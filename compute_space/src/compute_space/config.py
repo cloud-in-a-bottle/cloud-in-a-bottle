@@ -248,10 +248,14 @@ class Config:
         """The mail hostname whose A record the MX points at, for direct inbound.
 
         Uses ``mail.<domain>`` (option A) — a dedicated mail host under the served
-        zone, so the apex A record is left untouched. Only meaningful when
+        zone, so the apex A record is left untouched. If the domain is *already*
+        a ``mail.`` host (common for delegated custom domains like
+        ``mail.mydomain.com``), it is used as-is rather than doubled to
+        ``mail.mail.mydomain.com``. Only meaningful when
         email_inbound_mode == "direct".
         """
-        return f"mail.{domain.strip().lower().rstrip('.')}"
+        d = domain.strip().lower().rstrip(".")
+        return d if d.startswith("mail.") else f"mail.{d}"
 
     @property
     def email_custom_domain_normalized(self) -> str | None:

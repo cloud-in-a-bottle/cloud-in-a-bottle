@@ -308,3 +308,57 @@ def test_provision_email_records_survives_proxy_outage(tmp_path: Path, monkeypat
     # Must not raise, and must not modify the zone (fail-open).
     provision_email_records(cfg)
     assert zonefile.read_text() == before
+
+
+def test_provision_custom_domain_direct_no_double_mail(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """A delegated custom domain 'mail.mydomain.com' in direct mode must NOT
+    produce 'mail.mail.mydomain.com' — the mail host is used as-is."""
+    zonefile = tmp_path / "zonefile"
+    custom_zonefile = tmp_path / "custom_zonefile"
+    _write_zonefile(zonefile)
+    custom_zonefile.write_text(
+        "$ORIGIN mail.mydomain.com.\n$TTL 60\n"
+        "@   IN SOA  ns.alice.example.com. admin.alice.example.com. (\n"
+        "    2020010100   ; serial\n    3600 ; refresh\n    600 ; retry\n"
+        "    86400 ; expire\n    60 ; minimum\n)\n"
+        "@   IN NS   ns.alice.example.com.\n@   IN A    203.0.113.10\n"
+    )
+    cfg = DefaultConfig(zone_domain="alice.example.com").evolve(
+        email_enabled=True,
+        email_proxy_base_url="https://proxy.test",
+        email_keycloak_issuer_url="https://kc.test/realms/openhost-customers",
+        email_keycloak_client_id="instance-alice",
+        email_keycloak_client_secret="s3cr3t",
+        email_inbound_mode="direct",
+        public_ip="203.0.113.9",
+        email_custom_domain="mail.mydomain.com",
+    )
+    monkeypatch.setattr(type(cfg), "coredns_zonefile_path", property(lambda self: zonefile))
+    monkeypatch.setattr(type(cfg), "coredns_custom_zonefile_path", property(lambda self: custom_zonefile))
+
+    class _FakeClient:
+        def __enter__(self): return self
+        def __exit__(self, *a): return None
+        def ensure_identity(self, domain=None):
+            target = domain or "alice.example.com"
+            return IdentityResult(domain=target, verified=False,
+                                  dkim_records=(DkimRecord(name=f"tok._domainkey.{target}", value="t.dkim.amazonses.com"),))
+
+    class _FakeTokenProvider:
+        def __enter__(self): return self
+        def __exit__(self, *a): return None
+
+    monkeypatch.setattr(prov.KeycloakTokenProvider, "create", classmethod(lambda cls, creds: _FakeTokenProvider()))
+    monkeypatch.setattr(prov.EmailProxyClient, "create", classmethod(lambda cls, url, tp: _FakeClient()))
+
+    provision_email_records(cfg)
+
+    primary = zonefile.read_text()
+    custom = custom_zonefile.read_text()
+    # Primary zone (alice.example.com) -> mail.alice.example.com
+    assert "@   IN MX   10 mail.alice.example.com." in primary
+    assert "mail.alice.example.com.   IN A   203.0.113.9" in primary
+    # Custom zone: mail.mydomain.com is already a mail host -> used as-is, NOT doubled.
+    assert "@   IN MX   10 mail.mydomain.com." in custom
+    assert "mail.mydomain.com.   IN A   203.0.113.9" in custom
+    assert "mail.mail." not in custom

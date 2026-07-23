@@ -286,4 +286,150 @@ def test_render_ses_inbound_unchanged_when_no_mail_host():
 def test_inbound_mail_host_for_uses_mail_subdomain():
     cfg = DefaultConfig(zone_domain="alice.selfhost.imbue.com")
     assert cfg.inbound_mail_host_for("alice.selfhost.imbue.com") == "mail.alice.selfhost.imbue.com"
-    assert cfg.inbound_mail_host_for("Mail.MyDomain.COM.") == "mail.mail.mydomain.com"
+    # An already-"mail." domain is used as-is (not doubled to mail.mail.…).
+    assert cfg.inbound_mail_host_for("Mail.MyDomain.COM.") == "mail.mydomain.com"
+
+
+# ─────────────────── direct-inbound: extensive edge cases ───────────────────
+
+
+def test_render_direct_mx_and_a_exact_format():
+    out = render_email_records(
+        "z.example", mail_from_host="", dkim_cnames=[],
+        inbound_mail_host="mail.z.example", inbound_mail_ip="1.2.3.4",
+    )
+    assert "@   IN MX   10 mail.z.example." in out
+    assert "mail.z.example.   IN A   1.2.3.4" in out
+    assert out.endswith("\n")
+
+
+def test_render_direct_ignores_mail_from_host():
+    out = render_email_records(
+        "z.example", mail_from_host="inbound-smtp.us-west-2.amazonaws.com",
+        dkim_cnames=[], inbound_mail_host="mail.z.example", inbound_mail_ip="1.2.3.4",
+    )
+    assert "inbound-smtp" not in out  # SES host ignored in direct mode
+
+
+def test_render_direct_empty_ip_raises():
+    with pytest.raises(ValueError, match="inbound_mail_ip"):
+        render_email_records("z", mail_from_host="", dkim_cnames=[],
+                             inbound_mail_host="mail.z", inbound_mail_ip="")
+
+
+def test_render_direct_none_ip_raises():
+    with pytest.raises(ValueError, match="inbound_mail_ip"):
+        render_email_records("z", mail_from_host="", dkim_cnames=[],
+                             inbound_mail_host="mail.z", inbound_mail_ip=None)
+
+
+def test_render_direct_host_trailing_dots_stripped():
+    out = render_email_records("z", mail_from_host="", dkim_cnames=[],
+                               inbound_mail_host="mail.z.example...", inbound_mail_ip="1.2.3.4")
+    assert "@   IN MX   10 mail.z.example." in out
+    assert ".." not in out.replace("; ---", "")
+
+
+def test_render_ses_no_a_record():
+    out = render_email_records("z", mail_from_host="inbound-smtp.aws", dkim_cnames=[])
+    assert "@   IN MX   10 inbound-smtp.aws." in out
+    assert " IN A " not in out
+
+
+def test_render_dmarc_rua_double_mailto_documented():
+    # Caller passes a bare address; passing a mailto: is a caller error that the
+    # renderer does not dedupe. Document current behavior.
+    out = render_email_records("z", mail_from_host="mx", dkim_cnames=[], dmarc_rua="mailto:x@y")
+    assert "rua=mailto:mailto:x@y" in out
+
+
+def test_render_dmarc_rua_empty_is_none():
+    out = render_email_records("z", mail_from_host="mx", dkim_cnames=[], dmarc_rua="")
+    assert 'v=DMARC1; p=quarantine"' in out
+    assert "rua=" not in out
+
+
+def test_apply_direct_error_leaves_file_untouched(tmp_path):
+    zone = tmp_path / "z.db"
+    zone.write_text(_zone_file())
+    before = zone.read_text()
+    with pytest.raises(ValueError):
+        apply_email_records(zone, "z.example", mail_from_host="", dkim_cnames=[],
+                            inbound_mail_host="mail.z.example", inbound_mail_ip=None)
+    assert zone.read_text() == before  # no partial write / no serial bump
+
+
+def test_apply_direct_writes_mx_and_a(tmp_path):
+    zone = tmp_path / "z.db"
+    zone.write_text(_zone_file())
+    apply_email_records(zone, "z.example", mail_from_host="", dkim_cnames=[],
+                        inbound_mail_host="mail.z.example", inbound_mail_ip="9.9.9.9")
+    content = zone.read_text()
+    assert "@   IN MX   10 mail.z.example." in content
+    assert "mail.z.example.   IN A   9.9.9.9" in content
+    assert "2020010100   ; serial" not in content  # bumped
+
+
+# ─── inbound_mail_host_for normalization + double-mail fix ───
+
+
+@pytest.mark.parametrize(
+    "domain,expected",
+    [
+        ("alice.host.imbue.com", "mail.alice.host.imbue.com"),
+        ("alice.host.imbue.com.", "mail.alice.host.imbue.com"),
+        ("Alice.HOST.Imbue.COM", "mail.alice.host.imbue.com"),
+        ("  alice.host.imbue.com  ", "mail.alice.host.imbue.com"),
+        ("  alice.host.imbue.com..  ", "mail.alice.host.imbue.com"),
+        # already a mail. host -> NOT doubled (the fix)
+        ("mail.mydomain.com", "mail.mydomain.com"),
+        ("Mail.MyDomain.COM.", "mail.mydomain.com"),
+    ],
+)
+def test_inbound_mail_host_for(domain, expected):
+    cfg = DefaultConfig(zone_domain="alice.host.imbue.com")
+    assert cfg.inbound_mail_host_for(domain) == expected
+
+
+# ─── mode validation: case/whitespace sensitivity ───
+
+
+@pytest.mark.parametrize("mode", ["Direct", "DIRECT", " direct", "ses ", "SES", "bogus", ""])
+def test_invalid_inbound_mode_rejected(mode):
+    kw = dict(_EMAIL_KW)
+    kw["email_inbound_mode"] = mode
+    with pytest.raises(ValueError, match="email_inbound_mode"):
+        DefaultConfig(zone_domain="alice.selfhost.imbue.com").evolve(**kw)
+
+
+def test_direct_mode_empty_public_ip_rejected():
+    kw = dict(_EMAIL_KW)
+    kw["email_inbound_mode"] = "direct"
+    kw["public_ip"] = ""
+    with pytest.raises(ValueError, match="public_ip must be set"):
+        DefaultConfig(zone_domain="alice.selfhost.imbue.com").evolve(**kw)
+
+
+def test_ses_mode_does_not_require_public_ip():
+    kw = dict(_EMAIL_KW)
+    kw["email_inbound_mode"] = "ses"
+    kw["public_ip"] = None
+    kw["email_inbound_mx_host"] = "inbound-smtp.us-west-2.amazonaws.com"
+    cfg = DefaultConfig(zone_domain="alice.selfhost.imbue.com").evolve(**kw)
+    assert cfg.email_inbound_mode == "ses"
+
+
+def test_disabled_email_ignores_bad_mode():
+    # email off -> mode not validated at all
+    cfg = DefaultConfig(zone_domain="alice.selfhost.imbue.com").evolve(
+        email_enabled=False, email_inbound_mode="bogus"
+    )
+    assert cfg.email_enabled is False
+
+
+def test_mode_validation_after_proxy_field_validation():
+    kw = dict(_EMAIL_KW)
+    kw["email_inbound_mode"] = "bogus"
+    kw["email_proxy_base_url"] = None
+    with pytest.raises(ValueError, match="email_proxy_base_url"):
+        DefaultConfig(zone_domain="alice.selfhost.imbue.com").evolve(**kw)
