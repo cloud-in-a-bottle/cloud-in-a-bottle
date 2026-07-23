@@ -27,6 +27,8 @@ def _full_email_kwargs() -> dict[str, object]:
         email_keycloak_client_id="instance-alice",
         email_keycloak_client_secret="s3cr3t",
         email_inbound_mx_host="inbound-smtp.us-west-2.amazonaws.com",
+        # Direct inbound is the default; it needs the instance IP for the mail A record.
+        public_ip="203.0.113.5",
     )
 
 
@@ -42,8 +44,9 @@ def test_email_enabled_requires_all_fields() -> None:
     cfg = DefaultConfig(zone_domain="x.example.com")
     with pytest.raises(ValueError, match="email_proxy_base_url must be set"):
         cfg.evolve(email_enabled=True)
-    # Missing just the MX host still fails.
+    # In ses inbound mode, the MX host is required.
     partial = {k: v for k, v in _full_email_kwargs().items() if k != "email_inbound_mx_host"}
+    partial["email_inbound_mode"] = "ses"
     with pytest.raises(ValueError, match="email_inbound_mx_host must be set"):
         cfg.evolve(**partial)
 

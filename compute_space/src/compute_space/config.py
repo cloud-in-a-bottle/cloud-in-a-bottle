@@ -111,8 +111,17 @@ class Config:
     email_keycloak_client_id: str | None
     email_keycloak_client_secret: str | None
     # The SES-managed inbound MX host for the region, e.g.
-    # "inbound-smtp.us-west-2.amazonaws.com".
+    # "inbound-smtp.us-west-2.amazonaws.com".  Only used when
+    # email_inbound_mode == "ses".
     email_inbound_mx_host: str | None
+    # How inbound mail is received:
+    #   "direct" (default): the zone's MX points at this instance (mail.<zone> ->
+    #     instance IP) and the instance's own mail server (Stalwart) receives on
+    #     port 25.  Requires inbound port 25 be open (true for the instances we
+    #     provision).  Outbound still relays through SES.
+    #   "ses": inbound goes to the SES-managed inbound host (email_inbound_mx_host)
+    #     — for environments where the instance can't accept inbound 25.
+    email_inbound_mode: str
     # Optional DMARC aggregate-report address published in the _dmarc record.
     email_dmarc_rua: str | None
     # Optional custom mail domain the owner delegated to this instance's CoreDNS
@@ -197,17 +206,24 @@ class Config:
                 if not getattr(self, name):
                     raise ValueError(f"{name} must be set in config to use the cert_api provider")
         if self.email_enabled:
-            # Enabling email requires the proxy URL, the per-instance Keycloak
-            # client-credentials, and the inbound MX host; none have a usable default.
+            # Enabling email requires the proxy URL and the per-instance Keycloak
+            # client-credentials (outbound always relays through SES).
             for name in (
                 "email_proxy_base_url",
                 "email_keycloak_issuer_url",
                 "email_keycloak_client_id",
                 "email_keycloak_client_secret",
-                "email_inbound_mx_host",
             ):
                 if not getattr(self, name):
                     raise ValueError(f"{name} must be set in config when email_enabled is True")
+            if self.email_inbound_mode not in ("direct", "ses"):
+                raise ValueError(
+                    f"email_inbound_mode must be 'direct' or 'ses', got {self.email_inbound_mode!r}"
+                )
+            if self.email_inbound_mode == "ses" and not self.email_inbound_mx_host:
+                raise ValueError("email_inbound_mx_host must be set when email_inbound_mode is 'ses'")
+            if self.email_inbound_mode == "direct" and not self.public_ip:
+                raise ValueError("public_ip must be set when email_inbound_mode is 'direct'")
         # Validate the custom mail domain shape (if set) regardless of
         # email_enabled, so a typo surfaces at config load rather than at the
         # first boot that turns email on.
@@ -227,6 +243,15 @@ class Config:
     @property
     def zone_domain_no_port(self) -> str:
         return self.zone_domain.split(":")[0]
+
+    def inbound_mail_host_for(self, domain: str) -> str:
+        """The mail hostname whose A record the MX points at, for direct inbound.
+
+        Uses ``mail.<domain>`` (option A) — a dedicated mail host under the served
+        zone, so the apex A record is left untouched. Only meaningful when
+        email_inbound_mode == "direct".
+        """
+        return f"mail.{domain.strip().lower().rstrip('.')}"
 
     @property
     def email_custom_domain_normalized(self) -> str | None:
@@ -401,6 +426,10 @@ class DefaultConfig(Config):
     email_keycloak_client_id: str | None = None
     email_keycloak_client_secret: str | None = None
     email_inbound_mx_host: str | None = None
+    # Default to direct inbound: the instances we provision accept inbound SMTP on
+    # port 25, so mail goes straight to the instance's own mail server. Set to
+    # "ses" only for environments where inbound 25 is blocked.
+    email_inbound_mode: str = "direct"
     email_dmarc_rua: str | None = None
     email_custom_domain: str | None = None
     email_mailbox_app_names: list[str] = attr.Factory(lambda: ["stalwart-email-server"])

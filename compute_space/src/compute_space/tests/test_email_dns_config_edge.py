@@ -18,6 +18,7 @@ _EMAIL_KW = dict(
     email_keycloak_client_id="instance-x",
     email_keycloak_client_secret="secret",
     email_inbound_mx_host="inbound-smtp.us-west-2.amazonaws.com",
+    public_ip="203.0.113.5",  # required for direct inbound (default)
 )
 
 
@@ -209,13 +210,37 @@ def test_delegation_record_strips_zone_port():
         "email_keycloak_issuer_url",
         "email_keycloak_client_id",
         "email_keycloak_client_secret",
-        "email_inbound_mx_host",
     ],
 )
 def test_email_enabled_requires_all_fields(missing):
+    # These are required whenever email is enabled (outbound relay always via SES).
+    # email_inbound_mx_host is required only in ses mode (covered separately).
     kw = dict(_EMAIL_KW)
     kw[missing] = None
     with pytest.raises(ValueError):
+        DefaultConfig(zone_domain="alice.selfhost.imbue.com").evolve(**kw)
+
+
+def test_email_direct_mode_requires_public_ip():
+    kw = dict(_EMAIL_KW)
+    kw["email_inbound_mode"] = "direct"
+    kw["public_ip"] = None
+    with pytest.raises(ValueError, match="public_ip must be set"):
+        DefaultConfig(zone_domain="alice.selfhost.imbue.com").evolve(**kw)
+
+
+def test_email_ses_mode_requires_mx_host():
+    kw = dict(_EMAIL_KW)
+    kw["email_inbound_mode"] = "ses"
+    kw["email_inbound_mx_host"] = None
+    with pytest.raises(ValueError, match="email_inbound_mx_host must be set"):
+        DefaultConfig(zone_domain="alice.selfhost.imbue.com").evolve(**kw)
+
+
+def test_email_invalid_inbound_mode_rejected():
+    kw = dict(_EMAIL_KW)
+    kw["email_inbound_mode"] = "bogus"
+    with pytest.raises(ValueError, match="email_inbound_mode"):
         DefaultConfig(zone_domain="alice.selfhost.imbue.com").evolve(**kw)
 
 
@@ -223,3 +248,42 @@ def test_email_disabled_needs_no_fields():
     # No exception when email is off, even with all email_* unset.
     cfg = DefaultConfig(zone_domain="alice.selfhost.imbue.com")
     assert cfg.email_enabled is False
+
+
+# ─────────────────────── direct-inbound DNS rendering ───────────────────────
+
+
+def test_render_direct_inbound_mx_and_a_record():
+    out = render_email_records(
+        "z.example",
+        mail_from_host="",
+        dkim_cnames=[],
+        inbound_mail_host="mail.z.example",
+        inbound_mail_ip="203.0.113.9",
+    )
+    assert "@   IN MX   10 mail.z.example." in out
+    assert "mail.z.example.   IN A   203.0.113.9" in out
+    assert "inbound-smtp" not in out
+    # Outbound (SPF) still authorizes SES.
+    assert "v=spf1 include:amazonses.com" in out
+
+
+def test_render_direct_inbound_requires_ip():
+    with pytest.raises(ValueError, match="inbound_mail_ip"):
+        render_email_records(
+            "z.example", mail_from_host="", dkim_cnames=[], inbound_mail_host="mail.z.example"
+        )
+
+
+def test_render_ses_inbound_unchanged_when_no_mail_host():
+    out = render_email_records(
+        "z.example", mail_from_host="inbound-smtp.us-west-2.amazonaws.com", dkim_cnames=[]
+    )
+    assert "@   IN MX   10 inbound-smtp.us-west-2.amazonaws.com." in out
+    assert " IN A " not in out
+
+
+def test_inbound_mail_host_for_uses_mail_subdomain():
+    cfg = DefaultConfig(zone_domain="alice.selfhost.imbue.com")
+    assert cfg.inbound_mail_host_for("alice.selfhost.imbue.com") == "mail.alice.selfhost.imbue.com"
+    assert cfg.inbound_mail_host_for("Mail.MyDomain.COM.") == "mail.mail.mydomain.com"

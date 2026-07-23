@@ -45,7 +45,8 @@ def provision_email_records(config: Config) -> None:
     assert config.email_keycloak_issuer_url is not None
     assert config.email_keycloak_client_id is not None
     assert config.email_keycloak_client_secret is not None
-    assert config.email_inbound_mx_host is not None
+    # email_inbound_mx_host is only required for ses mode (validated in Config);
+    # direct mode uses the instance's own mail host + public_ip instead.
 
     credentials = KeycloakClientCredentials(
         issuer_url=config.email_keycloak_issuer_url,
@@ -104,14 +105,27 @@ def _provision_zone(
     """
     result = client.ensure_identity(request_domain)
     dkim_cnames = [DkimCname(name=r.name, target=r.value) for r in result.dkim_records]
+    # Inbound: direct-to-instance (MX -> mail.<domain> -> instance IP) or SES.
+    # Outbound always relays through SES regardless.
+    if config.email_inbound_mode == "direct":
+        inbound_mail_host: str | None = config.inbound_mail_host_for(domain)
+        inbound_mail_ip: str | None = config.public_ip
+        mail_from_host = ""  # unused in direct mode
+    else:
+        inbound_mail_host = None
+        inbound_mail_ip = None
+        assert config.email_inbound_mx_host is not None  # required for ses mode (validated)
+        mail_from_host = config.email_inbound_mx_host
     apply_email_records(
         zone_file_path,
         domain,
-        mail_from_host=config.email_inbound_mx_host,  # type: ignore[arg-type]  # asserted non-None by caller
+        mail_from_host=mail_from_host,
         dkim_cnames=dkim_cnames,
         dmarc_rua=config.email_dmarc_rua,
+        inbound_mail_host=inbound_mail_host,
+        inbound_mail_ip=inbound_mail_ip,
     )
     logger.info(
-        f"Published email DNS records for {domain} "
-        f"({len(dkim_cnames)} DKIM CNAME(s); identity verified={result.verified})"
+        f"Published email DNS records for {domain} (mode={config.email_inbound_mode}, "
+        f"{len(dkim_cnames)} DKIM CNAME(s); identity verified={result.verified})"
     )

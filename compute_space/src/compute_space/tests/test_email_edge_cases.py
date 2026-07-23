@@ -20,6 +20,7 @@ _EMAIL_KW = dict(
     email_keycloak_client_id="instance-x",
     email_keycloak_client_secret="secret",
     email_inbound_mx_host="inbound-smtp.us-west-2.amazonaws.com",
+    public_ip="203.0.113.5",
 )
 
 

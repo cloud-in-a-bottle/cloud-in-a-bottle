@@ -240,25 +240,45 @@ def render_email_records(
     mail_from_host: str,
     dkim_cnames: list[DkimCname],
     dmarc_rua: str | None = None,
+    inbound_mail_host: str | None = None,
+    inbound_mail_ip: str | None = None,
 ) -> str:
     """Render the persistent email DNS records for a zone as zone-file lines.
 
-    Produces SPF (apex TXT authorizing SES), a DMARC policy (_dmarc TXT), the MX
-    record (pointing at the SES-managed inbound host), and the DKIM CNAMEs SES
-    requires. These are deterministic given the inputs, so they can be re-applied
+    Produces SPF (apex TXT authorizing SES — outbound always relays via SES), a
+    DMARC policy (_dmarc TXT), the MX record, and the DKIM CNAMEs SES requires.
+    These are deterministic given the inputs, so they can be re-applied
     idempotently on every boot (the zone file is regenerated from template at
     start_coredns time).
+
+    Inbound (the MX target) depends on the mode:
+
+    * **SES inbound** (``inbound_mail_host`` is None): MX points at the
+      SES-managed inbound host (``mail_from_host``). Used where the instance can't
+      accept inbound SMTP directly.
+    * **Direct inbound** (``inbound_mail_host`` + ``inbound_mail_ip`` given): MX
+      points at the instance's own mail host (e.g. ``mail.<zone>``) and an A
+      record is published for that host -> the instance IP, so the instance's own
+      mail server receives mail on port 25. Only outbound still goes through SES.
     """
     lines: list[str] = ["; --- openhost email records (managed) ---"]
-    # SPF: authorize Amazon SES to send for this domain.
+    # SPF: authorize Amazon SES to send for this domain (outbound is always SES).
     lines.append('@   IN TXT  "v=spf1 include:amazonses.com ~all"')
     # DMARC: a conservative default policy. rua is optional aggregate-report addr.
     dmarc = "v=DMARC1; p=quarantine"
     if dmarc_rua:
         dmarc += f"; rua=mailto:{dmarc_rua}"
     lines.append(f'_dmarc   IN TXT  "{dmarc}"')
-    # MX: inbound mail for the zone goes to the SES-managed inbound host.
-    lines.append(f"@   IN MX   10 {mail_from_host.rstrip('.')}.")
+    # MX: direct-to-instance when a mail host is given, else the SES inbound host.
+    if inbound_mail_host is not None:
+        if not inbound_mail_ip:
+            raise ValueError("inbound_mail_host requires inbound_mail_ip for the A record")
+        host = inbound_mail_host.rstrip(".")
+        lines.append(f"@   IN MX   10 {host}.")
+        # Publish the mail host's A record so the MX resolves to the instance.
+        lines.append(f"{host}.   IN A   {inbound_mail_ip}")
+    else:
+        lines.append(f"@   IN MX   10 {mail_from_host.rstrip('.')}.")
     # DKIM: SES CNAMEs (absolute names).
     for c in dkim_cnames:
         lines.append(f"{c.name.rstrip('.')}.   IN CNAME  {c.target.rstrip('.')}.")
@@ -273,6 +293,8 @@ def apply_email_records(
     mail_from_host: str,
     dkim_cnames: list[DkimCname],
     dmarc_rua: str | None = None,
+    inbound_mail_host: str | None = None,
+    inbound_mail_ip: str | None = None,
 ) -> None:
     """Append the persistent email records to the zone file and bump the serial.
 
@@ -286,6 +308,8 @@ def apply_email_records(
         mail_from_host=mail_from_host,
         dkim_cnames=dkim_cnames,
         dmarc_rua=dmarc_rua,
+        inbound_mail_host=inbound_mail_host,
+        inbound_mail_ip=inbound_mail_ip,
     )
     with open(zone_file_path) as f:
         content = f.read()
