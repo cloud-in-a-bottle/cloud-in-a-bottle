@@ -7,6 +7,7 @@ before these fields existed) must keep loading unchanged.
 
 from __future__ import annotations
 
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -15,6 +16,7 @@ from litestar.exceptions import NotAuthorizedException
 
 import compute_space.web.routes.api.system as sys_mod
 from compute_space.config import DefaultConfig
+from compute_space.config import load_config
 from compute_space.core.email.relay_credential import RelayCredential
 from compute_space.web.routes.api.system import custom_email_domain
 
@@ -122,14 +124,19 @@ def test_config_with_removed_email_inbound_fields_still_loads(tmp_path, monkeypa
         'email_inbound_mode = "direct"\n'
         'email_inbound_mx_host = "inbound-smtp.us-west-2.amazonaws.com"\n'
     )
-    # Exercise the production load path (load_config -> typed_settings).
+    # Exercise the production load path (load_config -> typed_settings). Force
+    # the scratch temp file into tmp_path by pointing tempfile at it directly
+    # (setting $TMPDIR would not work: tempfile.gettempdir() caches its result).
     monkeypatch.setenv("OPENHOST_ROUTER_CONFIG", str(config_path))
-    from compute_space.config import load_config
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
 
+    before = set(tmp_path.glob("openhost-config-*.toml"))
     cfg = load_config()
     assert cfg.email_enabled is True
     assert cfg.public_ip == "203.0.113.5"
     assert not hasattr(cfg, "email_inbound_mode")
+    # The scrubbed temp copy (which carries secrets) must not linger.
+    assert set(tmp_path.glob("openhost-config-*.toml")) == before
 
     # And the from_toml path used by non-DI callers.
     cfg2 = DefaultConfig.from_toml(str(config_path))

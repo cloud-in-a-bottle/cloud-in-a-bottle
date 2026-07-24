@@ -541,11 +541,19 @@ def load_config() -> Config:
     ``OPENHOST_CONFIG`` for backward compatibility.
     """
     path = os.environ.get("OPENHOST_ROUTER_CONFIG") or os.environ.get("OPENHOST_CONFIG")
-    if path:
-        path = _scrub_obsolete_keys_to_temp(path)
-        return typed_settings.load(DefaultConfig, appname="openhost", config_files=[path])
-    else:
+    if not path:
         return typed_settings.load(DefaultConfig, appname="openhost")
+    scrubbed = _scrub_obsolete_keys_to_temp(path)
+    try:
+        return typed_settings.load(DefaultConfig, appname="openhost", config_files=[scrubbed])
+    finally:
+        # Delete the temp copy (if we made one) so it doesn't linger in /tmp —
+        # it may carry secrets like email_keycloak_client_secret.
+        if scrubbed != path:
+            try:
+                os.unlink(scrubbed)
+            except OSError:
+                pass
 
 
 def _scrub_obsolete_keys_to_temp(path: str) -> str:
@@ -556,6 +564,9 @@ def _scrub_obsolete_keys_to_temp(path: str) -> str:
     deploy (still carrying removed fields) would fail to load. We strip those
     keys before handing the file to typed-settings, without modifying the file on
     disk (ansible owns that; it will re-render on the next config change).
+
+    The caller is responsible for deleting the returned path when it differs from
+    the input (it is a temp file that may carry secrets).
     """
     try:
         with open(path, "rb") as f:
