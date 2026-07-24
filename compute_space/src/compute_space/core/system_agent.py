@@ -19,8 +19,11 @@ class SystemAgentError(Exception):
 def _run_system_agent(*args: str, timeout: int = 300) -> str:
     """Run the agent, raising SystemAgentError on failure. Returns stdout."""
     try:
+        # `-n`: never prompt for a password.  The agent is configured passwordless (NOPASSWD) on
+        # provisioned hosts; `-n` makes a misconfigured host fail fast instead of hanging on a
+        # prompt — important now that the router also calls the agent at startup (config scrub).
         result = subprocess.run(
-            ["sudo", "openhost_system_agent", *args],
+            ["sudo", "-n", "openhost_system_agent", *args],
             capture_output=True,
             text=True,
             timeout=timeout,
@@ -97,3 +100,11 @@ def system_agent_get_remote() -> RemoteInfo:
 @async_wrap
 def system_agent_status() -> MigrationStatus:
     return _call_system_agent_sync(MigrationStatus, "status")
+
+
+def scrub_config_zone_domain() -> None:
+    """Ask the agent (root) to remove the migrated ``zone_domain`` line from ``config.toml``, so all
+    config-file mutation goes through the single privileged writer.  Sync (called from the router's
+    synchronous first-boot seed).  Raises SystemAgentError on failure — the caller treats it as
+    best-effort since the value is already in the DB and ignored at runtime."""
+    _run_system_agent("config", "scrub-zone-domain", timeout=30)

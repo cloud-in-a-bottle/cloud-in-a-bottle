@@ -15,6 +15,7 @@ from compute_space import COMPUTE_SPACE_PACKAGE_DIR
 from compute_space import OPENHOST_PROJECT_DIR
 from compute_space.config import Config
 from compute_space.config import DefaultConfig
+from compute_space.config import Domain
 from compute_space.config import set_active_config
 from compute_space.db.schema import schema_path
 from compute_space.tests.utils import kill_tree
@@ -53,14 +54,20 @@ def _resolve_test_zone_to_localhost() -> Iterator[None]:
 
 def _make_test_config(tmp_path: Path, **overrides: Any) -> Config:
     """Create a DefaultConfig with temp dirs under tmp_path. Returns the Config object."""
+    zone_domain = overrides.pop("zone_domain", "testzone.local")
+    tls_enabled = overrides.pop("tls_enabled", False)
+    # Default the domain set from zone_domain so the config behaves like a seeded instance —
+    # Config.all_domains no longer synthesizes a primary from the legacy zone_domain field.
+    domains = overrides.pop("domains", (Domain(name=zone_domain, tls=tls_enabled),))
     cfg = DefaultConfig(
         host="127.0.0.1",
         data_root_dir=str(tmp_path),
         apps_dir_override=str(OPENHOST_PROJECT_DIR / "apps"),
         port_range_start=overrides.pop("port_range_start", 19000),
         port_range_end=overrides.pop("port_range_end", 19099),
-        zone_domain=overrides.pop("zone_domain", "testzone.local"),
-        tls_enabled=overrides.pop("tls_enabled", False),
+        zone_domain=zone_domain,
+        tls_enabled=tls_enabled,
+        domains=domains,
         start_caddy=overrides.pop("start_caddy", False),
         # Off by default in tests so existing test setup flows keep working;
         # the integration test that exercises the gate sets it to True

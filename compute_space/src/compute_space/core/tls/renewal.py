@@ -66,7 +66,7 @@ def renew_cert_if_needed(
     # here propagates (the renewal thread catches it and retries sooner), as before.
     status = get_cert_status(config.tls_cert_path, config.tls_key_path)
     if status != CertStatus.OK:
-        logger.info(f"TLS cert for {config.zone_domain} is {status.value}; renewing")
+        logger.info(f"TLS cert for {config.primary_domain.name} is {status.value}; renewing")
         provision(config)
         renewed = True
 
@@ -74,7 +74,7 @@ def renew_cert_if_needed(
     # the rest (or the already-renewed primary's Caddy restart).
     for domain in config.all_domains:
         name = domain.name_no_port
-        if not domain.tls or name == config.zone_domain_no_port:
+        if not domain.tls or name == config.primary_domain.name_no_port:
             continue
         cert_path, key_path = config.cert_path_for(name), config.key_path_for(name)
         status = get_cert_status(cert_path, key_path)

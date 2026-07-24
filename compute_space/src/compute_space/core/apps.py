@@ -463,7 +463,7 @@ def insert_and_deploy(
         temp_data_dir=config.temporary_data_dir,
         archive_dir=archive_backend.effective_archive_dir(config, db),
         my_openhost_redirect_domain=config.my_openhost_redirect_domain,
-        zone_domain=config.zone_domain,
+        zone_domain=config.primary_domain.name,
         port=config.port,
         owner_username=read_owner_username(db) or DEFAULT_OWNER_USERNAME,
     )
@@ -781,7 +781,7 @@ def start_app_process(app_id: str, db: sqlite3.Connection, config: Config) -> No
         temp_data_dir=config.temporary_data_dir,
         archive_dir=archive_backend.effective_archive_dir(config, db),
         my_openhost_redirect_domain=config.my_openhost_redirect_domain,
-        zone_domain=config.zone_domain,
+        zone_domain=config.primary_domain.name,
         port=config.port,
         owner_username=read_owner_username(db) or DEFAULT_OWNER_USERNAME,
     )

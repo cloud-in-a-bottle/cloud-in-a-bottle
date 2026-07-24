@@ -332,7 +332,9 @@ async def api_diagnostics(
     diagnostics = await collect_platform_diagnostics(db, config)
     headers = None
     if download:
-        headers = {"Content-Disposition": f'attachment; filename="{_diagnostics_filename(config.zone_domain)}"'}
+        headers = {
+            "Content-Disposition": f'attachment; filename="{_diagnostics_filename(config.primary_domain.name)}"'
+        }
     return Response(content=diagnostics, status_code=200, media_type=MediaType.JSON, headers=headers)
 
 

@@ -27,7 +27,7 @@ from compute_space.core import archive_backend
 from compute_space.core.auth.auth import read_owner_username
 from compute_space.core.auth.identity import load_identity_keys
 from compute_space.core.domain_store import rebuild_active_domains
-from compute_space.core.domain_store import set_base_domains
+from compute_space.core.first_boot import seed_first_boot
 from compute_space.core.image_pruner import start_image_pruner
 from compute_space.core.logging import logger
 from compute_space.core.startup import check_app_status
@@ -76,7 +76,8 @@ def _make_static_url(static_dir: Path) -> Any:
 
 
 def _template_globals(config: Config, static_dir: Path) -> dict[str, Any]:
-    zone_domain = config.zone_domain
+    # The instance's canonical domain comes from the DB primary (never the legacy zone_domain).
+    zone_domain = config.primary_domain.name if config.all_domains else ""
     zone_name = zone_domain.split(".")[0] if zone_domain else None
 
     @pass_context
@@ -136,10 +137,10 @@ def _full_app_bootstrap(config: Config) -> None:
     start_storage_guard(config)
     start_image_pruner(config)
     retry_pending_default_apps(config)
-    # Fold any runtime-added domains (from runtime_domains.json) into the active config, so a
-    # domain added via /api/domains in a previous run is served again after restart.  The
-    # config-file/synthesized set is the immutable "base"; runtime records layer on top.
-    set_base_domains(config.all_domains)
+    # The DB `domains` table is the source of truth for the domain set.  Seed it once (+ claim token)
+    # from first_boot.toml / config-file domains / legacy files, then load it into the active config
+    # so routing/URL-building reflect it.  Both are idempotent.
+    seed_first_boot(config)
     rebuild_active_domains(config)
 
 

@@ -68,4 +68,4 @@ def provision_cert(config: Config) -> None:
     Used both for the initial acquisition at startup and for renewals.  Thin wrapper over
     ``acquire_cert_for_domain`` for the primary ``zone_domain`` (unchanged behavior).
     """
-    acquire_cert_for_domain(config, config.zone_domain, config.tls_cert_path, config.tls_key_path)
+    acquire_cert_for_domain(config, config.primary_domain.name, config.tls_cert_path, config.tls_key_path)

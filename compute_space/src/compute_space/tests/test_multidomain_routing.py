@@ -142,8 +142,12 @@ def test_zone_for_request_falls_back_to_primary(multi_domain_config: Any) -> Non
 
 
 def test_single_domain_config_unchanged(tmp_path: Path) -> None:
-    """With no explicit domains, routing still works exactly as before off zone_domain."""
-    set_active_config(DefaultConfig(zone_domain="solo.example.com", tls_enabled=True))
+    """A single-domain config routes exactly as before (now an explicit one-domain set)."""
+    set_active_config(
+        DefaultConfig(
+            zone_domain="solo.example.com", tls_enabled=True, domains=(Domain(name="solo.example.com", tls=True),)
+        )
+    )
     assert _looks_like_app_subdomain("app.solo.example.com") is True
     assert _looks_like_app_subdomain("solo.example.com") is False
     assert zone_for_request(_fake_conn("app.solo.example.com")).name == "solo.example.com"

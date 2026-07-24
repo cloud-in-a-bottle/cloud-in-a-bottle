@@ -25,7 +25,7 @@ from compute_space.core.dns import public_dns_zones
 from compute_space.core.dns import set_active_coredns
 from compute_space.core.dns import start_coredns
 from compute_space.core.domain_store import rebuild_active_domains
-from compute_space.core.domain_store import set_base_domains
+from compute_space.core.first_boot import seed_first_boot
 from compute_space.core.logging import logger
 from compute_space.core.logging import setup_file_logging
 from compute_space.core.pinned_binary import get_pinned_binary
@@ -123,11 +123,11 @@ def main() -> None:
     config = load_config()
     config.make_all_dirs()
     _bootstrap(config)
-    # Fold runtime-added domains (from /api/domains, persisted in runtime_domains.json) into the
-    # domain set *before* starting CoreDNS/Caddy, so a domain added at runtime is served again
-    # (DNS zone + Caddy site) after a restart — not merely present in the in-memory routing config.
-    # create_app re-folds later; the fold is idempotent (deduped by name).
-    set_base_domains(config.all_domains)
+    # The DB `domains` table is the source of truth.  On first boot, seed it (+ the claim token)
+    # from first_boot.toml, else the config-file zone_domain + [[openhost.domains]] / claim-token
+    # file.  Then load the set into the active config *before* starting CoreDNS/Caddy so every
+    # configured domain is served this boot.  Both are idempotent; create_app re-runs them.
+    seed_first_boot(config)
     config = rebuild_active_domains(config)
     children: list[subprocess.Popen[bytes]] = []
 

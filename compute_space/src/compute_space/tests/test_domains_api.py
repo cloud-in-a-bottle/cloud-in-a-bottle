@@ -24,7 +24,7 @@ from compute_space.core.auth.auth import SESSION_COOKIE_NAME
 from compute_space.core.auth.auth import create_session
 from compute_space.core.domain_store import CERT_STATUS_ACTIVE
 from compute_space.core.domain_store import CERT_STATUS_ERROR
-from compute_space.core.domain_store import set_base_domains
+from compute_space.core.domain_store import seed_domains_from_legacy
 from compute_space.db import provide_db
 from compute_space.db.connection import init_db
 from compute_space.tests.conftest import _make_test_config
@@ -62,7 +62,7 @@ def _auth_cookie(db_path: str) -> dict[str, str]:
 def cfg(tmp_path: Path) -> Any:
     c = _make_test_config(tmp_path, zone_domain="host.example.com", tls_enabled=True, domains=(PRIMARY,))
     init_db(c.db_path)
-    set_base_domains(c.all_domains)
+    seed_domains_from_legacy(c)  # seed the DB primary so add/remove rebuild from a real primary row
     caddy.set_active_caddy(None)  # no Caddy in tests → reload is a no-op
     return c
 

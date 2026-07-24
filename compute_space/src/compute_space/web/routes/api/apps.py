@@ -281,7 +281,7 @@ async def clone_and_get_app_info(
     if not repo_url:
         return Response(content=ErrorResponse(error="No repository URL provided"), status_code=400)
 
-    add_app_url = f"//{config.zone_domain}/add_app?repo={repo_url}"
+    add_app_url = f"//{config.primary_domain.name}/add_app?repo={repo_url}"
     manifest, clone_dir, error, authorize_url = await clone_with_github_fallback(repo_url, return_to=add_app_url)
 
     if authorize_url:
@@ -685,7 +685,7 @@ async def _reload_app_impl(
             if not pull_ok and is_github_repo_url(repo_url):
                 lf.write("Attempting git pull with github oauth\n")
                 lf.flush()
-                return_to = f"//{config.zone_domain}/reload_app/{app_id}?continue_oauth_update=1"
+                return_to = f"//{config.primary_domain.name}/reload_app/{app_id}?continue_oauth_update=1"
                 try:
                     token = await get_oauth_token("github", ["repo"], return_to=return_to)
                 except ServiceNotAvailable as e:

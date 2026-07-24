@@ -163,21 +163,22 @@ class Config:
 
     @property
     def all_domains(self) -> tuple[Domain, ...]:
-        """The full domain set, always non-empty.
-
-        Returns the explicitly configured ``domains`` if present; otherwise a
-        single primary Domain synthesized from the legacy ``zone_domain`` +
-        ``tls_enabled`` fields, so single-domain configs Just Work.
-        """
-        if self.domains:
-            return self.domains
-        return (Domain(name=self.zone_domain, tls=self.tls_enabled),)
+        """The full domain set — the DB-sourced ``domains`` loaded into the active config by
+        ``rebuild_active_domains``.  The legacy ``zone_domain`` is NOT read here (not even as a
+        fallback): it is captured into the DB once by the first-boot seed and never consulted again.
+        Empty only before that seed runs at startup."""
+        return self.domains
 
     @property
     def primary_domain(self) -> Domain:
-        """The canonical domain, used by background tasks and outbound links that
-        have no request in hand.  Mirrors the legacy ``zone_domain``/``tls_enabled``."""
-        return self.all_domains[0]
+        """The canonical domain (``domains[0]``), used by background tasks and outbound links that
+        have no request in hand.  Sourced from the DB, never from the legacy ``zone_domain``."""
+        if not self.domains:
+            raise RuntimeError(
+                "No domains loaded — the DB domain set has not been seeded/rebuilt into the config yet. "
+                "seed_first_boot()+rebuild_active_domains() must run before primary_domain is read."
+            )
+        return self.domains[0]
 
     def match_domain(self, host: str) -> Domain | None:
         """Return the configured Domain that owns ``host`` — the domain itself (the
@@ -292,21 +293,14 @@ class Config:
     def cert_path_for(self, domain_name: str) -> Path:
         """Cert file for a domain.  The primary keeps the legacy path for backward
         compatibility; additional domains get a per-domain file under ``certs/``."""
-        if domain_name == self.zone_domain_no_port:
+        if domain_name == self.primary_domain.name_no_port:
             return self.tls_cert_path
         return self.certs_dir / f"{domain_name}.pem"
 
     def key_path_for(self, domain_name: str) -> Path:
-        if domain_name == self.zone_domain_no_port:
+        if domain_name == self.primary_domain.name_no_port:
             return self.tls_key_path
         return self.certs_dir / f"{domain_name}.key"
-
-    @property
-    def runtime_domains_path(self) -> Path:
-        """Router-owned JSON state for domains added at runtime (via /api/domains),
-        merged with the config-file domains at startup.  Kept out of config.toml so the
-        router never rewrites the provisioning-owned config file."""
-        return self.openhost_data_path / "runtime_domains.json"
 
     @property
     def coredns_corefile_path(self) -> Path:
@@ -326,10 +320,10 @@ class Config:
         compatibility; additional public domains get a per-domain file under ``zones/``.  Each
         public domain is a separate authoritative zone, so its ACME DNS-01 ``_acme-challenge``
         TXT records must land in its own zone file (not the primary's)."""
-        # Strip any port so the primary maps to the legacy path (callers may pass the full
-        # ``zone_domain``, which can include a port) and no ``:`` ends up in a filename.
+        # Strip any port so the primary maps to the legacy path (callers may pass a name with a
+        # port) and no ``:`` ends up in a filename.
         name = domain_name.split(":")[0]
-        if name == self.zone_domain_no_port:
+        if name == self.primary_domain.name_no_port:
             return self.coredns_zonefile_path
         return self.zones_dir / f"{name}.zone"
 
@@ -367,8 +361,10 @@ class Config:
 
 @attr.s(auto_attribs=True, frozen=True)
 class DefaultConfig(Config):
-    # needs set at runtime, no reasonable default value
-    # zone_domain: str
+    # Legacy field: captured into the DB by the first-boot seed and then never read (see
+    # domain_store/first_boot).  Optional so a post-migration config.toml can omit it — the seed
+    # scrubs the line after capturing it.  The DB `domains` set is the source of truth.
+    zone_domain: str = attr.ib(default="", converter=_lowercase)
 
     # Server
     host: str = "127.0.0.1"

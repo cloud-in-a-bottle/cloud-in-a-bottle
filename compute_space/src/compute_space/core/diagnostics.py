@@ -770,7 +770,7 @@ async def collect_platform_diagnostics(db: sqlite3.Connection, config: Config) -
     return PlatformDiagnostics(
         schema_version=DIAGNOSTICS_SCHEMA_VERSION,
         generated_at=datetime.now(UTC).isoformat(),
-        zone_domain=config.zone_domain,
+        zone_domain=config.primary_domain.name,
         openhost=openhost_git,
         system=_collect_system_info(),
         container_runtime=_collect_container_runtime(),
@@ -803,7 +803,7 @@ async def collect_app_diagnostics(row: sqlite3.Row, config: Config) -> AppDiagno
     return AppDiagnostics(
         schema_version=DIAGNOSTICS_SCHEMA_VERSION,
         generated_at=datetime.now(UTC).isoformat(),
-        zone_domain=config.zone_domain,
+        zone_domain=config.primary_domain.name,
         app_id=row["app_id"],
         name=row["name"],
         status=row["status"],

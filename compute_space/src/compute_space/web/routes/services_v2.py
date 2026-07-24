@@ -170,7 +170,7 @@ def _approve_grant_url(config: Config, consumer_app_id: str, service_url: str, g
     # Cross-app approval is server-side (no browsing request in hand), so this stays on
     # the canonical/primary domain; use its scheme rather than a hardcoded https so a
     # plain-http primary (e.g. a `.local` instance) builds a correct URL.
-    if not config.zone_domain:
+    if not config.all_domains:
         return approve_path
     primary = config.primary_domain
     return f"{primary.scheme}://{primary.name}{approve_path}"

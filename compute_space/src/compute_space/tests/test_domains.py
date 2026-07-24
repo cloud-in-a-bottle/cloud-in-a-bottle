@@ -21,15 +21,20 @@ def test_single_domain_serialization_omits_domains_key() -> None:
     assert "domains" not in cfg.to_toml_str()
 
 
-def test_all_domains_synthesized_from_legacy_fields() -> None:
-    cfg = DefaultConfig(zone_domain="host.example.com", tls_enabled=True)
-    assert cfg.all_domains == (Domain(name="host.example.com", tls=True),)
-    assert cfg.primary_domain == Domain(name="host.example.com", tls=True)
-    assert cfg.primary_domain.scheme == "https"
+def test_all_domains_is_the_explicit_set_no_synthesis() -> None:
+    # all_domains is the DB-sourced set; it does NOT synthesize a primary from the legacy
+    # zone_domain field (that is captured into the DB once by the first-boot seed instead).
+    bare = DefaultConfig(zone_domain="host.example.com", tls_enabled=True)
+    assert bare.all_domains == ()
+    populated = DefaultConfig(
+        zone_domain="host.example.com", tls_enabled=True, domains=(Domain(name="host.example.com", tls=True),)
+    )
+    assert populated.primary_domain == Domain(name="host.example.com", tls=True)
+    assert populated.primary_domain.scheme == "https"
 
 
 def test_non_tls_primary_domain_scheme_is_http() -> None:
-    cfg = DefaultConfig(zone_domain="myhost.local", tls_enabled=False)
+    cfg = DefaultConfig(zone_domain="myhost.local", tls_enabled=False, domains=(Domain(name="myhost.local"),))
     assert cfg.primary_domain.scheme == "http"
 
 
@@ -114,6 +119,10 @@ def test_match_domain_empty_name_never_matches() -> None:
 def test_coredns_zonefile_path_for_primary_ignores_port() -> None:
     # The primary must map to the legacy zonefile even when zone_domain carries a port, and no
     # ':' may leak into a per-domain filename.
-    cfg = DefaultConfig(zone_domain="host.example.com:8443", tls_enabled=True)
-    assert cfg.coredns_zonefile_path_for(cfg.zone_domain) == cfg.coredns_zonefile_path
+    cfg = DefaultConfig(
+        zone_domain="host.example.com:8443",
+        tls_enabled=True,
+        domains=(Domain(name="host.example.com:8443", tls=True),),
+    )
+    assert cfg.coredns_zonefile_path_for("host.example.com:8443") == cfg.coredns_zonefile_path
     assert ":" not in cfg.coredns_zonefile_path_for("other.example.com:99").name

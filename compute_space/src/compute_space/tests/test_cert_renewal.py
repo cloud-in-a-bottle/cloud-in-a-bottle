@@ -77,7 +77,11 @@ def test_status_unparseable_cert_treated_as_expired(tmp_path: Path) -> None:
 
 
 def _config(tmp_path: Path) -> Config:
-    config = DefaultConfig(zone_domain="test.example.com", data_root_dir=str(tmp_path))
+    config = DefaultConfig(
+        zone_domain="test.example.com",
+        data_root_dir=str(tmp_path),
+        domains=(Domain("test.example.com", tls=True),),
+    )
     config.openhost_data_path.mkdir(parents=True)
     return config
 
