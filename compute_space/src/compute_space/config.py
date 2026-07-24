@@ -579,8 +579,18 @@ def _scrub_obsolete_keys_to_temp(path: str) -> str:
         return path
     data["openhost"] = _drop_obsolete_keys(section)
     fd, tmp_path = tempfile.mkstemp(prefix="openhost-config-", suffix=".toml")
-    with os.fdopen(fd, "wb") as f:
-        tomli_w.dump(data, f)
+    try:
+        with os.fdopen(fd, "wb") as f:
+            tomli_w.dump(data, f)
+    except Exception:
+        # Don't leave a (possibly secret-bearing) temp file behind if writing
+        # fails — the caller only unlinks paths it receives, and it won't get
+        # this one when we raise.
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
     return tmp_path
 
 

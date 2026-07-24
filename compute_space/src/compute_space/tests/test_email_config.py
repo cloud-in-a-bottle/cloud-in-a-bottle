@@ -16,6 +16,7 @@ import pytest
 import typed_settings
 from litestar.exceptions import NotAuthorizedException
 
+import compute_space.config as config_mod
 import compute_space.web.routes.api.system as sys_mod
 from compute_space.config import DefaultConfig
 from compute_space.config import load_config
@@ -143,6 +144,28 @@ def test_config_with_removed_email_inbound_fields_still_loads(tmp_path, monkeypa
     # And the from_toml path used by non-DI callers.
     cfg2 = DefaultConfig.from_toml(str(config_path))
     assert cfg2.email_enabled is True
+
+
+def test_scrub_obsolete_keys_cleans_up_on_write_failure(tmp_path, monkeypatch) -> None:
+    # If writing the scrubbed temp copy fails, it must not leave a (possibly
+    # secret-bearing) file behind.
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        "[openhost]\n"
+        'zone_domain = "alice.selfhost.imbue.com"\n'
+        'email_inbound_mode = "direct"\n'  # an obsolete key -> triggers the temp write
+    )
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+
+    def _boom(_data, _f):
+        raise RuntimeError("disk full")
+
+    monkeypatch.setattr(config_mod.tomli_w, "dump", _boom)
+
+    with pytest.raises(RuntimeError, match="disk full"):
+        config_mod._scrub_obsolete_keys_to_temp(str(config_path))
+    # No temp file left behind.
+    assert list(tmp_path.glob("openhost-config-*.toml")) == []
 
 
 def test_email_config_round_trips_through_toml() -> None:
