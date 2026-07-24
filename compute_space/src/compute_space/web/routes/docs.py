@@ -427,6 +427,9 @@ _TEMPLATE = """<!DOCTYPE html>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <!-- Light-only: pin the color scheme (parsed before first paint) to stop the
+       browser's Auto Dark Mode white-flashing the page on navigation/repaint. -->
+  <meta name="color-scheme" content="light">
   <title>{{ page_title }} - OpenHost Manual</title>
   <style>
     /* The docs page deliberately reuses layout.html's exact palette and
@@ -441,7 +444,7 @@ _TEMPLATE = """<!DOCTYPE html>
        column doesn't shift sideways when navigating to/from a page whose height
        toggles the vertical scrollbar. Progressive enhancement — unsupported
        browsers simply ignore it. */
-    html { scrollbar-gutter: stable; }
+    html { scrollbar-gutter: stable; background: #fff; }
     body {
       font-family: -apple-system, system-ui, sans-serif;
       color: #222;

@@ -4,6 +4,12 @@
 <!DOCTYPE html>
 <html>
 <head>
+  {#- This app is light-only. Declaring the color scheme (parsed before first
+     paint) pins the base canvas to light and opts out of the browser's Auto
+     Dark Mode, which otherwise white-flashes the page on every navigation /
+     repaint in a dark-mode environment. Pair with an explicit <html>
+     background so no default canvas frame shows before the CSS applies. -#}
+  <meta name="color-scheme" content="light">
   <title>{% if display_name %}{{ display_name }}'s personal compute space{% else %}OpenHost{% endif %}{% block title_suffix %}{% endblock %}</title>
   <style>
     /* Always reserve the vertical scrollbar gutter so the centred body doesn't
@@ -11,7 +17,7 @@
        don't (a short page loses the scrollbar, widening the viewport and
        re-centring the column). Ignored by browsers that lack support, so it's a
        no-regression progressive enhancement. */
-    html { scrollbar-gutter: stable; }
+    html { scrollbar-gutter: stable; background: #fff; }
     body { font-family: -apple-system, system-ui, sans-serif; max-width: 960px; margin: 2em auto; padding: 0 1em; color: #222; }
     table { border-collapse: collapse; width: 100%; margin: 1em 0; }
     th, td { border: 1px solid #ddd; padding: 0.5em 0.8em; text-align: left; }
