@@ -640,6 +640,23 @@ _TEMPLATE = """<!DOCTYPE html>
       {% endif %}
     </main>
   </div>
+  <!-- Prerender side-effect-free tabs on hover so navigation reveals an
+       already-painted page instead of building it live (kills swap-time render
+       flash). Excludes /terminal/ (PTY) and /diagnostics/ (scan). Chrome-only. -->
+  <script type="speculationrules">
+  {
+    "prerender": [{
+      "where": { "or": [
+        { "href_matches": "/dashboard" },
+        { "href_matches": "/docs/*" },
+        { "href_matches": "/add_app" },
+        { "href_matches": "/system/*" },
+        { "href_matches": "/settings" }
+      ] },
+      "eagerness": "moderate"
+    }]
+  }
+  </script>
 </body>
 </html>
 """
