@@ -140,6 +140,13 @@ class Config:
     # no re-provisioning.  The endpoint is scoped to these mailbox app names so the
     # credential only reaches the mailbox app.
     email_mailbox_app_names: list[str]
+    # Default apps (bare dirnames or remote git URLs, same as ``default_apps``)
+    # auto-deployed ONLY when email is enabled — the mailbox server + webmail
+    # client that give the instance a real inbox/outbox.  Kept separate from
+    # ``default_apps`` so an instance with email off does not ship a mailbox; they
+    # are appended to the deployed set by ``effective_default_apps`` when
+    # ``email_enabled`` is True.
+    email_default_apps: list[str]
 
     ## coredns (only really needed if acquiring TLS certs via DNS-01, or if using NS dns records)
     coredns_enabled: bool
@@ -377,6 +384,24 @@ class Config:
     def default_apps_sentinel_path(self) -> str:
         return str(Path(self.openhost_data_path) / "default_apps.json")
 
+    @property
+    def effective_default_apps(self) -> list[str]:
+        """The apps to auto-deploy: ``default_apps`` plus the email apps when
+        email is enabled.
+
+        The mailbox + webmail apps are only useful (and only correctly scoped for
+        the relay-config endpoint) when email is on, so they are appended here
+        rather than living in ``default_apps`` — an instance with email off ships
+        no mailbox.  De-duplicated preserving order so an operator who already
+        listed one of them in ``default_apps`` doesn't get it twice.
+        """
+        specs = list(self.default_apps)
+        if self.email_enabled:
+            for spec in self.email_default_apps:
+                if spec not in specs:
+                    specs.append(spec)
+        return specs
+
     def make_all_dirs(self) -> None:
         """Make all necessary directories for the config."""
         assert os.path.exists(self.data_root_dir)
@@ -435,6 +460,16 @@ class DefaultConfig(Config):
     email_dmarc_rua: str | None = None
     email_custom_domain: str | None = None
     email_mailbox_app_names: list[str] = attr.Factory(lambda: ["stalwart-email-server"])
+    # The mailbox server (Stalwart) + webmail client (Bulwark) that give the
+    # instance a real inbox/outbox.  Deployed only when email is enabled (see
+    # effective_default_apps).  Stalwart's manifest name must stay in
+    # email_mailbox_app_names for it to be allowed to fetch the relay config.
+    email_default_apps: list[str] = attr.Factory(
+        lambda: [
+            "https://github.com/imbue-openhost/openhost-stalwart-email-server",
+            "https://github.com/imbue-openhost/openhost-bulwark-email-client",
+        ]
+    )
 
     start_caddy: bool = True
 

@@ -216,14 +216,21 @@ def _install_one(spec: str, config: Config, db: sqlite3.Connection) -> tuple[str
 
 def deploy_default_apps(config: Config, db: sqlite3.Connection) -> list[DefaultAppOutcome]:
     """Idempotent across boots.  ok/skipped are terminal; failed retries
-    up to MAX_RETRY_ATTEMPTS.  Never raises."""
-    if not config.default_apps:
+    up to MAX_RETRY_ATTEMPTS.  Never raises.
+
+    Deploys ``config.effective_default_apps`` — i.e. ``default_apps`` plus the
+    mailbox + webmail apps when email is enabled — so turning email on (and
+    rebooting) auto-installs a real inbox/outbox, while an instance with email
+    off ships no mailbox.
+    """
+    specs = config.effective_default_apps
+    if not specs:
         return []
 
     sentinel = _load_sentinel(config.default_apps_sentinel_path)
     outcomes: list[DefaultAppOutcome] = []
 
-    for spec in config.default_apps:
+    for spec in specs:
         prior = sentinel.get(spec) or {}
         prior_status = prior.get("status")
         try:

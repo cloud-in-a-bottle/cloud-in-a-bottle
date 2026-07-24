@@ -225,6 +225,68 @@ def test_remote_url_entry_dispatches_to_clone_path(cfg_with_apps, monkeypatch):
     assert "https://github.com/imbue-openhost/openhost-catalog" in sentinel
 
 
+def test_email_apps_deployed_only_when_email_enabled(cfg_with_apps, monkeypatch):
+    """The mailbox + webmail apps are appended to the deployed set only when
+    email is enabled; with email off they are not attempted."""
+    _patch_insert_and_deploy(monkeypatch)
+
+    src_app_dir = Path(cfg_with_apps.apps_dir) / "secrets_v2"
+
+    cloned: list[str] = []
+
+    async def fake_clone(repo_url, github_token=None):  # noqa: ANN001
+        cloned.append(repo_url)
+        # Each URL needs its own fake clone tree with a unique manifest name so
+        # they don't collide as "already installed".
+        parent = tempfile.mkdtemp(prefix="openhost-clone-")
+        clone_dir = os.path.join(parent, "repo")
+        shutil.copytree(src_app_dir, clone_dir)
+        name = repo_url.rstrip("/").rsplit("/", 1)[-1]
+        (Path(clone_dir) / "openhost.toml").write_text(
+            f'[app]\nname = "{name}"\nversion = "0.1"\n[runtime.container]\nimage = "Dockerfile"\nport = 8080\n'
+        )
+        return parse_manifest(clone_dir), clone_dir, None
+
+    monkeypatch.setattr(da, "clone_and_read_manifest", fake_clone)
+
+    email_kwargs = dict(
+        email_enabled=True,
+        email_proxy_base_url="https://frontend.example.com",
+        email_keycloak_issuer_url="https://kc.example.com/realms/openhost-customers",
+        email_keycloak_client_id="instance-x",
+        email_keycloak_client_secret="s3cr3t",
+        email_inbound_mx_host="inbound-smtp.us-west-2.amazonaws.com",
+        public_ip="203.0.113.10",  # required for the default direct inbound mode
+    )
+
+    # Email OFF: only the base default app is attempted.
+    cfg_off = cfg_with_apps.evolve(default_apps=["https://github.com/imbue-openhost/openhost-catalog"])
+    db = sqlite3.connect(cfg_off.db_path)
+    try:
+        da.deploy_default_apps(cfg_off, db)
+    finally:
+        db.close()
+    assert cloned == ["https://github.com/imbue-openhost/openhost-catalog"]
+
+    # Email ON (fresh config + db): the two email apps are appended and attempted.
+    cloned.clear()
+    cfg_on = cfg_with_apps.evolve(
+        default_apps=["https://github.com/imbue-openhost/openhost-catalog"],
+        **email_kwargs,
+    )
+    db = sqlite3.connect(cfg_on.db_path)
+    try:
+        result = da.deploy_default_apps(cfg_on, db)
+    finally:
+        db.close()
+    assert "https://github.com/imbue-openhost/openhost-stalwart-email-server" in cloned
+    assert "https://github.com/imbue-openhost/openhost-bulwark-email-client" in cloned
+    assert {o.name for o in result if o.status == "ok"} >= {
+        "https://github.com/imbue-openhost/openhost-stalwart-email-server",
+        "https://github.com/imbue-openhost/openhost-bulwark-email-client",
+    }
+
+
 def test_remote_url_clone_failure_is_retried(cfg_with_apps, monkeypatch):
     """Clone failures get the same retry-budget treatment as local failures."""
     _patch_insert_and_deploy(monkeypatch)

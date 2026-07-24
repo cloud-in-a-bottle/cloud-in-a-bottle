@@ -51,6 +51,27 @@ def test_email_enabled_requires_all_fields() -> None:
         cfg.evolve(**partial)
 
 
+def test_effective_default_apps_excludes_email_apps_when_off() -> None:
+    cfg = DefaultConfig(zone_domain="x.example.com", default_apps=["oauth_provider"])
+    assert cfg.email_enabled is False
+    assert cfg.effective_default_apps == ["oauth_provider"]
+
+
+def test_effective_default_apps_appends_email_apps_when_on() -> None:
+    cfg = DefaultConfig(zone_domain="x.example.com", default_apps=["oauth_provider"]).evolve(**_full_email_kwargs())
+    apps = cfg.effective_default_apps
+    assert apps[0] == "oauth_provider"
+    assert "https://github.com/imbue-openhost/openhost-stalwart-email-server" in apps
+    assert "https://github.com/imbue-openhost/openhost-bulwark-email-client" in apps
+
+
+def test_effective_default_apps_dedupes_when_already_listed() -> None:
+    stalwart = "https://github.com/imbue-openhost/openhost-stalwart-email-server"
+    cfg = DefaultConfig(zone_domain="x.example.com", default_apps=[stalwart]).evolve(**_full_email_kwargs())
+    apps = cfg.effective_default_apps
+    assert apps.count(stalwart) == 1
+
+
 def test_email_enabled_with_all_fields_ok() -> None:
     cfg = DefaultConfig(zone_domain="x.example.com").evolve(**_full_email_kwargs())
     assert cfg.email_enabled is True
