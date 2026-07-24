@@ -78,62 +78,9 @@ def test_proxy_client_raises_on_error_status():
         client.ensure_identity()
 
 
-def test_provision_email_records_writes_zone(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    zonefile = tmp_path / "zonefile"
-    _write_zonefile(zonefile)
-
-    cfg = DefaultConfig(zone_domain="alice.example.com").evolve(
-        email_enabled=True,
-        email_proxy_base_url="https://proxy.test",
-        email_keycloak_issuer_url="https://kc.test/realms/openhost-customers",
-        email_keycloak_client_id="instance-alice",
-        email_keycloak_client_secret="s3cr3t",
-        public_ip="203.0.113.9",
-    )
-    # Point the config's zonefile path at our temp file.
-    monkeypatch.setattr(type(cfg), "coredns_zonefile_path", property(lambda self: zonefile))
-
-    # Stub the proxy client construction to return a fake identity.
-
-    class _FakeClient:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *a):
-            return None
-
-        def ensure_identity(self, domain=None):
-            return IdentityResult(
-                domain="alice.example.com",
-                verified=False,
-                dkim_records=(DkimRecord(name="tok._domainkey.alice.example.com", value="tok.dkim.amazonses.com"),),
-            )
-
-    class _FakeTokenProvider:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *a):
-            return None
-
-    monkeypatch.setattr(prov.KeycloakTokenProvider, "create", classmethod(lambda cls, creds: _FakeTokenProvider()))
-    monkeypatch.setattr(prov.EmailProxyClient, "create", classmethod(lambda cls, url, tp: _FakeClient()))
-
-    provision_email_records(cfg)
-
-    content = zonefile.read_text()
-    assert "v=spf1 include:amazonses.com" in content
-    assert "v=DMARC1" in content
-    # Inbound is always direct: MX points at the instance's own mail host + A record.
-    assert "@   IN MX   10 mail.alice.example.com." in content
-    assert "mail.alice.example.com.   IN A   203.0.113.9" in content
-    assert "inbound-smtp" not in content
-    assert "tok._domainkey.alice.example.com.   IN CNAME  tok.dkim.amazonses.com." in content
-
-
 def test_provision_email_records_direct_inbound_points_mx_at_instance(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    """Direct inbound: MX -> mail.<zone> + an A record for it -> the instance IP.
-    Outbound still authorizes SES (SPF) and publishes SES DKIM."""
+    """Inbound is always direct: MX -> mail.<zone> + an A record for it -> the
+    instance IP; outbound still authorizes SES (SPF) and publishes SES DKIM."""
     zonefile = tmp_path / "zonefile"
     _write_zonefile(zonefile)
 

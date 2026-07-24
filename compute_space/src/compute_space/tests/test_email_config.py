@@ -1,8 +1,10 @@
 """Config tests for the additive, opt-in email feature.
 
-Email is disabled by default; enabling it requires the proxy URL, per-instance
-Keycloak client-credentials, and the inbound MX host. Old configs (written
-before these fields existed) must keep loading unchanged.
+Email is disabled by default; enabling it requires the proxy URL, the
+per-instance Keycloak client-credentials, and the instance's public IP (inbound
+is always delivered directly to the instance, so the MX/A records point at it).
+Old configs (written before these fields existed, or carrying the removed
+email_inbound_* keys) must keep loading unchanged.
 """
 
 from __future__ import annotations

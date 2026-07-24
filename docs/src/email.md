@@ -8,8 +8,8 @@ provisioning that talks to the proxy) are implemented in this repo and gated
 behind `email_enabled` in the instance config (off by default). The central
 relay is a separate service,
 [`openhost-email-proxy`](https://github.com/imbue-openhost/openhost-email-proxy),
-deployed on fly.io, and it is **outbound-only**: inbound mail is delivered
-directly to the instance's own mail server (MX → instance, port 25) by default.
+deployed on fly.io, and it is **outbound-only**: inbound mail is always delivered
+directly to the instance's own mail server (MX → instance, port 25).
 See [Production readiness](#production-readiness) for what remains before turning
 this on for real tenants.
 
@@ -119,8 +119,8 @@ ordinary OpenHost apps shipped as defaults.
 ```
 
 Outbound flows left-to-right through the frontend/backend to SES. Inbound does
-**not** traverse the proxy: by default the zone's MX points at the instance and
-its own mail server (Stalwart) accepts SMTP on port 25 directly (see
+**not** traverse the proxy: the zone's MX always points at the instance and its
+own mail server (Stalwart) accepts SMTP on port 25 directly (see
 [Receiving mail](#receiving-mail)).
 
 ## The email relay (frontend + private backend)
@@ -143,7 +143,9 @@ directly. Its responsibilities:
   CoreDNS, and SES verifies once they resolve. SES will not send on
   behalf of an unverified domain, so this is mandatory — and automatic,
   not an operator step.
-- **Handle inbound** via SES receiving (see [Receiving mail](#receiving-mail)).
+
+The backend does **not** handle inbound mail at all: inbound is delivered
+directly to the instance (see [Receiving mail](#receiving-mail)).
 
 The instance never holds AWS credentials. It only holds a Keycloak
 credential that OpenHost can revoke at any time.
@@ -273,7 +275,8 @@ data lives on the operator's own zone (not in a central store), and the
 implementation can iterate without a platform release.
 
 - The mailbox server relays outbound mail to the SES proxy (as a
-  smarthost client) and ingests inbound mail delivered by the proxy.
+  smarthost client) and receives inbound mail directly on port 25 (the
+  zone's MX points at the instance).
 - The mailbox server exposes its JMAP interface as a
   [cross-app service](./cross_app_services.md); the webmail app
   *consumes* that service.
@@ -284,8 +287,9 @@ Isolation has three layers; keep them distinct.
 
 1. **Between instances (structural).** Each instance is a separate VM
    with its own mailbox server and its own storage, so one instance
-   physically cannot read another's mail. The proxy additionally routes
-   inbound mail only to the instance that owns the destination zone.
+   physically cannot read another's mail. Inbound mail is delivered
+   directly to the destination instance (its zone's MX points at it), so
+   it never passes through any shared component.
    This is the same isolation that already separates every OpenHost zone
    — nothing new is built for it.
 
