@@ -217,9 +217,7 @@ class Config:
                 if not getattr(self, name):
                     raise ValueError(f"{name} must be set in config when email_enabled is True")
             if self.email_inbound_mode not in ("direct", "ses"):
-                raise ValueError(
-                    f"email_inbound_mode must be 'direct' or 'ses', got {self.email_inbound_mode!r}"
-                )
+                raise ValueError(f"email_inbound_mode must be 'direct' or 'ses', got {self.email_inbound_mode!r}")
             if self.email_inbound_mode == "ses" and not self.email_inbound_mx_host:
                 raise ValueError("email_inbound_mx_host must be set when email_inbound_mode is 'ses'")
             if self.email_inbound_mode == "direct" and not self.public_ip:

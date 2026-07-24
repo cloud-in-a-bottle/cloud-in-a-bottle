@@ -129,9 +129,7 @@ def test_provision_email_records_writes_zone(tmp_path: Path, monkeypatch: pytest
     assert "tok._domainkey.alice.example.com.   IN CNAME  tok.dkim.amazonses.com." in content
 
 
-def test_provision_email_records_direct_inbound_points_mx_at_instance(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-):
+def test_provision_email_records_direct_inbound_points_mx_at_instance(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """Direct inbound: MX -> mail.<zone> + an A record for it -> the instance IP.
     Outbound still authorizes SES (SPF) and publishes SES DKIM."""
     zonefile = tmp_path / "zonefile"
@@ -337,16 +335,26 @@ def test_provision_custom_domain_direct_no_double_mail(tmp_path: Path, monkeypat
     monkeypatch.setattr(type(cfg), "coredns_custom_zonefile_path", property(lambda self: custom_zonefile))
 
     class _FakeClient:
-        def __enter__(self): return self
-        def __exit__(self, *a): return None
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return None
+
         def ensure_identity(self, domain=None):
             target = domain or "alice.example.com"
-            return IdentityResult(domain=target, verified=False,
-                                  dkim_records=(DkimRecord(name=f"tok._domainkey.{target}", value="t.dkim.amazonses.com"),))
+            return IdentityResult(
+                domain=target,
+                verified=False,
+                dkim_records=(DkimRecord(name=f"tok._domainkey.{target}", value="t.dkim.amazonses.com"),),
+            )
 
     class _FakeTokenProvider:
-        def __enter__(self): return self
-        def __exit__(self, *a): return None
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return None
 
     monkeypatch.setattr(prov.KeycloakTokenProvider, "create", classmethod(lambda cls, creds: _FakeTokenProvider()))
     monkeypatch.setattr(prov.EmailProxyClient, "create", classmethod(lambda cls, url, tp: _FakeClient()))
