@@ -102,6 +102,40 @@ def test_legacy_config_without_email_fields_still_loads(tmp_path: Path) -> None:
     assert cfg.email_enabled is False
 
 
+def test_config_with_removed_email_inbound_fields_still_loads(tmp_path, monkeypatch) -> None:
+    # Upgrade path: an email-enabled config.toml written by the previous template
+    # (with the now-removed email_inbound_mode / email_inbound_mx_host) must still
+    # load, or a code-only redeploy would break the router (ansible doesn't
+    # re-render config.toml unless forced). The obsolete keys are dropped on load.
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        "[openhost]\n"
+        'zone_domain = "alice.selfhost.imbue.com"\n'
+        "tls_enabled = true\n"
+        "coredns_enabled = true\n"
+        'public_ip = "203.0.113.5"\n'
+        "email_enabled = true\n"
+        'email_proxy_base_url = "https://frontend.example"\n'
+        'email_keycloak_issuer_url = "https://kc.example/realms/openhost-customers"\n'
+        'email_keycloak_client_id = "instance-x"\n'
+        'email_keycloak_client_secret = "secret"\n'
+        'email_inbound_mode = "direct"\n'
+        'email_inbound_mx_host = "inbound-smtp.us-west-2.amazonaws.com"\n'
+    )
+    # Exercise the production load path (load_config -> typed_settings).
+    monkeypatch.setenv("OPENHOST_ROUTER_CONFIG", str(config_path))
+    from compute_space.config import load_config
+
+    cfg = load_config()
+    assert cfg.email_enabled is True
+    assert cfg.public_ip == "203.0.113.5"
+    assert not hasattr(cfg, "email_inbound_mode")
+
+    # And the from_toml path used by non-DI callers.
+    cfg2 = DefaultConfig.from_toml(str(config_path))
+    assert cfg2.email_enabled is True
+
+
 def test_email_config_round_trips_through_toml() -> None:
     cfg = DefaultConfig(zone_domain="x.example.com").evolve(**_full_email_kwargs())
     rendered = cfg.to_toml_str()

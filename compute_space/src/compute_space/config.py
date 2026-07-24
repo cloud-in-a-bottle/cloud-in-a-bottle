@@ -1,5 +1,6 @@
 import os
 import re
+import tempfile
 import tomllib
 from pathlib import Path
 from typing import Any
@@ -16,6 +17,26 @@ import typed_settings
 # broker, which holds the ACME account so the instance never sees ACME creds.
 CERT_PROVIDER_ACME = "acme"
 CERT_PROVIDER_CERT_API = "cert_api"
+
+# Config keys that older versions wrote into config.toml but that no longer map
+# to a Config field. typed-settings (and cattrs, forbid_extra_keys) reject any
+# unknown key in a config file, so a config.toml written by an older deploy would
+# otherwise fail to load after the field is removed — breaking the router on a
+# code-only redeploy (ansible does not re-render config.toml unless forced).
+# These keys are silently dropped on load. Add a key here when removing a field.
+#   - email_inbound_mode / email_inbound_mx_host: the SES-based inbound mode was
+#     removed; inbound is now always delivered directly to the instance.
+_OBSOLETE_CONFIG_KEYS = frozenset(
+    {
+        "email_inbound_mode",
+        "email_inbound_mx_host",
+    }
+)
+
+
+def _drop_obsolete_keys(section: dict[str, Any]) -> dict[str, Any]:
+    """Return ``section`` without any keys in ``_OBSOLETE_CONFIG_KEYS``."""
+    return {k: v for k, v in section.items() if k not in _OBSOLETE_CONFIG_KEYS}
 
 
 def _lowercase(s: str) -> str:
@@ -284,7 +305,8 @@ class Config:
     def from_toml(cls, path: str) -> Self:
         with open(path, "rb") as f:
             d = tomllib.load(f)
-        return cattrs.structure(d.get("openhost", d), cls)
+        section = d.get("openhost", d)
+        return cattrs.structure(_drop_obsolete_keys(section), cls)
 
     @property
     def persistent_data_dir(self) -> str:
@@ -520,9 +542,35 @@ def load_config() -> Config:
     """
     path = os.environ.get("OPENHOST_ROUTER_CONFIG") or os.environ.get("OPENHOST_CONFIG")
     if path:
+        path = _scrub_obsolete_keys_to_temp(path)
         return typed_settings.load(DefaultConfig, appname="openhost", config_files=[path])
     else:
         return typed_settings.load(DefaultConfig, appname="openhost")
+
+
+def _scrub_obsolete_keys_to_temp(path: str) -> str:
+    """If ``path`` contains obsolete config keys, write a cleaned copy and return
+    its path; otherwise return ``path`` unchanged.
+
+    typed-settings rejects unknown keys, so a config.toml written by an older
+    deploy (still carrying removed fields) would fail to load. We strip those
+    keys before handing the file to typed-settings, without modifying the file on
+    disk (ansible owns that; it will re-render on the next config change).
+    """
+    try:
+        with open(path, "rb") as f:
+            data = tomllib.load(f)
+    except (OSError, tomllib.TOMLDecodeError):
+        # Let typed-settings surface the real error with its own messaging.
+        return path
+    section = data.get("openhost")
+    if not isinstance(section, dict) or not (_OBSOLETE_CONFIG_KEYS & section.keys()):
+        return path
+    data["openhost"] = _drop_obsolete_keys(section)
+    fd, tmp_path = tempfile.mkstemp(prefix="openhost-config-", suffix=".toml")
+    with os.fdopen(fd, "wb") as f:
+        tomli_w.dump(data, f)
+    return tmp_path
 
 
 _active_config: Config | None = None
