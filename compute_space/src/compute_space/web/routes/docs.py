@@ -428,6 +428,17 @@ _TEMPLATE = """<!DOCTYPE html>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{{ page_title }} - OpenHost Manual</title>
+  <!-- Hold first paint until #page-content is parsed so a cross-document view
+       transition snapshots a complete page, not a half-built one (the residual
+       navigation flash). Must live in <head>. Chrome-only; others ignore it. -->
+  <link rel="expect" href="#page-content" blocking="render">
+  <script>
+    // TEMP diagnostic: warn if a cross-document view transition is skipped
+    // (e.g. the 4s render timeout). Remove once the flash question is settled.
+    addEventListener("pagereveal", (e) => {
+      if (e.viewTransition) e.viewTransition.finished.catch((err) => console.warn("view transition skipped:", err.name));
+    });
+  </script>
   <style>
     /* The docs page deliberately reuses layout.html's exact palette and
        typography (hardcoded light colours, #222 text on #fff, #ddd
@@ -442,6 +453,12 @@ _TEMPLATE = """<!DOCTYPE html>
        toggles the vertical scrollbar. Progressive enhancement — unsupported
        browsers simply ignore it. */
     html { scrollbar-gutter: stable; }
+    /* Match layout.html: instant swap and hold nav bar. Unsupported browsers
+       will use old behavior. */
+    @view-transition { navigation: auto; }
+    h1.space-title { view-transition-name: space-title; }
+    #main-nav { view-transition-name: main-nav; }
+    ::view-transition-group(*), ::view-transition-old(*), ::view-transition-new(*) { animation: none !important; }
     body {
       font-family: -apple-system, system-ui, sans-serif;
       color: #222;
@@ -613,7 +630,7 @@ _TEMPLATE = """<!DOCTYPE html>
         </div>
       {% endfor %}
     </aside>
-    <main class="content">
+    <main class="content" id="page-content">
       {{ content_html | safe }}
       {% if prev_link or next_link %}
         <div class="footer-nav">
@@ -623,6 +640,23 @@ _TEMPLATE = """<!DOCTYPE html>
       {% endif %}
     </main>
   </div>
+  <!-- Prerender side-effect-free tabs on hover so navigation reveals an
+       already-painted page instead of building it live (kills swap-time render
+       flash). Excludes /terminal/ (PTY) and /diagnostics/ (scan). Chrome-only. -->
+  <script type="speculationrules">
+  {
+    "prerender": [{
+      "where": { "or": [
+        { "href_matches": "/dashboard" },
+        { "href_matches": "/docs/*" },
+        { "href_matches": "/add_app" },
+        { "href_matches": "/system/*" },
+        { "href_matches": "/settings" }
+      ] },
+      "eagerness": "moderate"
+    }]
+  }
+  </script>
 </body>
 </html>
 """
