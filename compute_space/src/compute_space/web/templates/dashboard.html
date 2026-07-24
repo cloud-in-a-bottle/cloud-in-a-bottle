@@ -12,7 +12,7 @@
   </tr>
   {% for app in apps %}
   <tr data-app-id="{{ app.app_id }}">
-    <td><a href="{{ app_url(app.name) }}" class="app-link">{{ app.name }}{% if app.manifest_name and app.manifest_name != app.name %} <span style="color:#666;font-size:0.85em;">({{ app.manifest_name }})</span>{% endif %}</a></td>
+    <td><a href="{{ app_url(app.name) }}" class="app-link" target="_blank" rel="noopener">{{ app.name }}{% if app.manifest_name and app.manifest_name != app.name %} <span style="color:#666;font-size:0.85em;">({{ app.manifest_name }})</span>{% endif %}</a></td>
     <td class="app-status status-{{ app.status }}">{{ app.status }}</td>
     {# Action buttons rendered server-side and never re-rendered by
        the polling loop; server-side guards (409 on stop/reload/rename
