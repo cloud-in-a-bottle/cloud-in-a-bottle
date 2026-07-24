@@ -5,19 +5,6 @@
 <html>
 <head>
   <title>{% if display_name %}{{ display_name }}'s personal compute space{% else %}OpenHost{% endif %}{% block title_suffix %}{% endblock %}</title>
-  {#- Hold the incoming page's first paint until #page-content is parsed, so a
-     cross-document view transition snapshots a complete page instead of a
-     half-built one (the residual navigation flash). Must live in <head>.
-     Chrome-only; other browsers ignore it and paint as usual. -#}
-  <link rel="expect" href="#page-content" blocking="render">
-  <script>
-    // TEMP diagnostic: warn if a cross-document view transition is skipped
-    // (e.g. the 4s render timeout) — that would explain a residual flash.
-    // Remove once the flash question is settled.
-    addEventListener("pagereveal", (e) => {
-      if (e.viewTransition) e.viewTransition.finished.catch((err) => console.warn("view transition skipped:", err.name));
-    });
-  </script>
   <style>
     /* Always reserve the vertical scrollbar gutter so the centred body doesn't
        shift sideways when navigating between pages that scroll and pages that
@@ -25,12 +12,6 @@
        re-centring the column). Ignored by browsers that lack support, so it's a
        no-regression progressive enhancement. */
     html { scrollbar-gutter: stable; }
-    /* Tab navigations hold the tab constant and swap the page content once ready
-       Progressive enhancement — unsupported browsers see a slight blank flash */
-    @view-transition { navigation: auto; }
-    body > h1 { view-transition-name: space-title; }
-    #main-nav { view-transition-name: main-nav; }
-    ::view-transition-group(*), ::view-transition-old(*), ::view-transition-new(*) { animation: none !important; }
     body { font-family: -apple-system, system-ui, sans-serif; max-width: 960px; margin: 2em auto; padding: 0 1em; color: #222; }
     table { border-collapse: collapse; width: 100%; margin: 1em 0; }
     th, td { border: 1px solid #ddd; padding: 0.5em 0.8em; text-align: left; }
@@ -78,24 +59,5 @@
   <h1>{% if display_name %}{{ display_name }}'s personal compute space{% else %}OpenHost{% endif %}</h1>
   {% include "_nav_header.html" %}
   <main id="page-content">{% block content %}{% endblock %}</main>
-  {#- Prerender the side-effect-free tabs on hover so navigating to them reveals
-     an already-painted page (killing any swap-time render flash) instead of
-     building it live. Deliberately excludes /terminal/ (opens a PTY) and
-     /diagnostics/ (runs a scan), which must not execute speculatively.
-     Chrome-only; other browsers ignore it. -#}
-  <script type="speculationrules">
-  {
-    "prerender": [{
-      "where": { "or": [
-        { "href_matches": "/dashboard" },
-        { "href_matches": "/docs/*" },
-        { "href_matches": "/add_app" },
-        { "href_matches": "/system/*" },
-        { "href_matches": "/settings" }
-      ] },
-      "eagerness": "moderate"
-    }]
-  }
-  </script>
 </body>
 </html>

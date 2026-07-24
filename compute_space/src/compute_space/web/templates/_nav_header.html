@@ -6,9 +6,9 @@
     including template (they use different colour palettes). -#}
 <nav id="main-nav">
   <a href="/dashboard" class="nav-tab">Dashboard</a>
-  <a href="/docs/" class="nav-tab">Docs</a>
+  <a href="/docs/" class="nav-tab" data-no-boost>Docs</a>
   <a href="/add_app" class="nav-tab">Deploy App</a>
-  <a href="/terminal/" class="nav-tab">Terminal</a>
+  <a href="/terminal/" class="nav-tab" data-no-boost>Terminal</a>
   <a href="/system/" class="nav-tab">System Info</a>
   <a href="/diagnostics/" class="nav-tab">Diagnostics</a>
   <a href="/settings" class="nav-tab">Settings</a>
@@ -35,12 +35,79 @@
 </style>
 <script>
   (function() {
-    var p = window.location.pathname.replace(/\/+$/, '') || '/';
-    document.querySelectorAll('#main-nav .nav-tab').forEach(function(a) {
-      var href = a.getAttribute('href').replace(/\/+$/, '') || '/';
-      if (p === href || p === '/' && href === '/dashboard' || (href !== '/dashboard' && p.startsWith(href))) {
-        a.classList.add('active');
-      }
+    // Highlight the tab matching the current path. Runs on initial load and again
+    // after every boosted swap below (the active tab moves without a reload).
+    function setActive() {
+      var p = window.location.pathname.replace(/\/+$/, '') || '/';
+      document.querySelectorAll('#main-nav .nav-tab').forEach(function(a) {
+        var href = a.getAttribute('href').replace(/\/+$/, '') || '/';
+        var on = p === href || (p === '/' && href === '/dashboard') || (href !== '/dashboard' && p.startsWith(href));
+        a.classList.toggle('active', on);
+      });
+    }
+    setActive();
+
+    // Boosted navigation: fetch the target and swap only #page-content, so the
+    // nav/header DOM is never re-rendered — the bar stays constant with no reload
+    // flash. Scoped to the layout.html page family, which all share an identical
+    // <head>; Docs (own template/styles) and Terminal (websocket) carry
+    // data-no-boost and navigate normally. Pure progressive enhancement: on a page
+    // without #page-content, or any fetch/parse hiccup, it falls back to a plain
+    // navigation and behaves exactly as before.
+    if (!document.getElementById("page-content") || !window.history.pushState) return;
+
+    function reexecute(root) {
+      // <script>s inserted as parsed markup don't run; clone them so they do.
+      root.querySelectorAll("script").forEach(function(old) {
+        var s = document.createElement("script");
+        for (var i = 0; i < old.attributes.length; i++) s.setAttribute(old.attributes[i].name, old.attributes[i].value);
+        s.textContent = old.textContent;
+        old.replaceWith(s);
+      });
+    }
+
+    function clearTimers() {
+      // Tear down the leaving page's pollers so repeated visits don't stack
+      // intervals (no page relies on a timer surviving a navigation).
+      var top = window.setTimeout(function() {}, 0);
+      for (var i = 1; i <= top; i++) { window.clearTimeout(i); window.clearInterval(i); }
+    }
+
+    var busy = false;
+    function go(url, push) {
+      if (busy) return;
+      busy = true;
+      fetch(url, { credentials: "same-origin" }).then(function(res) {
+        var ct = res.headers.get("content-type") || "";
+        if (!res.ok || ct.indexOf("text/html") === -1) throw new Error("not boostable");
+        return res.text();
+      }).then(function(html) {
+        var doc = new DOMParser().parseFromString(html, "text/html");
+        var next = doc.getElementById("page-content");
+        if (!next) throw new Error("no #page-content");  // e.g. Docs / login page
+        clearTimers();
+        if (push) window.history.pushState({ boost: 1 }, "", url);
+        document.title = doc.title;
+        document.getElementById("page-content").replaceWith(next);
+        reexecute(next);
+        setActive();
+        window.scrollTo(0, 0);
+        busy = false;
+      }).catch(function() {
+        window.location.href = url;  // any hiccup → plain navigation
+      });
+    }
+
+    document.addEventListener("click", function(e) {
+      if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+      var a = e.target.closest("a");
+      if (!a || a.target === "_blank" || a.hasAttribute("data-no-boost") || a.hasAttribute("download")) return;
+      if (a.origin !== window.location.origin) return;                 // external (e.g. source link)
+      if (a.pathname === window.location.pathname && a.hash) return;    // in-page anchor
+      e.preventDefault();
+      go(a.href, true);
     });
+
+    window.addEventListener("popstate", function() { go(window.location.href, false); });
   })();
 </script>
