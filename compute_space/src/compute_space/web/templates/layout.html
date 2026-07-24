@@ -78,24 +78,5 @@
   <h1>{% if display_name %}{{ display_name }}'s personal compute space{% else %}OpenHost{% endif %}</h1>
   {% include "_nav_header.html" %}
   <main id="page-content">{% block content %}{% endblock %}</main>
-  {#- Prerender the side-effect-free tabs on hover so navigating to them reveals
-     an already-painted page (killing any swap-time render flash) instead of
-     building it live. Deliberately excludes /terminal/ (opens a PTY) and
-     /diagnostics/ (runs a scan), which must not execute speculatively.
-     Chrome-only; other browsers ignore it. -#}
-  <script type="speculationrules">
-  {
-    "prerender": [{
-      "where": { "or": [
-        { "href_matches": "/dashboard" },
-        { "href_matches": "/docs/*" },
-        { "href_matches": "/add_app" },
-        { "href_matches": "/system/*" },
-        { "href_matches": "/settings" }
-      ] },
-      "eagerness": "moderate"
-    }]
-  }
-  </script>
 </body>
 </html>
