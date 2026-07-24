@@ -255,8 +255,7 @@ def test_email_apps_deployed_only_when_email_enabled(cfg_with_apps, monkeypatch)
         email_keycloak_issuer_url="https://kc.example.com/realms/openhost-customers",
         email_keycloak_client_id="instance-x",
         email_keycloak_client_secret="s3cr3t",
-        email_inbound_mx_host="inbound-smtp.us-west-2.amazonaws.com",
-        public_ip="203.0.113.10",  # required for the default direct inbound mode
+        public_ip="203.0.113.10",  # required when email is enabled (direct inbound)
     )
 
     # Email OFF: only the base default app is attempted.

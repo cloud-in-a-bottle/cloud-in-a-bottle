@@ -48,12 +48,10 @@ email_proxy_base_url = "{{ email_proxy_base_url }}"
 email_keycloak_issuer_url = "{{ email_keycloak_issuer_url }}"
 email_keycloak_client_id = "{{ email_keycloak_client_id }}"
 email_keycloak_client_secret = "{{ email_keycloak_client_secret }}"
-# Inbound: "direct" (default) = the instance's own mail server receives on port 25
-# (MX -> mail.<zone> -> this instance); "ses" = SES-managed inbound host.
-email_inbound_mode = "{{ email_inbound_mode | default('direct') }}"
-{% if email_inbound_mode is not defined or email_inbound_mode == 'ses' %}
-email_inbound_mx_host = "{{ email_inbound_mx_host | default('inbound-smtp.us-west-2.amazonaws.com') }}"
-{% endif %}
+# Inbound is always delivered directly to this instance's own mail server: the
+# zone's MX points at this instance (mail.<zone> -> public_ip) and Stalwart
+# receives on port 25. Mail is never routed through OpenHost infra inbound, so
+# the platform can never read a tenant's mail. Only outbound relays through SES.
 {% if email_dmarc_rua is defined %}
 email_dmarc_rua = "{{ email_dmarc_rua }}"
 {% endif %}

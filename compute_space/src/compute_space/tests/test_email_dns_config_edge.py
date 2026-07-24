@@ -1,4 +1,11 @@
-"""Edge cases for email DNS record rendering + custom-domain config validation."""
+"""Edge cases for email DNS record rendering + custom-domain config validation.
+
+Inbound is ALWAYS direct to the instance's own mail server: the zone's MX points
+at ``mail.<zone>`` and an A record for that host resolves to the instance's
+public IP, so Stalwart receives on port 25. Mail never traverses OpenHost
+infrastructure inbound (the platform can never read a tenant's mail). Only
+outbound relays through the central SES proxy. There is no "ses" inbound mode.
+"""
 
 from __future__ import annotations
 
@@ -17,55 +24,115 @@ _EMAIL_KW = dict(
     email_keycloak_issuer_url="https://kc.example/realms/openhost-customers",
     email_keycloak_client_id="instance-x",
     email_keycloak_client_secret="secret",
-    email_inbound_mx_host="inbound-smtp.us-west-2.amazonaws.com",
-    public_ip="203.0.113.5",  # required for direct inbound (default)
+    public_ip="203.0.113.5",  # required whenever email is enabled (direct inbound)
 )
 
 
-# ─────────────────────── render_email_records ───────────────────────
+def _render(zone: str = "z.example", **kwargs) -> str:
+    """render_email_records with sensible direct-inbound defaults for brevity."""
+    kwargs.setdefault("inbound_mail_host", "mail.z.example")
+    kwargs.setdefault("inbound_mail_ip", "203.0.113.9")
+    kwargs.setdefault("dkim_cnames", [])
+    return render_email_records(zone, **kwargs)
 
 
-def test_render_includes_spf_dmarc_mx():
-    out = render_email_records("z.example", mail_from_host="inbound-smtp.us-west-2.amazonaws.com", dkim_cnames=[])
+# ─────────────────────── render_email_records: core ───────────────────────
+
+
+def test_render_includes_spf_dmarc_mx_and_a():
+    out = _render()
     assert '@   IN TXT  "v=spf1 include:amazonses.com ~all"' in out
     assert '_dmarc   IN TXT  "v=DMARC1; p=quarantine"' in out
-    assert "@   IN MX   10 inbound-smtp.us-west-2.amazonaws.com." in out
+    assert "@   IN MX   10 mail.z.example." in out
+    assert "mail.z.example.   IN A   203.0.113.9" in out
+
+
+def test_render_mx_always_points_at_instance_not_ses():
+    # The SES inbound host must NEVER appear as an MX target.
+    out = _render(inbound_mail_host="mail.z.example", inbound_mail_ip="1.2.3.4")
+    assert "inbound-smtp" not in out
+    assert "amazonaws.com" not in out
+    assert "@   IN MX   10 mail.z.example." in out
 
 
 def test_render_dmarc_rua_appended():
-    out = render_email_records("z.example", mail_from_host="mx.aws", dkim_cnames=[], dmarc_rua="dmarc@z.example")
+    out = _render(dmarc_rua="dmarc@z.example")
     assert "rua=mailto:dmarc@z.example" in out
 
 
+def test_render_dmarc_rua_empty_is_omitted():
+    out = _render(dmarc_rua="")
+    assert 'v=DMARC1; p=quarantine"' in out
+    assert "rua=" not in out
+
+
+def test_render_dmarc_rua_double_mailto_documented():
+    # Caller passes a bare address; a mailto: prefix is a caller error the
+    # renderer does not dedupe. Document current behavior.
+    out = _render(dmarc_rua="mailto:x@y")
+    assert "rua=mailto:mailto:x@y" in out
+
+
 def test_render_no_dkim_still_valid():
-    out = render_email_records("z.example", mail_from_host="mx.aws", dkim_cnames=[])
+    out = _render(dkim_cnames=[])
     assert "IN CNAME" not in out
     assert out.strip().endswith("; --- end openhost email records ---")
 
 
 def test_render_multiple_dkim_cnames():
     cnames = [DkimCname(name=f"t{i}._domainkey.z.example", target=f"t{i}.dkim.amazonses.com") for i in range(3)]
-    out = render_email_records("z.example", mail_from_host="mx.aws", dkim_cnames=cnames)
+    out = _render(dkim_cnames=cnames)
     assert out.count("IN CNAME") == 3
 
 
 def test_render_dkim_names_get_trailing_dot():
     c = [DkimCname(name="tok._domainkey.z.example", target="tok.dkim.amazonses.com")]
-    out = render_email_records("z.example", mail_from_host="mx.aws", dkim_cnames=c)
+    out = _render(dkim_cnames=c)
     assert "tok._domainkey.z.example.   IN CNAME  tok.dkim.amazonses.com." in out
 
 
 def test_render_dkim_names_already_dotted_not_doubled():
     c = [DkimCname(name="tok._domainkey.z.example.", target="tok.dkim.amazonses.com.")]
-    out = render_email_records("z.example", mail_from_host="mx.aws", dkim_cnames=c)
+    out = _render(dkim_cnames=c)
     assert "tok._domainkey.z.example.   IN CNAME  tok.dkim.amazonses.com." in out
     assert ".." not in out.replace("; ---", "")  # no double dots in records
 
 
-def test_render_mx_host_trailing_dot_not_doubled():
-    out = render_email_records("z.example", mail_from_host="mx.aws.", dkim_cnames=[])
-    assert "@   IN MX   10 mx.aws." in out
-    assert "mx.aws.." not in out
+# ─────────────────────── render: mail host / IP edge cases ───────────────────────
+
+
+def test_render_mail_host_trailing_dots_stripped():
+    out = _render(inbound_mail_host="mail.z.example...", inbound_mail_ip="1.2.3.4")
+    assert "@   IN MX   10 mail.z.example." in out
+    assert "mail.z.example.   IN A   1.2.3.4" in out
+    assert ".." not in out.replace("; ---", "")
+
+
+def test_render_output_ends_with_newline():
+    assert _render().endswith("\n")
+
+
+def test_render_empty_ip_raises():
+    with pytest.raises(ValueError, match="inbound_mail_ip"):
+        render_email_records("z", inbound_mail_host="mail.z", inbound_mail_ip="", dkim_cnames=[])
+
+
+def test_render_none_ip_raises():
+    with pytest.raises(ValueError, match="inbound_mail_ip"):
+        render_email_records("z", inbound_mail_host="mail.z", inbound_mail_ip=None, dkim_cnames=[])  # type: ignore[arg-type]
+
+
+def test_render_empty_host_raises():
+    with pytest.raises(ValueError, match="inbound_mail_host"):
+        render_email_records("z", inbound_mail_host="", inbound_mail_ip="1.2.3.4", dkim_cnames=[])
+
+
+def test_render_ipv6_ip_passthrough():
+    out = _render(inbound_mail_ip="2001:db8::1")
+    assert "mail.z.example.   IN A   2001:db8::1" in out
+
+
+# ─────────────────────── apply_email_records ───────────────────────
 
 
 def _zone_file(serial: int = 2020010100) -> str:
@@ -84,30 +151,71 @@ def _zone_file(serial: int = 2020010100) -> str:
     )
 
 
-def test_apply_email_records_appends_and_bumps_serial(tmp_path: Path):
+def test_apply_email_records_appends_mx_a_and_bumps_serial(tmp_path: Path):
     zone = tmp_path / "zone.db"
     zone.write_text(_zone_file())
     apply_email_records(
         zone,
         "z.example",
-        mail_from_host="mx.aws",
+        inbound_mail_host="mail.z.example",
+        inbound_mail_ip="9.9.9.9",
         dkim_cnames=[DkimCname(name="t._domainkey.z.example", target="t.dkim.amazonses.com")],
     )
     content = zone.read_text()
     assert "v=spf1 include:amazonses.com" in content
+    assert "@   IN MX   10 mail.z.example." in content
+    assert "mail.z.example.   IN A   9.9.9.9" in content
     assert "IN CNAME" in content
-    # serial bumped from 2020010100
-    assert "2020010100   ; serial" not in content
+    assert "2020010100   ; serial" not in content  # bumped
 
 
 def test_apply_email_records_idempotent_serial_progresses(tmp_path: Path):
     zone = tmp_path / "zone.db"
     zone.write_text(_zone_file())
-    apply_email_records(zone, "z.example", mail_from_host="mx", dkim_cnames=[])
-    apply_email_records(zone, "z.example", mail_from_host="mx", dkim_cnames=[])
+    apply_email_records(
+        zone, "z.example", inbound_mail_host="mail.z.example", inbound_mail_ip="1.1.1.1", dkim_cnames=[]
+    )
+    apply_email_records(
+        zone, "z.example", inbound_mail_host="mail.z.example", inbound_mail_ip="1.1.1.1", dkim_cnames=[]
+    )
     second = zone.read_text()
-    # applied twice -> two record blocks, serial advanced again
     assert second.count("openhost email records (managed)") == 2
+
+
+def test_apply_error_leaves_file_untouched(tmp_path: Path):
+    zone = tmp_path / "z.db"
+    zone.write_text(_zone_file())
+    before = zone.read_text()
+    with pytest.raises(ValueError):
+        apply_email_records(
+            zone,
+            "z.example",
+            inbound_mail_host="mail.z.example",
+            inbound_mail_ip=None,  # type: ignore[arg-type]
+            dkim_cnames=[],
+        )
+    assert zone.read_text() == before  # no partial write / no serial bump
+
+
+# ─────────────────────── inbound_mail_host_for ───────────────────────
+
+
+@pytest.mark.parametrize(
+    "domain,expected",
+    [
+        ("alice.host.imbue.com", "mail.alice.host.imbue.com"),
+        ("alice.host.imbue.com.", "mail.alice.host.imbue.com"),
+        ("Alice.HOST.Imbue.COM", "mail.alice.host.imbue.com"),
+        ("  alice.host.imbue.com  ", "mail.alice.host.imbue.com"),
+        ("  alice.host.imbue.com..  ", "mail.alice.host.imbue.com"),
+        # already a mail. host -> NOT doubled to mail.mail.…
+        ("mail.mydomain.com", "mail.mydomain.com"),
+        ("Mail.MyDomain.COM.", "mail.mydomain.com"),
+    ],
+)
+def test_inbound_mail_host_for(domain, expected):
+    cfg = DefaultConfig(zone_domain="alice.host.imbue.com")
+    assert cfg.inbound_mail_host_for(domain) == expected
 
 
 # ─────────────────────── custom-domain validation ───────────────────────
@@ -137,7 +245,6 @@ def test_custom_domain_malformed_rejected(bad):
 
 
 def test_custom_domain_trailing_dots_normalized_not_rejected():
-    # Trailing dots are stripped by normalization, so a trailing-dot FQDN is fine.
     cfg = DefaultConfig(zone_domain="alice.selfhost.imbue.com").evolve(
         **_EMAIL_KW, email_custom_domain="mail.mydomain.com.."
     )
@@ -159,7 +266,6 @@ def test_custom_domain_subdomain_of_zone_rejected():
 
 
 def test_custom_domain_parent_of_zone_rejected():
-    # zone is a subdomain of the custom domain -> also overlaps
     with pytest.raises(ValueError):
         DefaultConfig(zone_domain="alice.selfhost.imbue.com").evolve(
             **_EMAIL_KW, email_custom_domain="selfhost.imbue.com"
@@ -197,6 +303,7 @@ def test_delegation_record_strips_zone_port():
         **_EMAIL_KW, email_custom_domain="mail.mydomain.com"
     )
     rec = cfg.custom_domain_delegation_record()
+    assert rec is not None
     assert rec.value == "ns.alice.selfhost.imbue.com"  # no :8443
 
 
@@ -210,237 +317,39 @@ def test_delegation_record_strips_zone_port():
         "email_keycloak_issuer_url",
         "email_keycloak_client_id",
         "email_keycloak_client_secret",
+        "public_ip",
     ],
 )
 def test_email_enabled_requires_all_fields(missing):
-    # These are required whenever email is enabled (outbound relay always via SES).
-    # email_inbound_mx_host is required only in ses mode (covered separately).
+    # Every one of these is required whenever email is enabled; public_ip because
+    # inbound is always direct (the MX/A records point at this instance).
     kw = dict(_EMAIL_KW)
     kw[missing] = None
     with pytest.raises(ValueError):
         DefaultConfig(zone_domain="alice.selfhost.imbue.com").evolve(**kw)
 
 
-def test_email_direct_mode_requires_public_ip():
+def test_email_enabled_empty_public_ip_rejected():
     kw = dict(_EMAIL_KW)
-    kw["email_inbound_mode"] = "direct"
-    kw["public_ip"] = None
-    with pytest.raises(ValueError, match="public_ip must be set"):
-        DefaultConfig(zone_domain="alice.selfhost.imbue.com").evolve(**kw)
-
-
-def test_email_ses_mode_requires_mx_host():
-    kw = dict(_EMAIL_KW)
-    kw["email_inbound_mode"] = "ses"
-    kw["email_inbound_mx_host"] = None
-    with pytest.raises(ValueError, match="email_inbound_mx_host must be set"):
-        DefaultConfig(zone_domain="alice.selfhost.imbue.com").evolve(**kw)
-
-
-def test_email_invalid_inbound_mode_rejected():
-    kw = dict(_EMAIL_KW)
-    kw["email_inbound_mode"] = "bogus"
-    with pytest.raises(ValueError, match="email_inbound_mode"):
-        DefaultConfig(zone_domain="alice.selfhost.imbue.com").evolve(**kw)
-
-
-def test_email_disabled_needs_no_fields():
-    # No exception when email is off, even with all email_* unset.
-    cfg = DefaultConfig(zone_domain="alice.selfhost.imbue.com")
-    assert cfg.email_enabled is False
-
-
-# ─────────────────────── direct-inbound DNS rendering ───────────────────────
-
-
-def test_render_direct_inbound_mx_and_a_record():
-    out = render_email_records(
-        "z.example",
-        mail_from_host="",
-        dkim_cnames=[],
-        inbound_mail_host="mail.z.example",
-        inbound_mail_ip="203.0.113.9",
-    )
-    assert "@   IN MX   10 mail.z.example." in out
-    assert "mail.z.example.   IN A   203.0.113.9" in out
-    assert "inbound-smtp" not in out
-    # Outbound (SPF) still authorizes SES.
-    assert "v=spf1 include:amazonses.com" in out
-
-
-def test_render_direct_inbound_requires_ip():
-    with pytest.raises(ValueError, match="inbound_mail_ip"):
-        render_email_records("z.example", mail_from_host="", dkim_cnames=[], inbound_mail_host="mail.z.example")
-
-
-def test_render_ses_inbound_unchanged_when_no_mail_host():
-    out = render_email_records("z.example", mail_from_host="inbound-smtp.us-west-2.amazonaws.com", dkim_cnames=[])
-    assert "@   IN MX   10 inbound-smtp.us-west-2.amazonaws.com." in out
-    assert " IN A " not in out
-
-
-def test_inbound_mail_host_for_uses_mail_subdomain():
-    cfg = DefaultConfig(zone_domain="alice.selfhost.imbue.com")
-    assert cfg.inbound_mail_host_for("alice.selfhost.imbue.com") == "mail.alice.selfhost.imbue.com"
-    # An already-"mail." domain is used as-is (not doubled to mail.mail.…).
-    assert cfg.inbound_mail_host_for("Mail.MyDomain.COM.") == "mail.mydomain.com"
-
-
-# ─────────────────── direct-inbound: extensive edge cases ───────────────────
-
-
-def test_render_direct_mx_and_a_exact_format():
-    out = render_email_records(
-        "z.example",
-        mail_from_host="",
-        dkim_cnames=[],
-        inbound_mail_host="mail.z.example",
-        inbound_mail_ip="1.2.3.4",
-    )
-    assert "@   IN MX   10 mail.z.example." in out
-    assert "mail.z.example.   IN A   1.2.3.4" in out
-    assert out.endswith("\n")
-
-
-def test_render_direct_ignores_mail_from_host():
-    out = render_email_records(
-        "z.example",
-        mail_from_host="inbound-smtp.us-west-2.amazonaws.com",
-        dkim_cnames=[],
-        inbound_mail_host="mail.z.example",
-        inbound_mail_ip="1.2.3.4",
-    )
-    assert "inbound-smtp" not in out  # SES host ignored in direct mode
-
-
-def test_render_direct_empty_ip_raises():
-    with pytest.raises(ValueError, match="inbound_mail_ip"):
-        render_email_records("z", mail_from_host="", dkim_cnames=[], inbound_mail_host="mail.z", inbound_mail_ip="")
-
-
-def test_render_direct_none_ip_raises():
-    with pytest.raises(ValueError, match="inbound_mail_ip"):
-        render_email_records("z", mail_from_host="", dkim_cnames=[], inbound_mail_host="mail.z", inbound_mail_ip=None)
-
-
-def test_render_direct_host_trailing_dots_stripped():
-    out = render_email_records(
-        "z", mail_from_host="", dkim_cnames=[], inbound_mail_host="mail.z.example...", inbound_mail_ip="1.2.3.4"
-    )
-    assert "@   IN MX   10 mail.z.example." in out
-    assert ".." not in out.replace("; ---", "")
-
-
-def test_render_ses_no_a_record():
-    out = render_email_records("z", mail_from_host="inbound-smtp.aws", dkim_cnames=[])
-    assert "@   IN MX   10 inbound-smtp.aws." in out
-    assert " IN A " not in out
-
-
-def test_render_dmarc_rua_double_mailto_documented():
-    # Caller passes a bare address; passing a mailto: is a caller error that the
-    # renderer does not dedupe. Document current behavior.
-    out = render_email_records("z", mail_from_host="mx", dkim_cnames=[], dmarc_rua="mailto:x@y")
-    assert "rua=mailto:mailto:x@y" in out
-
-
-def test_render_dmarc_rua_empty_is_none():
-    out = render_email_records("z", mail_from_host="mx", dkim_cnames=[], dmarc_rua="")
-    assert 'v=DMARC1; p=quarantine"' in out
-    assert "rua=" not in out
-
-
-def test_apply_direct_error_leaves_file_untouched(tmp_path):
-    zone = tmp_path / "z.db"
-    zone.write_text(_zone_file())
-    before = zone.read_text()
-    with pytest.raises(ValueError):
-        apply_email_records(
-            zone,
-            "z.example",
-            mail_from_host="",
-            dkim_cnames=[],
-            inbound_mail_host="mail.z.example",
-            inbound_mail_ip=None,
-        )
-    assert zone.read_text() == before  # no partial write / no serial bump
-
-
-def test_apply_direct_writes_mx_and_a(tmp_path):
-    zone = tmp_path / "z.db"
-    zone.write_text(_zone_file())
-    apply_email_records(
-        zone,
-        "z.example",
-        mail_from_host="",
-        dkim_cnames=[],
-        inbound_mail_host="mail.z.example",
-        inbound_mail_ip="9.9.9.9",
-    )
-    content = zone.read_text()
-    assert "@   IN MX   10 mail.z.example." in content
-    assert "mail.z.example.   IN A   9.9.9.9" in content
-    assert "2020010100   ; serial" not in content  # bumped
-
-
-# ─── inbound_mail_host_for normalization + double-mail fix ───
-
-
-@pytest.mark.parametrize(
-    "domain,expected",
-    [
-        ("alice.host.imbue.com", "mail.alice.host.imbue.com"),
-        ("alice.host.imbue.com.", "mail.alice.host.imbue.com"),
-        ("Alice.HOST.Imbue.COM", "mail.alice.host.imbue.com"),
-        ("  alice.host.imbue.com  ", "mail.alice.host.imbue.com"),
-        ("  alice.host.imbue.com..  ", "mail.alice.host.imbue.com"),
-        # already a mail. host -> NOT doubled (the fix)
-        ("mail.mydomain.com", "mail.mydomain.com"),
-        ("Mail.MyDomain.COM.", "mail.mydomain.com"),
-    ],
-)
-def test_inbound_mail_host_for(domain, expected):
-    cfg = DefaultConfig(zone_domain="alice.host.imbue.com")
-    assert cfg.inbound_mail_host_for(domain) == expected
-
-
-# ─── mode validation: case/whitespace sensitivity ───
-
-
-@pytest.mark.parametrize("mode", ["Direct", "DIRECT", " direct", "ses ", "SES", "bogus", ""])
-def test_invalid_inbound_mode_rejected(mode):
-    kw = dict(_EMAIL_KW)
-    kw["email_inbound_mode"] = mode
-    with pytest.raises(ValueError, match="email_inbound_mode"):
-        DefaultConfig(zone_domain="alice.selfhost.imbue.com").evolve(**kw)
-
-
-def test_direct_mode_empty_public_ip_rejected():
-    kw = dict(_EMAIL_KW)
-    kw["email_inbound_mode"] = "direct"
     kw["public_ip"] = ""
     with pytest.raises(ValueError, match="public_ip must be set"):
         DefaultConfig(zone_domain="alice.selfhost.imbue.com").evolve(**kw)
 
 
-def test_ses_mode_does_not_require_public_ip():
-    kw = dict(_EMAIL_KW)
-    kw["email_inbound_mode"] = "ses"
-    kw["public_ip"] = None
-    kw["email_inbound_mx_host"] = "inbound-smtp.us-west-2.amazonaws.com"
-    cfg = DefaultConfig(zone_domain="alice.selfhost.imbue.com").evolve(**kw)
-    assert cfg.email_inbound_mode == "ses"
-
-
-def test_disabled_email_ignores_bad_mode():
-    # email off -> mode not validated at all
-    cfg = DefaultConfig(zone_domain="alice.selfhost.imbue.com").evolve(email_enabled=False, email_inbound_mode="bogus")
+def test_email_disabled_needs_no_fields():
+    cfg = DefaultConfig(zone_domain="alice.selfhost.imbue.com")
     assert cfg.email_enabled is False
 
 
-def test_mode_validation_after_proxy_field_validation():
-    kw = dict(_EMAIL_KW)
-    kw["email_inbound_mode"] = "bogus"
-    kw["email_proxy_base_url"] = None
-    with pytest.raises(ValueError, match="email_proxy_base_url"):
-        DefaultConfig(zone_domain="alice.selfhost.imbue.com").evolve(**kw)
+def test_email_disabled_without_public_ip_ok():
+    # public_ip is only required when email is enabled.
+    cfg = DefaultConfig(zone_domain="alice.selfhost.imbue.com").evolve(email_enabled=False)
+    assert cfg.email_enabled is False
+    assert cfg.public_ip is None
+
+
+def test_no_ses_inbound_mode_field():
+    # The ses inbound mode is gone entirely — the fields no longer exist.
+    cfg = DefaultConfig(zone_domain="alice.selfhost.imbue.com").evolve(**_EMAIL_KW)
+    assert not hasattr(cfg, "email_inbound_mode")
+    assert not hasattr(cfg, "email_inbound_mx_host")

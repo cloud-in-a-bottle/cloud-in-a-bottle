@@ -110,18 +110,13 @@ class Config:
     email_keycloak_issuer_url: str | None
     email_keycloak_client_id: str | None
     email_keycloak_client_secret: str | None
-    # The SES-managed inbound MX host for the region, e.g.
-    # "inbound-smtp.us-west-2.amazonaws.com".  Only used when
-    # email_inbound_mode == "ses".
-    email_inbound_mx_host: str | None
-    # How inbound mail is received:
-    #   "direct" (default): the zone's MX points at this instance (mail.<zone> ->
-    #     instance IP) and the instance's own mail server (Stalwart) receives on
-    #     port 25.  Requires inbound port 25 be open (true for the instances we
-    #     provision).  Outbound still relays through SES.
-    #   "ses": inbound goes to the SES-managed inbound host (email_inbound_mx_host)
-    #     — for environments where the instance can't accept inbound 25.
-    email_inbound_mode: str
+    # Inbound mail is ALWAYS delivered directly to this instance's own mail
+    # server: the zone's MX points at the instance (mail.<zone> -> public_ip) and
+    # Stalwart receives on port 25.  Mail is never routed through OpenHost
+    # infrastructure inbound, so the platform can never read a tenant's mail.
+    # (Outbound still relays through the central proxy -> SES, which owns the
+    # shared sending reputation.)  This requires inbound port 25 be reachable,
+    # which holds for the instances OpenHost provisions.
     # Optional DMARC aggregate-report address published in the _dmarc record.
     email_dmarc_rua: str | None
     # Optional custom mail domain the owner delegated to this instance's CoreDNS
@@ -223,12 +218,10 @@ class Config:
             ):
                 if not getattr(self, name):
                     raise ValueError(f"{name} must be set in config when email_enabled is True")
-            if self.email_inbound_mode not in ("direct", "ses"):
-                raise ValueError(f"email_inbound_mode must be 'direct' or 'ses', got {self.email_inbound_mode!r}")
-            if self.email_inbound_mode == "ses" and not self.email_inbound_mx_host:
-                raise ValueError("email_inbound_mx_host must be set when email_inbound_mode is 'ses'")
-            if self.email_inbound_mode == "direct" and not self.public_ip:
-                raise ValueError("public_ip must be set when email_inbound_mode is 'direct'")
+            # Inbound is always direct-to-instance, so the MX/A records point at
+            # this instance's public IP — which must therefore be known.
+            if not self.public_ip:
+                raise ValueError("public_ip must be set in config when email_enabled is True")
         # Validate the custom mail domain shape (if set) regardless of
         # email_enabled, so a typo surfaces at config load rather than at the
         # first boot that turns email on.
@@ -252,12 +245,11 @@ class Config:
     def inbound_mail_host_for(self, domain: str) -> str:
         """The mail hostname whose A record the MX points at, for direct inbound.
 
-        Uses ``mail.<domain>`` (option A) — a dedicated mail host under the served
-        zone, so the apex A record is left untouched. If the domain is *already*
-        a ``mail.`` host (common for delegated custom domains like
+        Uses ``mail.<domain>`` — a dedicated mail host under the served zone, so
+        the apex A record is left untouched. If the domain is *already* a
+        ``mail.`` host (common for delegated custom domains like
         ``mail.mydomain.com``), it is used as-is rather than doubled to
-        ``mail.mail.mydomain.com``. Only meaningful when
-        email_inbound_mode == "direct".
+        ``mail.mail.mydomain.com``.
         """
         d = domain.strip().lower().rstrip(".")
         return d if d.startswith("mail.") else f"mail.{d}"
@@ -452,11 +444,6 @@ class DefaultConfig(Config):
     email_keycloak_issuer_url: str | None = None
     email_keycloak_client_id: str | None = None
     email_keycloak_client_secret: str | None = None
-    email_inbound_mx_host: str | None = None
-    # Default to direct inbound: the instances we provision accept inbound SMTP on
-    # port 25, so mail goes straight to the instance's own mail server. Set to
-    # "ses" only for environments where inbound 25 is blocked.
-    email_inbound_mode: str = "direct"
     email_dmarc_rua: str | None = None
     email_custom_domain: str | None = None
     email_mailbox_app_names: list[str] = attr.Factory(lambda: ["stalwart-email-server"])

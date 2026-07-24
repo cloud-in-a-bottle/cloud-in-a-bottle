@@ -26,8 +26,7 @@ def _full_email_kwargs() -> dict[str, object]:
         email_keycloak_issuer_url="https://keycloak.example.com/realms/openhost-customers",
         email_keycloak_client_id="instance-alice",
         email_keycloak_client_secret="s3cr3t",
-        email_inbound_mx_host="inbound-smtp.us-west-2.amazonaws.com",
-        # Direct inbound is the default; it needs the instance IP for the mail A record.
+        # Inbound is always direct-to-instance; the MX/A records need the instance IP.
         public_ip="203.0.113.5",
     )
 
@@ -37,18 +36,28 @@ def test_email_disabled_by_default() -> None:
     assert cfg.email_enabled is False
     assert cfg.email_proxy_base_url is None
     assert cfg.email_keycloak_client_secret is None
-    assert cfg.email_inbound_mx_host is None
 
 
 def test_email_enabled_requires_all_fields() -> None:
     cfg = DefaultConfig(zone_domain="x.example.com")
     with pytest.raises(ValueError, match="email_proxy_base_url must be set"):
         cfg.evolve(email_enabled=True)
-    # In ses inbound mode, the MX host is required.
-    partial = {k: v for k, v in _full_email_kwargs().items() if k != "email_inbound_mx_host"}
-    partial["email_inbound_mode"] = "ses"
-    with pytest.raises(ValueError, match="email_inbound_mx_host must be set"):
+
+
+def test_email_enabled_requires_public_ip() -> None:
+    # Inbound is always direct-to-instance, so the public IP (the MX/A target)
+    # must be known when email is enabled.
+    cfg = DefaultConfig(zone_domain="x.example.com")
+    partial = {k: v for k, v in _full_email_kwargs().items() if k != "public_ip"}
+    with pytest.raises(ValueError, match="public_ip must be set"):
         cfg.evolve(**partial)
+
+
+def test_email_config_has_no_inbound_mode_fields() -> None:
+    # The ses inbound mode has been removed entirely: inbound is always direct.
+    cfg = DefaultConfig(zone_domain="x.example.com")
+    assert not hasattr(cfg, "email_inbound_mode")
+    assert not hasattr(cfg, "email_inbound_mx_host")
 
 
 def test_effective_default_apps_excludes_email_apps_when_off() -> None:
@@ -75,7 +84,7 @@ def test_effective_default_apps_dedupes_when_already_listed() -> None:
 def test_email_enabled_with_all_fields_ok() -> None:
     cfg = DefaultConfig(zone_domain="x.example.com").evolve(**_full_email_kwargs())
     assert cfg.email_enabled is True
-    assert cfg.email_inbound_mx_host == "inbound-smtp.us-west-2.amazonaws.com"
+    assert cfg.public_ip == "203.0.113.5"
 
 
 def test_legacy_config_without_email_fields_still_loads(tmp_path: Path) -> None:
@@ -99,7 +108,9 @@ def test_email_config_round_trips_through_toml() -> None:
     assert "email_enabled = true" in rendered
     assert 'email_proxy_base_url = "https://openhost-email-proxy.fly.dev"' in rendered
     assert 'email_keycloak_client_id = "instance-alice"' in rendered
-    assert 'email_inbound_mx_host = "inbound-smtp.us-west-2.amazonaws.com"' in rendered
+    # The removed ses-inbound fields must not round-trip.
+    assert "email_inbound_mode" not in rendered
+    assert "email_inbound_mx_host" not in rendered
 
 
 def test_email_config_has_no_baked_in_relay_secret() -> None:

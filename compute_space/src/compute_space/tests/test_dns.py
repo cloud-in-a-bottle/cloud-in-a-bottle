@@ -115,7 +115,8 @@ def test_clear_txt_preserves_email_txt_records(tmp_path: Path) -> None:
     apply_email_records(
         zonefile,
         "app.example.com",
-        mail_from_host="inbound-smtp.us-west-2.amazonaws.com",
+        inbound_mail_host="mail.app.example.com",
+        inbound_mail_ip="203.0.113.9",
         dkim_cnames=[DkimCname(name="tok1._domainkey.app.example.com", target="tok1.dkim.amazonses.com")],
         dmarc_rua="dmarc@app.example.com",
     )
@@ -126,10 +127,11 @@ def test_clear_txt_preserves_email_txt_records(tmp_path: Path) -> None:
     content = zonefile.read_text()
     # ACME challenge gone...
     assert "challenge" not in content
-    # ...but SPF, DMARC, MX, DKIM survive.
+    # ...but SPF, DMARC, MX, DKIM, and the mail-host A record survive.
     assert "v=spf1 include:amazonses.com" in content
     assert "v=DMARC1" in content
     assert "IN MX" in content
+    assert "mail.app.example.com.   IN A   203.0.113.9" in content
     assert "tok1._domainkey.app.example.com.   IN CNAME  tok1.dkim.amazonses.com." in content
 
 
@@ -139,7 +141,8 @@ def test_apply_email_records_bumps_serial_and_is_appendable(tmp_path: Path) -> N
     apply_email_records(
         zonefile,
         "app.example.com",
-        mail_from_host="inbound-smtp.us-west-2.amazonaws.com",
+        inbound_mail_host="mail.app.example.com",
+        inbound_mail_ip="203.0.113.9",
         dkim_cnames=[
             DkimCname(name="a._domainkey.app.example.com", target="a.dkim.amazonses.com"),
             DkimCname(name="b._domainkey.app.example.com", target="b.dkim.amazonses.com"),
@@ -148,7 +151,9 @@ def test_apply_email_records_bumps_serial_and_is_appendable(tmp_path: Path) -> N
     content = zonefile.read_text()
     assert "101   ; serial" in content
     assert '@   IN TXT  "v=spf1 include:amazonses.com ~all"' in content
-    assert "@   IN MX   10 inbound-smtp.us-west-2.amazonaws.com." in content
+    # MX points at the instance's own mail host, with a matching A record.
+    assert "@   IN MX   10 mail.app.example.com." in content
+    assert "mail.app.example.com.   IN A   203.0.113.9" in content
     assert "a._domainkey.app.example.com.   IN CNAME  a.dkim.amazonses.com." in content
     assert "b._domainkey.app.example.com.   IN CNAME  b.dkim.amazonses.com." in content
     # Default DMARC has no rua when none provided.

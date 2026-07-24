@@ -88,8 +88,7 @@ def test_provision_email_records_writes_zone(tmp_path: Path, monkeypatch: pytest
         email_keycloak_issuer_url="https://kc.test/realms/openhost-customers",
         email_keycloak_client_id="instance-alice",
         email_keycloak_client_secret="s3cr3t",
-        email_inbound_mode="ses",
-        email_inbound_mx_host="inbound-smtp.us-west-2.amazonaws.com",
+        public_ip="203.0.113.9",
     )
     # Point the config's zonefile path at our temp file.
     monkeypatch.setattr(type(cfg), "coredns_zonefile_path", property(lambda self: zonefile))
@@ -125,7 +124,10 @@ def test_provision_email_records_writes_zone(tmp_path: Path, monkeypatch: pytest
     content = zonefile.read_text()
     assert "v=spf1 include:amazonses.com" in content
     assert "v=DMARC1" in content
-    assert "@   IN MX   10 inbound-smtp.us-west-2.amazonaws.com." in content
+    # Inbound is always direct: MX points at the instance's own mail host + A record.
+    assert "@   IN MX   10 mail.alice.example.com." in content
+    assert "mail.alice.example.com.   IN A   203.0.113.9" in content
+    assert "inbound-smtp" not in content
     assert "tok._domainkey.alice.example.com.   IN CNAME  tok.dkim.amazonses.com." in content
 
 
@@ -141,7 +143,6 @@ def test_provision_email_records_direct_inbound_points_mx_at_instance(tmp_path: 
         email_keycloak_issuer_url="https://kc.test/realms/openhost-customers",
         email_keycloak_client_id="instance-alice",
         email_keycloak_client_secret="s3cr3t",
-        email_inbound_mode="direct",  # the default; explicit for clarity
         public_ip="203.0.113.9",
     )
     monkeypatch.setattr(type(cfg), "coredns_zonefile_path", property(lambda self: zonefile))
@@ -210,8 +211,7 @@ def test_provision_email_records_provisions_custom_domain(tmp_path: Path, monkey
         email_keycloak_issuer_url="https://kc.test/realms/openhost-customers",
         email_keycloak_client_id="instance-alice",
         email_keycloak_client_secret="s3cr3t",
-        email_inbound_mode="ses",
-        email_inbound_mx_host="inbound-smtp.us-west-2.amazonaws.com",
+        public_ip="203.0.113.10",
         email_custom_domain="mail.mydomain.com",
     )
     monkeypatch.setattr(type(cfg), "coredns_zonefile_path", property(lambda self: zonefile))
@@ -253,9 +253,12 @@ def test_provision_email_records_provisions_custom_domain(tmp_path: Path, monkey
     # Built-in zone got its records.
     assert "tok._domainkey.alice.example.com.   IN CNAME  tok.dkim.amazonses.com." in zonefile.read_text()
     # Custom zone got its own records (SPF/DMARC/MX/DKIM under the custom origin).
+    # Inbound is direct: MX -> mail.<custom> -> instance IP (never the SES host).
     custom_content = custom_zonefile.read_text()
     assert "v=spf1 include:amazonses.com" in custom_content
-    assert "@   IN MX   10 inbound-smtp.us-west-2.amazonaws.com." in custom_content
+    assert "@   IN MX   10 mail.mydomain.com." in custom_content
+    assert "mail.mydomain.com.   IN A   203.0.113.10" in custom_content
+    assert "inbound-smtp" not in custom_content
     assert "tok._domainkey.mail.mydomain.com.   IN CNAME  tok.dkim.amazonses.com." in custom_content
 
 
@@ -327,7 +330,6 @@ def test_provision_custom_domain_direct_no_double_mail(tmp_path: Path, monkeypat
         email_keycloak_issuer_url="https://kc.test/realms/openhost-customers",
         email_keycloak_client_id="instance-alice",
         email_keycloak_client_secret="s3cr3t",
-        email_inbound_mode="direct",
         public_ip="203.0.113.9",
         email_custom_domain="mail.mydomain.com",
     )

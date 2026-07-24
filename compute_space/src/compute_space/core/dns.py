@@ -237,11 +237,10 @@ class DkimCname:
 def render_email_records(
     zone_domain: str,
     *,
-    mail_from_host: str,
+    inbound_mail_host: str,
+    inbound_mail_ip: str,
     dkim_cnames: list[DkimCname],
     dmarc_rua: str | None = None,
-    inbound_mail_host: str | None = None,
-    inbound_mail_ip: str | None = None,
 ) -> str:
     """Render the persistent email DNS records for a zone as zone-file lines.
 
@@ -251,16 +250,17 @@ def render_email_records(
     idempotently on every boot (the zone file is regenerated from template at
     start_coredns time).
 
-    Inbound (the MX target) depends on the mode:
-
-    * **SES inbound** (``inbound_mail_host`` is None): MX points at the
-      SES-managed inbound host (``mail_from_host``). Used where the instance can't
-      accept inbound SMTP directly.
-    * **Direct inbound** (``inbound_mail_host`` + ``inbound_mail_ip`` given): MX
-      points at the instance's own mail host (e.g. ``mail.<zone>``) and an A
-      record is published for that host -> the instance IP, so the instance's own
-      mail server receives mail on port 25. Only outbound still goes through SES.
+    Inbound is **always direct to this instance**: the MX points at the
+    instance's own mail host (``inbound_mail_host``, e.g. ``mail.<zone>``) and an
+    A record is published for that host -> the instance IP (``inbound_mail_ip``),
+    so the instance's own mail server receives mail on port 25. Mail is never
+    routed through OpenHost infrastructure inbound, so the platform can never
+    read a tenant's mail. Only outbound goes through the central SES relay.
     """
+    if not inbound_mail_host:
+        raise ValueError("inbound_mail_host is required")
+    if not inbound_mail_ip:
+        raise ValueError("inbound_mail_ip is required for the mail host A record")
     lines: list[str] = ["; --- openhost email records (managed) ---"]
     # SPF: authorize Amazon SES to send for this domain (outbound is always SES).
     lines.append('@   IN TXT  "v=spf1 include:amazonses.com ~all"')
@@ -269,16 +269,11 @@ def render_email_records(
     if dmarc_rua:
         dmarc += f"; rua=mailto:{dmarc_rua}"
     lines.append(f'_dmarc   IN TXT  "{dmarc}"')
-    # MX: direct-to-instance when a mail host is given, else the SES inbound host.
-    if inbound_mail_host is not None:
-        if not inbound_mail_ip:
-            raise ValueError("inbound_mail_host requires inbound_mail_ip for the A record")
-        host = inbound_mail_host.rstrip(".")
-        lines.append(f"@   IN MX   10 {host}.")
-        # Publish the mail host's A record so the MX resolves to the instance.
-        lines.append(f"{host}.   IN A   {inbound_mail_ip}")
-    else:
-        lines.append(f"@   IN MX   10 {mail_from_host.rstrip('.')}.")
+    # MX: always direct-to-instance. Point at the instance's own mail host and
+    # publish its A record so the MX resolves to this instance's IP.
+    host = inbound_mail_host.rstrip(".")
+    lines.append(f"@   IN MX   10 {host}.")
+    lines.append(f"{host}.   IN A   {inbound_mail_ip}")
     # DKIM: SES CNAMEs (absolute names).
     for c in dkim_cnames:
         lines.append(f"{c.name.rstrip('.')}.   IN CNAME  {c.target.rstrip('.')}.")
@@ -290,11 +285,10 @@ def apply_email_records(
     zone_file_path: Path,
     zone_domain: str,
     *,
-    mail_from_host: str,
+    inbound_mail_host: str,
+    inbound_mail_ip: str,
     dkim_cnames: list[DkimCname],
     dmarc_rua: str | None = None,
-    inbound_mail_host: str | None = None,
-    inbound_mail_ip: str | None = None,
 ) -> None:
     """Append the persistent email records to the zone file and bump the serial.
 
@@ -305,11 +299,10 @@ def apply_email_records(
     """
     block = render_email_records(
         zone_domain,
-        mail_from_host=mail_from_host,
-        dkim_cnames=dkim_cnames,
-        dmarc_rua=dmarc_rua,
         inbound_mail_host=inbound_mail_host,
         inbound_mail_ip=inbound_mail_ip,
+        dkim_cnames=dkim_cnames,
+        dmarc_rua=dmarc_rua,
     )
     with open(zone_file_path) as f:
         content = f.read()
