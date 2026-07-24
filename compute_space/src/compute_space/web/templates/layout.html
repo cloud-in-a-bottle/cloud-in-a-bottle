@@ -5,6 +5,19 @@
 <html>
 <head>
   <title>{% if display_name %}{{ display_name }}'s personal compute space{% else %}OpenHost{% endif %}{% block title_suffix %}{% endblock %}</title>
+  {#- Hold the incoming page's first paint until #page-content is parsed, so a
+     cross-document view transition snapshots a complete page instead of a
+     half-built one (the residual navigation flash). Must live in <head>.
+     Chrome-only; other browsers ignore it and paint as usual. -#}
+  <link rel="expect" href="#page-content" blocking="render">
+  <script>
+    // TEMP diagnostic: warn if a cross-document view transition is skipped
+    // (e.g. the 4s render timeout) — that would explain a residual flash.
+    // Remove once the flash question is settled.
+    addEventListener("pagereveal", (e) => {
+      if (e.viewTransition) e.viewTransition.finished.catch((err) => console.warn("view transition skipped:", err.name));
+    });
+  </script>
   <style>
     /* Always reserve the vertical scrollbar gutter so the centred body doesn't
        shift sideways when navigating between pages that scroll and pages that
@@ -64,6 +77,6 @@
 <body>
   <h1>{% if display_name %}{{ display_name }}'s personal compute space{% else %}OpenHost{% endif %}</h1>
   {% include "_nav_header.html" %}
-  {% block content %}{% endblock %}
+  <main id="page-content">{% block content %}{% endblock %}</main>
 </body>
 </html>
