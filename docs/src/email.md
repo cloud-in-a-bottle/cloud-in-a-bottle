@@ -8,8 +8,12 @@ provisioning that talks to the proxy) are implemented in this repo and gated
 behind `email_enabled` in the instance config (off by default). The central
 relay is a separate service,
 [`openhost-email-proxy`](https://github.com/imbue-openhost/openhost-email-proxy),
-deployed on fly.io. See [Production readiness](#production-readiness) for what
-remains before turning this on for real tenants.
+deployed on fly.io, and it is **outbound-only**. Inbound is being reworked to be
+delivered directly to the instance's own mail server (MX → instance, port 25) —
+that mode switch (`email_inbound_mode`) lands in a follow-up; the code in this
+change still points the MX at the SES-managed inbound host. See
+[Production readiness](#production-readiness) for what remains before turning
+this on for real tenants.
 
 The guiding constraint is that **OpenHost instances are operated by
 untrusted users**. A single instance must never be able to damage email
@@ -101,7 +105,7 @@ ordinary OpenHost apps shipped as defaults.
    (Keycloak,          │  frontend (public door)   │ ─6PN─▶ │  · From = zone only           │ ──▶ AWS SES ─▶ MX
     calls /api/email)  │  · verifies instance token │        │  · per-instance rate caps     │     (outbound)
                        │  · derives zone            │        │  · spam / bounce / complaint  │
-                       │  · sets X-OpenHost-Zone    │ ◀────  │  · SES identity + verify      │ ◀── SES inbound (S3+SNS)
+                       │  · sets X-OpenHost-Zone    │ ◀────  │  · SES identity + verify      │
                        └──────────────────────────┘        └──────────────────────────────┘
         │
         ▼
@@ -111,6 +115,11 @@ ordinary OpenHost apps shipped as defaults.
 
   On the instance: mailbox server (app) + webmail client (app)
 ```
+
+Outbound flows left-to-right through the frontend/backend to SES. Inbound does
+**not** traverse the proxy: it is delivered to the instance's own mail server.
+Today the MX points at the SES-managed inbound host; a follow-up switches it to
+point directly at the instance (see [Receiving mail](#receiving-mail)).
 
 ## The email relay (frontend + private backend)
 
@@ -185,11 +194,14 @@ Each instance is authoritative for its own zone via CoreDNS (see
 into that zone **automatically** — there is a single mechanism, no
 per-provider connectors:
 
-- **SPF** authorizing SES to send for the zone.
+- **SPF** authorizing SES to send for the zone (outbound always relays via SES).
 - **DKIM** public keys (the tokens the SES proxy obtained when creating
   the domain identity) so signed mail aligns.
 - **DMARC** policy for the zone.
-- **MX** pointing at the SES inbound endpoint.
+- **MX** for inbound, pointing at the SES-managed inbound host
+  (`email_inbound_mx_host`). A follow-up adds an `email_inbound_mode` switch that
+  can instead point the MX at the instance's own mail host (`mail.<zone>`, with a
+  matching A record) for direct delivery to Stalwart on port 25.
 
 Because these are persistent zone records (unlike the transient
 ACME-challenge records), they are written as part of the zone's base
@@ -235,14 +247,21 @@ CoreDNS load-bearing for the whole domain.
 
 ## Receiving mail
 
-> **Status:** the previous SES-based inbound path (SES receiving → S3 → SNS →
-> proxy → instance over HTTPS) has been removed. It existed to work around
-> providers that block inbound port 25. For the environments OpenHost targets
-> (instances that can accept inbound SMTP on port 25), inbound is being reworked
-> to be **direct to the instance's own mail server**: the zone's MX points at the
-> instance, and Stalwart receives on port 25 — no S3/SNS/proxy hop. That design
-> lands in a follow-up. Only **outbound** currently flows through the central
-> SES relay (see [Sending](#sending-mail)); inbound is handled by the instance.
+Inbound mail is handled by the instance's own mail server, not the central
+relay — only **outbound** flows through the SES relay (see
+[The email relay](#the-email-relay-frontend--private-backend)).
+
+In this change the zone's **MX points at the SES-managed inbound host**
+(`email_inbound_mx_host`). A follow-up adds `email_inbound_mode`: in `direct`
+mode (the intended default) the MX instead points at the instance
+(`mail.<zone>`, whose A record CoreDNS publishes → the instance's public IP) so a
+sender's MX connects straight to Stalwart on port 25, which works because the
+instances OpenHost provisions accept inbound SMTP on port 25; `ses` mode keeps
+the SES inbound host for environments that block inbound 25.
+
+The earlier full SES-based inbound path (SES receiving → S3 → SNS → proxy →
+instance over HTTPS) has been removed from the proxy, the frontend, and the
+mailbox app.
 
 ## The mailbox and webmail apps
 
@@ -314,7 +333,8 @@ NS delegation; everything after that is automatic.
 - **An instance holds no AWS credentials** — it authenticates to the
   proxy with a per-instance, individually-revocable Keycloak credential.
 - **Proxy unavailability is fail-safe** — outbound mail queues on the
-  instance's mailbox server and retries; inbound mail is retried by SNS.
+  instance's mailbox server and retries; inbound does not depend on the proxy
+  (a sending MX retries per normal SMTP).
 - **Mail data stays on the instance** — the proxy relays and enforces
   policy but is not the mail store.
 
@@ -337,18 +357,23 @@ NS delegation; everything after that is automatic.
 - **Platform (this repo):** `email_*` config (opt-in, off by default),
   CoreDNS publishing of SPF/DKIM/DMARC/MX (`core/dns.py:apply_email_records`),
   a `clear_txt` fix that no longer wipes email TXT records on cert renewal, the
-  proxy client + startup provisioning (`core/email/`), and finalize-time config
-  injection (`ansible/templates/config.toml.j2`).
-- **Proxy (`openhost-email-proxy`):** outbound send with Keycloak auth +
-  From-domain enforcement + per-instance rate/volume caps, SES identity
-  create/verify, and the signature-verified SNS inbound webhook with S3 fetch
-  and per-zone routing to the destination instance.
+  proxy/frontend client + startup provisioning (`core/email/`), the scoped
+  `/api/email/relay-config` router endpoint, and finalize-time config injection
+  (`ansible/templates/config.toml.j2`). Inbound MX still points at the SES host;
+  the direct-inbound `email_inbound_mode` switch is a follow-up.
+- **Proxy (`openhost-email-proxy`):** outbound-only. SMTP submission relay
+  (per-instance HMAC credential) + `/v1/send`, From-domain enforcement,
+  per-instance rate/volume caps, and SES identity create/verify. Inbound (the
+  old SNS/S3 webhook) has been removed; inbound is delivered directly to the
+  instance's Stalwart on port 25.
+- **Mailbox + webmail apps:** `openhost-stalwart-email-server` (relays outbound
+  through the SMTP smarthost using the fetched relay-config; receives inbound on
+  :25) and `openhost-bulwark-email-client` (consumes Stalwart's JMAP service).
 
 Verified end-to-end on a fresh instance: it auto-published its DNS records, SES
 auto-verified the domain from those records, and the instance sent DKIM-signed
 mail through the proxy to a real external inbox. From-domain enforcement,
-audience/issuer checks, rate limiting, and SNS signature rejection are covered
-by tests.
+audience/issuer checks, and rate limiting are covered by tests.
 
 ## Production readiness
 
@@ -361,33 +386,44 @@ operational / infrastructure decisions or depend on other teams):
    the production AWS account/region before any real sending.
 2. **A dedicated production AWS account.** Testing used a personal-scope account
    with inline IAM keys. Production should use a dedicated imbue AWS account, an
-   IAM role/policy scoped to exactly the SES + S3 + SNS actions the proxy needs,
-   and credentials delivered as fly secrets (never committed).
-3. **Real per-instance Keycloak provisioning.** vm-manager must create the
-   per-instance confidential client in `openhost-customers`, attach the
-   `openhost-email` client scope (subdomain claim + `openhost-email` audience),
-   set the service-account `subdomain` attribute, and inject the client
-   credentials at finalize (the same step it will do for cert-api). Testing used
-   a throwaway Keycloak and a manual provisioning script; production points
-   `email_keycloak_issuer_url` at the real `keycloak.imbue.com` realm.
-4. **Inbound infrastructure (SES receiving).** Create the S3 receiving bucket,
-   the SNS topic subscribed to the proxy's `/v1/inbound`, and the SES receipt
-   rule set that stores mail to S3 + notifies SNS. The proxy's inbound dispatch
-   + signature verification are implemented and tested, but the AWS receipt
-   pipeline itself must be stood up (and is only needed if inbound is desired;
-   outbound works without it).
-5. **Instance-side inbound endpoint + mailbox app.** The proxy forwards inbound
-   mail to `https://<zone>/_email/inbound`; that endpoint (and the mailbox
-   server + webmail default apps that consume it) is a separate piece of work.
-6. **Proxy scaling / shared rate-limit store.** The proxy runs a single fly
-   machine because the rate-limiter is in-process. Multi-machine HA needs a
-   shared counter store (e.g. Redis/DynamoDB). Same constraint as cert-api.
-7. **SES configuration sets per tenant.** Reputation isolation via per-tenant
+   IAM role/policy scoped to exactly the SES actions the proxy needs (outbound
+   send + identity management), and credentials delivered as fly secrets (never
+   committed).
+3. **The `openhost-email` Keycloak client scope.** vm-manager mints the
+   per-instance client and attaches this scope, but the scope itself (a
+   `subdomain` user-attribute mapper + an Audience mapper for
+   `aud: openhost-email`, attached as Default) must be created by hand in the
+   `openhost-customers` realm, exactly like the existing `cert-api` scope.
+   vm-manager fails the provision with a clear error if the scope is missing.
+   Testing used a throwaway Keycloak; production points `email_keycloak_issuer_url`
+   at the real realm.
+4. **Turn the feature on end-to-end.** In the frontend (imbue-hosted-spaces) set
+   `IMBUE_EMAIL_BACKEND_URL` (the proxy's 6PN URL), `IMBUE_EMAIL_INSTANCE_ISSUER`
+   (the `openhost-customers` realm), and `IMBUE_EMAIL_SMTP_HOST`/`_PORT` (the
+   proxy's public submission endpoint). In vm-manager Settings set `email_enabled`
+   and `email_proxy_base_url` (→ the frontend's public URL, since the instance
+   calls the frontend for identity + relay-config). Email is off by default in
+   both until these are set.
+5. **Per-instance email authorization.** The frontend currently authenticates
+   the instance but does not gate *which* instances may use email — any
+   authenticated instance can. The per-instance `email_enabled` flag in the
+   frontend DB (fail-closed) is a pending, separate change.
+6. **Custom-domain inbound in the mailbox app.** Stalwart only marks its default
+   zone domain as local at first boot and does not learn a configured custom
+   mail domain, so inbound for a BYO custom domain would be rejected as non-local
+   even though DNS/SES are set up for it. Outbound from the custom domain and
+   default-subdomain inbound both work; custom-domain inbound needs the mailbox
+   app to be told its custom domain.
+7. **Proxy scaling / shared stores.** The proxy runs a single fly machine
+   because the rate-limiter (and the custom-domain grant store) are in-process /
+   file-backed. Multi-machine HA needs a shared store (e.g. Redis/DynamoDB).
+   Same constraint as cert-api.
+8. **SES configuration sets per tenant.** Reputation isolation via per-tenant
    configuration sets (and dedicated IPs where warranted) plus bounce/complaint
-   SNS handling and a suppression list should be provisioned before scale.
-8. **DMARC policy + reporting.** The default published policy is
+   handling and a suppression list should be provisioned before scale.
+9. **DMARC policy + reporting.** The default published policy is
    `p=quarantine`; decide the production policy and a `rua` aggregate-report
    address per zone (config supports `email_dmarc_rua`).
-9. **Canonical proxy URL + config defaults.** Point `email_proxy_base_url` and
-   `email_inbound_mx_host` at the production proxy and SES region; consider a
-   default once the production proxy has a stable DNS name.
+10. **Canonical proxy URL + config defaults.** Point `email_proxy_base_url` at
+    the production frontend and `email_inbound_mx_host` at the SES inbound host
+    for the region; consider defaults once they have stable DNS names.

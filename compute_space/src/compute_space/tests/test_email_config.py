@@ -225,3 +225,28 @@ def test_relay_config_reports_unconfigured_when_email_off(monkeypatch) -> None:
     resp = sys_mod.email_relay_config.fn(object(), _FakeDB("stalwart-email-server"), cfg)  # type: ignore[attr-defined]
     assert resp.content.configured is False
     assert resp.content.smtp_relay_password is None
+
+
+def test_relay_provider_cache_reused_across_equivalent_configs(monkeypatch) -> None:
+    # provide_config() re-wraps the active config into a fresh Config per request,
+    # so two distinct-but-equivalent Config objects must still share one provider
+    # (otherwise the TTL cache never hits and the dict leaks a provider per call).
+    monkeypatch.setattr(sys_mod, "_relay_providers", {})
+    cfg1 = DefaultConfig(zone_domain="alice.selfhost.imbue.com").evolve(**_full_email_kwargs())
+    cfg2 = DefaultConfig(zone_domain="alice.selfhost.imbue.com").evolve(**_full_email_kwargs())
+    assert cfg1 is not cfg2
+    p1 = sys_mod.get_relay_credential_provider(cfg1)
+    p2 = sys_mod.get_relay_credential_provider(cfg2)
+    assert p1 is p2
+    assert len(sys_mod._relay_providers) == 1
+
+
+def test_relay_provider_cache_separates_distinct_configs(monkeypatch) -> None:
+    # Different zones (or email identities) must not share a cached credential.
+    monkeypatch.setattr(sys_mod, "_relay_providers", {})
+    cfg_a = DefaultConfig(zone_domain="alice.selfhost.imbue.com").evolve(**_full_email_kwargs())
+    cfg_b = DefaultConfig(zone_domain="bob.selfhost.imbue.com").evolve(**_full_email_kwargs())
+    p_a = sys_mod.get_relay_credential_provider(cfg_a)
+    p_b = sys_mod.get_relay_credential_provider(cfg_b)
+    assert p_a is not p_b
+    assert len(sys_mod._relay_providers) == 2

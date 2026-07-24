@@ -47,14 +47,36 @@ DEFAULT_TOKEN_EXPIRY_HOURS: float = 8.0
 
 
 # Process-wide relay-credential provider (caches the frontend-fetched credential
-# with a short TTL). One per config identity so tests with distinct configs don't
-# bleed into each other.
-_relay_providers: dict[int, RelayCredentialProvider] = {}
+# with a short TTL). Keyed on the config values that determine the credential
+# rather than on id(config): provide_config() hands each request a freshly-built
+# Config object (it re-wraps the active DefaultConfig into a plain Config), so an
+# id()-based key would never hit — defeating the TTL cache (refetching from the
+# frontend on every request) and leaking a provider per request. A content key
+# keeps one provider per distinct email/zone identity, so the TTL cache works and
+# tests with distinct configs still don't bleed into each other.
+_relay_providers: dict[tuple[object, ...], RelayCredentialProvider] = {}
 _relay_providers_lock = threading.Lock()
 
 
+def _relay_provider_key(config: Config) -> tuple[object, ...]:
+    """A stable key over the config fields the relay credential depends on.
+
+    Two Config objects that would fetch the same credential (same proxy URL,
+    Keycloak client, and zone/custom domain) share one cached provider.
+    """
+    return (
+        config.email_enabled,
+        config.email_proxy_base_url,
+        config.email_keycloak_issuer_url,
+        config.email_keycloak_client_id,
+        config.email_keycloak_client_secret,
+        config.zone_domain_no_port,
+        config.email_custom_domain_normalized,
+    )
+
+
 def get_relay_credential_provider(config: Config) -> RelayCredentialProvider:
-    key = id(config)
+    key = _relay_provider_key(config)
     with _relay_providers_lock:
         provider = _relay_providers.get(key)
         if provider is None:
