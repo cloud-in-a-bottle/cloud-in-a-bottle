@@ -4,7 +4,9 @@ A ``first_boot.toml`` next to the router config supplies a fresh instance's prim
 claim token; they are seeded into the DB (the ``domains`` table + the ``settings`` claim token)
 exactly once.  On an old instance there is no ``first_boot.toml`` — the domain set is seeded from the
 config-file ``zone_domain`` + ``[[openhost.domains]]`` and the claim token from its legacy file.
-After first boot the DB is authoritative and these file sources are never read again.
+After first boot the DB is authoritative and these file sources are never read again (``zone_domain``
+stays in ``config.toml`` but is ignored; the ``zone_domain`` line is scrubbed by the old-instance
+system-agent migration ``v0007_seed_domains_and_scrub`` — for a fresh install, on its first update).
 """
 
 from __future__ import annotations
@@ -21,7 +23,6 @@ from compute_space.config import Config
 from compute_space.config import Domain
 from compute_space.core import domain_store
 from compute_space.core import settings_store
-from compute_space.core import system_agent
 from compute_space.core.logging import logger
 
 
@@ -81,29 +82,20 @@ def _read_legacy_claim_token(config: Config) -> str | None:
     return content.split(":", 1)[0] or None
 
 
-def _scrub_zone_domain_line() -> None:
-    """Remove the now-captured ``zone_domain`` line from ``config.toml`` — delegated to the system
-    agent so all config-file mutation goes through the single privileged writer (the agent runs as
-    root and preserves the file's ``host:host`` ownership).  Best-effort: the value is already in the
-    DB and is never read at runtime, so a failure (e.g. no agent in dev/CI) must not block startup.
-    ``config.toml`` still loads afterwards because ``zone_domain`` is optional in ``DefaultConfig``."""
-    try:
-        system_agent.scrub_config_zone_domain()
-        logger.info("Requested config.toml zone_domain scrub via the system agent")
-    except system_agent.SystemAgentError as exc:
-        logger.warning("Could not scrub zone_domain via the system agent ({}); it is ignored at runtime anyway", exc)
-
-
 def seed_first_boot(config: Config) -> None:
     """Seed the DB (domains + claim token) once, on first boot.  Idempotent — no-op once the
     ``domains`` table has rows.  Prefers ``first_boot.toml``; otherwise the config-file ``zone_domain``
-    + ``[[openhost.domains]]`` (domains) and the legacy claim-token file (token)."""
+    + ``[[openhost.domains]]`` (domains) and the legacy claim-token file (token).
+
+    This only *captures* the legacy config into the DB; it never edits ``config.toml``.  Removing the
+    now-ignored ``zone_domain`` line is the old-instance system-agent migration
+    ``v0007_seed_domains_and_scrub`` (the runtime seed can't scrub without racing its own capture)."""
     fb = read_first_boot()
     if fb is not None:
         primary = Domain(name=fb.domain, tls=fb.tls, mdns=fb.mdns)
-        seeded = domain_store.seed_domains(config, primary, [])
+        domain_store.seed_domains(config, primary, [])
     else:
-        seeded = domain_store.seed_domains_from_legacy(config)
+        domain_store.seed_domains_from_legacy(config)
 
     # Migrate the claim token into the settings store.  Relevant only pre-setup, so gate on
     # owner-absence + settings-absence rather than the domain-seeded flag — an instance that seeded
@@ -113,8 +105,3 @@ def seed_first_boot(config: Config) -> None:
         if token:
             settings_store.set_setting(config, settings_store.CLAIM_TOKEN_KEY, token)
             logger.info("Seeded claim token into the settings store")
-
-    # Scrub the captured zone_domain line from config.toml only when we migrated the domain set this
-    # boot (i.e. the DB was empty); afterwards the DB is authoritative and the line is never read.
-    if seeded:
-        _scrub_zone_domain_line()

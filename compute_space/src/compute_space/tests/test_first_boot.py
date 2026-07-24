@@ -8,7 +8,6 @@ from pathlib import Path
 import pytest
 
 from compute_space.config import Domain
-from compute_space.core import system_agent
 from compute_space.core.domain_store import load_records
 from compute_space.core.domain_store import seed_domains
 from compute_space.core.first_boot import read_first_boot
@@ -17,13 +16,6 @@ from compute_space.core.settings_store import CLAIM_TOKEN_KEY
 from compute_space.core.settings_store import get_setting
 from compute_space.db.versioned import apply_migrations
 from compute_space.tests.conftest import _make_test_config
-from openhost_system_agent.config_edit import scrub_zone_domain
-
-
-@pytest.fixture(autouse=True)
-def _stub_agent_scrub(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The config scrub delegates to ``sudo openhost_system_agent``; stub it so tests never shell out."""
-    monkeypatch.setattr(system_agent, "scrub_config_zone_domain", lambda: None)
 
 
 def _cfg(tmp_path: Path):  # type: ignore[no-untyped-def]
@@ -85,40 +77,19 @@ def test_seed_falls_back_to_config_and_legacy_claim_file(tmp_path: Path, monkeyp
     assert get_setting(cfg, CLAIM_TOKEN_KEY) == "legacy-tok"  # extra after ':' stripped
 
 
-def test_seed_delegates_scrub_to_agent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    # After capturing zone_domain into the DB, the router asks the system agent to scrub the line.
-    # Simulate the agent's edit so the end-to-end result is covered (only that line removed).
+def test_seed_leaves_config_toml_untouched(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # The seed only captures into the DB — it never edits config.toml (the zone_domain line stays,
+    # ignored; a later system-agent migration scrubs it).
     cfg = _cfg(tmp_path)
     config_toml = tmp_path / "config.toml"
-    config_toml.write_text(
-        '[openhost]\nzone_domain = "config-domain.example.com"\nhost = "127.0.0.1"\ntls_enabled = true\n'
-    )
+    body = '[openhost]\nzone_domain = "config-domain.example.com"\nhost = "127.0.0.1"\ntls_enabled = true\n'
+    config_toml.write_text(body)
     monkeypatch.setenv("OPENHOST_ROUTER_CONFIG", str(config_toml))
-    calls: list[int] = []
-
-    def fake_scrub() -> None:
-        calls.append(1)
-        scrub_zone_domain(str(config_toml))  # what the agent does, as root, in prod
-
-    monkeypatch.setattr(system_agent, "scrub_config_zone_domain", fake_scrub)
 
     seed_first_boot(cfg)
 
-    assert calls == [1]  # router delegated the scrub to the agent, once, on first boot
-    text = config_toml.read_text()
-    assert "zone_domain" not in text
-    assert 'host = "127.0.0.1"' in text and "tls_enabled = true" in text  # other lines preserved
-    assert [r.name for r in load_records(cfg)] == ["config-domain.example.com"]
-
-
-def test_scrub_only_delegated_on_first_boot(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    cfg = _cfg(tmp_path)
-    _point_config_env(monkeypatch, tmp_path)
-    calls: list[int] = []
-    monkeypatch.setattr(system_agent, "scrub_config_zone_domain", lambda: calls.append(1))
-    seed_first_boot(cfg)  # first boot: seeded -> scrub delegated
-    seed_first_boot(cfg)  # second boot: already seeded -> no scrub
-    assert calls == [1]
+    assert config_toml.read_text() == body  # untouched
+    assert [r.name for r in load_records(cfg)] == ["config-domain.example.com"]  # captured into the DB
 
 
 def test_claim_token_migrates_even_when_domains_already_seeded(

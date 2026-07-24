@@ -8,7 +8,6 @@ import attr
 import attrs
 import cappa
 
-from openhost_system_agent.config_edit import scrub_zone_domain
 from openhost_system_agent.status import get_migration_status
 from openhost_system_agent.update import apply_update
 from openhost_system_agent.update import fetch_updates
@@ -77,27 +76,13 @@ class StatusCmd:
         _output(get_migration_status())
 
 
-@cappa.command(name="config", help="Edit the router config.toml (root-owned config-file operations).")
-@attrs.define
-class ConfigCmd:
-    @cappa.command(
-        name="scrub-zone-domain",
-        help="Remove the legacy zone_domain line from config.toml (already captured into the DB).",
-    )
-    def scrub_zone_domain(self) -> None:
-        try:
-            _output(scrub_zone_domain())
-        except Exception as e:
-            _error(str(e))
-
-
 @cappa.command(
     name="openhost_system_agent",
     help="OpenHost system agent — host-level updates and migrations.",
 )
 @attrs.define
 class SystemAgent:
-    subcommand: cappa.Subcommands[UpdateCmd | StatusCmd | ConfigCmd]
+    subcommand: cappa.Subcommands[UpdateCmd | StatusCmd]
 
 
 def main() -> None:

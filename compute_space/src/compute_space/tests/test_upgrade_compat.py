@@ -3,7 +3,8 @@
 Simulates a pre-consolidation instance in-process — a v12 DB (no domains/settings tables), a
 config.toml with ``zone_domain`` + ``[[openhost.domains]]``, and a legacy claim-token file — then
 runs the upgrade-boot sequence (migrate → seed → rebuild) and asserts everything is captured into the
-DB, the primary/cert layout is preserved, and the ``zone_domain`` line is scrubbed from config.toml."""
+DB and the primary/cert layout is preserved.  (config.toml is left untouched — removing the now-ignored
+``zone_domain`` line is a later system-agent migration.)"""
 
 from __future__ import annotations
 
@@ -13,7 +14,6 @@ from pathlib import Path
 import pytest
 
 from compute_space.config import load_config
-from compute_space.core import system_agent
 from compute_space.core.domain_store import load_records
 from compute_space.core.domain_store import rebuild_active_domains
 from compute_space.core.first_boot import seed_first_boot
@@ -21,13 +21,6 @@ from compute_space.core.settings_store import CLAIM_TOKEN_KEY
 from compute_space.core.settings_store import get_setting
 from compute_space.db.connection import init_db
 from compute_space.db.schema import schema_path
-from openhost_system_agent.config_edit import scrub_zone_domain
-
-
-@pytest.fixture(autouse=True)
-def _stub_agent_scrub(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The config scrub delegates to the system agent (unavailable in tests); stub it by default."""
-    monkeypatch.setattr(system_agent, "scrub_config_zone_domain", lambda: None)
 
 
 def _build_v12_db(db_path: str) -> None:
@@ -77,8 +70,6 @@ def _old_instance(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, owner: boo
 
 def test_upgrade_captures_all_domains_and_claim_token(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     config, config_toml = _old_instance(tmp_path, monkeypatch, owner=False)
-    # Simulate the system agent performing the scrub (it's the privileged writer in production).
-    monkeypatch.setattr(system_agent, "scrub_config_zone_domain", lambda: scrub_zone_domain(str(config_toml)))
 
     # Upgrade boot: migrate the DB, then seed + rebuild.
     init_db(config.db_path)  # v12 -> v13
@@ -100,24 +91,22 @@ def test_upgrade_captures_all_domains_and_claim_token(tmp_path: Path, monkeypatc
     assert new_config.cert_path_for("host.example.com") == new_config.tls_cert_path  # legacy path kept
     assert new_config.cert_path_for("secondary.example.com") == new_config.certs_dir / "secondary.example.com.pem"
 
-    # The captured zone_domain line is scrubbed; the rest of config.toml is preserved and still loads.
-    text = config_toml.read_text()
-    assert "zone_domain" not in text
-    assert "[[openhost.domains]]" in text and 'host = "127.0.0.1"' in text
+    # config.toml is left untouched — the now-ignored zone_domain line stays (scrubbed later, by a
+    # system-agent migration).
+    assert "zone_domain" in config_toml.read_text()
 
 
 def test_upgrade_is_idempotent_across_restarts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # An instance that already completed setup (owner exists): the claim-token file is normally gone,
     # but even if present, a second boot must not re-seed or duplicate anything.
     config, config_toml = _old_instance(tmp_path, monkeypatch, owner=True)
-    monkeypatch.setattr(system_agent, "scrub_config_zone_domain", lambda: scrub_zone_domain(str(config_toml)))
     init_db(config.db_path)
     seed_first_boot(config)
     first = {r.name for r in load_records(config)}
 
-    # Second boot: config.toml is already scrubbed (zone_domain gone) and the DB is authoritative.
+    # Second boot: config.toml is unchanged (still has zone_domain) but the DB is authoritative.
     reloaded = load_config()
-    assert reloaded.zone_domain == ""  # scrubbed
+    assert reloaded.zone_domain == "host.example.com"  # still present (not scrubbed), just ignored
     seed_first_boot(reloaded)
     rebuild_active_domains(reloaded)
 
