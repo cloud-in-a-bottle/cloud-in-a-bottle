@@ -89,7 +89,10 @@ class EmailProxyClient:
 
 
 def _parse_identity(resp: httpx.Response) -> IdentityResult:
-    if resp.status_code != 200:
+    # The frontend returns 200 for an already-existing identity and 201 when it
+    # creates one, both with the same body (domain + DKIM records). Accept any 2xx
+    # so a freshly-created identity (201) is not mistaken for an error.
+    if not (200 <= resp.status_code < 300):
         raise EmailProxyError(f"email API returned HTTP {resp.status_code}: {resp.text}")
     body = resp.json()
     records = tuple(DkimRecord(name=r["name"], value=r["value"]) for r in body.get("dkim_records", []))

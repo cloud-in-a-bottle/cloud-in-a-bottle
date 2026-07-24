@@ -69,6 +69,26 @@ def test_proxy_client_parses_identity_and_sends_bearer():
     assert result.dkim_records[0].name == "a._domainkey.alice.example.com"
 
 
+def test_proxy_client_accepts_201_created_identity():
+    # The frontend returns 201 when it CREATES the SES identity (200 when it
+    # already exists); both carry the same body. A 201 must NOT be treated as an
+    # error, or the instance skips publishing its DKIM/MX records.
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            201,
+            json={
+                "domain": "alice.example.com",
+                "verified": False,
+                "dkim_records": [{"name": "a._domainkey.alice.example.com", "value": "a.dkim.amazonses.com"}],
+            },
+        )
+
+    client = _client_with_handler(handler)
+    result = client.ensure_identity()
+    assert result.domain == "alice.example.com"
+    assert len(result.dkim_records) == 1
+
+
 def test_proxy_client_raises_on_error_status():
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(502, text="upstream boom")
