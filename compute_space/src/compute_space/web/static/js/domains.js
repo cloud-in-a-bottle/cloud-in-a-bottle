@@ -24,41 +24,42 @@ function domainCertBadge(d) {
   return '<span style="color:' + color + ';"' + title + '>' + label + '</span>';
 }
 
+// Repaint the table from a domain list (as returned by GET/POST/DELETE /api/domains).
+function renderDomains(domains) {
+  var tbody = document.getElementById('domains-body');
+  var table = document.getElementById('domains-table');
+  var none = document.getElementById('no-domains');
+  if (!domains.length) {
+    table.style.display = 'none';
+    none.style.display = '';
+    none.textContent = 'No domains.';
+    return;
+  }
+  table.style.display = '';
+  none.style.display = 'none';
+  var anyAcquiring = false;
+  tbody.innerHTML = domains.map(function(d) {
+    if (d.tls && d.cert_status === 'acquiring') { anyAcquiring = true; }
+    var name = dEsc(d.name) + (d.is_primary ? ' <span class="muted">(primary)</span>' : '');
+    var discovery = d.mdns ? 'mDNS (.local)' : 'Public DNS';
+    var actions = d.is_primary
+      ? '<span class="muted">—</span>'
+      : '<button class="btn btn-danger" onclick="removeDomain(\'' + dEsc(d.name) + '\')">Remove</button>';
+    return '<tr><td>' + name + '</td>'
+      + '<td>' + dEsc(d.scheme) + '</td>'
+      + '<td>' + discovery + '</td>'
+      + '<td>' + domainCertBadge(d) + '</td>'
+      + '<td>' + actions + '</td></tr>';
+  }).join('');
+  // A cert acquisition (DNS-01) runs in the background; poll until it settles.
+  if (anyAcquiring) { setTimeout(loadDomains, 4000); }
+}
+
 function loadDomains() {
-  // no-store so a reload right after add/remove reflects the current set instead of a
-  // cached list that's missing the just-added domain.
+  // no-store so a poll reflects the current set, not a cached copy.
   fetch(DOMAINS_URL, {credentials: 'same-origin', cache: 'no-store'})
     .then(function(r) { return r.json(); })
-    .then(function(data) {
-      var domains = (data && data.domains) || [];
-      var tbody = document.getElementById('domains-body');
-      var table = document.getElementById('domains-table');
-      var none = document.getElementById('no-domains');
-      if (!domains.length) {
-        table.style.display = 'none';
-        none.style.display = '';
-        none.textContent = 'No domains.';
-        return;
-      }
-      table.style.display = '';
-      none.style.display = 'none';
-      var anyAcquiring = false;
-      tbody.innerHTML = domains.map(function(d) {
-        if (d.tls && d.cert_status === 'acquiring') { anyAcquiring = true; }
-        var name = dEsc(d.name) + (d.is_primary ? ' <span class="muted">(primary)</span>' : '');
-        var discovery = d.mdns ? 'mDNS (.local)' : 'Public DNS';
-        var actions = d.is_primary
-          ? '<span class="muted">—</span>'
-          : '<button class="btn btn-danger" onclick="removeDomain(\'' + dEsc(d.name) + '\')">Remove</button>';
-        return '<tr><td>' + name + '</td>'
-          + '<td>' + dEsc(d.scheme) + '</td>'
-          + '<td>' + discovery + '</td>'
-          + '<td>' + domainCertBadge(d) + '</td>'
-          + '<td>' + actions + '</td></tr>';
-      }).join('');
-      // A cert acquisition (DNS-01) runs in the background; poll until it settles.
-      if (anyAcquiring) { setTimeout(loadDomains, 4000); }
-    });
+    .then(function(data) { renderDomains((data && data.domains) || []); });
 }
 
 function addDomain() {
@@ -83,7 +84,8 @@ function addDomain() {
         msg.className = 'hint';
         msg.style.display = '';
       }
-      loadDomains();
+      // Repaint from the POST response (the full list) — no follow-up GET to race the Caddy restart.
+      renderDomains((data && data.domains) || []);
     });
 }
 
@@ -93,7 +95,7 @@ function removeDomain(name) {
     .then(function(r) { return r.json(); })
     .then(function(data) {
       if (data && data.error) { alert(data.error); return; }
-      loadDomains();
+      renderDomains((data && data.domains) || []);
     });
 }
 

@@ -94,6 +94,18 @@ def test_list_shows_primary(cfg: Any, client: TestClient[Litestar]) -> None:
     assert domains[0]["name"] == "host.example.com"
     assert domains[0]["is_primary"] is True
     assert domains[0]["scheme"] == "https"
+    # No cert file on disk yet → status reflects that (not a stale 'active').
+    assert domains[0]["cert_status"] == "none"
+
+
+def test_primary_with_cert_on_disk_reports_active(cfg: Any, client: TestClient[Litestar]) -> None:
+    # Regression: the seeded primary stores cert_status='none', but if its (legacy) cert file exists
+    # on disk — which is what Caddy actually serves — /api/domains must report it active, not 'none'.
+    cfg.tls_cert_path.parent.mkdir(parents=True, exist_ok=True)
+    cfg.tls_cert_path.write_text("-----BEGIN CERTIFICATE-----\n")
+    cfg.tls_key_path.write_text("-----BEGIN PRIVATE KEY-----\n")
+    info = next(d for d in client.get("/api/domains", cookies=_auth_cookie(cfg.db_path)).json()["domains"])
+    assert info["name"] == "host.example.com" and info["cert_status"] == "active"
 
 
 # --- add mDNS .local (immediately active, no ACME) ----------------------------------
@@ -103,13 +115,13 @@ def test_add_local_domain_is_active_and_routable(cfg: Any, client: TestClient[Li
     cookies = _auth_cookie(cfg.db_path)
     resp = client.post("/api/domains", json={"name": "myhost.local", "mdns": True}, cookies=cookies)
     assert resp.status_code == 202
+    # POST returns the full updated list (so the UI repaints without a follow-up GET).
     body = resp.json()
-    assert body["name"] == "myhost.local" and body["scheme"] == "http"
-    assert body["cert_status"] == CERT_STATUS_ACTIVE  # http, nothing to acquire
+    assert {d["name"] for d in body["domains"]} == {"host.example.com", "myhost.local"}
+    added = next(d for d in body["domains"] if d["name"] == "myhost.local")
+    assert added["scheme"] == "http" and added["cert_status"] == CERT_STATUS_ACTIVE  # http, nothing to acquire
     # persisted + now routable via the active config
     assert get_config().match_domain("app.myhost.local") is not None
-    names = {d["name"] for d in client.get("/api/domains", cookies=cookies).json()["domains"]}
-    assert names == {"host.example.com", "myhost.local"}
 
 
 # --- add TLS domain: acquiring → active / error -------------------------------------

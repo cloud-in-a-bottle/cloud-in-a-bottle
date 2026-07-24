@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import re
 import threading
+import time
 
 import attr
 from litestar import Response
@@ -79,12 +80,16 @@ def _domain_info(config: Config, domain: Domain) -> DomainInfo:
     record = get_record(config, name)
     if not domain.tls:
         cert_status, error = CERT_STATUS_ACTIVE, None  # http, nothing to acquire
+    elif config.cert_path_for(name).exists() and config.key_path_for(name).exists():
+        # A real cert+key are on disk — that's exactly what Caddy serves (config_cert_resolver keys
+        # off both files), so report active regardless of the stored status.  Covers the primary
+        # (seeded 'none' but its legacy cert is present) and any acquired domain.
+        cert_status, error = CERT_STATUS_ACTIVE, None
     elif record is not None:
+        # No cert yet: surface the in-flight acquisition state (acquiring / error / none).
         cert_status, error = record.cert_status, record.error_message
     else:
-        # a base TLS domain (e.g. the primary): reflect whether its cert file is on disk
-        cert_status = CERT_STATUS_ACTIVE if config.cert_path_for(name).exists() else CERT_STATUS_NONE
-        error = None
+        cert_status, error = CERT_STATUS_NONE, None
     return DomainInfo(
         name=name,
         tls=domain.tls,
@@ -117,6 +122,22 @@ def _spawn_acquisition(config: Config, domain: Domain) -> None:
     threading.Thread(target=_run_acquisition, args=(config, domain), daemon=True).start()
 
 
+def _reload_caddy_after_response() -> None:
+    """Restart Caddy off the request path (a daemon thread, after a short flush delay).
+
+    The dashboard is served *through* Caddy (browser → Caddy:443 → router), so restarting Caddy
+    *inside* the request that triggered a domain change would tear down that request's own connection
+    before the response reaches the browser — leaving the UI stale until a manual refresh.  Deferring
+    the restart lets the response (the full domain list) land first.  CoreDNS restarts and cert
+    acquisition stay inline: they're on port 53 / ACME, not the dashboard's HTTP path."""
+
+    def work() -> None:
+        time.sleep(0.5)  # let the response finish flushing through Caddy before we restart it
+        reload_caddy_for_domains(get_config())
+
+    threading.Thread(target=work, daemon=True).start()
+
+
 def _validate_new_domain(config: Config, name: str, tls: bool, mdns: bool) -> str | None:
     if not name:
         return "domain name is required"
@@ -135,7 +156,7 @@ async def list_domains(config: Config) -> DomainListResponse:
 
 
 @post("/api/domains", status_code=202, guards=[require_owner_auth])
-async def add_domain(data: AddDomainRequest, config: Config) -> Response[DomainInfo] | Response[ErrorResponse]:
+async def add_domain(data: AddDomainRequest, config: Config) -> Response[DomainListResponse] | Response[ErrorResponse]:
     name = data.name.strip().lower()
     error = _validate_new_domain(config, name, data.tls, data.mdns)
     if error is not None:
@@ -154,7 +175,6 @@ async def add_domain(data: AddDomainRequest, config: Config) -> Response[DomainI
         ),
     )
     new_config = rebuild_active_domains(config)
-    reload_caddy_for_domains(new_config)  # serve the domain now (tls internal for TLS domains)
     if not data.mdns:
         # Make CoreDNS authoritative for the new public zone *before* acquisition: DNS-01 writes
         # the _acme-challenge TXT into this domain's zone file, which only resolves once CoreDNS
@@ -162,7 +182,14 @@ async def add_domain(data: AddDomainRequest, config: Config) -> Response[DomainI
         reload_coredns_for_domains(new_config)
     if data.tls:
         _spawn_acquisition(new_config, domain)
-    return Response(_domain_info(new_config, domain), status_code=202, media_type=MediaType.JSON)
+    _reload_caddy_after_response()  # serve the new site (tls internal for TLS) without killing this request
+    # Return the full updated list so the client repaints the table without a follow-up GET that
+    # would race the deferred Caddy restart.
+    return Response(
+        DomainListResponse(domains=[_domain_info(new_config, d) for d in new_config.all_domains]),
+        status_code=202,
+        media_type=MediaType.JSON,
+    )
 
 
 @delete("/api/domains/{name:str}", status_code=200, guards=[require_owner_auth])
@@ -174,10 +201,10 @@ async def remove_domain(name: str, config: Config) -> Response[DomainListRespons
     if not remove_record(config, name):
         return Response(ErrorResponse(error="domain not found"), status_code=404)
     new_config = rebuild_active_domains(config)
-    reload_caddy_for_domains(new_config)
     if removed is not None and not removed.mdns:
         # Drop the zone from CoreDNS so it stops answering for the removed public domain.
         reload_coredns_for_domains(new_config)
+    _reload_caddy_after_response()  # deferred so it doesn't tear down this request's connection
     return Response(
         DomainListResponse(domains=[_domain_info(new_config, d) for d in new_config.all_domains]),
         status_code=200,
