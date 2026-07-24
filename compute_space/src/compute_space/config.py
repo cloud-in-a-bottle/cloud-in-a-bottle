@@ -362,10 +362,25 @@ class Config:
 
     @property
     def app_archive_dir(self) -> str:
-        # JuiceFS FUSE mount; lives under data_root_dir (NOT persistent_data_dir)
-        # so restic backups don't double-store bytes that already live in S3.
-        # Empty/non-existent until archive_backend.configure_backend has run.
+        # JuiceFS FUSE mountpoint for the archive tier.  Lives under
+        # data_root_dir (NOT persistent_data_dir) so restic backups don't
+        # double-store bytes that already live in S3.  The archive tier is
+        # ALWAYS a JuiceFS mount here regardless of backend; only JuiceFS's
+        # object storage differs (local file store vs S3 — see
+        # ``local_archive_object_store_dir``).
         return os.path.join(self.data_root_dir, "app_archive")
+
+    @property
+    def local_archive_object_store_dir(self) -> str:
+        # Directory that backs JuiceFS's ``file`` object store on the default
+        # 'local' backend.  This holds JuiceFS's raw chunk objects (NOT a
+        # POSIX view of app files — apps always go through the mount at
+        # ``app_archive_dir``).  Kept under ``persistent_data_dir`` so it
+        # (a) survives container rebuilds and (b) IS captured by restic
+        # backups — local archive data has no other durable copy, unlike the
+        # S3-backed tier (whose bytes live in the operator's bucket, so the
+        # mountpoint is excluded from backups).
+        return os.path.join(self.persistent_data_dir, "app_archive_local_objects")
 
     @property
     def apps_dir(self) -> str:
@@ -465,8 +480,12 @@ class Config:
         assert os.path.exists(self.data_root_dir)
         os.makedirs(self.persistent_data_dir, exist_ok=True)
         os.makedirs(self.temporary_data_dir, exist_ok=True)
-        # Skip app_archive_dir: a stray local dir at that path would shadow
-        # the JuiceFS mount once attach_on_startup brings it up.
+        # Skip app_archive_dir: it is the JuiceFS FUSE mountpoint and must be
+        # created + mounted by ``archive_backend.attach_on_startup`` (which
+        # formats the local file volume on first boot and starts the mount)
+        # once the DB — which holds the backend state — is readable, not here.
+        # The local object store dir (``local_archive_object_store_dir``) is
+        # likewise created by ``format_local_volume``.
         os.makedirs(self.apps_dir, exist_ok=True)
         os.makedirs(self.openhost_data_path, exist_ok=True)
         os.makedirs(self.keys_dir, exist_ok=True)

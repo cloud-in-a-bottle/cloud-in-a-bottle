@@ -46,13 +46,12 @@ def cookies(cfg: Any) -> dict[str, str]:
 # --- GET state ------------------------------------------------------------
 
 
-def test_get_returns_seeded_disabled_state(client: TestClient[Litestar], cookies: dict[str, str]) -> None:
+def test_get_returns_seeded_local_state(client: TestClient[Litestar], cookies: dict[str, str]) -> None:
     resp = client.get("/api/storage/archive_backend", cookies=cookies)
     assert resp.status_code == 200
     body = resp.json()
-    assert body["backend"] == "disabled"
+    assert body["backend"] == "local"
     assert body["s3_bucket"] is None
-    assert body["archive_dir"] is None
     assert body["meta_dumps"] is None
     assert "s3_secret_access_key" not in body
 
@@ -195,24 +194,74 @@ def test_configure_rejects_invalid_s3_prefix(client: TestClient[Litestar], cooki
         assert "s3_prefix" in body["error"], (bad, body)
 
 
-def test_configure_rejects_when_already_configured(
+def test_configure_s3_requires_confirm_migrate_s3(
     cfg: Any, client: TestClient[Litestar], cookies: dict[str, str]
 ) -> None:
-    """Configure is one-shot: once the backend is 's3', subsequent
-    configure calls return 409.  Reconfiguration is intentionally not
-    supported."""
+    """When already on S3, configuring a new bucket MIGRATES the data.  Without
+    confirm_migrate_s3 it returns 409 explaining the migration."""
     db = sqlite3.connect(cfg.db_path)
     try:
-        db.execute("UPDATE archive_backend SET backend='s3', s3_bucket='b'")
+        db.execute(
+            "UPDATE archive_backend SET backend='s3', s3_bucket='oldbucket', "
+            "s3_access_key_id='ak', s3_secret_access_key='sk' WHERE id=1"
+        )
         db.commit()
     finally:
         db.close()
     resp = client.post(
         "/api/storage/archive_backend/configure",
-        json={"s3_bucket": "b2", "s3_access_key_id": "a", "s3_secret_access_key": "s"},
+        json={"s3_bucket": "newbucket", "s3_access_key_id": "a", "s3_secret_access_key": "s"},
         cookies=cookies,
     )
     assert resp.status_code == 409
+    assert "confirm_migrate_s3" in resp.json()["error"]
+    assert "oldbucket" in resp.json()["error"]
+
+
+def test_configure_s3_to_s3_happy_path(cfg: Any, client: TestClient[Litestar], cookies: dict[str, str]) -> None:
+    """With confirm_migrate_s3, the s3->s3 migration proceeds and the response
+    reflects the new bucket."""
+    db = sqlite3.connect(cfg.db_path)
+    try:
+        db.execute(
+            "UPDATE archive_backend SET backend='s3', s3_bucket='oldbucket', "
+            "s3_access_key_id='ak', s3_secret_access_key='sk', "
+            "s3_prefix='oh-zone-1', juicefs_volume_name='oh-zone-1' WHERE id=1"
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    with mock.patch.object(archive_backend, "configure_backend") as mock_configure:
+
+        def side_effect(_config: Any, db: sqlite3.Connection, **kwargs: Any) -> None:
+            db.execute(
+                "UPDATE archive_backend SET s3_bucket=?, s3_access_key_id=?, s3_secret_access_key=? WHERE id=1",
+                (kwargs["s3_bucket"], kwargs["s3_access_key_id"], kwargs["s3_secret_access_key"]),
+            )
+            db.commit()
+
+        mock_configure.side_effect = side_effect
+
+        resp = client.post(
+            "/api/storage/archive_backend/configure",
+            json={
+                "s3_bucket": "newbucket",
+                "s3_access_key_id": "newak",
+                "s3_secret_access_key": "newsk",
+                "confirm_migrate_s3": True,
+            },
+            cookies=cookies,
+        )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["backend"] == "s3"
+    assert body["s3_bucket"] == "newbucket"
+    assert "s3_secret_access_key" not in body
+    # The new-bucket creds were forwarded to configure_backend as the DESTINATION.
+    _, kwargs = mock_configure.call_args
+    assert kwargs["s3_bucket"] == "newbucket"
+    assert kwargs["s3_access_key_id"] == "newak"
 
 
 def test_configure_happy_path(client: TestClient[Litestar], cookies: dict[str, str]) -> None:
@@ -369,17 +418,21 @@ def apps_client(cfg: Any) -> Iterator[TestClient[Litestar]]:
         yield c
 
 
-def test_add_app_refuses_archive_app_when_backend_disabled(
+def test_add_app_allows_archive_app_on_default_local_backend(
     apps_client: TestClient[Litestar], cookies: dict[str, str], tmp_path: Path
 ) -> None:
-    """An app with ``app_archive = true`` cannot be installed while the
-    backend is 'disabled'.  400 (operator-actionable: configure S3) rather
-    than 503 (transient retry)."""
+    """An app with ``app_archive = true`` installs on a fresh zone: the
+    default 'local' backend makes the archive tier always available (a
+    live JuiceFS file-backed mount), so the archive gate must NOT block
+    with the old "configure S3" 400.  With the mount healthy the request
+    proceeds past the gate (any later failure is unrelated to the archive
+    check)."""
     fake_clone_dir = str(tmp_path / "clone")
     os.makedirs(fake_clone_dir)
     with (
         mock.patch.object(apps_routes, "parse_manifest", return_value=_archive_manifest("probe", app_archive=True)),
         mock.patch.object(apps_routes, "validate_manifest", return_value=None),
+        mock.patch.object(apps_routes.archive_backend, "is_archive_dir_healthy", return_value=True),
     ):
         resp = apps_client.post(
             "/api/add_app",
@@ -390,9 +443,13 @@ def test_add_app_refuses_archive_app_when_backend_disabled(
             },
             cookies=cookies,
         )
-    assert resp.status_code == 400
-    body = resp.json()
-    assert "S3" in body["error"] or "system page" in body["error"].lower()
+    # The archive gate no longer produces a 400/"configure S3" error.
+    if resp.status_code == 400:
+        body = resp.json()
+        assert "S3" not in body.get("error", "")
+        assert "archive" not in body.get("error", "").lower()
+    # And it is not blocked as a transient archive-unhealthy 503 either.
+    assert resp.status_code != 503
 
 
 def test_add_app_allows_access_all_archive_when_backend_disabled(
@@ -477,3 +534,66 @@ def test_reload_app_allows_access_all_archive_when_archive_unhealthy(
     ):
         resp = apps_client.post(f"/reload_app/{seer_id}", cookies=cookies)
     assert resp.status_code != 503 or "archive" not in resp.text.lower()
+
+
+def test_configure_requires_confirm_when_local_has_data(
+    cfg: Any, client: TestClient[Litestar], cookies: dict[str, str]
+) -> None:
+    """Upgrading local->S3 while apps have local archive data requires an
+    explicit confirm_migrate_local flag; without it -> 409 listing the apps."""
+    # Seed a file into the (mounted) local archive for an app.
+    app_dir = os.path.join(archive_backend.juicefs_mount_dir(cfg), "nextcloud", "files")
+    os.makedirs(app_dir, exist_ok=True)
+    with open(os.path.join(app_dir, "x.txt"), "wb") as f:
+        f.write(b"data")
+
+    # Without confirm -> 409 (mount reported live so the data is visible).
+    with mock.patch.object(archive_backend, "is_mounted", return_value=True):
+        resp = client.post(
+            "/api/storage/archive_backend/configure",
+            json={"s3_bucket": "b", "s3_access_key_id": "a", "s3_secret_access_key": "s"},
+            cookies=cookies,
+        )
+    assert resp.status_code == 409, resp.text
+    assert "nextcloud" in resp.json()["error"]
+
+    # With confirm -> proceeds (configure_backend is mocked to flip state).
+    with (
+        mock.patch.object(archive_backend, "is_mounted", return_value=True),
+        mock.patch.object(archive_backend, "configure_backend") as mock_configure,
+    ):
+
+        def side_effect(_config: Any, db: sqlite3.Connection, **kwargs: Any) -> None:
+            db.execute("UPDATE archive_backend SET backend='s3', s3_bucket=? WHERE id=1", (kwargs["s3_bucket"],))
+            db.commit()
+
+        mock_configure.side_effect = side_effect
+        resp = client.post(
+            "/api/storage/archive_backend/configure",
+            json={
+                "s3_bucket": "b",
+                "s3_access_key_id": "a",
+                "s3_secret_access_key": "s",
+                "confirm_migrate_local": True,
+            },
+            cookies=cookies,
+        )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["backend"] == "s3"
+
+
+def test_get_surfaces_local_archive_apps(cfg: Any, client: TestClient[Litestar], cookies: dict[str, str]) -> None:
+    """On backend='local', the GET state lists apps with local archive data
+    so the dashboard can show whose data an S3 upgrade would migrate."""
+    app_dir = os.path.join(archive_backend.juicefs_mount_dir(cfg), "nextcloud", "files")
+    os.makedirs(app_dir, exist_ok=True)
+    with open(os.path.join(app_dir, "f.txt"), "wb") as f:
+        f.write(b"x")
+    with mock.patch.object(archive_backend, "is_mounted", return_value=True):
+        resp = client.get("/api/storage/archive_backend", cookies=cookies)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["backend"] == "local"
+    assert body["local_archive_apps"] == ["nextcloud"]
+    # The archive tier is always the JuiceFS mountpoint, both backends.
+    assert body["archive_dir"] == archive_backend.juicefs_mount_dir(cfg)

@@ -9,18 +9,26 @@ Before=openhost.service
 [Service]
 Type=simple
 User=host
-# S3 credentials (ACCESS_KEY / SECRET_KEY) live in the env file
-# written by compute_space at configure time.  The service stays
-# installed-but-disabled until the operator configures the archive
-# backend; compute_space then writes the env file and
-# enables/starts this unit.
+# The mount command is backend-agnostic: JuiceFS reads the storage type +
+# bucket from the meta DB (set by `format` / `config`).  Only the S3 backend
+# needs credentials, which (when present) live as ACCESS_KEY / SECRET_KEY in
+# the env file written by compute_space.  The unit stays installed-but-disabled
+# until compute_space brings the archive backend online (at boot for the local
+# file-backed volume, or on the dashboard S3-upgrade path); it then writes the
+# env file and enables/starts this unit.
 EnvironmentFile={{ juicefs_env_file }}
 # systemd does not shell-expand $VAR in ExecStart; we use /bin/sh
 # so the env vars from EnvironmentFile are expanded correctly.
 ExecStart=/bin/sh -c '"$JUICEFS_BINARY" --no-agent mount --no-usage-report -o allow_other "$JUICEFS_META_DSN" "$JUICEFS_MOUNT_DIR"'
-ExecStop=/bin/sh -c '"$JUICEFS_BINARY" umount "$JUICEFS_MOUNT_DIR"'
+# -f: force/lazy unmount so a busy mount (e.g. a still-attached app bind
+# mount) still detaches promptly instead of blocking until the FUSE process
+# force-exits.  compute_space quiesces archive-using apps before restarting
+# the mount for a backend migration, so forcing here is safe.
+ExecStop=/bin/sh -c '"$JUICEFS_BINARY" umount -f "$JUICEFS_MOUNT_DIR"'
 Restart=always
 RestartSec=5
+# Allow the graceful stop enough time; JuiceFS flushes then force-exits ~30s.
+TimeoutStopSec=90
 # JuiceFS logs to ~/.juicefs/juicefs.log; keep stdout/stderr quiet
 # so journald doesn't duplicate everything.
 StandardOutput=null

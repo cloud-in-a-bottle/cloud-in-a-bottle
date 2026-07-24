@@ -14,7 +14,7 @@
   <tr><th>Description</th><td>{{ app.description or "---" }}</td></tr>
   <tr><th>URL</th><td>
     <span id="name-display">
-      <a href="{{ app_url(app.name) }}" class="app-link">{{ app_url(app.name) }}</a>
+      <a href="{{ app_url(app.name) }}" class="app-link" target="_blank" rel="noopener">{{ app_url(app.name) }}</a>
       <button class="btn" onclick="editName()" style="margin-left:0.5em;">Edit</button>
     </span>
     <span id="name-edit" style="display:none;">
@@ -60,7 +60,7 @@
   {% for link in links %}
   <tr>
     <td>{{ link.name }}</td>
-    <td><a href="{{ app_url(app.name).rstrip('/') }}{{ link.path }}">{{ link.path }}</a></td>
+    <td><a href="{{ app_url(app.name).rstrip('/') }}{{ link.path }}" target="_blank" rel="noopener">{{ link.path }}</a></td>
   </tr>
   {% endfor %}
 </table>

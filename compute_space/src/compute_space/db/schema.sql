@@ -119,12 +119,15 @@ CREATE TABLE IF NOT EXISTS schema_version (
 );
 
 -- Archive backend state.  Single-row table.  Fresh zones come up at
--- backend='disabled'; the operator configures S3 once.  Apps that
--- opt into the ``app_archive`` data tier refuse to install until
--- the backend is set to 's3'.
+-- backend='local' — the archive tier is backed by a directory on the
+-- instance's local disk and is always available.  The operator can
+-- later upgrade to durable object storage by configuring S3, which
+-- migrates the local archive data into the bucket.  ('disabled' is
+-- retained in the CHECK for backward compatibility with pre-v12 rows
+-- but is no longer used by fresh installs.)
 CREATE TABLE IF NOT EXISTS archive_backend (
     id INTEGER PRIMARY KEY CHECK (id = 1),
-    backend TEXT NOT NULL DEFAULT 'disabled' CHECK(backend IN ('disabled', 's3')),
+    backend TEXT NOT NULL DEFAULT 'local' CHECK(backend IN ('disabled', 'local', 's3')),
     s3_bucket TEXT,
     s3_region TEXT,
     s3_endpoint TEXT,

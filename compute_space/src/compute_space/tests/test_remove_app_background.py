@@ -124,6 +124,8 @@ def test_remove_full_calls_full_deprovision(tmp_path: Path) -> None:
         remove_app_background(app_id, keep_data=False, config=cfg)
 
     temp_only.assert_not_called()
+    # The archive tier is always the JuiceFS mountpoint, so remove passes
+    # the effective archive dir = app_archive_dir for every backend.
     full.assert_called_once_with(
         "myapp",
         cfg.persistent_data_dir,

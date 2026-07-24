@@ -17,6 +17,7 @@ import httpx
 import compute_space.core.storage as storage
 from compute_space.config import Config
 from compute_space.config import get_config
+from compute_space.core import archive_backend
 from compute_space.core.app_id import is_valid_app_name
 from compute_space.core.app_id import new_app_id
 from compute_space.core.auth.auth import DEFAULT_OWNER_USERNAME
@@ -26,6 +27,7 @@ from compute_space.core.auth.permissions_v2 import PermissionRecord
 from compute_space.core.auth.permissions_v2 import grant_permission_v2
 from compute_space.core.containers import BUILD_CACHE_CORRUPT_MARKER
 from compute_space.core.containers import build_image
+from compute_space.core.containers import is_container_running
 from compute_space.core.containers import remove_image
 from compute_space.core.containers import run_container
 from compute_space.core.containers import stop_app_process
@@ -459,7 +461,7 @@ def insert_and_deploy(
         manifest=manifest,
         data_dir=config.persistent_data_dir,
         temp_data_dir=config.temporary_data_dir,
-        archive_dir=config.app_archive_dir,
+        archive_dir=archive_backend.effective_archive_dir(config, db),
         my_openhost_redirect_domain=config.my_openhost_redirect_domain,
         zone_domain=config.zone_domain,
         port=config.port,
@@ -589,7 +591,7 @@ def deploy_app_background(
             env_vars,
             config.persistent_data_dir,
             config.temporary_data_dir,
-            config.app_archive_dir,
+            archive_backend.effective_archive_dir(config, db),
             port_mappings=port_mappings,
         )
         db.execute(
@@ -700,6 +702,70 @@ def _sync_port_mappings(
             )
 
 
+def stop_running_archive_apps(
+    db: sqlite3.Connection,
+    config: Config,
+    stopped_out: list[str] | None = None,
+) -> list[str]:
+    """Stop every RUNNING app that uses the archive tier; return their app_ids.
+
+    Used to quiesce the archive mount before a local->S3 migration restarts
+    the JuiceFS FUSE mount: no app may write into the local store during the
+    sync (that write would be lost when the volume re-points to S3), and
+    ``systemctl stop openhost-juicefs`` cannot cleanly unmount while a
+    container still has the mount open.  The caller restarts these apps once
+    the mount is back (via ``start_apps_by_id``).
+
+    ``stop_app_process`` stops the container but does NOT update the DB status
+    and never raises, so we verify quiescence against the real container state
+    (``is_container_running``), NOT the ``apps.status`` column.  If any archive
+    container is still running after the stop attempt we raise: proceeding
+    while a container may still be writing to the archive risks silent data
+    loss, so we abort and let the caller fail-open (the local backend stays
+    intact).
+
+    ``stopped_out``, when provided, is appended to incrementally as each
+    container is stopped, so the caller can restart the already-stopped apps
+    even if this function later raises (the return value is lost on ``raise``).
+    """
+    recorded: list[str] = stopped_out if stopped_out is not None else []
+    rows = db.execute("SELECT app_id, name, container_id, status, manifest_raw FROM apps").fetchall()
+    still_running: list[str] = []
+    for row in rows:
+        if row["status"] != "running":
+            continue
+        if not archive_backend.manifest_uses_archive(row["manifest_raw"] or ""):
+            continue
+        logger.info("stopping archive-using app %s before archive migration", row["name"])
+        try:
+            stop_app_process(row)
+        except Exception:
+            logger.exception("failed to stop app %s before archive migration", row["name"])
+        recorded.append(row["app_id"])
+        # Verify against the real container state (stop_app_process is
+        # best-effort and doesn't touch the DB).
+        container_id = row["container_id"]
+        if container_id and is_container_running(container_id):
+            still_running.append(row["name"])
+
+    if still_running:
+        raise RuntimeError(
+            f"could not stop archive-using app(s) before migration: {', '.join(still_running)}; "
+            "aborting so the sync can't race a live writer (local backend left intact)"
+        )
+    return recorded
+
+
+def start_apps_by_id(app_ids: list[str], db: sqlite3.Connection, config: Config) -> None:
+    """Start each app by id (best-effort).  Companion to
+    ``stop_running_archive_apps`` for the migration quiesce/resume dance."""
+    for app_id in app_ids:
+        try:
+            start_app_process(app_id, db, config)
+        except Exception:
+            logger.exception("failed to restart app %s after archive migration remount", app_id)
+
+
 def start_app_process(app_id: str, db: sqlite3.Connection, config: Config) -> None:
     """Start the process for an app. Updates DB with status and container id."""
     app_row = db.execute("SELECT * FROM apps WHERE app_id = ?", (app_id,)).fetchone()
@@ -713,7 +779,7 @@ def start_app_process(app_id: str, db: sqlite3.Connection, config: Config) -> No
         manifest=manifest,
         data_dir=config.persistent_data_dir,
         temp_data_dir=config.temporary_data_dir,
-        archive_dir=config.app_archive_dir,
+        archive_dir=archive_backend.effective_archive_dir(config, db),
         my_openhost_redirect_domain=config.my_openhost_redirect_domain,
         zone_domain=config.zone_domain,
         port=config.port,
@@ -753,7 +819,7 @@ def start_app_process(app_id: str, db: sqlite3.Connection, config: Config) -> No
         env_vars,
         config.persistent_data_dir,
         config.temporary_data_dir,
-        config.app_archive_dir,
+        archive_backend.effective_archive_dir(config, db),
         port_mappings=port_mappings,
     )
     db.execute(
@@ -1095,7 +1161,7 @@ def remove_app_background(app_id: str, keep_data: bool, config: Config) -> None:
                     app_name,
                     config.persistent_data_dir,
                     config.temporary_data_dir,
-                    config.app_archive_dir,
+                    archive_backend.effective_archive_dir(config, db),
                 )
         except Exception:
             logger.exception("Failed to deprovision data for %s", app_name)

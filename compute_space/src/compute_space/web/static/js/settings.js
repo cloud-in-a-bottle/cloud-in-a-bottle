@@ -444,7 +444,25 @@ function renderArchiveBackend(state) {
         + '</code></span>';
     }
     rows += '<tr><th>Latest meta dump</th><td>' + dumpLine + '</td></tr>';
+  } else if (state.backend === 'local') {
+    rows += '<tr><th>Backend</th>'
+      + '<td><span class="status-running">Local disk (JuiceFS)</span>'
+      + (state.state_message ? ' <span class="error">' + escSettingsHtml(state.state_message) + '</span>' : '')
+      + '</td></tr>';
+    if (state.archive_dir) {
+      rows += '<tr><th>Host path</th><td><code>' + escSettingsHtml(state.archive_dir) + '</code></td></tr>';
+    }
+    rows += '<tr><th>Durability</th><td><span class="error">Local disk only.</span> '
+      + 'The archive is a JuiceFS volume whose objects live on this instance\u2019s local disk '
+      + '(included in backups) but NOT on durable object storage. Configure S3 below for elastic, durable storage.</td></tr>';
+    var apps = state.local_archive_apps || [];
+    if (apps.length) {
+      rows += '<tr><th>Apps with local archive data</th><td>'
+        + apps.map(function(a){ return '<code>' + escSettingsHtml(a) + '</code>'; }).join(', ')
+        + '<div class="hint">Configuring S3 will migrate these apps\u2019 archive data into the bucket.</div></td></tr>';
+    }
   } else {
+    // Legacy pre-v12 'disabled' state (no archive tier).
     rows += '<tr><th>Backend</th>'
       + '<td><span class="status-stopped">not configured</span></td></tr>';
   }
@@ -455,34 +473,70 @@ function renderArchiveBackend(state) {
       + 'Filename-to-S3-chunk mappings live in a SQLite metadata DB on this zone’s local disk; '
       + 'recovery after the local disk is wiped requires the latest meta dump in S3 plus a manual <code>juicefs load</code>.</p>';
   }
+  // S3 can be configured from the default 'local' backend (data is migrated
+  // into the bucket), a legacy 'disabled' zone (fresh format), or an existing
+  // 's3' backend (data is migrated to a new bucket/provider).
   var configureBtn = '';
-  if (state.backend === 'disabled') {
+  if (state.backend === 'local') {
+    configureBtn = '<div class="control-row"><button class="btn" id="archive-backend-configure-btn">Upgrade to S3 backend…</button></div>';
+  } else if (state.backend === 'disabled') {
     configureBtn = '<div class="control-row"><button class="btn" id="archive-backend-configure-btn">Configure S3 backend…</button></div>';
+  } else if (state.backend === 's3') {
+    configureBtn = '<div class="control-row"><button class="btn" id="archive-backend-configure-btn">Migrate to a new bucket…</button></div>';
   }
 
   el.innerHTML = '<table id="archive-backend-table" class="form-table"><tbody>' + rows + '</tbody></table>'
     + experimentalNote
     + configureBtn
     + '<div id="archive-backend-form" hidden></div>';
-  if (state.backend === 'disabled') {
-    document.getElementById('archive-backend-configure-btn').onclick = function() { showConfigureForm(); };
+  if (state.backend === 'local' || state.backend === 'disabled' || state.backend === 's3') {
+    document.getElementById('archive-backend-configure-btn').onclick = function() { showConfigureForm(state); };
   }
 }
 
-function showConfigureForm() {
+function showConfigureForm(state) {
+  state = state || {};
   var formEl = document.getElementById('archive-backend-form');
+  var migrateNote = '';
+  var localApps = (state.local_archive_apps || []);
+  if (state.backend === 'local') {
+    var appsLine = localApps.length
+      ? ' Apps whose archive data will be migrated: ' + localApps.map(function(a){ return '<code>' + escSettingsHtml(a) + '</code>'; }).join(', ') + '.'
+      : ' There is no local archive data yet, so nothing will be migrated.';
+    migrateNote = '<p class="error"><strong>This migrates your existing LOCAL archive data into S3.</strong> '
+      + 'JuiceFS copies the archive objects into the bucket (verified with <code>--check-all</code>) and re-points the volume; if anything fails the switch is aborted and your local data is left intact (fail-open). '
+      + 'After a successful migration the local copy is removed and the switch to S3 is <strong>one-way</strong>.'
+      + appsLine + '</p>';
+  } else if (state.backend === 's3') {
+    migrateNote = '<p class="error"><strong>This migrates your archive from the current bucket (<code>'
+      + escSettingsHtml(state.s3_bucket || '?') + '</code>) to the NEW bucket below.</strong> '
+      + 'JuiceFS copies every archive object to the new bucket (verified with <code>--check-all</code>) and re-points the volume; if anything fails the switch is aborted and your current bucket is left intact (fail-open). '
+      + 'After a successful migration the old bucket\u2019s objects (under this zone\u2019s prefix only) are reclaimed.</p>';
+  }
   formEl.innerHTML = '<p><strong>Configure S3 archive storage.</strong> JuiceFS will format the bucket and mount it locally; this is a one-time operation.</p>'
+    + migrateNote
     + '<p class="error"><strong>Experimental.</strong> Filename-to-S3-chunk mappings live in a SQLite metadata DB on this zone’s local disk, not in the bucket. If the local disk is wiped, the bucket bytes can be recovered only from JuiceFS\'s periodic meta dumps in S3 (replayed via <code>juicefs load</code>).</p>'
     + '<p class="hint">JuiceFS will automatically dump the metadata DB to <code>&lt;bucket&gt;/&lt;prefix&gt;/meta/dump-*.json.gz</code> once an hour. These dumps are the recovery anchor for reattaching a freshly-installed zone to an existing bucket.</p>'
     + '<table class="form-table"><tbody>'
     + '<tr><th><label for="ab-bucket">S3 bucket</label></th><td><input id="ab-bucket" type="text" placeholder="my-openhost-archive"></td></tr>'
     + '<tr><th><label for="ab-region">Region</label></th><td><input id="ab-region" type="text" value="us-east-1"></td></tr>'
     + '<tr><th><label for="ab-endpoint">Endpoint</label></th><td><input id="ab-endpoint" type="text" placeholder="https://..."> <span class="hint">optional, non-AWS</span></td></tr>'
-    + '<tr><th><label for="ab-prefix">Prefix</label></th><td><input id="ab-prefix" type="text" placeholder="andrew-3"> <span class="hint">optional single-segment name; lets multiple zones share one bucket &mdash; also used as the JuiceFS volume name</span></td></tr>'
+    // On an s3->s3 migration the volume name (object prefix) is fixed by the
+    // existing volume and cannot change, so the Prefix input is omitted; it is
+    // only meaningful when first choosing a volume name (local/disabled).
+    + (state.backend === 's3'
+        ? ''
+        : '<tr><th><label for="ab-prefix">Prefix</label></th><td><input id="ab-prefix" type="text" placeholder="andrew-3"> <span class="hint">optional single-segment name; lets multiple zones share one bucket &mdash; also used as the JuiceFS volume name</span></td></tr>')
     + '<tr><th><label for="ab-access-key">Access key ID</label></th><td><input id="ab-access-key" type="text"></td></tr>'
     + '<tr><th><label for="ab-secret-key">Secret access key</label></th><td><input id="ab-secret-key" type="password"></td></tr>'
     + '</tbody></table>'
-    + '<p><label><input type="checkbox" id="ab-confirm"> I understand the S3 archive backend is experimental and that reconfiguration is not supported.</label></p>'
+    + '<p><label><input type="checkbox" id="ab-confirm"> I understand the S3 archive backend is experimental'
+    + (state.backend === 'local'
+        ? ' and that my existing local archive data will be migrated into S3.'
+        : state.backend === 's3'
+        ? ' and that my archive will be migrated to the new bucket and the old bucket reclaimed.'
+        : ' and that this configures S3 for the archive tier.')
+    + '</label></p>'
     + '<div class="control-row">'
     + '<button class="btn" id="ab-test-btn">Test connection</button>'
     + '<button class="btn btn-primary" id="ab-submit-btn">Configure</button>'
@@ -499,13 +553,21 @@ function showConfigureForm() {
 }
 
 function _archiveBackendBody() {
+  var prefixEl = document.getElementById('ab-prefix');
   return {
     s3_bucket: document.getElementById('ab-bucket').value,
     s3_region: document.getElementById('ab-region').value,
     s3_endpoint: document.getElementById('ab-endpoint').value,
-    s3_prefix: document.getElementById('ab-prefix').value,
+    // The Prefix input is omitted on an s3->s3 migration (volume name fixed).
+    s3_prefix: prefixEl ? prefixEl.value : '',
     s3_access_key_id: document.getElementById('ab-access-key').value,
     s3_secret_access_key: document.getElementById('ab-secret-key').value,
+    // Ticking the confirmation checkbox (checked in submitConfigure)
+    // acknowledges the one-way local->S3 migration AND the s3->s3 bucket
+    // migration; the server ignores whichever flag doesn't apply to the
+    // current backend.
+    confirm_migrate_local: true,
+    confirm_migrate_s3: true,
   };
 }
 

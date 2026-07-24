@@ -91,6 +91,10 @@ class CloneInfoResponse:
     clone_dir: str
     app_name: str
     validation_error: str | None = None
+    # Storage tiers the app will use, including whether its archive data lands
+    # on durable S3 or non-durable local disk.  Surfaced on the install screen
+    # alongside permissions.  See archive_backend.storage_summary.
+    storage: archive_backend.StorageSummary | None = None
 
 
 @attr.s(auto_attribs=True, frozen=True)
@@ -292,12 +296,14 @@ async def clone_and_get_app_info(
     info = attr.asdict(manifest)
     info.pop("raw_toml", None)
     assert clone_dir is not None
+    storage = archive_backend.storage_summary(manifest.raw_toml, db)
     return Response(
         content=CloneInfoResponse(
             manifest=info,
             clone_dir=clone_dir,
             app_name=manifest.name,
             validation_error=validation_error,
+            storage=storage,
         ),
         status_code=200,
         media_type=MediaType.JSON,
@@ -357,23 +363,13 @@ async def api_add_app(
         shutil.rmtree(clone_dir, ignore_errors=True)
         return Response(content=ErrorResponse(error=validation_error), status_code=400)
 
-    # 400 when the operator hasn't configured S3 (action: visit the System
-    # page); 503 when configured-but-unhealthy (action: retry transient).
+    # The archive tier is ALWAYS available: it is a JuiceFS mount on every
+    # zone (a local file-backed volume by default, S3 after an operator
+    # upgrade), brought up at boot by attach_on_startup.  So app_archive no
+    # longer blocks installation for lack of S3.  We only refuse when that
+    # JuiceFS mount is transiently unhealthy (retryable 503), regardless of
+    # whether it's the local or S3 backend.
     if manifest.app_archive:
-        backend_state = archive_backend.read_state(db)
-        if backend_state.backend != "s3":
-            shutil.rmtree(clone_dir, ignore_errors=True)
-            return Response(
-                content=ErrorResponse(
-                    error=(
-                        "This app uses the app_archive data tier, but "
-                        "S3 archive storage has not been configured on "
-                        "this zone.  Visit the System page to configure an "
-                        "S3 backend before deploying this app."
-                    )
-                ),
-                status_code=400,
-            )
         if not archive_backend.is_archive_dir_healthy(config, db):
             shutil.rmtree(clone_dir, ignore_errors=True)
             return Response(
@@ -620,6 +616,8 @@ async def _reload_app_impl(
         return Response(content=ErrorResponse(error="App is being removed"), status_code=409)
     app_name = app_row["name"]
 
+    # The archive tier is a JuiceFS mount for both the local and S3 backends;
+    # refuse to reload an app that hard-requires it while that mount is down.
     if not archive_backend.is_archive_dir_healthy(config, db):
         if archive_backend.manifest_requires_archive(app_row["manifest_raw"] or ""):
             return Response(
@@ -904,8 +902,13 @@ async def remove_app(
     return Response(content=OkResponse(ok=True), status_code=202, media_type=MediaType.JSON)
 
 
-def _rename_app_storage_dirs(config: Config, old_name: str, new_name: str) -> str | None:
+def _rename_app_storage_dirs(config: Config, old_name: str, new_name: str, archive_dir: str) -> str | None:
     """Rename per-app subdirs across the three storage tiers, with rollback on partial failure.
+
+    ``archive_dir`` is the archive parent for the current backend — always
+    the JuiceFS mountpoint now (absent only on a legacy 'disabled' zone) —
+    pass ``archive_backend.effective_archive_dir``.  Getting this wrong
+    orphans an app's archive data under its old name.
 
     Returns ``None`` on success or an error message on failure. Sync helper
     so the blocking renames (which can be slow on JuiceFS) stay off the
@@ -918,11 +921,11 @@ def _rename_app_storage_dirs(config: Config, old_name: str, new_name: str) -> st
     for parent in rename_parents:
         if not os.path.isdir(parent):
             return f"Storage parent {parent!r} is not a directory; refusing to rename so per-app data isn't orphaned."
-    # The archive parent only exists when the operator has configured S3 +
-    # JuiceFS is mounted; skip it cleanly otherwise (apps with app_archive=true
-    # are blocked from install on disabled zones, so this is harmless).
-    if os.path.isdir(config.app_archive_dir):
-        rename_parents.append(config.app_archive_dir)
+    # The archive parent is the JuiceFS mountpoint, present whenever the mount
+    # is live (both local and S3 backends).  Skip it cleanly only on a legacy
+    # 'disabled' zone where the mountpoint never gets created.
+    if os.path.isdir(archive_dir):
+        rename_parents.append(archive_dir)
     renamed: list[tuple[str, str]] = []
     try:
         for parent in rename_parents:
@@ -1019,6 +1022,7 @@ async def rename_app(
         config,
         old_name,
         new_name,
+        archive_backend.effective_archive_dir(config, db),
     )
     if rename_error is not None:
         rollback_db_error: str | None = None

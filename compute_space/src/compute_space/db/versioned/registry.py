@@ -18,6 +18,7 @@ from compute_space.db.versioned.migrations.v0008_drop_v1_service_tables import M
 from compute_space.db.versioned.migrations.v0009_session_auth import Migration0009SessionAuth
 from compute_space.db.versioned.migrations.v0010_app_links import Migration0010AppLinks
 from compute_space.db.versioned.migrations.v0011_cpu_cores import Migration0011CpuCores
+from compute_space.db.versioned.migrations.v0012_archive_local_backend import Migration0012ArchiveLocalBackend
 
 # Numbered migrations in apply order. Versions MUST start at 2 and be
 # contiguous. v0 (legacy) and v1 (baseline produced by the existing
@@ -33,4 +34,5 @@ REGISTRY: list[Migration] = [
     Migration0009SessionAuth(),
     Migration0010AppLinks(),
     Migration0011CpuCores(),
+    Migration0012ArchiveLocalBackend(),
 ]

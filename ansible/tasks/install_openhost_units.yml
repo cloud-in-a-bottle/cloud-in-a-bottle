@@ -82,6 +82,8 @@
 # this file. It happens in tasks/restart_openhost_service.yml alongside the
 # start, so a prebaked (domain-less) host stays fully dormant.
 
-# Do NOT enable openhost-juicefs here; it stays disabled until the
-# operator configures the archive backend via the dashboard.  The
-# compute_space code enables + starts it at that point.
+# Do NOT enable openhost-juicefs here; it stays disabled until compute_space
+# brings the archive backend online.  The archive tier is a JuiceFS volume on
+# every zone (a local file-backed volume by default, S3 after an operator
+# upgrade), so compute_space enables + starts this unit at boot via
+# attach_on_startup (and on the dashboard S3-upgrade path).

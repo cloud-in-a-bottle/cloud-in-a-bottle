@@ -91,12 +91,25 @@ def _seed_app_row(db_path: str, name: str, port: int = 19500, status: str = "sto
     return app_id
 
 
+def _archive_parent(cfg: Any) -> Path:
+    """The EFFECTIVE archive parent for the zone's current backend.
+
+    Fresh test DBs default to backend='local', so this is the local archive
+    dir; a test that flips the row to 's3' gets the JuiceFS mountpoint.
+    """
+    db = sqlite3.connect(cfg.db_path)
+    try:
+        return Path(apps_routes.archive_backend.effective_archive_dir(cfg, db))
+    finally:
+        db.close()
+
+
 def _tier_parents(cfg: Any) -> dict[str, Path]:
     """Single source of truth mapping tier name -> host-side parent dir."""
     return {
         "app_data": Path(cfg.persistent_data_dir) / "app_data",
         "app_temp_data": Path(cfg.temporary_data_dir) / "app_temp_data",
-        "app_archive": Path(cfg.app_archive_dir),
+        "app_archive": _archive_parent(cfg),
     }
 
 
@@ -135,7 +148,7 @@ def test_rename_skips_missing_tier_without_error(cfg_factory: Any) -> None:
 
     status, payload = _post_rename(cfg, app_id, "new-name")
     assert status == 200, payload
-    assert not (Path(cfg.app_archive_dir) / "new-name").exists()
+    assert not (_archive_parent(cfg) / "new-name").exists()
 
 
 def test_rename_rollback_on_archive_failure(cfg_factory: Any) -> None:
@@ -145,7 +158,7 @@ def test_rename_rollback_on_archive_failure(cfg_factory: Any) -> None:
     _make_per_app_dirs(cfg, "old-name", ["app_data", "app_temp_data", "app_archive"])
 
     real_rename = os.rename
-    archive_root = os.path.realpath(cfg.app_archive_dir)
+    archive_root = os.path.realpath(str(_archive_parent(cfg)))
 
     def flaky_rename(src: str, dst: str) -> None:
         if os.path.realpath(os.path.dirname(src)) == archive_root:
@@ -223,7 +236,7 @@ def test_rename_rollback_continues_when_a_rollback_rename_itself_fails(cfg_facto
     _make_per_app_dirs(cfg, "old-name", ["app_data", "app_temp_data", "app_archive"])
 
     real_rename = os.rename
-    archive_root = os.path.realpath(cfg.app_archive_dir)
+    archive_root = os.path.realpath(str(_archive_parent(cfg)))
     app_temp_root = os.path.realpath(str(Path(cfg.temporary_data_dir) / "app_temp_data"))
 
     def flaky_rename(src: str, dst: str) -> None:
@@ -289,3 +302,26 @@ def test_rename_non_archive_app_works_with_disabled_backend(cfg_factory: Any) ->
     assert status == 200, payload
     assert payload is not None
     assert payload["name"] == "renamed"
+
+
+def test_rename_moves_local_archive_data(cfg_factory: Any) -> None:
+    """On the default 'local' archive backend, renaming an archive-using app
+    must move its archive subdir under the JuiceFS mountpoint (<old> ->
+    <new>), not orphan it.  The archive tier is always the JuiceFS mount, so
+    the effective archive parent is ``app_archive_dir`` for every backend."""
+    cfg = cfg_factory(20260)
+    # Fresh DB defaults to backend='local'; the archive parent is the mount.
+    archive_parent = _archive_parent(cfg)
+    assert archive_parent == Path(cfg.app_archive_dir)
+    app_id = _seed_app_row(cfg.db_path, "old-name")
+    # Seed data across all three tiers, archive on the LOCAL backend path.
+    for tier, parent in _tier_parents(cfg).items():
+        d = parent / "old-name"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "sentinel.txt").write_text(tier)
+
+    status, payload = _post_rename(cfg, app_id, "new-name")
+    assert status == 200, payload
+
+    assert not (archive_parent / "old-name").exists()
+    assert (archive_parent / "new-name" / "sentinel.txt").read_text() == "app_archive"

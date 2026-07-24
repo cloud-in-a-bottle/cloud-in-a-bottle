@@ -134,10 +134,10 @@ Apps receive a persistent data directory by default. You can opt out or request 
 - **`app_data = true`** (default) — mounts a persistent directory at `/data/app_data/{app_name}/`. Backed up. Set `false` to opt out.
 - **`sqlite = ["db_name"]`** — Provisions a SQLite database. Access the file at `OPENHOST_SQLITE_<NAME>`.
 - **`app_temp_data = true`** — mounts a temporary directory at `/data/app_temp_data/{app_name}/`. Not backed up, can be recreated.
-- **`app_archive = true`** — mounts an elastic archive directory at `/data/app_archive/{app_name}/`. S3-backed via JuiceFS. Requires the operator to configure the archive backend first.
+- **`app_archive = true`** — mounts an archive directory for bulk content at `/data/app_archive/{app_name}/`. Always available: local-disk backed by default, upgradable to S3 (JuiceFS) by the operator. No operator setup required to install.
 - **`access_vm_data = true`** — read-only access to the VM's shared data at `/data/vm_data/`.
 - **`access_all_app_data = true`** — full rw access to all apps' persistent and temp data parent directories, plus rw vm_data. For admin tools like file browsers.
-- **`access_all_archive = true`** — full access to all apps' archive parent directory. Permissive: silently skipped when JuiceFS is not configured. For backup tools.
+- **`access_all_archive = true`** — full access to all apps' archive parent directory. Permissive: silently skipped if the archive mount is transiently unavailable. For backup tools.
 - **`access_all_data = true`** — convenience shorthand for `access_all_app_data = true` + `access_all_archive = true`.
 
 

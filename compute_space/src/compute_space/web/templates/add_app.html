@@ -28,7 +28,7 @@
       <p>Discover new apps for your compute space and install them with a click.</p>
     </div>
     {% if catalog_installed %}
-    <a class="btn btn-primary callout-action" href="{{ app_url(catalog_app_name) }}">Browse the catalog</a>
+    <a class="btn btn-primary callout-action" href="{{ app_url(catalog_app_name) }}" target="_blank" rel="noopener">Browse the catalog</a>
     {% else %}
     <button class="btn btn-primary callout-action" onclick="cloneApp('{{ catalog_repo_url }}')">Install the catalog</button>
     {% endif %}

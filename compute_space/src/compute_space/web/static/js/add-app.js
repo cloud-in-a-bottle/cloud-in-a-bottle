@@ -60,7 +60,7 @@ async function cloneApp(url) {
   }
 
   cloneDir = data.clone_dir;
-  renderManifest(data.manifest, repoUrl);
+  renderManifest(data.manifest, repoUrl, data.storage);
   document.getElementById('app-name').value = data.app_name;
   if (data.validation_error) {
     showError(data.validation_error);
@@ -71,7 +71,8 @@ async function cloneApp(url) {
   show('confirm-section');
 }
 
-function renderManifest(m, url) {
+function renderManifest(m, url, storage) {
+  storage = storage || {};
   let rows = '';
   function section(title, bg) { rows += `<tr><th colspan="2" style="background:${bg};">${title}</th></tr>`; }
   function row(label, val) { rows += `<tr><td>${label}</td><td>${val}</td></tr>`; }
@@ -109,10 +110,20 @@ function renderManifest(m, url) {
         if (m.access_vm_data) row('VM data', 'Read-only access to VM shared data');
       }
       if (wantsAllArchive) {
-        row('Full archive access', 'Read/write to ALL apps\u2019 archive data (when S3 backend is configured)');
+        row('Full archive access', 'Read/write to ALL apps\u2019 archive (bulk) data');
       } else if (m.app_archive) {
-        row('Archive data', "Read/write to app's own archive directory (requires S3 backend)");
+        row('Archive data', "Read/write to app's own archive (bulk) storage directory");
       }
+    }
+  }
+
+  // Storage tier summary + durability notice (mirrors the permissions UX).
+  if (storage.uses_archive) {
+    section('Storage', '#fff3cd');
+    if (storage.archive_backend === 's3') {
+      row('Archive tier', 'S3-backed (durable object storage)');
+    } else if (storage.archive_backend === 'local') {
+      row('Archive tier', 'Local disk on this instance (not durable object storage yet)');
     }
   }
 

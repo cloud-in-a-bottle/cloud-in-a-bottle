@@ -91,7 +91,7 @@
 <p id="no-tokens" class="muted">No API tokens.</p>
 
 <h2 class="section-title">Archive backend</h2>
-<p class="hint">An optional S3-backed data tier (<code>app_archive</code>), used by apps that store large amounts of data which might not fit an instance's local storage.</p>
+<p class="hint">The archive data tier (<code>app_archive</code>) is used by apps that store large amounts of bulk data (e.g. file uploads, media). It is always available: by default it is backed by <strong>local disk</strong> on this instance. Configure an <strong>S3</strong> backend for durable, elastic object storage &mdash; any existing local archive data is migrated into the bucket when you do.</p>
 <div id="archive-backend-status">
   <div class="muted">Loading&hellip;</div>
 </div>
