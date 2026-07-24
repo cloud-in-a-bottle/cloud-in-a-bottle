@@ -35,9 +35,9 @@ def provision_email_records(config: Config) -> None:
     """Create the SES identity/identities and publish email DNS records.
 
     Provisions the instance's built-in zone, and the delegated custom mail domain
-    when one is configured. No-op when email is disabled. Validated config
-    guarantees the email_* fields are populated when email_enabled is True
-    (Config.__attrs_post_init__).
+    when one is configured. No-op when email is not enabled. ``email_enabled`` is
+    True only when all email prerequisites are present (Config.email_enabled), so
+    the email_* fields and public_ip are guaranteed populated past the guard.
     """
     if not config.email_enabled:
         return

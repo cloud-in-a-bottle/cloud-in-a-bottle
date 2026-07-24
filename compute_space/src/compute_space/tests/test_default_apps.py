@@ -250,7 +250,6 @@ def test_email_apps_deployed_only_when_email_enabled(cfg_with_apps, monkeypatch)
     monkeypatch.setattr(da, "clone_and_read_manifest", fake_clone)
 
     email_kwargs = dict(
-        email_enabled=True,
         email_proxy_base_url="https://frontend.example.com",
         email_keycloak_issuer_url="https://kc.example.com/realms/openhost-customers",
         email_keycloak_client_id="instance-x",

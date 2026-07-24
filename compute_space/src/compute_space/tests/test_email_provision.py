@@ -85,7 +85,6 @@ def test_provision_email_records_direct_inbound_points_mx_at_instance(tmp_path: 
     _write_zonefile(zonefile)
 
     cfg = DefaultConfig(zone_domain="alice.example.com").evolve(
-        email_enabled=True,
         email_proxy_base_url="https://proxy.test",
         email_keycloak_issuer_url="https://kc.test/realms/openhost-customers",
         email_keycloak_client_id="instance-alice",
@@ -153,7 +152,6 @@ def test_provision_email_records_provisions_custom_domain(tmp_path: Path, monkey
     )
 
     cfg = DefaultConfig(zone_domain="alice.example.com").evolve(
-        email_enabled=True,
         email_proxy_base_url="https://proxy.test",
         email_keycloak_issuer_url="https://kc.test/realms/openhost-customers",
         email_keycloak_client_id="instance-alice",
@@ -224,7 +222,6 @@ def test_provision_email_records_survives_proxy_outage(tmp_path: Path, monkeypat
     before = zonefile.read_text()
 
     cfg = DefaultConfig(zone_domain="alice.example.com").evolve(
-        email_enabled=True,
         email_proxy_base_url="https://proxy.test",
         email_keycloak_issuer_url="https://kc.test/realms/openhost-customers",
         email_keycloak_client_id="instance-alice",
@@ -272,7 +269,6 @@ def test_provision_custom_domain_direct_no_double_mail(tmp_path: Path, monkeypat
         "@   IN NS   ns.alice.example.com.\n@   IN A    203.0.113.10\n"
     )
     cfg = DefaultConfig(zone_domain="alice.example.com").evolve(
-        email_enabled=True,
         email_proxy_base_url="https://proxy.test",
         email_keycloak_issuer_url="https://kc.test/realms/openhost-customers",
         email_keycloak_client_id="instance-alice",

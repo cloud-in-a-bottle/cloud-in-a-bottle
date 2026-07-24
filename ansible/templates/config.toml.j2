@@ -37,13 +37,15 @@ cert_api_keycloak_issuer_url = "{{ cert_api_keycloak_issuer_url }}"
 cert_api_keycloak_client_id = "{{ cert_api_keycloak_client_id }}"
 cert_api_keycloak_client_secret = "{{ cert_api_keycloak_client_secret }}"
 {% endif %}
-{% if email_enabled is defined and email_enabled %}
-# Opt-in: publish email DNS records (SPF/DKIM/DMARC/MX) into this instance's
-# CoreDNS zone and relay outbound mail through the openhost-email-proxy.  Auth is
-# Keycloak client-credentials (the same per-instance confidential client used for
-# cert_api); client_secret is the only sensitive value.  The proxy creates the
-# SES domain identity and returns the DKIM records this instance publishes.
-email_enabled = true
+{% if email_proxy_base_url is defined and email_proxy_base_url %}
+# Email is enabled automatically because these prerequisites are present (there
+# is no on/off flag): the instance publishes email DNS records (SPF/DKIM/DMARC/MX)
+# into its CoreDNS zone and relays outbound mail through the openhost-email-proxy.
+# Auth is Keycloak client-credentials (the same per-instance confidential client
+# used for cert_api); client_secret is the only sensitive value. The proxy creates
+# the SES domain identity and returns the DKIM records this instance publishes.
+# (public_ip is rendered in the coredns section above; email requires it because
+# inbound is always direct to the instance.)
 email_proxy_base_url = "{{ email_proxy_base_url }}"
 email_keycloak_issuer_url = "{{ email_keycloak_issuer_url }}"
 email_keycloak_client_id = "{{ email_keycloak_client_id }}"

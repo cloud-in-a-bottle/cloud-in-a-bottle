@@ -19,7 +19,6 @@ from compute_space.core.dns import apply_email_records
 from compute_space.core.dns import render_email_records
 
 _EMAIL_KW = dict(
-    email_enabled=True,
     email_proxy_base_url="https://frontend.example",
     email_keycloak_issuer_url="https://kc.example/realms/openhost-customers",
     email_keycloak_client_id="instance-x",
@@ -307,7 +306,12 @@ def test_delegation_record_strips_zone_port():
     assert rec.value == "ns.alice.selfhost.imbue.com"  # no :8443
 
 
-# ─────────────────────── email_enabled validation ───────────────────────
+# ─────────────────── email-enabled derivation + validation ───────────────────
+
+
+def test_all_prereqs_present_enables_email():
+    cfg = DefaultConfig(zone_domain="alice.selfhost.imbue.com").evolve(**_EMAIL_KW)
+    assert cfg.email_enabled is True
 
 
 @pytest.mark.parametrize(
@@ -317,35 +321,52 @@ def test_delegation_record_strips_zone_port():
         "email_keycloak_issuer_url",
         "email_keycloak_client_id",
         "email_keycloak_client_secret",
-        "public_ip",
     ],
 )
-def test_email_enabled_requires_all_fields(missing):
-    # Every one of these is required whenever email is enabled; public_ip because
-    # inbound is always direct (the MX/A records point at this instance).
+def test_partial_email_config_rejected(missing):
+    # Dropping any single email_* field while the others are set is a partial
+    # config (a likely typo that would silently disable email), so it raises.
     kw = dict(_EMAIL_KW)
     kw[missing] = None
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="partially configured"):
         DefaultConfig(zone_domain="alice.selfhost.imbue.com").evolve(**kw)
 
 
-def test_email_enabled_empty_public_ip_rejected():
+def test_partial_email_config_empty_string_also_rejected():
     kw = dict(_EMAIL_KW)
-    kw["public_ip"] = ""
+    kw["email_proxy_base_url"] = ""  # empty is falsy -> still "missing"
+    with pytest.raises(ValueError, match="partially configured"):
+        DefaultConfig(zone_domain="alice.selfhost.imbue.com").evolve(**kw)
+
+
+def test_full_email_config_missing_public_ip_rejected():
+    # All email_* fields set (email on) but no public_ip -> the direct-inbound
+    # MX/A records have no target, so this is rejected.
+    kw = dict(_EMAIL_KW)
+    kw["public_ip"] = None
     with pytest.raises(ValueError, match="public_ip must be set"):
         DefaultConfig(zone_domain="alice.selfhost.imbue.com").evolve(**kw)
 
 
-def test_email_disabled_needs_no_fields():
+def test_public_ip_alone_is_not_partial_email_config():
+    # public_ip is a general CoreDNS field; on its own it must NOT trigger the
+    # partial-email-config error (regression guard for the "every non-email
+    # instance fails to boot" bug).
+    cfg = DefaultConfig(zone_domain="alice.selfhost.imbue.com").evolve(coredns_enabled=True, public_ip="203.0.113.5")
+    assert cfg.email_enabled is False
+
+
+def test_no_prereqs_means_email_off_no_error():
     cfg = DefaultConfig(zone_domain="alice.selfhost.imbue.com")
     assert cfg.email_enabled is False
-
-
-def test_email_disabled_without_public_ip_ok():
-    # public_ip is only required when email is enabled.
-    cfg = DefaultConfig(zone_domain="alice.selfhost.imbue.com").evolve(email_enabled=False)
-    assert cfg.email_enabled is False
     assert cfg.public_ip is None
+
+
+def test_email_enabled_is_not_a_settable_field():
+    # It is a derived property now, so evolve(email_enabled=...) is not accepted.
+    cfg = DefaultConfig(zone_domain="alice.selfhost.imbue.com")
+    with pytest.raises((TypeError, AttributeError)):
+        cfg.evolve(email_enabled=True)
 
 
 def test_no_ses_inbound_mode_field():

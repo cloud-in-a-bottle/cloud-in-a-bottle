@@ -26,7 +26,6 @@ from compute_space.web.routes.api.system import custom_email_domain
 
 def _full_email_kwargs() -> dict[str, object]:
     return dict(
-        email_enabled=True,
         email_proxy_base_url="https://openhost-email-proxy.fly.dev",
         email_keycloak_issuer_url="https://keycloak.example.com/realms/openhost-customers",
         email_keycloak_client_id="instance-alice",
@@ -43,19 +42,46 @@ def test_email_disabled_by_default() -> None:
     assert cfg.email_keycloak_client_secret is None
 
 
-def test_email_enabled_requires_all_fields() -> None:
-    cfg = DefaultConfig(zone_domain="x.example.com")
-    with pytest.raises(ValueError, match="email_proxy_base_url must be set"):
+def test_email_enabled_is_derived_from_prereqs() -> None:
+    # No on/off flag: all prereqs present -> on.
+    cfg = DefaultConfig(zone_domain="x.example.com").evolve(**_full_email_kwargs())
+    assert cfg.email_enabled is True
+    # There is no settable email_enabled field.
+    with pytest.raises((TypeError, AttributeError)):
         cfg.evolve(email_enabled=True)
 
 
-def test_email_enabled_requires_public_ip() -> None:
-    # Inbound is always direct-to-instance, so the public IP (the MX/A target)
-    # must be known when email is enabled.
+def test_partial_email_config_is_rejected() -> None:
+    # A partial email config (some email_* fields set, others missing) is a likely
+    # typo that would silently disable email, so it is surfaced as an error.
+    cfg = DefaultConfig(zone_domain="x.example.com")
+    for missing in ("email_proxy_base_url", "email_keycloak_issuer_url", "email_keycloak_client_secret"):
+        partial = {k: v for k, v in _full_email_kwargs().items() if k != missing}
+        with pytest.raises(ValueError, match="partially configured"):
+            cfg.evolve(**partial)
+
+
+def test_full_email_config_without_public_ip_rejected() -> None:
+    # When all email_* fields are set (email will be on), public_ip is required
+    # for the direct-inbound MX/A records.
     cfg = DefaultConfig(zone_domain="x.example.com")
     partial = {k: v for k, v in _full_email_kwargs().items() if k != "public_ip"}
     with pytest.raises(ValueError, match="public_ip must be set"):
         cfg.evolve(**partial)
+
+
+def test_email_off_when_no_prereqs() -> None:
+    cfg = DefaultConfig(zone_domain="x.example.com")
+    assert cfg.email_enabled is False
+
+
+def test_coredns_instance_without_email_loads_with_public_ip() -> None:
+    # CRITICAL: public_ip is a general CoreDNS field present on essentially every
+    # instance. An instance with public_ip set but NO email fields must load fine
+    # with email off — public_ip alone must not look like a "partial email config".
+    cfg = DefaultConfig(zone_domain="x.example.com", coredns_enabled=True, public_ip="203.0.113.9")
+    assert cfg.email_enabled is False
+    assert cfg.public_ip == "203.0.113.9"
 
 
 def test_email_config_has_no_inbound_mode_fields() -> None:
@@ -102,16 +128,20 @@ def test_legacy_config_without_email_fields_still_loads(tmp_path: Path) -> None:
         "acquire_tls_cert_if_missing = true\n"
         'acme_account_key_path = "/secrets/certbot_private_key.json"\n'
         "coredns_enabled = true\n"
+        # ansible renders public_ip into every config; a non-email instance still
+        # has it, and that must not look like a partial email config.
+        'public_ip = "203.0.113.9"\n'
     )
     cfg = typed_settings.load(DefaultConfig, appname="openhost", config_files=[str(config_path)])
     assert cfg.email_enabled is False
 
 
-def test_config_with_removed_email_inbound_fields_still_loads(tmp_path, monkeypatch) -> None:
-    # Upgrade path: an email-enabled config.toml written by the previous template
-    # (with the now-removed email_inbound_mode / email_inbound_mx_host) must still
-    # load, or a code-only redeploy would break the router (ansible doesn't
-    # re-render config.toml unless forced). The obsolete keys are dropped on load.
+def test_config_with_removed_email_fields_still_loads(tmp_path, monkeypatch) -> None:
+    # Upgrade path: an email-enabled config.toml written by a previous template
+    # (with the now-removed email_enabled / email_inbound_mode / email_inbound_mx_host)
+    # must still load, or a code-only redeploy would break the router (ansible
+    # doesn't re-render config.toml unless forced). The obsolete keys are dropped
+    # on load; email is then re-derived from the surviving prerequisites.
     config_path = tmp_path / "config.toml"
     config_path.write_text(
         "[openhost]\n"
@@ -168,15 +198,24 @@ def test_scrub_obsolete_keys_cleans_up_on_write_failure(tmp_path, monkeypatch) -
     assert list(tmp_path.glob("openhost-config-*.toml")) == []
 
 
-def test_email_config_round_trips_through_toml() -> None:
+def test_email_config_round_trips_through_toml(tmp_path: Path) -> None:
     cfg = DefaultConfig(zone_domain="x.example.com").evolve(**_full_email_kwargs())
     rendered = cfg.to_toml_str()
-    assert "email_enabled = true" in rendered
+    # email_enabled is a derived property, not a stored field, so it is NOT
+    # rendered; the prerequisites that imply it are.
+    assert "email_enabled" not in rendered
     assert 'email_proxy_base_url = "https://openhost-email-proxy.fly.dev"' in rendered
     assert 'email_keycloak_client_id = "instance-alice"' in rendered
     # The removed ses-inbound fields must not round-trip.
     assert "email_inbound_mode" not in rendered
     assert "email_inbound_mx_host" not in rendered
+    # Re-load the rendered TOML and confirm email is still derived as enabled
+    # (the prerequisites survive the round trip even though the flag isn't stored).
+    out = tmp_path / "config.toml"
+    out.write_text(rendered)
+    reloaded = DefaultConfig.from_toml(str(out))
+    assert reloaded.email_enabled is True
+    assert reloaded.email_proxy_base_url == "https://openhost-email-proxy.fly.dev"
 
 
 def test_email_config_has_no_baked_in_relay_secret() -> None:

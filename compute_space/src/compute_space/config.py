@@ -18,6 +18,25 @@ import typed_settings
 CERT_PROVIDER_ACME = "acme"
 CERT_PROVIDER_CERT_API = "cert_api"
 
+# The email-specific fields that must ALL be present for email to be enabled.
+# Email has no separate on/off flag; ``Config.email_enabled`` is derived from
+# these (plus public_ip). Kept as a module constant so validation and the
+# property agree on one list. These authenticate to the email frontend and relay
+# outbound through the central proxy.
+#
+# NOTE: public_ip is deliberately NOT in this list. It is a general-purpose
+# CoreDNS field present on essentially every instance (email or not), so using it
+# as an email-participation signal would make every non-email instance look
+# "partially configured". Instead, public_ip is required *additionally* only when
+# these email fields are all set (inbound is always direct-to-instance, so the
+# MX/A records point at the instance's IP, which must then be known).
+_EMAIL_PREREQ_FIELDS = (
+    "email_proxy_base_url",
+    "email_keycloak_issuer_url",
+    "email_keycloak_client_id",
+    "email_keycloak_client_secret",
+)
+
 # Config keys that older versions wrote into config.toml but that no longer map
 # to a Config field. typed-settings (and cattrs, forbid_extra_keys) reject any
 # unknown key in a config file, so a config.toml written by an older deploy would
@@ -26,10 +45,13 @@ CERT_PROVIDER_CERT_API = "cert_api"
 # These keys are silently dropped on load. Add a key here when removing a field.
 #   - email_inbound_mode / email_inbound_mx_host: the SES-based inbound mode was
 #     removed; inbound is now always delivered directly to the instance.
+#   - email_enabled: replaced by a derived property (email is on when its
+#     prerequisites are present); older configs may still carry the literal key.
 _OBSOLETE_CONFIG_KEYS = frozenset(
     {
         "email_inbound_mode",
         "email_inbound_mx_host",
+        "email_enabled",
     }
 )
 
@@ -114,12 +136,15 @@ class Config:
     cert_api_keycloak_client_secret: str | None
 
     ## Email
-    # When True, the instance publishes email DNS records (SPF/DKIM/DMARC/MX) into
-    # its CoreDNS zone and can relay outbound mail through the email proxy.  All
-    # the email_* fields below must be set when this is True (validated in
-    # __attrs_post_init__).  Provisioning injects these per instance, mirroring
-    # the cert_api Keycloak fields.
-    email_enabled: bool
+    # Email is enabled automatically when its prerequisites are present — there is
+    # no separate on/off flag.  ``email_enabled`` (a derived property below) is
+    # True iff the proxy URL, the per-instance Keycloak client-credentials, and
+    # the instance's public IP are all set.  Provisioning supplies those whenever
+    # the operator has email infrastructure configured; when they are absent the
+    # instance simply runs without email (no boot failure).  This makes a
+    # freshly-provisioned instance "just have working email" with zero flags,
+    # while degrading gracefully in environments where the email infra isn't
+    # stood up.
     # Base URL of the email API (the imbue-hosted-spaces frontend, the
     # authenticated public door), e.g. "https://openhost.imbue.com".  The instance
     # calls the frontend's /api/email/* endpoints; the frontend authenticates this
@@ -159,9 +184,9 @@ class Config:
     # Default apps (bare dirnames or remote git URLs, same as ``default_apps``)
     # auto-deployed ONLY when email is enabled — the mailbox server + webmail
     # client that give the instance a real inbox/outbox.  Kept separate from
-    # ``default_apps`` so an instance with email off does not ship a mailbox; they
+    # ``default_apps`` so an instance without email does not ship a mailbox; they
     # are appended to the deployed set by ``effective_default_apps`` when
-    # ``email_enabled`` is True.
+    # ``email_enabled`` is True (i.e. when the email prerequisites are present).
     email_default_apps: list[str]
 
     ## coredns (only really needed if acquiring TLS certs via DNS-01, or if using NS dns records)
@@ -228,23 +253,26 @@ class Config:
             ):
                 if not getattr(self, name):
                     raise ValueError(f"{name} must be set in config to use the cert_api provider")
-        if self.email_enabled:
-            # Enabling email requires the proxy URL and the per-instance Keycloak
-            # client-credentials (outbound always relays through SES).
-            for name in (
-                "email_proxy_base_url",
-                "email_keycloak_issuer_url",
-                "email_keycloak_client_id",
-                "email_keycloak_client_secret",
-            ):
-                if not getattr(self, name):
-                    raise ValueError(f"{name} must be set in config when email_enabled is True")
-            # Inbound is always direct-to-instance, so the MX/A records point at
-            # this instance's public IP — which must therefore be known.
-            if not self.public_ip:
-                raise ValueError("public_ip must be set in config when email_enabled is True")
-        # Validate the custom mail domain shape (if set) regardless of
-        # email_enabled, so a typo surfaces at config load rather than at the
+        # Email has no explicit on/off flag: it is enabled automatically when all
+        # of its email_* prerequisites are present (see the email_enabled
+        # property). We do NOT hard-fail when they are absent — an instance
+        # without email infra just runs without email. But a PARTIAL email config
+        # (some email fields set, others missing) almost certainly means a typo or
+        # a botched provision that would silently disable email, so we surface it.
+        set_count = sum(1 for name in _EMAIL_PREREQ_FIELDS if getattr(self, name))
+        if 0 < set_count < len(_EMAIL_PREREQ_FIELDS):
+            missing = [name for name in _EMAIL_PREREQ_FIELDS if not getattr(self, name)]
+            raise ValueError(
+                "email is partially configured: set all of "
+                f"{sorted(_EMAIL_PREREQ_FIELDS)} to enable email, or none to disable it. "
+                f"Missing: {sorted(missing)}"
+            )
+        if set_count == len(_EMAIL_PREREQ_FIELDS) and not self.public_ip:
+            # Email is fully configured, so it will be enabled — and inbound is
+            # always direct-to-instance, so the MX/A records need the public IP.
+            raise ValueError("public_ip must be set in config when email is enabled")
+        # Validate the custom mail domain shape (if set) regardless of whether
+        # email is enabled, so a typo surfaces at config load rather than at the
         # first boot that turns email on.
         custom = self.email_custom_domain_normalized
         if custom is not None:
@@ -258,6 +286,22 @@ class Config:
                     f"email_custom_domain {custom!r} overlaps the instance zone {zone!r}; "
                     "the built-in zone already handles that name"
                 )
+
+    @property
+    def email_enabled(self) -> bool:
+        """Whether email is active on this instance.
+
+        Derived, not a stored flag: email is on iff all of ``_EMAIL_PREREQ_FIELDS``
+        (the proxy URL and the per-instance Keycloak client-credentials) are set.
+        When they are, ``public_ip`` is also required — enforced in
+        ``__attrs_post_init__`` — so a valid email-enabled config always has the
+        public IP for the direct-inbound MX/A records. Provisioning supplies these
+        whenever the operator has email infrastructure configured, so a freshly-
+        provisioned instance "just has working email" with no flag to flip; in
+        environments without the email infra the fields are absent and the
+        instance runs without email.
+        """
+        return all(getattr(self, name) for name in _EMAIL_PREREQ_FIELDS)
 
     @property
     def zone_domain_no_port(self) -> str:
@@ -460,8 +504,9 @@ class DefaultConfig(Config):
     cert_api_keycloak_client_id: str | None = None
     cert_api_keycloak_client_secret: str | None = None
 
-    # Email — disabled by default. All fields injected by provisioning when enabled.
-    email_enabled: bool = False
+    # Email — no on/off flag; enabled automatically when its prerequisites (the
+    # proxy URL + keycloak client + public_ip) are present. Provisioning injects
+    # them when the operator has email infra configured.
     email_proxy_base_url: str | None = None
     email_keycloak_issuer_url: str | None = None
     email_keycloak_client_id: str | None = None

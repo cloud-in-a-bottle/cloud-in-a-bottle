@@ -13,7 +13,6 @@ from compute_space.core.email.relay_credential import RelayCredentialProvider
 from compute_space.tests.conftest import _make_test_config
 
 _EMAIL_KW = dict(
-    email_enabled=True,
     email_mailbox_app_names=["stalwart-email-server"],
     email_proxy_base_url="https://frontend.example",
     email_keycloak_issuer_url="https://kc.example/realms/openhost-customers",

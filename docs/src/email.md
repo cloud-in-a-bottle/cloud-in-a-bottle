@@ -4,8 +4,13 @@ This document describes how OpenHost instances send and receive email
 for their zone, and why the design is shaped the way it is.
 
 The platform-side pieces described here (the CoreDNS email records and the
-provisioning that talks to the proxy) are implemented in this repo and gated
-behind `email_enabled` in the instance config (off by default). The central
+provisioning that talks to the proxy) are implemented in this repo. There is no
+email on/off flag: email is enabled automatically when its prerequisites are
+present in the instance config (the proxy/frontend URL, the per-instance Keycloak
+client-credentials, and the instance's public IP). Provisioning supplies those
+whenever the operator has email infrastructure configured, so a freshly-
+provisioned instance "just has working email"; when the infra isn't present the
+fields are absent and the instance simply runs without email. The central
 relay is a separate service,
 [`openhost-email-proxy`](https://github.com/imbue-openhost/openhost-email-proxy),
 deployed on fly.io, and it is **outbound-only**: inbound mail is always delivered
@@ -360,8 +365,9 @@ NS delegation; everything after that is automatic.
 
 ## What is implemented today
 
-- **Platform (this repo):** `email_*` config (opt-in, off by default),
-  CoreDNS publishing of SPF/DKIM/DMARC/MX (`core/dns.py:apply_email_records`),
+- **Platform (this repo):** `email_*` config (no flag — enabled when its
+  prerequisites are present), CoreDNS publishing of SPF/DKIM/DMARC/MX
+  (`core/dns.py:apply_email_records`),
   a `clear_txt` fix that no longer wipes email TXT records on cert renewal, the
   proxy/frontend client + startup provisioning (`core/email/`), the scoped
   `/api/email/relay-config` router endpoint, and finalize-time config injection
@@ -406,10 +412,11 @@ operational / infrastructure decisions or depend on other teams):
 4. **Turn the feature on end-to-end.** In the frontend (imbue-hosted-spaces) set
    `IMBUE_EMAIL_BACKEND_URL` (the proxy's 6PN URL), `IMBUE_EMAIL_INSTANCE_ISSUER`
    (the `openhost-customers` realm), and `IMBUE_EMAIL_SMTP_HOST`/`_PORT` (the
-   proxy's public submission endpoint). In vm-manager Settings set `email_enabled`
-   and `email_proxy_base_url` (→ the frontend's public URL, since the instance
-   calls the frontend for identity + relay-config). Email is off by default in
-   both until these are set.
+   proxy's public submission endpoint). In vm-manager Settings set
+   `email_proxy_base_url` (→ the frontend's public URL, since the instance calls
+   the frontend for identity + relay-config); that alone turns email on for new
+   instances (there is no separate toggle). Until it is set, provisioned
+   instances simply come up without email.
 5. **Per-instance email authorization.** The frontend currently authenticates
    the instance but does not gate *which* instances may use email — any
    authenticated instance can. The per-instance `email_enabled` flag in the
