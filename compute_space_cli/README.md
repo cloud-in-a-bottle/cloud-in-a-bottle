@@ -49,6 +49,8 @@ oh app reload cool-app                       # rebuild + restart
 oh app reload cool-app --update --wait       # git pull, rebuild, wait until running
 oh app ssh cool-app                          # open a shell inside the running container
 oh app ssh cool-app --shell bash             # use bash instead of sh (default: sh)
+oh app ssh cool-app -- ls -la /data          # run a command in the container and exit
+oh app ssh cool-app "cat /etc/os-release"    # ...or pass it as a single quoted string
 oh app stop cool-app                         # stop app
 oh app remove cool-app                       # remove app + data
 oh app remove cool-app --keep-data           # remove but keep data
