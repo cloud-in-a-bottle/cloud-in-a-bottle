@@ -12,12 +12,6 @@
        re-centring the column). Ignored by browsers that lack support, so it's a
        no-regression progressive enhancement. */
     html { scrollbar-gutter: stable; }
-    /* Tab navigations hold the tab constant and swap the page content once ready
-       Progressive enhancement — unsupported browsers see a slight blank flash */
-    @view-transition { navigation: auto; }
-    body > h1 { view-transition-name: space-title; }
-    #main-nav { view-transition-name: main-nav; }
-    ::view-transition-group(*), ::view-transition-old(*), ::view-transition-new(*) { animation: none !important; }
     body { font-family: -apple-system, system-ui, sans-serif; max-width: 960px; margin: 2em auto; padding: 0 1em; color: #222; }
     table { border-collapse: collapse; width: 100%; margin: 1em 0; }
     th, td { border: 1px solid #ddd; padding: 0.5em 0.8em; text-align: left; }

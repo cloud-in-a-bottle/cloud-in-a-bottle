@@ -442,12 +442,6 @@ _TEMPLATE = """<!DOCTYPE html>
        toggles the vertical scrollbar. Progressive enhancement — unsupported
        browsers simply ignore it. */
     html { scrollbar-gutter: stable; }
-    /* Match layout.html: instant swap and hold nav bar. Unsupported browsers
-       will use old behavior. */
-    @view-transition { navigation: auto; }
-    h1.space-title { view-transition-name: space-title; }
-    #main-nav { view-transition-name: main-nav; }
-    ::view-transition-group(*), ::view-transition-old(*), ::view-transition-new(*) { animation: none !important; }
     body {
       font-family: -apple-system, system-ui, sans-serif;
       color: #222;
