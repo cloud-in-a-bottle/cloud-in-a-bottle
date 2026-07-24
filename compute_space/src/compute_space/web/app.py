@@ -18,12 +18,14 @@ from litestar.static_files import create_static_files_router
 from litestar.template.config import TemplateConfig
 from litestar.types import ASGIApp
 
+from compute_space import OPENHOST_PROJECT_DIR
 from compute_space.config import Config
 from compute_space.config import get_config
 from compute_space.config import provide_config
 from compute_space.core import archive_backend
 from compute_space.core.auth.auth import read_owner_username
 from compute_space.core.auth.identity import load_identity_keys
+from compute_space.core.git_ops import get_github_source_url
 from compute_space.core.image_pruner import start_image_pruner
 from compute_space.core.logging import logger
 from compute_space.core.startup import check_app_status
@@ -95,12 +97,17 @@ def _template_globals(config: Config, static_dir: Path) -> dict[str, Any]:
             logger.exception("failed to read owner username for template")
             return None
 
+    # Resolved once at startup: the running checkout's branch/fork doesn't change
+    # without a restart, and a "view source" link needn't be recomputed per request.
+    source_url = get_github_source_url(OPENHOST_PROJECT_DIR)
+
     return {
         "zone_name": zone_name,
         "zone_domain": zone_domain,
         "app_url": app_url,
         "owner_name": owner_name,
         "static_url": _make_static_url(static_dir),
+        "source_url": source_url,
     }
 
 

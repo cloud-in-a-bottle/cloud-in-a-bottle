@@ -78,8 +78,10 @@ from pygments.formatters import HtmlFormatter
 from pygments.lexers import get_lexer_by_name
 from pygments.util import ClassNotFound
 
+from compute_space import OPENHOST_PROJECT_DIR
 from compute_space.config import get_config
 from compute_space.core.auth.auth import read_owner_username
+from compute_space.core.git_ops import get_github_source_url
 from compute_space.core.logging import logger
 from compute_space.db import get_db
 
@@ -97,6 +99,11 @@ def _docs_src_dir() -> Path:
 
 _DEFAULT_INDEX = "introduction"
 _SUMMARY_FILENAME = "SUMMARY.md"
+
+# Resolved once at import: the running checkout's branch/fork is fixed for the
+# process, and the shared nav's "view source" mark (rendered via _nav_header.html)
+# needs it in this route's standalone Jinja environment. None on tarball deploys.
+_SOURCE_URL = get_github_source_url(OPENHOST_PROJECT_DIR)
 
 
 # ─── Space navigation header ────────────────────────────────────────
@@ -739,6 +746,7 @@ def _render_doc(slug: str) -> Response[str]:
         next_link=next_l,
         pygments_css=PYGMENTS_CSS,
         display_name=_space_display_name(),
+        source_url=_SOURCE_URL,
     )
     return Response(content=html, media_type=MediaType.HTML)
 
