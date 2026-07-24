@@ -437,6 +437,11 @@ _TEMPLATE = """<!DOCTYPE html>
        flip from light (Dashboard) to dark (Docs) mid-navigation.  Keeping
        the two in lockstep is the whole point: the manual should look like
        just another in-space page. */
+    /* Match layout.html: always reserve the scrollbar gutter so the centred
+       column doesn't shift sideways when navigating to/from a page whose height
+       toggles the vertical scrollbar. Progressive enhancement — unsupported
+       browsers simply ignore it. */
+    html { scrollbar-gutter: stable; }
     body {
       font-family: -apple-system, system-ui, sans-serif;
       color: #222;
