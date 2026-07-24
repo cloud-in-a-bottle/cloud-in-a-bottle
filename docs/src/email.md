@@ -8,11 +8,9 @@ provisioning that talks to the proxy) are implemented in this repo and gated
 behind `email_enabled` in the instance config (off by default). The central
 relay is a separate service,
 [`openhost-email-proxy`](https://github.com/imbue-openhost/openhost-email-proxy),
-deployed on fly.io, and it is **outbound-only**. Inbound is being reworked to be
-delivered directly to the instance's own mail server (MX → instance, port 25) —
-that mode switch (`email_inbound_mode`) lands in a follow-up; the code in this
-change still points the MX at the SES-managed inbound host. See
-[Production readiness](#production-readiness) for what remains before turning
+deployed on fly.io, and it is **outbound-only**: inbound mail is delivered
+directly to the instance's own mail server (MX → instance, port 25) by default.
+See [Production readiness](#production-readiness) for what remains before turning
 this on for real tenants.
 
 The guiding constraint is that **OpenHost instances are operated by
@@ -25,11 +23,14 @@ follows from that constraint.
 
 Two facts make email different from a normal app:
 
-1. **Cloud providers block port 25.** Most hosts (Hetzner, GCP, and
-   others) block inbound *and* outbound TCP/25 to fight spam. An
-   instance therefore cannot deliver mail directly to a recipient's MX,
-   nor accept mail directly from a sender's MX. A relay is mandatory —
-   this is not optional plumbing.
+1. **Cloud providers block outbound port 25.** Most hosts (Hetzner, GCP,
+   and others) block *outbound* TCP/25 to fight spam, so an instance
+   cannot deliver mail directly to a recipient's MX — an outbound relay is
+   mandatory, not optional plumbing. (Inbound 25 is a different matter:
+   the instances OpenHost provisions can accept inbound connections on
+   port 25, which is what makes direct inbound the default — see
+   [Receiving mail](#receiving-mail). Environments that also block inbound
+   25 can fall back to `email_inbound_mode = "ses"`.)
 
 2. **Deliverability is a shared, reputation-based resource.** Whether
    mail lands in an inbox depends on the sending IP's reputation and on
@@ -113,13 +114,15 @@ ordinary OpenHost apps shipped as defaults.
   (authoritative for the selfhost subzone; and for a BYO domain
    via optional NS delegation)
 
-  On the instance: mailbox server (app) + webmail client (app)
+  On the instance: mailbox server (app, receives inbound on :25) + webmail client (app)
+
+           sender's MX ──▶ mail.<zone> (A → instance IP) ──▶ Stalwart :25   (inbound, direct)
 ```
 
 Outbound flows left-to-right through the frontend/backend to SES. Inbound does
-**not** traverse the proxy: it is delivered to the instance's own mail server.
-Today the MX points at the SES-managed inbound host; a follow-up switches it to
-point directly at the instance (see [Receiving mail](#receiving-mail)).
+**not** traverse the proxy: by default the zone's MX points at the instance and
+its own mail server (Stalwart) accepts SMTP on port 25 directly (see
+[Receiving mail](#receiving-mail)).
 
 ## The email relay (frontend + private backend)
 
@@ -198,10 +201,11 @@ per-provider connectors:
 - **DKIM** public keys (the tokens the SES proxy obtained when creating
   the domain identity) so signed mail aligns.
 - **DMARC** policy for the zone.
-- **MX** for inbound, pointing at the SES-managed inbound host
-  (`email_inbound_mx_host`). A follow-up adds an `email_inbound_mode` switch that
-  can instead point the MX at the instance's own mail host (`mail.<zone>`, with a
-  matching A record) for direct delivery to Stalwart on port 25.
+- **MX** for inbound. In the default `direct` mode (`email_inbound_mode`) the MX
+  points at the instance's own mail host (`mail.<zone>`, whose A record CoreDNS
+  also publishes → the instance IP), so mail is delivered straight to Stalwart on
+  port 25. In the optional `ses` mode (for environments that block inbound 25)
+  the MX points at the SES-managed inbound host (`email_inbound_mx_host`) instead.
 
 Because these are persistent zone records (unlike the transient
 ACME-challenge records), they are written as part of the zone's base
@@ -247,17 +251,18 @@ CoreDNS load-bearing for the whole domain.
 
 ## Receiving mail
 
-Inbound mail is handled by the instance's own mail server, not the central
-relay — only **outbound** flows through the SES relay (see
+Inbound mail is delivered **directly to the instance's own mail server** — it
+does not traverse the central relay. By default (`email_inbound_mode = "direct"`)
+the zone's MX points at the instance (`mail.<zone>`, whose A record CoreDNS
+publishes → the instance's public IP), so a sender's MX connects straight to
+Stalwart on port 25. Only **outbound** flows through the central SES relay (see
 [The email relay](#the-email-relay-frontend--private-backend)).
 
-In this change the zone's **MX points at the SES-managed inbound host**
-(`email_inbound_mx_host`). A follow-up adds `email_inbound_mode`: in `direct`
-mode (the intended default) the MX instead points at the instance
-(`mail.<zone>`, whose A record CoreDNS publishes → the instance's public IP) so a
-sender's MX connects straight to Stalwart on port 25, which works because the
-instances OpenHost provisions accept inbound SMTP on port 25; `ses` mode keeps
-the SES inbound host for environments that block inbound 25.
+This works because the instances OpenHost provisions accept inbound SMTP on port
+25. For environments that block inbound 25, `email_inbound_mode = "ses"` points
+the MX at the SES-managed inbound host (`email_inbound_mx_host`) instead; that
+mode requires standing up the SES receiving pipeline (S3 bucket + receipt rule)
+separately and is not the default.
 
 The earlier full SES-based inbound path (SES receiving → S3 → SNS → proxy →
 instance over HTTPS) has been removed from the proxy, the frontend, and the
@@ -333,8 +338,8 @@ NS delegation; everything after that is automatic.
 - **An instance holds no AWS credentials** — it authenticates to the
   proxy with a per-instance, individually-revocable Keycloak credential.
 - **Proxy unavailability is fail-safe** — outbound mail queues on the
-  instance's mailbox server and retries; inbound does not depend on the proxy
-  (a sending MX retries per normal SMTP).
+  instance's mailbox server and retries; inbound is unaffected because it is
+  delivered directly to the instance (a sending MX retries per normal SMTP).
 - **Mail data stays on the instance** — the proxy relays and enforces
   policy but is not the mail store.
 
@@ -359,8 +364,8 @@ NS delegation; everything after that is automatic.
   a `clear_txt` fix that no longer wipes email TXT records on cert renewal, the
   proxy/frontend client + startup provisioning (`core/email/`), the scoped
   `/api/email/relay-config` router endpoint, and finalize-time config injection
-  (`ansible/templates/config.toml.j2`). Inbound MX still points at the SES host;
-  the direct-inbound `email_inbound_mode` switch is a follow-up.
+  (`ansible/templates/config.toml.j2`), including direct-inbound MX/A rendering
+  with the `email_inbound_mode` switch (default `direct`).
 - **Proxy (`openhost-email-proxy`):** outbound-only. SMTP submission relay
   (per-instance HMAC credential) + `/v1/send`, From-domain enforcement,
   per-instance rate/volume caps, and SES identity create/verify. Inbound (the
@@ -425,5 +430,5 @@ operational / infrastructure decisions or depend on other teams):
    `p=quarantine`; decide the production policy and a `rua` aggregate-report
    address per zone (config supports `email_dmarc_rua`).
 10. **Canonical proxy URL + config defaults.** Point `email_proxy_base_url` at
-    the production frontend and `email_inbound_mx_host` at the SES inbound host
-    for the region; consider defaults once they have stable DNS names.
+    the production frontend; consider a default once it has a stable DNS name.
+    `email_inbound_mx_host` only matters in the optional `ses` inbound mode.
