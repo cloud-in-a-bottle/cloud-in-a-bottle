@@ -139,6 +139,98 @@ def test_upgrade_without_public_ip_rejected() -> None:
         existing.evolve(email_proxy_base_url="https://openhost.imbue.com")
 
 
+# ── extensive seamless-upgrade / resolver edge cases ──
+
+
+def test_partial_kc_override_issuer_only() -> None:
+    existing = DefaultConfig(zone_domain="alice.selfhost.imbue.com").evolve(**_cert_api_kwargs())
+    with pytest.raises(ValueError, match="partially configured"):
+        existing.evolve(email_proxy_base_url="https://f", email_keycloak_issuer_url="https://kc/realms/x")
+
+
+def test_partial_kc_override_two_of_three() -> None:
+    existing = DefaultConfig(zone_domain="alice.selfhost.imbue.com").evolve(**_cert_api_kwargs())
+    with pytest.raises(ValueError, match="partially configured"):
+        existing.evolve(
+            email_proxy_base_url="https://f",
+            email_keycloak_issuer_url="https://kc/realms/x",
+            email_keycloak_client_id="c",
+        )
+
+
+def test_empty_string_kc_override_is_partial() -> None:
+    existing = DefaultConfig(zone_domain="alice.selfhost.imbue.com").evolve(**_cert_api_kwargs())
+    with pytest.raises(ValueError, match="partially configured"):
+        existing.evolve(
+            email_proxy_base_url="https://f",
+            email_keycloak_issuer_url="https://kc/realms/x",
+            email_keycloak_client_id="c",
+            email_keycloak_client_secret="",
+        )
+
+
+def test_override_partial_rejected_even_without_proxy() -> None:
+    # Partial kc override is a typo regardless of whether email is being turned on.
+    cfg = DefaultConfig(zone_domain="x.example.com")
+    with pytest.raises(ValueError, match="partially configured"):
+        cfg.evolve(email_keycloak_issuer_url="https://kc/realms/x", email_keycloak_client_id="c")
+
+
+def test_cert_api_client_present_but_email_off_without_proxy() -> None:
+    # Having the cert-api client is not enough; email stays off until proxy URL set.
+    cfg = DefaultConfig(zone_domain="alice.selfhost.imbue.com").evolve(**_cert_api_kwargs())
+    assert cfg.email_enabled is False
+    # ...but the resolvers still expose the cert-api client for when it's turned on.
+    assert cfg.email_keycloak_client_id_resolved == "instance-alice"
+
+
+def test_acme_instance_cannot_enable_email_without_explicit_kc() -> None:
+    # A BYO-ACME instance has no cert-api client, so proxy-only can't enable email.
+    cfg = DefaultConfig(zone_domain="x.example.com", public_ip="203.0.113.5")
+    with pytest.raises(ValueError, match="email cannot be enabled"):
+        cfg.evolve(email_proxy_base_url="https://openhost.imbue.com")
+
+
+def test_acme_instance_enables_email_with_explicit_kc() -> None:
+    # A BYO-ACME instance can still enable email by supplying explicit email kc.
+    cfg = DefaultConfig(zone_domain="x.example.com", public_ip="203.0.113.5").evolve(
+        email_proxy_base_url="https://openhost.imbue.com",
+        email_keycloak_issuer_url="https://kc/realms/openhost-customers",
+        email_keycloak_client_id="email-only-client",
+        email_keycloak_client_secret="es",
+    )
+    assert cfg.email_enabled is True
+    assert cfg.email_keycloak_client_id_resolved == "email-only-client"
+
+
+def test_upgraded_config_round_trips(tmp_path) -> None:
+    # An upgraded config (cert-api + email_proxy_base_url only) survives a TOML
+    # round trip and stays email-enabled, with kc still inherited.
+    upgraded = DefaultConfig(zone_domain="alice.selfhost.imbue.com").evolve(
+        **_cert_api_kwargs(), email_proxy_base_url="https://openhost.imbue.com"
+    )
+    out = tmp_path / "config.toml"
+    out.write_text(upgraded.to_toml_str())
+    reloaded = DefaultConfig.from_toml(str(out))
+    assert reloaded.email_enabled is True
+    assert reloaded.email_keycloak_client_id_resolved == "instance-alice"
+    # email_keycloak_* were never stored (inherited), so they shouldn't be in TOML.
+    rendered = upgraded.to_toml_str()
+    assert "email_keycloak_client_id" not in rendered
+    assert 'email_proxy_base_url = "https://openhost.imbue.com"' in rendered
+
+
+def test_explicit_kc_override_is_rendered() -> None:
+    cfg = DefaultConfig(zone_domain="x.example.com", public_ip="203.0.113.5").evolve(
+        email_proxy_base_url="https://f",
+        email_keycloak_issuer_url="https://kc/realms/x",
+        email_keycloak_client_id="c",
+        email_keycloak_client_secret="s",
+    )
+    rendered = cfg.to_toml_str()
+    assert 'email_keycloak_client_id = "c"' in rendered
+
+
 def test_coredns_instance_without_email_loads_with_public_ip() -> None:
     # CRITICAL: public_ip is a general CoreDNS field present on essentially every
     # instance. An instance with public_ip set but NO email fields must load fine
