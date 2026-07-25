@@ -539,7 +539,7 @@ class DefaultConfig(Config):
     # email_mailbox_app_names for it to be allowed to fetch the relay config.
     email_default_apps: list[str] = attr.Factory(
         lambda: [
-            "https://github.com/imbue-openhost/openhost-stalwart-email-server@andrew/fix-outbound-relay",
+            "https://github.com/imbue-openhost/openhost-stalwart-email-server",
             "https://github.com/imbue-openhost/openhost-bulwark-email-client",
         ]
     )
