@@ -42,17 +42,19 @@ def provision_email_records(config: Config) -> None:
     if not config.email_enabled:
         return
     assert config.email_proxy_base_url is not None
-    assert config.email_keycloak_issuer_url is not None
-    assert config.email_keycloak_client_id is not None
-    assert config.email_keycloak_client_secret is not None
+    # The Keycloak client-credentials resolve (email_keycloak_* with cert-api
+    # fallback); email_enabled guarantees they are non-None here.
+    assert config.email_keycloak_issuer_url_resolved is not None
+    assert config.email_keycloak_client_id_resolved is not None
+    assert config.email_keycloak_client_secret_resolved is not None
     # Inbound is always direct-to-instance, so the MX/A records need the
     # instance's public IP (validated non-None in Config when email is enabled).
     assert config.public_ip is not None
 
     credentials = KeycloakClientCredentials(
-        issuer_url=config.email_keycloak_issuer_url,
-        client_id=config.email_keycloak_client_id,
-        client_secret=config.email_keycloak_client_secret,
+        issuer_url=config.email_keycloak_issuer_url_resolved,
+        client_id=config.email_keycloak_client_id_resolved,
+        client_secret=config.email_keycloak_client_secret_resolved,
     )
     try:
         with KeycloakTokenProvider.create(credentials) as token_provider:

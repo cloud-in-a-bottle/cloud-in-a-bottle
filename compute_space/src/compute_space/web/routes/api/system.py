@@ -67,9 +67,9 @@ def _relay_provider_key(config: Config) -> tuple[object, ...]:
     return (
         config.email_enabled,
         config.email_proxy_base_url,
-        config.email_keycloak_issuer_url,
-        config.email_keycloak_client_id,
-        config.email_keycloak_client_secret,
+        config.email_keycloak_issuer_url_resolved,
+        config.email_keycloak_client_id_resolved,
+        config.email_keycloak_client_secret_resolved,
         config.zone_domain_no_port,
         config.email_custom_domain_normalized,
     )

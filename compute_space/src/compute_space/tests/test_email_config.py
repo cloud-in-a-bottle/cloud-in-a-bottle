@@ -18,6 +18,7 @@ from litestar.exceptions import NotAuthorizedException
 
 import compute_space.config as config_mod
 import compute_space.web.routes.api.system as sys_mod
+from compute_space.config import CERT_PROVIDER_CERT_API
 from compute_space.config import DefaultConfig
 from compute_space.config import load_config
 from compute_space.core.email.relay_credential import RelayCredential
@@ -51,14 +52,22 @@ def test_email_enabled_is_derived_from_prereqs() -> None:
         cfg.evolve(email_enabled=True)
 
 
-def test_partial_email_config_is_rejected() -> None:
-    # A partial email config (some email_* fields set, others missing) is a likely
-    # typo that would silently disable email, so it is surfaced as an error.
+def test_partial_email_keycloak_config_is_rejected() -> None:
+    # Setting SOME but not all of the explicit email_keycloak_* override fields is
+    # a likely typo (set all three to override cert-api, or none to inherit it).
     cfg = DefaultConfig(zone_domain="x.example.com")
-    for missing in ("email_proxy_base_url", "email_keycloak_issuer_url", "email_keycloak_client_secret"):
+    for missing in ("email_keycloak_issuer_url", "email_keycloak_client_id", "email_keycloak_client_secret"):
         partial = {k: v for k, v in _full_email_kwargs().items() if k != missing}
         with pytest.raises(ValueError, match="partially configured"):
             cfg.evolve(**partial)
+
+
+def test_email_proxy_without_keycloak_creds_is_rejected() -> None:
+    # email_proxy_base_url set (email intended) but no resolvable Keycloak client
+    # (no cert-api, no explicit override) -> email could never authenticate.
+    cfg = DefaultConfig(zone_domain="x.example.com", public_ip="203.0.113.5")
+    with pytest.raises(ValueError, match="email cannot be enabled"):
+        cfg.evolve(email_proxy_base_url="https://openhost.imbue.com")
 
 
 def test_full_email_config_without_public_ip_rejected() -> None:
@@ -73,6 +82,61 @@ def test_full_email_config_without_public_ip_rejected() -> None:
 def test_email_off_when_no_prereqs() -> None:
     cfg = DefaultConfig(zone_domain="x.example.com")
     assert cfg.email_enabled is False
+
+
+def _cert_api_kwargs() -> dict[str, object]:
+    """An instance provisioned with cert-api (holds a per-instance Keycloak client)
+    but no email fields — the shape of an existing pre-email instance."""
+    return dict(
+        coredns_enabled=True,
+        public_ip="203.0.113.5",
+        cert_provider=CERT_PROVIDER_CERT_API,
+        cert_api_base_url="https://cert-api.example.com",
+        cert_api_keycloak_issuer_url="https://keycloak.example.com/realms/openhost-customers",
+        cert_api_keycloak_client_id="instance-alice",
+        cert_api_keycloak_client_secret="cert-secret",
+    )
+
+
+def test_seamless_upgrade_email_inherits_cert_api_keycloak() -> None:
+    # THE seamless upgrade: an existing cert-api instance enables email by setting
+    # ONLY email_proxy_base_url; the Keycloak client-credentials inherit from
+    # cert-api. No new credentials to inject.
+    existing = DefaultConfig(zone_domain="alice.selfhost.imbue.com").evolve(**_cert_api_kwargs())
+    assert existing.email_enabled is False  # no email URL yet
+    upgraded = existing.evolve(email_proxy_base_url="https://openhost.imbue.com")
+    assert upgraded.email_enabled is True
+    assert upgraded.email_keycloak_issuer_url_resolved == "https://keycloak.example.com/realms/openhost-customers"
+    assert upgraded.email_keycloak_client_id_resolved == "instance-alice"
+    assert upgraded.email_keycloak_client_secret_resolved == "cert-secret"
+
+
+def test_explicit_email_keycloak_overrides_cert_api() -> None:
+    existing = DefaultConfig(zone_domain="alice.selfhost.imbue.com").evolve(**_cert_api_kwargs())
+    cfg = existing.evolve(
+        email_proxy_base_url="https://openhost.imbue.com",
+        email_keycloak_issuer_url="https://kc2.example/realms/other",
+        email_keycloak_client_id="email-client",
+        email_keycloak_client_secret="email-secret",
+    )
+    assert cfg.email_enabled is True
+    assert cfg.email_keycloak_issuer_url_resolved == "https://kc2.example/realms/other"
+    assert cfg.email_keycloak_client_id_resolved == "email-client"
+
+
+def test_email_keycloak_resolvers_none_without_any_client() -> None:
+    cfg = DefaultConfig(zone_domain="x.example.com")
+    assert cfg.email_keycloak_issuer_url_resolved is None
+    assert cfg.email_keycloak_client_id_resolved is None
+    assert cfg.email_keycloak_client_secret_resolved is None
+
+
+def test_upgrade_without_public_ip_rejected() -> None:
+    # A cert-api instance somehow missing public_ip that turns on email is rejected.
+    kw = {k: v for k, v in _cert_api_kwargs().items() if k != "public_ip"}
+    existing = DefaultConfig(zone_domain="alice.selfhost.imbue.com").evolve(**kw)
+    with pytest.raises(ValueError, match="public_ip must be set"):
+        existing.evolve(email_proxy_base_url="https://openhost.imbue.com")
 
 
 def test_coredns_instance_without_email_loads_with_public_ip() -> None:

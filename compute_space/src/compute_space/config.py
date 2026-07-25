@@ -30,8 +30,22 @@ CERT_PROVIDER_CERT_API = "cert_api"
 # "partially configured". Instead, public_ip is required *additionally* only when
 # these email fields are all set (inbound is always direct-to-instance, so the
 # MX/A records point at the instance's IP, which must then be known).
-_EMAIL_PREREQ_FIELDS = (
+#
+# NOTE: the Keycloak client-credentials are resolved (email_keycloak_*_resolved),
+# which fall back to the cert-api client — so an instance that was cert-api
+# provisioned already satisfies the Keycloak prerequisites for free. In practice
+# the only value an upgraded instance is missing is email_proxy_base_url. This is
+# what makes "enable email on an existing instance" seamless: set one value.
+_EMAIL_PREREQ_ATTRS = (
     "email_proxy_base_url",
+    "email_keycloak_issuer_url_resolved",
+    "email_keycloak_client_id_resolved",
+    "email_keycloak_client_secret_resolved",
+)
+# The explicit email Keycloak override fields. Setting some-but-not-all is a typo
+# (set all three to override the cert-api client, or none to inherit it) — checked
+# in __attrs_post_init__.
+_EMAIL_KEYCLOAK_OVERRIDE_FIELDS = (
     "email_keycloak_issuer_url",
     "email_keycloak_client_id",
     "email_keycloak_client_secret",
@@ -254,23 +268,38 @@ class Config:
                 if not getattr(self, name):
                     raise ValueError(f"{name} must be set in config to use the cert_api provider")
         # Email has no explicit on/off flag: it is enabled automatically when all
-        # of its email_* prerequisites are present (see the email_enabled
-        # property). We do NOT hard-fail when they are absent — an instance
-        # without email infra just runs without email. But a PARTIAL email config
-        # (some email fields set, others missing) almost certainly means a typo or
-        # a botched provision that would silently disable email, so we surface it.
-        set_count = sum(1 for name in _EMAIL_PREREQ_FIELDS if getattr(self, name))
-        if 0 < set_count < len(_EMAIL_PREREQ_FIELDS):
-            missing = [name for name in _EMAIL_PREREQ_FIELDS if not getattr(self, name)]
+        # of its prerequisites resolve (see the email_enabled property). The
+        # Keycloak client-credentials fall back to the cert-api client, so in the
+        # common case the only email_* value that needs setting is
+        # email_proxy_base_url. We do NOT hard-fail when email is simply off. But
+        # we surface two misconfigurations:
+        #
+        #  (a) The stored email_keycloak_* fields are partially set (a typo — set
+        #      all three to override the cert-api client, or none to inherit it).
+        kc_set = sum(1 for name in _EMAIL_KEYCLOAK_OVERRIDE_FIELDS if getattr(self, name))
+        if 0 < kc_set < len(_EMAIL_KEYCLOAK_OVERRIDE_FIELDS):
+            missing = [name for name in _EMAIL_KEYCLOAK_OVERRIDE_FIELDS if not getattr(self, name)]
             raise ValueError(
-                "email is partially configured: set all of "
-                f"{sorted(_EMAIL_PREREQ_FIELDS)} to enable email, or none to disable it. "
-                f"Missing: {sorted(missing)}"
+                "email Keycloak credentials are partially configured: set all of "
+                f"{sorted(_EMAIL_KEYCLOAK_OVERRIDE_FIELDS)} to override the cert-api client, "
+                f"or none to inherit it. Missing: {sorted(missing)}"
             )
-        if set_count == len(_EMAIL_PREREQ_FIELDS) and not self.public_ip:
-            # Email is fully configured, so it will be enabled — and inbound is
-            # always direct-to-instance, so the MX/A records need the public IP.
-            raise ValueError("public_ip must be set in config when email is enabled")
+        #  (b) email_proxy_base_url is set (email intended) but the Keycloak
+        #      client-credentials don't resolve (no cert-api client and no email
+        #      override) — email could never authenticate, so this is a config
+        #      error rather than a silent disable.
+        if self.email_proxy_base_url:
+            missing = [a for a in _EMAIL_PREREQ_ATTRS if not getattr(self, a)]
+            if missing:
+                raise ValueError(
+                    "email_proxy_base_url is set but email cannot be enabled; missing "
+                    f"{sorted(missing)}. Provide the cert-api Keycloak client (cert_provider="
+                    f"{CERT_PROVIDER_CERT_API!r}) or explicit email_keycloak_* credentials."
+                )
+            if not self.public_ip:
+                # Email will be enabled — inbound is always direct-to-instance, so
+                # the MX/A records need the public IP.
+                raise ValueError("public_ip must be set in config when email is enabled")
         # Validate the custom mail domain shape (if set) regardless of whether
         # email is enabled, so a typo surfaces at config load rather than at the
         # first boot that turns email on.
@@ -287,21 +316,41 @@ class Config:
                     "the built-in zone already handles that name"
                 )
 
+    # --- Email Keycloak client-credentials, resolved with cert-api fallback ---
+    # Email reuses the same per-instance Keycloak confidential client as cert-api
+    # (both authenticate to the openhost-customers realm). An operator can override
+    # per-field via email_keycloak_*, but by default email inherits the cert-api
+    # client. This is what lets an existing cert-api instance enable email by
+    # setting only email_proxy_base_url — no new credentials to inject.
+
+    @property
+    def email_keycloak_issuer_url_resolved(self) -> str | None:
+        return self.email_keycloak_issuer_url or self.cert_api_keycloak_issuer_url
+
+    @property
+    def email_keycloak_client_id_resolved(self) -> str | None:
+        return self.email_keycloak_client_id or self.cert_api_keycloak_client_id
+
+    @property
+    def email_keycloak_client_secret_resolved(self) -> str | None:
+        return self.email_keycloak_client_secret or self.cert_api_keycloak_client_secret
+
     @property
     def email_enabled(self) -> bool:
         """Whether email is active on this instance.
 
-        Derived, not a stored flag: email is on iff all of ``_EMAIL_PREREQ_FIELDS``
-        (the proxy URL and the per-instance Keycloak client-credentials) are set.
-        When they are, ``public_ip`` is also required — enforced in
-        ``__attrs_post_init__`` — so a valid email-enabled config always has the
-        public IP for the direct-inbound MX/A records. Provisioning supplies these
-        whenever the operator has email infrastructure configured, so a freshly-
-        provisioned instance "just has working email" with no flag to flip; in
-        environments without the email infra the fields are absent and the
-        instance runs without email.
+        Derived, not a stored flag: email is on iff all of ``_EMAIL_PREREQ_ATTRS``
+        resolve — the proxy URL plus the Keycloak client-credentials (which fall
+        back to the cert-api client). When they do, ``public_ip`` is also required
+        (enforced in ``__attrs_post_init__``) for the direct-inbound MX/A records.
+
+        Because the Keycloak creds inherit from cert-api, a cert-api instance
+        enables email simply by having ``email_proxy_base_url`` set — so a
+        freshly-provisioned instance "just has working email", and an existing
+        instance is upgraded by injecting that single value. Environments without
+        the email infra leave it unset and run without email.
         """
-        return all(getattr(self, name) for name in _EMAIL_PREREQ_FIELDS)
+        return all(getattr(self, name) for name in _EMAIL_PREREQ_ATTRS)
 
     @property
     def zone_domain_no_port(self) -> str:

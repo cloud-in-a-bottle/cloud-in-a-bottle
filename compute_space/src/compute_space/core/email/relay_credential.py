@@ -79,13 +79,15 @@ class RelayCredentialProvider:
     def _fetch(self) -> RelayCredential:
         cfg = self.config
         assert cfg.email_proxy_base_url is not None
-        assert cfg.email_keycloak_issuer_url is not None
-        assert cfg.email_keycloak_client_id is not None
-        assert cfg.email_keycloak_client_secret is not None
+        # Keycloak creds resolve (email_keycloak_* with cert-api fallback);
+        # email_enabled guarantees they are non-None here.
+        assert cfg.email_keycloak_issuer_url_resolved is not None
+        assert cfg.email_keycloak_client_id_resolved is not None
+        assert cfg.email_keycloak_client_secret_resolved is not None
         credentials = KeycloakClientCredentials(
-            issuer_url=cfg.email_keycloak_issuer_url,
-            client_id=cfg.email_keycloak_client_id,
-            client_secret=cfg.email_keycloak_client_secret,
+            issuer_url=cfg.email_keycloak_issuer_url_resolved,
+            client_id=cfg.email_keycloak_client_id_resolved,
+            client_secret=cfg.email_keycloak_client_secret_resolved,
         )
         url = f"{cfg.email_proxy_base_url.rstrip('/')}/api/email/relay-config"
         try:

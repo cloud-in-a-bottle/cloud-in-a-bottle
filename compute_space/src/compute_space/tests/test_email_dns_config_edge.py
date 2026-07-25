@@ -317,26 +317,41 @@ def test_all_prereqs_present_enables_email():
 @pytest.mark.parametrize(
     "missing",
     [
-        "email_proxy_base_url",
         "email_keycloak_issuer_url",
         "email_keycloak_client_id",
         "email_keycloak_client_secret",
     ],
 )
-def test_partial_email_config_rejected(missing):
-    # Dropping any single email_* field while the others are set is a partial
-    # config (a likely typo that would silently disable email), so it raises.
+def test_partial_email_keycloak_rejected(missing):
+    # Dropping one of the explicit email_keycloak_* override fields while the
+    # others are set is a partial override (a likely typo), so it raises.
     kw = dict(_EMAIL_KW)
     kw[missing] = None
     with pytest.raises(ValueError, match="partially configured"):
         DefaultConfig(zone_domain="alice.selfhost.imbue.com").evolve(**kw)
 
 
-def test_partial_email_config_empty_string_also_rejected():
+def test_partial_email_keycloak_empty_string_also_rejected():
     kw = dict(_EMAIL_KW)
-    kw["email_proxy_base_url"] = ""  # empty is falsy -> still "missing"
+    kw["email_keycloak_issuer_url"] = ""  # empty is falsy -> still "partial"
     with pytest.raises(ValueError, match="partially configured"):
         DefaultConfig(zone_domain="alice.selfhost.imbue.com").evolve(**kw)
+
+
+def test_email_keycloak_set_without_proxy_is_off_not_error():
+    # All 3 explicit kc fields set but no proxy URL -> email simply off, no error
+    # (kc credentials configured but email not turned on).
+    kw = {k: v for k, v in _EMAIL_KW.items() if k != "email_proxy_base_url"}
+    cfg = DefaultConfig(zone_domain="alice.selfhost.imbue.com").evolve(**kw)
+    assert cfg.email_enabled is False
+
+
+def test_proxy_without_resolvable_keycloak_rejected():
+    # proxy URL set but no kc anywhere (no cert-api, no override) -> error.
+    with pytest.raises(ValueError, match="email cannot be enabled"):
+        DefaultConfig(zone_domain="alice.selfhost.imbue.com").evolve(
+            public_ip="203.0.113.5", email_proxy_base_url="https://openhost.imbue.com"
+        )
 
 
 def test_full_email_config_missing_public_ip_rejected():
