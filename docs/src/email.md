@@ -334,6 +334,30 @@ polls SES until the domain verifies. For a `selfhost` subdomain this is
 fully automatic. For a custom domain, the one manual step is the user's
 NS delegation; everything after that is automatic.
 
+### Upgrading an existing instance (turning email on)
+
+Email is designed so an instance that already exists (provisioned before email,
+or with email off) can be upgraded with minimal action, because it reuses what
+cert-api already gave it:
+
+- **Keycloak credentials inherit from cert-api.** The instance's `email_keycloak_*`
+  resolve from its `cert_api_keycloak_*` client when not explicitly set, so no new
+  per-instance credential is minted or injected. The only server-side Keycloak
+  action is attaching the `openhost-email` audience scope to that existing client —
+  done idempotently by vm-manager's back-fill endpoint
+  `POST /api/instance/<name>/enable-email-scope` (no re-mint, no SSH).
+- **public_ip is already present** on any CoreDNS instance.
+- **The one value to add is `email_proxy_base_url`** (the email frontend URL,
+  deployment-wide). Once it is in the instance config, `email_enabled` derives to
+  true and, on the next router boot, the instance auto-publishes its email DNS,
+  auto-deploys the mailbox + webmail apps, and fetches its relay credential at
+  runtime — no manual app installs.
+
+So the upgrade is: (1) vm-manager attaches the email scope to the instance's
+client, (2) the instance gets `email_proxy_base_url` in its config (via a
+re-deploy/config render), (3) reboot the router. Everything downstream is
+automatic and reboot-safe.
+
 ## Trust and failure model
 
 - **An instance can only send as its own zone**, enforced by the proxy
