@@ -22,20 +22,32 @@ start_caddy = {{ 'false' if http_only else 'true' }}
 claim_token_required = true
 data_root_dir = "/home/host/.openhost/local_compute_space"
 apps_dir_override = "/home/host/openhost/apps"
+{% if imbue_identity_issuer_url is defined and imbue_identity_issuer_url %}
+# Shared per-instance Imbue credential (client-credentials). One credential
+# authenticates this instance to every Imbue service (cert acquisition, email,
+# ...). client_secret is the only sensitive value. New provisioning writes this
+# shared block; each service resolves its credential from it unless a deprecated
+# per-service override is set below.
+imbue_identity_issuer_url = "{{ imbue_identity_issuer_url }}"
+imbue_identity_client_id = "{{ imbue_identity_client_id }}"
+imbue_identity_client_secret = "{{ imbue_identity_client_secret }}"
+{% endif %}
 {% if cert_provider is defined and cert_provider == 'cert_api' %}
 # Opt-in: fetch TLS certs from the openhost-cert-api broker instead of the
 # bring-your-own ACME account key above (which is then ignored).  The broker
 # holds the ACME account, so this instance never sees ACME credentials.
 # cert_api_base_url defaults to the canonical broker; only set it to override.
-# Auth is Keycloak client-credentials: this instance's confidential client in
-# the openhost-customers realm.  client_secret is the only sensitive value.
+# Auth resolves from the shared imbue_identity_* block above; the deprecated
+# cert_api_keycloak_* override below is rendered only when explicitly provided.
 cert_provider = "cert_api"
 {% if cert_api_base_url is defined %}
 cert_api_base_url = "{{ cert_api_base_url }}"
 {% endif %}
+{% if cert_api_keycloak_issuer_url is defined and cert_api_keycloak_issuer_url %}
 cert_api_keycloak_issuer_url = "{{ cert_api_keycloak_issuer_url }}"
 cert_api_keycloak_client_id = "{{ cert_api_keycloak_client_id }}"
 cert_api_keycloak_client_secret = "{{ cert_api_keycloak_client_secret }}"
+{% endif %}
 {% endif %}
 {% if email_proxy_base_url is defined and email_proxy_base_url %}
 # Email is enabled automatically because this prerequisite is present (there is no
