@@ -210,6 +210,10 @@ class Config:
         # array, so single-domain configs serialize byte-identically to before.
         if not d.get("domains"):
             d.pop("domains", None)
+        # The domain now seeds via first_boot.toml, not config.toml; don't emit an empty
+        # `zone_domain` line (kept when present so already-provisioned configs round-trip).
+        if not d.get("zone_domain"):
+            d.pop("zone_domain", None)
         return {"openhost": d}
 
     def to_toml_str(self) -> str:

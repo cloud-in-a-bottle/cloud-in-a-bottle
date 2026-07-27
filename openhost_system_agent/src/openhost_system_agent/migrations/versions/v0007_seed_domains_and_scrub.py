@@ -1,5 +1,5 @@
 """v7: migrate an OLD instance's config-file domain set + claim token into the router DB, then
-scrub the now-captured ``zone_domain`` line from ``config.toml``.
+scrub the now-captured ``zone_domain`` / ``tls_enabled`` lines from ``config.toml``.
 
 This is the **old-instance (upgrade)** path of the config/domains consolidation.  Fresh installs
 don't run agent migrations at first boot (ansible stamps the log at v1 and the agent applies v2+ only
@@ -52,8 +52,12 @@ CREATE TABLE IF NOT EXISTS settings (
 );
 """
 
-# A top-level ``zone_domain = "..."`` assignment line (whole line, incl. its newline).
-_ZONE_DOMAIN_LINE_RE = re.compile(r"(?m)^[ \t]*zone_domain[ \t]*=.*(?:\r?\n|$)")
+# Top-level ``zone_domain``/``tls_enabled`` assignment lines (whole line, incl. its newline).  Both
+# are now DB-derived (the primary domain's name + its per-domain ``tls``), captured above and never
+# read at runtime, so the config-file copies are removed.  The other TLS/DNS switches
+# (``acquire_tls_cert_if_missing``, ``coredns_enabled``, ``start_caddy``) are genuine instance-level
+# config and are left in place.
+_CAPTURED_LINE_RE = re.compile(r"(?m)^[ \t]*(?:zone_domain|tls_enabled)[ \t]*=.*(?:\r?\n|$)")
 
 
 def _seed_domains(db: sqlite3.Connection, openhost: dict[str, object]) -> None:
@@ -98,15 +102,15 @@ def _seed_claim_token(db: sqlite3.Connection, claim_token_path: str) -> None:
         db.execute("INSERT INTO settings (key, value) VALUES ('claim_token', ?)", (token,))
 
 
-def _scrub_zone_domain(config_path: str) -> None:
-    """Remove the now-captured ``zone_domain`` line from ``config.toml``, preserving the file's
-    owner/mode (this runs as root, so a naive rewrite would leave it root-owned)."""
+def _scrub_captured_config(config_path: str) -> None:
+    """Remove the now-captured ``zone_domain`` / ``tls_enabled`` lines from ``config.toml``, preserving
+    the file's owner/mode (this runs as root, so a naive rewrite would leave it root-owned)."""
     p = Path(config_path)
     try:
         original = p.read_text()
     except OSError:
         return
-    scrubbed = _ZONE_DOMAIN_LINE_RE.sub("", original)
+    scrubbed = _CAPTURED_LINE_RE.sub("", original)
     if scrubbed == original:
         return
     st = p.stat()
@@ -122,8 +126,9 @@ def migrate(
     db_path: str = DB_PATH,
     claim_token_path: str = CLAIM_TOKEN_PATH,
 ) -> None:
-    """Capture the config-file domain set + claim token into the router DB, then scrub ``config.toml``.
-    Idempotent; a no-op if there's no router DB yet or nothing left to capture."""
+    """Capture the config-file domain set + claim token into the router DB, then scrub the captured
+    ``zone_domain`` / ``tls_enabled`` lines from ``config.toml``.  Idempotent; a no-op if there's no
+    router DB yet or nothing left to capture."""
     if not Path(db_path).exists():
         return  # the router hasn't created its DB yet — it'll seed at first boot
     try:
@@ -149,7 +154,7 @@ def migrate(
             if sidecar.exists():
                 os.chown(sidecar, st.st_uid, st.st_gid)
 
-    _scrub_zone_domain(config_path)
+    _scrub_captured_config(config_path)
 
 
 class Migration0007SeedDomainsAndScrub(SystemMigration):

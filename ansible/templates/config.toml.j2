@@ -5,9 +5,8 @@
    -e bind_host=0.0.0.0 for LAN access).  Re-run without the flag for full
    TLS + CoreDNS once DNS is in place. #}
 [openhost]
-zone_domain = "{{ domain }}"
+{# Domain and tls_enabled are no longer written here, but in first_boot.toml #}
 host = "{{ bind_host | default('127.0.0.1') }}"
-tls_enabled = {{ 'false' if http_only else 'true' }}
 acquire_tls_cert_if_missing = {{ 'false' if http_only else 'true' }}
 {% if not http_only %}
 acme_account_key_path = "/home/host/openhost/ansible/secrets/certbot_private_key.json"

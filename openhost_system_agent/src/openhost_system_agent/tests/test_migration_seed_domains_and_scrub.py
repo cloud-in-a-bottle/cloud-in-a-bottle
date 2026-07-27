@@ -66,10 +66,13 @@ def test_captures_domains_and_claim_token_then_scrubs(tmp_path: Path) -> None:
     conn.close()
     assert token == ("old-claim-tok",)
 
-    # config.toml scrubbed of the now-captured zone_domain line; the rest is preserved.
+    # config.toml scrubbed of the now-captured zone_domain + tls_enabled lines (the primary's tls=1
+    # above proves tls_enabled was captured before being removed); the rest is preserved.
     scrubbed = config.read_text()
     assert "zone_domain" not in scrubbed
+    assert "tls_enabled" not in scrubbed
     assert "[[openhost.domains]]" in scrubbed and 'name = "secondary.example.com"' in scrubbed
+    assert "tls = true" in scrubbed  # the domain's own `tls` line must NOT be scrubbed (only tls_enabled)
 
 
 def test_is_idempotent_and_preserves_existing_seed(tmp_path: Path) -> None:

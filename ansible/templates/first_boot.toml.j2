@@ -1,0 +1,6 @@
+{% set http_only = (local_http_only | default(false)) | bool %}
+{# first_boot.toml: the fresh instance's primary domain + claim token. These values seed the
+   DB once, then are ignored after. #}
+domain = "{{ domain }}"
+tls = {{ 'false' if http_only else 'true' }}
+claim_token = "{{ effective_claim_token }}"
