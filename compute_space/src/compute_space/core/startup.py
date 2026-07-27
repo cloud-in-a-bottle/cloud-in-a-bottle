@@ -5,6 +5,8 @@ import time
 
 from compute_space.config import Config
 from compute_space.core.apps import start_app_process
+from compute_space.core.containers import BUILD_CACHE_CORRUPT_MARKER
+from compute_space.core.containers import drop_docker_build_cache
 from compute_space.core.containers import is_container_running
 from compute_space.core.default_apps import deploy_default_apps
 from compute_space.core.logging import logger
@@ -74,6 +76,11 @@ def check_app_status(config: Config) -> None:
                 (row["app_id"],),
             )
             apps_to_restart.append(row["app_id"])
+
+        # Recover apps whose build corrupted containers-storage onto the same
+        # serial rebuild path (which exists precisely to avoid that corruption).
+        apps_to_restart.extend(_recover_cache_corrupt_apps(db))
+
         db.commit()
     finally:
         db.close()
@@ -84,6 +91,46 @@ def check_app_status(config: Config) -> None:
             args=(apps_to_restart, config),
             daemon=True,
         ).start()
+
+
+def _recover_cache_corrupt_apps(db: sqlite3.Connection) -> list[str]:
+    """Prune the build cache and return app_ids to rebuild, for apps that
+    failed with a cache-corruption marker.
+
+    A plain retry can't recover — the corruption is cached — so the cache is
+    dropped before the caller rebuilds these serially.  No attempt
+    bookkeeping is needed to avoid looping: recovery clears the app's error,
+    so it only reappears here if a serial, freshly-pruned rebuild reproduced
+    the corruption, which the concurrency that causes it can't.  The caller
+    commits ``db``.
+    """
+    rows = db.execute(
+        "SELECT app_id, repo_path FROM apps WHERE status = 'error' AND error_message LIKE ?",
+        (f"%{BUILD_CACHE_CORRUPT_MARKER}%",),
+    ).fetchall()
+    corrupt = [r["app_id"] for r in rows if r["repo_path"] and os.path.isdir(r["repo_path"])]
+    if not corrupt:
+        return []
+
+    logger.warning(
+        "containers-storage cache corruption in %d app(s); dropping build cache and rebuilding serially: %s",
+        len(corrupt),
+        corrupt,
+    )
+    try:
+        output = drop_docker_build_cache()
+        logger.info("dropped build cache before serial rebuild: %s", output)
+    except Exception as e:
+        # Rebuild anyway — a partial prune plus a fresh serial build often
+        # still recovers.
+        logger.error("failed to drop build cache during corruption recovery: %s", e)
+
+    for app_id in corrupt:
+        db.execute(
+            "UPDATE apps SET status = 'starting', error_message = NULL WHERE app_id = ?",
+            (app_id,),
+        )
+    return corrupt
 
 
 def _restart_apps_sequential(app_ids: list[str], config: Config) -> None:

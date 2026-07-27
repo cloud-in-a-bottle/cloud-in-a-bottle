@@ -78,6 +78,10 @@ DEFAULT_CAPABILITIES: frozenset[str] = frozenset(
 _BUILD_CACHE_CORRUPT_FRAGMENTS_UNCONDITIONAL = (
     "storage-driver errored",
     "layer not known",
+    # buildah aborts a build step when the overlay layer it just tried to
+    # mount is unusable (see _OVERLAY_LINK_CORRUPT_RE) and then reports the
+    # discarded build container as "identifier is not a container".
+    "identifier is not a container",
 )
 
 # The "missing local layer blob" error from containers-storage.  The
@@ -85,11 +89,21 @@ _BUILD_CACHE_CORRUPT_FRAGMENTS_UNCONDITIONAL = (
 # errors that happen to mention a sha256 digest.
 _MISSING_LAYER_RE = re.compile(r"content digest sha256:[0-9a-f]+:\s*not found", re.IGNORECASE)
 
+# containers-storage overlay corruption: when a layer's short-name "link"
+# file is empty or missing, the overlay driver assembles a lowerdir that
+# resolves to the bare `overlay`/`overlay/l` directory, and the mount
+# fails with `readlink <...>/overlay[/l]: invalid argument` — at build
+# time ("mounting new container") or at container start.  Retrying reuses
+# the same corrupt cached layer, so only a cache prune fixes it.
+# Requiring "readlink", "overlay" and "invalid argument" on one line keeps
+# this from matching unrelated readlink/EINVAL noise.
+_OVERLAY_LINK_CORRUPT_RE = re.compile(r"readlink .*overlay.*: invalid argument", re.IGNORECASE)
+
 
 def _is_build_cache_corrupt_line(line: str) -> bool:
     if any(frag in line for frag in _BUILD_CACHE_CORRUPT_FRAGMENTS_UNCONDITIONAL):
         return True
-    return bool(_MISSING_LAYER_RE.search(line))
+    return bool(_MISSING_LAYER_RE.search(line) or _OVERLAY_LINK_CORRUPT_RE.search(line))
 
 
 def _log_path(app_name: str, temp_data_dir: str) -> str:
