@@ -14,6 +14,7 @@ from typing import Any
 
 import compute_space.core.startup as startup
 from compute_space.core.app_id import new_app_id
+from compute_space.core.containers import BUILD_CACHE_CORRUPT_MARKER
 from compute_space.db.connection import init_db
 
 from .conftest import _make_test_config
@@ -57,6 +58,43 @@ def _status(cfg: Any, app_id: str) -> str:
         return status
     finally:
         db.close()
+
+
+def _seed_error_app(cfg: Any, *, name: str, port: int, repo_path: str, error_message: str) -> str:
+    """Seed an app already in 'error' with a specific error_message."""
+    app_id = new_app_id()
+    db = sqlite3.connect(cfg.db_path)
+    try:
+        db.execute(
+            """INSERT INTO apps (app_id, name, version, repo_path, local_port, status, container_id, error_message)
+               VALUES (?, ?, '1.0', ?, ?, 'error', NULL, ?)""",
+            (app_id, name, repo_path, port, error_message),
+        )
+        db.commit()
+    finally:
+        db.close()
+    return app_id
+
+
+def _error_message(cfg: Any, app_id: str) -> str | None:
+    db = sqlite3.connect(cfg.db_path)
+    try:
+        row = db.execute("SELECT error_message FROM apps WHERE app_id = ?", (app_id,)).fetchone()
+        return row[0] if row else None
+    finally:
+        db.close()
+
+
+def _stub_drop_cache(monkeypatch: Any) -> list[bool]:
+    """Record calls to drop_docker_build_cache without shelling out to podman."""
+    calls: list[bool] = []
+
+    def fake_drop() -> str:
+        calls.append(True)
+        return "deleted: sha256:abc"
+
+    monkeypatch.setattr(startup, "drop_docker_build_cache", fake_drop)
+    return calls
 
 
 def _capture_restart_sweep(monkeypatch: Any) -> tuple[list[str], threading.Event]:
@@ -256,6 +294,152 @@ def test_inflight_build_at_exact_process_start_is_not_restarted(tmp_path: Path, 
     assert not done.is_set()
     assert app_id not in restarted
     assert _status(cfg, app_id) == "starting"
+
+
+# ---------------------------------------------------------------------------
+# Cache-corruption recovery: drop the build cache once and rebuild serially.
+# ---------------------------------------------------------------------------
+
+
+def test_cache_corrupt_app_is_pruned_and_serially_rebuilt(tmp_path: Path, monkeypatch: Any) -> None:
+    # The concurrent initial deploy corrupted containers-storage; the boot sweep
+    # must drop the build cache and queue the app onto the (serial) rebuild path.
+    cfg = _make_test_config(tmp_path, port=21600)
+    init_db(cfg.db_path)
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    app_id = _seed_error_app(
+        cfg,
+        name="corrupt",
+        port=21610,
+        repo_path=str(repo),
+        error_message=f"{BUILD_CACHE_CORRUPT_MARKER} Container build cache is corrupted.",
+    )
+
+    monkeypatch.setattr(startup, "is_container_running", lambda cid: False)
+    drop_calls = _stub_drop_cache(monkeypatch)
+    restarted, done = _capture_restart_sweep(monkeypatch)
+
+    startup.check_app_status(cfg)
+
+    assert done.wait(5), "cache-corrupt app was never queued for serial rebuild"
+    assert drop_calls == [True], "build cache should be dropped exactly once"
+    assert app_id in restarted
+    # Reset to transitional state so the dashboard reflects the retry.
+    assert _status(cfg, app_id) == "starting"
+    assert _error_message(cfg, app_id) is None
+
+
+def test_non_corrupt_error_app_is_left_alone(tmp_path: Path, monkeypatch: Any) -> None:
+    # A build that failed for an ordinary reason (bad Dockerfile, etc.) must NOT
+    # trigger a cache drop or an automatic rebuild — only the corruption marker does.
+    cfg = _make_test_config(tmp_path, port=21700)
+    init_db(cfg.db_path)
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    app_id = _seed_error_app(
+        cfg,
+        name="badfile",
+        port=21710,
+        repo_path=str(repo),
+        error_message="Container build failed (exit code 1): COPY failed: no such file",
+    )
+
+    monkeypatch.setattr(startup, "is_container_running", lambda cid: False)
+    drop_calls = _stub_drop_cache(monkeypatch)
+    restarted, done = _capture_restart_sweep(monkeypatch)
+
+    startup.check_app_status(cfg)
+
+    assert not done.is_set()
+    assert drop_calls == []
+    assert app_id not in restarted
+    assert _status(cfg, app_id) == "error"
+
+
+def test_recovered_app_is_not_re_pruned_once_marker_cleared(tmp_path: Path, monkeypatch: Any) -> None:
+    # No persisted ledger: bounding relies on recovery clearing the marker.
+    # After the first sweep sets the app to 'starting' with a null error, a
+    # second sweep in the same state must not prune or rebuild it again.
+    cfg = _make_test_config(tmp_path, port=21800)
+    init_db(cfg.db_path)
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    app_id = _seed_error_app(
+        cfg,
+        name="recovered",
+        port=21810,
+        repo_path=str(repo),
+        error_message=f"{BUILD_CACHE_CORRUPT_MARKER} Container build cache is corrupted.",
+    )
+
+    monkeypatch.setattr(startup, "is_container_running", lambda cid: False)
+    drop_calls = _stub_drop_cache(monkeypatch)
+    _capture_restart_sweep(monkeypatch)
+
+    startup.check_app_status(cfg)  # first sweep: recovers (prunes) the app
+    assert drop_calls == [True]
+    assert _status(cfg, app_id) == "starting"
+
+    # Second sweep with the app now in 'starting' (marker cleared): the
+    # normal sweep handles it (dead container -> rebuild) but the corruption
+    # recovery must NOT prune again.
+    startup.check_app_status(cfg)
+    assert drop_calls == [True], "cache must not be dropped again once the marker is cleared"
+
+
+def test_multiple_corrupt_apps_prune_once_and_all_rebuild(tmp_path: Path, monkeypatch: Any) -> None:
+    # A single global prune clears every corrupt layer, so N corrupt apps must
+    # trigger exactly one drop and then all rebuild serially in one sweep.
+    cfg = _make_test_config(tmp_path, port=21900)
+    init_db(cfg.db_path)
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    ids = {
+        _seed_error_app(
+            cfg,
+            name=f"corrupt{i}",
+            port=21910 + i,
+            repo_path=str(repo),
+            error_message=f"{BUILD_CACHE_CORRUPT_MARKER} Container build cache is corrupted.",
+        )
+        for i in range(3)
+    }
+
+    monkeypatch.setattr(startup, "is_container_running", lambda cid: False)
+    drop_calls = _stub_drop_cache(monkeypatch)
+    restarted, done = _capture_restart_sweep(monkeypatch)
+
+    startup.check_app_status(cfg)
+
+    assert done.wait(5)
+    assert drop_calls == [True], "prune must run exactly once for the whole sweep"
+    assert ids.issubset(set(restarted))
+
+
+def test_corrupt_app_with_missing_repo_is_not_recovered(tmp_path: Path, monkeypatch: Any) -> None:
+    # No checkout to rebuild from — a prune would be pointless, so skip it.
+    cfg = _make_test_config(tmp_path, port=22000)
+    init_db(cfg.db_path)
+    missing = tmp_path / "gone"  # never created
+    app_id = _seed_error_app(
+        cfg,
+        name="corrupt-norepo",
+        port=22010,
+        repo_path=str(missing),
+        error_message=f"{BUILD_CACHE_CORRUPT_MARKER} Container build cache is corrupted.",
+    )
+
+    monkeypatch.setattr(startup, "is_container_running", lambda cid: False)
+    drop_calls = _stub_drop_cache(monkeypatch)
+    restarted, done = _capture_restart_sweep(monkeypatch)
+
+    startup.check_app_status(cfg)
+
+    assert not done.is_set()
+    assert drop_calls == []
+    assert app_id not in restarted
+    assert _status(cfg, app_id) == "error"
 
 
 def test_running_app_with_live_container_is_left_alone(tmp_path: Path, monkeypatch: Any) -> None:
