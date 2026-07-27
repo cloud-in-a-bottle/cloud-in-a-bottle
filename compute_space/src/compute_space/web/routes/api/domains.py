@@ -13,6 +13,7 @@ import re
 import threading
 import time
 
+import anyio
 import attr
 from litestar import Response
 from litestar import Router
@@ -32,6 +33,7 @@ from compute_space.core.domain_store import CERT_STATUS_ERROR
 from compute_space.core.domain_store import CERT_STATUS_NONE
 from compute_space.core.domain_store import DomainRecord
 from compute_space.core.domain_store import get_record
+from compute_space.core.domain_store import load_records
 from compute_space.core.domain_store import rebuild_active_domains
 from compute_space.core.domain_store import remove_record
 from compute_space.core.domain_store import set_record_status
@@ -90,13 +92,13 @@ def _tls_cert_display(config: Config, name: str, record: DomainRecord | None) ->
     return CERT_STATUS_NONE, None
 
 
-def _domain_info(config: Config, domain: Domain) -> DomainInfo:
+def _domain_info(config: Config, domain: Domain, record: DomainRecord | None) -> DomainInfo:
     name = domain.name_no_port
     is_primary = name == config.primary_domain.name_no_port
     if not domain.tls:
         cert_status, error = CERT_STATUS_ACTIVE, None  # http, nothing to acquire
     else:
-        cert_status, error = _tls_cert_display(config, name, get_record(config, name))
+        cert_status, error = _tls_cert_display(config, name, record)
     return DomainInfo(
         name=name,
         tls=domain.tls,
@@ -106,6 +108,12 @@ def _domain_info(config: Config, domain: Domain) -> DomainInfo:
         error_message=error,
         is_primary=is_primary,
     )
+
+
+def _domain_list(config: Config) -> list[DomainInfo]:
+    """The API view of the full domain set, loading all records in one query (not one per domain)."""
+    records = {r.name: r for r in load_records(config)}
+    return [_domain_info(config, d, records.get(d.name_no_port)) for d in config.all_domains]
 
 
 def _run_acquisition(config: Config, domain: Domain) -> None:
@@ -159,7 +167,7 @@ def _validate_new_domain(config: Config, name: str, tls: bool, mdns: bool) -> st
 
 @get("/api/domains", guards=[require_owner_auth])
 async def list_domains(config: Config) -> DomainListResponse:
-    return DomainListResponse(domains=[_domain_info(config, d) for d in config.all_domains])
+    return DomainListResponse(domains=_domain_list(config))
 
 
 @post("/api/domains", status_code=202, guards=[require_owner_auth])
@@ -183,17 +191,18 @@ async def add_domain(data: AddDomainRequest, config: Config) -> Response[DomainL
     )
     new_config = rebuild_active_domains(config)
     if not data.mdns:
-        # Make CoreDNS authoritative for the new public zone *before* acquisition: DNS-01 writes
-        # the _acme-challenge TXT into this domain's zone file, which only resolves once CoreDNS
-        # serves the zone.  (mDNS domains never touch CoreDNS.)
-        reload_coredns_for_domains(new_config)
+        # Make CoreDNS authoritative for the new public zone *before* acquisition: DNS-01 writes the
+        # _acme-challenge TXT into this domain's zone file, which only resolves once CoreDNS serves
+        # the zone.  Run off the event loop — the restart does a blocking terminate+wait(3s) — but
+        # await it so ordering before acquisition holds.  (mDNS domains never touch CoreDNS.)
+        await anyio.to_thread.run_sync(reload_coredns_for_domains, new_config)
     if data.tls:
         _spawn_acquisition(new_config, domain)
     _reload_caddy_after_response()  # serve the new site (tls internal for TLS) without killing this request
     # Return the full updated list so the client repaints the table without a follow-up GET that
     # would race the deferred Caddy restart.
     return Response(
-        DomainListResponse(domains=[_domain_info(new_config, d) for d in new_config.all_domains]),
+        DomainListResponse(domains=_domain_list(new_config)),
         status_code=202,
         media_type=MediaType.JSON,
     )
@@ -209,11 +218,12 @@ async def remove_domain(name: str, config: Config) -> Response[DomainListRespons
         return Response(ErrorResponse(error="domain not found"), status_code=404)
     new_config = rebuild_active_domains(config)
     if removed is not None and not removed.mdns:
-        # Drop the zone from CoreDNS so it stops answering for the removed public domain.
-        reload_coredns_for_domains(new_config)
+        # Drop the zone from CoreDNS so it stops answering for the removed public domain.  Off the
+        # event loop — the restart blocks on a terminate+wait(3s).
+        await anyio.to_thread.run_sync(reload_coredns_for_domains, new_config)
     _reload_caddy_after_response()  # deferred so it doesn't tear down this request's connection
     return Response(
-        DomainListResponse(domains=[_domain_info(new_config, d) for d in new_config.all_domains]),
+        DomainListResponse(domains=_domain_list(new_config)),
         status_code=200,
         media_type=MediaType.JSON,
     )

@@ -71,6 +71,15 @@ def _sync_cert_statuses(config: Config) -> None:
         logger.exception("cert_status display sync skipped (non-fatal)")
 
 
+def _mark_cert_active(config: Config, name: str) -> None:
+    """Best-effort: record a freshly (re)acquired cert as active now, rather than waiting for the next
+    cycle's ``_sync_cert_statuses``.  Display-only, so a DB error is logged and swallowed."""
+    try:
+        set_record_status(config, name, CERT_STATUS_ACTIVE)
+    except Exception:
+        logger.exception(f"cert_status active-mark skipped for {name} (non-fatal)")
+
+
 def renew_cert_if_needed(
     config: Config,
     reload_caddy: Callable[[Config], object],
@@ -95,6 +104,7 @@ def renew_cert_if_needed(
         if status != CertStatus.OK:
             logger.info(f"TLS cert for {config.primary_domain.name} is {status.value}; renewing")
             provision(config)
+            _mark_cert_active(config, config.primary_domain.name_no_port)
             renewed = True
 
     # Additional TLS domains — per-domain paths, each isolated so one bad domain doesn't block
@@ -111,6 +121,7 @@ def renew_cert_if_needed(
             logger.info(f"TLS cert for {name} is {status.value}; renewing")
             cert_path.parent.mkdir(parents=True, exist_ok=True)
             acquire(config, name, cert_path, key_path)
+            _mark_cert_active(config, name)
             renewed = True
         except Exception:
             logger.exception(f"TLS cert renewal failed for {name}; will retry next cycle")

@@ -258,3 +258,23 @@ def test_sync_cert_statuses_leaves_domain_without_cert_alone(tmp_path: Path) -> 
     _sync_cert_statuses(cfg)
 
     assert get_record(cfg, "host.example.com").cert_status == "none"
+
+
+def test_renew_marks_primary_active_same_cycle(tmp_path: Path) -> None:
+    # A successful primary renewal flips the DB status to 'active' in the same cycle — not only on the
+    # next cycle's _sync_cert_statuses, which ran (at the top) before the new cert existed.
+    cfg = _make_test_config(tmp_path, zone_domain="host.example.com", tls_enabled=True)
+    apply_migrations(cfg.db_path)
+    seed_domains(cfg, Domain("host.example.com", tls=True), [])
+    # Expired cert: the top-of-cycle sync sees it non-OK and leaves the record 'none'; the primary
+    # block then renews, so only the post-renewal mark can produce 'active'.
+    _write_self_signed_cert(
+        cfg.tls_cert_path, cfg.tls_key_path, datetime.datetime.now(datetime.UTC) - datetime.timedelta(days=1)
+    )
+
+    def _provision(c: Config) -> None:
+        _write_self_signed_cert(c.tls_cert_path, c.tls_key_path, datetime.datetime(2100, 1, 1, tzinfo=datetime.UTC))
+
+    renewed = renew_cert_if_needed(cfg, lambda c: None, provision=_provision)
+    assert renewed is True
+    assert get_record(cfg, "host.example.com").cert_status == "active"
