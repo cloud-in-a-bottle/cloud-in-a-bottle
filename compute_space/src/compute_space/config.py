@@ -11,6 +11,8 @@ import cattrs
 import tomli_w
 import typed_settings
 
+from compute_space.core.tls.keycloak import KeycloakClientCredentials
+
 # TLS cert provider selection (see Config.cert_provider).
 # "acme" is the default bring-your-own-ACME-credentials path (unchanged, fully
 # backward compatible). "cert_api" fetches certs from the openhost-cert-api
@@ -125,6 +127,22 @@ class Config:
     # the local port to bind the compute space web server to.
     port: int
 
+    ## Instance identity (shared Imbue credential)
+    # A single per-instance credential the instance uses to authenticate to Imbue for any Imbue-provided service
+    # (cert acquisition, email, ...). It is a client-credentials grant: the instance fetches a short-lived bearer from
+    # ``imbue_identity_issuer_url`` using ``imbue_identity_client_id`` + ``imbue_identity_client_secret``, and presents
+    # it (with the per-service audience) to that service. It reaches the instance one of two ways that produce the same
+    # result: injected at provision time for managed spaces, or obtained via the "Connect to Imbue" flow in Settings
+    # for non-managed spaces. When absent, dependent services simply stay off (no boot failure).
+    #
+    # The per-service ``cert_api_keycloak_*`` / ``email_keycloak_*`` fields below are DEPRECATED overrides kept for
+    # backward compatibility with already-deployed configs: each service resolves its credential from its own override
+    # first, then falls back to this shared identity (see the ``*_resolved`` properties). New provisioning writes only
+    # these shared fields.
+    imbue_identity_issuer_url: str | None
+    imbue_identity_client_id: str | None
+    imbue_identity_client_secret: str | None
+
     ## TLS
     tls_enabled: bool
     acquire_tls_cert_if_missing: bool
@@ -232,16 +250,19 @@ class Config:
                 f"{CERT_PROVIDER_ACME!r} or {CERT_PROVIDER_CERT_API!r})"
             )
         if self.cert_provider == CERT_PROVIDER_CERT_API:
-            # The cert_api broker path needs the broker URL plus the per-instance
-            # Keycloak client-credentials; none have a usable default.
-            for name in (
-                "cert_api_base_url",
-                "cert_api_keycloak_issuer_url",
-                "cert_api_keycloak_client_id",
-                "cert_api_keycloak_client_secret",
+            # The cert_api broker path needs the broker URL. Validate it directly.
+            if not self.cert_api_base_url:
+                raise ValueError("cert_api_base_url must be set in config to use the cert_api provider")
+            # It also needs the per-instance client-credentials, which resolve from the deprecated
+            # cert_api_keycloak_* override or the shared imbue_identity_* fields (either source satisfies
+            # the provider). Report the settable field name, not the internal *_resolved property.
+            for field_name, resolved_name in (
+                ("cert_api_keycloak_issuer_url", "cert_api_keycloak_issuer_url_resolved"),
+                ("cert_api_keycloak_client_id", "cert_api_keycloak_client_id_resolved"),
+                ("cert_api_keycloak_client_secret", "cert_api_keycloak_client_secret_resolved"),
             ):
-                if not getattr(self, name):
-                    raise ValueError(f"{name} must be set in config to use the cert_api provider")
+                if not getattr(self, resolved_name):
+                    raise ValueError(f"{field_name} must be set in config to use the cert_api provider")
         # Email has no explicit on/off flag: it is enabled automatically when all
         # of its prerequisites resolve (see the email_enabled property). The
         # Keycloak client-credentials fall back to the cert-api client, so in the
@@ -291,24 +312,54 @@ class Config:
                     "the built-in zone already handles that name"
                 )
 
-    # --- Email Keycloak client-credentials, resolved with cert-api fallback ---
-    # Email reuses the same per-instance Keycloak confidential client as cert-api
-    # (both authenticate to the openhost-customers realm). An operator can override
-    # per-field via email_keycloak_*, but by default email inherits the cert-api
-    # client. This is what lets an existing cert-api instance enable email by
-    # setting only email_proxy_base_url — no new credentials to inject.
+    # --- Instance identity, resolved per service ---
+    # Every service authenticates with the same per-instance credential. Each service resolves it from its own
+    # DEPRECATED per-service override first (kept so already-deployed configs keep working), then falls back to the
+    # shared ``imbue_identity_*`` fields that new provisioning writes. cert-api additionally falls back to the shared
+    # identity, and email additionally inherits cert-api's override — so an existing cert-api instance enables email by
+    # setting only email_proxy_base_url, and a shared-identity instance satisfies both services from one credential.
+
+    @property
+    def cert_api_keycloak_issuer_url_resolved(self) -> str | None:
+        return self.cert_api_keycloak_issuer_url or self.imbue_identity_issuer_url
+
+    @property
+    def cert_api_keycloak_client_id_resolved(self) -> str | None:
+        return self.cert_api_keycloak_client_id or self.imbue_identity_client_id
+
+    @property
+    def cert_api_keycloak_client_secret_resolved(self) -> str | None:
+        return self.cert_api_keycloak_client_secret or self.imbue_identity_client_secret
 
     @property
     def email_keycloak_issuer_url_resolved(self) -> str | None:
-        return self.email_keycloak_issuer_url or self.cert_api_keycloak_issuer_url
+        return self.email_keycloak_issuer_url or self.cert_api_keycloak_issuer_url_resolved
 
     @property
     def email_keycloak_client_id_resolved(self) -> str | None:
-        return self.email_keycloak_client_id or self.cert_api_keycloak_client_id
+        return self.email_keycloak_client_id or self.cert_api_keycloak_client_id_resolved
 
     @property
     def email_keycloak_client_secret_resolved(self) -> str | None:
-        return self.email_keycloak_client_secret or self.cert_api_keycloak_client_secret
+        return self.email_keycloak_client_secret or self.cert_api_keycloak_client_secret_resolved
+
+    @property
+    def instance_identity(self) -> KeycloakClientCredentials | None:
+        """The shared per-instance credential, or None when no identity is configured.
+
+        Resolves through the cert-api override for backward compatibility, so an
+        instance provisioned before the shared field existed still yields a
+        credential. Returns None (rather than a partial object) unless all three
+        parts resolve, so callers can treat None as "no Imbue identity configured".
+        """
+        issuer = self.cert_api_keycloak_issuer_url_resolved
+        client_id = self.cert_api_keycloak_client_id_resolved
+        client_secret = self.cert_api_keycloak_client_secret_resolved
+        if issuer and client_id and client_secret:
+            return KeycloakClientCredentials(
+                issuer_url=issuer, client_id=client_id, client_secret=client_secret
+            )
+        return None
 
     @property
     def email_enabled(self) -> bool:
@@ -534,6 +585,12 @@ class DefaultConfig(Config):
     acme_email: str | None = None
     acme_account_key_path: str | None = None
     acme_directory_url: str | None = None
+
+    # Shared per-instance Imbue credential — injected by provisioning (managed spaces) or obtained via the
+    # "Connect to Imbue" flow (non-managed). No safe default; absent means dependent services stay off.
+    imbue_identity_issuer_url: str | None = None
+    imbue_identity_client_id: str | None = None
+    imbue_identity_client_secret: str | None = None
 
     # Default to the BYO-ACME path so existing deployments are unaffected.
     cert_provider: str = CERT_PROVIDER_ACME
