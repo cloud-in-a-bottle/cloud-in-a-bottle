@@ -44,6 +44,7 @@ from compute_space.core.manifest import AppLink
 from compute_space.core.manifest import AppManifest
 from compute_space.core.manifest import PortMapping
 from compute_space.core.manifest import parse_manifest
+from compute_space.core.manifest import parse_manifest_from_string
 from compute_space.core.oauth import OAuthAuthorizationRequired
 from compute_space.core.oauth import get_oauth_token
 from compute_space.core.ports import allocate_port
@@ -411,6 +412,41 @@ def manifest_ungranted_permissions_v2(
             seen.add(key)
             ungranted.append(PermissionGrant(service_url=perm.service, grant=grant_payload))
     return ungranted
+
+
+def manifest_newly_declared_permissions_v2(
+    manifest: AppManifest,
+    granted: list[PermissionRecord],
+    previous_manifest_raw: str | None,
+) -> list[PermissionGrant]:
+    """The permissions an update *newly* declares: in the new manifest, not already
+    granted, and not declared by the previously-deployed manifest.
+
+    This is the update gate's delta. Gating on it — rather than on grant state
+    (see :func:`manifest_ungranted_permissions_v2`) — means a permission the owner
+    deliberately revoked is NOT re-surfaced for approval on an unrelated update:
+    it was declared by the previous manifest too, so it isn't part of the delta.
+    Only grants the app *author* actually added are gated.
+
+    Scope is permissions only; other manifest changes (ports, resources, image,
+    …) always apply on update regardless of this diff.
+
+    ``previous_manifest_raw`` is the currently-deployed manifest text (``apps.manifest_raw``).
+    When it is absent or unparseable, this falls back to the full grant-state diff
+    (equivalent to :func:`manifest_ungranted_permissions_v2`) — the safe default,
+    since it never silently grants something the owner hasn't seen.
+    """
+    ungranted = manifest_ungranted_permissions_v2(manifest, granted)
+    if not previous_manifest_raw:
+        return ungranted
+    try:
+        previous_manifest = parse_manifest_from_string(previous_manifest_raw)
+    except ValueError:
+        return ungranted
+    previously_declared = {
+        _permission_key(pg.service_url, pg.grant) for pg in all_manifest_permissions_v2(previous_manifest)
+    }
+    return [pg for pg in ungranted if _permission_key(pg.service_url, pg.grant) not in previously_declared]
 
 
 def insert_and_deploy(

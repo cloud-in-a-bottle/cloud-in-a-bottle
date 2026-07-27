@@ -23,6 +23,7 @@ from litestar import Litestar
 from litestar.testing import TestClient
 
 from compute_space.core.app_id import new_app_id
+from compute_space.core.apps import manifest_newly_declared_permissions_v2
 from compute_space.core.apps import manifest_ungranted_permissions_v2
 from compute_space.core.auth.permissions_v2 import PermissionRecord
 from compute_space.core.auth.permissions_v2 import get_all_permissions_v2
@@ -302,6 +303,85 @@ def test_gate_returns_none_for_unparseable_manifest(cfg: Any, tmp_path: Path) ->
 
     # A broken manifest isn't the gate's problem; the reload path surfaces it.
     assert _gate_new_permissions(app_id, str(repo), approve_new_permissions=False) is None
+
+
+# ─── the update delta: gate only author-added permissions ─────────────────────
+
+
+def test_newly_declared_empty_when_previous_manifest_also_declared_it(tmp_path: Path) -> None:
+    """Revoke survives update: a permission declared by BOTH the previous and the
+    new manifest, but not granted (revoked), is NOT part of the delta."""
+    consumes = _consume_block("github.com/x/secrets", "secrets", '{ key = "API_KEY" }')
+    new_manifest = _manifest_with_consumes(tmp_path / "new", consumes)
+    prev_raw = _CONSUMES.format(consumes=consumes)  # previous manifest declared the same perm
+    assert manifest_newly_declared_permissions_v2(new_manifest, [], prev_raw) == []
+
+
+def test_newly_declared_lists_author_added_permission(tmp_path: Path) -> None:
+    """A permission the new manifest declares that the previous manifest did not is in the delta."""
+    prev_consumes = _consume_block("github.com/x/a", "a", '{ key = "OLD" }')
+    new_consumes = prev_consumes + _consume_block("github.com/x/b", "b", '{ key = "NEW" }')
+    new_manifest = _manifest_with_consumes(tmp_path / "new", new_consumes)
+    prev_raw = _CONSUMES.format(consumes=prev_consumes)
+    new = manifest_newly_declared_permissions_v2(new_manifest, [], prev_raw)
+    assert len(new) == 1
+    assert new[0].service_url == "github.com/x/b"
+    assert new[0].grant == {"key": "NEW"}
+
+
+def test_newly_declared_excludes_already_granted(tmp_path: Path) -> None:
+    """Even a newly-declared permission isn't re-listed if it's somehow already granted."""
+    consumes = _consume_block("github.com/x/b", "b", '{ key = "NEW" }')
+    new_manifest = _manifest_with_consumes(tmp_path / "new", consumes)
+    prev_raw = _CONSUMES.format(consumes="")  # previous declared nothing
+    granted = [
+        PermissionRecord(
+            consumer_app_id="a1",
+            service_url="github.com/x/b",
+            grant={"key": "NEW"},
+            scope="global",
+            provider_app_id=None,
+        )
+    ]
+    assert manifest_newly_declared_permissions_v2(new_manifest, granted, prev_raw) == []
+
+
+def test_newly_declared_falls_back_to_ungranted_without_previous_manifest(tmp_path: Path) -> None:
+    """No previous manifest (None / legacy row): fall back to the full grant-state diff."""
+    consumes = _consume_block("github.com/x/secrets", "secrets", '{ key = "API_KEY" }')
+    m = _manifest_with_consumes(tmp_path / "m", consumes)
+    fallback = manifest_newly_declared_permissions_v2(m, [], None)
+    assert len(fallback) == 1
+    assert fallback[0].service_url == "github.com/x/secrets"
+
+
+def test_gate_does_not_reprompt_revoked_permission_on_update(cfg: Any, tmp_path: Path) -> None:
+    """End-to-end gate: a revoked permission still declared in the (unchanged) manifest
+    is not gated on update, because the previous manifest declared it too."""
+    repo = tmp_path / "repo"
+    consumes = _consume_block("github.com/x/secrets", "secrets", '{ key = "API_KEY" }')
+    _manifest_with_consumes(repo, consumes)
+    app_id = _seed_perm_app(cfg, str(repo))
+    prev_raw = _CONSUMES.format(consumes=consumes)
+    # No permissions_v2 row for it (owner revoked, or never granted).
+    assert (
+        _gate_new_permissions(app_id, str(repo), approve_new_permissions=False, previous_manifest_raw=prev_raw) is None
+    )
+
+
+def test_gate_prompts_for_author_added_permission_on_update(cfg: Any, tmp_path: Path) -> None:
+    """End-to-end gate: a permission the update newly declares (not in the previous
+    manifest) is still gated for approval."""
+    repo = tmp_path / "repo"
+    prev_consumes = _consume_block("github.com/x/a", "a", '{ key = "OLD" }')
+    new_consumes = prev_consumes + _consume_block("github.com/x/b", "b", '{ key = "NEW" }')
+    _manifest_with_consumes(repo, new_consumes)
+    app_id = _seed_perm_app(cfg, str(repo))
+    prev_raw = _CONSUMES.format(consumes=prev_consumes)
+    result = _gate_new_permissions(app_id, str(repo), approve_new_permissions=False, previous_manifest_raw=prev_raw)
+    assert result is not None
+    assert result.ok is False
+    assert [p["service_url"] for p in result.permissions_required] == ["github.com/x/b"]
 
 
 # ─── the /reload_app route end-to-end ─────────────────────────────────────────

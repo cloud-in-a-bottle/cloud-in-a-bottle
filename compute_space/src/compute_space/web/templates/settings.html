@@ -96,6 +96,12 @@
   <div class="muted">Loading&hellip;</div>
 </div>
 
+<h2 class="section-title">Services</h2>
+<p class="hint">When more than one installed app provides the same service, choose which one is used by default. Consumer apps that don't pin a specific provider get the default; with no default set, the highest version wins.</p>
+<div id="services-status">
+  <div class="muted">Loading&hellip;</div>
+</div>
+
 <h2 class="section-title">Maintenance</h2>
 <table class="form-table">
   <tr>
@@ -126,4 +132,5 @@
 <script src="{{ static_url('js/username-validation.js') }}"></script>
 <script src="{{ static_url('js/tokens.js') }}"></script>
 <script src="{{ static_url('js/settings.js') }}"></script>
+<script src="{{ static_url('js/services.js') }}"></script>
 {% endblock %}

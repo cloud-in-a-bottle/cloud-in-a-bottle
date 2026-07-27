@@ -30,7 +30,7 @@ from compute_space.core.apps import app_log_path
 from compute_space.core.apps import clone_with_github_fallback
 from compute_space.core.apps import git_pull
 from compute_space.core.apps import insert_and_deploy
-from compute_space.core.apps import manifest_ungranted_permissions_v2
+from compute_space.core.apps import manifest_newly_declared_permissions_v2
 from compute_space.core.apps import move_clone_to_app_temp_dir
 from compute_space.core.apps import reload_app_background
 from compute_space.core.apps import remove_app_background
@@ -551,16 +551,21 @@ def _gate_new_permissions(
     app_id: str,
     repo_path: str,
     approve_new_permissions: bool,
+    previous_manifest_raw: str | None = None,
 ) -> PermissionsRequiredResponse | None:
-    """Enforce explicit owner approval of permissions a reload would newly grant.
+    """Enforce explicit owner approval of permissions an update *newly* declares.
 
-    Reads the manifest that is about to be deployed (from ``repo_path`` on disk,
-    which already reflects any git pull) and diffs its declared permissions
-    against what the app already holds. If the manifest declares nothing new,
-    returns ``None`` (proceed). If it declares new permissions:
+    Reads the manifest about to be deployed (from ``repo_path`` on disk, which
+    already reflects any git pull) and diffs its declared permissions against the
+    *previously-deployed* manifest (``previous_manifest_raw``) as well as what the
+    app already holds. Only permissions the app author newly added are gated — a
+    permission the owner deliberately revoked was declared by the previous
+    manifest too, so it is not re-surfaced for approval on an unrelated update
+    (see :func:`manifest_newly_declared_permissions_v2`). If nothing is newly
+    declared, returns ``None`` (proceed). Otherwise:
 
-    - ``approve_new_permissions=True``: grant them and return ``None`` (proceed),
-      mirroring the owner-approved grants at install time.
+    - ``approve_new_permissions=True``: grant the new permissions and return
+      ``None`` (proceed), mirroring the owner-approved grants at install time.
     - otherwise: return a :class:`PermissionsRequiredResponse` so the caller can
       refuse the reload until the owner approves.
 
@@ -574,12 +579,14 @@ def _gate_new_permissions(
     except ValueError:
         return None
 
-    ungranted = manifest_ungranted_permissions_v2(manifest, get_all_permissions_v2(consumer_app_id=app_id))
-    if not ungranted:
+    new_perms = manifest_newly_declared_permissions_v2(
+        manifest, get_all_permissions_v2(consumer_app_id=app_id), previous_manifest_raw
+    )
+    if not new_perms:
         return None
 
     if approve_new_permissions:
-        for pg in ungranted:
+        for pg in new_perms:
             grant_permission_v2(consumer_app_id=app_id, service_url=pg.service_url, grant_payload=pg.grant)
         return None
 
@@ -592,7 +599,7 @@ def _gate_new_permissions(
                 "grant": pg.grant,
                 "shortname": shortname_by_service.get(pg.service_url, ""),
             }
-            for pg in ungranted
+            for pg in new_perms
         ],
         error=("This update declares new service permissions that must be approved before it can be applied."),
     )
@@ -746,7 +753,11 @@ async def _reload_app_impl(
     # install and chose to keep running without.
     if update or continue_oauth:
         perm_gate = await asyncio.to_thread(
-            _gate_new_permissions, app_id, app_row["repo_path"], approve_new_permissions
+            _gate_new_permissions,
+            app_id,
+            app_row["repo_path"],
+            approve_new_permissions,
+            app_row["manifest_raw"],
         )
         if perm_gate is not None:
             # Roll the working tree back to the version the app is running, so the

@@ -65,7 +65,10 @@ async def app_detail(app_name: str, db: sqlite3.Connection, config: Config, next
     # so the "needs approval" set the owner sees here matches what an update
     # would refuse to apply.
     granted_records = get_all_permissions_v2(consumer_app_id=app_id)
-    granted_perms = [{"service_url": p.service_url, "grant": p.grant, "scope": p.scope} for p in granted_records]
+    granted_perms = [
+        {"service_url": p.service_url, "grant": p.grant, "scope": p.scope, "provider_app_id": p.provider_app_id}
+        for p in granted_records
+    ]
     ungranted_perms: list[dict[str, object]] = []
     manifest_raw = app_row["manifest_raw"]
     if manifest_raw:
