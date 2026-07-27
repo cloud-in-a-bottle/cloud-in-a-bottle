@@ -21,6 +21,7 @@ from compute_space.core.settings_store import CLAIM_TOKEN_KEY
 from compute_space.core.settings_store import get_setting
 from compute_space.db.connection import init_db
 from compute_space.db.schema import schema_path
+from compute_space.web.start import _require_configured_domain
 
 
 def _build_v12_db(db_path: str) -> None:
@@ -116,3 +117,30 @@ def test_upgrade_is_idempotent_across_restarts(tmp_path: Path, monkeypatch: pyte
 
 def reloaded_primary(config) -> str:  # type: ignore[no-untyped-def]
     return next(r.name for r in load_records(config) if r.is_primary)
+
+
+def test_boot_fails_loud_when_no_domain_configured(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Ensure failure when no domain source given
+    data_root = tmp_path / "data"
+    data_root.mkdir()
+    config_toml = tmp_path / "config.toml"
+    config_toml.write_text(f'[openhost]\ndata_root_dir = "{data_root}"\nhost = "127.0.0.1"\nport = 8080\n')
+    monkeypatch.setenv("OPENHOST_ROUTER_CONFIG", str(config_toml))
+    config = load_config()
+    config.make_all_dirs()
+    init_db(config.db_path)
+
+    seed_first_boot(config)
+    config = rebuild_active_domains(config)
+    assert config.all_domains == ()  # nothing seeded it — the misconfiguration the guard catches
+
+    with pytest.raises(RuntimeError, match="No domain configured"):
+        _require_configured_domain(config)
+
+
+def test_boot_guard_passes_for_seeded_instance(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    config, _ = _old_instance(tmp_path, monkeypatch, owner=False)
+    init_db(config.db_path)
+    seed_first_boot(config)
+    config = rebuild_active_domains(config)
+    _require_configured_domain(config)  # a seeded instance boots fine (no raise)

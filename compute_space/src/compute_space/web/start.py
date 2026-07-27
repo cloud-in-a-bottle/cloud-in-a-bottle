@@ -72,6 +72,16 @@ def _owner_exists(config: Config) -> bool:
         db.close()
 
 
+def _require_configured_domain(config: Config) -> None:
+    """Check that a nonempty domain exists"""
+    if not config.all_domains:
+        raise RuntimeError(
+            "No domain configured: nothing seeded the DB `domains` table (no first_boot.toml, no "
+            "[[openhost.domains]] in the router config, and no legacy zone_domain). Set a domain in "
+            "first_boot.toml or the config, then restart."
+        )
+
+
 def _ensure_tls_cert(config: Config) -> None:
     """Make sure a usable cert+key pair is on disk before Caddy starts, acquiring or renewing as configured."""
     status = get_cert_status(config.tls_cert_path, config.tls_key_path)
@@ -130,6 +140,7 @@ def main() -> None:
     # configured domain is served this boot.  Both are idempotent; create_app re-runs them.
     seed_first_boot(config)
     config = rebuild_active_domains(config)
+    _require_configured_domain(config)  # fail loud at boot, not late in the first request
     children: list[subprocess.Popen[bytes]] = []
 
     coredns: CoreDnsProcess | None = None
