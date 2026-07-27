@@ -18,6 +18,7 @@ from compute_space.config import set_active_config
 from compute_space.core.auth.keys import load_keys
 from compute_space.core.caddy import CaddyProcess
 from compute_space.core.caddy import config_cert_resolver
+from compute_space.core.caddy import reload_caddy_for_domains
 from compute_space.core.caddy import set_active_caddy
 from compute_space.core.caddy import start_caddy
 from compute_space.core.dns import CoreDnsProcess
@@ -164,7 +165,8 @@ def main() -> None:
         # Register so /api/domains can regenerate + restart Caddy when a domain is added/removed.
         set_active_caddy(caddy)
         if config.tls_enabled and config.coredns_enabled and config.acquire_tls_cert_if_missing:
-            start_renewal_thread(caddy.restart)
+            # Regenerate Caddyfile to serve all domains
+            start_renewal_thread(reload_caddy_for_domains)
     else:
         if needs_caddy_for_tls:
             raise RuntimeError(

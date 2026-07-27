@@ -10,6 +10,8 @@ from cryptography.hazmat.primitives.asymmetric import ec
 from compute_space.config import Config
 from compute_space.config import DefaultConfig
 from compute_space.config import Domain
+from compute_space.core.caddy import config_cert_resolver
+from compute_space.core.caddy import generate_caddyfile
 from compute_space.core.domain_store import get_record
 from compute_space.core.domain_store import seed_domains
 from compute_space.core.tls.renewal import RENEW_BEFORE
@@ -98,7 +100,7 @@ def test_renew_skips_valid_cert(tmp_path: Path) -> None:
     )
     calls: list[str] = []
     renewed = renew_cert_if_needed(
-        config, lambda: calls.append("restart"), provision=lambda c: calls.append("provision")
+        config, lambda c: calls.append("restart"), provision=lambda c: calls.append("provision")
     )
     assert renewed is False
     assert calls == []
@@ -116,7 +118,7 @@ def test_renew_provisions_and_restarts_caddy(tmp_path: Path, expires_in: datetim
     )
     calls: list[str] = []
     renewed = renew_cert_if_needed(
-        config, lambda: calls.append("restart"), provision=lambda c: calls.append("provision")
+        config, lambda c: calls.append("restart"), provision=lambda c: calls.append("provision")
     )
     assert renewed is True
     assert calls == ["provision", "restart"]
@@ -130,7 +132,7 @@ def test_renew_failure_does_not_restart_caddy(tmp_path: Path) -> None:
         raise RuntimeError("ACME is down")
 
     with pytest.raises(RuntimeError, match="ACME is down"):
-        renew_cert_if_needed(config, lambda: calls.append("restart"), provision=_failing_provision)
+        renew_cert_if_needed(config, lambda c: calls.append("restart"), provision=_failing_provision)
     assert calls == []
 
 
@@ -157,7 +159,7 @@ def test_renew_acquires_stale_secondary_domain(tmp_path: Path) -> None:
     acquired: list[str] = []
     renewed = renew_cert_if_needed(
         config,
-        lambda: calls.append("restart"),
+        lambda c: calls.append("restart"),
         provision=lambda c: calls.append("provision"),
         acquire=lambda c, name, cp, kp: acquired.append(name),
     )
@@ -177,10 +179,35 @@ def test_renew_isolates_a_failing_secondary(tmp_path: Path) -> None:
         acquired.append(name)
 
     calls: list[str] = []
-    renewed = renew_cert_if_needed(config, lambda: calls.append("restart"), provision=lambda c: None, acquire=_acquire)
+    renewed = renew_cert_if_needed(
+        config, lambda c: calls.append("restart"), provision=lambda c: None, acquire=_acquire
+    )
     assert renewed is True
     assert acquired == ["good.example.com"]  # bad one failed but didn't abort the loop
     assert calls == ["restart"]
+
+
+def test_renew_reload_regenerates_caddyfile_for_new_secondary_cert(tmp_path: Path) -> None:
+    # Regression: after a secondary cert is acquired, the reload must *regenerate* the Caddyfile so
+    # the domain's `tls internal` fallback block is rewritten to point at the acquired cert.  A bare
+    # restart re-read the stale Caddyfile and left the domain on Caddy's self-signed cert forever.
+    config = _multidomain_config(tmp_path, "second.example.com")
+
+    def _acquire(c: Config, name: str, cert_path: Path, key_path: Path) -> None:
+        cert_path.write_text("cert")  # generate_caddyfile only checks the files exist, not validity
+        key_path.write_text("key")
+
+    caddyfile = tmp_path / "Caddyfile"
+
+    def _reload(c: Config) -> None:
+        caddyfile.write_text(generate_caddyfile(c.all_domains, c.port, config_cert_resolver(c)))
+
+    renewed = renew_cert_if_needed(config, _reload, provision=lambda c: None, acquire=_acquire)
+    assert renewed is True
+    content = caddyfile.read_text()
+    # The secondary now serves its acquired file cert rather than falling back to `tls internal`.
+    assert str(config.cert_path_for("second.example.com")) in content
+    assert "tls internal" not in content
 
 
 def test_sync_cert_statuses_marks_primary_active_when_cert_present(tmp_path: Path) -> None:

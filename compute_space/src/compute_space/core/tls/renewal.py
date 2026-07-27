@@ -73,12 +73,11 @@ def _sync_cert_statuses(config: Config) -> None:
 
 def renew_cert_if_needed(
     config: Config,
-    restart_caddy: Callable[[], None],
+    reload_caddy: Callable[[Config], object],
     provision: Callable[[Config], None] = provision_cert,
     acquire: Callable[[Config, str, Path, Path], None] = acquire_cert_for_domain,
 ) -> bool:
-    """Renew every TLS cert that is missing, expired, or inside the renewal window — the primary
-    and each additional TLS domain — restarting Caddy once if anything was renewed.
+    """Renew every TLS cert that is missing, expired, or inside the renewal window.
 
     The primary keeps its legacy cert paths and dedicated ``provision`` routine (behavior
     unchanged).  Each additional TLS domain uses its own ``certs/<name>`` paths; a failure on one
@@ -116,22 +115,23 @@ def renew_cert_if_needed(
             logger.exception(f"TLS cert renewal failed for {name}; will retry next cycle")
 
     if renewed:
-        restart_caddy()
+        reload_caddy(config)
     return renewed
 
 
-def start_renewal_thread(restart_caddy: Callable[[], None]) -> threading.Thread:
+def start_renewal_thread(reload_caddy: Callable[[Config], object]) -> threading.Thread:
     """Run renew_cert_if_needed periodically in a daemon thread, retrying sooner after failures.
 
     Reads the *live* active config each cycle (``get_config()``), so a domain added at runtime via
     /api/domains after startup is picked up by renewal rather than frozen out by a stale snapshot.
+    ``reload_caddy`` regenerates the Caddyfile so a renewed/newly-acquired cert is actually served.
     """
 
     def _loop() -> None:
         while True:
             interval = CHECK_INTERVAL
             try:
-                renew_cert_if_needed(get_config(), restart_caddy)
+                renew_cert_if_needed(get_config(), reload_caddy)
             except Exception:
                 logger.exception(f"TLS cert renewal failed; retrying in {RETRY_INTERVAL}")
                 interval = RETRY_INTERVAL
