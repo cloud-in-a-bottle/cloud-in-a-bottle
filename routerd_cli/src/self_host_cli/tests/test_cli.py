@@ -51,6 +51,19 @@ class TestGenerateConfig:
         self._run(tmp_path, monkeypatch, domain="second.example.com")
         assert 'domain = "first.example.com"' in first_boot.read_text()
 
+    def test_bare_up_seeds_localhost(self, tmp_path, monkeypatch):
+        # Bare `openhost up` (no domain) must still seed a domain so the router boots on localhost.
+        _, first_boot = self._run(tmp_path, monkeypatch, domain="")
+        assert 'domain = "localhost"' in first_boot.read_text()
+
+    def test_blank_seed_is_reseeded(self, tmp_path, monkeypatch):
+        # A first_boot.toml left blank by an aborted run must be re-seeded, not preserved (else boot
+        # stays wedged: read_first_boot ignores the blank domain and nothing seeds the DB).
+        first_boot = tmp_path / "first_boot.toml"
+        first_boot.write_text('domain = ""\ntls = false\n')
+        self._run(tmp_path, monkeypatch, domain="host.example.com")
+        assert 'domain = "host.example.com"' in first_boot.read_text()
+
 
 class TestArgParsing:
     def test_no_args_is_none_command(self):
