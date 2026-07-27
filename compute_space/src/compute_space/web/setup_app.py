@@ -139,6 +139,7 @@ async def setup_post(request: Request[Any, Any, Any], config: Config) -> Respons
     # app time to come up before the next navigation.
     body = (
         "<!doctype html><html><head><meta http-equiv=refresh content='2; url=/'>"
+        "<meta name=robots content=noindex>"
         "<title>OpenHost — restarting</title></head>"
         "<body style='font-family:system-ui;text-align:center;margin-top:4em;'>"
         "<p>Setup complete. Restarting…</p></body></html>"
