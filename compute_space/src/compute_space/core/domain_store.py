@@ -128,11 +128,10 @@ def rebuild_active_domains(config: Config) -> Config:
     """Load the domain set from the DB and swap it into the active config, so routing, Caddy
     generation, and URL-building immediately reflect it.  Returns the new config.
 
-    The DB primary also drives the legacy ``zone_domain`` / ``tls_enabled`` scalars (used by cert
-    paths, the DNS zone, and the ``OPENHOST_ZONE_DOMAIN`` handed to apps), so a domain seeded from
+    The DB primary also drives the ``zone_domain`` / ``tls_enabled`` scalars (used by cert paths, the
+    DNS zone, and the ``OPENHOST_ZONE_DOMAIN`` handed to apps), so a domain seeded from
     ``first_boot.toml`` takes effect everywhere — not just in routing.  When the table is empty
-    (pre-seed only — startup runs the seed first) ``domains`` stays empty and ``zone_domain`` is left
-    untouched; ``all_domains`` no longer synthesizes a primary from it."""
+    (pre-seed only — startup runs the seed first) the active config keeps an empty domain set."""
     domains = effective_domains(config)
     if domains:
         primary = domains[0]
@@ -171,11 +170,11 @@ def seed_domains(config: Config, primary: Domain, extras: list[DomainRecord]) ->
 
 def seed_domains_from_legacy(config: Config) -> bool:
     """Seed from the config-file fields — the ``zone_domain`` primary plus any ``[[openhost.domains]]``.
-    The no-first_boot path (old production instance, or a fresh deploy whose provisioning still writes
-    ``zone_domain``).
+    This is the path for an instance whose ``config.toml`` still carries ``zone_domain`` (fresh
+    deploys seed from ``first_boot.toml`` instead).
 
-    This is the ONE-TIME migration capture and the ONLY place ``config.zone_domain`` is read: it is
-    lifted into the DB here and never consulted again (``all_domains`` no longer falls back to it)."""
+    It is the ONLY place ``config.zone_domain`` is read: lifted into the DB here, after which the DB
+    is authoritative."""
     extras = [DomainRecord(d.name, d.tls, d.mdns) for d in config.domains]
     if not config.zone_domain:
         # No legacy domain to migrate (e.g. an already-scrubbed config.toml).  Don't seed a bogus

@@ -20,8 +20,8 @@ def generate_config(
     email: str = "",
 ) -> str:
 
-    # The domain is no longer written into config.toml — it seeds into the DB from first_boot.toml
-    # on first boot (after that the DB is authoritative).  config.toml holds only operational config.
+    # The domain seeds into the DB from first_boot.toml (written below) on first boot; config.toml
+    # holds only operational config.
     content = DefaultConfig(
         host="0.0.0.0",
         port=port,

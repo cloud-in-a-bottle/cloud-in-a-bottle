@@ -102,7 +102,7 @@ def test_heading_uses_owner_username_when_set(cfg: Any) -> None:
         resp = client.get("/dashboard", cookies=cookie)
     assert resp.status_code == 200
     assert "alice's personal compute space" in resp.text
-    # The zone subdomain must no longer drive the heading.
+    # The zone subdomain must not drive the heading.
     assert "alice-zone's personal compute space" not in resp.text
 
 

@@ -164,9 +164,7 @@ class Config:
     @property
     def all_domains(self) -> tuple[Domain, ...]:
         """The full domain set — the DB-sourced ``domains`` loaded into the active config by
-        ``rebuild_active_domains``.  The legacy ``zone_domain`` is NOT read here (not even as a
-        fallback): it is captured into the DB once by the first-boot seed and never consulted again.
-        Empty only before that seed runs at startup."""
+        ``rebuild_active_domains``.  Empty only before the first-boot seed runs at startup."""
         return self.domains
 
     @property
@@ -206,12 +204,10 @@ class Config:
 
     def _to_toml_dict(self) -> dict[str, dict[str, Any]]:
         d = {k: v for k, v in attr.asdict(self).items() if v is not None}
-        # `domains` is derived from `zone_domain` when unset; don't persist an empty
-        # array, so single-domain configs serialize byte-identically to before.
+        # `domains` and `zone_domain` are DB-derived (seeded from first_boot.toml); omit them when
+        # empty so single-domain configs stay clean.  When present they're kept, so the file round-trips.
         if not d.get("domains"):
             d.pop("domains", None)
-        # The domain now seeds via first_boot.toml, not config.toml; don't emit an empty
-        # `zone_domain` line (kept when present so already-provisioned configs round-trip).
         if not d.get("zone_domain"):
             d.pop("zone_domain", None)
         return {"openhost": d}

@@ -4,9 +4,9 @@ A ``first_boot.toml`` next to the router config supplies a fresh instance's prim
 claim token; they are seeded into the DB (the ``domains`` table + the ``settings`` claim token)
 exactly once.  On an old instance there is no ``first_boot.toml`` — the domain set is seeded from the
 config-file ``zone_domain`` + ``[[openhost.domains]]`` and the claim token from its legacy file.
-After first boot the DB is authoritative and these file sources are never read again (``zone_domain``
-stays in ``config.toml`` but is ignored; the ``zone_domain`` line is scrubbed by the old-instance
-system-agent migration ``v0007_seed_domains_and_scrub`` — for a fresh install, on its first update).
+After first boot the DB is authoritative and these file sources aren't read again; the old-instance
+system-agent migration ``v0007_seed_domains_and_scrub`` scrubs the captured ``zone_domain`` line from
+``config.toml`` (for a fresh install, on its first update).
 """
 
 from __future__ import annotations
@@ -87,9 +87,9 @@ def seed_first_boot(config: Config) -> None:
     ``domains`` table has rows.  Prefers ``first_boot.toml``; otherwise the config-file ``zone_domain``
     + ``[[openhost.domains]]`` (domains) and the legacy claim-token file (token).
 
-    This only *captures* the legacy config into the DB; it never edits ``config.toml``.  Removing the
-    now-ignored ``zone_domain`` line is the old-instance system-agent migration
-    ``v0007_seed_domains_and_scrub`` (the runtime seed can't scrub without racing its own capture)."""
+    This only *captures* into the DB; it never edits ``config.toml``.  Removing the captured
+    ``zone_domain`` line is the old-instance system-agent migration ``v0007_seed_domains_and_scrub``
+    (the runtime seed can't scrub without racing its own capture)."""
     fb = read_first_boot()
     if fb is not None:
         primary = Domain(name=fb.domain, tls=fb.tls, mdns=fb.mdns)

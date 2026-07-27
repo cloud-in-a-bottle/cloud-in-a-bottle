@@ -53,10 +53,9 @@ CREATE TABLE IF NOT EXISTS settings (
 """
 
 # Top-level ``zone_domain``/``tls_enabled`` assignment lines (whole line, incl. its newline).  Both
-# are now DB-derived (the primary domain's name + its per-domain ``tls``), captured above and never
-# read at runtime, so the config-file copies are removed.  The other TLS/DNS switches
-# (``acquire_tls_cert_if_missing``, ``coredns_enabled``, ``start_caddy``) are genuine instance-level
-# config and are left in place.
+# are DB-derived (the primary domain's name + its per-domain ``tls``) and captured above, so their
+# config-file copies are scrubbed.  The instance-level switches (``acquire_tls_cert_if_missing``,
+# ``coredns_enabled``, ``start_caddy``) are matched by neither and stay.
 _CAPTURED_LINE_RE = re.compile(r"(?m)^[ \t]*(?:zone_domain|tls_enabled)[ \t]*=.*(?:\r?\n|$)")
 
 

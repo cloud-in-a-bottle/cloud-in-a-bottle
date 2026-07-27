@@ -39,7 +39,7 @@ class TestGenerateConfig:
 
     def test_domain_seeds_via_first_boot_not_config(self, tmp_path, monkeypatch):
         cfg, first_boot = self._run(tmp_path, monkeypatch)
-        # The domain is no longer in config.toml; it goes to first_boot.toml.
+        # The domain lives in first_boot.toml, not config.toml.
         assert "zone_domain" not in cfg.read_text()
         fb = first_boot.read_text()
         assert 'domain = "host.example.com"' in fb

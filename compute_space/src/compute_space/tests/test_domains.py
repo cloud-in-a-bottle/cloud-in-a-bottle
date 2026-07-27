@@ -15,8 +15,8 @@ from compute_space.config import load_config
 
 
 def test_single_domain_serialization_omits_domains_key() -> None:
-    """A config that never set ``domains`` must serialize without the key, so
-    existing single-domain configs stay byte-identical to before this feature."""
+    """A config that never set ``domains`` must serialize without the key, so a
+    single-domain config stays clean."""
     cfg = DefaultConfig(zone_domain="host.example.com", tls_enabled=True)
     assert "domains" not in cfg.to_toml_str()
 

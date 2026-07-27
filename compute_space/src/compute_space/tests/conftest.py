@@ -56,8 +56,8 @@ def _make_test_config(tmp_path: Path, **overrides: Any) -> Config:
     """Create a DefaultConfig with temp dirs under tmp_path. Returns the Config object."""
     zone_domain = overrides.pop("zone_domain", "testzone.local")
     tls_enabled = overrides.pop("tls_enabled", False)
-    # Default the domain set from zone_domain so the config behaves like a seeded instance —
-    # Config.all_domains no longer synthesizes a primary from the legacy zone_domain field.
+    # Default the domain set from zone_domain so the config behaves like a seeded instance
+    # (Config.all_domains reads the explicit domain set).
     domains = overrides.pop("domains", (Domain(name=zone_domain, tls=tls_enabled),))
     cfg = DefaultConfig(
         host="127.0.0.1",
