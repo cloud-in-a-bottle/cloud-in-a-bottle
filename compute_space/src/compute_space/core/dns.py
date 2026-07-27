@@ -208,17 +208,21 @@ class CoreDnsProcess:
     proc: subprocess.Popen[bytes]
     corefile_path: Path
     coredns_bin: str
+    # Serializes restart() to match CaddyProcess — insurance against a future background caller racing
+    # two coredns onto :53 (today's callers are already serialized on the event loop).
+    _restart_lock: threading.Lock = attr.ib(factory=threading.Lock, init=False, eq=False, repr=False)
 
     def restart(self) -> None:
-        if self.proc.poll() is None:
-            self.proc.terminate()
-            try:
-                self.proc.wait(timeout=3)
-            except subprocess.TimeoutExpired:
-                logger.warning(f"CoreDNS (pid {self.proc.pid}) did not exit after terminate, killing")
-                self.proc.kill()
-                self.proc.wait()
-        self.proc = _spawn_coredns(self.corefile_path, self.coredns_bin)
+        with self._restart_lock:
+            if self.proc.poll() is None:
+                self.proc.terminate()
+                try:
+                    self.proc.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    logger.warning(f"CoreDNS (pid {self.proc.pid}) did not exit after terminate, killing")
+                    self.proc.kill()
+                    self.proc.wait()
+            self.proc = _spawn_coredns(self.corefile_path, self.coredns_bin)
 
 
 def start_coredns(

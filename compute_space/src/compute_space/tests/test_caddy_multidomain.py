@@ -8,11 +8,15 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+import threading
+import time
 from pathlib import Path
 
 import pytest
 
 from compute_space.config import Domain
+from compute_space.core import caddy as caddy_mod
+from compute_space.core.caddy import CaddyProcess
 from compute_space.core.caddy import generate_caddyfile
 
 PUBLIC = Domain("host.example.com", tls=True)
@@ -102,3 +106,45 @@ def test_generated_caddyfile_is_valid(tmp_path: Path, domains: tuple[Domain, ...
         text=True,
     )
     assert result.returncode == 0, f"caddy rejected the config:\n{result.stderr}\n---\n{cf}"
+
+
+class _FakeProc:
+    """Reports already-exited so restart() skips terminate and goes straight to (the stubbed) spawn."""
+
+    pid = 1
+
+    def poll(self) -> int:
+        return 0
+
+    def wait(self, timeout: float | None = None) -> int:
+        return 0
+
+
+def test_restart_serializes_concurrent_callers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Three daemon threads (deferred domain reload, acquisition completion, TLS renewal) can restart
+    # Caddy at once; the spawn critical section must run one-at-a-time, else a second `caddy run`
+    # races the first onto :443.
+    active = 0
+    max_active = 0
+    counter_lock = threading.Lock()  # guards the probe counters, not the code under test
+
+    def fake_spawn(_path: Path) -> _FakeProc:
+        nonlocal active, max_active
+        with counter_lock:
+            active += 1
+            max_active = max(max_active, active)
+        time.sleep(0.02)  # widen the window so an unserialized restart would overlap here
+        with counter_lock:
+            active -= 1
+        return _FakeProc()
+
+    monkeypatch.setattr(caddy_mod, "_spawn_caddy", fake_spawn)
+    cp = CaddyProcess(proc=_FakeProc(), caddyfile_path=tmp_path / "Caddyfile")  # type: ignore[arg-type]
+
+    threads = [threading.Thread(target=cp.restart) for _ in range(5)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert max_active == 1  # never two spawns in flight at once

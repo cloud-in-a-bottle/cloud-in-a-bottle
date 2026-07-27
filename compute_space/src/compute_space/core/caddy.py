@@ -116,21 +116,25 @@ class CaddyProcess:
 
     proc: subprocess.Popen[bytes]
     caddyfile_path: Path
+    # Serializes restart(): several daemon threads (deferred domain reload, cert-acquisition
+    # completion, TLS renewal) can call it at once, and two overlapping restarts race :443.
+    _restart_lock: threading.Lock = attr.ib(factory=threading.Lock, init=False, eq=False, repr=False)
 
     def restart(self) -> None:
         """Restart Caddy so it picks up renewed TLS cert files (it runs with `admin off`, so there
         is no live-reload path).  The old process must stop before the new one starts since both
         bind :80/:443.
         """
-        if self.proc.poll() is None:
-            self.proc.terminate()
-            try:
-                self.proc.wait(timeout=3)
-            except subprocess.TimeoutExpired:
-                logger.warning(f"Caddy (pid {self.proc.pid}) did not exit after terminate, killing")
-                self.proc.kill()
-                self.proc.wait()
-        self.proc = _spawn_caddy(self.caddyfile_path)
+        with self._restart_lock:
+            if self.proc.poll() is None:
+                self.proc.terminate()
+                try:
+                    self.proc.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    logger.warning(f"Caddy (pid {self.proc.pid}) did not exit after terminate, killing")
+                    self.proc.kill()
+                    self.proc.wait()
+            self.proc = _spawn_caddy(self.caddyfile_path)
 
 
 def start_caddy(
