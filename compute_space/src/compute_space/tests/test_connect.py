@@ -195,7 +195,12 @@ _IDENT = dict(
 def connected_cfg(tmp_path: Path) -> Any:
     # An instance already holding a credential, with an Imbue front door set.
     cfg = _make_test_config(
-        tmp_path, port=20600, zone_domain="alice.example.com", email_proxy_base_url=_IMBUE, public_ip="203.0.113.5", **_IDENT
+        tmp_path,
+        port=20600,
+        zone_domain="alice.example.com",
+        email_proxy_base_url=_IMBUE,
+        public_ip="203.0.113.5",
+        **_IDENT,
     )
     init_db(cfg.db_path)
     return cfg
@@ -234,9 +239,7 @@ def _auth_cookie(cfg: Any) -> dict[str, str]:
     conn = sqlite3.connect(cfg.db_path)
     conn.row_factory = sqlite3.Row
     try:
-        cur = conn.execute(
-            "INSERT INTO users (username, password_hash) VALUES (?, ?)", ("owner", pw_hash)
-        )
+        cur = conn.execute("INSERT INTO users (username, password_hash) VALUES (?, ?)", ("owner", pw_hash))
         assert cur.lastrowid is not None
         token = create_session(cur.lastrowid, conn)
         conn.commit()

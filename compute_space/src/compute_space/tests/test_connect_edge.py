@@ -416,9 +416,7 @@ def test_exchange_coerces_non_string_fields_to_str(monkeypatch: pytest.MonkeyPat
 
 
 @pytest.mark.parametrize("missing", ["issuer_url", "client_id", "client_secret"])
-def test_exchange_malformed_when_any_field_missing(
-    monkeypatch: pytest.MonkeyPatch, missing: str
-) -> None:
+def test_exchange_malformed_when_any_field_missing(monkeypatch: pytest.MonkeyPatch, missing: str) -> None:
     body = {"issuer_url": "i", "client_id": "c", "client_secret": "s"}
     del body[missing]
     _mock_httpx_post(monkeypatch, lambda: httpx.Response(200, json=body))
@@ -460,9 +458,7 @@ def test_exchange_ignores_extra_fields(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.mark.parametrize("status", [400, 401, 403, 500, 502, 503])
-def test_exchange_error_status_includes_code_in_message(
-    monkeypatch: pytest.MonkeyPatch, status: int
-) -> None:
+def test_exchange_error_status_includes_code_in_message(monkeypatch: pytest.MonkeyPatch, status: int) -> None:
     _mock_httpx_post(monkeypatch, lambda: httpx.Response(status, json={"error": "nope"}))
     with pytest.raises(ConnectError) as exc:
         exchange_code_for_credential("https://front.example.com", "code")
@@ -500,9 +496,7 @@ def test_exchange_error_message_truncated_to_200_chars(monkeypatch: pytest.Monke
         lambda: httpx.ConnectTimeout("connect timed out"),
     ],
 )
-def test_exchange_wraps_each_network_error(
-    monkeypatch: pytest.MonkeyPatch, exc_factory: Any
-) -> None:
+def test_exchange_wraps_each_network_error(monkeypatch: pytest.MonkeyPatch, exc_factory: Any) -> None:
     def fake_post(url: str, json: Any = None, timeout: Any = None) -> httpx.Response:
         raise exc_factory()
 
@@ -601,9 +595,7 @@ def connected_cfg(tmp_path: Path) -> Any:
 
 @pytest.fixture
 def unconnected_cfg(tmp_path: Path) -> Any:
-    cfg = _make_test_config(
-        tmp_path, port=20701, zone_domain="alice.example.com", email_proxy_base_url=_IMBUE
-    )
+    cfg = _make_test_config(tmp_path, port=20701, zone_domain="alice.example.com", email_proxy_base_url=_IMBUE)
     init_db(cfg.db_path)
     return cfg
 
@@ -632,9 +624,7 @@ def _auth_cookie(cfg: Any) -> dict[str, str]:
     conn = sqlite3.connect(cfg.db_path)
     conn.row_factory = sqlite3.Row
     try:
-        cur = conn.execute(
-            "INSERT INTO users (username, password_hash) VALUES (?, ?)", ("owner", pw_hash)
-        )
+        cur = conn.execute("INSERT INTO users (username, password_hash) VALUES (?, ?)", ("owner", pw_hash))
         assert cur.lastrowid is not None
         token = create_session(cur.lastrowid, conn)
         conn.commit()
@@ -796,9 +786,7 @@ def _config_file(cfg: Any, monkeypatch: pytest.MonkeyPatch) -> Path:
     return path
 
 
-def test_callback_persists_the_exchanged_credential(
-    unconnected_cfg: Any, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_callback_persists_the_exchanged_credential(unconnected_cfg: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     _config_file(unconnected_cfg, monkeypatch)
     exchanged = _cred("https://iss.new", "cid-new", "csecret-new")
     with (
@@ -844,9 +832,7 @@ def test_callback_trigger_restart_called_once_on_success(
     restart.assert_called_once_with()
 
 
-def test_callback_real_persist_writes_config(
-    unconnected_cfg: Any, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_callback_real_persist_writes_config(unconnected_cfg: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     # Exercise the callback with the REAL persist_instance_identity (only the
     # exchange + restart mocked) so the whole write path is covered end to end.
     path = _config_file(unconnected_cfg, monkeypatch)
@@ -896,9 +882,7 @@ def test_callback_blank_or_whitespace_code_redirects_error(
     restart.assert_not_called()
 
 
-def test_callback_missing_code_param_redirects_error(
-    unconnected_cfg: Any, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_callback_missing_code_param_redirects_error(unconnected_cfg: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     # The handler defaults code="" so an entirely-absent ?code= behaves like blank.
     _config_file(unconnected_cfg, monkeypatch)
     with (
@@ -916,9 +900,7 @@ def test_callback_missing_code_param_redirects_error(
     exchange.assert_not_called()
 
 
-def test_callback_connect_error_502_and_no_restart(
-    unconnected_cfg: Any, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_callback_connect_error_502_and_no_restart(unconnected_cfg: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     _config_file(unconnected_cfg, monkeypatch)
     with (
         mock.patch(
@@ -938,9 +920,7 @@ def test_callback_connect_error_502_and_no_restart(
     restart.assert_not_called()
 
 
-def test_callback_persist_error_502_and_no_restart(
-    unconnected_cfg: Any, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_callback_persist_error_502_and_no_restart(unconnected_cfg: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     # A ConnectError raised by persist (not just exchange) is also caught -> 502,
     # no restart.
     _config_file(unconnected_cfg, monkeypatch)
@@ -965,9 +945,7 @@ def test_callback_persist_error_502_and_no_restart(
     restart.assert_not_called()
 
 
-def test_callback_500_when_no_config_path(
-    unconnected_cfg: Any, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_callback_500_when_no_config_path(unconnected_cfg: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     # Env-driven config (no file) -> the credential can't be persisted -> 500,
     # and no exchange/restart happens.
     monkeypatch.delenv("OPENHOST_ROUTER_CONFIG", raising=False)

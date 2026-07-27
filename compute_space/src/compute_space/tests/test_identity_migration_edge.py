@@ -286,9 +286,7 @@ def test_persist_then_scrub_together_preserve_identity(tmp_path: Path, monkeypat
     _clear_openhost_env(monkeypatch)
     p = tmp_path / "config.toml"
     p.write_text(
-        "[openhost]\n"
-        'zone_domain = "alice.host.example.com"\n'
-        'email_inbound_mode = "direct"\n'  # obsolete key present
+        '[openhost]\nzone_domain = "alice.host.example.com"\nemail_inbound_mode = "direct"\n'  # obsolete key present
     )
     persist_instance_identity(str(p), _cred(_ISSUER, "iid", "isec"))
     monkeypatch.setenv("OPENHOST_ROUTER_CONFIG", str(p))
@@ -409,12 +407,7 @@ def test_scrub_preserves_non_openhost_sections(tmp_path: Path, monkeypatch: pyte
     monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
     p = tmp_path / "config.toml"
     p.write_text(
-        "[openhost]\n"
-        'zone_domain = "alice.host.example.com"\n'
-        'email_inbound_mode = "direct"\n'
-        "\n"
-        "[other]\n"
-        'keep = "me"\n'
+        '[openhost]\nzone_domain = "alice.host.example.com"\nemail_inbound_mode = "direct"\n\n[other]\nkeep = "me"\n'
     )
     out = config_mod._scrub_obsolete_keys_to_temp(str(p))
     assert out != str(p)
@@ -495,11 +488,7 @@ def test_awaiting_connect_loads_email_off_no_error(tmp_path: Path, monkeypatch: 
     # A valid state: loads without error, email off, identity None.
     _clear_openhost_env(monkeypatch)
     p = tmp_path / "config.toml"
-    p.write_text(
-        "[openhost]\n"
-        'zone_domain = "alice.host.example.com"\n'
-        f'email_proxy_base_url = "{_PROXY}"\n'
-    )
+    p.write_text(f'[openhost]\nzone_domain = "alice.host.example.com"\nemail_proxy_base_url = "{_PROXY}"\n')
     cfg = _load_file(p)
     assert cfg.email_enabled is False
     assert cfg.instance_identity is None
@@ -513,11 +502,7 @@ def test_acme_with_partial_imbue_and_no_proxy_loads(tmp_path: Path, monkeypatch:
     # rejected as a typo — the typo guard only fires when a proxy is present.
     _clear_openhost_env(monkeypatch)
     p = tmp_path / "config.toml"
-    p.write_text(
-        "[openhost]\n"
-        'zone_domain = "alice.host.example.com"\n'
-        f'imbue_identity_issuer_url = "{_ISSUER}"\n'
-    )
+    p.write_text(f'[openhost]\nzone_domain = "alice.host.example.com"\nimbue_identity_issuer_url = "{_ISSUER}"\n')
     cfg = _load_file(p)
     assert cfg.cert_provider == CERT_PROVIDER_ACME
     assert cfg.instance_identity is None
@@ -542,10 +527,7 @@ def test_awaiting_connect_then_persist_enables_via_reload(tmp_path: Path, monkey
     _clear_openhost_env(monkeypatch)
     p = tmp_path / "config.toml"
     p.write_text(
-        "[openhost]\n"
-        'zone_domain = "alice.host.example.com"\n'
-        f'email_proxy_base_url = "{_PROXY}"\n'
-        f'public_ip = "{_IP}"\n'
+        f'[openhost]\nzone_domain = "alice.host.example.com"\nemail_proxy_base_url = "{_PROXY}"\npublic_ip = "{_IP}"\n'
     )
     awaiting = _load_file(p)
     assert awaiting.email_enabled is False

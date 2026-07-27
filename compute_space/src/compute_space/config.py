@@ -374,9 +374,7 @@ class Config:
         client_id = self.cert_api_keycloak_client_id_resolved
         client_secret = self.cert_api_keycloak_client_secret_resolved
         if issuer and client_id and client_secret:
-            return KeycloakClientCredentials(
-                issuer_url=issuer, client_id=client_id, client_secret=client_secret
-            )
+            return KeycloakClientCredentials(issuer_url=issuer, client_id=client_id, client_secret=client_secret)
         return None
 
     @property
