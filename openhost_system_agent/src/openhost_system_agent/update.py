@@ -98,10 +98,6 @@ def _latest_ancestor_tag(repo: git.Repo) -> str | None:
 # the latest tag is the destination. Kept in sync with apply_after_checkout.py.
 _TARGET_REF_CONFIG = "openhost.target-ref"
 
-# The release branch. A box sitting on this branch while unpinned is the normal production state
-# (tag-tracking) and is left alone; any *other* checked-out branch is treated as dev work to track.
-_DEFAULT_BRANCH = "main"
-
 
 def _get_target_ref(repo: git.Repo) -> str | None:
     try:
@@ -119,31 +115,6 @@ def _set_target_ref(repo: git.Repo, ref: str | None) -> None:
         repo.git.config("--unset-all", _TARGET_REF_CONFIG)
     except git.GitCommandError:
         pass  # already unset
-
-
-def _current_branch(repo: git.Repo) -> str | None:
-    """The checked-out branch name, or None when HEAD is detached (on a tag/commit, or mid-walk)."""
-    try:
-        return repo.active_branch.name
-    except TypeError:
-        return None
-
-
-def _reconcile_target_ref(repo: git.Repo) -> str | None:
-    """Keep the pin tracking the checked-out branch whenever that branch indicates dev work — it
-    differs from the pin, or (while unpinned) is a branch other than ``main``. Persists the adoption
-    and returns the effective target ref (None = unpinned, i.e. tag-tracking).
-
-    Leaves everything else untouched: a detached HEAD (tag/commit pin, or mid-walk) keeps the stored
-    pin, and a stock box on ``main`` while unpinned stays tag-tracking."""
-    current = _current_branch(repo)
-    if current is None:
-        return _get_target_ref(repo)  # detached: honour the stored pin (or stay unpinned)
-    pin = _get_target_ref(repo)
-    if current != (pin if pin is not None else _DEFAULT_BRANCH):
-        _set_target_ref(repo, current)
-        return current
-    return pin
 
 
 def _resolve_ref_sha(repo: git.Repo, ref: str) -> str | None:
@@ -221,7 +192,7 @@ def fetch_updates() -> FetchResult:
     if repo.is_dirty(untracked_files=True):
         return FetchResult(state="DIRTY")
 
-    target = _reconcile_target_ref(repo)
+    target = _get_target_ref(repo)
     if target is not None:
         sha = _resolve_ref_sha(repo, target)
         if sha is None:
@@ -253,7 +224,7 @@ def show_diff() -> DiffResult:
     repo = _repo()
     current = _current_tag(repo) or _latest_ancestor_tag(repo) or repo.head.commit.hexsha[:8]
 
-    target = _reconcile_target_ref(repo)
+    target = _get_target_ref(repo)
     dest_label: str | None
     if target is not None:
         dest: str | None = _resolve_ref_sha(repo, target)
@@ -288,10 +259,6 @@ def apply_update() -> NoReturn:
 
     if repo.is_dirty(untracked_files=True):
         raise RuntimeError("Working tree has uncommitted changes. Stash or commit first.")
-
-    # Adopt the checked-out dev branch as the pin BEFORE the walk: the walk reads the pin from git
-    # config (in a separate process) and detaches HEAD, so the branch has to be persisted here first.
-    _reconcile_target_ref(repo)
 
     repo.git.fetch("origin", "--tags")
     if not _get_sorted_tags(repo) and _get_target_ref(repo) is None:
@@ -360,7 +327,7 @@ def get_remote_info() -> RemoteInfo:
     repo = _repo()
     remote = _get_remote(repo)
     url = _strip_credentials(remote.url) if remote.url else None
-    target = _reconcile_target_ref(repo)
+    target = _get_target_ref(repo)
     # When unpinned, still report the resolved current tag for display, but flag
     # it as not pinned so the dashboard doesn't round-trip it back into a pin.
     ref = target or _current_tag(repo) or _latest_ancestor_tag(repo) or repo.head.commit.hexsha[:8]
