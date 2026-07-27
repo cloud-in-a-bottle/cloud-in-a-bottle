@@ -88,13 +88,14 @@ def renew_cert_if_needed(
     _sync_cert_statuses(config)  # keep the stored cert_status honest (e.g. the seeded-'none' primary)
     renewed = False
 
-    # Primary — unchanged: legacy cert paths + the injectable ``provision`` routine.  A failure
-    # here propagates (the renewal thread catches it and retries sooner), as before.
-    status = get_cert_status(config.tls_cert_path, config.tls_key_path)
-    if status != CertStatus.OK:
-        logger.info(f"TLS cert for {config.primary_domain.name} is {status.value}; renewing")
-        provision(config)
-        renewed = True
+    # Primary — legacy cert paths + injectable ``provision``, but only when the primary is itself a
+    # TLS domain (a non-TLS/.local primary has no cert to provision).  A failure here propagates.
+    if config.primary_domain.tls:
+        status = get_cert_status(config.tls_cert_path, config.tls_key_path)
+        if status != CertStatus.OK:
+            logger.info(f"TLS cert for {config.primary_domain.name} is {status.value}; renewing")
+            provision(config)
+            renewed = True
 
     # Additional TLS domains — per-domain paths, each isolated so one bad domain doesn't block
     # the rest (or the already-renewed primary's Caddy restart).

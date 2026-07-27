@@ -168,6 +168,30 @@ def test_renew_acquires_stale_secondary_domain(tmp_path: Path) -> None:
     assert calls == ["restart"]  # primary was OK, so provision was never called
 
 
+def test_renew_acquires_secondary_under_non_tls_primary(tmp_path: Path) -> None:
+    # A non-TLS (.local) primary with a public TLS secondary: the primary has no cert to provision,
+    # but the secondary must still be acquired and Caddy restarted (the renewal thread now runs
+    # whenever any domain needs TLS, and the primary block is skipped for a non-TLS primary).
+    config = DefaultConfig(
+        zone_domain="host.local",
+        data_root_dir=str(tmp_path),
+        tls_enabled=False,
+        domains=(Domain("host.local", tls=False), Domain("public.example.com", tls=True)),
+    )
+    config.openhost_data_path.mkdir(parents=True)
+    calls: list[str] = []
+    acquired: list[str] = []
+    renewed = renew_cert_if_needed(
+        config,
+        lambda c: calls.append("restart"),
+        provision=lambda c: calls.append("provision"),
+        acquire=lambda c, name, cp, kp: acquired.append(name),
+    )
+    assert renewed is True
+    assert acquired == ["public.example.com"]
+    assert calls == ["restart"]  # primary is non-TLS → provision never called
+
+
 def test_renew_isolates_a_failing_secondary(tmp_path: Path) -> None:
     # One secondary whose acquisition fails (e.g. DNS not delegated) must not block the others.
     config = _multidomain_config(tmp_path, "bad.example.com", "good.example.com")

@@ -38,6 +38,8 @@ from compute_space.core.domain_store import set_record_status
 from compute_space.core.domain_store import upsert_record
 from compute_space.core.logging import logger
 from compute_space.core.tls.domain_certs import ensure_cert_for
+from compute_space.core.tls.renewal import CertStatus
+from compute_space.core.tls.renewal import get_cert_status
 from compute_space.web.auth.auth import require_owner_auth
 
 # A DNS label per RFC 1123 (letters/digits/hyphen, not starting/ending with hyphen), and a
@@ -74,22 +76,27 @@ class ErrorResponse:
     error: str
 
 
+def _tls_cert_display(config: Config, name: str, record: DomainRecord | None) -> tuple[str, str | None]:
+    """Cert status for a TLS domain, derived from the cert actually on disk (what Caddy serves) so an
+    expired/unreadable cert is never shown 'active'; falls back to the stored in-flight state."""
+    status = get_cert_status(config.cert_path_for(name), config.key_path_for(name))
+    if status in (CertStatus.OK, CertStatus.EXPIRING_SOON):
+        return CERT_STATUS_ACTIVE, None  # a valid cert is on disk
+    if status == CertStatus.EXPIRED:
+        # On disk but no longer valid: browsers reject it and renewal is failing — surface it.
+        return CERT_STATUS_ERROR, (record.error_message if record else None) or "certificate expired or unreadable"
+    if record is not None:
+        return record.cert_status, record.error_message  # MISSING: acquiring / error / none
+    return CERT_STATUS_NONE, None
+
+
 def _domain_info(config: Config, domain: Domain) -> DomainInfo:
     name = domain.name_no_port
     is_primary = name == config.primary_domain.name_no_port
-    record = get_record(config, name)
     if not domain.tls:
         cert_status, error = CERT_STATUS_ACTIVE, None  # http, nothing to acquire
-    elif config.cert_path_for(name).exists() and config.key_path_for(name).exists():
-        # A real cert+key are on disk — that's exactly what Caddy serves (config_cert_resolver keys
-        # off both files), so report active regardless of the stored status.  Covers the primary
-        # (seeded 'none' but its legacy cert is present) and any acquired domain.
-        cert_status, error = CERT_STATUS_ACTIVE, None
-    elif record is not None:
-        # No cert yet: surface the in-flight acquisition state (acquiring / error / none).
-        cert_status, error = record.cert_status, record.error_message
     else:
-        cert_status, error = CERT_STATUS_NONE, None
+        cert_status, error = _tls_cert_display(config, name, get_record(config, name))
     return DomainInfo(
         name=name,
         tls=domain.tls,

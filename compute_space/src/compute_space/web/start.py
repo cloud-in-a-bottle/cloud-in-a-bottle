@@ -175,8 +175,9 @@ def main() -> None:
         )
         # Register so /api/domains can regenerate + restart Caddy when a domain is added/removed.
         set_active_caddy(caddy)
-        if config.tls_enabled and config.coredns_enabled and config.acquire_tls_cert_if_missing:
-            # Regenerate Caddyfile to serve all domains
+        if needs_caddy_for_tls and config.coredns_enabled and config.acquire_tls_cert_if_missing:
+            # Renew every TLS domain — including a TLS secondary under a non-TLS primary — and
+            # regenerate the Caddyfile so acquired certs are served.
             start_renewal_thread(reload_caddy_for_domains)
     else:
         if needs_caddy_for_tls:

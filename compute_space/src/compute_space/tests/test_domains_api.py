@@ -5,6 +5,7 @@ runs (reload is a no-op in tests)."""
 
 from __future__ import annotations
 
+import datetime
 import sqlite3
 from collections.abc import Iterator
 from pathlib import Path
@@ -12,6 +13,10 @@ from typing import Any
 
 import bcrypt
 import pytest
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import ec
 from litestar import Litestar
 from litestar.di import Provide
 from litestar.testing import TestClient
@@ -32,6 +37,30 @@ from compute_space.web.routes.api import domains as domains_module
 from compute_space.web.routes.api.domains import api_domains_routes
 
 PRIMARY = Domain("host.example.com", tls=True)
+
+
+def _write_cert(cert_path: Path, key_path: Path, *, days_valid: int = 60) -> None:
+    """Write a self-signed cert+key that get_cert_status can parse (expired when days_valid < 0)."""
+    key = ec.generate_private_key(ec.SECP256R1())
+    subject = x509.Name([x509.NameAttribute(x509.oid.NameOID.COMMON_NAME, "host.example.com")])
+    not_after = datetime.datetime.now(datetime.UTC) + datetime.timedelta(days=days_valid)
+    cert = (
+        x509.CertificateBuilder()
+        .subject_name(subject)
+        .issuer_name(subject)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(not_after - datetime.timedelta(days=90))
+        .not_valid_after(not_after)
+        .sign(key, hashes.SHA256())
+    )
+    cert_path.parent.mkdir(parents=True, exist_ok=True)
+    cert_path.write_bytes(cert.public_bytes(serialization.Encoding.PEM))
+    key_path.write_bytes(
+        key.private_bytes(
+            serialization.Encoding.PEM, serialization.PrivateFormat.TraditionalOpenSSL, serialization.NoEncryption()
+        )
+    )
 
 
 def _make_app() -> Litestar:
@@ -99,13 +128,20 @@ def test_list_shows_primary(cfg: Any, client: TestClient[Litestar]) -> None:
 
 
 def test_primary_with_cert_on_disk_reports_active(cfg: Any, client: TestClient[Litestar]) -> None:
-    # Regression: the seeded primary stores cert_status='none', but if its (legacy) cert file exists
-    # on disk — which is what Caddy actually serves — /api/domains must report it active, not 'none'.
-    cfg.tls_cert_path.parent.mkdir(parents=True, exist_ok=True)
-    cfg.tls_cert_path.write_text("-----BEGIN CERTIFICATE-----\n")
-    cfg.tls_key_path.write_text("-----BEGIN PRIVATE KEY-----\n")
+    # Regression: the seeded primary stores cert_status='none', but a valid cert on disk — which is
+    # what Caddy actually serves — must report active, not 'none'.
+    _write_cert(cfg.tls_cert_path, cfg.tls_key_path)
     info = next(d for d in client.get("/api/domains", cookies=_auth_cookie(cfg.db_path)).json()["domains"])
     assert info["name"] == "host.example.com" and info["cert_status"] == "active"
+
+
+def test_primary_with_expired_cert_not_active(cfg: Any, client: TestClient[Litestar]) -> None:
+    # An expired cert still has files on disk (so a mere existence check would say 'active'), but
+    # browsers reject it — it must surface as an error, not active.
+    _write_cert(cfg.tls_cert_path, cfg.tls_key_path, days_valid=-1)
+    info = next(d for d in client.get("/api/domains", cookies=_auth_cookie(cfg.db_path)).json()["domains"])
+    assert info["cert_status"] == CERT_STATUS_ERROR
+    assert "expired" in (info["error_message"] or "")
 
 
 # --- add mDNS .local (immediately active, no ACME) ----------------------------------
