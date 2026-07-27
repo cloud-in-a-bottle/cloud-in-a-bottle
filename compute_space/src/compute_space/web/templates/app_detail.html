@@ -123,7 +123,7 @@
 {% endif %}
 {% if ungranted_permissions %}
 <h4 style="margin-bottom:0.2em;">Declared dependencies (not currently granted)</h4>
-<p style="margin-top:0;">The full list of services this app's manifest declares but doesn't currently hold &mdash; including any you've revoked. Grant one to (re-)enable it. An app update won't re-prompt for these; it only asks about permissions the author newly adds.</p>
+<p style="margin-top:0;">Permissions declared by the app but not granted</p>
 <script id="ungranted-perms-data" type="application/json">{{ ungranted_permissions | tojson }}</script>
 <table>
   <tr><th>Service</th><th>Grant</th><th>Actions</th></tr>
