@@ -134,3 +134,36 @@ def test_scrub_only_when_domains_already_seeded(tmp_path: Path) -> None:
     conn.close()
     assert names == ["host.example.com"]  # secondary NOT added (seed no-op)
     assert "zone_domain" not in config.read_text()  # but still scrubbed
+
+
+def test_missing_users_table_does_not_brick_update(tmp_path: Path) -> None:
+    # A router DB predating the auth schema has no `users` table.  The claim-token seed probes it; an
+    # unguarded probe raises OperationalError, and because a failed system migration is retried on
+    # every `openhost update`, that would deadlock updates.  A missing table must count as "no owner"
+    # so the migration proceeds and still captures the domains + claim token.
+    config, db, claim = _paths(tmp_path)
+    conn = sqlite3.connect(db)
+    conn.execute("CREATE TABLE some_old_table (x TEXT)")  # DB exists, but there is no `users` table
+    conn.commit()
+    conn.close()
+    claim.write_text("tok:extra")
+
+    mod.migrate(str(config), str(db), str(claim))  # must not raise
+
+    conn = sqlite3.connect(db)
+    assert conn.execute("SELECT value FROM settings WHERE key = 'claim_token'").fetchone() == ("tok",)
+    names = sorted(n for (n,) in conn.execute("SELECT name FROM domains"))
+    conn.close()
+    assert names == ["host.example.com", "secondary.example.com"]
+
+
+def test_owner_exists_treats_missing_users_table_as_no_owner(tmp_path: Path) -> None:
+    conn = sqlite3.connect(tmp_path / "no_users.db")
+    try:
+        assert mod._owner_exists(conn) is False  # missing table → False, not OperationalError
+        conn.execute("CREATE TABLE users (username TEXT PRIMARY KEY, password_hash TEXT NOT NULL)")
+        assert mod._owner_exists(conn) is False  # empty users table → still no owner
+        conn.execute("INSERT INTO users (username, password_hash) VALUES ('o', 'x')")
+        assert mod._owner_exists(conn) is True
+    finally:
+        conn.close()

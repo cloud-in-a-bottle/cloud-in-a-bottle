@@ -86,10 +86,21 @@ def _seed_domains(db: sqlite3.Connection, openhost: dict[str, object]) -> None:
     )
 
 
+def _owner_exists(db: sqlite3.Connection) -> bool:
+    """True if an owner row exists.  A missing ``users`` table (a router DB predating the auth schema)
+    counts as 'no owner' rather than raising ``OperationalError`` — which would abort the whole
+    migration and, since a failed system migration is retried every ``openhost update``, deadlock
+    updates.  Mirrors the router's own ``first_boot._owner_exists`` guard."""
+    try:
+        return db.execute("SELECT 1 FROM users LIMIT 1").fetchone() is not None
+    except sqlite3.OperationalError:
+        return False
+
+
 def _seed_claim_token(db: sqlite3.Connection, claim_token_path: str) -> None:
     """Move the legacy claim-token file into ``settings`` — only while still pre-setup (no owner)
     and not already present.  The file may hold ``token:extra``; the token is before the colon."""
-    if db.execute("SELECT 1 FROM users LIMIT 1").fetchone() is not None:
+    if _owner_exists(db):
         return  # owner exists → claim token is moot
     if db.execute("SELECT 1 FROM settings WHERE key = 'claim_token'").fetchone() is not None:
         return
