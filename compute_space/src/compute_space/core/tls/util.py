@@ -193,7 +193,7 @@ def _acquire_cert_dns01(
                 time.sleep(2)
 
             # Clean up DNS record
-            dns_module.clear_txt(coredns_zonefile_path)
+            dns_module.clear_acme_challenge_records(coredns_zonefile_path)
 
             if not order.fullchain_pem:
                 raise RuntimeError(f"Failed to get cert for {domains}: order not finalized")
@@ -202,7 +202,7 @@ def _acquire_cert_dns01(
 
         except (errors.ValidationError, RuntimeError) as exc:
             # Clean up DNS records before retrying
-            dns_module.clear_txt(coredns_zonefile_path)
+            dns_module.clear_acme_challenge_records(coredns_zonefile_path)
 
             if attempt < max_attempts:
                 wait = 30 * attempt

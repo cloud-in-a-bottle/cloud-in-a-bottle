@@ -1,465 +1,153 @@
 # Email (Design)
 
-This document describes how OpenHost instances send and receive email
-for their zone, and why the design is shaped the way it is.
+How OpenHost instances send and receive mail for their zone, and why the design looks the way it does.
 
-The platform-side pieces described here (the CoreDNS email records and the
-provisioning that talks to the proxy) are implemented in this repo. There is no
-email on/off flag: email is enabled automatically when its prerequisites are
-present in the instance config (the proxy/frontend URL, the per-instance Keycloak
-client-credentials, and the instance's public IP). Provisioning supplies those
-whenever the operator has email infrastructure configured, so a freshly-
-provisioned instance "just has working email"; when the infra isn't present the
-fields are absent and the instance simply runs without email. The central
-relay is a separate service,
-[`openhost-email-proxy`](https://github.com/imbue-openhost/openhost-email-proxy),
-deployed on fly.io, and it is **outbound-only**: inbound mail is always delivered
-directly to the instance's own mail server (MX → instance, port 25).
-See [Production readiness](#production-readiness) for what remains before turning
-this on for real tenants.
+Email has no on/off switch. It turns on automatically once the instance config has what it needs: the email API URL, the per-instance Keycloak client-credentials, and the instance's public IP. Provisioning fills these in when email infrastructure is configured, so a fresh instance simply has working mail; when they're absent the instance runs fine without it.
 
-The guiding constraint is that **OpenHost instances are operated by
-untrusted users**. A single instance must never be able to damage email
-deliverability for any other instance, exhaust a shared resource, or
-send mail claiming to be a domain it does not own. Every decision below
-follows from that constraint.
+The design starts from one fact: **OpenHost instances are run by untrusted users.** No single instance may harm another's deliverability, drain a shared quota, or send as a domain it doesn't own. Everything below follows from that.
 
 ## Why email needs platform support
 
-Two facts make email different from a normal app:
+Two things make email unlike a normal app:
 
-1. **Cloud providers block outbound port 25.** Most hosts (Hetzner, GCP,
-   and others) block *outbound* TCP/25 to fight spam, so an instance
-   cannot deliver mail directly to a recipient's MX — an outbound relay is
-   mandatory, not optional plumbing. (Inbound 25 is a different matter:
-   the instances OpenHost provisions accept inbound connections on port 25,
-   which is why inbound is always delivered directly to the instance — see
-   [Receiving mail](#receiving-mail).)
+1. **Outbound port 25 is blocked.** Hetzner, GCP, and most hosts block outbound TCP/25 to fight spam, so an instance can't deliver straight to a recipient's MX. An outbound relay is mandatory. (Inbound 25 is separate — the instances OpenHost provisions do accept it, which is why inbound goes directly to the instance.)
 
-2. **Deliverability is a shared, reputation-based resource.** Whether
-   mail lands in an inbox depends on the sending IP's reputation and on
-   SPF/DKIM/DMARC alignment. If every instance sent from its own cloud
-   IP, one abusive tenant would get that IP block-listed and, worse, a
-   shared address space would let one tenant poison the reputation of
-   all others.
+2. **Deliverability is a shared reputation.** Whether mail reaches the inbox depends on the sending IP's reputation and on SPF/DKIM/DMARC alignment. If every instance sent from its own IP, one abusive tenant could get an address block-listed and poison everyone sharing that space.
 
-Both facts point to the same answer: outbound mail flows through a
-**central, OpenHost-operated SES relay** that owns the sending
-reputation and enforces per-instance limits, rather than each instance
-talking to the world directly.
+Both point to the same answer: outbound flows through a **central, OpenHost-operated relay** that owns the sending reputation and enforces per-instance limits, instead of each instance talking to the world directly.
 
-Each instance runs a real mailbox server (**Stalwart**) and webmail
-client (**Bulwark**) as default apps, giving a real inbox + outbox. The
-mailbox server relays outbound mail through the central SES proxy as an
-**SMTP smarthost**:
-
-- the **email proxy** (`openhost-email-proxy`) runs an **SMTP submission
-  relay** that holds the AWS SES credentials. Instances' Stalwart relays
-  outbound to it over SMTP submission (AUTH), and it enforces From-domain
-  scope + per-instance rate limits, then forwards to SES.
-- **Per-instance SMTP auth is a stateless HMAC credential**: username =
-  the instance's zone FQDN, password = `HMAC-SHA256(relay_secret, zone)`.
-  vm-manager derives the same password at provision and hands it to the
-  instance; the proxy re-derives + constant-time compares, learning the
-  authorized zone from that one check. Rotating `relay_secret` rotates
-  every instance credential.
-- The relay credentials reach the mailbox app through a **scoped router
-  endpoint**, not the app environment. The mailbox app fetches
-  `GET /api/email/relay-config` at `OPENHOST_ROUTER_URL` using its
-  `OPENHOST_APP_TOKEN`; the router returns the SMTP host/port/user/password
-  (plus zone + custom domain) **only** to an app whose name is in
-  `email_mailbox_app_names`. This keeps the per-instance relay password out
-  of every other (untrusted) app's environment — only the mailbox app can
-  read it.
-
-This keeps the SES-credential-holding proxy off the public internet
-(reached over Fly 6PN), gives instances a real inbox+outbox instead of a
-send-only shim, and keeps the central multi-tenant safety guarantees
-(From enforcement, rate limits, abuse controls) in one place.
-
-> The SES **domain-identity creation** (to obtain DKIM tokens at
-> provision) still uses a small HTTP call authenticated by the
-> per-instance Keycloak client via the imbue-hosted-spaces frontend; only
-> the high-volume *send* path moved to SMTP.
+Each instance runs a real mailbox server (**Stalwart**) and webmail client (**Bulwark**) as default apps, giving it a genuine inbox and outbox. Outbound is relayed through the central relay as an **SMTP smarthost**; the relay authenticates the instance, enforces that it only sends as its own zone, applies rate limits, and hands off to the upstream provider (SES). The relay credential is delivered to the mailbox app at runtime through a scoped router endpoint (`GET /api/email/relay-config`), gated to the app names in `email_mailbox_app_names`, so it never lands in any other app's environment.
 
 ## The platform / app divide
 
-The design splits along a single principle: anything **trust-critical or
-multi-tenant-unsafe** is central or platform-level; anything
-**user-facing and iterated often** is an app.
+The split follows one rule: anything **trust-critical or multi-tenant-unsafe** is central or platform-level; anything **user-facing** is an app.
 
 | Piece | Where | Why |
 |-------|-------|-----|
-| Email backend (SES relay, spam/abuse, SES identity + verification) | **Central, private** (Fly 6PN; holds AWS creds) | Shared reputation must be centrally governed; keep creds off the public internet |
-| Auth boundary (verify instance token, proxy to backend) | **Central** (imbue-hosted-spaces frontend) | One authenticated public door, mirroring how it fronts vm-manager |
-| Per-instance credential (Keycloak) | **Central-issued, instance-held** | Authenticates the instance and anchors From-enforcement |
-| DNS records (DKIM/SPF/DMARC/MX) | **Platform** (CoreDNS) | Only the platform can write the authoritative zone |
-| Provisioning (inject credential + mail config) | **Platform** | Part of instance finalize |
-| Mailbox server (SMTP/JMAP + storage) | **App** (default) | User-facing, swappable, iterate-often |
-| Webmail client | **App** (default) | Pure UX |
-
-The frontend + private backend together are the trust boundary that
-makes multi-tenant email safe. The mailbox and webmail pieces are
-ordinary OpenHost apps shipped as defaults.
+| Outbound relay + spam/abuse + provider identity | Central | Shared reputation must be centrally governed; provider creds stay off the instance |
+| Per-instance credential (Keycloak) | Central-issued, instance-held | Authenticates the instance and anchors From-enforcement |
+| DNS records (DKIM/SPF/DMARC/MX) | Platform (CoreDNS) | Only the platform writes the authoritative zone |
+| Provisioning (inject credential + mail config) | Platform | Part of instance finalize |
+| Mailbox server (SMTP/JMAP + storage) | App (default) | User-facing, swappable |
+| Webmail client | App (default) | Pure UX |
 
 ## Architecture overview
 
 ```
-                       ┌──────────────────────────┐        ┌──────────────────────────────┐
-   instance ──token──▶ │  imbue-hosted-spaces      │        │  email backend (PRIVATE, 6PN) │
-   (Keycloak,          │  frontend (public door)   │ ─6PN─▶ │  · From = zone only           │ ──▶ AWS SES ─▶ MX
-    calls /api/email)  │  · verifies instance token │        │  · per-instance rate caps     │     (outbound)
-                       │  · derives zone            │        │  · spam / bounce / complaint  │
-                       │  · sets X-OpenHost-Zone    │ ◀────  │  · SES identity + verify      │
-                       └──────────────────────────┘        └──────────────────────────────┘
-        │
-        ▼
-  CoreDNS on the instance writes DKIM / SPF / DMARC / MX
-  (authoritative for the selfhost subzone; and for a BYO domain
-   via optional NS delegation)
+   instance ──Keycloak token──▶ email API ──▶ upstream provider (SES) ──▶ recipient MX   (outbound)
 
-  On the instance: mailbox server (app, receives inbound on :25) + webmail client (app)
+   CoreDNS on the instance writes DKIM / SPF / DMARC / MX
+   (authoritative for the selfhost subzone; and for a BYO domain via optional NS delegation)
 
-           sender's MX ──▶ mail.<zone> (A → instance IP) ──▶ Stalwart :25   (inbound, direct)
+   On the instance: mailbox server (receives inbound on :25) + webmail client
+
+   sender's MX ──▶ mail.<zone> (A → instance IP) ──▶ Stalwart :25   (inbound, direct)
 ```
 
-Outbound flows left-to-right through the frontend/backend to SES. Inbound does
-**not** traverse the proxy: the zone's MX always points at the instance and its
-own mail server (Stalwart) accepts SMTP on port 25 directly (see
-[Receiving mail](#receiving-mail)).
+Outbound flows through the email API to the provider. Inbound does **not**: the zone's MX always points at the instance, and its mail server accepts SMTP on port 25 directly.
 
-## The email relay (frontend + private backend)
+## Request authentication
 
-The relay runs on OpenHost-operated infrastructure (Fly), **separate
-from any instance**, split into an authenticated frontend door and a
-private backend.
+Each instance is provisioned with its own Keycloak confidential client in the `openhost-customers` realm. It fetches a client-credentials token and presents it to the email API's `/api/email/*` endpoints. This mirrors the cert-api pattern exactly. The sending zone is derived from the instance's attested identity — not from anything in the message — which is what anchors From-domain enforcement. Revoking one instance is just disabling its Keycloak client; there's no shared secret.
 
-**The private backend** holds the AWS SES credentials and does the SES
-work. It has no public listener (reachable only over Fly 6PN), so it is
-never exposed to the internet and cannot be called by an instance
-directly. Its responsibilities:
+## Abuse controls
 
-- **Relay outbound mail to AWS SES**, which delivers to the recipient's MX.
-- **Spam and abuse mitigation** for the whole fleet (see
-  [Abuse controls](#abuse-controls)).
-- **Create and verify SES domain identities.** When a zone is
-  provisioned, the backend calls SES to create the domain identity, gets
-  back the DKIM tokens, returns them so the instance can publish them in
-  CoreDNS, and SES verifies once they resolve. SES will not send on
-  behalf of an unverified domain, so this is mandatory — and automatic,
-  not an operator step.
+Because outbound has a single central path, that's where all multi-tenant safety lives:
 
-The backend does **not** handle inbound mail at all: inbound is delivered
-directly to the instance (see [Receiving mail](#receiving-mail)).
-
-The instance never holds AWS credentials. It only holds a Keycloak
-credential that OpenHost can revoke at any time.
-
-### Request authentication (frontend, Keycloak, cert-api pattern)
-
-The **frontend** (imbue-hosted-spaces) is the authentication boundary —
-the same role it already plays in front of vm-manager. An instance calls
-the frontend's `/api/email/*` endpoints with a **Keycloak
-client-credentials** token: each instance is provisioned with its own
-confidential client in the `openhost-customers` realm (aud
-`openhost-email`, a `subdomain` claim = the instance's zone), injected at
-finalize time (see [Provisioning](#provisioning)), exactly mirroring the
-cert-api pattern.
-
-The frontend verifies the token locally against the realm's JWKS, reads
-the `subdomain` claim, and proxies to the private backend over 6PN with a
-trusted `X-OpenHost-Zone` header. The backend derives the sending domain
-from that header — not from anything the instance asserts in the message
-— which is what anchors From-domain enforcement. The header is
-trustworthy only because the backend is unreachable except from the
-frontend over the private network. Revoking a single instance is a matter
-of disabling its Keycloak client; there is no shared secret to rotate.
-
-### Abuse controls
-
-Because the backend is the only way out and the frontend is the only way
-in, that pair is where all multi-tenant safety lives:
-
-- **From-domain enforcement.** The proxy rejects any message whose
-  envelope-from or header-from is not within the instance's own
-  (Keycloak-attested) zone. An instance can only ever send as
-  `*@<its-own-zone>`. This cannot be enforced on the instance itself —
-  only a party the tenant cannot bypass can enforce it.
-- **Per-instance rate and volume caps**, so one tenant cannot consume
-  the shared SES quota at the expense of others.
-- **Reputation isolation.** Each instance (or cohort) is assigned a
-  distinct SES **configuration set**, so bounce/complaint reputation is
-  tracked per tenant and a bad actor's damage is contained; dedicated
-  IPs can be assigned where needed.
-- **Suppression and bounce/complaint handling**, maintained centrally so
-  no instance can repeatedly hammer a bad address.
-- **Automatic suspension** of an instance whose bounce/complaint rate
-  crosses a threshold — per-instance, without affecting anyone else.
+- **From-domain enforcement.** A message whose envelope-from or header-from is outside the instance's attested zone is rejected. An instance can only send as `*@<its-own-zone>`. This can't be enforced on the instance itself — only a party the tenant can't bypass can enforce it.
+- **Per-instance rate and volume caps**, so one tenant can't consume the shared quota at others' expense.
+- **Reputation isolation** per tenant, so a bad actor's bounce/complaint damage is contained.
+- **Suppression and bounce/complaint handling**, maintained centrally.
+- **Automatic per-instance suspension** when a bounce/complaint rate crosses a threshold, without affecting anyone else.
 
 ## DNS records (CoreDNS)
 
-Each instance is authoritative for its own zone via CoreDNS (see
-[Routing](./routing.md)). The email deliverability records are written
-into that zone **automatically** — there is a single mechanism, no
-per-provider connectors:
+Each instance is authoritative for its own zone via CoreDNS (see [Routing](./routing.md)). The deliverability records are written automatically — one mechanism, no per-provider connectors:
 
-- **SPF** authorizing SES to send for the zone (outbound always relays via SES).
-- **DKIM** public keys (the tokens the SES proxy obtained when creating
-  the domain identity) so signed mail aligns.
+- **SPF** authorizing the relay to send for the zone.
+- **DKIM** public keys so signed mail aligns.
 - **DMARC** policy for the zone.
-- **MX** for inbound, always pointing at the instance's own mail host
-  (`mail.<zone>`, whose A record CoreDNS also publishes → the instance's public
-  IP), so mail is delivered straight to Stalwart on port 25. Inbound never
-  traverses OpenHost infrastructure, so the platform can never read a tenant's
-  mail. (There is no SES-inbound mode; only outbound goes through SES.)
+- **MX** for inbound, always pointing at the instance's own mail host (`mail.<zone>`, whose A record CoreDNS also publishes → the instance's public IP), so mail is delivered straight to Stalwart on port 25.
 
-Because these are persistent zone records (unlike the transient
-ACME-challenge records), they are written as part of the zone's base
-configuration so they survive router restarts, and the ACME-challenge
-cleanup is scoped so that it never removes them.
+These are persistent zone records, so they're written as part of the zone's base config (surviving router restarts), and the ACME-challenge cleanup is scoped so it never removes them.
 
 ### Bring-your-own domain (one NS record)
 
-A `<name>.selfhost.imbue.com` address works out of the box because the
-parent zone already delegates each subzone to the instance's CoreDNS.
+A `<name>.selfhost.imbue.com` address works out of the box, since the parent zone already delegates each subzone to the instance's CoreDNS.
 
-To use a **custom domain** (e.g. `me@mydomain.com`), the owner sets
-`email_custom_domain` on the instance and adds a **single NS record** at
-their registrar delegating that (sub)zone to the instance's CoreDNS — the
-same delegation model selfhost already uses. The exact record is surfaced
-by `Config.custom_domain_delegation_record()`:
+For a **custom domain** (e.g. `me@mydomain.com`), the owner sets `email_custom_domain` and adds a **single NS record** at their registrar delegating that (sub)zone to the instance's CoreDNS — the same delegation model selfhost uses. The exact record comes from `Config.custom_domain_delegation_record()`:
 
 ```
 mail.mydomain.com.   NS   ns.<zone>.
 ```
 
-The nameserver host (`ns.<zone>`) already resolves to the instance's public
-IP within its built-in zone, so this one record is all that is required —
-there is nothing else to copy from the registrar side.
+`ns.<zone>` already resolves to the instance's public IP, so that one record is all that's needed. The instance then serves the custom domain as a second authoritative zone and publishes the same SPF/DKIM/DMARC/MX records into it. Sending is authorized end-to-end because the NS delegation proves the owner controls the domain and the provider verifies the identity via the published DKIM records. The instance's authorized custom domain is supplied centrally, never asserted by the instance, so the From-domain boundary holds.
 
-Once set, the instance serves the custom domain as a **second authoritative
-zone** (`start_coredns` renders an extra CoreDNS server block + a
-`zonefile.custom`), and `provision_email_records` creates a second SES
-identity for it and publishes the same SPF/DKIM/DMARC/MX records into that
-zone. Sending from the custom domain is authorized end-to-end because (a)
-the NS delegation to *this* instance is proof the owner controls the
-domain, and (b) SES verifies the identity via the published DKIM records
-before it will send. The email proxy is told the instance's authorized
-custom domain by the frontend (never by the instance itself), so the
-multi-tenant From-domain boundary is preserved.
-
-Recommendation: delegate a **subdomain** (e.g. `mail.mydomain.com`)
-rather than the apex, so OpenHost only becomes authoritative for the mail
-subzone and the owner keeps their existing website/DNS untouched.
-Delegating the apex is possible for owners who want OpenHost to serve all
-of their DNS, but it is a bigger commitment and makes the instance's
-CoreDNS load-bearing for the whole domain.
+Recommendation: delegate a **subdomain** (e.g. `mail.mydomain.com`) rather than the apex, so OpenHost is only authoritative for the mail subzone and the owner's existing website/DNS is untouched.
 
 ## Receiving mail
 
-Inbound mail is **always** delivered directly to the instance's own mail
-server — it never traverses OpenHost infrastructure, so the platform can never
-read a tenant's mail. The zone's MX points at the instance (`mail.<zone>`, whose
-A record CoreDNS publishes → the instance's public IP), so a sender's MX
-connects straight to Stalwart on port 25. Only **outbound** flows through the
-central SES relay (see
-[The email relay](#the-email-relay-frontend--private-backend)).
+Inbound is **always** delivered directly to the instance's own mail server; it never traverses OpenHost infrastructure, so the platform can't read a tenant's mail. The zone's MX points at the instance (`mail.<zone>` → its public IP), so a sender's MX connects straight to Stalwart on port 25. Only **outbound** goes through the central relay.
 
-This works because the instances OpenHost provisions accept inbound SMTP on port
-25. There is deliberately **no** SES-based inbound path or "managed" inbound
-mode: routing a tenant's incoming mail through OpenHost-operated infrastructure
-would let the platform read that mail, which the design forbids. (The earlier
-SES receiving → S3 → SNS → proxy → instance path has been removed from the
-proxy, the frontend, and the mailbox app.)
+There is deliberately **no** managed/relayed inbound mode: routing incoming mail through OpenHost-operated infrastructure would let the platform read it, which the design forbids.
 
 ## The mailbox and webmail apps
 
-The mailbox server (SMTP + JMAP with local storage) and the webmail
-client ship as **default OpenHost apps**. Keeping them as apps means mail
-data lives on the operator's own zone (not in a central store), and the
-implementation can iterate without a platform release.
+The mailbox server (SMTP + JMAP with local storage) and the webmail client ship as **default apps**. Keeping them as apps means mail data lives on the operator's own zone, and they can iterate without a platform release.
 
-- The mailbox server relays outbound mail to the SES proxy (as a
-  smarthost client) and receives inbound mail directly on port 25 (the
-  zone's MX points at the instance).
-- The mailbox server exposes its JMAP interface as a
-  [cross-app service](./cross_app_services.md); the webmail app
-  *consumes* that service.
+- The mailbox server relays outbound through the smarthost and receives inbound directly on port 25.
+- It exposes its JMAP interface as a [cross-app service](./cross_app_services.md); the webmail app consumes that service.
 
 ## Access control — who can read the mail
 
-Isolation has three layers; keep them distinct.
+Three layers, kept distinct:
 
-1. **Between instances (structural).** Each instance is a separate VM
-   with its own mailbox server and its own storage, so one instance
-   physically cannot read another's mail. Inbound mail is delivered
-   directly to the destination instance (its zone's MX points at it), so
-   it never passes through any shared component.
-   This is the same isolation that already separates every OpenHost zone
-   — nothing new is built for it.
+1. **Between instances (structural).** Each instance is a separate VM with its own mailbox and storage, so one instance physically can't read another's mail. Inbound goes directly to the destination instance, never through a shared component. This is the same isolation that already separates every OpenHost zone.
 
-2. **Within an instance, single owner (the common case).** Access to the
-   webmail app and the mailbox is gated by **OpenHost owner
-   authentication**: the router only stamps `X-OpenHost-Is-Owner: true`
-   for the authenticated zone owner; everyone else is bounced to the zone
-   login. A small proxy in front of the mailbox server validates the
-   consuming app's permission grant, **strips any client-supplied
-   credentials, and injects the owner's mailbox credentials** before
-   forwarding. The webmail app never sees a mail password; the mail
-   account's own password is internal and never user-facing. Access is
-   governed entirely by OpenHost auth, not by knowledge of a mail
-   password.
+2. **Within an instance, single owner (the common case).** The webmail app and mailbox are gated by OpenHost owner authentication: the router only stamps `X-OpenHost-Is-Owner: true` for the authenticated owner; everyone else is bounced to login. A proxy in front of the mailbox server strips any client-supplied credentials and injects the owner's mailbox credentials before forwarding, so the webmail app never sees a mail password.
 
-3. **Within an instance, multiple users (out of scope for now).** The
-   current owner-auth model is binary — owner or not-owner — so every
-   party who authenticates as the owner sees the same mailbox. Giving
-   several distinct users on one zone their own private mailboxes would
-   require mapping each authenticated OpenHost user to a specific mailbox
-   in the JMAP proxy, which depends on OpenHost's federated-identity work
-   and is not addressed here.
+3. **Within an instance, multiple users (out of scope for now).** Owner-auth is binary today, so everyone who authenticates as the owner sees the same mailbox. Per-user mailboxes would require mapping each authenticated OpenHost user to a specific mailbox, which depends on OpenHost's federated-identity work.
 
 ## Provisioning
 
-Per-instance email configuration is injected at **finalize time**,
-alongside the existing certificate-broker configuration:
-
-- the instance's **Keycloak credential** (client id/secret) for the SES
-  proxy,
-- the proxy's base URL,
-- and the zone's mail settings.
-
-At provision, the SES proxy creates the SES domain identity and the DKIM
-tokens are published into CoreDNS along with SPF/DMARC/MX; the proxy
-polls SES until the domain verifies. For a `selfhost` subdomain this is
-fully automatic. For a custom domain, the one manual step is the user's
-NS delegation; everything after that is automatic.
+Per-instance email config is injected at **finalize time**, alongside the cert-broker config: the instance's Keycloak credential, the email API base URL, and the zone's mail settings. At provision, the provider domain identity is created and the DKIM tokens are published into CoreDNS with SPF/DMARC/MX, then verified once they resolve. For a `selfhost` subdomain this is fully automatic; for a custom domain the one manual step is the owner's NS delegation.
 
 ### Upgrading an existing instance (turning email on)
 
-Email is designed so an instance that already exists (provisioned before email,
-or with email off) can be upgraded with minimal action, because it reuses what
-cert-api already gave it:
+An instance provisioned before email (or with email off) can be upgraded with minimal action, because it reuses what cert-api already gave it:
 
-- **Keycloak credentials inherit from cert-api.** The instance's `email_keycloak_*`
-  resolve from its `cert_api_keycloak_*` client when not explicitly set, so no new
-  per-instance credential is minted or injected. The only server-side Keycloak
-  action is attaching the `openhost-email` audience scope to that existing client —
-  done idempotently by vm-manager's back-fill endpoint
-  `POST /api/instance/<name>/enable-email-scope` (no re-mint, no SSH).
+- **Keycloak credentials inherit from cert-api.** `email_keycloak_*` resolve from `cert_api_keycloak_*` when not set, so no new credential is minted. The only server-side action is attaching the `openhost-email` audience scope to that existing client — done idempotently by vm-manager's `POST /api/instance/<name>/enable-email-scope` (no re-mint, no SSH).
 - **public_ip is already present** on any CoreDNS instance.
-- **The one value to add is `email_proxy_base_url`** (the email frontend URL,
-  deployment-wide). Once it is in the instance config, `email_enabled` derives to
-  true and, on the next router boot, the instance auto-publishes its email DNS,
-  auto-deploys the mailbox + webmail apps, and fetches its relay credential at
-  runtime — no manual app installs.
+- **The one value to add is `email_proxy_base_url`.** Once it's in the config, `email_enabled` derives true and, on the next router boot, the instance auto-publishes its DNS, auto-deploys the mailbox + webmail apps, and fetches its relay credential at runtime.
 
-So the upgrade is: (1) vm-manager attaches the email scope to the instance's
-client, (2) the instance gets `email_proxy_base_url` in its config (via a
-re-deploy/config render), (3) reboot the router. Everything downstream is
-automatic and reboot-safe.
+So the upgrade is: (1) attach the email scope to the instance's client, (2) add `email_proxy_base_url` to its config, (3) reboot the router. Everything downstream is automatic and reboot-safe.
 
 ## Trust and failure model
 
-- **An instance can only send as its own zone**, enforced by the proxy
-  from the Keycloak-attested identity.
-- **An instance cannot damage others' deliverability** — reputation is
-  isolated per SES configuration set; abuse triggers per-instance
-  suspension only.
-- **An instance holds no AWS credentials** — it authenticates to the
-  proxy with a per-instance, individually-revocable Keycloak credential.
-- **Proxy unavailability is fail-safe** — outbound mail queues on the
-  instance's mailbox server and retries; inbound is unaffected because it is
-  delivered directly to the instance (a sending MX retries per normal SMTP).
-- **Mail data stays on the instance** — the proxy relays and enforces
-  policy but is not the mail store.
-
-## Summary
-
-| Concern | Where it lives | Why |
-|---------|----------------|-----|
-| Outbound relay + spam/abuse | Central SES proxy (fly.io) → AWS SES | Port 25 blocked; reputation is shared |
-| Request auth | Keycloak (cert-api pattern) | Per-instance, revocable; anchors From-enforcement |
-| From-domain safety | Central SES proxy | Only the proxy can enforce it against an untrusted tenant |
-| SES identity + verification | Central SES proxy | SES won't send for an unverified domain |
-| DKIM/SPF/DMARC/MX | CoreDNS (auto) | Instance owns its zone |
-| Custom domains | Optional NS delegation → CoreDNS | Seamless BYO-domain via one record |
-| Inbound receive | Always direct to instance (MX → instance, Stalwart :25) | Instances accept inbound 25; never routed through OpenHost, so the platform can't read tenant mail |
-| Mailbox store + webmail | Default apps | Mail data stays on the operator's zone; iterate freely |
-| Read access (single owner) | OpenHost owner auth + JMAP proxy | App never sees mail credentials |
+- **An instance can only send as its own zone**, enforced centrally from the Keycloak-attested identity.
+- **An instance can't damage others' deliverability** — reputation is isolated per tenant; abuse triggers per-instance suspension only.
+- **An instance holds no provider credentials** — it authenticates with a per-instance, individually-revocable Keycloak credential.
+- **Relay unavailability is fail-safe** — outbound queues on the mailbox server and retries; inbound is unaffected because it's delivered directly (a sending MX retries per normal SMTP).
+- **Mail data stays on the instance** — the relay enforces policy but is not the mail store.
 
 ## What is implemented today
 
-- **Platform (this repo):** `email_*` config (no flag — enabled when its
-  prerequisites are present), CoreDNS publishing of SPF/DKIM/DMARC/MX
-  (`core/dns.py:apply_email_records`),
-  a `clear_txt` fix that no longer wipes email TXT records on cert renewal, the
-  proxy/frontend client + startup provisioning (`core/email/`), the scoped
-  `/api/email/relay-config` router endpoint, and finalize-time config injection
-  (`ansible/templates/config.toml.j2`), including the always-direct inbound MX/A
-  rendering (MX → `mail.<zone>` → the instance's public IP).
-- **Proxy (`openhost-email-proxy`):** outbound-only. SMTP submission relay
-  (per-instance HMAC credential) + `/v1/send`, From-domain enforcement,
-  per-instance rate/volume caps, and SES identity create/verify. Inbound (the
-  old SNS/S3 webhook) has been removed; inbound is delivered directly to the
-  instance's Stalwart on port 25.
-- **Mailbox + webmail apps:** `openhost-stalwart-email-server` (relays outbound
-  through the SMTP smarthost using the fetched relay-config; receives inbound on
-  :25) and `openhost-bulwark-email-client` (consumes Stalwart's JMAP service).
+- **Platform (this repo):** `email_*` config (no flag — on when its prerequisites are present), CoreDNS publishing of SPF/DKIM/DMARC/MX (`core/dns.py:apply_email_records`), an ACME-cleanup fix that no longer wipes email TXT records on cert renewal, the email API client + startup provisioning (`core/email/`), the scoped `/api/email/relay-config` endpoint, and finalize-time config injection (`ansible/templates/config.toml.j2`), including the always-direct inbound MX/A rendering.
+- **Mailbox + webmail apps:** `openhost-stalwart-email-server` (relays outbound through the smarthost using the fetched relay-config; receives inbound on :25) and `openhost-bulwark-email-client` (consumes Stalwart's JMAP service).
 
-Verified end-to-end on a fresh instance: it auto-published its DNS records, SES
-auto-verified the domain from those records, and the instance sent DKIM-signed
-mail through the proxy to a real external inbox. From-domain enforcement,
-audience/issuer checks, and rate limiting are covered by tests.
+Verified end-to-end on a fresh instance: it auto-published its DNS records, the domain auto-verified, and the instance sent DKIM-signed mail to a real external inbox. From-domain enforcement, audience/issuer checks, and rate limiting are covered by tests.
 
 ## Production readiness
 
-Before enabling email for real tenants, the following must be done. These are
-deliberately **not** in scope of the initial implementation (they are
-operational / infrastructure decisions or depend on other teams):
+Deliberately out of scope for the initial implementation (operational/infrastructure decisions or dependencies on other teams):
 
-1. **AWS SES production access.** The account is in the SES sandbox, which only
-   sends to verified recipients and caps volume. Request production access for
-   the production AWS account/region before any real sending.
-2. **A dedicated production AWS account.** Testing used a personal-scope account
-   with inline IAM keys. Production should use a dedicated imbue AWS account, an
-   IAM role/policy scoped to exactly the SES actions the proxy needs (outbound
-   send + identity management), and credentials delivered as fly secrets (never
-   committed).
-3. **The `openhost-email` Keycloak client scope.** vm-manager mints the
-   per-instance client and attaches this scope, but the scope itself (a
-   `subdomain` user-attribute mapper + an Audience mapper for
-   `aud: openhost-email`, attached as Default) must be created by hand in the
-   `openhost-customers` realm, exactly like the existing `cert-api` scope.
-   vm-manager fails the provision with a clear error if the scope is missing.
-   Testing used a throwaway Keycloak; production points `email_keycloak_issuer_url`
-   at the real realm.
-4. **Turn the feature on end-to-end.** In the frontend (imbue-hosted-spaces) set
-   `IMBUE_EMAIL_BACKEND_URL` (the proxy's 6PN URL), `IMBUE_EMAIL_INSTANCE_ISSUER`
-   (the `openhost-customers` realm), and `IMBUE_EMAIL_SMTP_HOST`/`_PORT` (the
-   proxy's public submission endpoint). In vm-manager Settings set
-   `email_proxy_base_url` (→ the frontend's public URL, since the instance calls
-   the frontend for identity + relay-config); that alone turns email on for new
-   instances (there is no separate toggle). Until it is set, provisioned
-   instances simply come up without email.
-5. **Per-instance email authorization.** The frontend currently authenticates
-   the instance but does not gate *which* instances may use email — any
-   authenticated instance can. The per-instance `email_enabled` flag in the
-   frontend DB (fail-closed) is a pending, separate change.
-6. **Custom-domain inbound in the mailbox app.** Stalwart only marks its default
-   zone domain as local at first boot and does not learn a configured custom
-   mail domain, so inbound for a BYO custom domain would be rejected as non-local
-   even though DNS/SES are set up for it. Outbound from the custom domain and
-   default-subdomain inbound both work; custom-domain inbound needs the mailbox
-   app to be told its custom domain.
-7. **Proxy scaling / shared stores.** The proxy runs a single fly machine
-   because the rate-limiter (and the custom-domain grant store) are in-process /
-   file-backed. Multi-machine HA needs a shared store (e.g. Redis/DynamoDB).
-   Same constraint as cert-api.
-8. **SES configuration sets per tenant.** Reputation isolation via per-tenant
-   configuration sets (and dedicated IPs where warranted) plus bounce/complaint
-   handling and a suppression list should be provisioned before scale.
-9. **DMARC policy + reporting.** The default published policy is
-   `p=quarantine`; decide the production policy and a `rua` aggregate-report
-   address per zone (config supports `email_dmarc_rua`).
-10. **Canonical proxy URL + config defaults.** Point `email_proxy_base_url` at
-     the production frontend; consider a default once it has a stable DNS name.
+1. **Provider production access.** Move the upstream provider out of its sandbox and request production sending access before any real sending.
+2. **A dedicated production provider account** with an IAM role/policy scoped to exactly the actions the relay needs, credentials delivered as secrets (never committed).
+3. **The `openhost-email` Keycloak client scope.** vm-manager mints the per-instance client and attaches this scope, but the scope itself (a `subdomain` mapper + an audience mapper for `aud: openhost-email`) must be created by hand in the `openhost-customers` realm, like the existing cert-api scope. vm-manager fails the provision with a clear error if it's missing.
+4. **Turn the feature on end-to-end.** Set the deployment-wide email API URL as `email_proxy_base_url` in vm-manager Settings; that alone turns email on for new instances. Until it's set, provisioned instances come up without email.
+5. **Per-instance email authorization.** The API authenticates the instance but does not yet gate *which* instances may use email; a fail-closed per-instance flag is a pending, separate change.
+6. **Custom-domain inbound in the mailbox app.** Stalwart marks only its default zone domain as local at first boot, so inbound for a BYO custom domain is rejected as non-local. Outbound from the custom domain and default-subdomain inbound both work; custom-domain inbound needs the mailbox app to be told its custom domain.
+7. **Relay scaling / shared stores.** The relay runs a single machine because its rate-limiter and grant store are in-process/file-backed. Multi-machine HA needs a shared store. Same constraint as cert-api.
+8. **Per-tenant reputation isolation** (configuration sets, dedicated IPs where warranted) plus bounce/complaint handling and a suppression list, before scale.
+9. **DMARC policy + reporting.** Default policy is `p=quarantine`; decide the production policy and a `rua` aggregate-report address per zone (`email_dmarc_rua`).
+10. **Canonical API URL + config defaults.** Point `email_proxy_base_url` at the production URL; consider a default once it has a stable DNS name.

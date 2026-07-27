@@ -150,57 +150,32 @@ class Config:
     cert_api_keycloak_client_secret: str | None
 
     ## Email
-    # Email is enabled automatically when its prerequisites are present — there is
-    # no separate on/off flag.  ``email_enabled`` (a derived property below) is
-    # True iff the proxy URL, the per-instance Keycloak client-credentials, and
-    # the instance's public IP are all set.  Provisioning supplies those whenever
-    # the operator has email infrastructure configured; when they are absent the
-    # instance simply runs without email (no boot failure).  This makes a
-    # freshly-provisioned instance "just have working email" with zero flags,
-    # while degrading gracefully in environments where the email infra isn't
-    # stood up.
-    # Base URL of the email API (the imbue-hosted-spaces frontend, the
-    # authenticated public door), e.g. "https://openhost.imbue.com".  The instance
-    # calls the frontend's /api/email/* endpoints; the frontend authenticates this
-    # instance and proxies to the private email backend over 6PN.
+    # Email has no on/off flag: it is enabled automatically when its prerequisites are present. The derived
+    # ``email_enabled`` property is True iff the proxy URL, the per-instance Keycloak client-credentials, and the
+    # public IP are all set. Provisioning supplies these when email infra is configured; otherwise the instance runs
+    # without email (no boot failure).
+    # Base URL of the email API, e.g. "https://openhost.imbue.com". The instance calls its /api/email/* endpoints.
     email_proxy_base_url: str | None
-    # Keycloak client-credentials for the email proxy.  Reuses the same per-instance
-    # confidential client as cert_api when present, but kept as distinct fields so
-    # email can be enabled independently.  Issuer is the openhost-customers realm.
+    # Keycloak client-credentials for the email API. Reuses the same per-instance client as cert_api when present, but
+    # kept as distinct fields so email can be enabled independently.
     email_keycloak_issuer_url: str | None
     email_keycloak_client_id: str | None
     email_keycloak_client_secret: str | None
-    # Inbound mail is ALWAYS delivered directly to this instance's own mail
-    # server: the zone's MX points at the instance (mail.<zone> -> public_ip) and
-    # Stalwart receives on port 25.  Mail is never routed through OpenHost
-    # infrastructure inbound, so the platform can never read a tenant's mail.
-    # (Outbound still relays through the central proxy -> SES, which owns the
-    # shared sending reputation.)  This requires inbound port 25 be reachable,
-    # which holds for the instances OpenHost provisions.
+    # Inbound mail is ALWAYS delivered directly to this instance: MX points at mail.<zone> -> public_ip and the mail
+    # server receives on port 25, so inbound never traverses OpenHost infra and the platform cannot read tenant mail.
+    # Outbound relays through the central proxy -> SES. Requires inbound port 25 be reachable.
     # Optional DMARC aggregate-report address published in the _dmarc record.
     email_dmarc_rua: str | None
-    # Optional custom mail domain the owner delegated to this instance's CoreDNS
-    # with a single NS record (e.g. "mail.mydomain.com").  When set, the instance
-    # serves it as a second authoritative zone and publishes the same
-    # SPF/DKIM/DMARC/MX records into it, so the owner can send/receive as that
-    # domain in addition to the built-in <zone> subdomain.  The NS delegation to
-    # this instance is itself the proof of control; the SES identity's DKIM
-    # verification is the second proof.
+    # Optional custom mail domain the owner delegated to this instance's CoreDNS with a single NS record (e.g.
+    # "mail.mydomain.com"). When set, the instance serves it as a second authoritative zone and publishes the same
+    # SPF/DKIM/DMARC/MX records, so mail can send/receive as that domain in addition to the built-in <zone> subdomain.
     email_custom_domain: str | None
-    # App name(s) allowed to fetch the SMTP relay config from
-    # /api/email/relay-config.  The relay host/port + per-instance credential are
-    # NOT stored on the instance: the router fetches them at runtime from the
-    # frontend (which has the backend derive HMAC(RELAY_SECRET, zone)), so nothing
-    # email-specific is baked into instance config and rotating RELAY_SECRET needs
-    # no re-provisioning.  The endpoint is scoped to these mailbox app names so the
-    # credential only reaches the mailbox app.
+    # App name(s) allowed to fetch the SMTP relay config from /api/email/relay-config. The relay credential is not
+    # stored on the instance; it is fetched at runtime and the endpoint is scoped to these mailbox app names.
     email_mailbox_app_names: list[str]
-    # Default apps (bare dirnames or remote git URLs, same as ``default_apps``)
-    # auto-deployed ONLY when email is enabled — the mailbox server + webmail
-    # client that give the instance a real inbox/outbox.  Kept separate from
-    # ``default_apps`` so an instance without email does not ship a mailbox; they
-    # are appended to the deployed set by ``effective_default_apps`` when
-    # ``email_enabled`` is True (i.e. when the email prerequisites are present).
+    # Default apps (bare dirnames or remote git URLs, same as ``default_apps``) auto-deployed ONLY when email is
+    # enabled — the mailbox server + webmail client. Kept separate from ``default_apps`` so a non-email instance has
+    # no mailbox; appended by ``effective_default_apps`` when ``email_enabled`` is True.
     email_default_apps: list[str]
 
     ## coredns (only really needed if acquiring TLS certs via DNS-01, or if using NS dns records)

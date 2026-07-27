@@ -1,12 +1,8 @@
 """HTTP client for the email API.
 
-The instance calls the imbue-hosted-spaces frontend (the authenticated public
-door), NOT the private email backend directly — the backend is only reachable
-over Fly's 6PN network. The frontend validates this instance's Keycloak token,
-derives its zone, and proxies to the private backend. This client presents a
-Keycloak bearer (via the shared KeycloakTokenProvider) and calls the frontend's
-``/api/email/*`` endpoints; the instance uses it at startup to create its SES
-domain identity and learn the DKIM CNAME records to publish in CoreDNS.
+Presents a Keycloak bearer (via the shared KeycloakTokenProvider) and calls the
+email API's ``/api/email/*`` endpoints. The instance uses it at startup to create
+its SES domain identity and learn the DKIM CNAME records to publish in CoreDNS.
 """
 
 from __future__ import annotations

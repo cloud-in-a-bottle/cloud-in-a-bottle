@@ -10,7 +10,7 @@ from compute_space.core.dns import DkimCname
 from compute_space.core.dns import TxtRecord
 from compute_space.core.dns import append_txt_records
 from compute_space.core.dns import apply_email_records
-from compute_space.core.dns import clear_txt
+from compute_space.core.dns import clear_acme_challenge_records
 
 
 def _write_zonefile(path: Path, serial: int = 100) -> None:
@@ -97,18 +97,18 @@ def test_append_txt_records_writes_absolute_fqdn_names_verbatim(tmp_path: Path) 
     assert "app.example.com.app.example.com" not in content
 
 
-def test_clear_txt_removes_acme_records(tmp_path: Path) -> None:
+def test_clear_acme_challenge_records_removes_acme_records(tmp_path: Path) -> None:
     zonefile = tmp_path / "zonefile"
     _write_zonefile(zonefile)
     append_txt_records(zonefile, [TxtRecord(record_name="_acme-challenge.app.example.com.", record_value="v")])
 
-    clear_txt(zonefile)
+    clear_acme_challenge_records(zonefile)
 
     assert "IN TXT" not in zonefile.read_text()
 
 
-def test_clear_txt_preserves_email_txt_records(tmp_path: Path) -> None:
-    # clear_txt runs on every cert renewal; it must remove ACME challenges but
+def test_clear_acme_challenge_records_preserves_email_txt_records(tmp_path: Path) -> None:
+    # clear_acme_challenge_records runs on every cert renewal; it must remove ACME challenges but
     # NOT the persistent SPF/DMARC TXT records, or mail would break on renewal.
     zonefile = tmp_path / "zonefile"
     _write_zonefile(zonefile)
@@ -122,7 +122,7 @@ def test_clear_txt_preserves_email_txt_records(tmp_path: Path) -> None:
     )
     append_txt_records(zonefile, [TxtRecord(record_name="_acme-challenge", record_value="challenge")])
 
-    clear_txt(zonefile)
+    clear_acme_challenge_records(zonefile)
 
     content = zonefile.read_text()
     # ACME challenge gone...

@@ -5,8 +5,8 @@ This module writes and updates the zone file. CoreDNS watches for SOA serial
 changes and auto-reloads.
 
 For DNS-01 ACME challenges, the router calls append_txt_records() to add TXT
-records, waits for CoreDNS to pick them up, then calls clear_txt() after the cert
-is issued.
+records, waits for CoreDNS to pick them up, then calls
+clear_acme_challenge_records() after the cert is issued.
 """
 
 from __future__ import annotations
@@ -332,9 +332,9 @@ def append_txt_records(zone_file_path: Path, records: list[TxtRecord]) -> None:
 
 
 # ACME DNS-01 challenge TXT records are always published at this owner name
-# (relative to the zone $ORIGIN, or as the absolute FQDN). clear_txt scopes its
-# removal to these so it never deletes persistent email TXT records (SPF at the
-# apex, DMARC at _dmarc) that share the "IN TXT" shape.
+# (relative to the zone $ORIGIN, or as the absolute FQDN). clear_acme_challenge_records
+# scopes its removal to these so it never deletes persistent email TXT records (SPF
+# at the apex, DMARC at _dmarc) that share the "IN TXT" shape.
 _ACME_CHALLENGE_LABEL = "_acme-challenge"
 
 
@@ -351,7 +351,7 @@ def _is_acme_challenge_txt(line: str) -> bool:
     return owner == _ACME_CHALLENGE_LABEL or owner.startswith(_ACME_CHALLENGE_LABEL + ".")
 
 
-def clear_txt(zone_file_path: Path) -> None:
+def clear_acme_challenge_records(zone_file_path: Path) -> None:
     """Remove ACME-challenge TXT records from the zone file and bump the SOA serial.
 
     Only ``_acme-challenge`` TXT records are removed; persistent email records

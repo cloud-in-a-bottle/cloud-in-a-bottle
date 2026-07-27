@@ -61,7 +61,7 @@ def provision_email_records(config: Config) -> None:
             with EmailProxyClient.create(config.email_proxy_base_url, token_provider) as client:
                 # Built-in zone: the proxy defaults to the caller's zone when no
                 # domain is passed.
-                _provision_zone(
+                _ensure_identity_and_publish_records(
                     config,
                     client,
                     domain=config.zone_domain_no_port,
@@ -77,7 +77,7 @@ def provision_email_records(config: Config) -> None:
                             f"Custom mail domain {custom_domain}: ensure this single NS record is set "
                             f"at the registrar to delegate it to this instance:  {delegation.as_display_line()}"
                         )
-                    _provision_zone(
+                    _ensure_identity_and_publish_records(
                         config,
                         client,
                         domain=custom_domain,
@@ -92,7 +92,7 @@ def provision_email_records(config: Config) -> None:
         return
 
 
-def _provision_zone(
+def _ensure_identity_and_publish_records(
     config: Config,
     client: EmailProxyClient,
     *,
