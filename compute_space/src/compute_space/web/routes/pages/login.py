@@ -34,7 +34,7 @@ def _validated_next(next_url: str, config: Config) -> str | None:
     parsed = urlparse(next_url)
     if not parsed.scheme and not parsed.netloc:
         return next_url
-    if config.match_domain(parsed.netloc) is not None:
+    if parsed.hostname is not None and config.match_domain(parsed.hostname) is not None:
         return next_url
     return None
 

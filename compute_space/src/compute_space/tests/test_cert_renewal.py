@@ -10,10 +10,15 @@ from cryptography.hazmat.primitives.asymmetric import ec
 from compute_space.config import Config
 from compute_space.config import DefaultConfig
 from compute_space.config import Domain
+from compute_space.core.domain_store import get_record
+from compute_space.core.domain_store import seed_domains
 from compute_space.core.tls.renewal import RENEW_BEFORE
 from compute_space.core.tls.renewal import CertStatus
+from compute_space.core.tls.renewal import _sync_cert_statuses
 from compute_space.core.tls.renewal import get_cert_status
 from compute_space.core.tls.renewal import renew_cert_if_needed
+from compute_space.db.versioned import apply_migrations
+from compute_space.tests.conftest import _make_test_config
 
 _NOW = datetime.datetime(2026, 7, 9, tzinfo=datetime.UTC)
 
@@ -176,3 +181,29 @@ def test_renew_isolates_a_failing_secondary(tmp_path: Path) -> None:
     assert renewed is True
     assert acquired == ["good.example.com"]  # bad one failed but didn't abort the loop
     assert calls == ["restart"]
+
+
+def test_sync_cert_statuses_marks_primary_active_when_cert_present(tmp_path: Path) -> None:
+    # The primary is seeded 'none' (its legacy cert predates the domains table); once its cert is on
+    # disk, the boot-time sync reconciles the stored column to 'active' to match the dashboard.
+    cfg = _make_test_config(tmp_path, zone_domain="host.example.com", tls_enabled=True)
+    apply_migrations(cfg.db_path)
+    seed_domains(cfg, Domain("host.example.com", tls=True), [])
+    assert get_record(cfg, "host.example.com").cert_status == "none"
+
+    # far-future not_valid_after => OK against real 'now' (the sync doesn't inject a clock)
+    _write_self_signed_cert(cfg.tls_cert_path, cfg.tls_key_path, datetime.datetime(2100, 1, 1, tzinfo=datetime.UTC))
+    _sync_cert_statuses(cfg)
+
+    assert get_record(cfg, "host.example.com").cert_status == "active"
+
+
+def test_sync_cert_statuses_leaves_domain_without_cert_alone(tmp_path: Path) -> None:
+    # No cert on disk => the stored status is not touched (stays 'none' for the add-flow to drive).
+    cfg = _make_test_config(tmp_path, zone_domain="host.example.com", tls_enabled=True)
+    apply_migrations(cfg.db_path)
+    seed_domains(cfg, Domain("host.example.com", tls=True), [])
+
+    _sync_cert_statuses(cfg)
+
+    assert get_record(cfg, "host.example.com").cert_status == "none"

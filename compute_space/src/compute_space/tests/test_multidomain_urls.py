@@ -51,6 +51,16 @@ def test_validated_next_rejects_foreign_domain() -> None:
     assert _validated_next("https://evil.example.org/phish", _cfg()) is None
 
 
+def test_validated_next_rejects_userinfo_host_spoof() -> None:
+    # `host.example.com:1@evil.com` navigates to evil.com; the port before `@` must not fool
+    # the domain match (regression: matching on netloc split the userinfo at the first colon).
+    cfg = _cfg()
+    assert _validated_next("https://host.example.com:1@evil.com/phish", cfg) is None
+    assert _validated_next("https://myapp.host.example.com@evil.com/phish", cfg) is None
+    # userinfo in front of a real configured host still resolves to that host, so it's allowed.
+    assert _validated_next("https://evil.com@host.example.com/x", cfg) == "https://evil.com@host.example.com/x"
+
+
 # --- cookies: scoped + Secure per arriving domain ---------------------------------
 
 

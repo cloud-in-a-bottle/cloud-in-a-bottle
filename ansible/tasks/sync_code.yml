@@ -6,6 +6,9 @@
 # Pass -e openhost_refspec=<ref> to also fetch a ref that the commit lives on
 #   (e.g. refs/pull/N/merge), for commits not reachable from any branch.
 # Precedence: openhost_branch > openhost_commit > main.
+# NOTE: these playbooks seed the domain via first_boot.toml (no zone_domain/tls_enabled in
+# config.toml), so the ref checked out here must be new enough to read first_boot.toml — the
+# config/domains-consolidation change onward. Older refs boot with no domain. See ansible/readme.md.
 
 - name: Clone or update openhost repo
   ansible.builtin.git:
