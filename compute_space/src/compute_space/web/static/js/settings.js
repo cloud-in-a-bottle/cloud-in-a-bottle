@@ -647,9 +647,76 @@ function loadArchiveBackend() {
     });
 }
 
+// --- Connect to Imbue -------------------------------------------------------
+
+async function loadConnectImbueStatus() {
+  const section = document.getElementById('connect-imbue-section');
+  const state = document.getElementById('connect-imbue-state');
+  const btn = document.getElementById('connect-imbue-btn');
+  try {
+    const resp = await fetch('/api/settings/connect-imbue/status');
+    if (!resp.ok) return;  // feature not present; leave the section hidden
+    const data = await resp.json();
+    if (!data.available) return;  // no Imbue front door configured
+    section.style.display = '';
+    if (data.connected) {
+      state.textContent = 'Connected to Imbue.';
+      btn.textContent = 'Reconnect to Imbue';
+    } else {
+      state.textContent = 'Not connected.';
+      btn.textContent = 'Connect to Imbue';
+    }
+    btn.style.display = '';
+  } catch (e) {
+    // Non-fatal: the section just stays hidden.
+  }
+}
+
+async function connectImbue() {
+  clearError();
+  const btn = document.getElementById('connect-imbue-btn');
+  const msg = document.getElementById('connect-imbue-msg');
+  btn.disabled = true;
+  try {
+    const resp = await fetch('/api/settings/connect-imbue/start', { method: 'POST' });
+    if (!resp.ok) {
+      const err = await resp.json();
+      throw new Error(err.detail || 'failed to start');
+    }
+    const data = await resp.json();
+    // Hand off to the Imbue front door; it authenticates the owner and redirects
+    // back to this instance's callback, which persists the credential + restarts.
+    window.location.href = data.redirect_url;
+  } catch (e) {
+    btn.disabled = false;
+    msg.textContent = 'Could not start connect: ' + e.message;
+    msg.className = 'error';
+    msg.style.display = '';
+  }
+}
+
+// Surface the ?connect=ok|error result of a completed callback round-trip.
+(function showConnectResult() {
+  const params = new URLSearchParams(window.location.search);
+  const result = params.get('connect');
+  if (!result) return;
+  const msg = document.getElementById('connect-imbue-msg');
+  if (!msg) return;
+  if (result === 'ok') {
+    msg.textContent = 'Connected. The instance is restarting to apply your Imbue credential.';
+    msg.className = '';
+    msg.style.color = '#2ea043';
+  } else {
+    msg.textContent = 'Connecting to Imbue failed. Please try again.';
+    msg.className = 'error';
+  }
+  msg.style.display = '';
+})();
+
 loadOwnerUsername();
 loadRemote();
 checkForUpdates();
 updateSshStatus();
 setInterval(updateSshStatus, 5000);
 loadArchiveBackend();
+loadConnectImbueStatus();

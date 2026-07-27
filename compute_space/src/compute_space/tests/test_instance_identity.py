@@ -189,14 +189,16 @@ def test_email_enabled_via_shared_identity_only() -> None:
 
 
 def test_email_not_enabled_without_any_identity() -> None:
-    # proxy URL set but no credential resolvable anywhere -> config error (email
-    # could never authenticate).
-    with pytest.raises(ValueError, match="email cannot be enabled"):
-        DefaultConfig(
-            zone_domain="alice.host.example.com",
-            email_proxy_base_url="https://openhost.imbue.com",
-            public_ip="203.0.113.10",
-        )
+    # proxy URL set but no credential resolvable anywhere is NOT an error: it is
+    # the "front door configured, awaiting Connect to Imbue" state. Email is simply
+    # off until the connect flow supplies the credential.
+    cfg = DefaultConfig(
+        zone_domain="alice.host.example.com",
+        email_proxy_base_url="https://openhost.imbue.com",
+        public_ip="203.0.113.10",
+    )
+    assert cfg.email_enabled is False
+    assert cfg.instance_identity is None
 
 
 # --- TOML round-trip -------------------------------------------------------------

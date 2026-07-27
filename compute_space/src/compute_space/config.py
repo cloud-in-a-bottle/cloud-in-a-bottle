@@ -280,21 +280,28 @@ class Config:
                 f"{sorted(_EMAIL_KEYCLOAK_OVERRIDE_FIELDS)} to override the cert-api client, "
                 f"or none to inherit it. Missing: {sorted(missing)}"
             )
-        #  (b) email_proxy_base_url is set (email intended) but the Keycloak
-        #      client-credentials don't resolve (no cert-api client and no email
-        #      override) — email could never authenticate, so this is a config
-        #      error rather than a silent disable.
+        #  (b) email_proxy_base_url is set with a PARTIALLY-resolved credential
+        #      (some but not all of issuer/id/secret) — a typo. A fully-absent
+        #      credential is NOT an error: that is the "front door configured, but
+        #      the instance hasn't been connected to Imbue yet" state (email simply
+        #      stays off until the Connect-to-Imbue flow supplies the credential).
         if self.email_proxy_base_url:
-            missing = [a for a in _EMAIL_PREREQ_ATTRS if not getattr(self, a)]
-            if missing:
+            cred_attrs = (
+                "email_keycloak_issuer_url_resolved",
+                "email_keycloak_client_id_resolved",
+                "email_keycloak_client_secret_resolved",
+            )
+            cred_set = sum(1 for a in cred_attrs if getattr(self, a))
+            if 0 < cred_set < len(cred_attrs):
+                missing = [a for a in cred_attrs if not getattr(self, a)]
                 raise ValueError(
-                    "email_proxy_base_url is set but email cannot be enabled; missing "
-                    f"{sorted(missing)}. Provide the cert-api Keycloak client (cert_provider="
-                    f"{CERT_PROVIDER_CERT_API!r}) or explicit email_keycloak_* credentials."
+                    "email_proxy_base_url is set but the instance credential is only partially "
+                    f"resolved (missing {sorted(missing)}). Provide a complete credential "
+                    "(imbue_identity_*, the cert-api client, or explicit email_keycloak_*) or none."
                 )
-            if not self.public_ip:
-                # Email will be enabled — inbound is always direct-to-instance, so
-                # the MX/A records need the public IP.
+            # When the credential fully resolves, email is enabled — inbound is
+            # always direct-to-instance, so the MX/A records need the public IP.
+            if cred_set == len(cred_attrs) and not self.public_ip:
                 raise ValueError("public_ip must be set in config when email is enabled")
         # Validate the custom mail domain shape (if set) regardless of whether
         # email is enabled, so a typo surfaces at config load rather than at the
@@ -342,6 +349,17 @@ class Config:
     @property
     def email_keycloak_client_secret_resolved(self) -> str | None:
         return self.email_keycloak_client_secret or self.cert_api_keycloak_client_secret_resolved
+
+    @property
+    def imbue_connect_base_url(self) -> str | None:
+        """Base URL of the Imbue front door for the "Connect to Imbue" flow.
+
+        The same front door the email API lives behind, so it reuses
+        ``email_proxy_base_url`` (e.g. "https://openhost.imbue.com"). Returns None
+        when no Imbue URL is configured, in which case the connect flow is
+        unavailable and the Settings button is hidden.
+        """
+        return self.email_proxy_base_url
 
     @property
     def instance_identity(self) -> KeycloakClientCredentials | None:
@@ -679,13 +697,23 @@ class DefaultConfig(Config):
     )
 
 
+def active_config_path() -> str | None:
+    """The config.toml path the instance loads, or None when config is env-driven.
+
+    Prefers ``OPENHOST_ROUTER_CONFIG`` (new CLI name) and falls back to
+    ``OPENHOST_CONFIG`` for backward compatibility. Shared by ``load_config`` and
+    the runtime credential-persistence path so the precedence rule lives once.
+    """
+    return os.environ.get("OPENHOST_ROUTER_CONFIG") or os.environ.get("OPENHOST_CONFIG")
+
+
 def load_config() -> Config:
     """Load config from OPENHOST_ prefixed env vars, env-selected TOML file, or default config, in that order.
 
     Prefer ``OPENHOST_ROUTER_CONFIG`` (new CLI name) and fall back to
     ``OPENHOST_CONFIG`` for backward compatibility.
     """
-    path = os.environ.get("OPENHOST_ROUTER_CONFIG") or os.environ.get("OPENHOST_CONFIG")
+    path = active_config_path()
     if not path:
         return typed_settings.load(DefaultConfig, appname="openhost")
     scrubbed = _scrub_obsolete_keys_to_temp(path)

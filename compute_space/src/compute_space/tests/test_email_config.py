@@ -62,12 +62,13 @@ def test_partial_email_keycloak_config_is_rejected() -> None:
             cfg.evolve(**partial)
 
 
-def test_email_proxy_without_keycloak_creds_is_rejected() -> None:
-    # email_proxy_base_url set (email intended) but no resolvable Keycloak client
-    # (no cert-api, no explicit override) -> email could never authenticate.
+def test_email_proxy_without_keycloak_creds_is_awaiting_connect() -> None:
+    # email_proxy_base_url set but no resolvable credential is NOT an error: it is
+    # the "front door configured, awaiting Connect to Imbue" state. Email stays off
+    # (no boot failure) until the connect flow supplies the credential.
     cfg = DefaultConfig(zone_domain="x.example.com", public_ip="203.0.113.5")
-    with pytest.raises(ValueError, match="email cannot be enabled"):
-        cfg.evolve(email_proxy_base_url="https://openhost.imbue.com")
+    connected = cfg.evolve(email_proxy_base_url="https://openhost.imbue.com")
+    assert connected.email_enabled is False
 
 
 def test_full_email_config_without_public_ip_rejected() -> None:
@@ -184,11 +185,13 @@ def test_cert_api_client_present_but_email_off_without_proxy() -> None:
     assert cfg.email_keycloak_client_id_resolved == "instance-alice"
 
 
-def test_acme_instance_cannot_enable_email_without_explicit_kc() -> None:
-    # A BYO-ACME instance has no cert-api client, so proxy-only can't enable email.
+def test_acme_instance_email_off_without_explicit_kc() -> None:
+    # A BYO-ACME instance has no cert-api client, so proxy-only leaves email off
+    # (awaiting either explicit email_keycloak_*/imbue_identity_* or Connect). This
+    # is not an error — the instance boots fine with email disabled.
     cfg = DefaultConfig(zone_domain="x.example.com", public_ip="203.0.113.5")
-    with pytest.raises(ValueError, match="email cannot be enabled"):
-        cfg.evolve(email_proxy_base_url="https://openhost.imbue.com")
+    connected = cfg.evolve(email_proxy_base_url="https://openhost.imbue.com")
+    assert connected.email_enabled is False
 
 
 def test_acme_instance_enables_email_with_explicit_kc() -> None:

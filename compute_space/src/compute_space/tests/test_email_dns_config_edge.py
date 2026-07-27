@@ -346,12 +346,14 @@ def test_email_keycloak_set_without_proxy_is_off_not_error():
     assert cfg.email_enabled is False
 
 
-def test_proxy_without_resolvable_keycloak_rejected():
-    # proxy URL set but no kc anywhere (no cert-api, no override) -> error.
-    with pytest.raises(ValueError, match="email cannot be enabled"):
-        DefaultConfig(zone_domain="alice.selfhost.imbue.com").evolve(
-            public_ip="203.0.113.5", email_proxy_base_url="https://openhost.imbue.com"
-        )
+def test_proxy_without_resolvable_keycloak_is_awaiting_connect():
+    # proxy URL set but no credential anywhere (no cert-api, no override, no shared
+    # identity) is NOT an error: it's the "front door configured, awaiting Connect
+    # to Imbue" state. Email stays off until the connect flow supplies a credential.
+    cfg = DefaultConfig(zone_domain="alice.selfhost.imbue.com").evolve(
+        public_ip="203.0.113.5", email_proxy_base_url="https://openhost.imbue.com"
+    )
+    assert cfg.email_enabled is False
 
 
 def test_full_email_config_missing_public_ip_rejected():
