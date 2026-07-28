@@ -283,6 +283,8 @@ async function copyAppDiagnostics(btn) {
   "appStatus": {{ app.status | tojson }},
   "nextUrl": {{ next_url | default("", true) | tojson }},
   "reloadAppUrl": "/reload_app/{{ app.app_id }}",
+  "updateReviewUrl": "/update_review/{{ app.name }}",
+  "appId": {{ app.app_id | tojson }},
   "setAppRemoteUrl": "/set_app_remote/{{ app.app_id }}",
   "dropBuildCacheUrl": "/api/drop-docker-cache"
 }
