@@ -31,6 +31,7 @@ from compute_space.core.apps import clone_with_github_fallback
 from compute_space.core.apps import git_pull
 from compute_space.core.apps import insert_and_deploy
 from compute_space.core.apps import manifest_newly_declared_permissions_v2
+from compute_space.core.apps import manifest_settings_changes
 from compute_space.core.apps import move_clone_to_app_temp_dir
 from compute_space.core.apps import reload_app_background
 from compute_space.core.apps import remove_app_background
@@ -157,22 +158,25 @@ class AppStatusResponse:
 @attr.s(auto_attribs=True, frozen=True)
 class ReloadAppRequest:
     update: bool = False
-    # When True, the owner has reviewed the permissions the (updated) manifest
-    # newly declares and approves granting them as part of this reload. Without
-    # it, a reload whose manifest declares new, ungranted permissions is
-    # refused (see PermissionsRequiredResponse) — mirroring the explicit
-    # owner approval required at install time.
+    # When True, the owner has reviewed the settings the (updated) manifest
+    # changes — including any newly declared permissions — and approves the
+    # update. Without it, a reload whose pulled manifest differs from the
+    # running one is refused (see UpdateReviewRequiredResponse); new permissions
+    # are then granted as part of the approved reload, mirroring install time.
     approve_new_permissions: bool = False
 
 
 @attr.s(auto_attribs=True, frozen=True)
-class PermissionsRequiredResponse:
-    """Returned by ``/reload_app`` when the manifest to be deployed declares
-    permissions the app does not already hold and the caller has not approved
-    them. The reload is NOT performed; the app keeps running its current
-    version until the owner re-submits with ``approve_new_permissions``."""
+class UpdateReviewRequiredResponse:
+    """Returned by ``/reload_app`` when an update's pulled manifest differs from
+    the running one and the caller hasn't approved it. The reload is NOT
+    performed; the app keeps running its current version until the owner
+    re-submits with ``approve_new_permissions``. ``settings_changed`` is the
+    grouped old→new diff; ``permissions_required`` the newly declared grants."""
 
     ok: bool
+    review_required: bool
+    settings_changed: list[dict[str, Any]]
     permissions_required: list[dict[str, Any]]
     error: str
 
@@ -547,30 +551,30 @@ async def stop_app(app_id: str, db: sqlite3.Connection) -> Response[OkResponse] 
     return Response(content=OkResponse(ok=True), status_code=200, media_type=MediaType.JSON)
 
 
-def _gate_new_permissions(
+def _gate_update_review(
     app_id: str,
     repo_path: str,
     approve_new_permissions: bool,
     previous_manifest_raw: str | None = None,
-) -> PermissionsRequiredResponse | None:
-    """Enforce explicit owner approval of permissions an update *newly* declares.
+) -> UpdateReviewRequiredResponse | None:
+    """Enforce explicit owner approval of any settings an update changes.
 
     Reads the manifest about to be deployed (from ``repo_path`` on disk, which
-    already reflects any git pull) and diffs its declared permissions against the
-    *previously-deployed* manifest (``previous_manifest_raw``) as well as what the
-    app already holds. Only permissions the app author newly added are gated — a
-    permission the owner deliberately revoked was declared by the previous
-    manifest too, so it is not re-surfaced for approval on an unrelated update
-    (see :func:`manifest_newly_declared_permissions_v2`). If nothing is newly
-    declared, returns ``None`` (proceed). Otherwise:
+    already reflects any git pull) and diffs it against the previously-deployed
+    manifest (``previous_manifest_raw``): a grouped settings diff plus the
+    newly-declared permissions the app doesn't already hold. Only permissions the
+    app author newly added are gated for granting — a permission the owner
+    deliberately revoked was declared by the previous manifest too, so it isn't
+    re-surfaced (see :func:`manifest_newly_declared_permissions_v2`). If nothing
+    changed, returns ``None`` (proceed). Otherwise:
 
     - ``approve_new_permissions=True``: grant the new permissions and return
-      ``None`` (proceed), mirroring the owner-approved grants at install time.
-    - otherwise: return a :class:`PermissionsRequiredResponse` so the caller can
+      ``None`` (proceed); other settings apply on reload without any grant.
+    - otherwise: return an :class:`UpdateReviewRequiredResponse` so the caller can
       refuse the reload until the owner approves.
 
-    A manifest that can't be parsed is treated as "nothing new" here; the reload
-    path will surface the parse error on its own.
+    A manifest that can't be parsed is treated as "nothing changed" here; the
+    reload path will surface the parse error on its own.
     """
     if not repo_path or not os.path.isdir(repo_path):
         return None
@@ -582,7 +586,8 @@ def _gate_new_permissions(
     new_perms = manifest_newly_declared_permissions_v2(
         manifest, get_all_permissions_v2(consumer_app_id=app_id), previous_manifest_raw
     )
-    if not new_perms:
+    settings_changed = manifest_settings_changes(manifest, previous_manifest_raw)
+    if not new_perms and not settings_changed:
         return None
 
     if approve_new_permissions:
@@ -591,8 +596,10 @@ def _gate_new_permissions(
         return None
 
     shortname_by_service = {c.service: c.shortname for c in manifest.consumes_services_v2}
-    return PermissionsRequiredResponse(
+    return UpdateReviewRequiredResponse(
         ok=False,
+        review_required=True,
+        settings_changed=[attr.asdict(c) for c in settings_changed],
         permissions_required=[
             {
                 "service_url": pg.service_url,
@@ -601,7 +608,7 @@ def _gate_new_permissions(
             }
             for pg in new_perms
         ],
-        error=("This update declares new service permissions that must be approved before it can be applied."),
+        error="This update changes the app's settings; review and approve them before it can be applied.",
     )
 
 
@@ -612,7 +619,7 @@ async def _reload_app_impl(
     approve_new_permissions: bool,
     db: sqlite3.Connection,
     config: Config,
-) -> Response[OkResponse] | Response[ErrorResponse] | Response[PermissionsRequiredResponse] | Redirect:
+) -> Response[OkResponse] | Response[ErrorResponse] | Response[UpdateReviewRequiredResponse] | Redirect:
     """Shared body for the POST (user-initiated reload) and GET (OAuth callback)
     entry points to ``/reload_app/{app_id}``."""
     app_row, err = _resolve_app_or_error(app_id, db)
@@ -741,30 +748,29 @@ async def _reload_app_impl(
                 db.commit()
                 lf.write(f"Pinned upstream to {pinned}\n")
 
-    # Gate: when an update pulls a new manifest that declares permissions the
-    # app doesn't already hold, refuse the reload until the owner approves them
-    # (the install flow requires the same explicit approval). Runs before the
-    # running container is touched, so a refused update leaves the app untouched.
+    # Gate: when an update pulls a manifest that differs from the running one
+    # (any changed setting, or newly declared permissions), refuse the reload
+    # until the owner approves (the install flow requires the same explicit
+    # approval). Runs before the running container is touched, so a refused
+    # update leaves the app untouched.
     #
     # Only applies when code is actually being pulled (update / oauth re-entry).
     # A plain reload deploys the manifest already on disk — the one the app is
-    # currently running — so it can't introduce new permissions, and gating it
-    # would wrongly re-prompt for permissions the owner deliberately declined at
-    # install and chose to keep running without.
+    # currently running — so it can't introduce changes, and gating it would
+    # wrongly re-prompt for a version the owner already chose to keep running.
     if update or continue_oauth:
-        perm_gate = await asyncio.to_thread(
-            _gate_new_permissions,
+        review_gate = await asyncio.to_thread(
+            _gate_update_review,
             app_id,
             app_row["repo_path"],
             approve_new_permissions,
             app_row["manifest_raw"],
         )
-        if perm_gate is not None:
+        if review_gate is not None:
             # Roll the working tree back to the version the app is running, so the
-            # pulled-but-refused code (which declares the unapproved permissions)
-            # does not linger on disk where a later plain reload — which is not
-            # gated, on the assumption the on-disk manifest matches the running
-            # one — would silently deploy it.
+            # pulled-but-refused code does not linger on disk where a later plain
+            # reload — which is not gated, on the assumption the on-disk manifest
+            # matches the running one — would silently deploy it.
             if pre_pull_sha:
                 try:
                     await reset_hard(Path(app_row["repo_path"]), pre_pull_sha)
@@ -772,10 +778,10 @@ async def _reload_app_impl(
                     with open(log_file, "a") as lf:
                         lf.write(f"WARNING: failed to roll back refused update to {pre_pull_sha}: {e}\n")
             with open(log_file, "a") as lf:
-                lf.write("Update requires approval of new service permissions; not reloading.\n")
+                lf.write("Update changes app settings requiring owner approval; not reloading.\n")
             if continue_oauth:
                 return Redirect(path=f"/app_detail/{app_name}")
-            return Response(content=perm_gate, status_code=200, media_type=MediaType.JSON)
+            return Response(content=review_gate, status_code=200, media_type=MediaType.JSON)
 
     await asyncio.to_thread(stop_app_process, app_row)
     db.execute(
@@ -799,7 +805,7 @@ async def reload_app(
     db: sqlite3.Connection,
     config: Config,
     data: ReloadAppRequest = ReloadAppRequest(),  # noqa: B008 — Litestar resolves this at dependency-injection time
-) -> Response[OkResponse] | Response[ErrorResponse] | Response[PermissionsRequiredResponse] | Redirect:
+) -> Response[OkResponse] | Response[ErrorResponse] | Response[UpdateReviewRequiredResponse] | Redirect:
     """User-initiated reload, optionally pulling latest code via ``update``."""
     return await _reload_app_impl(
         app_id,
@@ -817,7 +823,7 @@ async def reload_app_after_oauth(
     db: sqlite3.Connection,
     config: Config,
     continue_oauth_update: Annotated[bool, Parameter(query="continue_oauth_update", required=False)] = False,
-) -> Response[OkResponse] | Response[ErrorResponse] | Response[PermissionsRequiredResponse] | Redirect:
+) -> Response[OkResponse] | Response[ErrorResponse] | Response[UpdateReviewRequiredResponse] | Redirect:
     """OAuth callback re-entry: the secrets app redirected the user back here
     after they granted GitHub access.  Resumes the update with ``continue_oauth=True``
     so we don't truncate the log file again or re-prompt for OAuth."""

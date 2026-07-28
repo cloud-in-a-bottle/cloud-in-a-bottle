@@ -108,13 +108,13 @@ function appAction(url, data, opts) {
   })
     .then(function(r) { return r.json().then(function(d) { return {ok: r.ok, data: d}; }); })
     .then(function(res) {
-      // An update whose manifest declares new service permissions is refused
-      // until the owner explicitly approves them (mirrors install-time
-      // approval). Prompt, and on confirmation re-issue the request with
-      // approve_new_permissions so the grants are written before the reload.
-      if (res.ok && res.data && res.data.permissions_required) {
+      // An update whose pulled manifest differs from the running one is refused
+      // until the owner reviews the changes (mirrors install-time approval).
+      // Prompt with the grouped diff, and on confirmation re-issue the request
+      // with approve_new_permissions so any new grants are written before reload.
+      if (res.ok && res.data && res.data.review_required) {
         if (clear) clear();
-        if (confirmNewPermissions(res.data.permissions_required)) {
+        if (confirmUpdateReview(res.data.settings_changed || [], res.data.permissions_required || [])) {
           var approved = Object.assign({}, data || {}, {approve_new_permissions: true});
           appAction(url, approved, opts);
         }
@@ -135,17 +135,34 @@ function appAction(url, data, opts) {
     });
 }
 
-// Show the owner exactly which new permissions an update wants and get an
-// explicit yes/no. Returns true if the owner approved.
-function confirmNewPermissions(perms) {
-  var lines = perms.map(function(p) {
-    var label = p.shortname ? (p.shortname + ' (' + p.service_url + ')') : p.service_url;
-    return '\u2022 ' + label + ': ' + JSON.stringify(p.grant);
+// Show the owner exactly what an update changes \u2014 settings grouped old \u2192 new,
+// plus any newly requested permissions \u2014 and get an explicit yes/no.
+// Returns true if the owner approved.
+function confirmUpdateReview(settingsChanged, perms) {
+  var lines = [];
+  var order = [];
+  var byGroup = {};
+  settingsChanged.forEach(function(c) {
+    if (!byGroup[c.group]) { byGroup[c.group] = []; order.push(c.group); }
+    byGroup[c.group].push(c);
   });
+  order.forEach(function(group) {
+    lines.push(group);
+    byGroup[group].forEach(function(c) {
+      lines.push('  ' + c.label + ': ' + c.old + ' \u2192 ' + c.new);
+    });
+  });
+  if (perms.length) {
+    lines.push('Permissions (new)');
+    perms.forEach(function(p) {
+      var label = p.shortname ? (p.shortname + ' (' + p.service_url + ')') : p.service_url;
+      lines.push('  \u2022 ' + label + ': ' + JSON.stringify(p.grant));
+    });
+  }
   return confirm(
-    'This update requests new service permissions:\n\n' +
+    'This update changes the app\u2019s settings:\n\n' +
     lines.join('\n') +
-    '\n\nApprove these and continue updating?'
+    '\n\nApprove these changes and continue updating?'
   );
 }
 

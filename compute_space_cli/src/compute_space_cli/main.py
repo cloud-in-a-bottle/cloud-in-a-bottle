@@ -182,7 +182,10 @@ class AppCmd:
         app_id = resolve_app_id_by_name(cfg.url, cfg.token, app_name)
         action = "Updating and reloading" if update else "Reloading"
         print(f"{action} {app_name}...")
-        data = {"update": "1"} if update else None
+        # An explicit `--update` is itself the owner's approval: send
+        # approve_new_permissions so the dashboard's change-review gate doesn't
+        # silently refuse the update (the browser reviews changes interactively).
+        data = {"update": "1", "approve_new_permissions": "1"} if update else None
         make_api_request(cfg.url, cfg.token, "POST", f"/reload_app/{app_id}", data=data)
         if wait:
             wait_for_app_running(cfg.url, cfg.token, app_id, app_name)
