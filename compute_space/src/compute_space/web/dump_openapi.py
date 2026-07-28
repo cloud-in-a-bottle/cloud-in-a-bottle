@@ -25,7 +25,7 @@ def render_openapi_yaml() -> str:
 
 def main() -> None:
     output = Path(sys.argv[1]) if len(sys.argv) > 1 else _DEFAULT_OUTPUT
-    output.write_text(render_openapi_yaml())
+    output.write_text(render_openapi_yaml(), encoding="utf-8")
     print(f"wrote {output}")
 
 

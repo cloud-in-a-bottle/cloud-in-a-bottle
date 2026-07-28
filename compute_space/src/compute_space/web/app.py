@@ -110,7 +110,13 @@ def _full_app_bootstrap(config: Config) -> None:
     retry_pending_default_apps(config)
 
 
-@route("/setup", http_method=[HttpMethod.GET, HttpMethod.POST], status_code=403, sync_to_thread=False)
+@route(
+    "/setup",
+    http_method=[HttpMethod.GET, HttpMethod.POST],
+    status_code=403,
+    sync_to_thread=False,
+    include_in_schema=False,
+)
 def setup_already_done() -> Response[str]:
     return Response(
         content="This instance has already been set up.",

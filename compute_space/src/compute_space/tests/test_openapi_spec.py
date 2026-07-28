@@ -10,7 +10,7 @@ from compute_space.web.openapi import build_openapi_schema
 
 
 def test_committed_openapi_yaml_is_up_to_date() -> None:
-    committed = _DEFAULT_OUTPUT.read_text()
+    committed = _DEFAULT_OUTPUT.read_text(encoding="utf-8")
     assert committed == render_openapi_yaml(), "openapi.yaml is stale; run `pixi run -e dev generate-openapi`"
 
 
