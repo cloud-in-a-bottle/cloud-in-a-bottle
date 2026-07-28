@@ -189,4 +189,5 @@ async def add_app(db: sqlite3.Connection, repo: str = "", next: str = "") -> Tem
 pages_apps_routes = Router(
     path="/",
     route_handlers=[dashboard, app_detail, add_app],
+    include_in_schema=False,
 )

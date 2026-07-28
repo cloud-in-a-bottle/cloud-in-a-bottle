@@ -76,4 +76,4 @@ async def logout(request: Request[Any, Any, Any], db: sqlite3.Connection, config
     return response
 
 
-pages_login_routes = Router(path="/", route_handlers=[login_get, login_post, logout])
+pages_login_routes = Router(path="/", route_handlers=[login_get, login_post, logout], include_in_schema=False)

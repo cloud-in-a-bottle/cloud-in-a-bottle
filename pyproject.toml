@@ -167,6 +167,11 @@ mypy = "*"
 types-requests = "*"
 schemathesis = ">=4.0"
 pre-commit = "*"
+pyyaml = ">=6.0"
+types-pyyaml = "*"
+
+[tool.pixi.feature.dev.tasks]
+generate-openapi = "python -m compute_space.web.dump_openapi"
 
 # mac needs a manual install to run tests with --run-tls, not supported
 # by conda-forge

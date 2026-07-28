@@ -10,4 +10,4 @@ async def settings_page() -> Template:
     return Template(template_name="settings.html")
 
 
-pages_settings_routes = Router(path="/", route_handlers=[settings_page])
+pages_settings_routes = Router(path="/", route_handlers=[settings_page], include_in_schema=False)

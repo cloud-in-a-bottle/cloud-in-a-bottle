@@ -519,4 +519,5 @@ services_v2_routes = Router(
     # OPTIONS handler to be appended, which then silently overwrites any explicit
     # OPTIONS handler via last-writer-wins in route_handler_method_map.
     route_handlers=[service_call_cors, service_call, service_call_ws, oauth_callback_proxy_v2],
+    include_in_schema=False,
 )

@@ -743,4 +743,4 @@ def _render_doc(slug: str) -> Response[str]:
     return Response(content=html, media_type=MediaType.HTML)
 
 
-docs_routes = Router(path="/", route_handlers=[docs_index, docs_slug])
+docs_routes = Router(path="/", route_handlers=[docs_index, docs_slug], include_in_schema=False)

@@ -66,4 +66,5 @@ async def terminal_ws(socket: WebSocket[Any, Any, Any]) -> None:
 pages_system_routes = Router(
     path="/",
     route_handlers=[system_page, diagnostics_page, terminal_page, terminal_ws],
+    include_in_schema=False,
 )

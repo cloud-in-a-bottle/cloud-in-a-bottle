@@ -34,20 +34,8 @@ from compute_space.db import get_db
 from compute_space.db import provide_db
 from compute_space.web.auth.auth import login_required_redirect
 from compute_space.web.middleware.subdomain_proxy import SubdomainProxyMiddleware
-from compute_space.web.routes.api.apps import api_apps_routes
-from compute_space.web.routes.api.archive_backend import api_archive_backend_routes
-from compute_space.web.routes.api.identity import identity_routes
-from compute_space.web.routes.api.permissions_v2 import api_permissions_v2_routes
-from compute_space.web.routes.api.services_v2 import api_services_v2_routes
-from compute_space.web.routes.api.settings import api_settings_routes
-from compute_space.web.routes.api.system import system_routes
-from compute_space.web.routes.docs import docs_routes
-from compute_space.web.routes.pages.apps import pages_apps_routes
-from compute_space.web.routes.pages.login import pages_login_routes
-from compute_space.web.routes.pages.permissions_v2 import pages_permissions_v2_routes
-from compute_space.web.routes.pages.settings import pages_settings_routes
-from compute_space.web.routes.pages.system import pages_system_routes
-from compute_space.web.routes.services_v2 import services_v2_routes
+from compute_space.web.openapi import OPENAPI_CONFIG
+from compute_space.web.routes.manifest import ALL_ROUTERS
 
 
 def _make_static_url(static_dir: Path) -> Any:
@@ -193,29 +181,12 @@ def create_app(config: Config) -> ASGIApp:
         if isinstance(engine, JinjaTemplateEngine):
             engine.engine.globals.update(_template_globals(config, static_dir))
 
-    static_router = create_static_files_router(path="/static", directories=[static_dir])
+    static_router = create_static_files_router(path="/static", directories=[static_dir], include_in_schema=False)
 
     atexit.register(cleanup_terminal)
 
     litestar_app = Litestar(
-        route_handlers=[
-            static_router,
-            api_apps_routes,
-            api_archive_backend_routes,
-            api_permissions_v2_routes,
-            api_services_v2_routes,
-            api_settings_routes,
-            system_routes,
-            identity_routes,
-            docs_routes,
-            pages_apps_routes,
-            pages_login_routes,
-            pages_permissions_v2_routes,
-            pages_settings_routes,
-            pages_system_routes,
-            services_v2_routes,
-            setup_already_done,
-        ],
+        route_handlers=[static_router, *ALL_ROUTERS, setup_already_done],
         template_config=template_config,
         before_request=_reject_app_subdomain_requests,
         dependencies={
@@ -227,5 +198,6 @@ def create_app(config: Config) -> ASGIApp:
             Exception: _log_unhandled_exception,
         },
         on_startup=[_install_template_globals],
+        openapi_config=OPENAPI_CONFIG,
     )
     return SubdomainProxyMiddleware(litestar_app)
