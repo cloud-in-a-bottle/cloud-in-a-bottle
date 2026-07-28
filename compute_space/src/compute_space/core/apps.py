@@ -206,6 +206,23 @@ def github_token_git_config(token: str | None) -> list[str]:
     return ["-c", f"url.https://{token}@github.com/.insteadOf=https://github.com/"]
 
 
+async def _remote_ref_is_commit(clone_url: str, ref: str, github_token: str | None) -> bool:
+    """Whether ``ref`` must be checked out as a commit rather than passed to
+    ``git clone --branch`` (which only accepts a branch or tag). Asks the remote
+    whether ``ref`` names a branch or tag; if it doesn't, it's a commit. A failed
+    probe defaults to the branch/tag path so clone can surface the real error."""
+    result = await asyncio.to_thread(
+        subprocess.run,
+        ["git", *github_token_git_config(github_token), "ls-remote", "--heads", "--tags", clone_url, ref],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    if result.returncode != 0:
+        return False
+    return not result.stdout.strip()
+
+
 async def clone_and_read_manifest(
     repo_url: str, github_token: str | None = None
 ) -> tuple[AppManifest | None, str | None, str | None]:
@@ -245,6 +262,10 @@ async def clone_and_read_manifest(
     tmp_parent = tempfile.mkdtemp(prefix="openhost-clone-")
     clone_dir = os.path.join(tmp_parent, "repo")
     try:
+        # `git clone --branch` accepts a branch or tag but NOT a bare commit
+        # hash, so a commit ref clones the default branch and is checked out
+        # below; branch/tag refs use --branch here.
+        ref_is_commit = ref is not None and await _remote_ref_is_commit(clone_url, ref, github_token)
         clone_cmd = [
             "git",
             *github_token_git_config(github_token),
@@ -252,7 +273,7 @@ async def clone_and_read_manifest(
             "--recurse-submodules",
             "--shallow-submodules",
         ]
-        if ref:
+        if ref and not ref_is_commit:
             clone_cmd.extend(["--branch", ref])
         clone_cmd.extend([clone_url, clone_dir])
         result = await asyncio.to_thread(subprocess.run, clone_cmd, capture_output=True, text=True, timeout=120)
@@ -281,6 +302,32 @@ async def clone_and_read_manifest(
                     cwd=clone_dir,
                     capture_output=True,
                     timeout=30,
+                )
+        # A commit-hash ref couldn't be passed to --branch; check it out now
+        # (the full clone already has the object) and resync submodules to it.
+        if ref_is_commit:
+            assert ref is not None
+            checkout = await asyncio.to_thread(
+                subprocess.run,
+                ["git", "checkout", "--force", ref],
+                cwd=clone_dir,
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+            if checkout.returncode != 0:
+                rmtree_with_sudo_fallback(tmp_parent, raise_on_failure=False)
+                stderr = checkout.stderr.strip()
+                if github_token:
+                    stderr = stderr.replace(github_token, "***")
+                return None, None, f"Git checkout of {ref} failed: {stderr}"
+            if os.path.exists(os.path.join(clone_dir, ".gitmodules")):
+                await asyncio.to_thread(
+                    subprocess.run,
+                    ["git", *github_token_git_config(github_token), "submodule", "update", "--init", "--recursive"],
+                    cwd=clone_dir,
+                    capture_output=True,
+                    timeout=120,
                 )
         try:
             manifest = parse_manifest(clone_dir)
