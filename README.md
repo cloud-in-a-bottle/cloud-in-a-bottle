@@ -2,7 +2,7 @@
 
 Your corner of the cloud.
 
-Deploy, use, and share any app on a server you control. Built on the idea that open source software should be as easy to use as any other app.
+Deploy, use, and share any app on a server you control. Built on the idea that software in the cloud should be as easy to use as any other app.
 
 [![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
 
@@ -12,20 +12,20 @@ Deploy, use, and share any app on a server you control. Built on the idea that o
 
 ## Why Openhost
 
-Most people have no access to the cloud that isn't mediated by a company with different incentives than theirs. Open source software exists but running it somewhere means fighting infrastructure that most people shouldn't have to touch.
+Most people have no access to the cloud that isn't mediated by a company with different incentives than theirs. Software in the cloud exists but running it somewhere means fighting infrastructure that most people shouldn't have to touch.
 
 Openhost is the project our team needed and couldn't find: a corner of the cloud that's genuinely yours. Where apps install as easily as on your phone, and the data lives on hardware you control.
 
 ## What people deploy
 
-- Personal tools — AI-generated apps, scripts, and utilities that would otherwise live on localhost
+- Personal tools — AI-generated apps, scripts, and utilities with nowhere useful to host them
 - Open source software — Matrix, Minecraft servers, notes apps, project management tools
-- Dev and creative tools — Sculptor, image-making software, anything you built and want to share with a real URL
+- Dev and creative tools — coding agents, image-making software, anything you built and want to share with a real URL
 - Anything Docker-compatible — add an `openhost.toml` manifest to any repo and it's deployable
 
 ## Managed hosting
 
-If you'd rather not run your own server, [Imbue Spaces](https://openhost.imbue.com/plans) provisions one for you: your SSH key, your data, your instance. We keep no copy of your key and have no route in after provisioning.
+If you'd rather not run your own server, [Openhost](https://openhost.imbue.com/plans) provisions one for you: your SSH key, your data, your instance. We keep no copy of your key.
 
 ---
 
