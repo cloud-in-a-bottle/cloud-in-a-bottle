@@ -78,10 +78,10 @@ def test_set_app_remote_persists_normalized_url(cfg: Any, tmp_path: Path) -> Non
     app_id = _seed_git_app(cfg, "myapp", str(repo), repo_url="https://github.com/old/repo")
     cookies = auth_cookie(cfg)
     with TestClient(app=make_test_app(api_apps_routes)) as client:
+        client.cookies.update(cookies)
         resp = client.post(
             f"/set_app_remote/{app_id}",
             json={"repo_url": "github.com/new/repo@dev"},
-            cookies=cookies,
         )
     assert resp.status_code == 200, resp.text
     assert resp.json()["repo_url"] == "https://github.com/new/repo@dev"
@@ -102,10 +102,10 @@ def test_set_app_remote_rejects_builtin_without_git(cfg: Any, tmp_path: Path) ->
     app_id = _seed_git_app(cfg, "builtin", str(plain), repo_url=None)
     cookies = auth_cookie(cfg)
     with TestClient(app=make_test_app(api_apps_routes)) as client:
+        client.cookies.update(cookies)
         resp = client.post(
             f"/set_app_remote/{app_id}",
             json={"repo_url": "https://github.com/new/repo"},
-            cookies=cookies,
         )
     assert resp.status_code == 400, resp.text
     assert "no git repository" in resp.json()["error"].lower()
@@ -124,7 +124,8 @@ def test_set_app_remote_rejects_ssh_url(cfg: Any, tmp_path: Path, ssh_url: str) 
     app_id = _seed_git_app(cfg, "myapp", str(repo), repo_url="https://github.com/old/repo")
     cookies = auth_cookie(cfg)
     with TestClient(app=make_test_app(api_apps_routes)) as client:
-        resp = client.post(f"/set_app_remote/{app_id}", json={"repo_url": ssh_url}, cookies=cookies)
+        client.cookies.update(cookies)
+        resp = client.post(f"/set_app_remote/{app_id}", json={"repo_url": ssh_url})
     assert resp.status_code == 400, resp.text
     assert "HTTPS" in resp.json()["error"]
 
@@ -145,7 +146,8 @@ def test_clone_and_get_app_info_rejects_ssh_url(cfg: Any, ssh_url: str) -> None:
     clear error — no clone attempt, no GitHub OAuth bounce."""
     cookies = auth_cookie(cfg)
     with TestClient(app=make_test_app(api_apps_routes)) as client:
-        resp = client.post("/api/clone_and_get_app_info", json={"repo_url": ssh_url}, cookies=cookies)
+        client.cookies.update(cookies)
+        resp = client.post("/api/clone_and_get_app_info", json={"repo_url": ssh_url})
     assert resp.status_code == 400, resp.text
     assert "HTTPS" in resp.json()["error"]
 
@@ -165,7 +167,8 @@ def test_set_app_remote_rejects_empty(cfg: Any, tmp_path: Path) -> None:
     app_id = _seed_git_app(cfg, "myapp", str(repo), repo_url="https://github.com/old/repo")
     cookies = auth_cookie(cfg)
     with TestClient(app=make_test_app(api_apps_routes)) as client:
-        resp = client.post(f"/set_app_remote/{app_id}", json={"repo_url": "  "}, cookies=cookies)
+        client.cookies.update(cookies)
+        resp = client.post(f"/set_app_remote/{app_id}", json={"repo_url": "  "})
     assert resp.status_code == 400, resp.text
 
 
@@ -283,7 +286,8 @@ def test_reload_update_pins_resolved_default_branch(cfg: Any, tmp_path: Path) ->
         mock.patch.object(apps_routes, "reload_app_background"),
         TestClient(app=make_test_app(api_apps_routes)) as client,
     ):
-        resp = client.post(f"/reload_app/{app_id}", json={"update": True}, cookies=cookies)
+        client.cookies.update(cookies)
+        resp = client.post(f"/reload_app/{app_id}", json={"update": True})
     assert resp.status_code == 200, resp.text
 
     db = sqlite3.connect(cfg.db_path)
@@ -326,10 +330,10 @@ def test_add_app_pins_default_branch_at_install(cfg: Any, tmp_path: Path) -> Non
         mock.patch.object(apps_routes, "insert_and_deploy", side_effect=fake_insert_and_deploy),
         TestClient(app=make_test_app(api_apps_routes)) as client,
     ):
+        client.cookies.update(cookies)
         resp = client.post(
             "/api/add_app",
             json={"repo_url": "https://github.com/owner/repo"},
-            cookies=cookies,
         )
     assert resp.status_code == 200, resp.text
     assert captured["repo_url"] == "https://github.com/owner/repo@main", captured
@@ -366,10 +370,10 @@ def test_add_app_non_git_clone_does_not_pin_or_error(cfg: Any, tmp_path: Path) -
         mock.patch.object(apps_routes, "insert_and_deploy", side_effect=fake_insert_and_deploy),
         TestClient(app=make_test_app(api_apps_routes)) as client,
     ):
+        client.cookies.update(cookies)
         resp = client.post(
             "/api/add_app",
             json={"repo_url": f"file://{clone}"},
-            cookies=cookies,
         )
     assert resp.status_code == 200, resp.text
     assert captured["repo_url"] == f"file://{clone}", captured

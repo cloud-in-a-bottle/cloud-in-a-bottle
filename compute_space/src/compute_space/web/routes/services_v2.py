@@ -34,7 +34,9 @@ from litestar import get
 from litestar import route
 from litestar import websocket
 from litestar.datastructures import MutableScopeHeaders
+from litestar.di import NamedDependency
 from litestar.exceptions import NotAuthorizedException
+from litestar.params import FromPath
 from litestar.response import Response
 from litestar.response.base import ASGIResponse
 from packaging.specifiers import InvalidSpecifier
@@ -187,7 +189,9 @@ def _add_cors_response_headers(response: ASGIResponse, request: Request[Any, Any
 
 
 @route(_CALL_PATH, http_method=[HttpMethod.OPTIONS])
-async def service_call_cors(request: Request[Any, Any, Any], shortname: str, rest: str) -> Response[str]:
+async def service_call_cors(
+    request: Request[Any, Any, Any], shortname: FromPath[str], rest: FromPath[str]
+) -> Response[str]:
     """Hande CORS preflight HTTP OPTIONS request, respond with appropriate CORS headers."""
     origin = request.headers.get("Origin", None)
     # block CORS preflight if Origin is not a known app - no auth headers yet but we can at least verify this,
@@ -250,11 +254,11 @@ def _service_call_common(
 
 @route(_CALL_PATH, http_method=_HTTP_METHODS, guards=[require_app_auth])
 async def service_call(
-    shortname: str,
-    rest: str,
+    shortname: FromPath[str],
+    rest: FromPath[str],
     request: Request[Any, Any, Any],
-    db: sqlite3.Connection,
-    config: Config,
+    db: NamedDependency[sqlite3.Connection],
+    config: NamedDependency[Config],
 ) -> ASGIResponse:
     """Proxy a request to the provider declared under <shortname> in the
     consumer's manifest.
@@ -273,7 +277,7 @@ async def service_call(
         installer_response = await _handle_installer_request(
             consumer_app_id, resolved.version_spec, rest, request, db, config
         )
-        return installer_response.to_asgi_response(app=request.app, request=request)
+        return installer_response.to_asgi_response(None, request=request)
 
     response = await proxy_http_request(
         request,
@@ -290,7 +294,12 @@ async def service_call(
 
 
 @websocket(_CALL_PATH)
-async def service_call_ws(socket: WebSocket[Any, Any, Any], shortname: str, rest: str, db: sqlite3.Connection) -> None:
+async def service_call_ws(
+    socket: WebSocket[Any, Any, Any],
+    shortname: FromPath[str],
+    rest: FromPath[str],
+    db: NamedDependency[sqlite3.Connection],
+) -> None:
     """WebSocket variant of ``service_call``"""
     # not using guards bc they currently only return HTTP exceptions
     try:

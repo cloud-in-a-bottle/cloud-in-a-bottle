@@ -27,6 +27,8 @@ class Migration0007AppIds(Migration):
         raise NotImplementedError("Migration0007AppIds drives execution through apply()")
 
     def apply(self, db: sqlite3.Connection) -> None:
+        # migration-lint: allow-pragma-foreign-keys
+        # Deliberate non-tx-safe toggle: FKs must be off across the FK-table recreates.
         db.execute("PRAGMA foreign_keys = OFF")
         db.execute("BEGIN EXCLUSIVE")
         try:

@@ -9,6 +9,7 @@ import bcrypt
 from litestar import Router
 from litestar import get
 from litestar import post
+from litestar.di import NamedDependency
 from litestar.exceptions import HTTPException
 
 from compute_space.core.auth.auth import read_owner_username
@@ -160,7 +161,9 @@ class ChangePasswordResponse:
 
 
 @post("/api/settings/change_password", status_code=200, guards=[require_owner_auth])
-async def change_password(data: ChangePasswordRequest, db: sqlite3.Connection) -> ChangePasswordResponse:
+async def change_password(
+    data: ChangePasswordRequest, db: NamedDependency[sqlite3.Connection]
+) -> ChangePasswordResponse:
     current = data.current_password.strip()
     new_pw = data.new_password.strip()
     confirm = data.confirm_password.strip()
@@ -190,12 +193,14 @@ async def change_password(data: ChangePasswordRequest, db: sqlite3.Connection) -
 
 
 @get("/api/settings/owner_username", guards=[require_owner_auth])
-async def get_owner_username(db: sqlite3.Connection) -> OwnerUsernameResponse:
+async def get_owner_username(db: NamedDependency[sqlite3.Connection]) -> OwnerUsernameResponse:
     return OwnerUsernameResponse(username=read_owner_username(db))
 
 
 @post("/api/settings/owner_username", status_code=200, guards=[require_owner_auth])
-async def set_owner_username(data: SetOwnerUsernameRequest, db: sqlite3.Connection) -> OwnerUsernameResponse:
+async def set_owner_username(
+    data: SetOwnerUsernameRequest, db: NamedDependency[sqlite3.Connection]
+) -> OwnerUsernameResponse:
     error = validate_owner_username(data.username)
     if error is not None:
         raise HTTPException(detail=error, status_code=400)

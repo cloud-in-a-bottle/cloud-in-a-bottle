@@ -4,7 +4,10 @@ from urllib.parse import urlencode
 
 from litestar import Router
 from litestar import get
+from litestar.di import NamedDependency
 from litestar.exceptions import HTTPException
+from litestar.params import FromPath
+from litestar.params import FromQuery
 from litestar.response import Template
 
 from compute_space.config import Config
@@ -33,13 +36,18 @@ CATALOG_REPO_URL = "https://github.com/imbue-openhost/openhost-catalog"
 
 
 @get(["/", "/dashboard"], guards=[require_owner_auth])
-async def dashboard(db: sqlite3.Connection) -> Template:
+async def dashboard(db: NamedDependency[sqlite3.Connection]) -> Template:
     apps_list = db.execute("SELECT * FROM apps ORDER BY name").fetchall()
     return Template(template_name="dashboard.html", context={"apps": apps_list})
 
 
 @get("/app_detail/{app_name:str}", guards=[require_owner_auth])
-async def app_detail(app_name: str, db: sqlite3.Connection, config: Config, next: str = "") -> Template:
+async def app_detail(
+    app_name: FromPath[str],
+    db: NamedDependency[sqlite3.Connection],
+    config: NamedDependency[Config],
+    next: FromQuery[str] = "",
+) -> Template:
     if not is_valid_app_name(app_name):
         raise HTTPException(detail="Invalid app name", status_code=400)
     app_row = db.execute("SELECT * FROM apps WHERE name = ?", (app_name,)).fetchone()
@@ -172,7 +180,9 @@ async def _resolve_edit_app(
 
 
 @get("/add_app", guards=[require_owner_auth])
-async def add_app(db: sqlite3.Connection, repo: str = "", next: str = "") -> Template:
+async def add_app(
+    db: NamedDependency[sqlite3.Connection], repo: FromQuery[str] = "", next: FromQuery[str] = ""
+) -> Template:
     catalog_installed = db.execute("SELECT 1 FROM apps WHERE name = ?", (CATALOG_APP_NAME,)).fetchone() is not None
     return Template(
         template_name="add_app.html",

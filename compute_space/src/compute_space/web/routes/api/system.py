@@ -14,6 +14,9 @@ from litestar import Router
 from litestar import delete
 from litestar import get
 from litestar import post
+from litestar.di import NamedDependency
+from litestar.params import FromPath
+from litestar.params import FromQuery
 
 from compute_space import OPENHOST_PROJECT_DIR
 from compute_space.config import Config
@@ -130,7 +133,7 @@ class VersionInfo:
 
 
 @get("/api/tokens", guards=[require_owner_auth])
-async def api_tokens_list(db: sqlite3.Connection) -> list[ApiToken]:
+async def api_tokens_list(db: NamedDependency[sqlite3.Connection]) -> list[ApiToken]:
     rows = db.execute("SELECT id, name, expires_at, created_at FROM api_tokens ORDER BY created_at DESC").fetchall()
     now = datetime.now(UTC)
     tokens: list[ApiToken] = []
@@ -151,7 +154,7 @@ async def api_tokens_list(db: sqlite3.Connection) -> list[ApiToken]:
 
 @post("/api/tokens", status_code=200, guards=[require_owner_auth])
 async def api_tokens_create(
-    data: CreateTokenRequest, db: sqlite3.Connection
+    data: CreateTokenRequest, db: NamedDependency[sqlite3.Connection]
 ) -> Response[CreatedToken] | Response[ErrorResponse]:
     name = data.name.strip() or "Untitled"
     expiry_hours_raw = data.expiry_hours.strip() if data.expiry_hours else ""
@@ -188,7 +191,7 @@ async def api_tokens_create(
 
 
 @delete("/api/tokens/{token_id:int}", guards=[require_owner_auth])
-async def api_tokens_delete(token_id: int, db: sqlite3.Connection) -> None:
+async def api_tokens_delete(token_id: FromPath[int], db: NamedDependency[sqlite3.Connection]) -> None:
     db.execute("DELETE FROM api_tokens WHERE id = ?", (token_id,))
     db.commit()
 
@@ -227,7 +230,7 @@ def health() -> Response[HealthRestarting] | HealthOk:
 
 
 @get("/api/listening-ports", guards=[require_owner_auth], sync_to_thread=False)
-def listening_ports(db: sqlite3.Connection) -> ListeningPortsResponse:
+def listening_ports(db: NamedDependency[sqlite3.Connection]) -> ListeningPortsResponse:
     """Return TCP ports listening on external-facing or wildcard interfaces, with classification.
 
     Loopback-only listeners are excluded — they are not reachable from outside the VM.
@@ -239,7 +242,7 @@ def listening_ports(db: sqlite3.Connection) -> ListeningPortsResponse:
 # sync_to_thread: walking app_data and querying podman take ~1s on a real
 # instance; running on the event loop would stall every concurrent request.
 @get("/api/storage-status", guards=[require_owner_auth], sync_to_thread=True)
-def api_storage_status(config: Config) -> dict[str, object]:
+def api_storage_status(config: NamedDependency[Config]) -> dict[str, object]:
     return storage_status(config)
 
 
@@ -319,7 +322,9 @@ def _diagnostics_filename(zone_domain: str) -> str:
 
 @get("/api/diagnostics", guards=[require_owner_auth])
 async def api_diagnostics(
-    db: sqlite3.Connection, config: Config, download: bool = False
+    db: NamedDependency[sqlite3.Connection],
+    config: NamedDependency[Config],
+    download: FromQuery[bool] = False,
 ) -> Response[PlatformDiagnostics]:
     """Return a full instance diagnostics bundle for debugging.
 

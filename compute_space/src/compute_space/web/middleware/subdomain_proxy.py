@@ -142,7 +142,7 @@ class SubdomainProxyMiddleware:
                 if scope["type"] == ScopeType.HTTP:
                     request: Request[Any, Any, Any] = Request(scope, receive, send)
                     response: Response[Any] = Response(content=None, status_code=404)
-                    await response.to_asgi_response(app=None, request=request)(scope, receive, send)
+                    await response.to_asgi_response(None, request=request)(scope, receive, send)
                 else:
                     await send(WebSocketCloseEvent(type="websocket.close", code=4404, reason="no such app"))
                 return
@@ -181,7 +181,7 @@ class SubdomainProxyMiddleware:
                 if scope["type"] == ScopeType.HTTP:
                     request = Request(scope, receive, send)
                     response = login_required_redirect(request)
-                    await response.to_asgi_response(app=None, request=request)(scope, receive, send)
+                    await response.to_asgi_response(None, request=request)(scope, receive, send)
                 else:
                     await send(
                         WebSocketCloseEvent(type="websocket.close", code=4401, reason="authentication required")

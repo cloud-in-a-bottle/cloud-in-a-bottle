@@ -51,7 +51,8 @@ def _post_rename(
     if mock_archive_healthy:
         patches.append(mock.patch.object(apps_routes.archive_backend, "is_archive_dir_healthy", return_value=True))
     with _client(cfg) as client, _stack(patches):
-        resp = client.post(f"/rename_app/{app_id}", json={"name": new_name}, cookies=cookies)
+        client.cookies.update(cookies)
+        resp = client.post(f"/rename_app/{app_id}", json={"name": new_name})
     try:
         payload = resp.json()
     except Exception:
@@ -172,7 +173,8 @@ def test_rename_rollback_on_archive_failure(cfg_factory: Any) -> None:
         mock.patch.object(apps_routes.archive_backend, "is_archive_dir_healthy", return_value=True),
         _client(cfg) as client,
     ):
-        resp = client.post(f"/rename_app/{app_id}", json={"name": "new-name"}, cookies=cookies)
+        client.cookies.update(cookies)
+        resp = client.post(f"/rename_app/{app_id}", json={"name": "new-name"})
     payload = resp.json()
 
     assert resp.status_code == 500, payload
@@ -215,7 +217,8 @@ def test_rename_refuses_archive_using_app_when_archive_unhealthy(cfg_factory: An
         mock.patch.object(apps_routes.archive_backend, "is_archive_dir_healthy", return_value=False),
         _client(cfg) as client,
     ):
-        resp = client.post(f"/rename_app/{app_id}", json={"name": "new-name"}, cookies=cookies)
+        client.cookies.update(cookies)
+        resp = client.post(f"/rename_app/{app_id}", json={"name": "new-name"})
     payload = resp.json()
     assert resp.status_code == 503, payload
     assert "Archive backend" in (payload or {}).get("error", ""), payload
@@ -254,7 +257,8 @@ def test_rename_rollback_continues_when_a_rollback_rename_itself_fails(cfg_facto
         mock.patch.object(apps_routes.archive_backend, "is_archive_dir_healthy", return_value=True),
         _client(cfg) as client,
     ):
-        resp = client.post(f"/rename_app/{app_id}", json={"name": "new-name"}, cookies=cookies)
+        client.cookies.update(cookies)
+        resp = client.post(f"/rename_app/{app_id}", json={"name": "new-name"})
     payload = resp.json()
 
     assert resp.status_code == 500, payload

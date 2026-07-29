@@ -495,6 +495,10 @@ class TestConcurrency:
 
 _PRAGMA_FK_RE = re.compile(r"PRAGMA\s+foreign_keys", re.IGNORECASE)
 
+# Inline opt-out: a source containing this marker acknowledges its
+# PRAGMA foreign_keys toggle as a deliberate, non-tx-safe op.
+_PRAGMA_FK_OPT_OUT = "migration-lint: allow-pragma-foreign-keys"
+
 
 def _scan_migration_for_unsafe_ops(migration: Migration) -> list[str]:
     """Flag ops known to confuse SQLite's transactional rollback.
@@ -508,14 +512,14 @@ def _scan_migration_for_unsafe_ops(migration: Migration) -> list[str]:
         sql_path = Path(inspect.getfile(migration.__class__)).resolve().parent / migration.sql_file
         if sql_path.exists():
             text = sql_path.read_text()
-            if _PRAGMA_FK_RE.search(text):
+            if _PRAGMA_FK_RE.search(text) and _PRAGMA_FK_OPT_OUT not in text:
                 findings.append(f"{sql_path.name}: PRAGMA foreign_keys inside SQL migration body")
     # Also scan the Python source of custom up() methods.
     try:
         src = inspect.getsource(type(migration))
     except (OSError, TypeError):
         src = ""
-    if _PRAGMA_FK_RE.search(src):
+    if _PRAGMA_FK_RE.search(src) and _PRAGMA_FK_OPT_OUT not in src:
         findings.append(
             f"{type(migration).__module__}.{type(migration).__name__}: PRAGMA foreign_keys inside Python migration"
         )

@@ -15,8 +15,8 @@ from typing import Any
 
 import pytest
 from litestar import Litestar
-from litestar.contrib.jinja import JinjaTemplateEngine
 from litestar.di import Provide
+from litestar.plugins.jinja import JinjaTemplateEngine
 from litestar.template.config import TemplateConfig
 from litestar.testing import TestClient
 
@@ -87,7 +87,8 @@ def test_heading_uses_zone_name_when_no_username(cfg: Any) -> None:
     _seed_username(cfg.db_path, "")  # simulate "no username set"
 
     with TestClient(app=_build_app(cfg)) as client:
-        resp = client.get("/dashboard", cookies=cookie)
+        client.cookies.update(cookie)
+        resp = client.get("/dashboard")
     assert resp.status_code == 200
     assert "alice-zone's personal compute space" in resp.text
     assert "owner's personal compute space" not in resp.text
@@ -99,7 +100,8 @@ def test_heading_uses_owner_username_when_set(cfg: Any) -> None:
     _seed_username(cfg.db_path, "alice")
 
     with TestClient(app=_build_app(cfg)) as client:
-        resp = client.get("/dashboard", cookies=cookie)
+        client.cookies.update(cookie)
+        resp = client.get("/dashboard")
     assert resp.status_code == 200
     assert "alice's personal compute space" in resp.text
     # The zone subdomain must no longer drive the heading.
@@ -116,8 +118,9 @@ def test_settings_renders_logout_button(cfg: Any) -> None:
     cookie = auth_cookie(cfg, username="owner")
 
     with TestClient(app=_build_app(cfg)) as client:
-        settings_resp = client.get("/settings", cookies=cookie)
-        dashboard_resp = client.get("/dashboard", cookies=cookie)
+        client.cookies.update(cookie)
+        settings_resp = client.get("/settings")
+        dashboard_resp = client.get("/dashboard")
     assert settings_resp.status_code == 200
     assert 'action="/logout"' in settings_resp.text
     assert 'method="post"' in settings_resp.text
