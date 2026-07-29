@@ -58,12 +58,12 @@ FROM apps
 
 class Migration0004AppsRemovingStatus(Migration):
     version = 4
+    allow_pragma_foreign_keys = True
 
     def up(self, db: sqlite3.Connection) -> None:  # pragma: no cover - apply() is overridden
         raise NotImplementedError("Migration0004AppsRemovingStatus drives execution through apply()")
 
     def apply(self, db: sqlite3.Connection) -> None:
-        # migration-lint: allow-pragma-foreign-keys
         # Deliberate non-tx-safe toggle: FKs must be off across the table swap.
         db.execute("PRAGMA foreign_keys = OFF")
         db.execute("BEGIN EXCLUSIVE")

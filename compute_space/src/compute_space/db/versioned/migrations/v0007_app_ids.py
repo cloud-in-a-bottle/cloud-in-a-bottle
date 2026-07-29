@@ -22,12 +22,12 @@ from compute_space.db.versioned.base import Migration
 
 class Migration0007AppIds(Migration):
     version = 7
+    allow_pragma_foreign_keys = True
 
     def up(self, db: sqlite3.Connection) -> None:  # pragma: no cover - apply() is overridden
         raise NotImplementedError("Migration0007AppIds drives execution through apply()")
 
     def apply(self, db: sqlite3.Connection) -> None:
-        # migration-lint: allow-pragma-foreign-keys
         # Deliberate non-tx-safe toggle: FKs must be off across the FK-table recreates.
         db.execute("PRAGMA foreign_keys = OFF")
         db.execute("BEGIN EXCLUSIVE")

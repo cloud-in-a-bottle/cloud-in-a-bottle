@@ -495,10 +495,6 @@ class TestConcurrency:
 
 _PRAGMA_FK_RE = re.compile(r"PRAGMA\s+foreign_keys", re.IGNORECASE)
 
-# Inline opt-out: a source containing this marker acknowledges its
-# PRAGMA foreign_keys toggle as a deliberate, non-tx-safe op.
-_PRAGMA_FK_OPT_OUT = "migration-lint: allow-pragma-foreign-keys"
-
 
 def _scan_migration_for_unsafe_ops(migration: Migration) -> list[str]:
     """Flag ops known to confuse SQLite's transactional rollback.
@@ -507,19 +503,19 @@ def _scan_migration_for_unsafe_ops(migration: Migration) -> list[str]:
     (the PRAGMA is a no-op inside a tx, which tends to silently defeat
     the author's intent). Extend as we encounter more gotchas.
     """
+    if migration.allow_pragma_foreign_keys:
+        return []
     findings: list[str] = []
     if isinstance(migration, SqlFileMigration):
         sql_path = Path(inspect.getfile(migration.__class__)).resolve().parent / migration.sql_file
-        if sql_path.exists():
-            text = sql_path.read_text()
-            if _PRAGMA_FK_RE.search(text) and _PRAGMA_FK_OPT_OUT not in text:
-                findings.append(f"{sql_path.name}: PRAGMA foreign_keys inside SQL migration body")
+        if sql_path.exists() and _PRAGMA_FK_RE.search(sql_path.read_text()):
+            findings.append(f"{sql_path.name}: PRAGMA foreign_keys inside SQL migration body")
     # Also scan the Python source of custom up() methods.
     try:
         src = inspect.getsource(type(migration))
     except (OSError, TypeError):
         src = ""
-    if _PRAGMA_FK_RE.search(src) and _PRAGMA_FK_OPT_OUT not in src:
+    if _PRAGMA_FK_RE.search(src):
         findings.append(
             f"{type(migration).__module__}.{type(migration).__name__}: PRAGMA foreign_keys inside Python migration"
         )
@@ -564,3 +560,15 @@ class TestPragmaHeuristic:
         findings = _scan_migration_for_unsafe_ops(Bad())
         assert findings, "Scanner must flag PRAGMA foreign_keys in a migration SQL file"
         assert "PRAGMA foreign_keys" in findings[0]
+
+    def test_opt_out_attribute_suppresses_findings(self):
+        """A migration setting ``allow_pragma_foreign_keys`` is not flagged."""
+
+        class OptedOut(Migration):
+            version = 2
+            allow_pragma_foreign_keys = True
+
+            def up(self, db):
+                db.execute("PRAGMA foreign_keys = OFF")
+
+        assert _scan_migration_for_unsafe_ops(OptedOut()) == []
