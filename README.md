@@ -1,16 +1,37 @@
-**NOTE: this is an exploratory project, it is not yet ready for general use! it is being made public for narrow beta testing, you are welcome to try it, but please don't file issues or open PRs; they will not be responded to.**
+# Openhost
 
-**This code is currently being provided under the AGPL-3.0 license (loosely, you can use it for any personal use, but if it's distributed commercially, the commercial use must also be made open-source). We may change to a different license in the future (eg [a fair source license](https://fair.io/licenses/)), with the intent that personal usage will always be totally allowed, with no restrictions or exclusions, but commercial use may be restricted so that we can develop a sustainable business model to continue to build and maintain the project.**
+Your corner of the cloud.
 
-**the "openhost" name is a placeholder and will be changed before this project is launched**.
+Deploy, use, and share any app on a server you control. Built on the idea that modern software lives in the cloud, and if you want to be in control of your digital life, you need your own place in the cloud too.
 
-# openhost
+[![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
 
-FOSS apps on your own compute and data. users bring their own hosting (cloud server or local hardware), and run open source apps via a self-hosting platform that handles routing, containers, storage, and auth.
+> **Early access.** Openhost is in active beta. We want you to try it and share feedback! Note that no password recovery exists yet and we don't hold keys to your instance so we can't reset it. Response time on issues and PRs may be slow as we're heads-down on the core product.
 
-## quick start
 
-### local development
+
+## Why Openhost
+
+Most people have no access to the cloud that isn't mediated by a company with different incentives than theirs. Open source web software exists but running it somewhere means fighting infrastructure that most people don't want to touch.
+
+Openhost is the project our team needed and couldn't find: a corner of the cloud that's genuinely yours. Where apps install as easily as on your phone, and the data lives on hardware you control.
+
+## What people deploy
+
+- Personal tools — AI-generated apps, scripts, and utilities with nowhere useful to host them
+- Open source software — Matrix, Minecraft servers, notes apps, project management tools
+- Dev and creative tools — coding agents, image-making software, anything you built and want to share with a real URL
+- Anything Docker-compatible — add an `openhost.toml` manifest to any repo and it's deployable
+
+## Managed hosting
+
+If you'd rather not run your own server, [Openhost](https://openhost.imbue.com/plans) provisions one for you: your SSH key, your data, your instance. We just set you up with everything you need to get going, and then it's all yours from there.
+
+---
+
+## Quick start
+
+### Local development
 
 ```bash
 # run the router directly on your machine (needs rootless podman)
@@ -30,7 +51,7 @@ openhost down
 openhost update
 ```
 
-### server deployment
+### Server deployment
 
 ```bash
 # full setup on a fresh Ubuntu 24.04 server
@@ -45,43 +66,48 @@ ansible-playbook ansible/deploy.yml -i <IP>, -e domain=<domain> \
 curl https://<domain>/health
 ```
 
-see `ansible/readme.md` for prerequisites and full details.
+See `ansible/readme.md` for prerequisites and full details.
 
-## how it works
+---
 
-the router is a Python app (Quart/Hypercorn) that provides a web dashboard for deploying and managing apps. it reads `openhost.toml` manifests from app repos, builds container images from each app's `Dockerfile` using rootless podman, runs each app in its own user namespace, and reverse-proxies HTTP requests to the right app by subdomain or path prefix.
+## How it works
 
-### server mode
+The router is a Python app that provides a web dashboard for deploying and managing apps. It reads `openhost.toml` manifests from app repos, builds container images from each app's `Dockerfile`, runs each app in its own isolated container, and proxies inbound HTTP requests to the right app by subdomain.
 
-when deployed to a server (via ansible), the router runs as a systemd service alongside CoreDNS and Caddy:
+### Server mode
+
+When deployed to a server via Ansible, the router runs as a systemd service alongside CoreDNS and Caddy:
 
 ```
-  ┌─────────────────────────────────────────────┐
-  │  Server (Ubuntu 24.04)                      │
-  │                                             │
-  │  CoreDNS (:53)  -- ACME DNS-01 challenges   │
-  │  Caddy (:443)   -- TLS termination          │
-  │  Router (:8080) -- app mgmt + reverse proxy │
-  │  rootless Podman -- app containers           │
-  └─────────────────────────────────────────────┘
+┌─────────────────────────────────────────────┐
+│  Server (Ubuntu 24.04)                      │
+│                                             │
+│  CoreDNS (:53)  -- ACME DNS-01 challenges   │
+│  Caddy (:443)   -- TLS termination          │
+│  Router (:8080) -- app mgmt + reverse proxy │
+│  rootless Podman -- app containers          │
+└─────────────────────────────────────────────┘
 ```
 
-CoreDNS serves DNS for the deployment domain, enabling automatic TLS certificate acquisition via ACME DNS-01. Caddy terminates TLS on :443 and proxies to the router on :8080.
+CoreDNS serves DNS for the deployment domain, enabling automatic TLS certificate acquisition via ACME DNS-01. Caddy terminates TLS on `:443` and proxies to the router on `:8080`.
 
-all persistent data (database, TLS certs, app data) lives under the configured `data_root_dir` (default: `/opt/openhost`).
+All persistent data (database, TLS certs, app data) lives under `data_root_dir` (default: `/opt/openhost`).
 
-### dev mode
+### Dev mode
 
-`openhost up --dev` runs the router directly on your machine. HTTP only on port 8080, no TLS, no CoreDNS, no Caddy. requires rootless podman for running app containers.
+`openhost up --dev` runs the router directly on your machine: HTTP only on port 8080, no TLS, no CoreDNS, no Caddy. Requires rootless podman for running app containers.
 
-## cloudflare tunnel setup (no port forwarding)
+---
 
-Use this when you want public internet access without opening home router ports. See `docs/cloudflare-local-tls-plan.md` for the full runbook and `docs/cloudflare-local-laack-xyz-setup-log.md` for a real-world setup log.
+## Cloudflare tunnel setup (no port forwarding)
 
-## local subdomain testing (optional)
+For public internet access without opening home router ports. See `docs/cloudflare-local-tls-plan.md` for the full runbook and `docs/cloudflare-local-laack-xyz-setup-log.md` for a real-world setup log.
 
-If you want to test host-based app routing locally (for example, `app.lvh.me`),
-run dev mode with a local zone domain:
+---
+
+## Local subdomain testing (optional)
+
+To test host-based app routing locally, run dev mode with a local zone domain:
 
 ```bash
 openhost up --dev --zone-domain lvh.me
@@ -94,47 +120,54 @@ Then open app URLs like:
 
 Notes:
 
-- This is optional and intended for local development only.
-- The default local flow remains `http://localhost:8080`.
-- Port `80` is not required; if you want no port in the URL, use your own local
-  port-forwarding setup from `:80` to `:8080`.
+- Optional — intended for local development only.
+- The default local flow is `http://localhost:8080`.
+- Port 80 is not required. If you want no port in the URL, add your own local port-forwarding from `:80` to `:8080`.
 
-## operating modes
+---
 
-| mode | command | what it does |
-|------|---------|-------------|
-| dev | `openhost up --dev` | runs router directly on host, HTTP only (needs rootless podman) |
-| server | `ansible-playbook ansible/setup.yml` | deploy to any VPS or bare metal with automatic HTTPS (see `ansible/readme.md`) |
+## Operating modes
 
-## components
+| Mode | Command | What It Does |
+|------|---------|--------------|
+| dev | `openhost up --dev` | Runs router directly on host, HTTP only (needs rootless podman) |
+| server | `ansible-playbook ansible/setup.yml` | Deploy to any VPS or bare metal with automatic HTTPS (see `ansible/readme.md`) |
 
-| component | path | what it does | status |
-|-----------|------|-------------|--------|
-| CLI | `routerd_cli/` | `openhost` command: up, down, doctor, update | buggy — has stale VM flags, being reworked |
-| compute_space CLI | `compute_space_cli/` | compute space management CLI | working |
-| compute_space | `compute_space/compute_space/` | HTTP routing, app deployment, auth, reverse proxy | working |
-| dau_tracker | `apps/dau_tracker/` | DAU tracking + version check | working |
-| partaay | `apps/partaay/` | distributed event hosting | working |
+---
 
-## development setup
+## Components
+
+| Component | Path | What It Does | Status |
+|-----------|------|--------------|--------|
+| CLI | `routerd_cli/` | `openhost` command: up, down, doctor, update | Buggy — has stale VM flags, being reworked |
+| compute_space CLI | `compute_space_cli/` | Compute space management CLI | Working |
+| compute_space | `compute_space/compute_space/` | HTTP routing, app deployment, auth, reverse proxy | Working |
+| dau_tracker | `apps/dau_tracker/` | DAU tracking + version check | Working |
+| partaay | `apps/partaay/` | Distributed event hosting | Working |
+
+---
+
+## Development setup
 
 ```bash
 # install pre-commit hooks (requires pre-commit: pip install pre-commit)
 pre-commit install
 ```
 
-### sculptor workspace setup script
+### [Sculptor](https://github.com/imbue-ai/sculptor) workspace setup script
 
-add
-```
+Add the following in Settings → Repositories → openhost → Workspace setup command. Sculptor is Imbue's coding environment — skip this if you use a different IDE.
+
+```bash
 cp -r [YOUR_LOCAL_OPENHOST_CHECKOUT]/.idea .
 pre-commit install
 ```
 
-in settings->repositories->openhost->Workspace setup command. adapt to any IDE config or other git-ignored files you'd like copied over; this one is for pycharm + pre-commit.
+Adapt to any IDE config or other git-ignored files you'd like copied over.
 
+---
 
-## testing
+## Testing
 
 ```bash
 # run all lightweight tests (from project root)
@@ -146,36 +179,56 @@ pixi run -e dev pytest --run-containers
 
 Server deployment prerequisites and test setup are documented in `ansible/readme.md`.
 
-## key docs
+---
 
-The user-facing manual is in `docs/src/`, rendered to HTML on the
-fly by compute_space and served at `https://<zone>/docs/`.  No
-build step: editing a markdown file under `docs/src/` and reloading
-the page is enough to see the change.
+## Key docs
 
-- `docs/src/introduction.md` - introduction + table of contents
-- `docs/src/creating_an_app.md` - guide to building apps
-- `docs/src/manifest_spec.md` - `openhost.toml` app manifest specification
-- `docs/src/routing.md` - subdomain + path routing model
-- `docs/src/data.md` - persistent + archive data tiers
-- `docs/src/user_identity.md` - identity / login flow for apps
-- `docs/src/oauth.md` - OAuth integration with external services
-- `docs/src/cross_app_services.md` - app-to-app service calls
+The user-facing manual lives in `docs/src/` and is served at `https://<zone>/docs/`. No build step — edit a markdown file and reload the page to see the change.
 
-`docs/src/SUMMARY.md` is the sidebar table of contents — add new
-pages there to surface them in the manual.
+- `docs/src/introduction.md` — introduction + table of contents
+- `docs/src/creating_an_app.md` — guide to building apps
+- `docs/src/manifest_spec.md` — `openhost.toml` app manifest specification
+- `docs/src/routing.md` — subdomain + path routing model
+- `docs/src/data.md` — persistent + archive data tiers
+- `docs/src/user_identity.md` — identity / login flow for apps
+- `docs/src/oauth.md` — OAuth integration with external services
+- `docs/src/cross_app_services.md` — app-to-app service calls
 
-## agent skill
+`docs/src/SUMMARY.md` is the sidebar table of contents — add new pages there to surface them in the manual.
 
-an agent skill that gives an AI coding agent context for deploying and debugging apps on openhost (via the `oh` CLI). install it with:
+---
+
+## Agent skill
+
+An agent skill that gives an AI coding agent context for deploying and debugging apps on Openhost via the `oh` CLI. Install with:
 
 ```bash
 npx skills add imbue-openhost/openhost --skill openhost-context
 ```
 
-the skill works best with the `oh` CLI installed and logged in:
+The skill works best with the `oh` CLI installed and logged in:
 
 ```bash
 uv tool install "oh @ git+https://github.com/imbue-openhost/openhost.git#subdirectory=compute_space_cli"
 oh instance login
 ```
+
+Once set up, ask your coding agent to package any existing project for Openhost and deploy it directly — no manual manifest editing required.
+
+---
+
+## License
+
+Openhost is provided under the [AGPL-3.0 license](LICENSE).
+
+We may move to a different license in the future — something like a [fair source license](https://fair.io/licenses/) — with the intent that personal use will always be unrestricted, while commercial use may be scoped to support a sustainable project.
+
+---
+
+## About Imbue
+
+We build honest software. Often open source. Tools that help people think, create, and build. Tools that are loyal to you. 
+
+- [Explore Imbue's code on GitHub](https://github.com/imbue-ai)
+- [Check us out at imbue.com](https://imbue.com/)
+- [Follow @Imbue_AI on X](https://x.com/imbue_ai)
