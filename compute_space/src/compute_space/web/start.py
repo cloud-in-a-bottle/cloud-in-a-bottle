@@ -6,6 +6,7 @@ import socket
 import sqlite3
 import subprocess
 import time
+from contextlib import closing
 from pathlib import Path
 from typing import Any
 
@@ -21,10 +22,12 @@ from compute_space.core.caddy import config_cert_resolver
 from compute_space.core.caddy import reload_caddy_for_domains
 from compute_space.core.caddy import set_active_caddy
 from compute_space.core.caddy import start_caddy
+from compute_space.core.caddy import unix_admin_address
 from compute_space.core.dns import CoreDnsProcess
 from compute_space.core.dns import public_dns_zones
 from compute_space.core.dns import set_active_coredns
 from compute_space.core.dns import start_coredns
+from compute_space.core.domain_store import effective_domains
 from compute_space.core.domain_store import rebuild_active_domains
 from compute_space.core.first_boot import seed_first_boot
 from compute_space.core.logging import logger
@@ -38,6 +41,7 @@ from compute_space.core.tls.renewal import get_cert_status
 from compute_space.core.tls.renewal import start_renewal_thread
 from compute_space.core.updates import RESTART_EXIT_CODE
 from compute_space.core.updates import initialize_shutdown_event
+from compute_space.db import get_db
 from compute_space.db import init_db
 from compute_space.web.app import create_app
 from compute_space.web.setup_app import create_setup_app
@@ -74,11 +78,10 @@ def _owner_exists(config: Config) -> bool:
 
 def _require_configured_domain(config: Config) -> None:
     """Check that a nonempty domain exists"""
-    if not config.all_domains:
+    if not config.zone_domain:
         raise RuntimeError(
-            "No domain configured: nothing seeded the DB `domains` table (no first_boot.toml, no "
-            "[[openhost.domains]] in the router config, and no legacy zone_domain). Set a domain in "
-            "first_boot.toml or the config, then restart."
+            "No domain configured: nothing seeded the DB `domains` table (no first_boot.toml and no "
+            "legacy zone_domain). Set a domain in first_boot.toml or the config, then restart."
         )
 
 
@@ -135,11 +138,14 @@ def main() -> None:
     config.make_all_dirs()
     _bootstrap(config)
     # The DB `domains` table is the source of truth.  On first boot, seed it (+ the claim token)
-    # from first_boot.toml, else the config-file zone_domain + [[openhost.domains]] / claim-token
-    # file.  Then load the set into the active config *before* starting CoreDNS/Caddy so every
-    # configured domain is served this boot.  Both are idempotent; create_app re-runs them.
+    # from first_boot.toml, else the config-file zone_domain / claim-token file.  Then sync the
+    # DB-derived scalars into the active config *before* starting CoreDNS/Caddy so every configured
+    # domain is served this boot.  Both are idempotent; create_app re-runs them.
     seed_first_boot(config)
-    config = rebuild_active_domains(config)
+    with closing(get_db()) as db:
+        config = rebuild_active_domains(config, db)
+        domains = effective_domains(db)
+        dns_zones = public_dns_zones(config, db)
     _require_configured_domain(config)  # fail loud at boot, not late in the first request
     children: list[subprocess.Popen[bytes]] = []
 
@@ -150,7 +156,7 @@ def main() -> None:
         # Authoritative for every public (non-mDNS) domain the instance answers on, so a
         # secondary domain delegated to this box resolves too — not just the primary.
         coredns = start_coredns(
-            public_dns_zones(config),
+            dns_zones,
             config.public_ip,
             config.coredns_corefile_path,
             coredns_bin=_ensure_coredns_binary(config),
@@ -164,14 +170,15 @@ def main() -> None:
     # Caddy reverse proxy. mainly for TLS termination, but also some other features.
     # The acquired file cert covers the primary domain (a wildcard for zone_domain);
     # any additional TLS domains fall back to Caddy's internal CA (see generate_caddyfile).
-    needs_caddy_for_tls = any(d.tls for d in config.all_domains)
+    needs_caddy_for_tls = any(d.tls for d in domains)
     caddy: CaddyProcess | None = None
     if config.start_caddy:
         caddy = start_caddy(
             config.caddyfile_path,
-            config.all_domains,
+            domains,
             config.port,
             cert_for=config_cert_resolver(config),
+            admin_addr=unix_admin_address(config.caddy_admin_socket_path),
         )
         # Register so /api/domains can regenerate + restart Caddy when a domain is added/removed.
         set_active_caddy(caddy)

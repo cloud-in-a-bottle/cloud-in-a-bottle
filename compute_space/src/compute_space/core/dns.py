@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import re
 import socket
+import sqlite3
 import subprocess
 import threading
 import time
@@ -28,6 +29,7 @@ from jinja2 import StrictUndefined
 
 from compute_space.config import Config
 from compute_space.core.containers import CONTAINER_GATEWAY_IP
+from compute_space.core.domain_store import effective_domains
 from compute_space.core.logging import logger
 
 _TEMPLATES_DIR = Path(__file__).parent / "templates"
@@ -112,7 +114,7 @@ class DnsZone:
         return self.zonefile_path.with_name(self.zonefile_path.name + ".container")
 
 
-def public_dns_zones(config: Config) -> tuple[DnsZone, ...]:
+def public_dns_zones(config: Config, db: sqlite3.Connection) -> tuple[DnsZone, ...]:
     """The zones CoreDNS is authoritative for: every non-mDNS domain the instance answers on.
 
     mDNS ``.local`` domains are served by the wildcard mDNS responder, never CoreDNS/ACME, so
@@ -120,7 +122,7 @@ def public_dns_zones(config: Config) -> tuple[DnsZone, ...]:
     get a per-domain file under ``zones/`` (see ``Config.coredns_zonefile_path_for``)."""
     return tuple(
         DnsZone(domain=d.name_no_port, zonefile_path=config.coredns_zonefile_path_for(d.name_no_port))
-        for d in config.all_domains
+        for d in effective_domains(db)
         if not d.mdns
     )
 
@@ -264,7 +266,7 @@ def get_active_coredns() -> CoreDnsProcess | None:
     return _active_coredns
 
 
-def reload_coredns_for_domains(config: Config) -> bool:
+def reload_coredns_for_domains(config: Config, db: sqlite3.Connection) -> bool:
     """Regenerate the Corefile + zone files from the config's current public-domain set and restart
     CoreDNS so it becomes authoritative for the new set (a new zone needs a restart; the ``file``
     plugin's ``reload`` only picks up edits to an *already-served* zone file).  No-op (returns
@@ -272,7 +274,7 @@ def reload_coredns_for_domains(config: Config) -> bool:
     coredns = get_active_coredns()
     if coredns is None or not config.public_ip:
         return False
-    _write_coredns_config(public_dns_zones(config), config.public_ip, coredns.corefile_path, CONTAINER_GATEWAY_IP)
+    _write_coredns_config(public_dns_zones(config, db), config.public_ip, coredns.corefile_path, CONTAINER_GATEWAY_IP)
     coredns.restart()
     return True
 

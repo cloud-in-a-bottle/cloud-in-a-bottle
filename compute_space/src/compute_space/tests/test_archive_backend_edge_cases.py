@@ -20,7 +20,6 @@ from unittest import mock
 import pytest
 
 from compute_space.config import DefaultConfig
-from compute_space.config import Domain
 from compute_space.core import apps as apps_mod
 from compute_space.core import archive_backend
 from compute_space.core.archive_backend import BackendConfigureError
@@ -492,7 +491,7 @@ def test_remove_local_object_store_noop_when_absent(cfg):
 
 
 def test_default_volume_name_is_valid_and_zone_derived():
-    cfg = DefaultConfig(zone_domain="alice.selfhost.imbue.com", domains=(Domain(name="alice.selfhost.imbue.com"),))
+    cfg = DefaultConfig(zone_domain="alice.selfhost.imbue.com")
     name = archive_backend.default_volume_name_for_zone(cfg)
     # JuiceFS validName: [a-z0-9-], 3..63, no leading/trailing dash.
     assert re.fullmatch(r"[a-z0-9][a-z0-9-]{1,61}[a-z0-9]", name)
@@ -503,20 +502,14 @@ def test_default_volume_name_is_valid_and_zone_derived():
 
 
 def test_default_volume_name_distinct_per_zone():
-    a = archive_backend.default_volume_name_for_zone(
-        DefaultConfig(zone_domain="alice.selfhost.imbue.com", domains=(Domain(name="alice.selfhost.imbue.com"),))
-    )
-    b = archive_backend.default_volume_name_for_zone(
-        DefaultConfig(zone_domain="bob.selfhost.imbue.com", domains=(Domain(name="bob.selfhost.imbue.com"),))
-    )
+    a = archive_backend.default_volume_name_for_zone(DefaultConfig(zone_domain="alice.selfhost.imbue.com"))
+    b = archive_backend.default_volume_name_for_zone(DefaultConfig(zone_domain="bob.selfhost.imbue.com"))
     assert a != b
 
 
 def test_default_volume_name_handles_weird_and_long_zones():
     for zone in ["", "UPPER.Case.Example.COM", "x" * 200 + ".example.com", "a_b.c--d.e"]:
-        name = archive_backend.default_volume_name_for_zone(
-            DefaultConfig(zone_domain=zone or "z.local", domains=(Domain(name=zone or "z.local"),))
-        )
+        name = archive_backend.default_volume_name_for_zone(DefaultConfig(zone_domain=zone or "z.local"))
         assert 3 <= len(name) <= 63
         assert re.fullmatch(r"[a-z0-9][a-z0-9-]{1,61}[a-z0-9]", name), (zone, name)
 
@@ -525,9 +518,7 @@ def test_two_zones_do_not_collide_on_default_volume():
     # The core of the bug: two fresh zones must not both key objects under the
     # same shared prefix.
     names = {
-        archive_backend.default_volume_name_for_zone(
-            DefaultConfig(zone_domain=f"z{i}.selfhost.imbue.com", domains=(Domain(name=f"z{i}.selfhost.imbue.com"),))
-        )
+        archive_backend.default_volume_name_for_zone(DefaultConfig(zone_domain=f"z{i}.selfhost.imbue.com"))
         for i in range(20)
     }
     assert len(names) == 20  # all distinct

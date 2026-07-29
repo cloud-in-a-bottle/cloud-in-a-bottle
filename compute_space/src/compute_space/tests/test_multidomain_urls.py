@@ -4,8 +4,12 @@ public request stays on the public domain (https)."""
 
 from __future__ import annotations
 
-from compute_space.config import DefaultConfig
+import sqlite3
+
 from compute_space.config import Domain
+from compute_space.core.domain_store import DomainRecord
+from compute_space.core.domain_store import seed_domains
+from compute_space.db.schema import schema_path
 from compute_space.web.auth.auth import build_login_url
 from compute_space.web.auth.cookies import build_session_cookie
 from compute_space.web.auth.cookies import clear_session_cookie
@@ -32,33 +36,39 @@ def test_login_url_on_public_domain_is_https_and_public() -> None:
 # --- _validated_next: accepts any configured domain -------------------------------
 
 
-def _cfg() -> DefaultConfig:
-    return DefaultConfig(zone_domain="host.example.com", tls_enabled=True, domains=(PUBLIC, LOCAL))
+def _db() -> sqlite3.Connection:
+    """In-memory DB seeded with PUBLIC (primary) + LOCAL, for the DB-backed ``match_domain``."""
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    with open(schema_path()) as f:
+        conn.executescript(f.read())
+    seed_domains(conn, PUBLIC, [DomainRecord(LOCAL.name, LOCAL.tls, LOCAL.mdns)])
+    return conn
 
 
 def test_validated_next_allows_relative_path() -> None:
-    assert _validated_next("/dashboard", _cfg()) == "/dashboard"
+    assert _validated_next("/dashboard", _db()) == "/dashboard"
 
 
 def test_validated_next_allows_both_domains() -> None:
-    cfg = _cfg()
-    assert _validated_next("https://myapp.host.example.com/x", cfg) == "https://myapp.host.example.com/x"
-    assert _validated_next("http://myapp.myhost.local/x", cfg) == "http://myapp.myhost.local/x"
-    assert _validated_next("http://myhost.local/", cfg) == "http://myhost.local/"
+    db = _db()
+    assert _validated_next("https://myapp.host.example.com/x", db) == "https://myapp.host.example.com/x"
+    assert _validated_next("http://myapp.myhost.local/x", db) == "http://myapp.myhost.local/x"
+    assert _validated_next("http://myhost.local/", db) == "http://myhost.local/"
 
 
 def test_validated_next_rejects_foreign_domain() -> None:
-    assert _validated_next("https://evil.example.org/phish", _cfg()) is None
+    assert _validated_next("https://evil.example.org/phish", _db()) is None
 
 
 def test_validated_next_rejects_userinfo_host_spoof() -> None:
     # `host.example.com:1@evil.com` navigates to evil.com; the port before `@` must not fool
     # the domain match (regression: matching on netloc split the userinfo at the first colon).
-    cfg = _cfg()
-    assert _validated_next("https://host.example.com:1@evil.com/phish", cfg) is None
-    assert _validated_next("https://myapp.host.example.com@evil.com/phish", cfg) is None
+    db = _db()
+    assert _validated_next("https://host.example.com:1@evil.com/phish", db) is None
+    assert _validated_next("https://myapp.host.example.com@evil.com/phish", db) is None
     # userinfo in front of a real configured host still resolves to that host, so it's allowed.
-    assert _validated_next("https://evil.com@host.example.com/x", cfg) == "https://evil.com@host.example.com/x"
+    assert _validated_next("https://evil.com@host.example.com/x", db) == "https://evil.com@host.example.com/x"
 
 
 # --- cookies: scoped + Secure per arriving domain ---------------------------------

@@ -1,3 +1,5 @@
+import sqlite3
+from contextlib import closing
 from typing import Any
 
 from litestar import Request
@@ -17,7 +19,9 @@ from litestar.types.asgi_types import WebSocketCloseEvent
 from compute_space.config import get_config
 from compute_space.core.apps import get_app_from_hostname
 from compute_space.core.apps import is_public_path
+from compute_space.core.domain_store import match_domain
 from compute_space.core.logging import logger
+from compute_space.db import get_db
 from compute_space.web.auth.auth import login_required_redirect
 from compute_space.web.auth.auth import verify_owner_auth
 from compute_space.web.helpers.proxy import proxy_http_request
@@ -82,13 +86,13 @@ async def _send_internal_error(scope: Scope, send: Send) -> None:
         pass
 
 
-def _looks_like_app_subdomain(netloc: str) -> bool:
+def _looks_like_app_subdomain(netloc: str, db: sqlite3.Connection) -> bool:
     """True iff ``netloc`` looks like ``<something>.<domain>`` for any configured
     domain (i.e. the request hit what looks like an app subdomain).  The router
     itself answers on a domain exactly, not on a subdomain of it.
     """
     host = netloc.split(":", 1)[0].lower()
-    matched = get_config().match_domain(netloc)
+    matched = match_domain(db, netloc)
     return matched is not None and host != matched.name_no_port
 
 
@@ -140,12 +144,14 @@ class SubdomainProxyMiddleware:
         # absolute-URL building) can stay on the arriving domain instead of the
         # single canonical one.  None for unrelated hosts.
         config = get_config()
-        zone = config.match_domain(netloc)
+        with closing(get_db()) as db:
+            zone = match_domain(db, netloc)
+            app = get_app_from_hostname(netloc, db)
+            looks_like_app = _looks_like_app_subdomain(netloc, db) if app is None else False
         scope[ZONE_SCOPE_KEY] = zone  # type: ignore[literal-required]
 
-        app = get_app_from_hostname(netloc)
         if not app:
-            if _looks_like_app_subdomain(netloc):
+            if looks_like_app:
                 # The hostname looks like an app subdomain but no app is deployed
                 # there — return 404 instead of falling through to the router
                 if scope["type"] == ScopeType.HTTP:

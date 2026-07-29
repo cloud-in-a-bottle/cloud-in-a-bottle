@@ -3,6 +3,7 @@ that the seeded primary drives the effective set."""
 
 from __future__ import annotations
 
+from contextlib import closing
 from pathlib import Path
 
 import pytest
@@ -14,13 +15,14 @@ from compute_space.core.first_boot import read_first_boot
 from compute_space.core.first_boot import seed_first_boot
 from compute_space.core.settings_store import CLAIM_TOKEN_KEY
 from compute_space.core.settings_store import get_setting
-from compute_space.db.versioned import apply_migrations
+from compute_space.db import init_db
 from compute_space.tests.conftest import _make_test_config
+from compute_space.tests.conftest import open_db
 
 
 def _cfg(tmp_path: Path):  # type: ignore[no-untyped-def]
     cfg = _make_test_config(tmp_path, zone_domain="config-domain.example.com", tls_enabled=True)
-    apply_migrations(cfg.db_path)
+    init_db(cfg.db_path)  # migrate + point get_db() at this DB (seed_first_boot opens its own conn)
     return cfg
 
 
@@ -46,11 +48,12 @@ def test_seed_prefers_first_boot(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 
     seed_first_boot(cfg)
 
-    recs = load_records(cfg)
-    # The first_boot domain becomes the primary — NOT the config.toml zone_domain.
-    assert [r.name for r in recs] == ["fresh.example.com"]
-    assert recs[0].is_primary is True and recs[0].tls is True  # public TLS by default
-    assert get_setting(cfg, CLAIM_TOKEN_KEY) == "tok-xyz"
+    with closing(open_db(cfg)) as db:
+        recs = load_records(db)
+        # The first_boot domain becomes the primary — NOT the config.toml zone_domain.
+        assert [r.name for r in recs] == ["fresh.example.com"]
+        assert recs[0].is_primary is True and recs[0].tls is True  # public TLS by default
+        assert get_setting(db, CLAIM_TOKEN_KEY) == "tok-xyz"
 
 
 def test_seed_first_boot_local_mdns(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -59,7 +62,8 @@ def test_seed_first_boot_local_mdns(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     (config_dir / "first_boot.toml").write_text('domain = "myhost.local"\ntls = false\nmdns = true\n')
 
     seed_first_boot(cfg)
-    recs = load_records(cfg)
+    with closing(open_db(cfg)) as db:
+        recs = load_records(db)
     assert recs[0].name == "myhost.local" and recs[0].tls is False and recs[0].mdns is True
 
 
@@ -73,8 +77,9 @@ def test_seed_falls_back_to_config_and_legacy_claim_file(tmp_path: Path, monkeyp
 
     seed_first_boot(cfg)
 
-    assert [r.name for r in load_records(cfg)] == ["config-domain.example.com"]
-    assert get_setting(cfg, CLAIM_TOKEN_KEY) == "legacy-tok"  # extra after ':' stripped
+    with closing(open_db(cfg)) as db:
+        assert [r.name for r in load_records(db)] == ["config-domain.example.com"]
+        assert get_setting(db, CLAIM_TOKEN_KEY) == "legacy-tok"  # extra after ':' stripped
 
 
 def test_seed_leaves_config_toml_untouched(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -89,7 +94,8 @@ def test_seed_leaves_config_toml_untouched(tmp_path: Path, monkeypatch: pytest.M
     seed_first_boot(cfg)
 
     assert config_toml.read_text() == body  # untouched
-    assert [r.name for r in load_records(cfg)] == ["config-domain.example.com"]  # captured into the DB
+    with closing(open_db(cfg)) as db:
+        assert [r.name for r in load_records(db)] == ["config-domain.example.com"]  # captured into the DB
 
 
 def test_claim_token_migrates_even_when_domains_already_seeded(
@@ -100,13 +106,15 @@ def test_claim_token_migrates_even_when_domains_already_seeded(
     # still be migrated into settings so /setup can authenticate.
     cfg = _cfg(tmp_path)
     _point_config_env(monkeypatch, tmp_path)
-    seed_domains(cfg, Domain("host.example.com", tls=True), [])  # pre-seed → domain seed will no-op
+    with closing(open_db(cfg)) as db:
+        seed_domains(db, Domain("host.example.com", tls=True), [])  # pre-seed → domain seed will no-op
     Path(cfg.claim_token_path).parent.mkdir(parents=True, exist_ok=True)
     Path(cfg.claim_token_path).write_text("intermediate-tok")
 
     seed_first_boot(cfg)
 
-    assert get_setting(cfg, CLAIM_TOKEN_KEY) == "intermediate-tok"
+    with closing(open_db(cfg)) as db:
+        assert get_setting(db, CLAIM_TOKEN_KEY) == "intermediate-tok"
 
 
 def test_seed_is_idempotent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -117,4 +125,5 @@ def test_seed_is_idempotent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
     # A second boot must not re-seed or duplicate, even if the file changes.
     (config_dir / "first_boot.toml").write_text('domain = "other.example.com"\nclaim_token = "tok2"\n')
     seed_first_boot(cfg)
-    assert [r.name for r in load_records(cfg)] == ["fresh.example.com"]
+    with closing(open_db(cfg)) as db:
+        assert [r.name for r in load_records(db)] == ["fresh.example.com"]

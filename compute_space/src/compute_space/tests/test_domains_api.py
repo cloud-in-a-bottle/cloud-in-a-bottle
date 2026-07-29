@@ -8,6 +8,7 @@ from __future__ import annotations
 import datetime
 import sqlite3
 from collections.abc import Iterator
+from contextlib import closing
 from pathlib import Path
 from typing import Any
 
@@ -22,17 +23,18 @@ from litestar.di import Provide
 from litestar.testing import TestClient
 
 from compute_space.config import Domain
-from compute_space.config import get_config
 from compute_space.config import provide_config
 from compute_space.core import caddy
 from compute_space.core.auth.auth import SESSION_COOKIE_NAME
 from compute_space.core.auth.auth import create_session
 from compute_space.core.domain_store import CERT_STATUS_ACTIVE
 from compute_space.core.domain_store import CERT_STATUS_ERROR
+from compute_space.core.domain_store import match_domain
 from compute_space.core.domain_store import seed_domains_from_legacy
 from compute_space.db import provide_db
 from compute_space.db.connection import init_db
 from compute_space.tests.conftest import _make_test_config
+from compute_space.tests.conftest import open_db
 from compute_space.web.routes.api import domains as domains_module
 from compute_space.web.routes.api.domains import api_domains_routes
 
@@ -91,7 +93,8 @@ def _auth_cookie(db_path: str) -> dict[str, str]:
 def cfg(tmp_path: Path) -> Any:
     c = _make_test_config(tmp_path, zone_domain="host.example.com", tls_enabled=True, domains=(PRIMARY,))
     init_db(c.db_path)
-    seed_domains_from_legacy(c)  # seed the DB primary so add/remove rebuild from a real primary row
+    with closing(open_db(c)) as db:
+        seed_domains_from_legacy(c, db)  # seed the DB primary so add/remove rebuild from a real primary row
     caddy.set_active_caddy(None)  # no Caddy in tests → reload is a no-op
     return c
 
@@ -156,8 +159,9 @@ def test_add_local_domain_is_active_and_routable(cfg: Any, client: TestClient[Li
     assert {d["name"] for d in body["domains"]} == {"host.example.com", "myhost.local"}
     added = next(d for d in body["domains"] if d["name"] == "myhost.local")
     assert added["scheme"] == "http" and added["cert_status"] == CERT_STATUS_ACTIVE  # http, nothing to acquire
-    # persisted + now routable via the active config
-    assert get_config().match_domain("app.myhost.local") is not None
+    # persisted + now routable via the DB-backed resolver
+    with closing(open_db(cfg)) as db:
+        assert match_domain(db, "app.myhost.local") is not None
 
 
 # --- add TLS domain: acquiring → active / error -------------------------------------

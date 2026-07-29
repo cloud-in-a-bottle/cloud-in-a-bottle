@@ -1,6 +1,7 @@
 # note: we don't need to handle CORS in the main auth path because cross-origin requests are not allowed.
 # the only allowed cross-origin requests go thru the services interface which handles its own CORS.
 import sqlite3
+from contextlib import closing
 from typing import Any
 from urllib.parse import quote
 from urllib.parse import urlparse
@@ -137,17 +138,18 @@ def verify_app_auth(connection: AnyConnection) -> str:
 
     returns `app_id` if authed; raises NotAuthorizedException if not authenticated.
     """
-    accessor = authenticate(connection, db=get_db())
-    origin = get_connection_origin(connection)
+    with closing(get_db()) as db:
+        accessor = authenticate(connection, db=db)
+        origin = get_connection_origin(connection)
 
-    if isinstance(accessor, AuthenticatedUser):
-        if origin is not None and (app := get_app_from_hostname(origin)) is not None:
-            # requests from app js come from the user's browser with the user's auth.
-            # Origin will always be set by the browser on these cross-origin requests.
-            return app.app_id
-    if isinstance(accessor, AuthenticatedApp):
-        # server-side app requests.
-        return accessor.app_id
+        if isinstance(accessor, AuthenticatedUser):
+            if origin is not None and (app := get_app_from_hostname(origin, db)) is not None:
+                # requests from app js come from the user's browser with the user's auth.
+                # Origin will always be set by the browser on these cross-origin requests.
+                return app.app_id
+        if isinstance(accessor, AuthenticatedApp):
+            # server-side app requests.
+            return accessor.app_id
     raise NotAuthorizedException(detail="app authentication required")
 
 

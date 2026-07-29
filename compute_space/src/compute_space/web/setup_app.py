@@ -6,6 +6,7 @@ When the setup handler successfully creates the owner row, it triggers shutdown 
 
 import os
 import secrets
+from contextlib import closing
 from pathlib import Path
 from typing import Any
 
@@ -45,12 +46,13 @@ from compute_space.web.helpers.zone import zone_for_request
 _setup_completed: bool = False
 
 
-def _verify_claim_token(claim_token: str, config: Config) -> bool:
+def _verify_claim_token(claim_token: str) -> bool:
     """Compare ``claim_token`` against the token seeded into the DB ``settings`` store (from
     ``first_boot.toml`` or the legacy claim-token file at startup)."""
     if not claim_token:
         return False
-    stored_token = get_setting(config, CLAIM_TOKEN_KEY)
+    with closing(get_db()) as db:
+        stored_token = get_setting(db, CLAIM_TOKEN_KEY)
     if not stored_token:
         return False
     return secrets.compare_digest(claim_token, stored_token)
@@ -78,7 +80,7 @@ async def root_redirect() -> Response[None]:
 @get("/setup")
 async def setup_get(request: Request[Any, Any, Any], config: Config) -> Template | Response[str]:
     claim_token = request.query_params.get("claim", "")
-    if _claim_token_required(config) and not _verify_claim_token(claim_token, config):
+    if _claim_token_required(config) and not _verify_claim_token(claim_token):
         return _claim_unauthorized()
     return Template(template_name="setup.html", context={"claim": claim_token})
 
@@ -87,7 +89,7 @@ async def setup_get(request: Request[Any, Any, Any], config: Config) -> Template
 async def setup_post(request: Request[Any, Any, Any], config: Config) -> Response[Any]:
     form = await request.form()
     form_claim = form.get("claim", "")
-    if _claim_token_required(config) and not _verify_claim_token(form_claim, config):
+    if _claim_token_required(config) and not _verify_claim_token(form_claim):
         return _claim_unauthorized()
 
     password = form.get("password", "")
@@ -125,7 +127,7 @@ async def setup_post(request: Request[Any, Any, Any], config: Config) -> Respons
 
     # The claim token has done its job — drop it from the settings store, and best-effort remove
     # the legacy file too (it's only a seed source; may linger on upgraded instances).
-    delete_setting(config, CLAIM_TOKEN_KEY)
+    delete_setting(db, CLAIM_TOKEN_KEY)
     try:
         os.remove(config.claim_token_path)
     except OSError:

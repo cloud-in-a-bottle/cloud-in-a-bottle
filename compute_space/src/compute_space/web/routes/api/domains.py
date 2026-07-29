@@ -10,8 +10,9 @@ config (so routing sees them) and regenerate + restart Caddy (so it terminates/s
 from __future__ import annotations
 
 import re
+import sqlite3
 import threading
-import time
+from contextlib import closing
 
 import anyio
 import attr
@@ -20,6 +21,7 @@ from litestar import Router
 from litestar import delete
 from litestar import get
 from litestar import post
+from litestar.background_tasks import BackgroundTask
 from litestar.enums import MediaType
 
 from compute_space.config import Config
@@ -32,6 +34,7 @@ from compute_space.core.domain_store import CERT_STATUS_ACTIVE
 from compute_space.core.domain_store import CERT_STATUS_ERROR
 from compute_space.core.domain_store import CERT_STATUS_NONE
 from compute_space.core.domain_store import DomainRecord
+from compute_space.core.domain_store import effective_domains
 from compute_space.core.domain_store import get_record
 from compute_space.core.domain_store import load_records
 from compute_space.core.domain_store import rebuild_active_domains
@@ -42,6 +45,7 @@ from compute_space.core.logging import logger
 from compute_space.core.tls.domain_certs import ensure_cert_for
 from compute_space.core.tls.renewal import CertStatus
 from compute_space.core.tls.renewal import get_cert_status
+from compute_space.db import get_db
 from compute_space.web.auth.auth import require_owner_auth
 
 # A DNS label per RFC 1123 (letters/digits/hyphen, not starting/ending with hyphen), and a
@@ -110,10 +114,9 @@ def _domain_info(config: Config, domain: Domain, record: DomainRecord | None) ->
     )
 
 
-def _domain_list(config: Config) -> list[DomainInfo]:
-    """The API view of the full domain set, loading all records in one query (not one per domain)."""
-    records = {r.name: r for r in load_records(config)}
-    return [_domain_info(config, d, records.get(d.name_no_port)) for d in config.all_domains]
+def _domain_list(config: Config, db: sqlite3.Connection) -> list[DomainInfo]:
+    """The API view of the full domain set, loading all records in one query."""
+    return [_domain_info(config, r.to_domain(), r) for r in load_records(db)]
 
 
 def _run_acquisition(config: Config, domain: Domain) -> None:
@@ -123,12 +126,15 @@ def _run_acquisition(config: Config, domain: Domain) -> None:
         ensure_cert_for(config, domain)
     except Exception as exc:  # noqa: BLE001 — surface any acquisition failure as domain status
         logger.opt(exception=True).error("cert acquisition failed for {}", domain.name)
-        set_record_status(config, domain.name_no_port, CERT_STATUS_ERROR, error_message=str(exc))
+        with closing(get_db()) as db:
+            set_record_status(db, domain.name_no_port, CERT_STATUS_ERROR, error_message=str(exc))
         return
-    set_record_status(config, domain.name_no_port, CERT_STATUS_ACTIVE)
+    with closing(get_db()) as db:
+        set_record_status(db, domain.name_no_port, CERT_STATUS_ACTIVE)
     # Regenerate Caddy from the *live* active config, not the snapshot captured at add time — a
     # domain added while this (slow) acquisition ran would otherwise be dropped from the Caddyfile.
-    reload_caddy_for_domains(get_config())
+    with closing(get_db()) as db:
+        reload_caddy_for_domains(get_config(), db)
 
 
 def _spawn_acquisition(config: Config, domain: Domain) -> None:
@@ -137,43 +143,44 @@ def _spawn_acquisition(config: Config, domain: Domain) -> None:
     threading.Thread(target=_run_acquisition, args=(config, domain), daemon=True).start()
 
 
-def _reload_caddy_after_response() -> None:
-    """Restart Caddy off the request path (a daemon thread, after a short flush delay).
+async def _reload_caddy_after_response() -> None:
+    """Regenerate + gracefully reload Caddy as a response background task.
 
-    The dashboard is served *through* Caddy (browser → Caddy:443 → router), so restarting Caddy
-    *inside* the request that triggered a domain change would tear down that request's own connection
-    before the response reaches the browser — leaving the UI stale until a manual refresh.  Deferring
-    the restart lets the response (the full domain list) land first.  CoreDNS restarts and cert
-    acquisition stay inline: they're on port 53 / ACME, not the dashboard's HTTP path."""
+    The reload is zero-downtime (admin-API config reload — see CaddyProcess.reload), so it won't drop
+    the request that triggered it; running it after the response is sent just keeps the reload's
+    latency off the response path.  Reads the *live* config so a concurrent domain change isn't
+    dropped from the regenerated Caddyfile; off the event loop since the reload shells out."""
 
-    def work() -> None:
-        time.sleep(0.5)  # let the response finish flushing through Caddy before we restart it
-        reload_caddy_for_domains(get_config())
+    def _reload() -> None:
+        with closing(get_db()) as db:
+            reload_caddy_for_domains(get_config(), db)
 
-    threading.Thread(target=work, daemon=True).start()
+    await anyio.to_thread.run_sync(_reload)
 
 
-def _validate_new_domain(config: Config, name: str, tls: bool, mdns: bool) -> str | None:
+def _validate_new_domain(config: Config, name: str, tls: bool, mdns: bool, db: sqlite3.Connection) -> str | None:
     if not name:
         return "domain name is required"
     if not _DOMAIN_RE.match(name):
         return "invalid domain name"
     if mdns and tls:
         return "mDNS (.local) domains are served over http; set tls=false"
-    if any(d.name_no_port == name for d in config.all_domains):
+    if any(d.name_no_port == name for d in effective_domains(db)):
         return "domain is already configured"
     return None
 
 
 @get("/api/domains", guards=[require_owner_auth])
-async def list_domains(config: Config) -> DomainListResponse:
-    return DomainListResponse(domains=_domain_list(config))
+async def list_domains(config: Config, db: sqlite3.Connection) -> DomainListResponse:
+    return DomainListResponse(domains=_domain_list(config, db))
 
 
 @post("/api/domains", status_code=202, guards=[require_owner_auth])
-async def add_domain(data: AddDomainRequest, config: Config) -> Response[DomainListResponse] | Response[ErrorResponse]:
+async def add_domain(
+    data: AddDomainRequest, config: Config, db: sqlite3.Connection
+) -> Response[DomainListResponse] | Response[ErrorResponse]:
     name = data.name.strip().lower()
-    error = _validate_new_domain(config, name, data.tls, data.mdns)
+    error = _validate_new_domain(config, name, data.tls, data.mdns, db)
     if error is not None:
         return Response(ErrorResponse(error=error), status_code=400, media_type=MediaType.JSON)
 
@@ -181,7 +188,7 @@ async def add_domain(data: AddDomainRequest, config: Config) -> Response[DomainL
     # TLS domains start as `acquiring` (served via `tls internal` until the real cert lands);
     # non-TLS (.local) domains are immediately active over http.
     upsert_record(
-        config,
+        db,
         DomainRecord(
             name=name,
             tls=data.tls,
@@ -189,43 +196,47 @@ async def add_domain(data: AddDomainRequest, config: Config) -> Response[DomainL
             cert_status=CERT_STATUS_ACQUIRING if data.tls else CERT_STATUS_ACTIVE,
         ),
     )
-    new_config = rebuild_active_domains(config)
+    new_config = rebuild_active_domains(config, db)
     if not data.mdns:
         # Make CoreDNS authoritative for the new public zone *before* acquisition: DNS-01 writes the
         # _acme-challenge TXT into this domain's zone file, which only resolves once CoreDNS serves
         # the zone.  Run off the event loop — the restart does a blocking terminate+wait(3s) — but
         # await it so ordering before acquisition holds.  (mDNS domains never touch CoreDNS.)
-        await anyio.to_thread.run_sync(reload_coredns_for_domains, new_config)
+        await anyio.to_thread.run_sync(reload_coredns_for_domains, new_config, db)
     if data.tls:
         _spawn_acquisition(new_config, domain)
-    _reload_caddy_after_response()  # serve the new site (tls internal for TLS) without killing this request
-    # Return the full updated list so the client repaints the table without a follow-up GET that
-    # would race the deferred Caddy restart.
+    # Return the full updated list so the client repaints the table without a follow-up GET, and
+    # regenerate Caddy (serving the new site) only after this response has been sent — see
+    # _reload_caddy_after_response.
     return Response(
-        DomainListResponse(domains=_domain_list(new_config)),
+        DomainListResponse(domains=_domain_list(new_config, db)),
         status_code=202,
         media_type=MediaType.JSON,
+        background=BackgroundTask(_reload_caddy_after_response),
     )
 
 
 @delete("/api/domains/{name:str}", status_code=200, guards=[require_owner_auth])
-async def remove_domain(name: str, config: Config) -> Response[DomainListResponse] | Response[ErrorResponse]:
+async def remove_domain(
+    name: str, config: Config, db: sqlite3.Connection
+) -> Response[DomainListResponse] | Response[ErrorResponse]:
     name = name.strip().lower()
     if name == config.primary_domain.name_no_port:
         return Response(ErrorResponse(error="cannot remove the primary domain"), status_code=400)
-    removed = get_record(config, name)
-    if not remove_record(config, name):
+    removed = get_record(db, name)
+    if not remove_record(db, name):
         return Response(ErrorResponse(error="domain not found"), status_code=404)
-    new_config = rebuild_active_domains(config)
+    new_config = rebuild_active_domains(config, db)
     if removed is not None and not removed.mdns:
         # Drop the zone from CoreDNS so it stops answering for the removed public domain.  Off the
         # event loop — the restart blocks on a terminate+wait(3s).
-        await anyio.to_thread.run_sync(reload_coredns_for_domains, new_config)
-    _reload_caddy_after_response()  # deferred so it doesn't tear down this request's connection
+        await anyio.to_thread.run_sync(reload_coredns_for_domains, new_config, db)
+    # Regenerate Caddy only after this response has been sent — see _reload_caddy_after_response.
     return Response(
-        DomainListResponse(domains=_domain_list(new_config)),
+        DomainListResponse(domains=_domain_list(new_config, db)),
         status_code=200,
         media_type=MediaType.JSON,
+        background=BackgroundTask(_reload_caddy_after_response),
     )
 
 

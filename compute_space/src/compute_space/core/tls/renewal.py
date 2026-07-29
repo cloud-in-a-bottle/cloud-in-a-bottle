@@ -1,8 +1,10 @@
 import datetime
 import enum
+import sqlite3
 import threading
 import time
 from collections.abc import Callable
+from contextlib import closing
 from pathlib import Path
 
 from cryptography import x509
@@ -10,11 +12,13 @@ from cryptography import x509
 from compute_space.config import Config
 from compute_space.config import get_config
 from compute_space.core.domain_store import CERT_STATUS_ACTIVE
+from compute_space.core.domain_store import effective_domains
 from compute_space.core.domain_store import get_record
 from compute_space.core.domain_store import set_record_status
 from compute_space.core.logging import logger
 from compute_space.core.tls.provision import acquire_cert_for_domain
 from compute_space.core.tls.provision import provision_cert
+from compute_space.db import get_db
 
 # Renew well before expiry so transient ACME/DNS failures have days of retries left, not hours.
 RENEW_BEFORE = datetime.timedelta(days=7)
@@ -58,31 +62,33 @@ def _sync_cert_statuses(config: Config) -> None:
     Best-effort: this only keeps the *display* column honest, so any failure (a locked or not-yet-
     migrated DB) is logged and swallowed rather than allowed to break the actual cert renewal."""
     try:
-        for domain in config.all_domains:
-            if not domain.tls:
-                continue
-            name = domain.name_no_port
-            record = get_record(config, name)
-            if record is None or record.cert_status == CERT_STATUS_ACTIVE:
-                continue
-            if get_cert_status(config.cert_path_for(name), config.key_path_for(name)) == CertStatus.OK:
-                set_record_status(config, name, CERT_STATUS_ACTIVE)
+        with closing(get_db()) as db:
+            for domain in effective_domains(db):
+                if not domain.tls:
+                    continue
+                name = domain.name_no_port
+                record = get_record(db, name)
+                if record is None or record.cert_status == CERT_STATUS_ACTIVE:
+                    continue
+                if get_cert_status(config.cert_path_for(name), config.key_path_for(name)) == CertStatus.OK:
+                    set_record_status(db, name, CERT_STATUS_ACTIVE)
     except Exception:
         logger.exception("cert_status display sync skipped (non-fatal)")
 
 
-def _mark_cert_active(config: Config, name: str) -> None:
+def _mark_cert_active(name: str) -> None:
     """Best-effort: record a freshly (re)acquired cert as active now, rather than waiting for the next
     cycle's ``_sync_cert_statuses``.  Display-only, so a DB error is logged and swallowed."""
     try:
-        set_record_status(config, name, CERT_STATUS_ACTIVE)
+        with closing(get_db()) as db:
+            set_record_status(db, name, CERT_STATUS_ACTIVE)
     except Exception:
         logger.exception(f"cert_status active-mark skipped for {name} (non-fatal)")
 
 
 def renew_cert_if_needed(
     config: Config,
-    reload_caddy: Callable[[Config], object],
+    reload_caddy: Callable[[Config, sqlite3.Connection], object],
     provision: Callable[[Config], None] = provision_cert,
     acquire: Callable[[Config, str, Path, Path], None] = acquire_cert_for_domain,
 ) -> bool:
@@ -104,34 +110,35 @@ def renew_cert_if_needed(
         if status != CertStatus.OK:
             logger.info(f"TLS cert for {config.primary_domain.name} is {status.value}; renewing")
             provision(config)
-            _mark_cert_active(config, config.primary_domain.name_no_port)
+            _mark_cert_active(config.primary_domain.name_no_port)
             renewed = True
 
     # Additional TLS domains — per-domain paths, each isolated so one bad domain doesn't block
     # the rest (or the already-renewed primary's Caddy restart).
-    for domain in config.all_domains:
-        name = domain.name_no_port
-        if not domain.tls or name == config.primary_domain.name_no_port:
-            continue
-        cert_path, key_path = config.cert_path_for(name), config.key_path_for(name)
-        status = get_cert_status(cert_path, key_path)
-        if status == CertStatus.OK:
-            continue
-        try:
-            logger.info(f"TLS cert for {name} is {status.value}; renewing")
-            cert_path.parent.mkdir(parents=True, exist_ok=True)
-            acquire(config, name, cert_path, key_path)
-            _mark_cert_active(config, name)
-            renewed = True
-        except Exception:
-            logger.exception(f"TLS cert renewal failed for {name}; will retry next cycle")
+    with closing(get_db()) as db:
+        for domain in effective_domains(db):
+            name = domain.name_no_port
+            if not domain.tls or name == config.primary_domain.name_no_port:
+                continue
+            cert_path, key_path = config.cert_path_for(name), config.key_path_for(name)
+            status = get_cert_status(cert_path, key_path)
+            if status == CertStatus.OK:
+                continue
+            try:
+                logger.info(f"TLS cert for {name} is {status.value}; renewing")
+                cert_path.parent.mkdir(parents=True, exist_ok=True)
+                acquire(config, name, cert_path, key_path)
+                _mark_cert_active(name)
+                renewed = True
+            except Exception:
+                logger.exception(f"TLS cert renewal failed for {name}; will retry next cycle")
 
-    if renewed:
-        reload_caddy(config)
+        if renewed:
+            reload_caddy(config, db)
     return renewed
 
 
-def start_renewal_thread(reload_caddy: Callable[[Config], object]) -> threading.Thread:
+def start_renewal_thread(reload_caddy: Callable[[Config, sqlite3.Connection], object]) -> threading.Thread:
     """Run renew_cert_if_needed periodically in a daemon thread, retrying sooner after failures.
 
     Reads the *live* active config each cycle (``get_config()``), so a domain added at runtime via

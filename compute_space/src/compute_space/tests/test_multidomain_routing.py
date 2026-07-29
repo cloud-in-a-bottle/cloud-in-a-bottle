@@ -5,6 +5,7 @@ domain is recoverable per request.  Single-domain behavior is unchanged; a secon
 from __future__ import annotations
 
 import types
+from contextlib import closing
 from pathlib import Path
 from typing import Any
 
@@ -12,9 +13,13 @@ import pytest
 
 from compute_space.config import DefaultConfig
 from compute_space.config import Domain
-from compute_space.config import set_active_config
 from compute_space.core.apps import get_app_from_hostname
+from compute_space.core.domain_store import DomainRecord
+from compute_space.core.domain_store import seed_domains
+from compute_space.db import get_db
+from compute_space.db import init_db
 from compute_space.tests.conftest import _make_test_config
+from compute_space.tests.conftest import open_db
 from compute_space.web.app import _reject_app_subdomain_requests
 from compute_space.web.helpers.zone import ZONE_SCOPE_KEY
 from compute_space.web.helpers.zone import zone_for_request
@@ -24,15 +29,18 @@ PRIMARY = Domain(name="host.example.com", tls=True)
 LOCAL = Domain(name="myhost.local", tls=False, mdns=True)
 
 
+def _seed(cfg: DefaultConfig, *domains: Domain) -> DefaultConfig:
+    """Migrate the config's DB and seed ``domains`` (primary first) so the DB-backed resolvers see them."""
+    init_db(cfg.db_path)
+    with closing(open_db(cfg)) as db:
+        seed_domains(db, domains[0], [DomainRecord(d.name, d.tls, d.mdns) for d in domains[1:]])
+    return cfg
+
+
 @pytest.fixture
 def multi_domain_config(tmp_path: Path) -> DefaultConfig:
-    cfg = _make_test_config(
-        tmp_path,
-        zone_domain="host.example.com",
-        tls_enabled=True,
-        domains=(PRIMARY, LOCAL),
-    )
-    return cfg  # type: ignore[return-value]
+    cfg = _make_test_config(tmp_path, zone_domain="host.example.com", tls_enabled=True)
+    return _seed(cfg, PRIMARY, LOCAL)  # type: ignore[arg-type]
 
 
 # --- get_app_from_hostname: matches under any configured domain -------------------
@@ -40,8 +48,8 @@ def multi_domain_config(tmp_path: Path) -> DefaultConfig:
 
 @pytest.fixture
 def captured_lookups(monkeypatch: pytest.MonkeyPatch) -> list[str]:
-    """Replace the DB lookup so we can assert which app name routing extracted,
-    without seeding a database.  Returns a sentinel App for any name."""
+    """Replace the app-row lookup so we can assert which app name routing extracted.
+    Returns a sentinel App for any name (the domain set still comes from the seeded DB)."""
     names: list[str] = []
     sentinel = object()
 
@@ -54,7 +62,13 @@ def captured_lookups(monkeypatch: pytest.MonkeyPatch) -> list[str]:
 
 
 def _route(host: str) -> Any:
-    return get_app_from_hostname(host)
+    with closing(get_db()) as db:
+        return get_app_from_hostname(host, db)
+
+
+def _looks(host: str) -> bool:
+    with closing(get_db()) as db:
+        return _looks_like_app_subdomain(host, db)
 
 
 def test_app_reachable_under_primary_domain(multi_domain_config: Any, captured_lookups: list[str]) -> None:
@@ -92,18 +106,19 @@ def test_unrelated_host_is_not_routed(multi_domain_config: Any, captured_lookups
 
 
 def test_looks_like_app_subdomain_across_domains(multi_domain_config: Any) -> None:
-    assert _looks_like_app_subdomain("myapp.host.example.com") is True
-    assert _looks_like_app_subdomain("myapp.myhost.local") is True
-    assert _looks_like_app_subdomain("host.example.com") is False  # router host
-    assert _looks_like_app_subdomain("myhost.local") is False
-    assert _looks_like_app_subdomain("evil.example.org") is False
+    assert _looks("myapp.host.example.com") is True
+    assert _looks("myapp.myhost.local") is True
+    assert _looks("host.example.com") is False  # router host
+    assert _looks("myhost.local") is False
+    assert _looks("evil.example.org") is False
 
 
 # --- _reject_app_subdomain_requests (defense-in-depth in Litestar) ----------------
 
 
 def _fake_request(netloc: str) -> Any:
-    return types.SimpleNamespace(url=types.SimpleNamespace(netloc=netloc))
+    # No stashed zone (empty scope) so the guard falls back to a DB lookup, exercising the bypass path.
+    return types.SimpleNamespace(url=types.SimpleNamespace(netloc=netloc), scope={})
 
 
 def test_reject_app_subdomain_across_domains(multi_domain_config: Any) -> None:
@@ -130,24 +145,17 @@ def test_zone_for_request_prefers_stashed_domain(multi_domain_config: Any) -> No
     assert zone_for_request(conn) == LOCAL
 
 
-def test_zone_for_request_reresolves_when_unstashed(multi_domain_config: Any) -> None:
-    assert zone_for_request(_fake_conn("myapp.myhost.local")) == LOCAL
-    assert zone_for_request(_fake_conn("myapp.host.example.com")) == PRIMARY
-
-
-def test_zone_for_request_falls_back_to_primary(multi_domain_config: Any) -> None:
-    # unrelated host, and a stashed None (host matched no domain in the middleware)
+def test_zone_for_request_falls_back_to_primary_when_unstashed(multi_domain_config: Any) -> None:
+    # No stash (e.g. a request that bypassed the middleware) falls back to the primary domain.
+    assert zone_for_request(_fake_conn("myapp.myhost.local")) == PRIMARY
     assert zone_for_request(_fake_conn("unrelated.example.org")) == PRIMARY
-    assert zone_for_request(_fake_conn("unrelated.example.org", scope={ZONE_SCOPE_KEY: None})) == PRIMARY
+    assert zone_for_request(_fake_conn("x", scope={ZONE_SCOPE_KEY: None})) == PRIMARY
 
 
 def test_single_domain_config_unchanged(tmp_path: Path) -> None:
-    """A single-domain config routes exactly as before (now an explicit one-domain set)."""
-    set_active_config(
-        DefaultConfig(
-            zone_domain="solo.example.com", tls_enabled=True, domains=(Domain(name="solo.example.com", tls=True),)
-        )
-    )
-    assert _looks_like_app_subdomain("app.solo.example.com") is True
-    assert _looks_like_app_subdomain("solo.example.com") is False
+    """A single-domain config routes exactly as before (now a one-row DB domain set)."""
+    cfg = _make_test_config(tmp_path, zone_domain="solo.example.com", tls_enabled=True)
+    _seed(cfg, Domain(name="solo.example.com", tls=True))  # type: ignore[arg-type]
+    assert _looks("app.solo.example.com") is True
+    assert _looks("solo.example.com") is False
     assert zone_for_request(_fake_conn("app.solo.example.com")).name == "solo.example.com"

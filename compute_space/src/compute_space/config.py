@@ -26,11 +26,12 @@ def _lowercase(s: str) -> str:
 class Domain:
     """One hostname the instance answers on, with its scheme and discovery method.
 
-    An instance answers on a set of these (``Config.all_domains``).  Routing, scheme,
-    link-building, and cookies are resolved per request from whichever Domain the
-    request's Host matched — see ``Config.match_domain``.  ``domains[0]`` (equivalently
-    ``Config.primary_domain``) is the canonical domain used by background tasks and
-    outbound links that have no request in hand.
+    An instance answers on a set of these, stored in the DB ``domains`` table (see
+    ``core/domain_store.py``).  Routing, scheme, link-building, and cookies are resolved per
+    request from whichever Domain the request's Host matched — see ``domain_store.match_domain``.
+    The primary row supplies ``Config.zone_domain``/``tls_enabled`` (equivalently
+    ``Config.primary_domain``), the canonical domain used by background tasks and outbound links
+    that have no request in hand.
     """
 
     # the domain name, eg `host.example.com` or `myhost.local`; may optionally
@@ -60,13 +61,6 @@ class Config:
     host: str
     # the local port to bind the compute space web server to.
     port: int
-
-    ## Domains
-    # The full set of domains this instance answers on, each with its own scheme
-    # (tls) and discovery method (mdns).  When empty, a single primary Domain is
-    # derived from ``zone_domain`` + ``tls_enabled`` (see ``all_domains``), so
-    # existing single-domain configs are unaffected.  ``domains[0]`` is the primary.
-    domains: tuple[Domain, ...]
 
     ## TLS
     tls_enabled: bool
@@ -162,52 +156,24 @@ class Config:
         return self.zone_domain.split(":")[0]
 
     @property
-    def all_domains(self) -> tuple[Domain, ...]:
-        """The full domain set — the DB-sourced ``domains`` loaded into the active config by
-        ``rebuild_active_domains``.  Empty only before the first-boot seed runs at startup."""
-        return self.domains
-
-    @property
     def primary_domain(self) -> Domain:
-        """The canonical domain (``domains[0]``), used by background tasks and outbound links that
-        have no request in hand.  Sourced from the DB, never from the legacy ``zone_domain``."""
-        if not self.domains:
+        """The canonical domain, used by background tasks and outbound links that have no request in
+        hand.  Derived from the DB-sourced ``zone_domain``/``tls_enabled`` scalars (kept in sync by
+        ``rebuild_active_domains``); the full domain set is read from the DB (``domain_store``)."""
+        if not self.zone_domain:
             raise RuntimeError(
-                "No domains loaded — the DB domain set has not been seeded/rebuilt into the config yet. "
+                "No primary domain — the DB domain set has not been seeded/rebuilt into the config yet. "
                 "seed_first_boot()+rebuild_active_domains() must run before primary_domain is read."
             )
-        return self.domains[0]
-
-    def match_domain(self, host: str) -> Domain | None:
-        """Return the configured Domain that owns ``host`` — the domain itself (the
-        router) or one of its ``<app>.<domain>`` subdomains — or None if none match.
-
-        Longest domain name wins, so overlapping domains resolve to the most specific
-        (e.g. ``host.example.com`` beats a hypothetical ``example.com``).  ``host`` may
-        include a ``:port``; it is compared port-insensitively.
-        """
-        host_no_port = host.split(":")[0].lower()
-        best: Domain | None = None
-        for domain in self.all_domains:
-            name = domain.name_no_port
-            if not name:
-                # An empty name would make `endswith("." + name)` match any trailing-dot host;
-                # skip it (only reachable via a misconfigured empty domain).
-                continue
-            if host_no_port == name or host_no_port.endswith("." + name):
-                if best is None or len(name) > len(best.name_no_port):
-                    best = domain
-        return best
+        return Domain(name=self.zone_domain, tls=self.tls_enabled)
 
     def evolve(self, **kwargs: Any) -> Self:
         return attr.evolve(self, **kwargs)
 
     def _to_toml_dict(self) -> dict[str, dict[str, Any]]:
         d = {k: v for k, v in attr.asdict(self).items() if v is not None}
-        # `domains` and `zone_domain` are DB-derived (seeded from first_boot.toml); omit them when
-        # empty so single-domain configs stay clean.  When present they're kept, so the file round-trips.
-        if not d.get("domains"):
-            d.pop("domains", None)
+        # `zone_domain` is DB-derived (seeded from first_boot.toml); omit it when empty so a scrubbed
+        # single-domain config stays clean.  When present it's kept, so the file round-trips.
         if not d.get("zone_domain"):
             d.pop("zone_domain", None)
         return {"openhost": d}
@@ -332,6 +298,12 @@ class Config:
         return self.openhost_data_path / "Caddyfile"
 
     @property
+    def caddy_admin_socket_path(self) -> Path:
+        """Unix socket for Caddy's admin API — the control surface used for zero-downtime config
+        reloads.  A filesystem path (owned by the router user), so it's never network-exposed."""
+        return self.openhost_data_path / "caddy-admin.sock"
+
+    @property
     def keys_dir(self) -> str:
         return str(Path(self.openhost_data_path) / "keys")
 
@@ -369,10 +341,6 @@ class DefaultConfig(Config):
     # Server
     host: str = "127.0.0.1"
     port: int = 8080
-
-    # Domains: empty by default; a single primary Domain is derived from
-    # zone_domain + tls_enabled at read time (Config.all_domains).
-    domains: tuple[Domain, ...] = ()
 
     # coredns (only truly needed if tls_enabled)
     coredns_enabled: bool = False

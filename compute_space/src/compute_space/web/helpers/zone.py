@@ -17,17 +17,11 @@ def zone_for_request(connection: ASGIConnection[Any, Any, Any, Any]) -> Domain:
     per-request scheme, link-building, and cookie scoping.
 
     Prefers the Domain the ``SubdomainProxyMiddleware`` stashed in the scope; if
-    it isn't present (e.g. a request that never traversed the middleware, or a
-    Host that matched no configured domain), it re-resolves from the request's
-    Host and finally falls back to the primary domain.  Always returns a Domain
-    so callers never have to special-case ``None``.
+    it isn't present (e.g. a request that never traversed the middleware), it
+    falls back to the primary domain.  Always returns a Domain so callers never
+    have to special-case ``None``.
     """
     stashed = connection.scope.get(ZONE_SCOPE_KEY)
     if isinstance(stashed, Domain):
         return stashed
-    config = get_config()
-    try:
-        netloc = connection.url.netloc
-    except ValueError:
-        return config.primary_domain
-    return config.match_domain(netloc) or config.primary_domain
+    return get_config().primary_domain

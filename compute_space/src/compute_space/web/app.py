@@ -1,5 +1,6 @@
 import atexit
 import sqlite3
+from contextlib import closing
 from pathlib import Path
 from typing import Any
 
@@ -21,11 +22,12 @@ from litestar.template.config import TemplateConfig
 from litestar.types import ASGIApp
 
 from compute_space.config import Config
-from compute_space.config import get_config
+from compute_space.config import Domain
 from compute_space.config import provide_config
 from compute_space.core import archive_backend
 from compute_space.core.auth.auth import read_owner_username
 from compute_space.core.auth.identity import load_identity_keys
+from compute_space.core.domain_store import match_domain
 from compute_space.core.domain_store import rebuild_active_domains
 from compute_space.core.first_boot import seed_first_boot
 from compute_space.core.image_pruner import start_image_pruner
@@ -37,6 +39,7 @@ from compute_space.core.terminal import cleanup_all as cleanup_terminal
 from compute_space.db import get_db
 from compute_space.db import provide_db
 from compute_space.web.auth.auth import login_required_redirect
+from compute_space.web.helpers.zone import ZONE_SCOPE_KEY
 from compute_space.web.helpers.zone import zone_for_request
 from compute_space.web.middleware.subdomain_proxy import SubdomainProxyMiddleware
 from compute_space.web.routes.api.apps import api_apps_routes
@@ -77,7 +80,7 @@ def _make_static_url(static_dir: Path) -> Any:
 
 def _template_globals(config: Config, static_dir: Path) -> dict[str, Any]:
     # The instance's canonical domain comes from the DB primary (never the legacy zone_domain).
-    zone_domain = config.primary_domain.name if config.all_domains else ""
+    zone_domain = config.zone_domain
     zone_name = zone_domain.split(".")[0] if zone_domain else None
 
     @pass_context
@@ -141,7 +144,11 @@ def _full_app_bootstrap(config: Config) -> None:
     # from first_boot.toml / config-file domains / legacy files, then load it into the active config
     # so routing/URL-building reflect it.  Both are idempotent.
     seed_first_boot(config)
-    rebuild_active_domains(config)
+    db = get_db()
+    try:
+        rebuild_active_domains(config, db)
+    finally:
+        db.close()
 
 
 @route("/setup", http_method=[HttpMethod.GET, HttpMethod.POST], status_code=403, sync_to_thread=False)
@@ -189,7 +196,12 @@ def _reject_app_subdomain_requests(request: Request[Any, Any, Any]) -> Response[
     """
     netloc = request.url.netloc
     host = netloc.split(":", 1)[0].lower()
-    matched = get_config().match_domain(netloc)
+    stashed = request.scope.get(ZONE_SCOPE_KEY)
+    if isinstance(stashed, Domain):
+        matched: Domain | None = stashed
+    else:
+        with closing(get_db()) as db:
+            matched = match_domain(db, netloc)
     if matched is not None and host != matched.name_no_port:
         return Response(content=None, status_code=404)
     return None

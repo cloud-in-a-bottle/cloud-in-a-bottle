@@ -1,3 +1,4 @@
+import sqlite3
 import subprocess
 import threading
 from collections.abc import Callable
@@ -7,6 +8,7 @@ import attr
 
 from compute_space.config import Config
 from compute_space.config import Domain
+from compute_space.core.domain_store import effective_domains
 from compute_space.core.logging import logger
 
 # Resolver: given a domain name, return its (cert_path, key_path) if a real cert file exists
@@ -63,6 +65,7 @@ def generate_caddyfile(
     domains: tuple[Domain, ...],
     web_server_port: int,
     cert_for: CertResolver | None = None,
+    admin_addr: str | None = None,
 ) -> str:
     """Generate Caddyfile content for the full domain set — one site block per domain.
 
@@ -71,7 +74,8 @@ def generate_caddyfile(
     which lets an extra domain come up for local testing, or serve immediately while its real
     cert is still being acquired.  A non-TLS (mDNS ``.local``) domain serves plain http with no
     redirect, so those requests are never forced to https.  All blocks reverse-proxy to the
-    router on loopback.
+    router on loopback.  ``admin_addr`` sets the admin endpoint (for zero-downtime reloads);
+    ``None`` disables it (``admin off``).
     """
     resolve = cert_for or (lambda _name: None)
     has_tls = any(d.tls for d in domains)
@@ -79,7 +83,7 @@ def generate_caddyfile(
     # for `tls internal` domains; the per-domain http blocks above provide the
     # http→https redirects we want, and only for the domains that want them.
     auto_https = "disable_redirects" if has_tls else "off"
-    parts = [f"{{\n    auto_https {auto_https}\n    admin off\n}}\n"]
+    parts = [f"{{\n    auto_https {auto_https}\n    admin {admin_addr or 'off'}\n}}\n"]
     for d in domains:
         name = d.name_no_port
         if not d.tls:
@@ -89,6 +93,11 @@ def generate_caddyfile(
         else:
             parts.append(_tls_domain_blocks(name, "tls internal", web_server_port))
     return "".join(parts)
+
+
+def unix_admin_address(socket_path: Path) -> str:
+    """Caddy network address for a unix-socket admin endpoint (``unix/`` + the absolute path)."""
+    return f"unix/{socket_path}"
 
 
 def _spawn_caddy(caddyfile_path: Path) -> subprocess.Popen[bytes]:
@@ -112,29 +121,66 @@ def _spawn_caddy(caddyfile_path: Path) -> subprocess.Popen[bytes]:
 
 @attr.s(auto_attribs=True)
 class CaddyProcess:
-    """Handle to the running Caddy child.  Mutable: restart() replaces proc with a fresh one."""
+    """Handle to the running Caddy child.  Mutable: restart()/reload() may replace proc."""
 
     proc: subprocess.Popen[bytes]
     caddyfile_path: Path
-    # Serializes restart(): several daemon threads (deferred domain reload, cert-acquisition
-    # completion, TLS renewal) can call it at once, and two overlapping restarts race :443.
+    # Admin API address (Caddy network form, e.g. `unix//path`) for zero-downtime reloads; None
+    # means Caddy runs with `admin off`, so reload() falls back to a cold restart.
+    admin_addr: str | None = None
+    # Serializes restart()/reload(): several daemon threads (deferred domain reload, cert-acquisition
+    # completion, TLS renewal) can call at once, and two overlapping restarts race :443.
     _restart_lock: threading.Lock = attr.ib(factory=threading.Lock, init=False, eq=False, repr=False)
 
+    def _cold_restart_locked(self) -> None:
+        """Stop the current process (if alive) and spawn a fresh one.  Caller must hold the lock; the
+        old process must exit before the new one starts since both bind :80/:443."""
+        if self.proc.poll() is None:
+            self.proc.terminate()
+            try:
+                self.proc.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                logger.warning(f"Caddy (pid {self.proc.pid}) did not exit after terminate, killing")
+                self.proc.kill()
+                self.proc.wait()
+        # A killed Caddy may leave its admin unix socket behind, blocking rebind; clear it first.
+        if self.admin_addr and self.admin_addr.startswith("unix/"):
+            Path(self.admin_addr.removeprefix("unix/")).unlink(missing_ok=True)
+        self.proc = _spawn_caddy(self.caddyfile_path)
+
     def restart(self) -> None:
-        """Restart Caddy so it picks up renewed TLS cert files (it runs with `admin off`, so there
-        is no live-reload path).  The old process must stop before the new one starts since both
-        bind :80/:443.
-        """
+        """Cold restart (terminate + respawn), dropping in-flight connections.  Prefer reload()."""
         with self._restart_lock:
-            if self.proc.poll() is None:
-                self.proc.terminate()
-                try:
-                    self.proc.wait(timeout=3)
-                except subprocess.TimeoutExpired:
-                    logger.warning(f"Caddy (pid {self.proc.pid}) did not exit after terminate, killing")
-                    self.proc.kill()
-                    self.proc.wait()
-            self.proc = _spawn_caddy(self.caddyfile_path)
+            self._cold_restart_locked()
+
+    def reload(self) -> None:
+        """Apply the current Caddyfile with a zero-downtime graceful reload via the admin API, so
+        in-flight requests (including the request that triggered a domain change) aren't dropped.
+        Falls back to a cold restart if the admin API is off, Caddy is dead, or the reload fails."""
+        with self._restart_lock:
+            if self.admin_addr is None or self.proc.poll() is not None:
+                self._cold_restart_locked()
+                return
+            result = subprocess.run(
+                [
+                    "caddy",
+                    "reload",
+                    "--config",
+                    str(self.caddyfile_path),
+                    "--adapter",
+                    "caddyfile",
+                    "--address",
+                    self.admin_addr,
+                ],
+                capture_output=True,
+                timeout=30,
+            )
+            if result.returncode != 0:
+                logger.error(
+                    f"caddy reload failed (rc={result.returncode}): "
+                    f"{result.stderr.decode(errors='replace').strip()}; cold-restarting"
+                )
+                self._cold_restart_locked()
 
 
 def start_caddy(
@@ -142,11 +188,12 @@ def start_caddy(
     domains: tuple[Domain, ...],
     web_server_port: int,
     cert_for: CertResolver | None = None,
+    admin_addr: str | None = None,
 ) -> CaddyProcess:
     """Generate Caddyfile and start Caddy."""
     caddyfile_path.parent.mkdir(parents=True, exist_ok=True)
-    caddyfile_path.write_text(generate_caddyfile(domains, web_server_port, cert_for))
-    return CaddyProcess(proc=_spawn_caddy(caddyfile_path), caddyfile_path=caddyfile_path)
+    caddyfile_path.write_text(generate_caddyfile(domains, web_server_port, cert_for, admin_addr))
+    return CaddyProcess(proc=_spawn_caddy(caddyfile_path), caddyfile_path=caddyfile_path, admin_addr=admin_addr)
 
 
 # The live CaddyProcess, registered by start.py so request handlers (e.g. /api/domains) can
@@ -164,13 +211,15 @@ def get_active_caddy() -> CaddyProcess | None:
     return _active_caddy
 
 
-def reload_caddy_for_domains(config: Config) -> bool:
-    """Regenerate the Caddyfile from the config's current domain set and restart Caddy so it
-    serves the new set.  No-op (returns False) when Caddy isn't running — the domain set still
-    changed in-memory/on-disk; there's just no front proxy to reload (dev / .local-only)."""
+def reload_caddy_for_domains(config: Config, db: sqlite3.Connection) -> bool:
+    """Regenerate the Caddyfile from the current domain set and gracefully reload Caddy so it serves
+    the new set with zero downtime.  No-op (returns False) when Caddy isn't running — the domain set
+    still changed in the DB; there's just no front proxy to reload (dev / .local-only)."""
     caddy = get_active_caddy()
     if caddy is None:
         return False
-    caddy.caddyfile_path.write_text(generate_caddyfile(config.all_domains, config.port, config_cert_resolver(config)))
-    caddy.restart()
+    caddy.caddyfile_path.write_text(
+        generate_caddyfile(effective_domains(db), config.port, config_cert_resolver(config), caddy.admin_addr)
+    )
+    caddy.reload()
     return True

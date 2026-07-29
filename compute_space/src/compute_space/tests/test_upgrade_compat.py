@@ -1,19 +1,21 @@
 """Backward-compat: an OLD instance upgrading to the config/domains-consolidation code.
 
 Simulates a pre-consolidation instance in-process — a v12 DB (no domains/settings tables), a
-config.toml with ``zone_domain`` + ``[[openhost.domains]]``, and a legacy claim-token file — then
-runs the upgrade-boot sequence (migrate → seed → rebuild) and asserts everything is captured into the
-DB and the primary/cert layout is preserved.  (config.toml is left untouched — removing the now-ignored
-``zone_domain`` line is a later system-agent migration.)"""
+config.toml with ``zone_domain``, and a legacy claim-token file — then runs the upgrade-boot sequence
+(migrate → seed → rebuild) and asserts the primary + claim token are captured into the DB and the
+cert layout is preserved.  (config.toml is left untouched — removing the now-ignored ``zone_domain``
+line is a later system-agent migration.)"""
 
 from __future__ import annotations
 
 import sqlite3
+from contextlib import closing
 from pathlib import Path
 
 import pytest
 
 from compute_space.config import load_config
+from compute_space.core.domain_store import effective_domains
 from compute_space.core.domain_store import load_records
 from compute_space.core.domain_store import rebuild_active_domains
 from compute_space.core.first_boot import seed_first_boot
@@ -21,6 +23,7 @@ from compute_space.core.settings_store import CLAIM_TOKEN_KEY
 from compute_space.core.settings_store import get_setting
 from compute_space.db.connection import init_db
 from compute_space.db.schema import schema_path
+from compute_space.tests.conftest import open_db
 from compute_space.web.start import _require_configured_domain
 
 
@@ -48,10 +51,6 @@ def _old_instance(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, owner: boo
         'host = "127.0.0.1"\n'
         "port = 8080\n"
         "tls_enabled = true\n"
-        "# a hand-added secondary public domain\n"
-        "[[openhost.domains]]\n"
-        'name = "secondary.example.com"\n'
-        "tls = true\n"
     )
     monkeypatch.setenv("OPENHOST_ROUTER_CONFIG", str(config_toml))
     config = load_config()
@@ -69,27 +68,29 @@ def _old_instance(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, owner: boo
     return config, config_toml
 
 
-def test_upgrade_captures_all_domains_and_claim_token(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_upgrade_captures_primary_and_claim_token(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     config, config_toml = _old_instance(tmp_path, monkeypatch, owner=False)
 
     # Upgrade boot: migrate the DB, then seed + rebuild.
     init_db(config.db_path)  # v12 -> v13
     seed_first_boot(config)
-    new_config = rebuild_active_domains(config)
+    with closing(open_db(config)) as db:
+        new_config = rebuild_active_domains(config, db)
+        by_name = {r.name: r for r in load_records(db)}
+        claim_token = get_setting(db, CLAIM_TOKEN_KEY)
 
-    by_name = {r.name: r for r in load_records(config)}
-    # zone_domain (primary) + [[openhost.domains]] captured into the DB.
-    assert set(by_name) == {"host.example.com", "secondary.example.com"}
+    # The config-file zone_domain is captured into the DB as the primary.
+    assert set(by_name) == {"host.example.com"}
     assert by_name["host.example.com"].is_primary is True
-    assert by_name["secondary.example.com"].is_primary is False
 
     # Claim token migrated off the file (token before ':' only) into settings.
-    assert get_setting(config, CLAIM_TOKEN_KEY) == "old-claim-tok"
+    assert claim_token == "old-claim-tok"
 
     # Runtime now sources everything from the DB primary; cert layout unchanged for the primary.
     assert new_config.primary_domain.name == "host.example.com"
     assert new_config.zone_domain == "host.example.com"  # derived from the primary
     assert new_config.cert_path_for("host.example.com") == new_config.tls_cert_path  # legacy path kept
+    # A non-primary domain would get its own per-domain cert path.
     assert new_config.cert_path_for("secondary.example.com") == new_config.certs_dir / "secondary.example.com.pem"
 
     # config.toml is left untouched — the now-ignored zone_domain line stays (scrubbed later, by a
@@ -103,20 +104,21 @@ def test_upgrade_is_idempotent_across_restarts(tmp_path: Path, monkeypatch: pyte
     config, config_toml = _old_instance(tmp_path, monkeypatch, owner=True)
     init_db(config.db_path)
     seed_first_boot(config)
-    first = {r.name for r in load_records(config)}
+    with closing(open_db(config)) as db:
+        first = {r.name for r in load_records(db)}
 
     # Second boot: config.toml is unchanged (still has zone_domain) but the DB is authoritative.
     reloaded = load_config()
     assert reloaded.zone_domain == "host.example.com"  # still present (not scrubbed), just ignored
     seed_first_boot(reloaded)
-    rebuild_active_domains(reloaded)
+    with closing(open_db(reloaded)) as db:
+        rebuild_active_domains(reloaded, db)
+        assert {r.name for r in load_records(db)} == first  # unchanged, no duplicates
+        assert reloaded_primary(db) == "host.example.com"
 
-    assert {r.name for r in load_records(config)} == first  # unchanged, no duplicates
-    assert reloaded_primary(config) == "host.example.com"
 
-
-def reloaded_primary(config) -> str:  # type: ignore[no-untyped-def]
-    return next(r.name for r in load_records(config) if r.is_primary)
+def reloaded_primary(db: sqlite3.Connection) -> str:
+    return next(r.name for r in load_records(db) if r.is_primary)
 
 
 def test_boot_fails_loud_when_no_domain_configured(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -131,8 +133,9 @@ def test_boot_fails_loud_when_no_domain_configured(tmp_path: Path, monkeypatch: 
     init_db(config.db_path)
 
     seed_first_boot(config)
-    config = rebuild_active_domains(config)
-    assert config.all_domains == ()  # nothing seeded it — the misconfiguration the guard catches
+    with closing(open_db(config)) as db:
+        config = rebuild_active_domains(config, db)
+        assert effective_domains(db) == ()  # nothing seeded it — the misconfiguration the guard catches
 
     with pytest.raises(RuntimeError, match="No domain configured"):
         _require_configured_domain(config)
@@ -142,5 +145,6 @@ def test_boot_guard_passes_for_seeded_instance(tmp_path: Path, monkeypatch: pyte
     config, _ = _old_instance(tmp_path, monkeypatch, owner=False)
     init_db(config.db_path)
     seed_first_boot(config)
-    config = rebuild_active_domains(config)
+    with closing(open_db(config)) as db:
+        config = rebuild_active_domains(config, db)
     _require_configured_domain(config)  # a seeded instance boots fine (no raise)

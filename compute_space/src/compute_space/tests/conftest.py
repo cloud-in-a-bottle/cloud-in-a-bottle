@@ -15,7 +15,6 @@ from compute_space import COMPUTE_SPACE_PACKAGE_DIR
 from compute_space import OPENHOST_PROJECT_DIR
 from compute_space.config import Config
 from compute_space.config import DefaultConfig
-from compute_space.config import Domain
 from compute_space.config import set_active_config
 from compute_space.db.schema import schema_path
 from compute_space.tests.utils import kill_tree
@@ -52,13 +51,21 @@ def _resolve_test_zone_to_localhost() -> Iterator[None]:
         socket.getaddrinfo = real_getaddrinfo
 
 
+def open_db(config: Config) -> sqlite3.Connection:
+    """A file-backed connection to the config's DB, configured like the app's ``get_db()`` — for
+    tests that call the DB-backed stores directly (which take a connection, not a config)."""
+    conn = sqlite3.connect(config.db_path)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys=ON")
+    return conn
+
+
 def _make_test_config(tmp_path: Path, **overrides: Any) -> Config:
-    """Create a DefaultConfig with temp dirs under tmp_path. Returns the Config object."""
+    """Build a DefaultConfig with temp dirs under tmp_path and register it active.  Side-effect-free on
+    the DB: tests that need a seeded domain set do their own ``init_db`` + ``seed_domains``."""
     zone_domain = overrides.pop("zone_domain", "testzone.local")
     tls_enabled = overrides.pop("tls_enabled", False)
-    # Default the domain set from zone_domain so the config behaves like a seeded instance
-    # (Config.all_domains reads the explicit domain set).
-    domains = overrides.pop("domains", (Domain(name=zone_domain, tls=tls_enabled),))
+    overrides.pop("domains", None)  # domain set is DB-backed; tests seed it explicitly
     cfg = DefaultConfig(
         host="127.0.0.1",
         data_root_dir=str(tmp_path),
@@ -67,7 +74,6 @@ def _make_test_config(tmp_path: Path, **overrides: Any) -> Config:
         port_range_end=overrides.pop("port_range_end", 19099),
         zone_domain=zone_domain,
         tls_enabled=tls_enabled,
-        domains=domains,
         start_caddy=overrides.pop("start_caddy", False),
         # Off by default in tests so existing test setup flows keep working;
         # the integration test that exercises the gate sets it to True

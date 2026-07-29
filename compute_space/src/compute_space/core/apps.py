@@ -16,7 +16,6 @@ import httpx
 
 import compute_space.core.storage as storage
 from compute_space.config import Config
-from compute_space.config import get_config
 from compute_space.core import archive_backend
 from compute_space.core.app_id import is_valid_app_name
 from compute_space.core.app_id import new_app_id
@@ -35,6 +34,7 @@ from compute_space.core.data import deprovision_data
 from compute_space.core.data import deprovision_temp_data
 from compute_space.core.data import provision_data
 from compute_space.core.data import rmtree_with_sudo_fallback
+from compute_space.core.domain_store import match_domain
 from compute_space.core.git_ops import UnsupportedRepoUrlError
 from compute_space.core.git_ops import is_github_repo_url
 from compute_space.core.git_ops import is_ssh_url
@@ -1183,11 +1183,11 @@ def remove_app_background(app_id: str, keep_data: bool, config: Config) -> None:
         db.close()
 
 
-def get_app_from_hostname(host: str) -> App | None:
+def get_app_from_hostname(host: str, db: sqlite3.Connection) -> App | None:
     """Extract+validate app name from a Host header value (or litestar's request.url.netloc; ie example.com[:port])
     by assuming that app_name is a subdir of one of the configured domains (as is convention).
 
-    The host is matched against every configured Domain (see Config.match_domain), so an app is
+    The host is matched against every configured Domain (see domain_store.match_domain), so an app is
     reachable under any domain the instance answers on (e.g. both `<app>.host.example.com` and
     `<app>.myhost.local`).  Matching is case-insensitive.
 
@@ -1198,8 +1198,7 @@ def get_app_from_hostname(host: str) -> App | None:
         zplizzi.host.imbue.com -> None
         localhost:8080 -> None
     """
-    config = get_config()
-    matched = config.match_domain(host)
+    matched = match_domain(db, host)
     if matched is None:
         return None
     zone_no_port = matched.name_no_port

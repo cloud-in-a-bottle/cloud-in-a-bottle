@@ -83,7 +83,7 @@ def default_volume_name_for_zone(config: Config) -> str:
     sanitised names would otherwise coincide (e.g. very long domains truncated
     to the same head) stay distinct.
     """
-    zone = config.primary_domain.name_no_port if config.all_domains else ""
+    zone = config.zone_domain_no_port
     # Map anything outside [a-z0-9-] to '-', collapse runs, trim edge dashes.
     slug = re.sub(r"[^a-z0-9-]+", "-", zone).strip("-")
     slug = re.sub(r"-{2,}", "-", slug)
