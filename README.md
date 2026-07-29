@@ -2,7 +2,7 @@
 
 Your corner of the cloud.
 
-Deploy, use, and share any app on a server you control. Built on the idea that software in the cloud should be as easy to use as any other app.
+Deploy, use, and share any app on a server you control. Built on the idea that modern software lives in the cloud, and if you want to be in control of your digital life, you need your own place in the cloud too.
 
 [![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
 
@@ -12,7 +12,7 @@ Deploy, use, and share any app on a server you control. Built on the idea that s
 
 ## Why Openhost
 
-Most people have no access to the cloud that isn't mediated by a company with different incentives than theirs. Software in the cloud exists but running it somewhere means fighting infrastructure that most people shouldn't have to touch.
+Most people have no access to the cloud that isn't mediated by a company with different incentives than theirs. Open source web software exists but running it somewhere means fighting infrastructure that most people don't want to touch.
 
 Openhost is the project our team needed and couldn't find: a corner of the cloud that's genuinely yours. Where apps install as easily as on your phone, and the data lives on hardware you control.
 
@@ -25,7 +25,7 @@ Openhost is the project our team needed and couldn't find: a corner of the cloud
 
 ## Managed hosting
 
-If you'd rather not run your own server, [Openhost](https://openhost.imbue.com/plans) provisions one for you: your SSH key, your data, your instance. We keep no copy of your key.
+If you'd rather not run your own server, [Openhost](https://openhost.imbue.com/plans) provisions one for you: your SSH key, your data, your instance. We just set you up with everything you need to get going, and then it's all yours from there.
 
 ---
 
@@ -72,7 +72,7 @@ See `ansible/readme.md` for prerequisites and full details.
 
 ## How it works
 
-The router is a Python app (Quart/Hypercorn) that provides a web dashboard for deploying and managing apps. It reads `openhost.toml` manifests from app repos, builds container images from each app's `Dockerfile` using rootless podman, runs each app in its own user namespace, and reverse-proxies HTTP requests to the right app by subdomain or path prefix.
+The router is a Python app that provides a web dashboard for deploying and managing apps. It reads `openhost.toml` manifests from app repos, builds container images from each app's `Dockerfile`, runs each app in its own isolated container, and proxies inbound HTTP requests to the right app by subdomain.
 
 ### Server mode
 
@@ -219,9 +219,9 @@ Once set up, ask your coding agent to package any existing project for Openhost 
 
 ## License
 
-Openhost is provided under the [AGPL-3.0 license](LICENSE). Personal use is fully allowed. If the software is distributed commercially, that use must also be made open source.
+Openhost is provided under the [AGPL-3.0 license](LICENSE).
 
-We may move to a different license in the future — something like a [fair source license](https://fair.io/licenses/) — with the intent that personal use will always be unrestricted, while commercial use may be scoped to support a sustainable project. Whatever changes: personal use stays free, always.
+We may move to a different license in the future — something like a [fair source license](https://fair.io/licenses/) — with the intent that personal use will always be unrestricted, while commercial use may be scoped to support a sustainable project.
 
 ---
 
@@ -232,7 +232,3 @@ We build honest software. Often open source. Tools that help people think, creat
 - [Explore Imbue's code on GitHub](https://github.com/imbue-ai)
 - [Check us out at imbue.com](https://imbue.com/)
 - [Follow @Imbue_AI on X](https://x.com/imbue_ai)
-
-## Related reading
-
-- The story behind Openhost coming soon...
