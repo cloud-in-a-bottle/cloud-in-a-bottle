@@ -189,10 +189,14 @@ class SubdomainProxyMiddleware:
                 return
 
         if scope["type"] == ScopeType.HTTP:
+            # Preserve the original Host instead of the 127.0.0.1:<port> httpx
+            # would synthesize, so backends that only read Host (not
+            # X-Forwarded-Host) behave.  HTTP-only: the websockets client
+            # appends rather than replaces Host, so setting it there duplicates it.
             proxied = await proxy_http_request(
                 Request(scope, receive, send),
                 target_port=app.local_port,
-                extra_headers=extra_headers,
+                extra_headers=[*extra_headers, ("Host", netloc)],
             )
             await proxied(scope, receive, send)
         else:
