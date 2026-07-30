@@ -28,8 +28,8 @@ from compute_space.core.auth.permissions_v2 import PermissionRecord
 from compute_space.core.auth.permissions_v2 import grant_permission_v2
 from compute_space.core.containers import BUILD_CACHE_CORRUPT_MARKER
 from compute_space.core.containers import EgressSetup
-from compute_space.core.containers import _egress_infra_name
 from compute_space.core.containers import build_image
+from compute_space.core.containers import egress_infra_pid
 from compute_space.core.containers import is_container_running
 from compute_space.core.containers import remove_image
 from compute_space.core.containers import run_container
@@ -614,19 +614,7 @@ def _teardown_existing_egress(app_row: sqlite3.Row, app_name: str) -> None:
         idx = app_row["ingress_index"]
     except (IndexError, KeyError):
         idx = None
-    infra_pid: int | None = None
-    try:
-        pid_result = subprocess.run(
-            ["podman", "inspect", "--format", "{{.State.Pid}}", _egress_infra_name(app_name)],
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-        if pid_result.returncode == 0 and pid_result.stdout.strip().isdigit():
-            pid = int(pid_result.stdout.strip())
-            infra_pid = pid if pid > 0 else None
-    except (subprocess.TimeoutExpired, OSError):
-        infra_pid = None
+    infra_pid = egress_infra_pid(app_name)
     if idx is not None:
         egress_mod.teardown_app_egress(infra_pid=infra_pid, ingress_index=int(idx))
     stop_egress_infra(app_name)
@@ -660,6 +648,12 @@ def _prepare_egress(
             f"App {app_name!r} requests egress profile {manifest.egress!r} but the "
             "privileged egress helper is not installed on this host. The operator "
             "must provision egress support (ansible) before deploying egress apps."
+        )
+    if not egress_mod.wireguard_available():
+        raise RuntimeError(
+            f"App {app_name!r} requests egress but WireGuard tools (wg) are not "
+            "installed on this host. The operator must provision egress support "
+            "(ansible) before deploying egress apps."
         )
     profile = egress_mod.load_profile(config.egress_profiles_dir, manifest.egress)
     ingress_index = _allocate_ingress_index(app_id, db)

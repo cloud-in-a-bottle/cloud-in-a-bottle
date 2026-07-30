@@ -44,7 +44,6 @@ import ipaddress
 import os
 import shutil
 import subprocess
-import tomllib
 
 import attr
 
@@ -68,9 +67,12 @@ class EgressProfileError(Exception):
 class EgressProfile:
     """A parsed WireGuard egress profile.
 
-    Only the fields the injector needs are surfaced; the raw config path is
-    handed to the privileged helper which reads keys itself (the unprivileged
-    router never needs the private key in memory).
+    Holds only the fields the deploy path needs (interface address + DNS); the
+    private key stays in the on-disk ``.conf`` and is read directly by the
+    privileged helper at injection time.  Note the router process does read the
+    whole config file (to parse address/DNS) and the profiles directory is
+    owned by the ``host`` user, so the key is not cryptographically isolated
+    from the router -- the router user is the trust boundary here, not the key.
     """
 
     name: str
@@ -265,7 +267,3 @@ def teardown_app_egress(*, infra_pid: int | None, ingress_index: int) -> None:
 def wireguard_available() -> bool:
     """True if wireguard-tools is installed on the host (needed by the helper)."""
     return shutil.which("wg") is not None
-
-
-def _tomllib_ok() -> bool:  # pragma: no cover - import guard only
-    return tomllib is not None

@@ -242,7 +242,7 @@ class EgressSetup:
     resolv_conf_path: str
 
 
-def _egress_infra_name(app_name: str) -> str:
+def egress_infra_name(app_name: str) -> str:
     return f"openhost-egress-{app_name}"
 
 
@@ -254,7 +254,7 @@ def _start_egress_infra(app_name: str, temp_data_dir: str) -> tuple[str, int]:
     the helper injects the tunnel as the sole route a dropped tunnel leaves the
     app with no egress (kill-switch), and no pasta route can leak around it.
     """
-    infra_name = _egress_infra_name(app_name)
+    infra_name = egress_infra_name(app_name)
     subprocess.run(["podman", "rm", "-f", infra_name], capture_output=True, timeout=30)
     cmd = [
         "podman",
@@ -291,10 +291,32 @@ def _start_egress_infra(app_name: str, temp_data_dir: str) -> tuple[str, int]:
     return infra_id, int(pid_result.stdout.strip())
 
 
+def egress_infra_pid(app_name: str) -> int | None:
+    """Return the PID of an app's running egress infra container, or None.
+
+    Used by teardown paths to address the app's netns for the privileged
+    helper.  Never raises; any error (missing container, timeout) maps to None.
+    """
+    try:
+        result = subprocess.run(
+            ["podman", "inspect", "--format", "{{.State.Pid}}", egress_infra_name(app_name)],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except (subprocess.TimeoutExpired, OSError) as e:
+        logger.warning("Could not read egress infra PID for %s: %s", app_name, e)
+        return None
+    if result.returncode != 0 or not result.stdout.strip().isdigit():
+        return None
+    pid = int(result.stdout.strip())
+    return pid if pid > 0 else None
+
+
 def stop_egress_infra(app_name: str) -> None:
     """Stop and remove an app's egress infra container.  Idempotent."""
     subprocess.run(
-        ["podman", "rm", "-f", _egress_infra_name(app_name)],
+        ["podman", "rm", "-f", egress_infra_name(app_name)],
         capture_output=True,
         timeout=30,
     )
@@ -377,7 +399,7 @@ def run_container(
             # container down so we never fall back to leaking out the DC IP.
             stop_egress_infra(app_name)
             raise
-        infra_name = _egress_infra_name(app_name)
+        infra_name = egress_infra_name(app_name)
         cmd.extend(
             [
                 "--network",
@@ -589,19 +611,7 @@ def stop_app_process(app_row: sqlite3.Row) -> None:
     # test fixtures without the columns don't raise.
     if _row_has_column(app_row, "egress_profile") and app_row["egress_profile"]:
         app_name = app_row["name"]
-        infra_pid: int | None = None
-        try:
-            pid_result = subprocess.run(
-                ["podman", "inspect", "--format", "{{.State.Pid}}", _egress_infra_name(app_name)],
-                capture_output=True,
-                text=True,
-                timeout=30,
-            )
-            if pid_result.returncode == 0 and pid_result.stdout.strip().isdigit():
-                pid = int(pid_result.stdout.strip())
-                infra_pid = pid if pid > 0 else None
-        except (subprocess.TimeoutExpired, OSError) as e:
-            logger.warning("Could not read egress infra PID for %s: %s", app_name, e)
+        infra_pid = egress_infra_pid(app_name)
         ingress_index = app_row["ingress_index"] if _row_has_column(app_row, "ingress_index") else None
         if ingress_index is not None:
             egress_mod.teardown_app_egress(infra_pid=infra_pid, ingress_index=int(ingress_index))
