@@ -115,9 +115,7 @@ def test_reload_refused_while_transient(
     assert _status(cfg.db_path, app_id) == busy_status
 
 
-def test_reload_refused_while_removing(
-    cfg: Any, client: TestClient[Litestar], cookies: dict[str, str]
-) -> None:
+def test_reload_refused_while_removing(cfg: Any, client: TestClient[Litestar], cookies: dict[str, str]) -> None:
     """A removing app is refused earlier (by the dedicated removing guard),
     also with 409 and no worker — belt-and-suspenders with the reload claim."""
     app_id = _seed_app(cfg.db_path, "goingaway", status="removing")
