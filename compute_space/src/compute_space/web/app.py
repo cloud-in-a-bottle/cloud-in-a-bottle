@@ -1,5 +1,4 @@
 import atexit
-import sqlite3
 from contextlib import closing
 from pathlib import Path
 from typing import Any
@@ -133,7 +132,7 @@ def _full_app_bootstrap(config: Config) -> None:
     DB / keys / logging are already initialized in ``start.py``; this only covers the
     heavier setup steps that don't make sense for the setup-only app.
     """
-    db = sqlite3.connect(config.db_path)
+    db = get_db()  # row_factory=Row; the archive derives its per-zone volume from the domains store
     try:
         archive_backend.attach_on_startup(config, db)
     finally:
