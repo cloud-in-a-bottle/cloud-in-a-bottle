@@ -139,6 +139,24 @@ async def test_router_reachable_on_both_bare_domains(wrapped_app: Any) -> None:
     assert r_local.status_code == 200 and r_local.text == "router-ok"
 
 
+@pytest.mark.asyncio
+async def test_router_reachable_on_internal_gateway_hosts(wrapped_app: Any) -> None:
+    # App→router service calls arrive on the container→host gateway (OPENHOST_ROUTER_URL), not a
+    # configured domain; the proxy must defer to the router rather than 404.
+    async with _client(wrapped_app) as c:
+        for host in ("host.containers.internal:8080", "host.docker.internal:8080", "127.0.0.1:8080"):
+            r = await c.get(f"http://{host}/health")
+            assert r.status_code == 200 and r.text == "router-ok", host
+
+
+@pytest.mark.asyncio
+async def test_unknown_external_host_still_404s(wrapped_app: Any) -> None:
+    # The internal-host allowance must not reopen serving arbitrary unmatched hosts.
+    async with _client(wrapped_app) as c:
+        r = await c.get("http://evil.example.org/health")
+    assert r.status_code == 404
+
+
 # --- Phase 2: unauthenticated login redirect stays on the ARRIVING domain ----------
 
 

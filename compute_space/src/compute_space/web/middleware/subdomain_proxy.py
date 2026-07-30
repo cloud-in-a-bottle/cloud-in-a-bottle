@@ -17,6 +17,7 @@ from litestar.types.asgi_types import WebSocketCloseEvent
 
 from compute_space.core.apps import get_app_from_hostname
 from compute_space.core.apps import is_public_path
+from compute_space.core.containers import ROUTER_INTERNAL_HOSTS
 from compute_space.core.domains import Domain
 from compute_space.core.logging import logger
 from compute_space.db import get_db
@@ -144,6 +145,11 @@ class SubdomainProxyMiddleware:
             looks_like_app = zone is not None and app is None and zone.is_app_subdomain(netloc)
 
         if zone is None:
+            if netloc.split(":")[0].lower() in ROUTER_INTERNAL_HOSTS:
+                # App→router service-proxy calls arrive here via OPENHOST_ROUTER_URL (the container→host
+                # gateway), which isn't a configured domain.  Defer to Litestar; those routes are auth-gated.
+                await self.app(scope, receive, send)
+                return
             # Unmatched host — not a configured domain or one of its subdomains.  Don't serve it (no
             # fallback to the primary).  Public traffic always arrives via Caddy with the original
             # domain Host, so this only rejects direct-by-IP / unknown-Host requests to the full app.
