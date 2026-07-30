@@ -18,6 +18,7 @@ import compute_space.core.storage as storage
 from compute_space.config import Config
 from compute_space.config import get_config
 from compute_space.core import archive_backend
+from compute_space.core import egress as egress_mod
 from compute_space.core.app_id import is_valid_app_name
 from compute_space.core.app_id import new_app_id
 from compute_space.core.auth.auth import DEFAULT_OWNER_USERNAME
@@ -26,11 +27,14 @@ from compute_space.core.auth.permissions_v2 import Grant
 from compute_space.core.auth.permissions_v2 import PermissionRecord
 from compute_space.core.auth.permissions_v2 import grant_permission_v2
 from compute_space.core.containers import BUILD_CACHE_CORRUPT_MARKER
+from compute_space.core.containers import EgressSetup
+from compute_space.core.containers import _egress_infra_name
 from compute_space.core.containers import build_image
 from compute_space.core.containers import is_container_running
 from compute_space.core.containers import remove_image
 from compute_space.core.containers import run_container
 from compute_space.core.containers import stop_app_process
+from compute_space.core.containers import stop_egress_infra
 from compute_space.core.data import deprovision_data
 from compute_space.core.data import deprovision_temp_data
 from compute_space.core.data import provision_data
@@ -163,6 +167,12 @@ class App:
     gpu: int
     public_paths: list[str]
     links: list[AppLink]
+    # Per-app egress (v0013).  '' = normal datacenter egress.  For egress apps
+    # ``upstream_host`` is the netns veth IP the router connects to; otherwise
+    # None (treated as loopback).
+    egress_profile: str
+    ingress_index: int | None
+    upstream_host: str | None
     manifest_raw: str | None
     installed_by: str | None
     created_at: str
@@ -174,6 +184,29 @@ class App:
         fields["public_paths"] = json.loads(fields["public_paths"] or "[]")
         fields["links"] = deserialize_links(fields["links"])
         return cls(**fields)
+
+    @property
+    def proxy_host(self) -> str:
+        """Host the reverse proxy / health checks should connect to.
+
+        Loopback for normal apps (their port is published on 127.0.0.1); the
+        infra netns veth IP for egress apps (reached over the ingress veth,
+        which does not traverse the tunnel).
+        """
+        return self.upstream_host or "127.0.0.1"
+
+    @property
+    def proxy_port(self) -> int:
+        """Port the reverse proxy / health checks should connect to.
+
+        Normal apps publish ``container_port`` on ``127.0.0.1:local_port`` so
+        the proxy uses ``local_port``.  Egress apps have no host port publish;
+        the app binds ``container_port`` directly inside the infra netns and is
+        reached over the veth at that same port.
+        """
+        if self.egress_profile and self.container_port:
+            return self.container_port
+        return self.local_port
 
 
 def find_app_by_name(name: str) -> App | None:
@@ -531,6 +564,126 @@ def insert_and_deploy(
     return app_id
 
 
+@attr.s(auto_attribs=True, frozen=True)
+class _EgressPlan:
+    """Result of preparing an app's egress: the run_container setup + where to
+    poll/proxy the app (netns veth IP + container port)."""
+
+    setup: EgressSetup
+    wait_host: str
+    wait_port: int
+    upstream_host: str
+    ingress_index: int
+
+
+def _allocate_ingress_index(app_id: str, db: sqlite3.Connection) -> int:
+    """Pick a stable per-app ingress index (the /30 selector).
+
+    Reuse the app's existing index if it already has one (so reload keeps the
+    same veth addressing); otherwise choose the smallest free index in
+    [1, 254] not currently used by another egress app.
+    """
+    existing = db.execute(
+        "SELECT ingress_index FROM apps WHERE app_id = ? AND ingress_index IS NOT NULL",
+        (app_id,),
+    ).fetchone()
+    if existing and existing["ingress_index"] is not None:
+        return int(existing["ingress_index"])
+    used = {
+        int(r["ingress_index"])
+        for r in db.execute(
+            "SELECT ingress_index FROM apps WHERE ingress_index IS NOT NULL AND app_id != ?",
+            (app_id,),
+        ).fetchall()
+        if r["ingress_index"] is not None
+    }
+    for idx in range(1, 255):
+        if idx not in used:
+            return idx
+    raise RuntimeError("No free egress ingress index available (max 254 egress apps)")
+
+
+def _teardown_existing_egress(app_row: sqlite3.Row, app_name: str) -> None:
+    """Tear down any egress infra + plumbing left from a prior deploy.
+
+    Best-effort and idempotent: safe when the app never used egress.  Called
+    on reload before re-preparing so a changed profile / removed egress can't
+    leave a stale tunnel or veth behind.
+    """
+    try:
+        idx = app_row["ingress_index"]
+    except (IndexError, KeyError):
+        idx = None
+    infra_pid: int | None = None
+    try:
+        pid_result = subprocess.run(
+            ["podman", "inspect", "--format", "{{.State.Pid}}", _egress_infra_name(app_name)],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if pid_result.returncode == 0 and pid_result.stdout.strip().isdigit():
+            pid = int(pid_result.stdout.strip())
+            infra_pid = pid if pid > 0 else None
+    except (subprocess.TimeoutExpired, OSError):
+        infra_pid = None
+    if idx is not None:
+        egress_mod.teardown_app_egress(infra_pid=infra_pid, ingress_index=int(idx))
+    stop_egress_infra(app_name)
+
+
+def _prepare_egress(
+    manifest: AppManifest,
+    app_id: str,
+    app_name: str,
+    config: Config,
+    db: sqlite3.Connection,
+) -> _EgressPlan | None:
+    """Prepare per-app egress if the manifest requests it; else None.
+
+    Loads and validates the referenced profile, allocates an ingress index,
+    persists the egress columns, and returns everything the deploy path needs.
+    Raises (failing the deploy) if the profile is missing/invalid or the host
+    isn't provisioned for egress -- fail closed rather than silently leaking.
+    """
+    if not manifest.egress:
+        # Clear any stale egress state if the app previously used egress.
+        db.execute(
+            "UPDATE apps SET egress_profile = '', ingress_index = NULL, upstream_host = NULL WHERE app_id = ?",
+            (app_id,),
+        )
+        db.commit()
+        return None
+
+    if not egress_mod.helper_available():
+        raise RuntimeError(
+            f"App {app_name!r} requests egress profile {manifest.egress!r} but the "
+            "privileged egress helper is not installed on this host. The operator "
+            "must provision egress support (ansible) before deploying egress apps."
+        )
+    profile = egress_mod.load_profile(config.egress_profiles_dir, manifest.egress)
+    ingress_index = _allocate_ingress_index(app_id, db)
+    _host_ip, netns_ip = egress_mod.ingress_ips_for_index(ingress_index)
+    resolv_conf_path = os.path.join(config.temporary_data_dir, "app_temp_data", app_name, "egress_resolv.conf")
+    db.execute(
+        "UPDATE apps SET egress_profile = ?, ingress_index = ?, upstream_host = ? WHERE app_id = ?",
+        (manifest.egress, ingress_index, netns_ip, app_id),
+    )
+    db.commit()
+    wait_port = manifest.container_port
+    return _EgressPlan(
+        setup=EgressSetup(
+            profile=profile,
+            ingress_index=ingress_index,
+            resolv_conf_path=resolv_conf_path,
+        ),
+        wait_host=netns_ip,
+        wait_port=wait_port,
+        upstream_host=netns_ip,
+        ingress_index=ingress_index,
+    )
+
+
 def deploy_app_background(
     manifest: AppManifest,
     repo_path: str,
@@ -583,6 +736,7 @@ def deploy_app_background(
             (app_id,),
         )
         db.commit()
+        egress_plan = _prepare_egress(manifest, app_id, app_name, config, db)
         container_id = run_container(
             app_name,
             image_tag,
@@ -593,6 +747,7 @@ def deploy_app_background(
             config.temporary_data_dir,
             archive_backend.effective_archive_dir(config, db),
             port_mappings=port_mappings,
+            egress_setup=egress_plan.setup if egress_plan else None,
         )
         db.execute(
             "UPDATE apps SET container_id = ? WHERE app_id = ?",
@@ -600,7 +755,9 @@ def deploy_app_background(
         )
         db.commit()
 
-        if wait_for_ready(local_port):
+        wait_host = egress_plan.wait_host if egress_plan else "127.0.0.1"
+        wait_port = egress_plan.wait_port if egress_plan else local_port
+        if wait_for_ready(wait_port, host=wait_host):
             db.execute(
                 "UPDATE apps SET status = 'running' WHERE app_id = ?",
                 (app_id,),
@@ -622,12 +779,16 @@ def deploy_app_background(
         db.close()
 
 
-def wait_for_ready(local_port: int, timeout: int = 60) -> bool:
-    """Poll the app's local port until it responds to HTTP. Returns True if ready."""
+def wait_for_ready(local_port: int, timeout: int = 60, host: str = "127.0.0.1") -> bool:
+    """Poll the app's port until it responds to HTTP. Returns True if ready.
+
+    ``host`` defaults to loopback for normal apps; egress apps pass the infra
+    netns veth IP (reached over the ingress veth, which bypasses the tunnel).
+    """
     deadline = time.time() + timeout
     while time.time() < deadline:
         try:
-            r = httpx.get(f"http://127.0.0.1:{local_port}/", timeout=2)
+            r = httpx.get(f"http://{host}:{local_port}/", timeout=2)
             if r.status_code < 500:
                 return True
         except (
@@ -811,6 +972,11 @@ def start_app_process(app_id: str, db: sqlite3.Connection, config: Config) -> No
         manifest.container_image,
         temp_data_dir=config.temporary_data_dir,
     )
+    # Tear down any prior egress plumbing before re-preparing: the infra
+    # container persists across app-container restarts (--restart) and a stale
+    # tunnel/veth from a previous config must not linger.
+    _teardown_existing_egress(app_row, app_name)
+    egress_plan = _prepare_egress(manifest, app_id, app_name, config, db)
     container_id = run_container(
         app_name,
         image_tag,
@@ -821,6 +987,7 @@ def start_app_process(app_id: str, db: sqlite3.Connection, config: Config) -> No
         config.temporary_data_dir,
         archive_backend.effective_archive_dir(config, db),
         port_mappings=port_mappings,
+        egress_setup=egress_plan.setup if egress_plan else None,
     )
     db.execute(
         "UPDATE apps SET container_id = ? WHERE app_id = ?",
@@ -828,7 +995,9 @@ def start_app_process(app_id: str, db: sqlite3.Connection, config: Config) -> No
     )
     db.commit()
 
-    if wait_for_ready(app_row["local_port"]):
+    wait_host = egress_plan.wait_host if egress_plan else "127.0.0.1"
+    wait_port = egress_plan.wait_port if egress_plan else app_row["local_port"]
+    if wait_for_ready(wait_port, host=wait_host):
         db.execute(
             "UPDATE apps SET status = 'running' WHERE app_id = ?",
             (app_id,),

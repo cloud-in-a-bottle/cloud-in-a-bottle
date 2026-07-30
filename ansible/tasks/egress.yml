@@ -1,0 +1,58 @@
+---
+# Per-app egress support: WireGuard tooling, the privileged plumbing helper,
+# and a tightly-scoped sudoers rule that lets the unprivileged `host` user
+# (which runs the rootless router) invoke ONLY that helper as root.
+#
+# Egress is opt-in per app via ``[runtime.container].egress`` in the app
+# manifest; this task just makes the host capable of serving such apps.  With
+# no egress profiles registered and no egress apps deployed, nothing here runs
+# at request time.  Runs with become: yes.
+
+- name: Install WireGuard userspace tools
+  apt:
+    name:
+      # `wg` + `wg-quick`; the helper uses `wg setconf`.  The kernel wireguard
+      # module ships with the 6.8 HWE kernel, so no DKMS is needed.
+      - wireguard-tools
+    state: present
+    update_cache: yes
+
+- name: Install the privileged egress helper
+  copy:
+    src: files/openhost-egress
+    dest: /usr/local/sbin/openhost-egress
+    owner: root
+    group: root
+    # root-only write; world-executable so the sudoers rule can run it.
+    mode: "0755"
+
+- name: Grant the host user sudo access to ONLY the egress helper
+  copy:
+    content: |
+      # Managed by OpenHost; do not edit by hand.
+      # Lets the rootless router (user `host`) run the per-app egress plumbing
+      # helper as root without a password.  Scoped to the exact binary path;
+      # the helper itself validates its arguments.
+      host ALL=(root) NOPASSWD: /usr/local/sbin/openhost-egress
+    dest: /etc/sudoers.d/openhost-egress
+    owner: root
+    group: root
+    mode: "0440"
+    # Reject a malformed drop-in rather than break sudo for the whole host.
+    validate: "visudo -cf %s"
+
+- name: Create the egress profiles directory
+  file:
+    # Matches Config.egress_profiles_dir (persistent_data/egress_profiles).
+    # Operators drop <name>.conf WireGuard configs here to register profiles.
+    path: "{{ data_root_dir | default('/opt/openhost') }}/persistent_data/egress_profiles"
+    state: directory
+    owner: host
+    group: host
+    # 0700: profiles hold WireGuard private keys.  Only the host user (router)
+    # and root (helper via sudo) need to read them.
+    mode: "0700"
+
+# net.ipv4.ip_forward is already enabled for network_host VPN apps in
+# containers.yml; the egress ingress veth and the exit-node forwarding both
+# rely on it, so no additional sysctl is needed here.

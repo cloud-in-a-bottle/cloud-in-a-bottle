@@ -191,14 +191,16 @@ class SubdomainProxyMiddleware:
         if scope["type"] == ScopeType.HTTP:
             proxied = await proxy_http_request(
                 Request(scope, receive, send),
-                target_port=app.local_port,
+                target_port=app.proxy_port,
                 extra_headers=extra_headers,
+                target_host=app.proxy_host,
             )
             await proxied(scope, receive, send)
         else:
             assert scope["type"] == ScopeType.WEBSOCKET
             await proxy_websocket_request(
                 WebSocket(scope, receive, send),
-                target_port=app.local_port,
+                target_port=app.proxy_port,
                 extra_headers=extra_headers,
+                target_host=app.proxy_host,
             )

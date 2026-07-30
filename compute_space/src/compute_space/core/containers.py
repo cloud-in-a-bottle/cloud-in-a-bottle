@@ -29,6 +29,7 @@ from datetime import datetime
 
 import attr
 
+from compute_space.core import egress as egress_mod
 from compute_space.core.logging import logger
 from compute_space.core.manifest import AppManifest
 from compute_space.core.manifest import PortMapping
@@ -223,6 +224,82 @@ def _bind_mount_arg(host_path: str, container_path: str, *, read_only: bool = Fa
     return f"{host_path}:{container_path}:{options}"
 
 
+@attr.s(auto_attribs=True, frozen=True)
+class EgressSetup:
+    """Everything ``run_container`` needs to route an app through an egress tunnel.
+
+    Assembled by the caller (``apps.py``) from the app's manifest + DB row +
+    the loaded egress profile.  When passed, the app runs inside an infra
+    netns whose sole route is the tunnel (fail-closed), and the router reaches
+    it at ``netns_ip:container_port`` via a host<->netns veth instead of
+    loopback.
+    """
+
+    profile: egress_mod.EgressProfile
+    ingress_index: int
+    # Router-owned resolv.conf path (bind-mounted into the app container) that
+    # points at a DNS reachable through the tunnel.
+    resolv_conf_path: str
+
+
+def _egress_infra_name(app_name: str) -> str:
+    return f"openhost-egress-{app_name}"
+
+
+def _start_egress_infra(app_name: str, temp_data_dir: str) -> tuple[str, int]:
+    """Start the ``--network none`` infra container and return (id, pid).
+
+    The infra container is a minimal always-up holder for the app's private
+    netns.  ``--network none`` is essential: it has NO default route, so after
+    the helper injects the tunnel as the sole route a dropped tunnel leaves the
+    app with no egress (kill-switch), and no pasta route can leak around it.
+    """
+    infra_name = _egress_infra_name(app_name)
+    subprocess.run(["podman", "rm", "-f", infra_name], capture_output=True, timeout=30)
+    cmd = [
+        "podman",
+        "run",
+        "-d",
+        "--name",
+        infra_name,
+        "--network",
+        "none",
+        "--restart",
+        "unless-stopped",
+        "--memory",
+        "16m",
+        # A tiny, always-available base.  We only need the netns to persist.
+        "docker.io/library/alpine:latest",
+        "sleep",
+        "infinity",
+    ]
+    logger.info("Starting egress infra container: %s", " ".join(cmd))
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+    if result.returncode != 0:
+        _append_log(app_name, temp_data_dir, f"ERROR (egress infra): {result.stderr}\n")
+        raise RuntimeError(f"Egress infra container start failed:\n{result.stderr}")
+    infra_id = result.stdout.strip()
+    pid_result = subprocess.run(
+        ["podman", "inspect", "--format", "{{.State.Pid}}", infra_id],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    if pid_result.returncode != 0 or not pid_result.stdout.strip().isdigit():
+        subprocess.run(["podman", "rm", "-f", infra_name], capture_output=True, timeout=30)
+        raise RuntimeError(f"Could not read egress infra PID: {pid_result.stderr.strip()}")
+    return infra_id, int(pid_result.stdout.strip())
+
+
+def stop_egress_infra(app_name: str) -> None:
+    """Stop and remove an app's egress infra container.  Idempotent."""
+    subprocess.run(
+        ["podman", "rm", "-f", _egress_infra_name(app_name)],
+        capture_output=True,
+        timeout=30,
+    )
+
+
 def run_container(
     app_name: str,
     image_tag: str,
@@ -233,6 +310,7 @@ def run_container(
     temp_data_dir: str,
     archive_dir: str,
     port_mappings: list[PortMapping] | None = None,
+    egress_setup: EgressSetup | None = None,
 ) -> str:
     """Start a detached container for an app.  Returns the container ID."""
     app_data_dir = os.path.join(data_dir, "app_data", app_name)
@@ -279,7 +357,40 @@ def run_container(
         container_name,
     ]
 
-    if manifest.network_host:
+    if egress_setup is not None:
+        # Egress mode: the app joins a private infra netns whose only route is
+        # a WireGuard tunnel.  Start that infra container and have the
+        # privileged helper inject the tunnel + a host<->netns ingress veth.
+        # The app then joins via --network container: and cannot reach the
+        # datacenter path at all.
+        infra_id, infra_pid = _start_egress_infra(app_name, temp_data_dir)
+        try:
+            egress_mod.setup_app_egress(
+                app_name=app_name,
+                infra_pid=infra_pid,
+                profile=egress_setup.profile,
+                ingress_index=egress_setup.ingress_index,
+                resolv_conf_path=egress_setup.resolv_conf_path,
+            )
+        except Exception:
+            # Fail closed: if we can't establish the tunnel, tear the infra
+            # container down so we never fall back to leaking out the DC IP.
+            stop_egress_infra(app_name)
+            raise
+        infra_name = _egress_infra_name(app_name)
+        cmd.extend(
+            [
+                "--network",
+                f"container:{infra_name}",
+                # DNS reaches the tunnel via this bind-mounted resolv.conf;
+                # --dns is rejected by podman in container: network mode.
+                "-v",
+                _bind_mount_arg(egress_setup.resolv_conf_path, "/etc/resolv.conf", read_only=True),
+                "--add-host=host.docker.internal:host-gateway",
+                "--add-host=host.containers.internal:host-gateway",
+            ]
+        )
+    elif manifest.network_host:
         # Host networking: the container shares the host's full network
         # namespace.  Required for apps that do IP forwarding (VPN servers
         # like WireGuard) because pasta can only proxy individual TCP/UDP
@@ -376,7 +487,10 @@ def run_container(
     # parse time so these binds always succeed.
     # With --network=host, port publishing is skipped (container binds
     # directly on the host's interfaces).
-    if port_mappings and not manifest.network_host:
+    # Egress apps can't publish ports (they join the infra netns, which has no
+    # host loopback); structured port mappings are unsupported there and the
+    # app's HTTP port is reached over the ingress veth instead.
+    if port_mappings and not manifest.network_host and egress_setup is None:
         for pm in port_mappings:
             cmd.extend(["-p", f"0.0.0.0:{pm.host_port}:{pm.container_port}/tcp"])
             cmd.extend(["-p", f"0.0.0.0:{pm.host_port}:{pm.container_port}/udp"])
@@ -419,6 +533,9 @@ def run_container(
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
     if result.returncode != 0:
         _append_log(app_name, temp_data_dir, f"ERROR: {result.stderr}\n")
+        # Fail closed: don't leave a half-configured egress infra behind.
+        if egress_setup is not None:
+            stop_egress_infra(app_name)
         raise RuntimeError(f"Container start failed:\n{result.stderr}")
 
     container_id = result.stdout.strip()
@@ -448,13 +565,47 @@ def stop_container(container_id: str) -> None:
     subprocess.run(["podman", "rm", "-f", container_id], capture_output=True, timeout=30)
 
 
+def _row_has_column(row: sqlite3.Row, name: str) -> bool:
+    """True if a sqlite3.Row has ``name`` (older rows/tests may predate it)."""
+    try:
+        return name in row.keys()
+    except Exception:
+        return False
+
+
 def stop_app_process(app_row: sqlite3.Row) -> None:
-    """Stop the running process for an app.  Does not update the database."""
+    """Stop the running process for an app.  Does not update the database.
+
+    For egress apps this also tears down the infra container and the
+    privileged tunnel/ingress plumbing so nothing is left dangling.
+    """
     try:
         if app_row["container_id"]:
             stop_container(app_row["container_id"])
     except Exception as e:
         logger.warning("Error stopping app %s: %s", app_row["name"], e)
+
+    # Egress teardown (best-effort, never fatal).  Guarded so pre-v13 rows or
+    # test fixtures without the columns don't raise.
+    if _row_has_column(app_row, "egress_profile") and app_row["egress_profile"]:
+        app_name = app_row["name"]
+        infra_pid: int | None = None
+        try:
+            pid_result = subprocess.run(
+                ["podman", "inspect", "--format", "{{.State.Pid}}", _egress_infra_name(app_name)],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            if pid_result.returncode == 0 and pid_result.stdout.strip().isdigit():
+                pid = int(pid_result.stdout.strip())
+                infra_pid = pid if pid > 0 else None
+        except (subprocess.TimeoutExpired, OSError) as e:
+            logger.warning("Could not read egress infra PID for %s: %s", app_name, e)
+        ingress_index = app_row["ingress_index"] if _row_has_column(app_row, "ingress_index") else None
+        if ingress_index is not None:
+            egress_mod.teardown_app_egress(infra_pid=infra_pid, ingress_index=int(ingress_index))
+        stop_egress_infra(app_name)
 
 
 def remove_image(app_name: str) -> None:

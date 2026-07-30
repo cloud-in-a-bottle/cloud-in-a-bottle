@@ -154,6 +154,18 @@ class AppManifest:
     # genuinely need raw network access (VPNs, transparent proxies).
     network_host: bool = False
 
+    # Route all of the app's outbound traffic through a named egress profile
+    # (a WireGuard tunnel to an operator-configured exit: the owner's home IP,
+    # a WG-compatible VPN provider, etc.).  The profile name references a
+    # config the instance operator has registered on the host; the app repo
+    # never carries tunnel keys.  Empty string = normal datacenter egress.
+    #
+    # Enforced fail-closed: the app runs inside an infra netns whose ONLY
+    # route is the tunnel, so if the tunnel drops the app has no egress at all
+    # (no leak to the datacenter IP).  Mutually exclusive with network_host
+    # (which shares the host netns and cannot be confined to a tunnel).
+    egress: str = ""
+
     # [routing]
     health_check: str | None = None
     public_paths: list[str] = attr.Factory(list)
@@ -235,6 +247,37 @@ def _validate_capabilities(caps: list[Any]) -> list[str]:
             )
         normalised.append(name)
     return normalised
+
+
+# Egress profile names are used as podman container names, netns handle
+# filenames, and WireGuard config filenames, so they must be a conservative
+# DNS-label-like token.  Same shape as app shortnames.
+_EGRESS_PROFILE_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
+
+
+def _validate_egress(egress: Any, network_host: bool) -> str:
+    """Normalise and validate ``[runtime.container].egress``.
+
+    Empty/absent means normal datacenter egress.  A non-empty value must be a
+    safe profile-name token and is incompatible with ``network_host`` (which
+    shares the host netns and so can't be confined to a per-app tunnel).
+    """
+    if egress is None or egress == "":
+        return ""
+    if not isinstance(egress, str):
+        raise ValueError("[runtime.container].egress must be a string profile name")
+    name = egress.strip()
+    if not _EGRESS_PROFILE_RE.match(name):
+        raise ValueError(
+            f"[runtime.container].egress {egress!r} is not a valid profile name "
+            "(lowercase letters, digits, '-' and '_', max 32 chars)."
+        )
+    if network_host:
+        raise ValueError(
+            "[runtime.container].egress cannot be combined with network_host: "
+            "host networking shares the host netns and cannot be confined to a tunnel."
+        )
+    return name
 
 
 def _parse_ports(ports_list: list[Any]) -> list[PortMapping]:
@@ -424,6 +467,7 @@ def parse_manifest_from_string(raw_text: str) -> AppManifest:
         capabilities=_validate_capabilities(container.get("capabilities", [])),
         devices=_validate_devices(container.get("devices", [])),
         network_host=container.get("network_host", False),
+        egress=_validate_egress(container.get("egress", ""), container.get("network_host", False)),
         shm_mb=shm_mb,
         health_check=routing.get("health_check"),
         public_paths=routing.get("public_paths", []),

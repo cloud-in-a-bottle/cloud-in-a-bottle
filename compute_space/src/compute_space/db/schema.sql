@@ -21,6 +21,14 @@ CREATE TABLE IF NOT EXISTS apps (
     gpu INTEGER NOT NULL DEFAULT 0,
     public_paths TEXT NOT NULL DEFAULT '[]',
     links TEXT NOT NULL DEFAULT '[]',
+    -- Per-app egress (see migration v0013 + core/egress.py).  egress_profile
+    -- '' means normal datacenter egress; a name routes the app through a
+    -- WireGuard tunnel.  ingress_index selects the host<->netns veth /30 and
+    -- upstream_host is where the proxy/health checks connect (loopback for
+    -- normal apps, the netns veth IP for egress apps; NULL == 127.0.0.1).
+    egress_profile TEXT NOT NULL DEFAULT '',
+    ingress_index INTEGER,
+    upstream_host TEXT,
     manifest_raw TEXT,
     installed_by TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),

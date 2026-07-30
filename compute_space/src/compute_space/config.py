@@ -184,6 +184,16 @@ class Config:
         return os.path.join(self.data_root_dir, "apps")
 
     @property
+    def egress_profiles_dir(self) -> str:
+        # Operator-managed per-app egress profiles.  Each ``<name>.conf`` is a
+        # WireGuard config describing an exit (owner's home IP, a WG VPN
+        # provider, etc.).  Apps reference a profile by name via
+        # ``[runtime.container].egress``; the tunnel keys live here on the
+        # host, never in app repos.  Kept under persistent_data_dir so it
+        # survives rebuilds and is captured by backups.
+        return os.path.join(self.persistent_data_dir, "egress_profiles")
+
+    @property
     def openhost_data_path(self) -> Path:
         # openhost-specific data, including the sqlite db and TLS certs.
         return Path(self.persistent_data_dir) / "openhost"

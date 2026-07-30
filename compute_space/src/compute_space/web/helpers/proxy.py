@@ -74,7 +74,9 @@ def _build_forwarded_request_headers(
     return new_headers
 
 
-def _format_proxy_request_url(scope: Scope, target_port: int, override_path: str | None = None) -> str:
+def _format_proxy_request_url(
+    scope: Scope, target_port: int, override_path: str | None = None, target_host: str = "127.0.0.1"
+) -> str:
     if override_path:
         path = override_path
     else:
@@ -87,7 +89,7 @@ def _format_proxy_request_url(scope: Scope, target_port: int, override_path: str
     path = path.lstrip("/")
     # websockets.connect() rejects http/https URIs; use ws for WS scopes.
     scheme = "ws" if scope["type"] == ScopeType.WEBSOCKET else "http"
-    target_url = f"{scheme}://127.0.0.1:{target_port}/{path}"
+    target_url = f"{scheme}://{target_host}:{target_port}/{path}"
     query_string = scope["query_string"]
     if query_string:
         target_url += f"?{query_string.decode('utf-8')}"
@@ -130,6 +132,7 @@ async def proxy_http_request(
     extra_headers: Iterable[tuple[str, str]] = (),
     timeout: float = 30,
     read_timeout: float | None = None,
+    target_host: str = "127.0.0.1",
 ) -> ASGIResponse:
     """Forward an HTTP request to a local port and return the response.
 
@@ -151,7 +154,7 @@ async def proxy_http_request(
     want to bound how long they'll wait on a backend (e.g. internal service
     calls) can pass an explicit ``read_timeout``.
     """
-    target_url = _format_proxy_request_url(request.scope, target_port, override_path)
+    target_url = _format_proxy_request_url(request.scope, target_port, override_path, target_host)
     new_request_headers = _build_forwarded_request_headers(
         request.headers, _HTTP_REQUEST_EXCLUDED_HEADERS, extra_headers
     )
@@ -288,12 +291,13 @@ async def proxy_websocket_request(
     target_port: int,
     extra_headers: Iterable[tuple[str, str]] = (),
     override_path: str | None = None,
+    target_host: str = "127.0.0.1",
 ) -> None:
     """Bidirectionally proxy a WebSocket connection to a backend app.
 
     If ``override_path`` is set, use it instead of the client path.
     """
-    target_url = _format_proxy_request_url(connection.scope, target_port, override_path)
+    target_url = _format_proxy_request_url(connection.scope, target_port, override_path, target_host)
 
     if subprotocols_str := connection.headers.get("Sec-WebSocket-Protocol"):
         subprotocols = [Subprotocol(s.strip()) for s in subprotocols_str.split(",")]

@@ -6,6 +6,7 @@
 
 - [App Manifest Spec](./manifest_spec.md)
 - [Routing](./routing.md)
+- [Per-App Egress](./egress.md)
 - [User Identity](./user_identity.md)
 - [Persistent Data & Archive](./data.md)
 - [Logs](./logs.md)

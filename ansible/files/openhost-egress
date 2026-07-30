@@ -1,0 +1,151 @@
+#!/usr/bin/env bash
+#
+# openhost-egress — privileged per-app egress plumbing helper.
+#
+# The OpenHost router runs unprivileged (rootless podman, user `host`) and
+# cannot manipulate network namespaces it does not own or configure WireGuard.
+# This helper is the ONLY privileged component: it is invoked by the router via
+# a tightly-scoped sudoers rule (NOPASSWD, exact path) to wire an app's egress.
+#
+# Model (validated end-to-end on a real rootless host):
+#   * The router starts a `--network none` "infra" container for the app; its
+#     netns has NO route out.  We are given that container's PID.
+#   * `up`   creates a WireGuard device in the infra netns configured from the
+#            app's profile, sets it as the SOLE default route (fail-closed
+#            kill-switch), and adds a host<->netns veth /30 so the router can
+#            still reach the app's HTTP port without that path crossing the
+#            tunnel.
+#   * `down` reverses it (idempotent, best-effort).
+#
+# All network state lives inside the infra container's netns (addressed by
+# PID) except the host end of the ingress veth, which lives in the host netns.
+#
+# Usage:
+#   openhost-egress up   --pid N --wg-config PATH --wg-address CIDR \
+#                        --ingress-host-ip IP --ingress-netns-ip IP
+#   openhost-egress down [--pid N] --ingress-host-ip IP --ingress-netns-ip IP
+#
+set -euo pipefail
+
+log() { echo "openhost-egress: $*" >&2; }
+die() { log "ERROR: $*"; exit 1; }
+
+# Deterministic, collision-free interface names derived from the ingress /30's
+# netns IP (last two octets), so multiple concurrent egress apps don't clash.
+# Linux IFNAMSIZ caps names at 15 chars; "ohveth" + 2 octets stays under it.
+iface_suffix_from_ip() {
+    # 10.199.<a>.<b> -> "<a>_<b>"  (kept short)
+    echo "$1" | awk -F. '{print $3"_"$4}'
+}
+
+cmd=""
+pid=""
+wg_config=""
+wg_address=""
+ingress_host_ip=""
+ingress_netns_ip=""
+
+cmd="${1:-}"; shift || true
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --pid) pid="$2"; shift 2;;
+        --wg-config) wg_config="$2"; shift 2;;
+        --wg-address) wg_address="$2"; shift 2;;
+        --ingress-host-ip) ingress_host_ip="$2"; shift 2;;
+        --ingress-netns-ip) ingress_netns_ip="$2"; shift 2;;
+        *) die "unknown argument: $1";;
+    esac
+done
+
+[ -n "$ingress_host_ip" ] || die "--ingress-host-ip required"
+[ -n "$ingress_netns_ip" ] || die "--ingress-netns-ip required"
+
+suffix="$(iface_suffix_from_ip "$ingress_netns_ip")"
+veth_host="ohveth${suffix}"     # host side of ingress veth
+veth_netns="ohvethc${suffix}"   # netns side (renamed inside netns)
+wg_dev="ohwg${suffix}"
+
+# nsenter into the infra container's netns by PID.
+in_netns() { nsenter -t "$pid" -n "$@"; }
+
+do_up() {
+    [ -n "$pid" ] || die "--pid required for up"
+    [ -n "$wg_config" ] || die "--wg-config required for up"
+    [ -n "$wg_address" ] || die "--wg-address required for up"
+    [ -f "$wg_config" ] || die "wg config not found: $wg_config"
+    [ -d "/proc/$pid" ] || die "no process with pid $pid"
+
+    # --- WireGuard egress inside the infra netns (sole default route) ---
+    # Create the wg device in the host netns then move it in (wg devices can
+    # change netns; creating directly inside a foreign netns is unreliable).
+    ip link del "$wg_dev" 2>/dev/null || true
+    ip link add "$wg_dev" type wireguard
+    ip link set "$wg_dev" netns "$pid"
+    # `wg setconf` accepts only the wg-native subset: [Interface] PrivateKey/
+    # ListenPort/FwMark and [Peer] sections.  wg-quick extensions (Address,
+    # DNS, MTU, Table, PostUp, …) must be stripped or wg errors out.  We build a
+    # clean config and feed it via a temp file (avoids process-substitution
+    # perms issues under sudo).
+    local clean
+    clean="$(mktemp)"
+    # shellcheck disable=SC2064
+    trap "rm -f '$clean'" RETURN
+    awk '
+        BEGIN{section=""}
+        /^[[:space:]]*#/ {next}
+        /^\[/ {section=tolower($0); print; next}
+        {
+            key=$0; sub(/[[:space:]]*=.*/,"",key); gsub(/[[:space:]]/,"",key); key=tolower(key)
+            if (section=="[interface]") {
+                if (key=="privatekey" || key=="listenport" || key=="fwmark") print
+            } else {
+                print
+            }
+        }
+    ' "$wg_config" > "$clean"
+    in_netns wg setconf "$wg_dev" "$clean"
+    in_netns ip address add "$wg_address" dev "$wg_dev"
+    in_netns ip link set "$wg_dev" up
+    in_netns ip link set lo up
+    # Sole default route via the tunnel.  Because the infra netns started with
+    # --network none there is no other default, so a dropped tunnel = no egress.
+    in_netns ip route replace default dev "$wg_dev"
+    # Belt-and-suspenders against IPv6 leaks: the --network none netns has no
+    # IPv6 egress, but if the profile doesn't carry v6 we make sure the app
+    # can't try v6 at all by disabling it in the namespace and blackholing any
+    # v6 default.  Failures are ignored (v6 may be compiled out).
+    in_netns sysctl -w net.ipv6.conf.all.disable_ipv6=1 >/dev/null 2>&1 || true
+    in_netns sysctl -w net.ipv6.conf.default.disable_ipv6=1 >/dev/null 2>&1 || true
+    in_netns ip -6 route replace blackhole default 2>/dev/null || true
+
+    # --- Ingress veth: host <-> infra netns, so the router reaches the app ---
+    ip link del "$veth_host" 2>/dev/null || true
+    ip link add "$veth_host" type veth peer name "$veth_netns"
+    ip address add "${ingress_host_ip}/30" dev "$veth_host"
+    ip link set "$veth_host" up
+    ip link set "$veth_netns" netns "$pid"
+    in_netns ip address add "${ingress_netns_ip}/30" dev "$veth_netns"
+    in_netns ip link set "$veth_netns" up
+    # The /30 is directly connected on both ends, so router->app traffic uses
+    # it directly and never touches the tunnel (and isn't killed if wg drops).
+
+    log "up: app pid=$pid wg=$wg_dev ($wg_address) ingress ${ingress_host_ip}<->${ingress_netns_ip}"
+}
+
+do_down() {
+    # Host-side veth removal takes its peer with it; safe if already gone.
+    ip link del "$veth_host" 2>/dev/null || true
+    # In-netns devices vanish with the container, but if the container is still
+    # up (reload) tear them down explicitly.
+    if [ -n "$pid" ] && [ -d "/proc/$pid" ]; then
+        in_netns ip link del "$wg_dev" 2>/dev/null || true
+        in_netns ip link del "$veth_netns" 2>/dev/null || true
+    fi
+    log "down: cleaned up ingress ${ingress_host_ip} (pid=${pid:-none})"
+}
+
+case "$cmd" in
+    up) do_up;;
+    down) do_down;;
+    *) die "usage: openhost-egress {up|down} [args]";;
+esac

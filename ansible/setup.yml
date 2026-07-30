@@ -36,6 +36,7 @@
   tasks:
     - import_tasks: tasks/apt_packages.yml
     - import_tasks: tasks/containers.yml
+    - import_tasks: tasks/egress.yml
     - import_tasks: tasks/journald.yml
 
 - name: Dev environment

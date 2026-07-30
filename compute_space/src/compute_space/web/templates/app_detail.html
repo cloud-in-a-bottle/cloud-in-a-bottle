@@ -26,6 +26,9 @@
   </td></tr>
   <tr><th>Local Port</th><td>{{ app.local_port }}</td></tr>
   <tr><th>Health Check</th><td>{{ app.health_check or "---" }}</td></tr>
+  {% if app.egress_profile %}
+  <tr><th>Egress</th><td>via <code>{{ app.egress_profile }}</code> tunnel <span style="color:#666;font-size:0.85em;">(all outbound traffic routed through this profile)</span></td></tr>
+  {% endif %}
   <tr><th>Memory</th><td>{{ app.memory_mb }} MB</td></tr>
   <tr><th>CPU</th><td>{{ app.cpu_cores }} cores</td></tr>
   {% if app.repo_url %}
