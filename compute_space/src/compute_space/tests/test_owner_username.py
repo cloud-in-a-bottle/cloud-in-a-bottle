@@ -39,6 +39,7 @@ from compute_space.core.data import provision_data
 from compute_space.core.manifest import AppManifest
 from compute_space.db import provide_db
 from compute_space.db.connection import init_db
+from compute_space.tests._litestar_helpers import stash_zone_middleware
 from compute_space.tests.conftest import _make_test_config
 from compute_space.web.routes.api.settings import api_settings_routes
 from compute_space.web.routes.pages.login import pages_login_routes
@@ -167,6 +168,7 @@ def _make_login_app() -> Litestar:
             "config": Provide(provide_config, sync_to_thread=False),
             "db": Provide(provide_db),
         },
+        middleware=[stash_zone_middleware],
         openapi_config=None,
     )
 

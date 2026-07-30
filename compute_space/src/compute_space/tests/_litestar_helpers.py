@@ -6,17 +6,39 @@ Kept under a leading-underscore name so pytest doesn't try to collect it.
 from __future__ import annotations
 
 import sqlite3
+from contextlib import closing
 from typing import Any
 
 import bcrypt
 from litestar import Litestar
 from litestar.di import Provide
 from litestar.handlers.base import BaseRouteHandler
+from litestar.types import ASGIApp
+from litestar.types import Receive
+from litestar.types import Scope
+from litestar.types import Send
 
 from compute_space.config import provide_config
 from compute_space.core.auth.auth import SESSION_COOKIE_NAME
 from compute_space.core.auth.auth import create_session
+from compute_space.core.domains import primary_domain_or_none
+from compute_space.db import get_db
 from compute_space.db import provide_db
+from compute_space.web.helpers.zone import ZONE_SCOPE_KEY
+
+
+def stash_zone_middleware(app: ASGIApp) -> ASGIApp:
+    """Test stand-in for the zone-stashing half of ``SubdomainProxyMiddleware``: put the DB primary
+    in the request scope so ``zone_for_request`` resolves in minimal test apps that omit the full
+    proxy middleware (the real middleware is required on every request in production)."""
+
+    async def middleware(scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] in ("http", "websocket"):
+            with closing(get_db()) as db:
+                scope[ZONE_SCOPE_KEY] = primary_domain_or_none(db)
+        await app(scope, receive, send)
+
+    return middleware
 
 
 def seed_user(db_path: str, username: str = "owner", password: str = "testpass1") -> int:
@@ -65,6 +87,7 @@ def make_test_app(*route_handlers: Any) -> Litestar:
             "config": Provide(provide_config, sync_to_thread=False),
             "db": Provide(provide_db),
         },
+        middleware=[stash_zone_middleware],
         openapi_config=None,
     )
 

@@ -8,10 +8,12 @@ import atexit
 import os
 import signal
 import socket
+import sqlite3
 import subprocess
 import sys
 import time
 from collections.abc import Generator
+from contextlib import closing
 from contextlib import contextmanager
 from typing import IO
 from typing import Any
@@ -21,6 +23,18 @@ import requests
 
 from compute_space import COMPUTE_SPACE_PACKAGE_DIR
 from compute_space.config import Config
+from compute_space.core.domains import Domain
+from compute_space.core.domains import primary_domain_or_none
+
+
+def write_first_boot_beside(config_path: str, primary: Domain | None) -> None:
+    """Write a ``first_boot.toml`` next to ``config_path`` seeding ``primary``, so a router
+    subprocess (whose config.toml no longer carries the domain) boots with one."""
+    if primary is None:
+        return
+    fb_path = os.path.join(os.path.dirname(config_path), "first_boot.toml")
+    with open(fb_path, "w") as f:
+        f.write(f'domain = "{primary.name}"\ntls = {"true" if primary.tls else "false"}\n')
 
 
 def make_router_env(config_path: str) -> dict[str, str]:
@@ -163,6 +177,9 @@ def managed_router(config: Config, startup_timeout: int = 30) -> Generator[subpr
 
     config_path = os.path.join(config.temporary_data_dir, "config.toml")
     config.to_toml(config_path)
+    with closing(sqlite3.connect(config.db_path)) as db:
+        db.row_factory = sqlite3.Row
+        write_first_boot_beside(config_path, primary_domain_or_none(db))
     env = make_router_env(config_path)
 
     log_path = os.path.join(config.temporary_data_dir, "router.log")

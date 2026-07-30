@@ -34,9 +34,17 @@ RUN mkdir -p /etc/openhost && \
 # Create minimal router config and data dirs (normally created by ansible)
 RUN mkdir -p /home/host/.openhost/local_compute_space \
              /opt/openhost && \
-    printf '[openhost]\nzone_domain = "test.local"\nhost = "127.0.0.1"\n' \
+    printf '[openhost]\nzone_domain = "test.local"\nhost = "127.0.0.1"\ndata_root_dir = "/home/host/.openhost/local_compute_space"\n' \
     > /home/host/.openhost/local_compute_space/config.toml && \
     chown -R host:host /home/host/.openhost /opt/openhost
+
+# A real pre-consolidation instance always has a router.db (schema <= v12); seed one so the v0007
+# domains migration has a DB to capture into + scrub (its no-DB path is the fresh-install case).
+RUN su - host -c "cd /home/host/openhost && \
+    mkdir -p /home/host/.openhost/local_compute_space/persistent_data/openhost && \
+    .pixi/envs/default/bin/python \
+        openhost_system_agent/src/openhost_system_agent/tests/seed_pre_consolidation_db.py \
+        /home/host/.openhost/local_compute_space/persistent_data/openhost/router.db"
 
 # systemd as init
 CMD ["/sbin/init"]

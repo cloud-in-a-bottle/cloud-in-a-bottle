@@ -21,6 +21,7 @@ from compute_space.web.routes.pages.apps import add_app
 
 from ._litestar_helpers import auth_cookie
 from .conftest import _make_test_config
+from .conftest import primary_of
 
 
 @pytest.fixture
@@ -75,7 +76,7 @@ def test_callout_links_to_catalog_when_installed(cfg: Any) -> None:
         resp = client.get("/add_app", cookies=cookie)
     assert resp.status_code == 200
     assert "Explore the App Catalog" in resp.text
-    assert f"http://catalog.{cfg.zone_domain}/" in resp.text
+    assert f"http://catalog.{primary_of(cfg).name}/" in resp.text
     assert "Install the catalog" not in resp.text
     assert "Available Built-in Apps" not in resp.text
 
@@ -90,4 +91,4 @@ def test_callout_offers_install_when_catalog_missing(cfg: Any) -> None:
     assert "Explore the App Catalog" in resp.text
     assert "Install the catalog" in resp.text
     assert "https://github.com/imbue-openhost/openhost-catalog" in resp.text
-    assert f"http://catalog.{cfg.zone_domain}/" not in resp.text
+    assert f"http://catalog.{primary_of(cfg).name}/" not in resp.text

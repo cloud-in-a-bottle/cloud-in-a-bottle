@@ -27,7 +27,7 @@ def _full_cert_api_kwargs() -> dict[str, str]:
 
 
 def test_default_provider_is_acme() -> None:
-    cfg = DefaultConfig(zone_domain="x.example.com")
+    cfg = DefaultConfig()
     assert cfg.cert_provider == CERT_PROVIDER_ACME
     # The broker URL defaults to a host but is only used by the cert_api
     # provider, so the default acme path is unaffected by it.
@@ -40,12 +40,10 @@ def test_default_provider_is_acme() -> None:
 
 
 def test_legacy_config_without_cert_fields_still_loads(tmp_path: Path) -> None:
-    # A config exactly as ansible wrote it before this feature existed.
+    # A config as ansible wrote it before the cert fields existed (post-scrub: no zone_domain).
     config_path = tmp_path / "config.toml"
     config_path.write_text(
         "[openhost]\n"
-        'zone_domain = "alice.host.example.com"\n'
-        "tls_enabled = true\n"
         "acquire_tls_cert_if_missing = true\n"
         'acme_account_key_path = "/secrets/certbot_private_key.json"\n'
         "coredns_enabled = true\n"
@@ -59,8 +57,6 @@ def test_cert_api_provider_config_loads(tmp_path: Path) -> None:
     config_path = tmp_path / "config.toml"
     config_path.write_text(
         "[openhost]\n"
-        'zone_domain = "alice.host.example.com"\n'
-        "tls_enabled = true\n"
         "acquire_tls_cert_if_missing = true\n"
         "coredns_enabled = true\n"
         'cert_provider = "cert_api"\n'
@@ -79,7 +75,6 @@ def test_cert_api_provider_config_loads(tmp_path: Path) -> None:
 
 def test_cert_provider_round_trips_through_toml() -> None:
     cfg = DefaultConfig(
-        zone_domain="alice.host.example.com",
         cert_provider=CERT_PROVIDER_CERT_API,
         cert_api_base_url="https://cert-api.example.com",
         cert_api_keycloak_issuer_url="https://keycloak.example.com/realms/openhost-customers",
@@ -96,11 +91,11 @@ def test_cert_provider_round_trips_through_toml() -> None:
 
 def test_unknown_cert_provider_is_rejected() -> None:
     with pytest.raises(ValueError, match="Unknown cert_provider"):
-        DefaultConfig(zone_domain="alice.host.example.com", cert_provider="bogus")
+        DefaultConfig(cert_provider="bogus")
 
 
 def test_complete_cert_api_config_is_valid() -> None:
-    cfg = DefaultConfig(zone_domain="alice.host.example.com", **_full_cert_api_kwargs())
+    cfg = DefaultConfig(**_full_cert_api_kwargs())
     assert cfg.cert_provider == CERT_PROVIDER_CERT_API
 
 
@@ -117,11 +112,11 @@ def test_cert_api_provider_requires_all_settings(missing_field: str) -> None:
     kwargs = _full_cert_api_kwargs()
     kwargs[missing_field] = None  # type: ignore[assignment]
     with pytest.raises(ValueError, match=f"{missing_field} must be set"):
-        DefaultConfig(zone_domain="alice.host.example.com", **kwargs)
+        DefaultConfig(**kwargs)
 
 
 def test_acme_provider_ignores_cert_api_settings() -> None:
     # The default acme path must not require any cert_api settings, even though
     # cert_api_keycloak_* default to None.
-    cfg = DefaultConfig(zone_domain="alice.host.example.com")
+    cfg = DefaultConfig()
     assert cfg.cert_provider == CERT_PROVIDER_ACME

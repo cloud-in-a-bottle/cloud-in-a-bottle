@@ -1,4 +1,5 @@
 import base64
+import sqlite3
 import urllib.parse
 from typing import Annotated
 
@@ -73,10 +74,10 @@ def jwks() -> JwksResponse:
 
 
 @get("/.well-known/openhost-identity", sync_to_thread=False)
-def openhost_identity() -> ZoneIdentityResponse:
+def openhost_identity(db: sqlite3.Connection) -> ZoneIdentityResponse:
     """Public endpoint: expose this zone's identity (domain + public key)."""
     try:
-        data = identity.get_zone_identity()
+        data = identity.get_zone_identity(db)
     except RuntimeError as e:
         raise HTTPException(detail="Identity not yet available", status_code=503) from e
     return ZoneIdentityResponse(
@@ -106,6 +107,7 @@ async def identity_approve(callback: str, app_name: str, requesting_domain: str)
 @post("/identity/approve", status_code=302, guards=[require_owner_auth])
 async def identity_approve_submit(
     data: Annotated[IdentityApproveForm, Body(media_type=RequestEncodingType.URL_ENCODED)],
+    db: sqlite3.Connection,
 ) -> Redirect:
     """Owner approved the login — sign an identity token and redirect back."""
     parsed = urllib.parse.urlparse(data.callback)
@@ -113,7 +115,7 @@ async def identity_approve_submit(
         raise HTTPException(detail="Invalid callback URL", status_code=400)
 
     try:
-        token = identity.sign_identity_token(data.callback)
+        token = identity.sign_identity_token(data.callback, db)
     except RuntimeError as e:
         logger.error("Failed to sign identity token: %s", e)
         raise HTTPException(detail="Identity service unavailable", status_code=503) from e

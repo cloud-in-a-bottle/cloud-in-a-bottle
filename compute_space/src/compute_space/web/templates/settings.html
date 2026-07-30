@@ -48,8 +48,8 @@
     <th><label for="remote-url">Git remote</label></th>
     <td>
       <input type="text" id="remote-url" placeholder="Loading…" disabled style="width:32em;">
-      <button onclick="setRemote()" class="btn btn-primary" id="set-remote-btn" disabled>Set &amp; restart</button>
-      <p class="hint">Repository this instance updates from.</p>
+      <button onclick="setRemote()" class="btn btn-primary" id="set-remote-btn" disabled>Save remote</button>
+      <p class="hint">Repository this instance updates from. Saving pins the target; use Update below to apply it.</p>
       <p id="remote-msg" style="display:none;"></p>
     </td>
   </tr>
@@ -65,6 +65,30 @@
     </td>
   </tr>
 </table>
+
+<h2 class="section-title">Domains</h2>
+<p class="hint">Hostnames this instance answers on. The primary is set at provisioning. Add a secondary
+  <strong>public</strong> domain (its DNS must be delegated to this instance — it then acquires a TLS
+  certificate automatically) or a local <code>.local</code> name served over plain HTTP. Removing a
+  domain takes effect immediately; the primary can't be removed.</p>
+
+<div class="control-row">
+  <label>Domain <input type="text" id="domain-name" placeholder="host.example.com" style="width: 20em;"></label>
+  <label>Type
+    <select id="domain-type">
+      <option value="public">Public (HTTPS)</option>
+      <option value="mdns">Local mDNS (.local, HTTP)</option>
+    </select>
+  </label>
+  <button class="btn btn-primary" onclick="addDomain()">Add domain</button>
+</div>
+<p id="domain-msg" style="display:none;"></p>
+
+<table id="domains-table" style="display:none;">
+  <thead><tr><th>Domain</th><th>Scheme</th><th>Discovery</th><th>Certificate</th><th>Actions</th></tr></thead>
+  <tbody id="domains-body"></tbody>
+</table>
+<p id="no-domains" class="muted">Loading&hellip;</p>
 
 <h2 class="section-title">API tokens</h2>
 <p class="hint">Bearer tokens for programmatic access (e.g. AI agents). Each token grants owner-level access until it expires.</p>
@@ -125,5 +149,6 @@
 
 <script src="{{ static_url('js/username-validation.js') }}"></script>
 <script src="{{ static_url('js/tokens.js') }}"></script>
+<script src="{{ static_url('js/domains.js') }}"></script>
 <script src="{{ static_url('js/settings.js') }}"></script>
 {% endblock %}

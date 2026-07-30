@@ -1,4 +1,5 @@
 import os
+import sqlite3
 import tomllib
 from pathlib import Path
 from typing import Any
@@ -9,6 +10,8 @@ import cattrs
 import tomli_w
 import typed_settings
 
+from compute_space.core.domains import is_primary_domain
+
 # TLS cert provider selection (see Config.cert_provider).
 # "acme" is the default bring-your-own-ACME-credentials path (unchanged, fully
 # backward compatible). "cert_api" fetches certs from the openhost-cert-api
@@ -17,24 +20,15 @@ CERT_PROVIDER_ACME = "acme"
 CERT_PROVIDER_CERT_API = "cert_api"
 
 
-def _lowercase(s: str) -> str:
-    # mypy can't handle str.lower apparently
-    return s.lower()
-
-
 @attr.s(auto_attribs=True, frozen=True)
 class Config:
     ## Server
-    # zone_domain is where the compute space is hosted, eg `host.example.com`
-    # it can optionally include a non-80/443 port, if necessary.
-    zone_domain: str = attr.ib(converter=_lowercase)
     # the local IP to bind the compute space web server to.
     host: str
     # the local port to bind the compute space web server to.
     port: int
 
     ## TLS
-    tls_enabled: bool
     acquire_tls_cert_if_missing: bool
     acme_email: str | None
     acme_account_key_path: str | None
@@ -122,15 +116,12 @@ class Config:
                 if not getattr(self, name):
                     raise ValueError(f"{name} must be set in config to use the cert_api provider")
 
-    @property
-    def zone_domain_no_port(self) -> str:
-        return self.zone_domain.split(":")[0]
-
     def evolve(self, **kwargs: Any) -> Self:
         return attr.evolve(self, **kwargs)
 
     def _to_toml_dict(self) -> dict[str, dict[str, Any]]:
-        return {"openhost": {k: v for k, v in attr.asdict(self).items() if v is not None}}
+        d = {k: v for k, v in attr.asdict(self).items() if v is not None}
+        return {"openhost": d}
 
     def to_toml_str(self) -> str:
         return tomli_w.dumps(self._to_toml_dict())
@@ -206,6 +197,28 @@ class Config:
         return self.openhost_data_path / "openhost-tls-key.pem"
 
     @property
+    def certs_dir(self) -> Path:
+        """Directory for per-domain TLS certs (domains beyond the primary)."""
+        return self.openhost_data_path / "certs"
+
+    def cert_path_for(self, domain_name: str, is_primary: bool) -> Path:
+        """Cert file for a domain.  The primary keeps the legacy path for backward
+        compatibility; additional domains get a per-domain file under ``certs/``."""
+        if is_primary:
+            return self.tls_cert_path
+        return self.certs_dir / f"{domain_name}.pem"
+
+    def key_path_for(self, domain_name: str, is_primary: bool) -> Path:
+        if is_primary:
+            return self.tls_key_path
+        return self.certs_dir / f"{domain_name}.key"
+
+    def cert_key_paths_for(self, db: sqlite3.Connection, domain_name: str) -> tuple[Path, Path]:
+        """Cert+key paths for a domain, resolving primary-vs-secondary from the DB."""
+        is_primary = is_primary_domain(db, domain_name)
+        return self.cert_path_for(domain_name, is_primary), self.key_path_for(domain_name, is_primary)
+
+    @property
     def coredns_corefile_path(self) -> Path:
         return self.openhost_data_path / "Corefile"
 
@@ -214,8 +227,29 @@ class Config:
         return self.openhost_data_path / "zonefile"
 
     @property
+    def zones_dir(self) -> Path:
+        """Directory for per-domain CoreDNS zone files (domains beyond the primary)."""
+        return self.openhost_data_path / "zones"
+
+    def coredns_zonefile_path_for(self, domain_name: str, is_primary: bool) -> Path:
+        """Zone file for a domain.  The primary keeps the legacy ``zonefile`` path for backward
+        compatibility; additional public domains get a per-domain file under ``zones/``.  Each
+        public domain is a separate authoritative zone, so its ACME DNS-01 ``_acme-challenge``
+        TXT records must land in its own zone file (not the primary's)."""
+        if is_primary:
+            return self.coredns_zonefile_path
+        # Strip any port so no ``:`` ends up in a filename.
+        return self.zones_dir / f"{domain_name.split(':')[0]}.zone"
+
+    @property
     def caddyfile_path(self) -> Path:
         return self.openhost_data_path / "Caddyfile"
+
+    @property
+    def caddy_admin_socket_path(self) -> Path:
+        """Unix socket for Caddy's admin API — the control surface used for zero-downtime config
+        reloads.  A filesystem path (owned by the router user), so it's never network-exposed."""
+        return self.openhost_data_path / "caddy-admin.sock"
 
     @property
     def keys_dir(self) -> str:
@@ -247,19 +281,15 @@ class Config:
 
 @attr.s(auto_attribs=True, frozen=True)
 class DefaultConfig(Config):
-    # needs set at runtime, no reasonable default value
-    # zone_domain: str
-
     # Server
     host: str = "127.0.0.1"
     port: int = 8080
 
-    # coredns (only truly needed if tls_enabled)
+    # coredns (only truly needed for DNS-01 TLS cert acquisition)
     coredns_enabled: bool = False
     public_ip: str | None = None
 
     # TLS
-    tls_enabled: bool = False
     acquire_tls_cert_if_missing: bool = False
     acme_email: str | None = None
     acme_account_key_path: str | None = None
