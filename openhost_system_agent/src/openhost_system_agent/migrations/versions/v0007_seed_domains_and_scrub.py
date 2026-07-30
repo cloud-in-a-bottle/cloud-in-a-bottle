@@ -26,11 +26,6 @@ from contextlib import closing
 from pathlib import Path
 
 from openhost_system_agent.migrations.base import SystemMigration
-from openhost_system_agent.migrations.helpers import get_host_uid
-from openhost_system_agent.migrations.helpers import run
-from openhost_system_agent.migrations.helpers import write_file
-from openhost_system_agent.migrations.versions.v0002_baseline import OPENHOST_SERVICE_PATH
-from openhost_system_agent.migrations.versions.v0002_baseline import build_openhost_service_unit
 
 # Router paths (mirror the openhost.service Environment + the data-dir layout).
 _DATA_DIR = "/home/host/.openhost/local_compute_space"
@@ -172,16 +167,8 @@ def migrate(
     _scrub_captured_config(config_path)
 
 
-def _install_boot_migrate_execstartpre() -> None:
-    """Rewrite openhost.service so it runs ``update migrate`` as an ExecStartPre, then reload systemd.
-    Ensures future boots scrub before the router loads config — the same consolidation the scrub above did."""
-    write_file(OPENHOST_SERVICE_PATH, build_openhost_service_unit(get_host_uid()), mode=0o644)
-    run("systemctl", "daemon-reload")
-
-
 class Migration0007SeedDomainsAndScrub(SystemMigration):
     version = 7
 
     def up(self) -> None:
         migrate()
-        _install_boot_migrate_execstartpre()

@@ -2,11 +2,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from openhost_system_agent.migrations.versions.v0002_baseline import MIGRATE_EXEC_START_PRE
 from openhost_system_agent.migrations.versions.v0002_baseline import RECLAIM_EXEC_START_PRE
 from openhost_system_agent.migrations.versions.v0002_baseline import RECLAIM_SCRIPT
 from openhost_system_agent.migrations.versions.v0002_baseline import RECLAIM_SCRIPT_PATH
-from openhost_system_agent.migrations.versions.v0002_baseline import SYSTEM_AGENT_PATH
 from openhost_system_agent.migrations.versions.v0002_baseline import build_openhost_service_unit
 
 
@@ -29,23 +27,6 @@ class TestOpenhostServiceUnit:
         # The exact ExecStartPre line is a module constant so migrations that
         # rewrite the unit stay byte-identical with the baseline.
         assert RECLAIM_EXEC_START_PRE in build_openhost_service_unit(1234)
-
-    def test_migrate_execstartpre_runs_as_root_blocking(self) -> None:
-        unit = build_openhost_service_unit(1001)
-        # Runs the agent as root (`+`) and NOT best-effort — a failed migration
-        # must block startup rather than boot the router on an unmigrated config.
-        assert f"ExecStartPre=+{SYSTEM_AGENT_PATH} update migrate\n" in unit
-        assert "ExecStartPre=-+/usr/local/bin/openhost_system_agent" not in unit
-
-    def test_migrate_runs_after_reclaim_before_execstart(self) -> None:
-        # Order matters: reclaim heals the pixi env the agent binary lives in, then
-        # migrate scrubs/updates config, then ExecStart boots the router.
-        unit = build_openhost_service_unit(1001)
-        assert unit.index("ExecStartPre=-+") < unit.index(MIGRATE_EXEC_START_PRE)
-        assert unit.index(MIGRATE_EXEC_START_PRE) < unit.index("ExecStart=/home/host/.pixi/bin/pixi run")
-
-    def test_migrate_uses_the_shared_constant(self) -> None:
-        assert MIGRATE_EXEC_START_PRE in build_openhost_service_unit(1234)
 
     def test_host_uid_is_substituted(self) -> None:
         unit = build_openhost_service_unit(4242)

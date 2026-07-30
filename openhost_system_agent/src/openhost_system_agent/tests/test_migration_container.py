@@ -191,8 +191,8 @@ class TestApplyUpdateWalk:
         before = _host_sh(c, f"{_PIXI} --version")
         assert "0.69.0" in before.stdout, f"unexpected starting pixi: {before.stdout!r}"
 
-        # Run the real entrypoint as root, resolving the console script from the
-        # pixi env (the /usr/local/bin symlink also exists, but this is exact).
+        # Run the real entrypoint as root (no /usr/local/bin symlink in the
+        # test image, so resolve the console script from the pixi env).
         which = _host_sh(c, f"cd {_REPO} && {_PIXI} run -e default which openhost_system_agent")
         agent = which.stdout.strip().splitlines()[-1]
         apply = _exec(c, "sudo", agent, "update", "apply", timeout=600, check=False)

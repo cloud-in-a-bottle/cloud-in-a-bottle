@@ -38,8 +38,6 @@ Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/{{ host_uid }}/bus
 # snippet) so no $VAR reaches systemd, and it needs nothing from the (possibly
 # broken) pixi env.
 ExecStartPre=-+/usr/local/bin/openhost-reclaim-pixi
-# Apply pending system migrations before ExecStart
-ExecStartPre=+/usr/local/bin/openhost_system_agent update migrate
 ExecStart=/home/host/.pixi/bin/pixi run python -m compute_space
 # Don't auto-restart on crash (can blow through certbot rate limits).
 # RestartForceExitStatus=42 overrides Restart=no for exit code 42 only,

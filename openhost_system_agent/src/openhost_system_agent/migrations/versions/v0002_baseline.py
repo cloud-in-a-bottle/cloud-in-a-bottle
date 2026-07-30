@@ -52,15 +52,6 @@ done
 # protects. Kept in sync with ansible/templates/openhost.service.j2.
 RECLAIM_EXEC_START_PRE = f"ExecStartPre=-+{RECLAIM_SCRIPT_PATH}\n"
 
-# System-agent symlink on sudo's secure_path (installed by ansible).
-SYSTEM_AGENT_PATH = "/usr/local/bin/openhost_system_agent"
-
-# Migrate before ExecStart so the router never boots against a config a pending
-# migration would fix (set-remote, manual checkout, and dirty trees all boot new
-# code before the update walk migrates). `+`: as root; no `-`: a failed migration
-# blocks boot. After reclaim (heals the pixi env). In sync with the ansible template.
-MIGRATE_EXEC_START_PRE = f"ExecStartPre=+{SYSTEM_AGENT_PATH} update migrate\n"
-
 
 def build_openhost_service_unit(host_uid: int) -> str:
     """Render the openhost.service unit. Shared so migrations that rewrite it
@@ -81,7 +72,6 @@ def build_openhost_service_unit(host_uid: int) -> str:
         f"Environment=XDG_RUNTIME_DIR=/run/user/{host_uid}\n"
         f"Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/{host_uid}/bus\n"
         + RECLAIM_EXEC_START_PRE
-        + MIGRATE_EXEC_START_PRE
         + "ExecStart=/home/host/.pixi/bin/pixi run python -m compute_space\n"
         "Restart=no\n"
         "RestartForceExitStatus=42\n"
