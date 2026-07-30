@@ -27,8 +27,9 @@ from compute_space.core.dns import CoreDnsProcess
 from compute_space.core.dns import public_dns_zones
 from compute_space.core.dns import set_active_coredns
 from compute_space.core.dns import start_coredns
-from compute_space.core.domain_store import effective_domains
-from compute_space.core.domain_store import rebuild_active_domains
+from compute_space.core.domains import Domain
+from compute_space.core.domains import effective_domains
+from compute_space.core.first_boot import owner_exists
 from compute_space.core.first_boot import seed_first_boot
 from compute_space.core.logging import logger
 from compute_space.core.logging import setup_file_logging
@@ -68,24 +69,16 @@ def _bootstrap(config: Config) -> None:
     init_db(config.db_path)
 
 
-def _owner_exists(config: Config) -> bool:
-    db = sqlite3.connect(config.db_path)
-    try:
-        return db.execute("SELECT 1 FROM users LIMIT 1").fetchone() is not None
-    finally:
-        db.close()
-
-
-def _require_configured_domain(config: Config) -> None:
-    """Check that a nonempty domain exists"""
-    if not config.zone_domain:
+def _require_configured_domain(domains: tuple[Domain, ...]) -> None:
+    """Fail loud at boot if nothing seeded the DB `domains` table."""
+    if not domains:
         raise RuntimeError(
-            "No domain configured: nothing seeded the DB `domains` table (no first_boot.toml and no "
-            "legacy zone_domain). Set a domain in first_boot.toml or the config, then restart."
+            "No domain configured: nothing seeded the DB `domains` table. "
+            "Set a domain in first_boot.toml, then restart."
         )
 
 
-def _ensure_tls_cert(config: Config) -> None:
+def _ensure_tls_cert(config: Config, db: sqlite3.Connection) -> None:
     """Make sure a usable cert+key pair is on disk before Caddy starts, acquiring or renewing as configured."""
     status = get_cert_status(config.tls_cert_path, config.tls_key_path)
     if status == CertStatus.OK:
@@ -103,11 +96,11 @@ def _ensure_tls_cert(config: Config) -> None:
         # The existing cert is still valid, so a failed renewal shouldn't block
         # startup — the background renewal loop will keep retrying.
         try:
-            provision_cert(config)
+            provision_cert(config, db)
         except Exception:
             logger.exception("TLS cert renewal failed; serving the existing cert and retrying in the background")
     else:
-        provision_cert(config)
+        provision_cert(config, db)
 
 
 def _ensure_coredns_binary(config: Config) -> str:
@@ -137,57 +130,55 @@ def main() -> None:
     config = load_config()
     config.make_all_dirs()
     _bootstrap(config)
-    # The DB `domains` table is the source of truth.  On first boot, seed it (+ the claim token)
-    # from first_boot.toml, else the config-file zone_domain / claim-token file.  Then sync the
-    # DB-derived scalars into the active config *before* starting CoreDNS/Caddy so every configured
-    # domain is served this boot.  Both are idempotent; create_app re-runs them.
+    # The DB `domains` table is the source of truth.  Seed it once (+ the claim token) from
+    # first_boot.toml before starting CoreDNS/Caddy so every configured domain is served this boot.
     seed_first_boot(config)
-    with closing(get_db()) as db:
-        config = rebuild_active_domains(config, db)
-        domains = effective_domains(db)
-        dns_zones = public_dns_zones(config, db)
-    _require_configured_domain(config)  # fail loud at boot, not late in the first request
     children: list[subprocess.Popen[bytes]] = []
-
     coredns: CoreDnsProcess | None = None
-    if config.coredns_enabled:
-        if not config.public_ip:
-            raise RuntimeError("Public IP must be set in config to use CoreDNS")
-        # Authoritative for every public (non-mDNS) domain the instance answers on, so a
-        # secondary domain delegated to this box resolves too — not just the primary.
-        coredns = start_coredns(
-            dns_zones,
-            config.public_ip,
-            config.coredns_corefile_path,
-            coredns_bin=_ensure_coredns_binary(config),
-        )
-        # Register so /api/domains can regenerate zones + restart CoreDNS when a domain is added.
-        set_active_coredns(coredns)
-
-    if config.tls_enabled:
-        _ensure_tls_cert(config)
-
-    # Caddy reverse proxy. mainly for TLS termination, but also some other features.
-    # The acquired file cert covers the primary domain (a wildcard for zone_domain);
-    # any additional TLS domains fall back to Caddy's internal CA (see generate_caddyfile).
-    needs_caddy_for_tls = any(d.tls for d in domains)
     caddy: CaddyProcess | None = None
-    if config.start_caddy:
-        caddy = start_caddy(
-            config.caddyfile_path,
-            domains,
-            config.port,
-            cert_for=config_cert_resolver(config),
-            admin_addr=unix_admin_address(config.caddy_admin_socket_path),
-        )
-        # Register so /api/domains can regenerate + restart Caddy when a domain is added/removed.
-        set_active_caddy(caddy)
-        if needs_caddy_for_tls and config.coredns_enabled and config.acquire_tls_cert_if_missing:
-            # Renew every TLS domain — including a TLS secondary under a non-TLS primary — and
-            # regenerate the Caddyfile so acquired certs are served.
-            start_renewal_thread(reload_caddy_for_domains)
-    else:
-        if needs_caddy_for_tls:
+    # One connection for the whole domain-dependent startup sequence (CoreDNS -> TLS cert -> Caddy);
+    # the primary + cert/zone paths are read live from it.
+    with closing(get_db()) as db:
+        domains = effective_domains(db)  # primary first
+        dns_zones = public_dns_zones(config, db)
+        _require_configured_domain(domains)  # fail loud at boot, not late in the first request
+
+        if config.coredns_enabled:
+            if not config.public_ip:
+                raise RuntimeError("Public IP must be set in config to use CoreDNS")
+            # Authoritative for every public (non-mDNS) domain the instance answers on, so a
+            # secondary domain delegated to this box resolves too — not just the primary.
+            coredns = start_coredns(
+                dns_zones,
+                config.public_ip,
+                config.coredns_corefile_path,
+                coredns_bin=_ensure_coredns_binary(config),
+            )
+            # Register so /api/domains can regenerate zones + restart CoreDNS when a domain is added.
+            set_active_coredns(coredns)
+
+        if domains[0].tls:  # primary is a TLS domain
+            _ensure_tls_cert(config, db)
+
+        # Caddy reverse proxy. mainly for TLS termination, but also some other features.
+        # The acquired file cert covers the primary domain (a wildcard for it);
+        # any additional TLS domains fall back to Caddy's internal CA (see generate_caddyfile).
+        needs_caddy_for_tls = any(d.tls for d in domains)
+        if config.start_caddy:
+            caddy = start_caddy(
+                config.caddyfile_path,
+                domains,
+                config.port,
+                cert_for=config_cert_resolver(config, db),
+                admin_addr=unix_admin_address(config.caddy_admin_socket_path),
+            )
+            # Register so /api/domains can regenerate + restart Caddy when a domain is added/removed.
+            set_active_caddy(caddy)
+            if needs_caddy_for_tls and config.coredns_enabled and config.acquire_tls_cert_if_missing:
+                # Renew every TLS domain — including a TLS secondary under a non-TLS primary — and
+                # regenerate the Caddyfile so acquired certs are served.
+                start_renewal_thread(reload_caddy_for_domains)
+        elif needs_caddy_for_tls:
             raise RuntimeError(
                 "A TLS domain is configured but start_caddy is False. Caddy is required for TLS termination."
             )
@@ -220,7 +211,7 @@ def main() -> None:
 
     # First-boot setup: serve a minimal app until the owner is provisioned.  The setup
     # handler triggers shutdown via trigger_restart(); we then proceed to the full app
-    if not _owner_exists(config):
+    if not owner_exists(config):
         logger.info("No owner row found; serving setup-only app")
         setup_completed = asyncio.run(_serve(create_setup_app(config), hypercorn_config))
         if not setup_completed:

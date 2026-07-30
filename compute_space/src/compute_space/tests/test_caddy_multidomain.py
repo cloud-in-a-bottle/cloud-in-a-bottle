@@ -14,11 +14,11 @@ from pathlib import Path
 
 import pytest
 
-from compute_space.config import Domain
-from compute_space.core import caddy as caddy_mod
+from compute_space.core import caddy
 from compute_space.core.caddy import CaddyProcess
 from compute_space.core.caddy import generate_caddyfile
 from compute_space.core.caddy import unix_admin_address
+from compute_space.core.domains import Domain
 
 PUBLIC = Domain("host.example.com", tls=True)
 PUBLIC2 = Domain("host.example.org", tls=True)
@@ -139,7 +139,7 @@ def test_restart_serializes_concurrent_callers(tmp_path: Path, monkeypatch: pyte
             active -= 1
         return _FakeProc()
 
-    monkeypatch.setattr(caddy_mod, "_spawn_caddy", fake_spawn)
+    monkeypatch.setattr(caddy, "_spawn_caddy", fake_spawn)
     cp = CaddyProcess(proc=_FakeProc(), caddyfile_path=tmp_path / "Caddyfile")  # type: ignore[arg-type]
 
     threads = [threading.Thread(target=cp.restart) for _ in range(5)]
@@ -196,9 +196,9 @@ def test_reload_uses_admin_api_without_respawn(tmp_path: Path, monkeypatch: pyte
     # A graceful reload keeps the running process (no respawn = no dropped connections); it just
     # shells out to `caddy reload` against the admin socket.
     spawned: list[Path] = []
-    monkeypatch.setattr(caddy_mod, "_spawn_caddy", lambda p: spawned.append(p) or _AliveProc())  # type: ignore[arg-type,func-returns-value]
+    monkeypatch.setattr(caddy, "_spawn_caddy", lambda p: spawned.append(p) or _AliveProc())  # type: ignore[arg-type,func-returns-value]
     calls: list[list[str]] = []
-    monkeypatch.setattr(caddy_mod.subprocess, "run", lambda cmd, **kw: calls.append(cmd) or _completed(cmd, 0))
+    monkeypatch.setattr(caddy.subprocess, "run", lambda cmd, **kw: calls.append(cmd) or _completed(cmd, 0))
     cp = CaddyProcess(proc=_AliveProc(), caddyfile_path=tmp_path / "Caddyfile", admin_addr="unix//x.sock")  # type: ignore[arg-type]
 
     cp.reload()
@@ -210,8 +210,8 @@ def test_reload_uses_admin_api_without_respawn(tmp_path: Path, monkeypatch: pyte
 
 def test_reload_falls_back_to_cold_restart_on_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     spawned: list[Path] = []
-    monkeypatch.setattr(caddy_mod, "_spawn_caddy", lambda p: spawned.append(p) or _AliveProc())  # type: ignore[arg-type,func-returns-value]
-    monkeypatch.setattr(caddy_mod.subprocess, "run", lambda cmd, **kw: _completed(cmd, 1))  # reload fails
+    monkeypatch.setattr(caddy, "_spawn_caddy", lambda p: spawned.append(p) or _AliveProc())  # type: ignore[arg-type,func-returns-value]
+    monkeypatch.setattr(caddy.subprocess, "run", lambda cmd, **kw: _completed(cmd, 1))  # reload fails
     cp = CaddyProcess(proc=_AliveProc(), caddyfile_path=tmp_path / "Caddyfile", admin_addr="unix//x.sock")  # type: ignore[arg-type]
 
     cp.reload()
@@ -223,9 +223,9 @@ def test_reload_cold_restarts_when_admin_off(tmp_path: Path, monkeypatch: pytest
     # With no admin endpoint there's nothing to reload through, so reload() must cold-restart and
     # never invoke `caddy reload`.
     ran: list[list[str]] = []
-    monkeypatch.setattr(caddy_mod.subprocess, "run", lambda cmd, **kw: ran.append(cmd) or _completed(cmd, 0))
+    monkeypatch.setattr(caddy.subprocess, "run", lambda cmd, **kw: ran.append(cmd) or _completed(cmd, 0))
     spawned: list[Path] = []
-    monkeypatch.setattr(caddy_mod, "_spawn_caddy", lambda p: spawned.append(p) or _AliveProc())  # type: ignore[arg-type,func-returns-value]
+    monkeypatch.setattr(caddy, "_spawn_caddy", lambda p: spawned.append(p) or _AliveProc())  # type: ignore[arg-type,func-returns-value]
     cp = CaddyProcess(proc=_AliveProc(), caddyfile_path=tmp_path / "Caddyfile")  # type: ignore[arg-type]  # admin_addr=None
 
     cp.reload()

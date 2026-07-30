@@ -1,4 +1,5 @@
 import os
+import sqlite3
 import tomllib
 from pathlib import Path
 from typing import Any
@@ -9,6 +10,8 @@ import cattrs
 import tomli_w
 import typed_settings
 
+from compute_space.core.domains import is_primary_domain
+
 # TLS cert provider selection (see Config.cert_provider).
 # "acme" is the default bring-your-own-ACME-credentials path (unchanged, fully
 # backward compatible). "cert_api" fetches certs from the openhost-cert-api
@@ -17,53 +20,15 @@ CERT_PROVIDER_ACME = "acme"
 CERT_PROVIDER_CERT_API = "cert_api"
 
 
-def _lowercase(s: str) -> str:
-    # mypy can't handle str.lower apparently
-    return s.lower()
-
-
-@attr.s(auto_attribs=True, frozen=True)
-class Domain:
-    """One hostname the instance answers on, with its scheme and discovery method.
-
-    An instance answers on a set of these, stored in the DB ``domains`` table (see
-    ``core/domain_store.py``).  Routing, scheme, link-building, and cookies are resolved per
-    request from whichever Domain the request's Host matched — see ``domain_store.match_domain``.
-    The primary row supplies ``Config.zone_domain``/``tls_enabled`` (equivalently
-    ``Config.primary_domain``), the canonical domain used by background tasks and outbound links
-    that have no request in hand.
-    """
-
-    # the domain name, eg `host.example.com` or `myhost.local`; may optionally
-    # include a non-80/443 port, mirroring ``Config.zone_domain``.
-    name: str = attr.ib(converter=_lowercase)
-    # served over TLS (https)?  Public domains: True; mDNS `.local`: False (plain http).
-    tls: bool = False
-    # published via the built-in wildcard mDNS responder (`.local`) rather than public DNS?
-    mdns: bool = False
-
-    @property
-    def name_no_port(self) -> str:
-        return self.name.split(":")[0]
-
-    @property
-    def scheme(self) -> str:
-        return "https" if self.tls else "http"
-
-
 @attr.s(auto_attribs=True, frozen=True)
 class Config:
     ## Server
-    # zone_domain is where the compute space is hosted, eg `host.example.com`
-    # it can optionally include a non-80/443 port, if necessary.
-    zone_domain: str = attr.ib(converter=_lowercase)
     # the local IP to bind the compute space web server to.
     host: str
     # the local port to bind the compute space web server to.
     port: int
 
     ## TLS
-    tls_enabled: bool
     acquire_tls_cert_if_missing: bool
     acme_email: str | None
     acme_account_key_path: str | None
@@ -151,31 +116,11 @@ class Config:
                 if not getattr(self, name):
                     raise ValueError(f"{name} must be set in config to use the cert_api provider")
 
-    @property
-    def zone_domain_no_port(self) -> str:
-        return self.zone_domain.split(":")[0]
-
-    @property
-    def primary_domain(self) -> Domain:
-        """The canonical domain, used by background tasks and outbound links that have no request in
-        hand.  Derived from the DB-sourced ``zone_domain``/``tls_enabled`` scalars (kept in sync by
-        ``rebuild_active_domains``); the full domain set is read from the DB (``domain_store``)."""
-        if not self.zone_domain:
-            raise RuntimeError(
-                "No primary domain — the DB domain set has not been seeded/rebuilt into the config yet. "
-                "seed_first_boot()+rebuild_active_domains() must run before primary_domain is read."
-            )
-        return Domain(name=self.zone_domain, tls=self.tls_enabled)
-
     def evolve(self, **kwargs: Any) -> Self:
         return attr.evolve(self, **kwargs)
 
     def _to_toml_dict(self) -> dict[str, dict[str, Any]]:
         d = {k: v for k, v in attr.asdict(self).items() if v is not None}
-        # `zone_domain` is DB-derived (seeded from first_boot.toml); omit it when empty so a scrubbed
-        # single-domain config stays clean.  When present it's kept, so the file round-trips.
-        if not d.get("zone_domain"):
-            d.pop("zone_domain", None)
         return {"openhost": d}
 
     def to_toml_str(self) -> str:
@@ -256,17 +201,22 @@ class Config:
         """Directory for per-domain TLS certs (domains beyond the primary)."""
         return self.openhost_data_path / "certs"
 
-    def cert_path_for(self, domain_name: str) -> Path:
+    def cert_path_for(self, domain_name: str, is_primary: bool) -> Path:
         """Cert file for a domain.  The primary keeps the legacy path for backward
         compatibility; additional domains get a per-domain file under ``certs/``."""
-        if domain_name == self.primary_domain.name_no_port:
+        if is_primary:
             return self.tls_cert_path
         return self.certs_dir / f"{domain_name}.pem"
 
-    def key_path_for(self, domain_name: str) -> Path:
-        if domain_name == self.primary_domain.name_no_port:
+    def key_path_for(self, domain_name: str, is_primary: bool) -> Path:
+        if is_primary:
             return self.tls_key_path
         return self.certs_dir / f"{domain_name}.key"
+
+    def cert_key_paths_for(self, db: sqlite3.Connection, domain_name: str) -> tuple[Path, Path]:
+        """Cert+key paths for a domain, resolving primary-vs-secondary from the DB."""
+        is_primary = is_primary_domain(db, domain_name)
+        return self.cert_path_for(domain_name, is_primary), self.key_path_for(domain_name, is_primary)
 
     @property
     def coredns_corefile_path(self) -> Path:
@@ -281,17 +231,15 @@ class Config:
         """Directory for per-domain CoreDNS zone files (domains beyond the primary)."""
         return self.openhost_data_path / "zones"
 
-    def coredns_zonefile_path_for(self, domain_name: str) -> Path:
+    def coredns_zonefile_path_for(self, domain_name: str, is_primary: bool) -> Path:
         """Zone file for a domain.  The primary keeps the legacy ``zonefile`` path for backward
         compatibility; additional public domains get a per-domain file under ``zones/``.  Each
         public domain is a separate authoritative zone, so its ACME DNS-01 ``_acme-challenge``
         TXT records must land in its own zone file (not the primary's)."""
-        # Strip any port so the primary maps to the legacy path (callers may pass a name with a
-        # port) and no ``:`` ends up in a filename.
-        name = domain_name.split(":")[0]
-        if name == self.primary_domain.name_no_port:
+        if is_primary:
             return self.coredns_zonefile_path
-        return self.zones_dir / f"{name}.zone"
+        # Strip any port so no ``:`` ends up in a filename.
+        return self.zones_dir / f"{domain_name.split(':')[0]}.zone"
 
     @property
     def caddyfile_path(self) -> Path:
@@ -333,21 +281,15 @@ class Config:
 
 @attr.s(auto_attribs=True, frozen=True)
 class DefaultConfig(Config):
-    # Legacy field: captured into the DB by the first-boot seed and then never read (see
-    # domain_store/first_boot).  Optional so a post-migration config.toml can omit it — the seed
-    # scrubs the line after capturing it.  The DB `domains` set is the source of truth.
-    zone_domain: str = attr.ib(default="", converter=_lowercase)
-
     # Server
     host: str = "127.0.0.1"
     port: int = 8080
 
-    # coredns (only truly needed if tls_enabled)
+    # coredns (only truly needed for DNS-01 TLS cert acquisition)
     coredns_enabled: bool = False
     public_ip: str | None = None
 
     # TLS
-    tls_enabled: bool = False
     acquire_tls_cert_if_missing: bool = False
     acme_email: str | None = None
     acme_account_key_path: str | None = None

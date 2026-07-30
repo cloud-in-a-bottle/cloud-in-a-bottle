@@ -22,13 +22,12 @@ from litestar.template.config import TemplateConfig
 from litestar.types import ASGIApp
 
 from compute_space.config import Config
-from compute_space.config import Domain
 from compute_space.config import provide_config
 from compute_space.core import archive_backend
 from compute_space.core.auth.auth import read_owner_username
 from compute_space.core.auth.identity import load_identity_keys
-from compute_space.core.domain_store import match_domain
-from compute_space.core.domain_store import rebuild_active_domains
+from compute_space.core.domains import Domain
+from compute_space.core.domains import primary_domain_or_none
 from compute_space.core.first_boot import seed_first_boot
 from compute_space.core.image_pruner import start_image_pruner
 from compute_space.core.logging import logger
@@ -40,7 +39,6 @@ from compute_space.db import get_db
 from compute_space.db import provide_db
 from compute_space.web.auth.auth import login_required_redirect
 from compute_space.web.helpers.zone import ZONE_SCOPE_KEY
-from compute_space.web.helpers.zone import zone_for_request
 from compute_space.web.middleware.subdomain_proxy import SubdomainProxyMiddleware
 from compute_space.web.routes.api.apps import api_apps_routes
 from compute_space.web.routes.api.archive_backend import api_archive_backend_routes
@@ -79,23 +77,28 @@ def _make_static_url(static_dir: Path) -> Any:
 
 
 def _template_globals(config: Config, static_dir: Path) -> dict[str, Any]:
-    # The instance's canonical domain comes from the DB primary (never the legacy zone_domain).
-    zone_domain = config.zone_domain
-    zone_name = zone_domain.split(".")[0] if zone_domain else None
+    def primary() -> Domain | None:
+        with closing(get_db()) as db:
+            return primary_domain_or_none(db)
 
     @pass_context
     def app_url(context: Context, app_name: str) -> str:
-        """Absolute URL to an app, on the domain the *current request* arrived on.
-
-        Building on the request's domain (rather than the single canonical one) keeps
-        dashboard app links on the domain the operator is using — click an app from the
-        ``.local`` dashboard and you land on ``<app>.myhost.local`` over http; from the
-        public dashboard you land on the https public URL.  Falls back to the primary
-        domain when there's no request in context (e.g. a non-request render).
-        """
+        """Absolute URL to an app, on the domain the current request arrived on.
+        Falls back to the live primary when the render had no proxied request."""
         request = context.get("request")
-        zone = zone_for_request(request) if request is not None else config.primary_domain
+        stashed = request.scope.get(ZONE_SCOPE_KEY) if request is not None else None
+        zone = stashed if isinstance(stashed, Domain) else primary()
+        if zone is None:
+            return f"//{app_name}/"  # pre-seed only: no primary yet, emit a scheme/host-relative link
         return f"{zone.scheme}://{app_name}.{zone.name}/"
+
+    def zone_domain() -> str:
+        p = primary()
+        return p.name if p else ""
+
+    def zone_name() -> str | None:
+        zd = zone_domain()
+        return zd.split(".")[0] if zd else None
 
     def owner_name() -> str | None:
         """The owner's configured username, or None if unset / pre-setup.
@@ -140,15 +143,9 @@ def _full_app_bootstrap(config: Config) -> None:
     start_storage_guard(config)
     start_image_pruner(config)
     retry_pending_default_apps(config)
-    # The DB `domains` table is the source of truth for the domain set.  Seed it once (+ claim token)
-    # from first_boot.toml / config-file domains / legacy files, then load it into the active config
-    # so routing/URL-building reflect it.  Both are idempotent.
+    # The DB `domains` table is the source of truth.  Seed it once (+ claim token) from
+    # first_boot.toml; everything reads the primary live from the DB thereafter.
     seed_first_boot(config)
-    db = get_db()
-    try:
-        rebuild_active_domains(config, db)
-    finally:
-        db.close()
 
 
 @route("/setup", http_method=[HttpMethod.GET, HttpMethod.POST], status_code=403, sync_to_thread=False)
@@ -195,14 +192,13 @@ def _reject_app_subdomain_requests(request: Request[Any, Any, Any]) -> Response[
     serve a router route (like /health) under the app's hostname.
     """
     netloc = request.url.netloc
-    host = netloc.split(":", 1)[0].lower()
     stashed = request.scope.get(ZONE_SCOPE_KEY)
     if isinstance(stashed, Domain):
         matched: Domain | None = stashed
     else:
         with closing(get_db()) as db:
-            matched = match_domain(db, netloc)
-    if matched is not None and host != matched.name_no_port:
+            matched = Domain.match(db, netloc)
+    if matched is not None and matched.is_app_subdomain(netloc):
         return Response(content=None, status_code=404)
     return None
 

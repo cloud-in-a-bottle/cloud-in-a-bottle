@@ -11,10 +11,11 @@ from cryptography import x509
 
 from compute_space.config import Config
 from compute_space.config import get_config
-from compute_space.core.domain_store import CERT_STATUS_ACTIVE
-from compute_space.core.domain_store import effective_domains
-from compute_space.core.domain_store import get_record
-from compute_space.core.domain_store import set_record_status
+from compute_space.core.domains import DomainCertStatus
+from compute_space.core.domains import effective_domains
+from compute_space.core.domains import get_record
+from compute_space.core.domains import primary_domain_or_none
+from compute_space.core.domains import set_record_status
 from compute_space.core.logging import logger
 from compute_space.core.tls.provision import acquire_cert_for_domain
 from compute_space.core.tls.provision import provision_cert
@@ -68,10 +69,11 @@ def _sync_cert_statuses(config: Config) -> None:
                     continue
                 name = domain.name_no_port
                 record = get_record(db, name)
-                if record is None or record.cert_status == CERT_STATUS_ACTIVE:
+                if record is None or record.cert_status == DomainCertStatus.ACTIVE:
                     continue
-                if get_cert_status(config.cert_path_for(name), config.key_path_for(name)) == CertStatus.OK:
-                    set_record_status(db, name, CERT_STATUS_ACTIVE)
+                cert_path, key_path = config.cert_key_paths_for(db, name)
+                if get_cert_status(cert_path, key_path) == CertStatus.OK:
+                    set_record_status(db, name, DomainCertStatus.ACTIVE)
     except Exception:
         logger.exception("cert_status display sync skipped (non-fatal)")
 
@@ -81,7 +83,7 @@ def _mark_cert_active(name: str) -> None:
     cycle's ``_sync_cert_statuses``.  Display-only, so a DB error is logged and swallowed."""
     try:
         with closing(get_db()) as db:
-            set_record_status(db, name, CERT_STATUS_ACTIVE)
+            set_record_status(db, name, DomainCertStatus.ACTIVE)
     except Exception:
         logger.exception(f"cert_status active-mark skipped for {name} (non-fatal)")
 
@@ -89,8 +91,8 @@ def _mark_cert_active(name: str) -> None:
 def renew_cert_if_needed(
     config: Config,
     reload_caddy: Callable[[Config, sqlite3.Connection], object],
-    provision: Callable[[Config], None] = provision_cert,
-    acquire: Callable[[Config, str, Path, Path], None] = acquire_cert_for_domain,
+    provision: Callable[[Config, sqlite3.Connection], None] = provision_cert,
+    acquire: Callable[[Config, str, Path, Path, sqlite3.Connection], None] = acquire_cert_for_domain,
 ) -> bool:
     """Renew every TLS cert that is missing, expired, or inside the renewal window.
 
@@ -103,31 +105,33 @@ def renew_cert_if_needed(
     _sync_cert_statuses(config)  # keep the stored cert_status honest (e.g. the seeded-'none' primary)
     renewed = False
 
-    # Primary — legacy cert paths + injectable ``provision``, but only when the primary is itself a
-    # TLS domain (a non-TLS/.local primary has no cert to provision).  A failure here propagates.
-    if config.primary_domain.tls:
-        status = get_cert_status(config.tls_cert_path, config.tls_key_path)
-        if status != CertStatus.OK:
-            logger.info(f"TLS cert for {config.primary_domain.name} is {status.value}; renewing")
-            provision(config)
-            _mark_cert_active(config.primary_domain.name_no_port)
-            renewed = True
-
-    # Additional TLS domains — per-domain paths, each isolated so one bad domain doesn't block
-    # the rest (or the already-renewed primary's Caddy restart).
     with closing(get_db()) as db:
+        primary = primary_domain_or_none(db)
+        # Primary — legacy cert paths + injectable ``provision``, but only when the primary is itself a
+        # TLS domain (a non-TLS/.local primary has no cert to provision).  A failure here propagates.
+        if primary is not None and primary.tls:
+            status = get_cert_status(config.tls_cert_path, config.tls_key_path)
+            if status != CertStatus.OK:
+                logger.info(f"TLS cert for {primary.name} is {status.value}; renewing")
+                provision(config, db)
+                _mark_cert_active(primary.name_no_port)
+                renewed = True
+
+        # Additional TLS domains — per-domain paths, each isolated so one bad domain doesn't block
+        # the rest (or the already-renewed primary's Caddy restart).
+        primary_no_port = primary.name_no_port if primary else None
         for domain in effective_domains(db):
             name = domain.name_no_port
-            if not domain.tls or name == config.primary_domain.name_no_port:
+            if not domain.tls or name == primary_no_port:
                 continue
-            cert_path, key_path = config.cert_path_for(name), config.key_path_for(name)
+            cert_path, key_path = config.cert_path_for(name, False), config.key_path_for(name, False)
             status = get_cert_status(cert_path, key_path)
             if status == CertStatus.OK:
                 continue
             try:
                 logger.info(f"TLS cert for {name} is {status.value}; renewing")
                 cert_path.parent.mkdir(parents=True, exist_ok=True)
-                acquire(config, name, cert_path, key_path)
+                acquire(config, name, cert_path, key_path, db)
                 _mark_cert_active(name)
                 renewed = True
             except Exception:

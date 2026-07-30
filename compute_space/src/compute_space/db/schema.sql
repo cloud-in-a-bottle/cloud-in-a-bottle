@@ -142,10 +142,10 @@ CREATE TABLE IF NOT EXISTS archive_backend (
 INSERT OR IGNORE INTO archive_backend (id) VALUES (1);
 
 -- Domains the instance answers on.  Single source of truth for the domain set (seeded once from
--- config.toml zone_domain + [[openhost.domains]] / first_boot.toml, then authoritative).  Exactly
--- one row is the primary (is_primary=1), enforced by the partial unique index below; the primary
--- supplies the canonical zone_domain used by background tasks and the OPENHOST_ZONE_DOMAIN handed to
--- apps.  cert_status mirrors the /api/domains acquisition state machine.
+-- first_boot.toml, then authoritative).  Exactly one row is the primary (is_primary=1), enforced by
+-- the partial unique index below; the primary (read live via domains.primary_domain(db)) is the
+-- canonical domain used by background tasks and the OPENHOST_ZONE_DOMAIN handed to apps.
+-- cert_status mirrors the /api/domains acquisition state machine.
 CREATE TABLE IF NOT EXISTS domains (
     name          TEXT PRIMARY KEY,                 -- lowercased hostname, no port
     tls           INTEGER NOT NULL DEFAULT 0,       -- served over https?

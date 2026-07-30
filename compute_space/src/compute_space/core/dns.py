@@ -29,7 +29,8 @@ from jinja2 import StrictUndefined
 
 from compute_space.config import Config
 from compute_space.core.containers import CONTAINER_GATEWAY_IP
-from compute_space.core.domain_store import effective_domains
+from compute_space.core.domains import effective_domains
+from compute_space.core.domains import primary_domain_or_none
 from compute_space.core.logging import logger
 
 _TEMPLATES_DIR = Path(__file__).parent / "templates"
@@ -120,8 +121,13 @@ def public_dns_zones(config: Config, db: sqlite3.Connection) -> tuple[DnsZone, .
     mDNS ``.local`` domains are served by the wildcard mDNS responder, never CoreDNS/ACME, so
     they are excluded.  The primary keeps the legacy ``zonefile`` path; additional public domains
     get a per-domain file under ``zones/`` (see ``Config.coredns_zonefile_path_for``)."""
+    primary = primary_domain_or_none(db)
+    primary_no_port = primary.name_no_port if primary else None
     return tuple(
-        DnsZone(domain=d.name_no_port, zonefile_path=config.coredns_zonefile_path_for(d.name_no_port))
+        DnsZone(
+            domain=d.name_no_port,
+            zonefile_path=config.coredns_zonefile_path_for(d.name_no_port, d.name_no_port == primary_no_port),
+        )
         for d in effective_domains(db)
         if not d.mdns
     )

@@ -13,7 +13,6 @@ from litestar.exceptions import NotAuthorizedException
 from litestar.handlers.base import BaseRouteHandler
 from litestar.response import Redirect
 
-from compute_space.config import Domain
 from compute_space.core.apps import get_app_from_hostname
 from compute_space.core.auth.auth import SESSION_COOKIE_NAME
 from compute_space.core.auth.auth import AuthenticatedAPIKey
@@ -23,6 +22,7 @@ from compute_space.core.auth.auth import AuthenticatedUser
 from compute_space.core.auth.auth import validate_api_token
 from compute_space.core.auth.auth import validate_app_token
 from compute_space.core.auth.auth import validate_session_token
+from compute_space.core.domains import Domain
 from compute_space.db import get_db
 from compute_space.web.helpers.zone import zone_for_request
 

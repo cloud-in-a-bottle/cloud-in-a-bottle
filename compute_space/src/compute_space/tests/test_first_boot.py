@@ -1,5 +1,6 @@
-"""First-boot seeding: `first_boot.toml` vs the legacy (config-file + claim-token file) path, and
-that the seeded primary drives the effective set."""
+"""First-boot seeding: the `first_boot.toml` path (domain + claim token) and the legacy claim-token
+file fallback, and that the seeded primary drives the effective set.  The domain is seeded only from
+first_boot.toml — an old instance's config.toml domain is captured by a system-agent migration."""
 
 from __future__ import annotations
 
@@ -8,9 +9,9 @@ from pathlib import Path
 
 import pytest
 
-from compute_space.config import Domain
-from compute_space.core.domain_store import load_records
-from compute_space.core.domain_store import seed_domains
+from compute_space.core.domains import Domain
+from compute_space.core.domains import load_records
+from compute_space.core.domains import seed_domains
 from compute_space.core.first_boot import read_first_boot
 from compute_space.core.first_boot import seed_first_boot
 from compute_space.core.settings_store import CLAIM_TOKEN_KEY
@@ -21,7 +22,9 @@ from compute_space.tests.conftest import open_db
 
 
 def _cfg(tmp_path: Path):  # type: ignore[no-untyped-def]
-    cfg = _make_test_config(tmp_path, zone_domain="config-domain.example.com", tls_enabled=True)
+    # seed_primary=False: these tests exercise the first-boot seed itself, so start from an empty
+    # (migrated) domains table.
+    cfg = _make_test_config(tmp_path, seed_primary=False)
     init_db(cfg.db_path)  # migrate + point get_db() at this DB (seed_first_boot opens its own conn)
     return cfg
 
@@ -67,9 +70,10 @@ def test_seed_first_boot_local_mdns(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     assert recs[0].name == "myhost.local" and recs[0].tls is False and recs[0].mdns is True
 
 
-def test_seed_falls_back_to_config_and_legacy_claim_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    # No first_boot.toml → seed the primary from config.toml zone_domain, and the claim token from
-    # its legacy file (upgrade path).  The file may hold `token:extra`.
+def test_seed_migrates_legacy_claim_file_without_first_boot(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # No first_boot.toml → no domain is seeded at runtime (an old instance's config.toml domain is
+    # captured by a system-agent migration), but the legacy claim-token file still migrates so /setup
+    # can authenticate.  The file may hold `token:extra`.
     cfg = _cfg(tmp_path)
     _point_config_env(monkeypatch, tmp_path)  # dir has no first_boot.toml
     Path(cfg.claim_token_path).parent.mkdir(parents=True, exist_ok=True)
@@ -78,13 +82,12 @@ def test_seed_falls_back_to_config_and_legacy_claim_file(tmp_path: Path, monkeyp
     seed_first_boot(cfg)
 
     with closing(open_db(cfg)) as db:
-        assert [r.name for r in load_records(db)] == ["config-domain.example.com"]
+        assert load_records(db) == ()  # no domain seeded from config.toml at runtime
         assert get_setting(db, CLAIM_TOKEN_KEY) == "legacy-tok"  # extra after ':' stripped
 
 
-def test_seed_leaves_config_toml_untouched(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    # The seed only captures into the DB — it never edits config.toml (the zone_domain line stays,
-    # ignored; a later system-agent migration scrubs it).
+def test_seed_does_not_touch_config_toml(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # The seed never edits config.toml, and it never reads a domain out of it.
     cfg = _cfg(tmp_path)
     config_toml = tmp_path / "config.toml"
     body = '[openhost]\nzone_domain = "config-domain.example.com"\nhost = "127.0.0.1"\ntls_enabled = true\n'
@@ -95,7 +98,7 @@ def test_seed_leaves_config_toml_untouched(tmp_path: Path, monkeypatch: pytest.M
 
     assert config_toml.read_text() == body  # untouched
     with closing(open_db(cfg)) as db:
-        assert [r.name for r in load_records(db)] == ["config-domain.example.com"]  # captured into the DB
+        assert load_records(db) == ()  # config.toml zone_domain is NOT captured at runtime
 
 
 def test_claim_token_migrates_even_when_domains_already_seeded(

@@ -8,7 +8,7 @@ from compute_space.web import start as start_mod
 
 
 def _cfg(tmp_path: Path) -> DefaultConfig:
-    return DefaultConfig(zone_domain="zone.example.com", data_root_dir=str(tmp_path))
+    return DefaultConfig(data_root_dir=str(tmp_path))
 
 
 def test_ensure_coredns_uses_path_binary_when_present(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

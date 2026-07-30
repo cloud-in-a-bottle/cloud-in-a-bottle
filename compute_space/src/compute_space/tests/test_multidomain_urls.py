@@ -6,9 +6,9 @@ from __future__ import annotations
 
 import sqlite3
 
-from compute_space.config import Domain
-from compute_space.core.domain_store import DomainRecord
-from compute_space.core.domain_store import seed_domains
+from compute_space.core.domains import Domain
+from compute_space.core.domains import DomainRecord
+from compute_space.core.domains import seed_domains
 from compute_space.db.schema import schema_path
 from compute_space.web.auth.auth import build_login_url
 from compute_space.web.auth.cookies import build_session_cookie
@@ -37,7 +37,7 @@ def test_login_url_on_public_domain_is_https_and_public() -> None:
 
 
 def _db() -> sqlite3.Connection:
-    """In-memory DB seeded with PUBLIC (primary) + LOCAL, for the DB-backed ``match_domain``."""
+    """In-memory DB seeded with PUBLIC (primary) + LOCAL, for the DB-backed ``Domain.match``."""
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row
     with open(schema_path()) as f:

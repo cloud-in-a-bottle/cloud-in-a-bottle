@@ -21,13 +21,14 @@ import requests
 from loguru import logger
 
 from compute_space import OPENHOST_PROJECT_DIR
-from compute_space.config import Domain
 from compute_space.core.caddy import generate_caddyfile
 from compute_space.core.data import provision_data
+from compute_space.core.domains import Domain
 from compute_space.core.manifest import AppManifest
 from compute_space.tests.conftest import _make_config_and_env
 from compute_space.tests.conftest import _start_router_process
 from compute_space.tests.conftest import _stop_router_process
+from compute_space.tests.conftest import primary_of
 from compute_space.tests.container import container_cleanup
 from compute_space.tests.utils import app_id_for
 from compute_space.tests.utils import wait_app_removed
@@ -544,12 +545,12 @@ def _wait_for_url(session, url, timeout=30, expect_status=200):
 
 def _zone_url(config):
     """Zone base URL — resolves to 127.0.0.1 via the DNS fixture in conftest.py."""
-    return f"http://{config.zone_domain}:{config.port}"
+    return f"http://{primary_of(config).name}:{config.port}"
 
 
 def _app_url(config, app_name):
     """App subdomain base URL — same DNS trick applies."""
-    return f"http://{app_name}.{config.zone_domain}:{config.port}"
+    return f"http://{app_name}.{primary_of(config).name}:{config.port}"
 
 
 @requires_containers
@@ -830,7 +831,7 @@ class TestContainerRestart:
             # Verify proxy works
             _wait_for_url(
                 session,
-                f"http://{self.APP_NAME}.{config.zone_domain}:{self.ROUTER_PORT}/health",
+                f"http://{self.APP_NAME}.{primary_of(config).name}:{self.ROUTER_PORT}/health",
                 timeout=30,
             )
 

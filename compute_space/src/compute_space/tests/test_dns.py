@@ -9,7 +9,6 @@ import pytest
 
 import compute_space.core.dns as dns_mod
 from compute_space.config import DefaultConfig
-from compute_space.config import Domain
 from compute_space.core.dns import DnsZone
 from compute_space.core.dns import TxtRecord
 from compute_space.core.dns import append_txt_records
@@ -17,9 +16,10 @@ from compute_space.core.dns import clear_txt
 from compute_space.core.dns import public_dns_zones
 from compute_space.core.dns import reload_coredns_for_domains
 from compute_space.core.dns import set_active_coredns
-from compute_space.core.domain_store import DomainRecord
-from compute_space.core.domain_store import seed_domains
-from compute_space.core.domain_store import upsert_record
+from compute_space.core.domains import Domain
+from compute_space.core.domains import DomainRecord
+from compute_space.core.domains import seed_domains
+from compute_space.core.domains import upsert_record
 from compute_space.db import init_db
 from compute_space.tests.conftest import open_db
 
@@ -27,7 +27,7 @@ from compute_space.tests.conftest import open_db
 def _seed_dns_cfg(tmp_path: Path, *domains: Domain, **kw: Any) -> DefaultConfig:
     """A config whose DB is seeded with ``domains`` (primary first), for the DB-backed zone builder."""
     primary = domains[0]
-    cfg = DefaultConfig(zone_domain=primary.name, data_root_dir=str(tmp_path), tls_enabled=primary.tls, **kw)
+    cfg = DefaultConfig(data_root_dir=str(tmp_path), **kw)
     cfg.make_all_dirs()
     init_db(cfg.db_path)
     with closing(open_db(cfg)) as db:

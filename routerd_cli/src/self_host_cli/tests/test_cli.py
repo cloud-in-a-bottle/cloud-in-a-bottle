@@ -9,7 +9,7 @@ from argparse import Namespace
 
 import pytest
 
-import self_host_cli.config_gen as cg
+from self_host_cli import config_gen
 from self_host_cli.doctor import _check_container_runtime
 from self_host_cli.doctor import _check_pixi
 from self_host_cli.doctor import _check_port
@@ -33,8 +33,8 @@ from self_host_cli.up import _resolve_zone_domain
 class TestGenerateConfig:
     def _run(self, tmp_path, monkeypatch, domain="host.example.com"):
         cfg = tmp_path / "config.toml"
-        monkeypatch.setattr(cg, "_CONFIG_PATH", str(cfg))
-        cg.generate_config(domain=domain, data_dir=str(tmp_path))
+        monkeypatch.setattr(config_gen, "_CONFIG_PATH", str(cfg))
+        config_gen.generate_config(domain=domain, data_dir=str(tmp_path))
         return cfg, tmp_path / "first_boot.toml"
 
     def test_domain_seeds_via_first_boot_not_config(self, tmp_path, monkeypatch):

@@ -9,9 +9,14 @@ seeds the DB and scrubs the file — matching the router's runtime seed for the 
 from __future__ import annotations
 
 import sqlite3
+import tomllib
 from pathlib import Path
 
-import openhost_system_agent.migrations.versions.v0007_seed_domains_and_scrub as mod
+import pytest
+
+from openhost_system_agent.migrations.versions.v0007_seed_domains_and_scrub import _SCHEMA
+from openhost_system_agent.migrations.versions.v0007_seed_domains_and_scrub import _owner_exists
+from openhost_system_agent.migrations.versions.v0007_seed_domains_and_scrub import migrate
 
 _CONFIG = (
     "[openhost]\n"
@@ -49,7 +54,7 @@ def test_captures_domains_and_claim_token_then_scrubs(tmp_path: Path) -> None:
     _v12_db(db, owner=False)
     claim.write_text("old-claim-tok:extra")
 
-    mod.migrate(str(config), str(db), str(claim))
+    migrate(str(config), str(db), str(claim))
 
     conn = sqlite3.connect(db)
     rows = {
@@ -80,14 +85,37 @@ def test_is_idempotent_and_preserves_existing_seed(tmp_path: Path) -> None:
     _v12_db(db, owner=False)
     claim.write_text("tok")
 
-    mod.migrate(str(config), str(db), str(claim))
+    migrate(str(config), str(db), str(claim))
     # A second run (e.g. config already scrubbed) must not duplicate or raise.
-    mod.migrate(str(config), str(db), str(claim))
+    migrate(str(config), str(db), str(claim))
 
     conn = sqlite3.connect(db)
     names = [n for (n,) in conn.execute("SELECT name FROM domains ORDER BY name")]
     conn.close()
     assert names == ["host.example.com", "secondary.example.com"]
+
+
+def test_malformed_config_fails_loud(tmp_path: Path) -> None:
+    config, db, claim = _paths(tmp_path)
+    _v12_db(db, owner=False)
+    config.write_text("[openhost]\nzone_domain =\n")  # invalid TOML: no value
+
+    # A malformed config must not be silently treated as "nothing to capture" — it fails so the
+    # migration is retried next update rather than permanently losing the domain set.
+    with pytest.raises(tomllib.TOMLDecodeError):
+        migrate(str(config), str(db), str(claim))
+
+
+def test_missing_config_is_noop(tmp_path: Path) -> None:
+    _, db, claim = _paths(tmp_path)
+    _v12_db(db, owner=False)
+
+    migrate(str(tmp_path / "nonexistent.toml"), str(db), str(claim))  # no raise
+
+    conn = sqlite3.connect(db)
+    tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    conn.close()
+    assert "domains" not in tables  # returned before creating the schema; nothing to capture
 
 
 def test_skips_claim_token_when_owner_exists(tmp_path: Path) -> None:
@@ -96,7 +124,7 @@ def test_skips_claim_token_when_owner_exists(tmp_path: Path) -> None:
     _v12_db(db, owner=True)
     claim.write_text("late-tok")
 
-    mod.migrate(str(config), str(db), str(claim))
+    migrate(str(config), str(db), str(claim))
 
     conn = sqlite3.connect(db)
     assert conn.execute("SELECT 1 FROM settings WHERE key = 'claim_token'").fetchone() is None
@@ -107,7 +135,7 @@ def test_no_op_without_db(tmp_path: Path) -> None:
     # No router DB yet (router hasn't booted) → nothing captured, config left untouched.
     config, db, claim = _paths(tmp_path)  # db not created
 
-    mod.migrate(str(config), str(db), str(claim))
+    migrate(str(config), str(db), str(claim))
 
     assert "zone_domain" in config.read_text()
     assert not db.exists()
@@ -119,7 +147,7 @@ def test_scrub_only_when_domains_already_seeded(tmp_path: Path) -> None:
     config, db, claim = _paths(tmp_path)
     _v12_db(db, owner=True)
     conn = sqlite3.connect(db)
-    conn.executescript(mod._SCHEMA)
+    conn.executescript(_SCHEMA)
     conn.execute(
         "INSERT INTO domains (name, tls, mdns, is_primary, cert_status, error_message) "
         "VALUES ('host.example.com', 1, 0, 1, 'none', NULL)"
@@ -127,7 +155,7 @@ def test_scrub_only_when_domains_already_seeded(tmp_path: Path) -> None:
     conn.commit()
     conn.close()
 
-    mod.migrate(str(config), str(db), str(claim))
+    migrate(str(config), str(db), str(claim))
 
     conn = sqlite3.connect(db)
     names = [n for (n,) in conn.execute("SELECT name FROM domains")]
@@ -148,7 +176,7 @@ def test_missing_users_table_does_not_brick_update(tmp_path: Path) -> None:
     conn.close()
     claim.write_text("tok:extra")
 
-    mod.migrate(str(config), str(db), str(claim))  # must not raise
+    migrate(str(config), str(db), str(claim))  # must not raise
 
     conn = sqlite3.connect(db)
     assert conn.execute("SELECT value FROM settings WHERE key = 'claim_token'").fetchone() == ("tok",)
@@ -160,10 +188,10 @@ def test_missing_users_table_does_not_brick_update(tmp_path: Path) -> None:
 def test_owner_exists_treats_missing_users_table_as_no_owner(tmp_path: Path) -> None:
     conn = sqlite3.connect(tmp_path / "no_users.db")
     try:
-        assert mod._owner_exists(conn) is False  # missing table → False, not OperationalError
+        assert _owner_exists(conn) is False  # missing table → False, not OperationalError
         conn.execute("CREATE TABLE users (username TEXT PRIMARY KEY, password_hash TEXT NOT NULL)")
-        assert mod._owner_exists(conn) is False  # empty users table → still no owner
+        assert _owner_exists(conn) is False  # empty users table → still no owner
         conn.execute("INSERT INTO users (username, password_hash) VALUES ('o', 'x')")
-        assert mod._owner_exists(conn) is True
+        assert _owner_exists(conn) is True
     finally:
         conn.close()

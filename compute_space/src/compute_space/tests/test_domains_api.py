@@ -22,20 +22,18 @@ from litestar import Litestar
 from litestar.di import Provide
 from litestar.testing import TestClient
 
-from compute_space.config import Domain
 from compute_space.config import provide_config
 from compute_space.core import caddy
 from compute_space.core.auth.auth import SESSION_COOKIE_NAME
 from compute_space.core.auth.auth import create_session
-from compute_space.core.domain_store import CERT_STATUS_ACTIVE
-from compute_space.core.domain_store import CERT_STATUS_ERROR
-from compute_space.core.domain_store import match_domain
-from compute_space.core.domain_store import seed_domains_from_legacy
+from compute_space.core.domains import Domain
+from compute_space.core.domains import DomainCertStatus
+from compute_space.core.domains import seed_domains
 from compute_space.db import provide_db
 from compute_space.db.connection import init_db
 from compute_space.tests.conftest import _make_test_config
 from compute_space.tests.conftest import open_db
-from compute_space.web.routes.api import domains as domains_module
+from compute_space.web.routes.api import domains
 from compute_space.web.routes.api.domains import api_domains_routes
 
 PRIMARY = Domain("host.example.com", tls=True)
@@ -94,7 +92,7 @@ def cfg(tmp_path: Path) -> Any:
     c = _make_test_config(tmp_path, zone_domain="host.example.com", tls_enabled=True, domains=(PRIMARY,))
     init_db(c.db_path)
     with closing(open_db(c)) as db:
-        seed_domains_from_legacy(c, db)  # seed the DB primary so add/remove rebuild from a real primary row
+        seed_domains(db, PRIMARY, [])  # seed the DB primary so add/remove rebuild from a real primary row
     caddy.set_active_caddy(None)  # no Caddy in tests → reload is a no-op
     return c
 
@@ -108,7 +106,7 @@ def client(cfg: Any) -> Iterator[TestClient[Litestar]]:
 @pytest.fixture
 def sync_acquisition(monkeypatch: pytest.MonkeyPatch) -> None:
     """Run cert acquisition synchronously so POST returns after the state machine settled."""
-    monkeypatch.setattr(domains_module, "_spawn_acquisition", domains_module._run_acquisition)
+    monkeypatch.setattr(domains, "_spawn_acquisition", domains._run_acquisition)
 
 
 # --- auth ---------------------------------------------------------------------------
@@ -143,7 +141,7 @@ def test_primary_with_expired_cert_not_active(cfg: Any, client: TestClient[Lites
     # browsers reject it — it must surface as an error, not active.
     _write_cert(cfg.tls_cert_path, cfg.tls_key_path, days_valid=-1)
     info = next(d for d in client.get("/api/domains", cookies=_auth_cookie(cfg.db_path)).json()["domains"])
-    assert info["cert_status"] == CERT_STATUS_ERROR
+    assert info["cert_status"] == DomainCertStatus.ERROR
     assert "expired" in (info["error_message"] or "")
 
 
@@ -158,10 +156,10 @@ def test_add_local_domain_is_active_and_routable(cfg: Any, client: TestClient[Li
     body = resp.json()
     assert {d["name"] for d in body["domains"]} == {"host.example.com", "myhost.local"}
     added = next(d for d in body["domains"] if d["name"] == "myhost.local")
-    assert added["scheme"] == "http" and added["cert_status"] == CERT_STATUS_ACTIVE  # http, nothing to acquire
+    assert added["scheme"] == "http" and added["cert_status"] == DomainCertStatus.ACTIVE  # http, nothing to acquire
     # persisted + now routable via the DB-backed resolver
     with closing(open_db(cfg)) as db:
-        assert match_domain(db, "app.myhost.local") is not None
+        assert Domain.match(db, "app.myhost.local") is not None
 
 
 # --- add TLS domain: acquiring → active / error -------------------------------------
@@ -170,7 +168,7 @@ def test_add_local_domain_is_active_and_routable(cfg: Any, client: TestClient[Li
 def test_add_tls_domain_acquires_and_becomes_active(
     cfg: Any, client: TestClient[Litestar], sync_acquisition: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(domains_module, "ensure_cert_for", lambda config, domain: None)  # "acquired"
+    monkeypatch.setattr(domains, "ensure_cert_for", lambda config, domain, db: None)  # "acquired"
     cookies = _auth_cookie(cfg.db_path)
     resp = client.post("/api/domains", json={"name": "host.example.org", "tls": True}, cookies=cookies)
     assert resp.status_code == 202
@@ -178,23 +176,23 @@ def test_add_tls_domain_acquires_and_becomes_active(
     info = next(
         d for d in client.get("/api/domains", cookies=cookies).json()["domains"] if d["name"] == "host.example.org"
     )
-    assert info["cert_status"] == CERT_STATUS_ACTIVE
+    assert info["cert_status"] == DomainCertStatus.ACTIVE
     assert info["scheme"] == "https"
 
 
 def test_add_tls_domain_records_acquisition_error(
     cfg: Any, client: TestClient[Litestar], sync_acquisition: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    def boom(config: Any, domain: Any) -> None:
+    def boom(config: Any, domain: Any, db: Any) -> None:
         raise RuntimeError("DNS not delegated")
 
-    monkeypatch.setattr(domains_module, "ensure_cert_for", boom)
+    monkeypatch.setattr(domains, "ensure_cert_for", boom)
     cookies = _auth_cookie(cfg.db_path)
     client.post("/api/domains", json={"name": "host.example.org", "tls": True}, cookies=cookies)
     info = next(
         d for d in client.get("/api/domains", cookies=cookies).json()["domains"] if d["name"] == "host.example.org"
     )
-    assert info["cert_status"] == CERT_STATUS_ERROR
+    assert info["cert_status"] == DomainCertStatus.ERROR
     assert "DNS not delegated" in info["error_message"]
 
 

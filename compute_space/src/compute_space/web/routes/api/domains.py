@@ -25,22 +25,19 @@ from litestar.background_tasks import BackgroundTask
 from litestar.enums import MediaType
 
 from compute_space.config import Config
-from compute_space.config import Domain
 from compute_space.config import get_config
 from compute_space.core.caddy import reload_caddy_for_domains
 from compute_space.core.dns import reload_coredns_for_domains
-from compute_space.core.domain_store import CERT_STATUS_ACQUIRING
-from compute_space.core.domain_store import CERT_STATUS_ACTIVE
-from compute_space.core.domain_store import CERT_STATUS_ERROR
-from compute_space.core.domain_store import CERT_STATUS_NONE
-from compute_space.core.domain_store import DomainRecord
-from compute_space.core.domain_store import effective_domains
-from compute_space.core.domain_store import get_record
-from compute_space.core.domain_store import load_records
-from compute_space.core.domain_store import rebuild_active_domains
-from compute_space.core.domain_store import remove_record
-from compute_space.core.domain_store import set_record_status
-from compute_space.core.domain_store import upsert_record
+from compute_space.core.domains import Domain
+from compute_space.core.domains import DomainCertStatus
+from compute_space.core.domains import DomainRecord
+from compute_space.core.domains import effective_domains
+from compute_space.core.domains import get_record
+from compute_space.core.domains import load_records
+from compute_space.core.domains import primary_domain
+from compute_space.core.domains import remove_record
+from compute_space.core.domains import set_record_status
+from compute_space.core.domains import upsert_record
 from compute_space.core.logging import logger
 from compute_space.core.tls.domain_certs import ensure_cert_for
 from compute_space.core.tls.renewal import CertStatus
@@ -67,7 +64,7 @@ class DomainInfo:
     tls: bool
     mdns: bool
     scheme: str
-    cert_status: str
+    cert_status: DomainCertStatus
     error_message: str | None
     is_primary: bool
 
@@ -82,27 +79,31 @@ class ErrorResponse:
     error: str
 
 
-def _tls_cert_display(config: Config, name: str, record: DomainRecord | None) -> tuple[str, str | None]:
+def _tls_cert_display(
+    config: Config, name: str, record: DomainRecord | None, is_primary: bool
+) -> tuple[DomainCertStatus, str | None]:
     """Cert status for a TLS domain, derived from the cert actually on disk (what Caddy serves) so an
     expired/unreadable cert is never shown 'active'; falls back to the stored in-flight state."""
-    status = get_cert_status(config.cert_path_for(name), config.key_path_for(name))
+    status = get_cert_status(config.cert_path_for(name, is_primary), config.key_path_for(name, is_primary))
     if status in (CertStatus.OK, CertStatus.EXPIRING_SOON):
-        return CERT_STATUS_ACTIVE, None  # a valid cert is on disk
+        return DomainCertStatus.ACTIVE, None  # a valid cert is on disk
     if status == CertStatus.EXPIRED:
         # On disk but no longer valid: browsers reject it and renewal is failing — surface it.
-        return CERT_STATUS_ERROR, (record.error_message if record else None) or "certificate expired or unreadable"
+        return DomainCertStatus.ERROR, (
+            record.error_message if record else None
+        ) or "certificate expired or unreadable"
     if record is not None:
         return record.cert_status, record.error_message  # MISSING: acquiring / error / none
-    return CERT_STATUS_NONE, None
+    return DomainCertStatus.NONE, None
 
 
 def _domain_info(config: Config, domain: Domain, record: DomainRecord | None) -> DomainInfo:
     name = domain.name_no_port
-    is_primary = name == config.primary_domain.name_no_port
+    is_primary = record.is_primary if record is not None else False
     if not domain.tls:
-        cert_status, error = CERT_STATUS_ACTIVE, None  # http, nothing to acquire
+        cert_status, error = DomainCertStatus.ACTIVE, None  # http, nothing to acquire
     else:
-        cert_status, error = _tls_cert_display(config, name, record)
+        cert_status, error = _tls_cert_display(config, name, record, is_primary)
     return DomainInfo(
         name=name,
         tls=domain.tls,
@@ -121,19 +122,18 @@ def _domain_list(config: Config, db: sqlite3.Connection) -> list[DomainInfo]:
 
 def _run_acquisition(config: Config, domain: Domain) -> None:
     """Acquire the domain's cert, then flip its status + reload Caddy so it uses the real cert.
-    Runs off the request thread (acquisition is slow).  Records the error on failure."""
-    try:
-        ensure_cert_for(config, domain)
-    except Exception as exc:  # noqa: BLE001 — surface any acquisition failure as domain status
-        logger.opt(exception=True).error("cert acquisition failed for {}", domain.name)
-        with closing(get_db()) as db:
-            set_record_status(db, domain.name_no_port, CERT_STATUS_ERROR, error_message=str(exc))
-        return
+    Runs off the request thread (acquisition is slow), so it owns one DB connection for the job.
+    Records the error on failure."""
     with closing(get_db()) as db:
-        set_record_status(db, domain.name_no_port, CERT_STATUS_ACTIVE)
-    # Regenerate Caddy from the *live* active config, not the snapshot captured at add time — a
-    # domain added while this (slow) acquisition ran would otherwise be dropped from the Caddyfile.
-    with closing(get_db()) as db:
+        try:
+            ensure_cert_for(config, domain, db)
+        except Exception as exc:  # noqa: BLE001 — surface any acquisition failure as domain status
+            logger.opt(exception=True).error("cert acquisition failed for {}", domain.name)
+            set_record_status(db, domain.name_no_port, DomainCertStatus.ERROR, error_message=str(exc))
+            return
+        set_record_status(db, domain.name_no_port, DomainCertStatus.ACTIVE)
+        # Regenerate Caddy from the *live* active config, not the snapshot captured at add time — a
+        # domain added while this (slow) acquisition ran would otherwise be dropped from the Caddyfile.
         reload_caddy_for_domains(get_config(), db)
 
 
@@ -193,23 +193,22 @@ async def add_domain(
             name=name,
             tls=data.tls,
             mdns=data.mdns,
-            cert_status=CERT_STATUS_ACQUIRING if data.tls else CERT_STATUS_ACTIVE,
+            cert_status=DomainCertStatus.ACQUIRING if data.tls else DomainCertStatus.ACTIVE,
         ),
     )
-    new_config = rebuild_active_domains(config, db)
     if not data.mdns:
         # Make CoreDNS authoritative for the new public zone *before* acquisition: DNS-01 writes the
         # _acme-challenge TXT into this domain's zone file, which only resolves once CoreDNS serves
         # the zone.  Run off the event loop — the restart does a blocking terminate+wait(3s) — but
         # await it so ordering before acquisition holds.  (mDNS domains never touch CoreDNS.)
-        await anyio.to_thread.run_sync(reload_coredns_for_domains, new_config, db)
+        await anyio.to_thread.run_sync(reload_coredns_for_domains, config, db)
     if data.tls:
-        _spawn_acquisition(new_config, domain)
+        _spawn_acquisition(config, domain)
     # Return the full updated list so the client repaints the table without a follow-up GET, and
     # regenerate Caddy (serving the new site) only after this response has been sent — see
     # _reload_caddy_after_response.
     return Response(
-        DomainListResponse(domains=_domain_list(new_config, db)),
+        DomainListResponse(domains=_domain_list(config, db)),
         status_code=202,
         media_type=MediaType.JSON,
         background=BackgroundTask(_reload_caddy_after_response),
@@ -221,19 +220,18 @@ async def remove_domain(
     name: str, config: Config, db: sqlite3.Connection
 ) -> Response[DomainListResponse] | Response[ErrorResponse]:
     name = name.strip().lower()
-    if name == config.primary_domain.name_no_port:
+    if name == primary_domain(db).name_no_port:
         return Response(ErrorResponse(error="cannot remove the primary domain"), status_code=400)
     removed = get_record(db, name)
     if not remove_record(db, name):
         return Response(ErrorResponse(error="domain not found"), status_code=404)
-    new_config = rebuild_active_domains(config, db)
     if removed is not None and not removed.mdns:
         # Drop the zone from CoreDNS so it stops answering for the removed public domain.  Off the
         # event loop — the restart blocks on a terminate+wait(3s).
-        await anyio.to_thread.run_sync(reload_coredns_for_domains, new_config, db)
+        await anyio.to_thread.run_sync(reload_coredns_for_domains, config, db)
     # Regenerate Caddy only after this response has been sent — see _reload_caddy_after_response.
     return Response(
-        DomainListResponse(domains=_domain_list(new_config, db)),
+        DomainListResponse(domains=_domain_list(config, db)),
         status_code=200,
         media_type=MediaType.JSON,
         background=BackgroundTask(_reload_caddy_after_response),

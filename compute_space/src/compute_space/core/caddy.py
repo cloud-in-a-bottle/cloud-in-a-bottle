@@ -7,8 +7,8 @@ from pathlib import Path
 import attr
 
 from compute_space.config import Config
-from compute_space.config import Domain
-from compute_space.core.domain_store import effective_domains
+from compute_space.core.domains import Domain
+from compute_space.core.domains import effective_domains
 from compute_space.core.logging import logger
 
 # Resolver: given a domain name, return its (cert_path, key_path) if a real cert file exists
@@ -46,14 +46,13 @@ def _http_domain_block(name: str, web_server_port: int) -> str:
     )
 
 
-def config_cert_resolver(config: Config) -> CertResolver:
+def config_cert_resolver(config: Config, db: sqlite3.Connection) -> CertResolver:
     """A CertResolver backed by the config's on-disk cert layout: a domain uses its file
     cert (the primary's legacy path, or a per-domain ``certs/<name>`` pair) when both files
     exist, otherwise falls back to ``tls internal``."""
 
     def resolve(name: str) -> tuple[Path, Path] | None:
-        cert_path = config.cert_path_for(name)
-        key_path = config.key_path_for(name)
+        cert_path, key_path = config.cert_key_paths_for(db, name)
         if cert_path.exists() and key_path.exists():
             return (cert_path, key_path)
         return None
@@ -219,7 +218,7 @@ def reload_caddy_for_domains(config: Config, db: sqlite3.Connection) -> bool:
     if caddy is None:
         return False
     caddy.caddyfile_path.write_text(
-        generate_caddyfile(effective_domains(db), config.port, config_cert_resolver(config), caddy.admin_addr)
+        generate_caddyfile(effective_domains(db), config.port, config_cert_resolver(config, db), caddy.admin_addr)
     )
     caddy.reload()
     return True

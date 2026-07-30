@@ -43,7 +43,6 @@ def generate_config(
         port=port,
         data_root_dir=data_dir,
         acme_email=email or None,
-        tls_enabled=False,
         start_caddy=False,
     ).to_toml_str()
 

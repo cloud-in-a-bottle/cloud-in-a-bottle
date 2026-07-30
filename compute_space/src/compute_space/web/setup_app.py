@@ -30,6 +30,7 @@ from compute_space.core.auth.auth import DEFAULT_OWNER_USERNAME
 from compute_space.core.auth.auth import create_session
 from compute_space.core.auth.auth import validate_owner_username
 from compute_space.core.default_apps import deploy_default_apps
+from compute_space.core.domains import primary_domain
 from compute_space.core.logging import logger
 from compute_space.core.settings_store import CLAIM_TOKEN_KEY
 from compute_space.core.settings_store import delete_setting
@@ -38,7 +39,6 @@ from compute_space.core.updates import is_shutdown_pending
 from compute_space.core.updates import trigger_restart
 from compute_space.db import get_db
 from compute_space.web.auth.cookies import build_session_cookie
-from compute_space.web.helpers.zone import zone_for_request
 
 # Set when setup_post succeeds. /health flips to 503 immediately so clients
 # polling for the post-restart main app don't see a stale 200 from the setup
@@ -151,7 +151,9 @@ async def setup_post(request: Request[Any, Any, Any], config: Config) -> Respons
         "<p>Setup complete. Restarting…</p></body></html>"
     )
     response = Response(content=body, status_code=200, media_type=MediaType.HTML)
-    response.set_cookie(build_session_cookie(session_token, zone_for_request(request)))
+    # Setup is always served on the primary domain; scope the cookie to it (no middleware here to
+    # stash a request domain).
+    response.set_cookie(build_session_cookie(session_token, primary_domain(db)))
 
     global _setup_completed  # noqa: PLW0603
     _setup_completed = True

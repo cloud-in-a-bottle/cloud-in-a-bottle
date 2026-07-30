@@ -1,8 +1,8 @@
 from litestar.datastructures import Cookie
 
-from compute_space.config import Domain
 from compute_space.core.auth.auth import SESSION_COOKIE_NAME
 from compute_space.core.auth.auth import SESSION_TTL_SECONDS
+from compute_space.core.domains import Domain
 
 
 def clear_session_cookie(zone: Domain) -> Cookie:

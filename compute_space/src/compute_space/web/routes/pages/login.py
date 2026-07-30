@@ -15,7 +15,7 @@ from compute_space.core.auth.auth import SESSION_COOKIE_NAME
 from compute_space.core.auth.auth import create_session
 from compute_space.core.auth.auth import revoke_session
 from compute_space.core.auth.auth import validate_password
-from compute_space.core.domain_store import match_domain
+from compute_space.core.domains import Domain
 from compute_space.web.auth.auth import authenticate
 from compute_space.web.auth.auth import require_same_origin
 from compute_space.web.auth.cookies import build_session_cookie
@@ -35,7 +35,7 @@ def _validated_next(next_url: str, db: sqlite3.Connection) -> str | None:
     parsed = urlparse(next_url)
     if not parsed.scheme and not parsed.netloc:
         return next_url
-    if parsed.hostname is not None and match_domain(db, parsed.hostname) is not None:
+    if parsed.hostname is not None and Domain.match(db, parsed.hostname) is not None:
         return next_url
     return None
 

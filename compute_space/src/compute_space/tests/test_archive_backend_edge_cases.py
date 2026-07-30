@@ -13,20 +13,23 @@ import os
 import re
 import sqlite3
 import subprocess
+from contextlib import closing
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
 import pytest
 
-from compute_space.config import DefaultConfig
 from compute_space.core import apps as apps_mod
 from compute_space.core import archive_backend
 from compute_space.core.archive_backend import BackendConfigureError
 from compute_space.core.archive_backend import configure_backend
 from compute_space.core.archive_backend import juicefs_mount_dir
 from compute_space.core.archive_backend import read_state
+from compute_space.core.domains import Domain
+from compute_space.core.domains import seed_domains
 from compute_space.db.connection import init_db
+from compute_space.db.schema import schema_path
 from compute_space.tests.conftest import _make_test_config
 
 
@@ -490,26 +493,39 @@ def test_remove_local_object_store_noop_when_absent(cfg):
 # --- per-zone volume name (collision-avoidance fix) -------------------------
 
 
+def _db_with_primary(zone: str) -> sqlite3.Connection:
+    """In-memory DB whose primary domain is ``zone`` — for default_volume_name_for_zone(db)."""
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    with open(schema_path()) as f:
+        conn.executescript(f.read())
+    seed_domains(conn, Domain(zone), [])
+    return conn
+
+
+def _volume_name_for(zone: str) -> str:
+    with closing(_db_with_primary(zone)) as db:
+        return archive_backend.default_volume_name_for_zone(db)
+
+
 def test_default_volume_name_is_valid_and_zone_derived():
-    cfg = DefaultConfig(zone_domain="alice.selfhost.imbue.com")
-    name = archive_backend.default_volume_name_for_zone(cfg)
-    # JuiceFS validName: [a-z0-9-], 3..63, no leading/trailing dash.
-    assert re.fullmatch(r"[a-z0-9][a-z0-9-]{1,61}[a-z0-9]", name)
-    assert name != "openhost"
-    assert "alice" in name  # zone-derived
-    # Deterministic for the same zone.
-    assert archive_backend.default_volume_name_for_zone(cfg) == name
+    with closing(_db_with_primary("alice.selfhost.imbue.com")) as db:
+        name = archive_backend.default_volume_name_for_zone(db)
+        # JuiceFS validName: [a-z0-9-], 3..63, no leading/trailing dash.
+        assert re.fullmatch(r"[a-z0-9][a-z0-9-]{1,61}[a-z0-9]", name)
+        assert name != "openhost"
+        assert "alice" in name  # zone-derived
+        # Deterministic for the same zone.
+        assert archive_backend.default_volume_name_for_zone(db) == name
 
 
 def test_default_volume_name_distinct_per_zone():
-    a = archive_backend.default_volume_name_for_zone(DefaultConfig(zone_domain="alice.selfhost.imbue.com"))
-    b = archive_backend.default_volume_name_for_zone(DefaultConfig(zone_domain="bob.selfhost.imbue.com"))
-    assert a != b
+    assert _volume_name_for("alice.selfhost.imbue.com") != _volume_name_for("bob.selfhost.imbue.com")
 
 
 def test_default_volume_name_handles_weird_and_long_zones():
     for zone in ["", "UPPER.Case.Example.COM", "x" * 200 + ".example.com", "a_b.c--d.e"]:
-        name = archive_backend.default_volume_name_for_zone(DefaultConfig(zone_domain=zone or "z.local"))
+        name = _volume_name_for(zone or "z.local")
         assert 3 <= len(name) <= 63
         assert re.fullmatch(r"[a-z0-9][a-z0-9-]{1,61}[a-z0-9]", name), (zone, name)
 
@@ -517,10 +533,7 @@ def test_default_volume_name_handles_weird_and_long_zones():
 def test_two_zones_do_not_collide_on_default_volume():
     # The core of the bug: two fresh zones must not both key objects under the
     # same shared prefix.
-    names = {
-        archive_backend.default_volume_name_for_zone(DefaultConfig(zone_domain=f"z{i}.selfhost.imbue.com"))
-        for i in range(20)
-    }
+    names = {_volume_name_for(f"z{i}.selfhost.imbue.com") for i in range(20)}
     assert len(names) == 20  # all distinct
     assert "openhost" not in names
 

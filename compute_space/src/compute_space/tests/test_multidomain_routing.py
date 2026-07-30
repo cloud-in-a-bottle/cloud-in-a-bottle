@@ -12,10 +12,10 @@ from typing import Any
 import pytest
 
 from compute_space.config import DefaultConfig
-from compute_space.config import Domain
 from compute_space.core.apps import get_app_from_hostname
-from compute_space.core.domain_store import DomainRecord
-from compute_space.core.domain_store import seed_domains
+from compute_space.core.domains import Domain
+from compute_space.core.domains import DomainRecord
+from compute_space.core.domains import seed_domains
 from compute_space.db import get_db
 from compute_space.db import init_db
 from compute_space.tests.conftest import _make_test_config
@@ -23,7 +23,6 @@ from compute_space.tests.conftest import open_db
 from compute_space.web.app import _reject_app_subdomain_requests
 from compute_space.web.helpers.zone import ZONE_SCOPE_KEY
 from compute_space.web.helpers.zone import zone_for_request
-from compute_space.web.middleware.subdomain_proxy import _looks_like_app_subdomain
 
 PRIMARY = Domain(name="host.example.com", tls=True)
 LOCAL = Domain(name="myhost.local", tls=False, mdns=True)
@@ -39,7 +38,8 @@ def _seed(cfg: DefaultConfig, *domains: Domain) -> DefaultConfig:
 
 @pytest.fixture
 def multi_domain_config(tmp_path: Path) -> DefaultConfig:
-    cfg = _make_test_config(tmp_path, zone_domain="host.example.com", tls_enabled=True)
+    # seed_primary=False: this fixture seeds the full set (primary + extras) itself.
+    cfg = _make_test_config(tmp_path, seed_primary=False)
     return _seed(cfg, PRIMARY, LOCAL)  # type: ignore[arg-type]
 
 
@@ -68,7 +68,8 @@ def _route(host: str) -> Any:
 
 def _looks(host: str) -> bool:
     with closing(get_db()) as db:
-        return _looks_like_app_subdomain(host, db)
+        matched = Domain.match(db, host)
+    return matched is not None and matched.is_app_subdomain(host)
 
 
 def test_app_reachable_under_primary_domain(multi_domain_config: Any, captured_lookups: list[str]) -> None:
@@ -145,17 +146,22 @@ def test_zone_for_request_prefers_stashed_domain(multi_domain_config: Any) -> No
     assert zone_for_request(conn) == LOCAL
 
 
-def test_zone_for_request_falls_back_to_primary_when_unstashed(multi_domain_config: Any) -> None:
-    # No stash (e.g. a request that bypassed the middleware) falls back to the primary domain.
-    assert zone_for_request(_fake_conn("myapp.myhost.local")) == PRIMARY
-    assert zone_for_request(_fake_conn("unrelated.example.org")) == PRIMARY
-    assert zone_for_request(_fake_conn("x", scope={ZONE_SCOPE_KEY: None})) == PRIMARY
+def test_zone_for_request_raises_when_unstashed(multi_domain_config: Any) -> None:
+    # SubdomainProxyMiddleware always stashes a Domain; reaching a handler without one is a bug, not a
+    # silent fallback.
+    with pytest.raises(RuntimeError, match="SubdomainProxyMiddleware is required"):
+        zone_for_request(_fake_conn("myapp.myhost.local"))
+    with pytest.raises(RuntimeError):
+        zone_for_request(_fake_conn("x", scope={ZONE_SCOPE_KEY: None}))
 
 
 def test_single_domain_config_unchanged(tmp_path: Path) -> None:
     """A single-domain config routes exactly as before (now a one-row DB domain set)."""
-    cfg = _make_test_config(tmp_path, zone_domain="solo.example.com", tls_enabled=True)
+    cfg = _make_test_config(tmp_path, seed_primary=False)
     _seed(cfg, Domain(name="solo.example.com", tls=True))  # type: ignore[arg-type]
     assert _looks("app.solo.example.com") is True
     assert _looks("solo.example.com") is False
-    assert zone_for_request(_fake_conn("app.solo.example.com")).name == "solo.example.com"
+    solo = Domain(name="solo.example.com", tls=True)
+    assert (
+        zone_for_request(_fake_conn("app.solo.example.com", scope={ZONE_SCOPE_KEY: solo})).name == "solo.example.com"
+    )

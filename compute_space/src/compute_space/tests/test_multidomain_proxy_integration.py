@@ -25,10 +25,10 @@ import pytest
 from litestar import Litestar
 from litestar import get
 
-from compute_space.config import Domain
 from compute_space.core.app_id import new_app_id
-from compute_space.core.domain_store import DomainRecord
-from compute_space.core.domain_store import seed_domains
+from compute_space.core.domains import Domain
+from compute_space.core.domains import DomainRecord
+from compute_space.core.domains import seed_domains
 from compute_space.db.connection import init_db
 from compute_space.tests.conftest import _make_test_config
 from compute_space.tests.conftest import open_db
@@ -88,7 +88,7 @@ def wrapped_app(tmp_path: Path, backend_port: int) -> Any:
 
     `myapp` makes "/" public (so proxy tests don't need auth); `privapp` has no public
     paths (so unauthenticated requests trigger the login redirect)."""
-    cfg = _make_test_config(tmp_path, zone_domain="host.example.com", tls_enabled=True)
+    cfg = _make_test_config(tmp_path, seed_primary=False)  # this test seeds the full set itself
     init_db(cfg.db_path)
     with closing(open_db(cfg)) as db:
         seed_domains(db, PRIMARY, [DomainRecord(LOCAL.name, LOCAL.tls, LOCAL.mdns)])

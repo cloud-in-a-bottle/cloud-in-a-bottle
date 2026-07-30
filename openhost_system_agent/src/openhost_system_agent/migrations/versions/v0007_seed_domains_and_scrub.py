@@ -144,8 +144,8 @@ def migrate(
     try:
         with open(config_path, "rb") as f:
             openhost = tomllib.load(f).get("openhost", {})
-    except (OSError, tomllib.TOMLDecodeError):
-        return
+    except FileNotFoundError:
+        return  # no config to capture; a malformed one must fail loud so the migration retries
     if not isinstance(openhost, dict):
         return
 

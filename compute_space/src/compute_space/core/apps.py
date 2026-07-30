@@ -34,7 +34,8 @@ from compute_space.core.data import deprovision_data
 from compute_space.core.data import deprovision_temp_data
 from compute_space.core.data import provision_data
 from compute_space.core.data import rmtree_with_sudo_fallback
-from compute_space.core.domain_store import match_domain
+from compute_space.core.domains import Domain
+from compute_space.core.domains import primary_domain
 from compute_space.core.git_ops import UnsupportedRepoUrlError
 from compute_space.core.git_ops import is_github_repo_url
 from compute_space.core.git_ops import is_ssh_url
@@ -463,7 +464,7 @@ def insert_and_deploy(
         temp_data_dir=config.temporary_data_dir,
         archive_dir=archive_backend.effective_archive_dir(config, db),
         my_openhost_redirect_domain=config.my_openhost_redirect_domain,
-        zone_domain=config.primary_domain.name,
+        zone_domain=primary_domain(db).name,
         port=config.port,
         owner_username=read_owner_username(db) or DEFAULT_OWNER_USERNAME,
     )
@@ -781,7 +782,7 @@ def start_app_process(app_id: str, db: sqlite3.Connection, config: Config) -> No
         temp_data_dir=config.temporary_data_dir,
         archive_dir=archive_backend.effective_archive_dir(config, db),
         my_openhost_redirect_domain=config.my_openhost_redirect_domain,
-        zone_domain=config.primary_domain.name,
+        zone_domain=primary_domain(db).name,
         port=config.port,
         owner_username=read_owner_username(db) or DEFAULT_OWNER_USERNAME,
     )
@@ -1187,7 +1188,7 @@ def get_app_from_hostname(host: str, db: sqlite3.Connection) -> App | None:
     """Extract+validate app name from a Host header value (or litestar's request.url.netloc; ie example.com[:port])
     by assuming that app_name is a subdir of one of the configured domains (as is convention).
 
-    The host is matched against every configured Domain (see domain_store.match_domain), so an app is
+    The host is matched against every configured Domain (see Domain.match), so an app is
     reachable under any domain the instance answers on (e.g. both `<app>.host.example.com` and
     `<app>.myhost.local`).  Matching is case-insensitive.
 
@@ -1198,7 +1199,7 @@ def get_app_from_hostname(host: str, db: sqlite3.Connection) -> App | None:
         zplizzi.host.imbue.com -> None
         localhost:8080 -> None
     """
-    matched = match_domain(db, host)
+    matched = Domain.match(db, host)
     if matched is None:
         return None
     zone_no_port = matched.name_no_port
@@ -1206,7 +1207,7 @@ def get_app_from_hostname(host: str, db: sqlite3.Connection) -> App | None:
     if host_no_port == zone_no_port:
         # the domain itself — the router, not an app
         return None
-    # match_domain guarantees host_no_port ends with "." + zone_no_port here
+    # Domain.match guarantees host_no_port ends with "." + zone_no_port here
     app_name = host_no_port[: -(len(zone_no_port) + 1)]
     if "." not in app_name:
         if app := find_app_by_name(app_name):
