@@ -160,20 +160,25 @@ class CaddyProcess:
             if self.admin_addr is None or self.proc.poll() is not None:
                 self._cold_restart_locked()
                 return
-            result = subprocess.run(
-                [
-                    "caddy",
-                    "reload",
-                    "--config",
-                    str(self.caddyfile_path),
-                    "--adapter",
-                    "caddyfile",
-                    "--address",
-                    self.admin_addr,
-                ],
-                capture_output=True,
-                timeout=30,
-            )
+            try:
+                result = subprocess.run(
+                    [
+                        "caddy",
+                        "reload",
+                        "--config",
+                        str(self.caddyfile_path),
+                        "--adapter",
+                        "caddyfile",
+                        "--address",
+                        self.admin_addr,
+                    ],
+                    capture_output=True,
+                    timeout=30,
+                )
+            except subprocess.TimeoutExpired:
+                logger.error("caddy reload timed out after 30s; cold-restarting")
+                self._cold_restart_locked()
+                return
             if result.returncode != 0:
                 logger.error(
                     f"caddy reload failed (rc={result.returncode}): "

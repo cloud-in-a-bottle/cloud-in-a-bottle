@@ -219,6 +219,23 @@ def test_reload_falls_back_to_cold_restart_on_failure(tmp_path: Path, monkeypatc
     assert len(spawned) == 1  # reload failed → cold restart respawned Caddy
 
 
+def test_reload_falls_back_to_cold_restart_on_timeout(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # A hung `caddy reload` raises TimeoutExpired; reload() must cold-restart rather than let it
+    # propagate uncaught and leave Caddy serving the stale config.
+    spawned: list[Path] = []
+    monkeypatch.setattr(caddy, "_spawn_caddy", lambda p: spawned.append(p) or _AliveProc())  # type: ignore[arg-type,func-returns-value]
+
+    def _hang(cmd: list[str], **kw: object) -> subprocess.CompletedProcess[bytes]:
+        raise subprocess.TimeoutExpired(cmd, 30)
+
+    monkeypatch.setattr(caddy.subprocess, "run", _hang)
+    cp = CaddyProcess(proc=_AliveProc(), caddyfile_path=tmp_path / "Caddyfile", admin_addr="unix//x.sock")  # type: ignore[arg-type]
+
+    cp.reload()  # must not raise
+
+    assert len(spawned) == 1  # timeout → cold restart respawned Caddy
+
+
 def test_reload_cold_restarts_when_admin_off(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # With no admin endpoint there's nothing to reload through, so reload() must cold-restart and
     # never invoke `caddy reload`.
