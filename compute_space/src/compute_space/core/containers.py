@@ -400,16 +400,18 @@ def run_container(
             stop_egress_infra(app_name)
             raise
         infra_name = egress_infra_name(app_name)
+        # NOTE: podman rejects --add-host and --dns when joining another
+        # container's netns (`--network container:`).  Both /etc/hosts and DNS
+        # come from the shared netns instead: DNS via the bind-mounted
+        # resolv.conf below (pointing through the tunnel), and host-gateway
+        # aliases are intentionally not provided (an egress app is meant to
+        # reach the internet through the tunnel, not host services).
         cmd.extend(
             [
                 "--network",
                 f"container:{infra_name}",
-                # DNS reaches the tunnel via this bind-mounted resolv.conf;
-                # --dns is rejected by podman in container: network mode.
                 "-v",
                 _bind_mount_arg(egress_setup.resolv_conf_path, "/etc/resolv.conf", read_only=True),
-                "--add-host=host.docker.internal:host-gateway",
-                "--add-host=host.containers.internal:host-gateway",
             ]
         )
     elif manifest.network_host:
