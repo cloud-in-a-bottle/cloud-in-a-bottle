@@ -40,11 +40,11 @@ RUN mkdir -p /home/host/.openhost/local_compute_space \
 
 # A real pre-consolidation instance always has a router.db (schema <= v12); seed one so the v0007
 # domains migration has a DB to capture into + scrub (its no-DB path is the fresh-install case).
-RUN mkdir -p /home/host/.openhost/local_compute_space/persistent_data/openhost && \
-    /home/host/.pixi/envs/default/bin/python \
-        /home/host/openhost/openhost_system_agent/src/openhost_system_agent/tests/seed_pre_consolidation_db.py \
-        /home/host/.openhost/local_compute_space/persistent_data/openhost/router.db && \
-    chown -R host:host /home/host/.openhost
+RUN su - host -c "cd /home/host/openhost && \
+    mkdir -p /home/host/.openhost/local_compute_space/persistent_data/openhost && \
+    .pixi/envs/default/bin/python \
+        openhost_system_agent/src/openhost_system_agent/tests/seed_pre_consolidation_db.py \
+        /home/host/.openhost/local_compute_space/persistent_data/openhost/router.db"
 
 # systemd as init
 CMD ["/sbin/init"]
