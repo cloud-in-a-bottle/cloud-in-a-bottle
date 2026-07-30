@@ -1,40 +1,38 @@
 # Running OpenHost in a local QEMU VM
 
-> **AI-generated.** Per this repo's convention, AI-written docs live in
-> `*_ai_generated.md` and are not a hand-maintained source of truth. The
-> authoritative deployment reference is **[`ansible/readme.md`](ansible/readme.md)**
-> and `ansible/setup.yml`; this file just walks the local-VM path end to end.
+> The authoritative deployment reference is
+> **[`ansible/readme.md`](https://github.com/imbue-openhost/openhost/blob/main/ansible/readme.md)**
+> and `ansible/setup.yml`; this guide walks the local-VM path end to end.
 >
 > Upstream docs for the tools used here:
 > [QEMU](https://www.qemu.org/download/) ·
-> [Ubuntu Server](https://ubuntu.com/download/server) ·
-> [Ubuntu autoinstall](https://ubuntu.com/server/docs/install/autoinstall)
+> [Ubuntu Server](https://ubuntu.com/download/server)
 
-This gets OpenHost running on a throwaway **Ubuntu 24.04 VM under QEMU** on your
-desktop — good for trying it out or developing against it before you point a
-real domain at a real server. Two parts:
+This gets OpenHost running on an **Ubuntu 24.04 VM under QEMU** on your
+desktop — good for trying it out before you buy a dedicated domain or machine.
+Two parts:
 
 1. **[Build the VM](#part-1--build-an-ubuntu-vm-in-qemu)** — install QEMU and
    stand up an Ubuntu VM.
 2. **[Deploy OpenHost](#part-2--deploy-openhost-onto-the-vm)** — run the Ansible
    playbook against that VM (HTTP-only mode; no domain needed).
 
-For a real public instance instead, see
+For a dedicated instance instead, see
 [Going to production](#going-to-production-real-host--domain).
 
 ---
 
 ## Settings — edit these once
 
-Set these in your shell; every command below uses them, so you only fill in
+Set these in your shell; the commands below use them, so you only fill in
 values here. The defaults target an **Apple Silicon (arm64) Mac**; see
 [Other hosts](#other-hosts-x86_64--linux) for x86_64 / Linux substitutions.
 
 ```bash
 # --- where the VM lives + how to reach it ---
-export VM_DIR=~/openhost-vm            # holds the disk, firmware vars, ISO
+export VM_DIR=~/openhost-vm            # holds the disk, firmware vars, seed
 export SSH_KEY=~/.ssh/id_ed25519       # your SSH private key ($SSH_KEY.pub must exist)
-export VM_USER=ubuntu                  # the login you'll create in the installer
+export VM_USER=ubuntu                  # the login cloud-init sets up in the VM
 export SSH_PORT=2222                   # host port -> VM :22
 export HTTP_PORT=8080                  # host port -> VM :8080 (the dashboard)
 
@@ -48,13 +46,14 @@ export DOMAIN=lvh.me:8080              # zone domain for app routing (see note i
 export OPENHOST_REPO=~/openhost        # path to your checkout of this repo
 
 # --- QEMU (Apple Silicon / arm64 defaults) ---
-export UBUNTU_ISO_URL="https://cdimage.ubuntu.com/releases/24.04/release/ubuntu-24.04.4-live-server-arm64.iso"
+# Ubuntu cloud image for your host's architecture (swap the -arm64 suffix for
+# -amd64 on x86_64):
+export UBUNTU_IMG_URL="https://cloud-images.ubuntu.com/releases/24.04/release/ubuntu-24.04-server-cloudimg-arm64.img"
 export QEMU=qemu-system-aarch64
 export ACCEL=hvf                       # macOS accelerator; Linux: kvm
 export EFI_CODE=/opt/homebrew/share/qemu/edk2-aarch64-code.fd
 export EFI_VARS_TEMPLATE=/opt/homebrew/share/qemu/edk2-arm-vars.fd
 
-mkdir -p "$VM_DIR"
 # If you don't already have an SSH key:  ssh-keygen -t ed25519 -f "$SSH_KEY" -N ""
 ```
 
@@ -75,57 +74,57 @@ sudo apt install qemu-system-arm qemu-system-x86 qemu-utils
 Verify: `"$QEMU" --version`. (Authoritative install docs:
 <https://www.qemu.org/download/>.)
 
-### 2. Get the Ubuntu Server ISO + create the disk
+### 2. Get the Ubuntu cloud image + create the disk
+
+The cloud image is a prebuilt qcow2 that configures itself from cloud-init on
+first boot — no interactive installer. Download it as the VM's disk and grow it
+to `$DISK_SIZE`:
 
 ```bash
-curl -L -o "$VM_DIR/ubuntu.iso" "$UBUNTU_ISO_URL"
-qemu-img create -f qcow2 "$VM_DIR/disk.qcow2" "$DISK_SIZE"
+mkdir -p "$VM_DIR"                              # holds the disk, firmware vars, seed
+curl -L -o "$VM_DIR/disk.qcow2" "$UBUNTU_IMG_URL"
+qemu-img resize "$VM_DIR/disk.qcow2" "$DISK_SIZE"   # cloud-init grows the rootfs to fill it
 cp "$EFI_VARS_TEMPLATE" "$VM_DIR/efi-vars.fd"   # writable UEFI variable store
 ```
 
-Use the **arm64** ISO on Apple Silicon, the **amd64** ISO on an x86_64 host
-(pick from <https://ubuntu.com/download/server>).
+### 3. Build the cloud-init seed
 
-### 3. Install Ubuntu (interactive)
-
-Boot the installer with a display. This opens a QEMU window; the port forwards
-are set up now so the *installed* system is reachable later.
+Cloud-init reads a `user-data` + `meta-data` pair from a small ISO labelled
+`CIDATA`. This one creates `$VM_USER`, imports your SSH key, and sets a sudo
+password (`ubuntu` by default — you'll hand it to Ansible's `--ask-become-pass`;
+change it here if you like).
 
 ```bash
-"$QEMU" \
-  -machine virt,accel=$ACCEL -cpu host -smp $CPUS -m $RAM_MB \
-  -drive if=pflash,format=raw,readonly=on,file="$EFI_CODE" \
-  -drive if=pflash,format=raw,file="$VM_DIR/efi-vars.fd" \
-  -device virtio-gpu-pci -display default,show-cursor=on \
-  -device qemu-xhci -device usb-kbd -device usb-tablet \
-  -device virtio-rng-pci \
-  -netdev user,id=n0,hostfwd=tcp::$SSH_PORT-:22,hostfwd=tcp::$HTTP_PORT-:8080 \
-  -device virtio-net-pci,netdev=n0 \
-  -drive if=none,file="$VM_DIR/disk.qcow2",format=qcow2,id=hd0 -device virtio-blk-pci,drive=hd0 \
-  -drive if=none,file="$VM_DIR/ubuntu.iso",format=raw,readonly=on,id=cd0 -device virtio-blk-pci,drive=cd0
+cat > "$VM_DIR/user-data" <<EOF
+#cloud-config
+users:
+  - name: $VM_USER
+    groups: [sudo]
+    shell: /bin/bash
+    sudo: ALL=(ALL) ALL
+    lock_passwd: false
+    ssh_authorized_keys:
+      - $(cat "$SSH_KEY.pub")
+chpasswd:
+  expire: false
+  users:
+    - {name: $VM_USER, password: ubuntu, type: text}
+ssh_pwauth: false
+EOF
+: > "$VM_DIR/meta-data"        # empty file is required but has no content
+
+# Pack them into a CIDATA seed ISO:
+# macOS:
+hdiutil makehybrid -iso -joliet -default-volume-name CIDATA \
+  -o "$VM_DIR/seed.iso" "$VM_DIR/user-data" "$VM_DIR/meta-data"
+# Linux (cloud-image-utils):  cloud-localds "$VM_DIR/seed.iso" "$VM_DIR/user-data" "$VM_DIR/meta-data"
 ```
 
-In the Ubuntu Server installer:
+### 4. Boot the VM (headless)
 
-- Accept the defaults for language/keyboard; **network** works out of the box
-  (QEMU user-mode NAT gives the VM internet).
-- **Storage:** use the entire disk.
-- **Profile:** set your name and a username — use the same value as `$VM_USER`
-  (`ubuntu`), and pick a password (you'll hand it to Ansible's `--ask-become-pass`).
-- **✅ Install OpenSSH server**, and **import your SSH key** — paste the contents
-  of `$SSH_KEY.pub`, or import from GitHub if your key is on your account.
-
-When it finishes, choose **Reboot**. Once it powers down, close the QEMU window.
-
-> Prefer a fully unattended, repeatable install? Ubuntu's
-> [autoinstall / cloud-init](https://ubuntu.com/server/docs/install/autoinstall)
-> can script all of the above via a NoCloud seed ISO.
-
-### 4. Boot the installed VM
-
-Same command **without** the ISO, headless (serial on your terminal). Leave this
-running in its own terminal (or a `tmux`/`screen` session) and use a new
-terminal for Part 2.
+Boot the disk with the seed attached, headless (serial on your terminal). Leave
+this running in its own terminal (or a `tmux`/`screen` session) and use a new
+terminal for Part 2. First boot takes a moment while cloud-init runs.
 
 ```bash
 "$QEMU" \
@@ -136,17 +135,28 @@ terminal for Part 2.
   -netdev user,id=n0,hostfwd=tcp::$SSH_PORT-:22,hostfwd=tcp::$HTTP_PORT-:8080 \
   -device virtio-net-pci,netdev=n0 \
   -drive if=none,file="$VM_DIR/disk.qcow2",format=qcow2,id=hd0 -device virtio-blk-pci,drive=hd0 \
+  -drive if=none,file="$VM_DIR/seed.iso",format=raw,readonly=on,id=cd0 -device virtio-blk-pci,drive=cd0 \
   -nographic
 ```
 
-Confirm SSH works from another terminal (accept the host key on first connect):
+Confirm SSH works from another terminal (accept the host key on first connect;
+retry for a few seconds if cloud-init is still finishing):
 
 ```bash
 ssh -p "$SSH_PORT" "$VM_USER@localhost" 'lsb_release -ds && echo SSH_OK'
 ```
 
+> The seed ISO is harmless to leave attached — cloud-init only applies it once
+> per VM, so this same command is also your restart command.
+>
 > `-nographic` wires the VM's serial console to this terminal; quit QEMU with
 > `Ctrl-A` then `X`. (Don't `Ctrl-C`.)
+
+### Manual install from the Server ISO (TODO)
+
+> **TODO:** document the alternative interactive install from the Ubuntu Server
+> ISO (boot subiquity with a display, use the whole disk, install OpenSSH, import
+> your SSH key) for anyone who'd rather not use the cloud image. To be filled in.
 
 ### Other hosts (x86_64 / Linux)
 
@@ -158,7 +168,8 @@ Settings block:
 - Firmware: OVMF instead of arm EDK2 —
   `EFI_CODE=/usr/share/OVMF/OVMF_CODE.fd`,
   `EFI_VARS_TEMPLATE=/usr/share/OVMF/OVMF_VARS.fd` (install `ovmf` on Debian/Ubuntu).
-- Use the **amd64** Ubuntu ISO.
+- Use the **amd64** cloud image (`UBUNTU_IMG_URL` above), and build the seed with
+  `cloud-localds` instead of `hdiutil`.
 
 On arm64 Linux, keep `-machine virt` but use
 `EFI_CODE=/usr/share/AAVMF/AAVMF_CODE.fd` and the matching `AAVMF_VARS.fd`.
@@ -204,7 +215,7 @@ ansible-playbook ansible/setup.yml \
   -e public_ip=127.0.0.1 \
   -e skip_apt_upgrade=true \
   --private-key=$SSH_KEY \
-  --ask-become-pass          # enter the VM user's sudo password from the installer
+  --ask-become-pass          # the VM user's sudo password (set in the cloud-init seed)
 ```
 
 This installs rootless Podman, pixi, the systemd units, and deploys OpenHost's
@@ -276,4 +287,5 @@ over SSH as `root`) and turning on TLS by dropping `local_http_only`:
    ```
 
 Your instance comes up at `https://host.example.com/`. Full options and the
-authoritative reference are in **[`ansible/readme.md`](ansible/readme.md)**.
+authoritative reference are in
+**[`ansible/readme.md`](https://github.com/imbue-openhost/openhost/blob/main/ansible/readme.md)**.
