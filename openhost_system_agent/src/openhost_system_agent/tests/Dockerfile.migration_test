@@ -26,6 +26,11 @@ WORKDIR /home/host/openhost
 # Install deps via pixi (provides python + all packages)
 RUN su - host -c "cd /home/host/openhost && /home/host/.pixi/bin/pixi install"
 
+# Symlink the system agent onto sudo's secure_path, mirroring ansible
+# install_openhost_units.yml — openhost.service's ExecStartPre invokes it by this path.
+RUN ln -sf /home/host/openhost/.pixi/envs/default/bin/openhost_system_agent \
+    /usr/local/bin/openhost_system_agent
+
 # Bootstrap migration log at v1 (baseline)
 RUN mkdir -p /etc/openhost && \
     echo '{"version":1,"timestamp":"2025-01-01T00:00:00Z","success":true,"error":null}' \

@@ -161,12 +161,14 @@ async function setRemote() {
       const err = await resp.json();
       throw new Error(err.detail || 'failed to set remote');
     }
-    try {
-      await fetch('/api/settings/restart_compute_space', {method: 'POST'});
-    } catch (e) {
-      // Expected — server may die before responding
-    }
-    showRestartOverlay();
+    // Only records the pin — it deliberately does NOT restart. Moving to the new
+    // ref is the update walk's job (checkout+migrate+install+restart, in order),
+    // so surface it as an available update instead of rebooting onto unmigrated code.
+    msg.textContent = 'Remote saved.';
+    msg.className = '';
+    msg.style.display = '';
+    btn.disabled = false;
+    await checkForUpdates();
   } catch (e) {
     msg.textContent = e.message;
     msg.className = 'error';
