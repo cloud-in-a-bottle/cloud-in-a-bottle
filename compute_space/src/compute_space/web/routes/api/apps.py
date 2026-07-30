@@ -766,12 +766,30 @@ async def _reload_app_impl(
                 return Redirect(path=f"/app_detail/{app_name}")
             return Response(content=perm_gate, status_code=200, media_type=MediaType.JSON)
 
-    await asyncio.to_thread(stop_app_process, app_row)
-    db.execute(
-        "UPDATE apps SET status = 'building', container_id = NULL, error_message = NULL WHERE app_id = ?",
+    # Atomically claim the reload before touching the running container.
+    # ``WHERE status NOT IN (<transient states>)`` makes concurrent reloads
+    # safe: only the first request flips the row to 'building' and spawns a
+    # worker; a second one gets rowcount=0 and is refused. Without this,
+    # spamming "Reload" spawns several reload_app_background threads that race
+    # to create the same ``openhost-<name>`` container and fail with
+    # "container name is already in use". ``continue_oauth`` resumes a reload
+    # this same request already began on its initial POST (status is still the
+    # pre-reload one, since the POST bounced to OAuth before claiming), so it
+    # proceeds regardless of the rowcount.
+    cursor = db.execute(
+        "UPDATE apps SET status = 'building', container_id = NULL, error_message = NULL "
+        "WHERE app_id = ? AND status NOT IN ('building', 'starting', 'removing')",
         (app_id,),
     )
     db.commit()
+    if cursor.rowcount == 0 and not continue_oauth:
+        return Response(
+            content=ErrorResponse(error="App is already reloading"),
+            status_code=409,
+            media_type=MediaType.JSON,
+        )
+
+    await asyncio.to_thread(stop_app_process, app_row)
 
     Thread(
         target=reload_app_background,
