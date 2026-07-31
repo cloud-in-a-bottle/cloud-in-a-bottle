@@ -231,9 +231,7 @@ def test_repeated_set_is_idempotent(db: sqlite3.Connection) -> None:
         set_instance_identity(db, _cred("iss", "cid", "sec"))
     assert get_stored_instance_identity(db) == _cred("iss", "cid", "sec")
     # No duplicate rows accumulate under the ON CONFLICT upsert.
-    rows = db.execute(
-        "SELECT COUNT(*) AS n FROM settings WHERE key = ?", (IMBUE_IDENTITY_ISSUER_URL_KEY,)
-    ).fetchone()
+    rows = db.execute("SELECT COUNT(*) AS n FROM settings WHERE key = ?", (IMBUE_IDENTITY_ISSUER_URL_KEY,)).fetchone()
     assert rows["n"] == 1
 
 

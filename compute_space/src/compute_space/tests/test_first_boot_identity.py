@@ -73,7 +73,7 @@ def test_read_first_boot_parses_identity_and_connect_url(monkeypatch: pytest.Mon
     config_dir = _point_config_env(monkeypatch, tmp_path)
     _write_first_boot(
         config_dir,
-        'domain = "fresh.example.com"\n' f'imbue_connect_base_url = "{_IMBUE}"\n' + _FULL_IDENTITY,
+        f'domain = "fresh.example.com"\nimbue_connect_base_url = "{_IMBUE}"\n' + _FULL_IDENTITY,
     )
     fb = read_first_boot()
     assert fb is not None
@@ -137,7 +137,7 @@ def test_seed_writes_connect_url_into_settings(monkeypatch: pytest.MonkeyPatch, 
     config_dir = _point_config_env(monkeypatch, tmp_path)
     _write_first_boot(
         config_dir,
-        'domain = "fresh.example.com"\n' f'imbue_connect_base_url = "{_IMBUE}"\n' + _FULL_IDENTITY,
+        f'domain = "fresh.example.com"\nimbue_connect_base_url = "{_IMBUE}"\n' + _FULL_IDENTITY,
     )
 
     seed_first_boot(cfg)
@@ -151,7 +151,7 @@ def test_seed_connect_url_without_identity(monkeypatch: pytest.MonkeyPatch, tmp_
     # only the connect URL (no identity) still installs the URL.
     cfg = _cfg(tmp_path)
     config_dir = _point_config_env(monkeypatch, tmp_path)
-    _write_first_boot(config_dir, 'domain = "fresh.example.com"\n' f'imbue_connect_base_url = "{_IMBUE}"\n')
+    _write_first_boot(config_dir, f'domain = "fresh.example.com"\nimbue_connect_base_url = "{_IMBUE}"\n')
 
     seed_first_boot(cfg)
 
@@ -235,7 +235,7 @@ def test_seed_does_not_overwrite_existing_connect_url(monkeypatch: pytest.Monkey
         set_setting(db, IMBUE_CONNECT_BASE_URL_KEY, "https://existing.imbue.com")
     _write_first_boot(
         config_dir,
-        'domain = "fresh.example.com"\n' f'imbue_connect_base_url = "{_IMBUE}"\n',
+        f'domain = "fresh.example.com"\nimbue_connect_base_url = "{_IMBUE}"\n',
     )
 
     seed_first_boot(cfg)
@@ -271,7 +271,7 @@ def test_seed_preserves_existing_credential_but_still_seeds_connect_url(
         set_instance_identity(db, prior)
     _write_first_boot(
         config_dir,
-        'domain = "fresh.example.com"\n' f'imbue_connect_base_url = "{_IMBUE}"\n' + _FULL_IDENTITY,
+        f'domain = "fresh.example.com"\nimbue_connect_base_url = "{_IMBUE}"\n' + _FULL_IDENTITY,
     )
 
     seed_first_boot(cfg)
