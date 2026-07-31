@@ -687,7 +687,7 @@ async function connectImbue() {
     }
     const data = await resp.json();
     // Hand off to Imbue to authorize; it returns to this instance's callback,
-    // which persists the credential + restarts.
+    // which stores the credential.
     window.location.href = data.redirect_url;
   } catch (e) {
     btn.disabled = false;
@@ -705,7 +705,7 @@ async function connectImbue() {
   const msg = document.getElementById('connect-imbue-msg');
   if (!msg) return;
   if (result === 'ok') {
-    msg.textContent = 'Connected. The instance is restarting to apply your Imbue credential.';
+    msg.textContent = 'Connected to Imbue.';
     msg.className = '';
     msg.style.color = '#2ea043';
   } else {

@@ -1,12 +1,12 @@
 """Instance side of the "Connect to Imbue" flow.
 
-Managed spaces get their shared Imbue credential injected at provision time. A
+Managed spaces get their shared Imbue credential seeded at provision time. A
 non-managed (self-hosted) instance instead obtains it here: the owner clicks
 "Connect to Imbue" in Settings and is sent to Imbue to authorize; Imbue returns a
-one-time code to this instance. This module builds the authorization URL, exchanges
-the code for the credential, and persists the credential into the instance's
-config.toml so a restart picks it up through the normal config path
-(Config.instance_identity).
+one-time code to this instance. This module builds the authorization URL and
+exchanges the code for the credential. The callback route stores the result in the
+DB settings table (see ``core.identity_store``), which is read live, so no restart
+is needed.
 """
 
 from __future__ import annotations
