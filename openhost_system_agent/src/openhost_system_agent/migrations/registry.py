@@ -11,6 +11,9 @@ from openhost_system_agent.migrations.versions.v0004_pixi_version import Migrati
 from openhost_system_agent.migrations.versions.v0005_pixi_ownership_failsafe import Migration0005PixiOwnershipFailsafe
 from openhost_system_agent.migrations.versions.v0006_journald_size_cap import Migration0006JournaldSizeCap
 from openhost_system_agent.migrations.versions.v0007_seed_domains_and_scrub import Migration0007SeedDomainsAndScrub
+from openhost_system_agent.migrations.versions.v0008_seed_imbue_identity_and_scrub import (
+    Migration0008SeedImbueIdentityAndScrub,
+)
 
 # Numbered migrations in apply order. Versions MUST start at 2 and be
 # contiguous. v1 is the baseline produced by ansible setup.yml.
@@ -21,6 +24,7 @@ REGISTRY: list[SystemMigration] = [
     Migration0005PixiOwnershipFailsafe(),
     Migration0006JournaldSizeCap(),
     Migration0007SeedDomainsAndScrub(),
+    Migration0008SeedImbueIdentityAndScrub(),
 ]
 
 

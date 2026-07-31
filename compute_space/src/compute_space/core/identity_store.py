@@ -35,9 +35,11 @@ def get_instance_identity(db: sqlite3.Connection, config: Config) -> KeycloakCli
     """The shared per-instance credential, or None when none is configured.
 
     Reads the settings table first, then falls back to the deprecated
-    ``cert_api_keycloak_*`` config fields (already-deployed instances). Returns
-    None unless all three parts resolve, so callers can treat None as "no Imbue
-    identity configured".
+    ``cert_api_keycloak_*`` config fields for instances that predate the settings
+    store and have not yet run ``openhost update`` (which migrates the credential
+    into the settings table + scrubs the config via system-agent migration v8).
+    Once every instance has migrated, this config fallback can be removed. Returns
+    None unless all three parts resolve, so callers treat None as "no identity".
     """
     issuer = settings_store.get_setting(db, IMBUE_IDENTITY_ISSUER_URL_KEY) or config.cert_api_keycloak_issuer_url
     client_id = settings_store.get_setting(db, IMBUE_IDENTITY_CLIENT_ID_KEY) or config.cert_api_keycloak_client_id
