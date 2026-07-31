@@ -90,10 +90,15 @@ def _parse_identity(resp: httpx.Response) -> IdentityResult:
     # so a freshly-created identity (201) is not mistaken for an error.
     if not (200 <= resp.status_code < 300):
         raise EmailProxyError(f"email API returned HTTP {resp.status_code}: {resp.text}")
-    body = resp.json()
-    records = tuple(DkimRecord(name=r["name"], value=r["value"]) for r in body.get("dkim_records", []))
-    return IdentityResult(
-        domain=body["domain"],
-        verified=bool(body.get("verified")),
-        dkim_records=records,
-    )
+    # A 2xx with a malformed body is still a failure — surface it as EmailProxyError
+    # (not a raw KeyError/ValueError) so callers handle it uniformly.
+    try:
+        body = resp.json()
+        records = tuple(DkimRecord(name=r["name"], value=r["value"]) for r in body.get("dkim_records", []))
+        return IdentityResult(
+            domain=body["domain"],
+            verified=bool(body.get("verified")),
+            dkim_records=records,
+        )
+    except (ValueError, KeyError, TypeError) as e:
+        raise EmailProxyError(f"email API returned a malformed identity response: {e}") from e

@@ -23,11 +23,7 @@ def email_enabled(config: Config, db: sqlite3.Connection) -> bool:
     deprecated cert_api_keycloak_* config fallback), and the public IP (inbound is
     always direct-to-instance, so the MX/A records need the instance's own IP).
     """
-    return bool(
-        config.email_proxy_base_url
-        and get_instance_identity(db, config) is not None
-        and config.public_ip
-    )
+    return bool(config.email_proxy_base_url and get_instance_identity(db, config) is not None and config.public_ip)
 
 
 def resolve_email_identity(config: Config, db: sqlite3.Connection) -> KeycloakClientCredentials | None:

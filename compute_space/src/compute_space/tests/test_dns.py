@@ -9,12 +9,15 @@ import pytest
 
 import compute_space.core.dns as dns_mod
 from compute_space.config import DefaultConfig
+from compute_space.core.dns import DkimCname
 from compute_space.core.dns import DnsZone
 from compute_space.core.dns import TxtRecord
 from compute_space.core.dns import append_txt_records
+from compute_space.core.dns import apply_email_records
 from compute_space.core.dns import clear_acme_challenge_records
 from compute_space.core.dns import public_dns_zones
 from compute_space.core.dns import reload_coredns_for_domains
+from compute_space.core.dns import render_email_records
 from compute_space.core.dns import set_active_coredns
 from compute_space.core.domains import Domain
 from compute_space.core.domains import DomainRecord
@@ -363,3 +366,128 @@ def test_reload_coredns_for_domains_noop_when_not_running(tmp_path: Path) -> Non
     config = _seed_dns_cfg(tmp_path, Domain(name="host.example.com", tls=True), public_ip="203.0.113.10")
     with closing(open_db(config)) as db:
         assert reload_coredns_for_domains(config, db) is False
+
+
+# --- render_email_records / apply_email_records (email DNS block) -------------
+
+
+def _dkim() -> list[DkimCname]:
+    return [DkimCname(name="tok1._domainkey.z.example.com", target="tok1.dkim.amazonses.com")]
+
+
+def test_render_email_records_includes_spf_dmarc_mx_a_dkim() -> None:
+    block = render_email_records(
+        "z.example.com",
+        inbound_mail_host="mail.z.example.com",
+        inbound_mail_ip="203.0.113.9",
+        dkim_cnames=_dkim(),
+    )
+    assert '@   IN TXT  "v=spf1 include:amazonses.com ~all"' in block
+    assert '_dmarc   IN TXT  "v=DMARC1; p=quarantine"' in block
+    assert "@   IN MX   10 mail.z.example.com." in block
+    assert "mail.z.example.com.   IN A   203.0.113.9" in block
+    assert "tok1._domainkey.z.example.com.   IN CNAME  tok1.dkim.amazonses.com." in block
+
+
+def test_render_email_records_wraps_in_managed_markers() -> None:
+    block = render_email_records(
+        "z.example.com",
+        inbound_mail_host="mail.z.example.com",
+        inbound_mail_ip="203.0.113.9",
+        dkim_cnames=[],
+    )
+    assert block.startswith("; --- openhost email records (managed) ---")
+    assert block.rstrip().endswith("; --- end openhost email records ---")
+
+
+def test_render_email_records_dmarc_rua_appended_when_set() -> None:
+    block = render_email_records(
+        "z.example.com",
+        inbound_mail_host="mail.z.example.com",
+        inbound_mail_ip="203.0.113.9",
+        dkim_cnames=[],
+        dmarc_rua="reports@example.com",
+    )
+    assert '_dmarc   IN TXT  "v=DMARC1; p=quarantine; rua=mailto:reports@example.com"' in block
+
+
+def test_render_email_records_no_rua_by_default() -> None:
+    block = render_email_records(
+        "z.example.com",
+        inbound_mail_host="mail.z.example.com",
+        inbound_mail_ip="203.0.113.9",
+        dkim_cnames=[],
+    )
+    assert "rua=" not in block
+
+
+def test_render_email_records_strips_trailing_dots_on_mail_host_and_dkim() -> None:
+    block = render_email_records(
+        "z.example.com",
+        inbound_mail_host="mail.z.example.com.",
+        inbound_mail_ip="203.0.113.9",
+        dkim_cnames=[DkimCname(name="t._domainkey.z.example.com.", target="t.dkim.amazonses.com.")],
+    )
+    # Exactly one trailing dot each (no doubled dots).
+    assert "mail.z.example.com.   IN A" in block
+    assert "mail.z.example.com..   IN A" not in block
+    assert "t._domainkey.z.example.com.   IN CNAME  t.dkim.amazonses.com." in block
+
+
+def test_render_email_records_requires_inbound_mail_host() -> None:
+    with pytest.raises(ValueError, match="inbound_mail_host is required"):
+        render_email_records("z.example.com", inbound_mail_host="", inbound_mail_ip="203.0.113.9", dkim_cnames=[])
+
+
+def test_render_email_records_requires_inbound_mail_ip() -> None:
+    with pytest.raises(ValueError, match="inbound_mail_ip is required"):
+        render_email_records(
+            "z.example.com", inbound_mail_host="mail.z.example.com", inbound_mail_ip="", dkim_cnames=[]
+        )
+
+
+def test_render_email_records_multiple_dkim_cnames() -> None:
+    block = render_email_records(
+        "z.example.com",
+        inbound_mail_host="mail.z.example.com",
+        inbound_mail_ip="203.0.113.9",
+        dkim_cnames=[
+            DkimCname(name="a._domainkey.z.example.com", target="a.dkim.amazonses.com"),
+            DkimCname(name="b._domainkey.z.example.com", target="b.dkim.amazonses.com"),
+        ],
+    )
+    assert "a._domainkey.z.example.com.   IN CNAME  a.dkim.amazonses.com." in block
+    assert "b._domainkey.z.example.com.   IN CNAME  b.dkim.amazonses.com." in block
+
+
+def test_apply_email_records_appends_block_and_bumps_serial(tmp_path: Path) -> None:
+    zonefile = tmp_path / "zonefile"
+    _write_zonefile(zonefile, serial=100)
+    apply_email_records(
+        zonefile,
+        "app.example.com",
+        inbound_mail_host="mail.app.example.com",
+        inbound_mail_ip="203.0.113.9",
+        dkim_cnames=[DkimCname(name="t._domainkey.app.example.com", target="t.dkim.amazonses.com")],
+    )
+    content = zonefile.read_text()
+    assert "101   ; serial" in content
+    assert "v=spf1 include:amazonses.com" in content
+    assert "@   IN MX   10 mail.app.example.com." in content
+    # The original zone content is preserved (records appended, not replaced).
+    assert "$ORIGIN app.example.com." in content
+
+
+def test_apply_email_records_preserves_existing_records(tmp_path: Path) -> None:
+    zonefile = tmp_path / "zonefile"
+    _write_zonefile(zonefile)
+    original_a = "@   IN A    127.0.0.1"
+    assert original_a in zonefile.read_text()
+    apply_email_records(
+        zonefile,
+        "app.example.com",
+        inbound_mail_host="mail.app.example.com",
+        inbound_mail_ip="203.0.113.9",
+        dkim_cnames=[],
+    )
+    assert original_a in zonefile.read_text()
