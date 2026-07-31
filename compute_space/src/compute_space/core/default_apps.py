@@ -30,6 +30,7 @@ from compute_space.core.apps import clone_and_read_manifest
 from compute_space.core.apps import insert_and_deploy
 from compute_space.core.apps import move_clone_to_app_temp_dir
 from compute_space.core.apps import validate_manifest
+from compute_space.core.email.enablement import email_enabled
 from compute_space.core.logging import logger
 from compute_space.core.manifest import AppManifest
 from compute_space.core.manifest import parse_manifest
@@ -217,13 +218,16 @@ def _install_one(spec: str, config: Config, db: sqlite3.Connection) -> tuple[str
 def deploy_default_apps(config: Config, db: sqlite3.Connection) -> list[DefaultAppOutcome]:
     """Idempotent across boots.  ok/skipped are terminal; failed retries
     up to MAX_RETRY_ATTEMPTS.  Never raises."""
-    if not config.default_apps:
+    # The email apps (mailbox + webmail) are appended only when email is enabled,
+    # which needs the DB (the shared Imbue identity lives in the settings table).
+    specs = config.effective_default_apps(email_on=email_enabled(config, db))
+    if not specs:
         return []
 
     sentinel = _load_sentinel(config.default_apps_sentinel_path)
     outcomes: list[DefaultAppOutcome] = []
 
-    for spec in config.default_apps:
+    for spec in specs:
         prior = sentinel.get(spec) or {}
         prior_status = prior.get("status")
         try:

@@ -1,4 +1,5 @@
 import os
+import re
 import sqlite3
 import tomllib
 from pathlib import Path
@@ -18,6 +19,40 @@ from compute_space.core.domains import is_primary_domain
 # broker, which holds the ACME account so the instance never sees ACME creds.
 CERT_PROVIDER_ACME = "acme"
 CERT_PROVIDER_CERT_API = "cert_api"
+
+
+# A DNS label: 1-63 chars, alphanumeric plus internal hyphens.  A well-formed
+# domain is one or more such labels joined by single dots (no empty labels, so no
+# leading/trailing/double dots).  Deliberately conservative — used to reject a
+# malformed email_custom_domain at config load.
+_DOMAIN_LABEL_RE = re.compile(r"^(?!-)[a-z0-9-]{1,63}(?<!-)$")
+
+
+def _is_well_formed_domain(domain: str) -> bool:
+    domain = domain.strip().lower().rstrip(".")
+    if not domain or len(domain) > 253:
+        return False
+    labels = domain.split(".")
+    if len(labels) < 2:
+        return False
+    return all(_DOMAIN_LABEL_RE.match(label) for label in labels)
+
+
+@attr.s(auto_attribs=True, frozen=True)
+class DelegationRecord:
+    """A single DNS record the owner must add at their registrar.
+
+    Used to tell the owner exactly what to paste to delegate a custom mail domain
+    to this instance (see Config.custom_domain_delegation_record).
+    """
+
+    name: str
+    record_type: str
+    value: str
+
+    def as_display_line(self) -> str:
+        """A registrar-style one-liner, e.g. 'mail.mydomain.com  NS  ns.<zone>'."""
+        return f"{self.name}   {self.record_type}   {self.value}"
 
 
 @attr.s(auto_attribs=True, frozen=True)
@@ -95,6 +130,31 @@ class Config:
     # /api/add_app and do not need to be present on disk ahead of time.
     default_apps: list[str]
 
+    ## Email
+    # Email has no on/off flag: it is enabled automatically when its prerequisites are present (see
+    # ``core.email.enablement.email_enabled``, which needs the DB for the shared Imbue identity). The
+    # prerequisites are the proxy URL, the per-instance Keycloak identity (from the DB settings table), and
+    # the public IP.  Provisioning supplies these when email infra is configured; otherwise the instance runs
+    # without email (no boot failure).
+    # Base URL of the email API, e.g. "https://openhost.imbue.com". The instance calls its /api/email/* endpoints.
+    email_proxy_base_url: str | None
+    # Inbound mail is ALWAYS delivered directly to this instance: MX points at mail.<zone> -> public_ip and the mail
+    # server receives on port 25, so inbound never traverses OpenHost infra and the platform cannot read tenant mail.
+    # Outbound relays through the central proxy -> SES. Requires inbound port 25 be reachable.
+    # Optional DMARC aggregate-report address published in the _dmarc record.
+    email_dmarc_rua: str | None
+    # Optional custom mail domain the owner delegated to this instance's CoreDNS with a single NS record (e.g.
+    # "mail.mydomain.com"). When set, the instance serves it as a second authoritative zone and publishes the same
+    # SPF/DKIM/DMARC/MX records, so mail can send/receive as that domain in addition to the built-in <zone> subdomain.
+    email_custom_domain: str | None
+    # App name(s) allowed to fetch the SMTP relay config from /api/email/relay-config. The relay credential is not
+    # stored on the instance; it is fetched at runtime and the endpoint is scoped to these mailbox app names.
+    email_mailbox_app_names: list[str]
+    # Default apps (bare dirnames or remote git URLs, same as ``default_apps``) auto-deployed ONLY when email is
+    # enabled — the mailbox server + webmail client. Kept separate from ``default_apps`` so a non-email instance has
+    # no mailbox; appended by ``effective_default_apps`` when email is enabled.
+    email_default_apps: list[str]
+
     def __attrs_post_init__(self) -> None:
         # Validate cert provider selection up front so any Config object can be
         # trusted as valid by the rest of the system (rather than discovering a
@@ -112,6 +172,13 @@ class Config:
             # are a deprecated fallback for already-deployed instances.
             if not self.cert_api_base_url:
                 raise ValueError("cert_api_base_url must be set in config to use the cert_api provider")
+
+        # Validate the custom mail domain's shape at config load (not zone overlap —
+        # the instance zone lives in the DB, not in Config), so a typo surfaces here
+        # rather than at the first boot that turns email on.
+        custom = self.email_custom_domain_normalized
+        if custom is not None and not _is_well_formed_domain(custom):
+            raise ValueError(f"email_custom_domain {self.email_custom_domain!r} is not a well-formed domain")
 
     def evolve(self, **kwargs: Any) -> Self:
         return attr.evolve(self, **kwargs)
@@ -260,6 +327,65 @@ class Config:
     def default_apps_sentinel_path(self) -> str:
         return str(Path(self.openhost_data_path) / "default_apps.json")
 
+    def inbound_mail_host_for(self, domain: str) -> str:
+        """The mail hostname whose A record the MX points at, for direct inbound.
+
+        Uses ``mail.<domain>`` — a dedicated mail host under the served zone, so
+        the apex A record is left untouched. If the domain is *already* a
+        ``mail.`` host (common for delegated custom domains like
+        ``mail.mydomain.com``), it is used as-is rather than doubled to
+        ``mail.mail.mydomain.com``.
+        """
+        d = domain.strip().lower().rstrip(".")
+        return d if d.startswith("mail.") else f"mail.{d}"
+
+    @property
+    def email_custom_domain_normalized(self) -> str | None:
+        """The custom mail domain lowercased and stripped of any trailing dot.
+
+        Returns None when no custom domain is configured (or it is blank after
+        normalization), so callers can treat "unset" and "blank" identically.
+        """
+        if not self.email_custom_domain:
+            return None
+        normalized = self.email_custom_domain.strip().lower().rstrip(".")
+        return normalized or None
+
+    def custom_domain_delegation_record(self, primary_zone: str) -> DelegationRecord | None:
+        """The single NS record the owner must add at their registrar to delegate
+        their custom mail domain to this instance, or None if none is configured.
+
+        ``primary_zone`` is the instance's zone (from the DB primary domain).  The
+        nameserver host lives under it (``ns.<zone>``), which already resolves to
+        the instance's public IP, so this one record is all that is required.
+        """
+        custom = self.email_custom_domain_normalized
+        if custom is None:
+            return None
+        zone = primary_zone.split(":")[0]
+        return DelegationRecord(
+            name=custom,
+            record_type="NS",
+            value=f"ns.{zone}",
+        )
+
+    def effective_default_apps(self, email_on: bool) -> list[str]:
+        """The apps to auto-deploy: ``default_apps`` plus the email apps when email is on.
+
+        The mailbox + webmail apps are only useful (and only correctly scoped for
+        the relay-config endpoint) when email is on, so they are appended here
+        rather than living in ``default_apps`` — an instance with email off ships
+        no mailbox.  De-duplicated preserving order so an operator who already
+        listed one of them in ``default_apps`` doesn't get it twice.  ``email_on``
+        is threaded in by the caller (email enablement needs the DB).
+        """
+        specs = list(self.default_apps)
+        if email_on:
+            for spec in self.email_default_apps:
+                if spec not in specs:
+                    specs.append(spec)
+        return specs
+
     def make_all_dirs(self) -> None:
         """Make all necessary directories for the config."""
         assert os.path.exists(self.data_root_dir)
@@ -354,6 +480,22 @@ class DefaultConfig(Config):
             "https://github.com/imbue-openhost/openhost-catalog",
             "https://github.com/imbue-openhost/openhost-backup",
             "https://github.com/imbue-openhost/openhost-community-chat",
+        ]
+    )
+
+    # Email — no on/off flag; enabled automatically when its prerequisites (the proxy URL, the shared
+    # Imbue identity in the DB, and the public IP) are present.  Provisioning sets them when the operator
+    # has email infra configured.
+    email_proxy_base_url: str | None = None
+    email_dmarc_rua: str | None = None
+    email_custom_domain: str | None = None
+    email_mailbox_app_names: list[str] = attr.Factory(lambda: ["stalwart-email-server"])
+    # The mailbox server + webmail client, deployed only when email is enabled (see effective_default_apps).
+    # Stalwart's manifest name must stay in email_mailbox_app_names for it to be allowed to fetch the relay config.
+    email_default_apps: list[str] = attr.Factory(
+        lambda: [
+            "https://github.com/imbue-openhost/openhost-stalwart-email-server",
+            "https://github.com/imbue-openhost/openhost-bulwark-email-client",
         ]
     )
 

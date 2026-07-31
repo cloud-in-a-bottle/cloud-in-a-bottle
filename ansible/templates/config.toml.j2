@@ -39,3 +39,21 @@ cert_api_keycloak_client_id = "{{ cert_api_keycloak_client_id }}"
 cert_api_keycloak_client_secret = "{{ cert_api_keycloak_client_secret }}"
 {% endif %}
 {% endif %}
+{% if email_proxy_base_url is defined and email_proxy_base_url %}
+# Email is enabled automatically because this prerequisite is present (there is no
+# on/off flag): the instance publishes email DNS records (SPF/DKIM/DMARC/MX) into
+# its CoreDNS zone and relays outbound mail through the openhost-email-proxy. Auth
+# resolves from the shared Imbue identity (seeded via first_boot.toml into the DB
+# settings table) — the same credential cert_api uses — so enabling email on an
+# existing instance needs only this one value. public_ip (rendered above) is also
+# required because inbound is delivered directly to this instance.
+email_proxy_base_url = "{{ email_proxy_base_url }}"
+{% if email_dmarc_rua is defined %}
+email_dmarc_rua = "{{ email_dmarc_rua }}"
+{% endif %}
+{% if email_custom_domain is defined and email_custom_domain %}
+# Optional custom mail domain the owner delegates to this instance with a single NS
+# record (ns.<zone>). The instance then serves it as a second authoritative zone.
+email_custom_domain = "{{ email_custom_domain }}"
+{% endif %}
+{% endif %}

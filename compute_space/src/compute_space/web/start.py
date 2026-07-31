@@ -29,6 +29,7 @@ from compute_space.core.dns import set_active_coredns
 from compute_space.core.dns import start_coredns
 from compute_space.core.domains import Domain
 from compute_space.core.domains import effective_domains
+from compute_space.core.email.provision import provision_email_records
 from compute_space.core.first_boot import owner_exists
 from compute_space.core.first_boot import seed_first_boot
 from compute_space.core.logging import logger
@@ -159,6 +160,11 @@ def main() -> None:
 
         if domains[0].tls:  # primary is a TLS domain
             _ensure_tls_cert(config, db)
+
+        # Publish email DNS records into the (freshly regenerated) CoreDNS zone(s).
+        # No-op unless email is enabled; best-effort (never blocks boot).
+        if config.coredns_enabled:
+            provision_email_records(config, db)
 
         # Caddy reverse proxy. mainly for TLS termination, but also some other features.
         # The acquired file cert covers the primary domain (a wildcard for it);

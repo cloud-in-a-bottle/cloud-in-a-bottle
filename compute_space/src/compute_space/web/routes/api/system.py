@@ -3,17 +3,21 @@ import os
 import secrets
 import sqlite3
 import subprocess
+import threading
 from datetime import UTC
 from datetime import datetime
 from datetime import timedelta
+from typing import Any
 
 import attr
 from litestar import MediaType
+from litestar import Request
 from litestar import Response
 from litestar import Router
 from litestar import delete
 from litestar import get
 from litestar import post
+from litestar.exceptions import NotAuthorizedException
 
 from compute_space import OPENHOST_PROJECT_DIR
 from compute_space.config import Config
@@ -24,17 +28,53 @@ from compute_space.core.auth.security_audit import list_listening_ports
 from compute_space.core.containers import drop_docker_build_cache
 from compute_space.core.diagnostics import PlatformDiagnostics
 from compute_space.core.diagnostics import collect_platform_diagnostics
+from compute_space.core.domains import primary_domain
+from compute_space.core.email.enablement import email_enabled
+from compute_space.core.email.relay_credential import RelayCredentialError
+from compute_space.core.email.relay_credential import RelayCredentialProvider
 from compute_space.core.git_ops import get_branch_name
 from compute_space.core.git_ops import get_head_sha
 from compute_space.core.git_ops import is_dirty
 from compute_space.core.logging import get_log_path
+from compute_space.core.logging import logger
 from compute_space.core.storage import is_guard_paused
 from compute_space.core.storage import set_guard_paused
 from compute_space.core.storage import storage_status
 from compute_space.core.updates import is_shutdown_pending
+from compute_space.web.auth.auth import require_app_auth
 from compute_space.web.auth.auth import require_owner_auth
+from compute_space.web.auth.auth import verify_app_auth
 
 DEFAULT_TOKEN_EXPIRY_HOURS: float = 8.0
+
+
+# Process-wide relay-credential provider (caches the frontend-fetched credential
+# with a short TTL). Keyed on the config values that determine the credential
+# rather than on id(config): provide_config() hands each request a freshly-built
+# Config object, so an id()-based key would never hit — defeating the TTL cache
+# (refetching from the frontend on every request) and leaking a provider per
+# request. The identity/zone the credential also depends on are sourced live from
+# the DB and keyed inside the provider itself (RelayCredentialProvider.get).
+_relay_providers: dict[tuple[object, ...], RelayCredentialProvider] = {}
+_relay_providers_lock = threading.Lock()
+
+
+def _relay_provider_key(config: Config) -> tuple[object, ...]:
+    """A stable key over the config fields the relay credential depends on."""
+    return (
+        config.email_proxy_base_url,
+        config.email_custom_domain_normalized,
+    )
+
+
+def get_relay_credential_provider(config: Config) -> RelayCredentialProvider:
+    key = _relay_provider_key(config)
+    with _relay_providers_lock:
+        provider = _relay_providers.get(key)
+        if provider is None:
+            provider = RelayCredentialProvider(config=config)
+            _relay_providers[key] = provider
+        return provider
 
 
 # ─── attrs models ──────────────────────────────────────────────────────────
@@ -113,6 +153,40 @@ class SshStatusResponse:
 class DropCacheOk:
     ok: bool  # always True
     output: str
+
+
+@attr.s(auto_attribs=True, frozen=True)
+class EmailRelayConfigResponse:
+    """SMTP smarthost relay config the mailbox app uses to send outbound mail.
+
+    Returned only to the mailbox app (scoped by app name); the relay password is a
+    per-instance secret and is deliberately NOT injected into every app's env.
+    ``configured`` is False when email/relay isn't set up on this instance.
+    """
+
+    configured: bool
+    smtp_relay_host: str | None
+    smtp_relay_port: int | None
+    smtp_relay_user: str | None
+    smtp_relay_password: str | None
+    zone_domain: str | None
+    custom_domain: str | None
+
+
+@attr.s(auto_attribs=True, frozen=True)
+class CustomEmailDomainResponse:
+    """Owner-facing view of the custom mail domain and the single NS record to add.
+
+    ``configured`` is False when no custom mail domain is set on this instance, in
+    which case the record fields are None.
+    """
+
+    configured: bool
+    domain: str | None
+    record_name: str | None
+    record_type: str | None
+    record_value: str | None
+    display_line: str | None
 
 
 @attr.s(auto_attribs=True, frozen=True)
@@ -336,6 +410,86 @@ async def api_diagnostics(
     return Response(content=diagnostics, status_code=200, media_type=MediaType.JSON, headers=headers)
 
 
+@get("/api/email/relay-config", guards=[require_app_auth], sync_to_thread=True)
+def email_relay_config(
+    request: Request[Any, Any, Any], db: sqlite3.Connection, config: Config
+) -> Response[EmailRelayConfigResponse]:
+    """Return the SMTP smarthost relay config for the mailbox app.
+
+    Scoped: the request must be authenticated as an app (OPENHOST_APP_TOKEN), and
+    that app must be one of ``config.email_mailbox_app_names``. The relay host/port
+    + per-instance credential are fetched at runtime from the frontend (never baked
+    into this instance's config), then handed only to the mailbox app.
+    """
+    app_id = verify_app_auth(request)
+    row = db.execute("SELECT name FROM apps WHERE app_id = ?", (app_id,)).fetchone()
+    app_name = row["name"] if row is not None else None
+    if app_name not in config.email_mailbox_app_names:
+        raise NotAuthorizedException(detail="app is not authorized to fetch email relay config")
+
+    unconfigured = Response(
+        content=EmailRelayConfigResponse(
+            configured=False,
+            smtp_relay_host=None,
+            smtp_relay_port=None,
+            smtp_relay_user=None,
+            smtp_relay_password=None,
+            zone_domain=None,
+            custom_domain=None,
+        ),
+        media_type=MediaType.JSON,
+    )
+    if not email_enabled(config, db):
+        return unconfigured
+    try:
+        cred = get_relay_credential_provider(config).get(db)
+    except RelayCredentialError as e:
+        logger.warning(f"relay-config: could not fetch credential from frontend: {e}")
+        return unconfigured
+    if cred is None:
+        return unconfigured
+    return Response(
+        content=EmailRelayConfigResponse(
+            configured=True,
+            smtp_relay_host=cred.smtp_relay_host,
+            smtp_relay_port=cred.smtp_relay_port,
+            smtp_relay_user=cred.smtp_relay_user,
+            smtp_relay_password=cred.smtp_relay_password,
+            zone_domain=cred.zone_domain,
+            custom_domain=cred.custom_domain,
+        ),
+        media_type=MediaType.JSON,
+    )
+
+
+@get("/api/email/custom-domain", guards=[require_owner_auth], sync_to_thread=False)
+def custom_email_domain(db: sqlite3.Connection, config: Config) -> CustomEmailDomainResponse:
+    """Return the owner's custom mail domain and the single NS record to delegate it.
+
+    The owner sets this once at their registrar; the instance's nameserver host
+    (ns.<zone>) already resolves to the instance IP, so this one record is all
+    that is required for the custom domain to work.
+    """
+    record = config.custom_domain_delegation_record(primary_domain(db).name_no_port)
+    if record is None:
+        return CustomEmailDomainResponse(
+            configured=False,
+            domain=None,
+            record_name=None,
+            record_type=None,
+            record_value=None,
+            display_line=None,
+        )
+    return CustomEmailDomainResponse(
+        configured=True,
+        domain=config.email_custom_domain_normalized,
+        record_name=record.name,
+        record_type=record.record_type,
+        record_value=record.value,
+        display_line=record.as_display_line(),
+    )
+
+
 @post("/restart_router", status_code=200, guards=[require_owner_auth], sync_to_thread=False)
 def restart_router() -> OkResponse:
     """Restart the router systemd service to pick up code changes."""
@@ -368,6 +522,8 @@ system_routes = Router(
         drop_docker_cache,
         api_version,
         api_diagnostics,
+        email_relay_config,
+        custom_email_domain,
         restart_router,
     ],
 )
