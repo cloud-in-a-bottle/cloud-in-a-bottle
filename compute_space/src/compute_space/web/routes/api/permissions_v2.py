@@ -16,8 +16,9 @@ from litestar.params import Body
 from compute_space.core.auth.permissions_v2 import get_all_permissions_v2
 from compute_space.core.auth.permissions_v2 import grant_permission_v2
 from compute_space.core.auth.permissions_v2 import revoke_permission_v2
+from compute_space.core.auth.scopes import PERMISSIONS_MANAGE
 from compute_space.web.auth.auth import require_app_auth
-from compute_space.web.auth.auth import require_owner_auth
+from compute_space.web.auth.auth import require_scope
 from compute_space.web.auth.auth import verify_app_auth
 
 
@@ -25,7 +26,7 @@ def _json_error(message: str, status: int) -> Response[dict[str, str]]:
     return Response(content={"error": message}, status_code=status, media_type=MediaType.JSON)
 
 
-@get("/api/permissions/v2", guards=[require_owner_auth], sync_to_thread=False)
+@get("/api/permissions/v2", guards=[require_scope(PERMISSIONS_MANAGE)], sync_to_thread=False)
 def list_permissions_v2(app_id: str | None = None) -> list[dict[str, Any]]:
     """List all V2 permissions, optionally filtered by app_id."""
     return [attr.asdict(p) for p in get_all_permissions_v2(app_id)]
@@ -33,7 +34,7 @@ def list_permissions_v2(app_id: str | None = None) -> list[dict[str, Any]]:
 
 @post(
     "/api/permissions/v2/grant_global_scoped",
-    guards=[require_owner_auth],
+    guards=[require_scope(PERMISSIONS_MANAGE)],
     status_code=200,
     sync_to_thread=False,
 )
@@ -58,7 +59,7 @@ def grant_global_scoped(
 
 @post(
     "/api/permissions/v2/revoke",
-    guards=[require_owner_auth],
+    guards=[require_scope(PERMISSIONS_MANAGE)],
     status_code=200,
     sync_to_thread=False,
 )

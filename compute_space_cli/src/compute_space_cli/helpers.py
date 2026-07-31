@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sys
 import time
+from collections.abc import Mapping
 
 import httpx
 
@@ -28,7 +29,7 @@ def make_api_request(
     method: str,
     path: str,
     *,
-    data: dict[str, str] | None = None,
+    data: Mapping[str, object] | None = None,
     timeout: float = 120,
     raw: bool = False,
 ) -> httpx.Response:

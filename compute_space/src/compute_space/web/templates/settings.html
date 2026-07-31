@@ -106,7 +106,7 @@
 <p id="no-domains" class="muted">Loading&hellip;</p>
 
 <h2 class="section-title">API tokens</h2>
-<p class="hint">Bearer tokens for programmatic access (e.g. AI agents). Each token grants owner-level access until it expires.</p>
+<p class="hint">Bearer tokens for programmatic access (e.g. AI agents). Grant each token only the scopes it needs &mdash; agents aren't a hard security boundary, so avoid handing them full access to apps that hold sensitive data.</p>
 
 <div class="control-row">
   <label>Name <input type="text" id="token-name" style="width: 200px;"></label>
@@ -114,6 +114,17 @@
     <input type="number" id="token-expiry" value="8" min="0.1" step="any" style="width: 70px;" disabled> hours
   </label>
   <label><input type="checkbox" id="token-no-expiry" checked onchange="document.getElementById('token-expiry').disabled = this.checked;"> Never expires</label>
+</div>
+
+<fieldset style="margin: 0.6em 0; border: 1px solid #ddd; border-radius: 4px; padding: 0.6em 1em;">
+  <legend style="padding: 0 0.4em; font-weight: 600;">Scopes</legend>
+  <div id="token-scopes"><!-- checkboxes rendered by tokens.js --></div>
+  <div id="token-scope-warning" style="display:none; color: #8a4b00; background: #fff3cd; border: 1px solid #ffca2c; padding: 0.5em 0.8em; border-radius: 4px; margin-top: 0.6em;">
+    <strong>&#9888; Privilege-escalation warning:</strong> the selected scopes are effectively owner-equivalent &mdash; a token holding them can take full control of this instance (mint tokens, change the password, read all secrets). Only grant these to fully trusted callers.
+  </div>
+</fieldset>
+
+<div class="control-row">
   <button class="btn btn-primary" onclick="createToken()">Create token</button>
 </div>
 
@@ -124,7 +135,7 @@
 </div>
 
 <table id="tokens-table" style="display:none;">
-  <thead><tr><th>Name</th><th>Created</th><th>Expires</th><th>Actions</th></tr></thead>
+  <thead><tr><th>Name</th><th>Scopes</th><th>Created</th><th>Expires</th><th>Actions</th></tr></thead>
   <tbody id="tokens-body"></tbody>
 </table>
 <p id="no-tokens" class="muted">No API tokens.</p>

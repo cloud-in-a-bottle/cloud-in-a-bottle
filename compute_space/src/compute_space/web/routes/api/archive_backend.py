@@ -19,7 +19,8 @@ from compute_space.config import Config
 from compute_space.core import archive_backend
 from compute_space.core.archive_backend import BackendConfigureError
 from compute_space.core.archive_backend import BackendState
-from compute_space.web.auth.auth import require_owner_auth
+from compute_space.core.auth.scopes import STORAGE_ADMIN
+from compute_space.web.auth.auth import require_scope
 
 
 @attr.s(auto_attribs=True, frozen=True)
@@ -144,7 +145,7 @@ class ConfigureArchiveRequest:
     confirm_migrate_s3: bool = False
 
 
-@get("/api/storage/archive_backend", guards=[require_owner_auth])
+@get("/api/storage/archive_backend", guards=[require_scope(STORAGE_ADMIN)])
 async def get_archive_backend(db: sqlite3.Connection, config: Config) -> BackendStateResponse:
     """Return current archive-backend state (secret redacted) plus archive_dir, meta_db_path, meta_dumps."""
     state = archive_backend.read_state(db)
@@ -178,7 +179,7 @@ async def get_archive_backend(db: sqlite3.Connection, config: Config) -> Backend
     return _state_to_response(state, archive_dir, meta_db_path, meta_dumps, local_apps)
 
 
-@post("/api/storage/archive_backend/test_connection", status_code=200, guards=[require_owner_auth])
+@post("/api/storage/archive_backend/test_connection", status_code=200, guards=[require_scope(STORAGE_ADMIN)])
 async def test_connection(
     data: Annotated[TestConnectionRequest, Body(media_type=MediaType.JSON)],
 ) -> Response[TestConnectionOk] | Response[TestConnectionError]:
@@ -200,7 +201,7 @@ async def test_connection(
     return Response(content=TestConnectionOk(ok=True), status_code=200, media_type=MediaType.JSON)
 
 
-@post("/api/storage/archive_backend/configure", status_code=200, guards=[require_owner_auth])
+@post("/api/storage/archive_backend/configure", status_code=200, guards=[require_scope(STORAGE_ADMIN)])
 async def configure_archive_backend(
     data: Annotated[ConfigureArchiveRequest, Body(media_type=MediaType.JSON)],
     db: sqlite3.Connection,

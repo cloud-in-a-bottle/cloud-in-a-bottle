@@ -47,7 +47,7 @@ def test_fresh_init_creates_domains_and_settings(tmp_path: Path) -> None:
     db = sqlite3.connect(db_path)
     try:
         assert {"domains", "settings"} <= _tables(db)
-        assert read_version(db) == 13
+        assert read_version(db) == 14
     finally:
         db.close()
 
@@ -67,7 +67,7 @@ def test_v12_db_upgrades_to_domains_and_settings(tmp_path: Path) -> None:
     db = sqlite3.connect(db_path)
     try:
         assert {"domains", "settings"} <= _tables(db)
-        assert read_version(db) == 13
+        assert read_version(db) == 14
     finally:
         db.close()
 

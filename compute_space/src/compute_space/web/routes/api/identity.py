@@ -17,8 +17,9 @@ from litestar.response import Template
 
 from compute_space.core.auth import identity
 from compute_space.core.auth.keys import get_public_key_pem
+from compute_space.core.auth.scopes import IDENTITY_APPROVE
 from compute_space.core.logging import logger
-from compute_space.web.auth.auth import require_owner_auth
+from compute_space.web.auth.auth import require_scope
 
 
 @attr.s(auto_attribs=True, frozen=True)
@@ -87,7 +88,7 @@ def openhost_identity(db: sqlite3.Connection) -> ZoneIdentityResponse:
     )
 
 
-@get("/identity/approve", guards=[require_owner_auth])
+@get("/identity/approve", guards=[require_scope(IDENTITY_APPROVE)])
 async def identity_approve(callback: str, app_name: str, requesting_domain: str) -> Template:
     """Show the owner an approval page for a federated login request."""
     parsed = urllib.parse.urlparse(callback)
@@ -104,7 +105,7 @@ async def identity_approve(callback: str, app_name: str, requesting_domain: str)
     )
 
 
-@post("/identity/approve", status_code=302, guards=[require_owner_auth])
+@post("/identity/approve", status_code=302, guards=[require_scope(IDENTITY_APPROVE)])
 async def identity_approve_submit(
     data: Annotated[IdentityApproveForm, Body(media_type=RequestEncodingType.URL_ENCODED)],
     db: sqlite3.Connection,

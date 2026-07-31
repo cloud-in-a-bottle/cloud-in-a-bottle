@@ -20,6 +20,34 @@ from compute_space_cli.helpers import resolve_app_id_by_name
 from compute_space_cli.helpers import wait_for_app_removed
 from compute_space_cli.helpers import wait_for_app_running
 
+# API-token scopes, mirroring compute_space/core/auth/scopes.py.  This CLI is a
+# standalone package with no dependency on the server, so the list is duplicated
+# here for --list-scopes help; the server is the source of truth and validates.
+# The trailing "(owner-equivalent)" marks privilege-escalation scopes.
+_AVAILABLE_SCOPES: list[tuple[str, str]] = [
+    ("owner", "Full access (all scopes)  (owner-equivalent)"),
+    ("apps:read", "List apps, status, diagnostics"),
+    ("apps:logs", "Read app logs (may contain user data)"),
+    ("apps:manage", "Deploy, clone, reload, stop, start, rename, set-remote"),
+    ("apps:delete", "Remove apps"),
+    ("system:read", "Version, ports, storage/ssh status, platform logs"),
+    ("settings:read", "Read settings, owner username, remote"),
+    ("system:admin", "Toggle SSH, restart router, drop cache  (owner-equivalent)"),
+    ("settings:write", "Update settings, change owner password  (owner-equivalent)"),
+    ("storage:admin", "Configure archive backend / S3 creds  (owner-equivalent)"),
+    ("tokens:manage", "Create/list/delete API tokens  (owner-equivalent)"),
+    ("permissions:manage", "Grant/revoke app service permissions  (owner-equivalent)"),
+    ("identity:approve", "Sign federated identity tokens as owner  (owner-equivalent)"),
+]
+
+
+def _print_available_scopes() -> None:
+    print("Available API-token scopes (pass with --scope, repeatable):\n")
+    width = max(len(name) for name, _ in _AVAILABLE_SCOPES)
+    for name, desc in _AVAILABLE_SCOPES:
+        print(f"  {name.ljust(width)}  {desc}")
+    print("\nScopes marked (owner-equivalent) can escalate privilege — grant them sparingly.")
+
 
 def _load_or_exit() -> config.MultiConfig:
     """Load MultiConfig or print a friendly message and exit."""
@@ -325,7 +353,8 @@ class TokensCmd:
         for t in tokens:
             exp = t.get("expires_at") or "never"
             expired = " (expired)" if t.get("expired") else ""
-            print(f"  [{t['id']}] {t['name']}  expires: {exp}{expired}")
+            scopes = ", ".join(t.get("scopes") or []) or "-"
+            print(f"  [{t['id']}] {t['name']}  expires: {exp}{expired}  scopes: {scopes}")
 
     @cappa.command(name="create")
     def create(
@@ -333,18 +362,36 @@ class TokensCmd:
         cfg: Annotated[config.Instance, Dep(resolve_instance)],
         name: Annotated[str, cappa.Arg(long=True, help="Token name")] = "Untitled",
         expiry_hours: Annotated[str, cappa.Arg(long=True, help='Hours until expiry, or "never"')] = "8",
+        scope: Annotated[
+            list[str] | None,
+            cappa.Arg(
+                long=True,
+                help=(
+                    "Grant scope (repeatable), e.g. --scope apps:read --scope apps:logs. "
+                    'Defaults to "owner" (full access) if none given. Run `oh tokens scopes` '
+                    "to see all scopes; owner and the *:admin/*:manage scopes are owner-equivalent."
+                ),
+            ),
+        ] = None,
     ) -> None:
         """Create a new API token."""
+        # No implicit owner on the server side (scopes are required there), so
+        # the CLI makes the default explicit: an unscoped `tokens create` asks
+        # for owner (full access), matching the pre-scopes behaviour.
+        scopes = scope or ["owner"]
         result = make_api_request(
             cfg.url,
             cfg.token,
             "POST",
             "/api/tokens",
-            data={"name": name, "expiry_hours": expiry_hours},
+            data={"name": name, "expiry_hours": expiry_hours, "scopes": scopes},
         ).json()
+        if "error" in result:
+            raise cappa.Exit(f"Error: {result['error']}", code=1)
         print(f"Token: {result['token']}")
         print(f"  name: {result.get('name', name)}")
         print(f"  expires: {result.get('expires_at') or 'never'}")
+        print(f"  scopes: {', '.join(result.get('scopes') or scopes)}")
 
     @cappa.command(name="delete")
     def delete(
@@ -355,6 +402,11 @@ class TokensCmd:
         """Delete an API token."""
         make_api_request(cfg.url, cfg.token, "DELETE", f"/api/tokens/{token_id}")
         print(f"Deleted token {token_id}")
+
+    @cappa.command(name="scopes")
+    def scopes(self) -> None:
+        """List the available API-token scopes (no instance required)."""
+        _print_available_scopes()
 
 
 @cappa.command(name="logs", help="View compute space logs.")

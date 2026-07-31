@@ -18,6 +18,8 @@ from compute_space.config import Config
 from compute_space.core.auth.auth import read_owner_username
 from compute_space.core.auth.auth import update_owner_username
 from compute_space.core.auth.auth import validate_owner_username
+from compute_space.core.auth.scopes import SETTINGS_READ
+from compute_space.core.auth.scopes import SETTINGS_WRITE
 from compute_space.core.connect import ConnectError
 from compute_space.core.connect import build_connect_url
 from compute_space.core.connect import exchange_code_for_credential
@@ -33,7 +35,7 @@ from compute_space.core.system_agent import system_agent_set_remote
 from compute_space.core.system_agent import system_agent_status
 from compute_space.core.updates import trigger_restart
 from compute_space.core.util import not_blank
-from compute_space.web.auth.auth import require_owner_auth
+from compute_space.web.auth.auth import require_scope
 from openhost_system_agent.protocol import RemoteInfo
 
 # --- request / response types -----------------------------------------------
@@ -80,7 +82,7 @@ class OwnerUsernameResponse:
 # --- routes -----------------------------------------------------------------
 
 
-@get("/api/settings/get-remote", guards=[require_owner_auth])
+@get("/api/settings/get-remote", guards=[require_scope(SETTINGS_READ)])
 async def get_remote() -> RemoteInfo:
     try:
         return await system_agent_get_remote()
@@ -88,7 +90,7 @@ async def get_remote() -> RemoteInfo:
         raise HTTPException(detail=str(e), status_code=500) from e
 
 
-@post("/api/settings/set-remote", status_code=200, guards=[require_owner_auth])
+@post("/api/settings/set-remote", status_code=200, guards=[require_scope(SETTINGS_WRITE)])
 async def set_remote(data: SetRemoteRequest) -> RemoteInfo:
     try:
         return await system_agent_set_remote(data.url.strip())
@@ -96,7 +98,7 @@ async def set_remote(data: SetRemoteRequest) -> RemoteInfo:
         raise HTTPException(detail=str(e), status_code=500) from e
 
 
-@get("/api/settings/update", guards=[require_owner_auth])
+@get("/api/settings/update", guards=[require_scope(SETTINGS_READ)])
 async def check_for_updates() -> CheckUpdatesResponse:
     try:
         fetch_result = await system_agent_fetch()
@@ -133,7 +135,7 @@ async def check_for_updates() -> CheckUpdatesResponse:
 _apply_lock = asyncio.Lock()
 
 
-@post("/api/settings/update", status_code=204, guards=[require_owner_auth])
+@post("/api/settings/update", status_code=204, guards=[require_scope(SETTINGS_WRITE)])
 async def apply_update() -> None:
     if _apply_lock.locked():
         raise HTTPException(detail="An update is already in progress.", status_code=409)
@@ -153,7 +155,7 @@ async def apply_update() -> None:
             raise HTTPException(detail=str(e), status_code=500) from e
 
 
-@post("/api/settings/restart_compute_space", status_code=204, guards=[require_owner_auth])
+@post("/api/settings/restart_compute_space", status_code=204, guards=[require_scope(SETTINGS_WRITE)])
 async def restart_compute_space() -> None:
     trigger_restart()
 
@@ -175,7 +177,7 @@ class ConnectStartResponse:
     redirect_url: str
 
 
-@get("/api/settings/connect-imbue/status", guards=[require_owner_auth])
+@get("/api/settings/connect-imbue/status", guards=[require_scope(SETTINGS_READ)])
 async def connect_imbue_status(config: Config, db: sqlite3.Connection) -> ConnectStatusResponse:
     return ConnectStatusResponse(
         available=bool(get_connect_base_url(db)),
@@ -183,7 +185,7 @@ async def connect_imbue_status(config: Config, db: sqlite3.Connection) -> Connec
     )
 
 
-@post("/api/settings/connect-imbue/start", status_code=200, guards=[require_owner_auth])
+@post("/api/settings/connect-imbue/start", status_code=200, guards=[require_scope(SETTINGS_WRITE)])
 async def connect_imbue_start(
     config: Config, db: sqlite3.Connection, request: Request[Any, Any, Any]
 ) -> ConnectStartResponse:
@@ -200,7 +202,7 @@ async def connect_imbue_start(
     return ConnectStartResponse(redirect_url=redirect_url)
 
 
-@get("/api/settings/connect-imbue/callback", guards=[require_owner_auth], sync_to_thread=True)
+@get("/api/settings/connect-imbue/callback", guards=[require_scope(SETTINGS_WRITE)], sync_to_thread=True)
 def connect_imbue_callback(config: Config, db: sqlite3.Connection, code: str = "") -> Redirect:
     """Exchange the one-time code and store the credential.
 
@@ -236,7 +238,7 @@ class ChangePasswordResponse:
     ok: bool
 
 
-@post("/api/settings/change_password", status_code=200, guards=[require_owner_auth])
+@post("/api/settings/change_password", status_code=200, guards=[require_scope(SETTINGS_WRITE)])
 async def change_password(data: ChangePasswordRequest, db: sqlite3.Connection) -> ChangePasswordResponse:
     current = data.current_password.strip()
     new_pw = data.new_password.strip()
@@ -266,12 +268,12 @@ async def change_password(data: ChangePasswordRequest, db: sqlite3.Connection) -
     return ChangePasswordResponse(ok=True)
 
 
-@get("/api/settings/owner_username", guards=[require_owner_auth])
+@get("/api/settings/owner_username", guards=[require_scope(SETTINGS_READ)])
 async def get_owner_username(db: sqlite3.Connection) -> OwnerUsernameResponse:
     return OwnerUsernameResponse(username=read_owner_username(db))
 
 
-@post("/api/settings/owner_username", status_code=200, guards=[require_owner_auth])
+@post("/api/settings/owner_username", status_code=200, guards=[require_scope(SETTINGS_WRITE)])
 async def set_owner_username(data: SetOwnerUsernameRequest, db: sqlite3.Connection) -> OwnerUsernameResponse:
     error = validate_owner_username(data.username)
     if error is not None:

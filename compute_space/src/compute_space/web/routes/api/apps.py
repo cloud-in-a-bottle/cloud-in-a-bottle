@@ -16,6 +16,8 @@ from litestar import Response
 from litestar import Router
 from litestar import get
 from litestar import post
+from litestar.di import Provide
+from litestar.params import Dependency
 from litestar.params import Parameter
 from litestar.response import Redirect
 
@@ -36,8 +38,15 @@ from compute_space.core.apps import reload_app_background
 from compute_space.core.apps import remove_app_background
 from compute_space.core.apps import start_app_process
 from compute_space.core.apps import validate_manifest
+from compute_space.core.auth.auth import AuthenticatedAPIKey
+from compute_space.core.auth.auth import AuthenticatedAccessor
+from compute_space.core.auth.auth import api_token_installed_by
 from compute_space.core.auth.permissions_v2 import get_all_permissions_v2
 from compute_space.core.auth.permissions_v2 import grant_permission_v2
+from compute_space.core.auth.scopes import APPS_DELETE
+from compute_space.core.auth.scopes import APPS_LOGS
+from compute_space.core.auth.scopes import APPS_MANAGE
+from compute_space.core.auth.scopes import APPS_READ
 from compute_space.core.containers import BUILD_CACHE_CORRUPT_MARKER
 from compute_space.core.containers import archive_old_log
 from compute_space.core.containers import get_docker_logs
@@ -60,7 +69,8 @@ from compute_space.core.oauth import OAuthAuthorizationRequired
 from compute_space.core.oauth import get_oauth_token
 from compute_space.core.ports import check_port_available
 from compute_space.core.services_v2 import ServiceNotAvailable
-from compute_space.web.auth.auth import require_owner_auth
+from compute_space.web.auth.auth import provide_accessor
+from compute_space.web.auth.auth import require_scope
 
 # ─── attrs request / response models ──────────────────────────────────────
 
@@ -273,7 +283,7 @@ async def _pin_refless_to_landed_branch(repo_url: str | None, repo_path: str) ->
 # ─── routes ────────────────────────────────────────────────────────────────
 
 
-@post("/api/clone_and_get_app_info", status_code=200, guards=[require_owner_auth])
+@post("/api/clone_and_get_app_info", status_code=200, guards=[require_scope(APPS_MANAGE)])
 async def clone_and_get_app_info(
     data: CloneRequest, db: sqlite3.Connection, config: Config
 ) -> Response[CloneInfoResponse] | Response[ErrorResponse] | Response[CloneAuthorizeResponse]:
@@ -311,7 +321,7 @@ async def clone_and_get_app_info(
     )
 
 
-@get("/api/check_port", guards=[require_owner_auth])
+@get("/api/check_port", guards=[require_scope(APPS_MANAGE)])
 async def check_port(
     port: Annotated[int, Parameter(ge=1, le=65535)], db: sqlite3.Connection
 ) -> Response[CheckPortResponse]:
@@ -324,9 +334,19 @@ async def check_port(
     )
 
 
-@post("/api/add_app", status_code=200, guards=[require_owner_auth])
+@post(
+    "/api/add_app",
+    status_code=200,
+    guards=[require_scope(APPS_MANAGE)],
+    dependencies={"accessor": Provide(provide_accessor, sync_to_thread=False)},
+)
 async def api_add_app(
-    data: AddAppRequest, db: sqlite3.Connection, config: Config
+    data: AddAppRequest,
+    db: sqlite3.Connection,
+    config: Config,
+    # skip_validation: the value is an attrs accessor object supplied by the
+    # provide_accessor dependency, not something Litestar should msgspec-validate.
+    accessor: Annotated[AuthenticatedAccessor | None, Dependency(skip_validation=True)],
 ) -> Response[AddAppResponse] | Response[ErrorResponse] | Response[AuthRequiredResponse]:
     """Install an app. Optionally takes a clone_dir from a prior clone_and_get_app_info call."""
     repo_url = data.repo_url.strip()
@@ -403,6 +423,12 @@ async def api_add_app(
     if not grants and data.grant_permissions_v2:
         grants = all_manifest_permissions_v2(manifest)
 
+    # Attribute token-initiated deploys to the token, so a future ownership
+    # scope can restrict a token to the apps it deployed.  Owner (session) and
+    # unauthenticated-but-guarded paths leave installed_by as None, matching
+    # the existing owner-initiated convention.
+    installed_by = api_token_installed_by(accessor.token_id) if isinstance(accessor, AuthenticatedAPIKey) else None
+
     try:
         app_id = insert_and_deploy(
             manifest,
@@ -413,6 +439,7 @@ async def api_add_app(
             app_name=app_name,
             repo_url=repo_url,
             port_overrides=port_overrides,
+            installed_by=installed_by,
         )
     except (RuntimeError, ValueError) as e:
         # ValueError covers uid_map pool exhaustion (see compute_uid_map_base)
@@ -427,7 +454,7 @@ async def api_add_app(
     )
 
 
-@get("/api/apps", guards=[require_owner_auth])
+@get("/api/apps", guards=[require_scope(APPS_READ)])
 async def api_apps(db: sqlite3.Connection) -> list[AppSummary]:
     rows = db.execute("SELECT app_id, name, status, error_message FROM apps ORDER BY name").fetchall()
     return [
@@ -457,7 +484,7 @@ async def _read_app_git_info(repo_path: str | None) -> tuple[str | None, str | N
     return branch, sha, dirty
 
 
-@get("/api/app_status/{app_id:str}", guards=[require_owner_auth])
+@get("/api/app_status/{app_id:str}", guards=[require_scope(APPS_READ)])
 async def app_status(app_id: str, db: sqlite3.Connection) -> Response[AppStatusResponse] | Response[ErrorResponse]:
     if not is_valid_app_id(app_id):
         return Response(content=ErrorResponse(error="Invalid app_id"), status_code=400)
@@ -497,7 +524,7 @@ def _app_diagnostics_filename(app_name: str) -> str:
     return f"openhost-app-diagnostics-{safe_name}-{stamp}.json"
 
 
-@get("/api/app_diagnostics/{app_id:str}", guards=[require_owner_auth])
+@get("/api/app_diagnostics/{app_id:str}", guards=[require_scope(APPS_READ)])
 async def app_diagnostics(
     app_id: str, db: sqlite3.Connection, config: Config, download: bool = False
 ) -> Response[AppDiagnostics] | Response[ErrorResponse]:
@@ -519,7 +546,7 @@ async def app_diagnostics(
     return Response(content=diagnostics, status_code=200, media_type=MediaType.JSON, headers=headers)
 
 
-@get("/app_logs/{app_id:str}", guards=[require_owner_auth], media_type=MediaType.TEXT)
+@get("/app_logs/{app_id:str}", guards=[require_scope(APPS_LOGS)], media_type=MediaType.TEXT)
 async def app_logs(app_id: str, db: sqlite3.Connection, config: Config) -> Response[str] | Response[ErrorResponse]:
     app_row, err = _resolve_app_or_error(app_id, db)
     if err is not None:
@@ -529,7 +556,7 @@ async def app_logs(app_id: str, db: sqlite3.Connection, config: Config) -> Respo
     return Response(content=logs, status_code=200, media_type=MediaType.TEXT)
 
 
-@post("/stop_app/{app_id:str}", status_code=200, guards=[require_owner_auth])
+@post("/stop_app/{app_id:str}", status_code=200, guards=[require_scope(APPS_MANAGE)])
 async def stop_app(app_id: str, db: sqlite3.Connection) -> Response[OkResponse] | Response[ErrorResponse]:
     app_row, err = _resolve_app_or_error(app_id, db)
     if err is not None:
@@ -801,7 +828,7 @@ async def _reload_app_impl(
     return Response(content=OkResponse(ok=True), status_code=200, media_type=MediaType.JSON)
 
 
-@post("/reload_app/{app_id:str}", status_code=200, guards=[require_owner_auth])
+@post("/reload_app/{app_id:str}", status_code=200, guards=[require_scope(APPS_MANAGE)])
 async def reload_app(
     app_id: str,
     db: sqlite3.Connection,
@@ -819,7 +846,7 @@ async def reload_app(
     )
 
 
-@get("/reload_app/{app_id:str}", guards=[require_owner_auth])
+@get("/reload_app/{app_id:str}", guards=[require_scope(APPS_MANAGE)])
 async def reload_app_after_oauth(
     app_id: str,
     db: sqlite3.Connection,
@@ -845,7 +872,7 @@ async def reload_app_after_oauth(
     )
 
 
-@post("/remove_app/{app_id:str}", status_code=202, guards=[require_owner_auth])
+@post("/remove_app/{app_id:str}", status_code=202, guards=[require_scope(APPS_DELETE)])
 async def remove_app(
     app_id: str,
     db: sqlite3.Connection,
@@ -968,7 +995,7 @@ def _rename_app_storage_dirs(config: Config, old_name: str, new_name: str, archi
     return None
 
 
-@post("/rename_app/{app_id:str}", status_code=200, guards=[require_owner_auth])
+@post("/rename_app/{app_id:str}", status_code=200, guards=[require_scope(APPS_MANAGE)])
 async def rename_app(
     app_id: str,
     data: RenameAppRequest,
@@ -1098,7 +1125,7 @@ async def rename_app(
     )
 
 
-@post("/set_app_remote/{app_id:str}", status_code=200, guards=[require_owner_auth])
+@post("/set_app_remote/{app_id:str}", status_code=200, guards=[require_scope(APPS_MANAGE)])
 async def set_app_remote(
     app_id: str,
     data: SetAppRemoteRequest,

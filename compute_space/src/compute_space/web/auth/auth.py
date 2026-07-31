@@ -12,6 +12,7 @@ from litestar.connection import ASGIConnection
 from litestar.exceptions import NotAuthorizedException
 from litestar.handlers.base import BaseRouteHandler
 from litestar.response import Redirect
+from litestar.types import Guard
 
 from compute_space.core.apps import get_app_from_hostname
 from compute_space.core.auth.auth import SESSION_COOKIE_NAME
@@ -22,6 +23,8 @@ from compute_space.core.auth.auth import AuthenticatedUser
 from compute_space.core.auth.auth import validate_api_token
 from compute_space.core.auth.auth import validate_app_token
 from compute_space.core.auth.auth import validate_session_token
+from compute_space.core.auth.scopes import OWNER
+from compute_space.core.auth.scopes import token_has_scope
 from compute_space.core.domains import Domain
 from compute_space.db import get_db
 from compute_space.web.helpers.zone import zone_for_request
@@ -110,10 +113,18 @@ def authenticate(connection: AnyConnection, db: sqlite3.Connection) -> Authentic
     return None
 
 
-def verify_owner_auth(connection: AnyConnection) -> None:
-    """Verify that the request is authenticated as an "owner" (either a user or an API key, with valid Origin).
+def verify_owner_auth(connection: AnyConnection, required_scope: str | None = None) -> None:
+    """Verify the request is authenticated as an "owner" — a session user or an API key.
 
-    returns if authed; raises NotAuthorizedException if not authenticated.
+    Session (human) owners are never scope-restricted: scopes only ever narrow
+    what a *token* can do. For an API key, the token's scope set must satisfy
+    ``required_scope`` (or hold the ``owner`` super-scope). ``required_scope``
+    of ``None`` demands full owner access — i.e. the token must hold ``owner``.
+    This makes any route still on the bare ``require_owner_auth`` guard
+    fail-closed for narrowly-scoped tokens until it is migrated to
+    ``require_scope``.
+
+    returns if authed; raises NotAuthorizedException otherwise.
     """
     accessor = authenticate(connection, db=get_db())
     origin = get_connection_origin(connection)
@@ -129,7 +140,11 @@ def verify_owner_auth(connection: AnyConnection) -> None:
         return
     if isinstance(accessor, AuthenticatedAPIKey):
         # API key requests won't come from untrusted JS, so can be trusted regardless of origin.
-        return
+        # Scope check: None => require the `owner` super-scope (full access).
+        effective = required_scope if required_scope is not None else OWNER
+        if token_has_scope(accessor.scopes, effective):
+            return
+        raise NotAuthorizedException(detail=f"token missing required scope: {effective}")
     raise NotAuthorizedException(detail="User or API key authentication required")
 
 
@@ -154,8 +169,39 @@ def verify_app_auth(connection: AnyConnection) -> str:
 
 
 def require_owner_auth(connection: AnyConnection, _route_handler: BaseRouteHandler) -> None:
-    """Adapt verify_owner_auth to be used as a route guard."""
+    """Route guard requiring full owner access (session user, or a token with the `owner` scope)."""
     verify_owner_auth(connection)
+
+
+def provide_accessor(request: Request[Any, Any, Any]) -> AuthenticatedAccessor | None:
+    """Dependency that resolves the calling accessor for handlers that need it.
+
+    Runs the same ``authenticate()`` resolution as the guards, so a handler can
+    attribute an action to the specific caller — e.g. stamp
+    ``apps.installed_by`` with a token's identity on a token-initiated deploy,
+    or audit-log which token performed an action. Returns None if
+    unauthenticated (the guard, not this dependency, is what enforces auth).
+
+    The parameter is named ``request`` because that is Litestar's reserved
+    injection key for the connection; a ``Request`` is an ``ASGIConnection``, so
+    it satisfies ``authenticate()``.
+
+    Wire it per-route via ``dependencies={"accessor": Provide(provide_accessor, sync_to_thread=False)}``.
+    """
+    return authenticate(request, db=get_db())
+
+
+def require_scope(required_scope: str) -> Guard:
+    """Build a route guard that passes for a session owner, or an API key whose
+    scopes include ``required_scope`` (or the ``owner`` super-scope).
+
+    Usage:  ``@post("/api/add_app", guards=[require_scope(APPS_MANAGE)])``
+    """
+
+    def guard(connection: AnyConnection, _route_handler: BaseRouteHandler) -> None:
+        verify_owner_auth(connection, required_scope=required_scope)
+
+    return guard
 
 
 def require_app_auth(connection: AnyConnection, _route_handler: BaseRouteHandler) -> None:

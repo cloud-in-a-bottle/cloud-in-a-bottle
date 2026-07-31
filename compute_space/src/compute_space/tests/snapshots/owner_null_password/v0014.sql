@@ -1,9 +1,10 @@
 BEGIN TRANSACTION;
-CREATE TABLE api_tokens (
+CREATE TABLE "api_tokens" (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,
     token_hash TEXT NOT NULL UNIQUE,
     expires_at TEXT NOT NULL,
+    scopes TEXT NOT NULL,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE TABLE "app_databases" (
@@ -88,7 +89,7 @@ CREATE TABLE schema_version (
     id INTEGER PRIMARY KEY CHECK (id = 1),
     version INTEGER NOT NULL
 );
-INSERT INTO "schema_version" VALUES(1,13);
+INSERT INTO "schema_version" VALUES(1,14);
 CREATE TABLE "service_defaults" (
                 service_url TEXT PRIMARY KEY,
                 app_id TEXT NOT NULL,

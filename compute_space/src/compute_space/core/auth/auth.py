@@ -9,6 +9,8 @@ from datetime import timedelta
 import attr
 import bcrypt
 
+from compute_space.core.auth.scopes import parse_scopes
+
 SESSION_TTL_SECONDS = 28 * 24 * 60 * 60  # four weeks
 SESSION_COOKIE_NAME = "session_token"
 
@@ -68,13 +70,30 @@ class AuthenticatedUser(AuthenticatedAccessor):
 
 @attr.s(auto_attribs=True, frozen=True)
 class AuthenticatedAPIKey(AuthenticatedAccessor):
-    # TODO: fill this out with permissions etc
-    pass
+    # Stable identity of the token, so handlers can attribute actions to it
+    # (e.g. stamp apps.installed_by on token-initiated deploys, or audit-log).
+    token_id: int
+    name: str
+    # The scopes granted to this token (parsed from api_tokens.scopes).
+    # `require_scope` checks membership; the special `owner` scope grants all.
+    scopes: frozenset[str] = attr.ib(factory=frozenset)
 
 
 @attr.s(auto_attribs=True, frozen=True)
 class AuthenticatedApp(AuthenticatedAccessor):
     app_id: str
+
+
+# Namespace prefix for ``apps.installed_by`` when a deploy is initiated by an
+# API token (a consumer app stores its app name there instead).  Kept in its
+# own namespace so a future "manage only the apps this token deployed"
+# ownership scope can match token-initiated installs unambiguously.
+API_TOKEN_INSTALLED_BY_PREFIX = "apitoken:"
+
+
+def api_token_installed_by(token_id: int) -> str:
+    """The ``apps.installed_by`` value stamped for a token-initiated deploy."""
+    return f"{API_TOKEN_INSTALLED_BY_PREFIX}{token_id}"
 
 
 def _hash(token: str) -> str:
@@ -122,17 +141,22 @@ def validate_api_token(token: str, db: sqlite3.Connection) -> AuthenticatedAPIKe
     token_hash = _hash(token)
 
     if row := db.execute(
-        "SELECT name, expires_at FROM api_tokens WHERE token_hash = ?",
+        "SELECT id, name, expires_at, scopes FROM api_tokens WHERE token_hash = ?",
         (token_hash,),
     ).fetchone():
         # NULL / empty expires_at means "never expires" — created via the
         # "never" option in /api/tokens.  Anything else is parsed and
         # compared.
         expires_at = row["expires_at"]
+        accessor = AuthenticatedAPIKey(
+            token_id=row["id"],
+            name=row["name"],
+            scopes=parse_scopes(row["scopes"]),
+        )
         if not expires_at:
-            return AuthenticatedAPIKey()
+            return accessor
         if datetime.fromisoformat(expires_at) >= datetime.now(UTC):
-            return AuthenticatedAPIKey()
+            return accessor
     return None
 
 

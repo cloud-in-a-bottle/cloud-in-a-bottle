@@ -376,11 +376,15 @@ class TestRouterCore:
         base = _zone_url(config)
 
         # Create a token
-        r = admin_session.post(f"{base}/api/tokens", json={"name": "test-token", "expiry_hours": "1"})
+        r = admin_session.post(
+            f"{base}/api/tokens",
+            json={"name": "test-token", "expiry_hours": "1", "scopes": ["owner"]},
+        )
         assert r.status_code == 200
         data = r.json()
         assert "token" in data
         assert data["name"] == "test-token"
+        assert data["scopes"] == ["owner"]
         raw_token = data["token"]
 
         # Use the token (no cookies) to hit a protected endpoint
@@ -413,7 +417,10 @@ class TestRouterCore:
     def test_api_token_no_expiry(self, admin_session, config):
         """Tokens created with expiry_hours=never should work."""
         base = _zone_url(config)
-        r = admin_session.post(f"{base}/api/tokens", json={"name": "no-expiry", "expiry_hours": "never"})
+        r = admin_session.post(
+            f"{base}/api/tokens",
+            json={"name": "no-expiry", "expiry_hours": "never", "scopes": ["owner"]},
+        )
         data = r.json()
         assert data["expires_at"] is None
 

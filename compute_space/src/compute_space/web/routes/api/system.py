@@ -13,10 +13,17 @@ from litestar import Response
 from litestar import Router
 from litestar import delete
 from litestar import get
+from litestar import patch
 from litestar import post
 
 from compute_space import OPENHOST_PROJECT_DIR
 from compute_space.config import Config
+from compute_space.core.auth.scopes import SYSTEM_ADMIN
+from compute_space.core.auth.scopes import SYSTEM_READ
+from compute_space.core.auth.scopes import TOKENS_MANAGE
+from compute_space.core.auth.scopes import dump_scopes
+from compute_space.core.auth.scopes import parse_scopes
+from compute_space.core.auth.scopes import validate_requested_scopes
 from compute_space.core.auth.security_audit import ListeningPort
 from compute_space.core.auth.security_audit import external_ports
 from compute_space.core.auth.security_audit import is_sshd_active
@@ -32,7 +39,7 @@ from compute_space.core.storage import is_guard_paused
 from compute_space.core.storage import set_guard_paused
 from compute_space.core.storage import storage_status
 from compute_space.core.updates import is_shutdown_pending
-from compute_space.web.auth.auth import require_owner_auth
+from compute_space.web.auth.auth import require_scope
 
 DEFAULT_TOKEN_EXPIRY_HOURS: float = 8.0
 
@@ -47,16 +54,29 @@ class ApiToken:
     expires_at: str | None
     created_at: str
     expired: bool
+    scopes: list[str]
 
 
 @attr.s(auto_attribs=True, frozen=True)
 class CreateTokenRequest:
     """Body for ``POST /api/tokens``.  ``expiry_hours`` is a string so the
     sentinel ``"never"`` (= no expiry) and a numeric value share one field
-    without forcing the JS client to send different keys."""
+    without forcing the JS client to send different keys.
+
+    ``scopes`` restricts what the token may do and is REQUIRED — there is no
+    implicit owner-on-omission (that would be a privilege hole).  A caller that
+    wants full access must ask for it explicitly by passing ``["owner"]``."""
 
     name: str
+    scopes: list[str]
     expiry_hours: str | None = None
+
+
+@attr.s(auto_attribs=True, frozen=True)
+class UpdateTokenRequest:
+    """Body for ``PATCH /api/tokens/{id}``: replace a token's scopes in place."""
+
+    scopes: list[str]
 
 
 @attr.s(auto_attribs=True, frozen=True)
@@ -64,6 +84,7 @@ class CreatedToken:
     token: str
     name: str
     expires_at: str | None
+    scopes: list[str]
 
 
 @attr.s(auto_attribs=True, frozen=True)
@@ -129,9 +150,11 @@ class VersionInfo:
 # ─── API Tokens ────────────────────────────────────────────────────────────
 
 
-@get("/api/tokens", guards=[require_owner_auth])
+@get("/api/tokens", guards=[require_scope(TOKENS_MANAGE)])
 async def api_tokens_list(db: sqlite3.Connection) -> list[ApiToken]:
-    rows = db.execute("SELECT id, name, expires_at, created_at FROM api_tokens ORDER BY created_at DESC").fetchall()
+    rows = db.execute(
+        "SELECT id, name, expires_at, created_at, scopes FROM api_tokens ORDER BY created_at DESC"
+    ).fetchall()
     now = datetime.now(UTC)
     tokens: list[ApiToken] = []
     for r in rows:
@@ -144,16 +167,23 @@ async def api_tokens_list(db: sqlite3.Connection) -> list[ApiToken]:
                 expires_at=r["expires_at"] or None,
                 created_at=r["created_at"],
                 expired=expired,
+                scopes=sorted(parse_scopes(r["scopes"])),
             )
         )
     return tokens
 
 
-@post("/api/tokens", status_code=200, guards=[require_owner_auth])
+@post("/api/tokens", status_code=200, guards=[require_scope(TOKENS_MANAGE)])
 async def api_tokens_create(
     data: CreateTokenRequest, db: sqlite3.Connection
 ) -> Response[CreatedToken] | Response[ErrorResponse]:
     name = data.name.strip() or "Untitled"
+    # Scopes are required and validated — no implicit owner-on-omission.  A
+    # caller wanting full access must pass ["owner"] explicitly.
+    requested_scopes = data.scopes
+    if error := validate_requested_scopes(requested_scopes):
+        return Response(content=ErrorResponse(error=error), status_code=400)
+
     expiry_hours_raw = data.expiry_hours.strip() if data.expiry_hours else ""
     expires_at: datetime | None
     if not expiry_hours_raw or expiry_hours_raw.lower() == "never":
@@ -169,10 +199,11 @@ async def api_tokens_create(
 
     raw_token = secrets.token_urlsafe(32)
     token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
+    scopes_json = dump_scopes(requested_scopes)
 
     db.execute(
-        "INSERT INTO api_tokens (name, token_hash, expires_at) VALUES (?, ?, ?)",
-        (name, token_hash, expires_at.isoformat() if expires_at else ""),
+        "INSERT INTO api_tokens (name, token_hash, expires_at, scopes) VALUES (?, ?, ?, ?)",
+        (name, token_hash, expires_at.isoformat() if expires_at else "", scopes_json),
     )
     db.commit()
 
@@ -181,13 +212,31 @@ async def api_tokens_create(
             token=raw_token,
             name=name,
             expires_at=expires_at.isoformat() if expires_at else None,
+            scopes=sorted(parse_scopes(scopes_json)),
         ),
         status_code=200,
         media_type=MediaType.JSON,
     )
 
 
-@delete("/api/tokens/{token_id:int}", guards=[require_owner_auth])
+@patch("/api/tokens/{token_id:int}", status_code=200, guards=[require_scope(TOKENS_MANAGE)])
+async def api_tokens_update(
+    token_id: int, data: UpdateTokenRequest, db: sqlite3.Connection
+) -> Response[OkResponse] | Response[ErrorResponse]:
+    """Replace a token's scopes in place (the "update later" capability)."""
+    if error := validate_requested_scopes(data.scopes):
+        return Response(content=ErrorResponse(error=error), status_code=400)
+    cursor = db.execute(
+        "UPDATE api_tokens SET scopes = ? WHERE id = ?",
+        (dump_scopes(data.scopes), token_id),
+    )
+    db.commit()
+    if cursor.rowcount == 0:
+        return Response(content=ErrorResponse(error="Token not found"), status_code=404)
+    return Response(content=OkResponse(ok=True), status_code=200, media_type=MediaType.JSON)
+
+
+@delete("/api/tokens/{token_id:int}", guards=[require_scope(TOKENS_MANAGE)])
 async def api_tokens_delete(token_id: int, db: sqlite3.Connection) -> None:
     db.execute("DELETE FROM api_tokens WHERE id = ?", (token_id,))
     db.commit()
@@ -201,7 +250,7 @@ async def api_tokens_delete(token_id: int, db: sqlite3.Connection) -> None:
 _LOG_TAIL_BYTES = 256 * 1024
 
 
-@get("/api/compute_space_logs", guards=[require_owner_auth], media_type=MediaType.TEXT, sync_to_thread=False)
+@get("/api/compute_space_logs", guards=[require_scope(SYSTEM_READ)], media_type=MediaType.TEXT, sync_to_thread=False)
 def compute_space_logs() -> Response[str]:
     """Return the tail (last 256 KiB) of the compute space log file."""
     log_path = get_log_path()
@@ -226,7 +275,7 @@ def health() -> Response[HealthRestarting] | HealthOk:
     return HealthOk(status="ok")
 
 
-@get("/api/listening-ports", guards=[require_owner_auth], sync_to_thread=False)
+@get("/api/listening-ports", guards=[require_scope(SYSTEM_READ)], sync_to_thread=False)
 def listening_ports(db: sqlite3.Connection) -> ListeningPortsResponse:
     """Return TCP ports listening on external-facing or wildcard interfaces, with classification.
 
@@ -238,12 +287,12 @@ def listening_ports(db: sqlite3.Connection) -> ListeningPortsResponse:
 
 # sync_to_thread: walking app_data and querying podman take ~1s on a real
 # instance; running on the event loop would stall every concurrent request.
-@get("/api/storage-status", guards=[require_owner_auth], sync_to_thread=True)
+@get("/api/storage-status", guards=[require_scope(SYSTEM_READ)], sync_to_thread=True)
 def api_storage_status(config: Config) -> dict[str, object]:
     return storage_status(config)
 
 
-@post("/api/storage-guard", status_code=200, guards=[require_owner_auth], sync_to_thread=False)
+@post("/api/storage-guard", status_code=200, guards=[require_scope(SYSTEM_ADMIN)], sync_to_thread=False)
 def toggle_storage_guard(data: ToggleStorageGuardRequest) -> StorageGuardResponse:
     """Pause or resume the storage guard."""
     set_guard_paused(data.paused)
@@ -253,12 +302,12 @@ def toggle_storage_guard(data: ToggleStorageGuardRequest) -> StorageGuardRespons
 # ─── SSH Toggle ────────────────────────────────────────────────────────────
 
 
-@get("/api/ssh-status", guards=[require_owner_auth], sync_to_thread=False)
+@get("/api/ssh-status", guards=[require_scope(SYSTEM_READ)], sync_to_thread=False)
 def ssh_status() -> SshStatusResponse:
     return SshStatusResponse(ssh_enabled=is_sshd_active())
 
 
-@post("/toggle-ssh", status_code=200, guards=[require_owner_auth], sync_to_thread=False)
+@post("/toggle-ssh", status_code=200, guards=[require_scope(SYSTEM_ADMIN)], sync_to_thread=False)
 def toggle_ssh() -> SshStatusResponse:
     if is_sshd_active():
         subprocess.run(
@@ -281,7 +330,7 @@ def toggle_ssh() -> SshStatusResponse:
 # ─── Router restart ────────────────────────────────────────────────────────
 
 
-@post("/api/drop-docker-cache", status_code=200, guards=[require_owner_auth], sync_to_thread=False)
+@post("/api/drop-docker-cache", status_code=200, guards=[require_scope(SYSTEM_ADMIN)], sync_to_thread=False)
 def drop_docker_cache() -> Response[DropCacheOk] | Response[ErrorResponse]:
     """Drop the container build cache to free disk space."""
     try:
@@ -291,7 +340,7 @@ def drop_docker_cache() -> Response[DropCacheOk] | Response[ErrorResponse]:
     return Response(content=DropCacheOk(ok=True, output=output), status_code=200, media_type=MediaType.JSON)
 
 
-@get("/api/version", guards=[require_owner_auth])
+@get("/api/version", guards=[require_scope(SYSTEM_READ)])
 async def api_version() -> VersionInfo:
     """Return git branch/SHA of the running openhost checkout.
 
@@ -317,7 +366,7 @@ def _diagnostics_filename(zone_domain: str) -> str:
     return f"openhost-diagnostics-{safe_zone}-{stamp}.json"
 
 
-@get("/api/diagnostics", guards=[require_owner_auth])
+@get("/api/diagnostics", guards=[require_scope(SYSTEM_READ)])
 async def api_diagnostics(
     db: sqlite3.Connection, config: Config, download: bool = False
 ) -> Response[PlatformDiagnostics]:
@@ -336,7 +385,7 @@ async def api_diagnostics(
     return Response(content=diagnostics, status_code=200, media_type=MediaType.JSON, headers=headers)
 
 
-@post("/restart_router", status_code=200, guards=[require_owner_auth], sync_to_thread=False)
+@post("/restart_router", status_code=200, guards=[require_scope(SYSTEM_ADMIN)], sync_to_thread=False)
 def restart_router() -> OkResponse:
     """Restart the router systemd service to pick up code changes."""
     subprocess.Popen(
@@ -357,6 +406,7 @@ system_routes = Router(
     route_handlers=[
         api_tokens_list,
         api_tokens_create,
+        api_tokens_update,
         api_tokens_delete,
         compute_space_logs,
         health,
