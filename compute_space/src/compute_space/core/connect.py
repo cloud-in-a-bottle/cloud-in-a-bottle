@@ -52,8 +52,11 @@ def exchange_code_for_credential(
 ) -> KeycloakClientCredentials:
     """Swap a one-time code for the instance's credential.
 
-    Returns the shared per-instance credential. Raises ConnectError on any non-200
-    response or malformed body.
+    ``code`` is the single-use code Imbue issued to this instance's callback after
+    the owner authorized (see the module docstring). Here we hand it back to Imbue
+    over a direct server-to-server call, so the credential itself never travels
+    through the owner's browser. Returns the shared per-instance credential; raises
+    ConnectError on any non-200 response or malformed body.
     """
     url = f"{frontend_base_url.rstrip('/')}{_CONNECT_EXCHANGE_PATH}"
     try:
