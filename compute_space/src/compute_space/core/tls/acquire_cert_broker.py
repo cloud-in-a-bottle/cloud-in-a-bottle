@@ -125,7 +125,7 @@ def acquire_tls_cert_via_broker(
         )
     finally:
         # Always pull the challenge records back out, success or failure.
-        dns_module.clear_txt(coredns_zonefile_path)
+        dns_module.clear_acme_challenge_records(coredns_zonefile_path)
 
     write_cert_and_key(cert_path, key_path, certificate.encode(), tls_private_key_to_pem(tls_key))
     logger.info(f"Installed broker-issued TLS cert for {domain} -> {cert_path}")

@@ -9,7 +9,7 @@ restart — see ``reload_coredns_for_domains``.
 
 For DNS-01 ACME challenges, the router calls append_txt_records() on a domain's own
 zone file to add TXT records, waits for CoreDNS to pick them up, then calls
-clear_txt() after the cert is issued.
+clear_acme_challenge_records() after the cert is issued.
 """
 
 from __future__ import annotations
@@ -329,12 +329,32 @@ def append_txt_records(zone_file_path: Path, records: list[TxtRecord]) -> None:
     logger.info(f"Appended {len(records)} TXT record(s)")
 
 
-def clear_txt(zone_file_path: Path) -> None:
-    """Remove all TXT records from the zone file and bump the SOA serial."""
+# ACME DNS-01 challenge TXT records are published at this owner name (relative to the
+# zone $ORIGIN, or as the absolute FQDN). clear_acme_challenge_records scopes its removal
+# to these so it never deletes persistent email TXT records (SPF at the apex, DMARC at
+# _dmarc) that share the "IN TXT" shape.
+_ACME_CHALLENGE_LABEL = "_acme-challenge"
+
+
+def _is_acme_challenge_txt(line: str) -> bool:
+    """True iff ``line`` is an ACME-challenge TXT record (owned by _acme-challenge)."""
+    if "IN TXT" not in line:
+        return False
+    owner = line.split(None, 1)[0] if line.split() else ""
+    return owner == _ACME_CHALLENGE_LABEL or owner.startswith(_ACME_CHALLENGE_LABEL + ".")
+
+
+def clear_acme_challenge_records(zone_file_path: Path) -> None:
+    """Remove ACME-challenge TXT records from the zone file and bump the SOA serial.
+
+    Only ``_acme-challenge`` TXT records are removed; persistent email records (SPF at
+    the apex, DMARC at ``_dmarc``, DKIM CNAMEs) are left intact so a cert renewal never
+    disturbs mail deliverability.
+    """
     with open(zone_file_path) as f:
         content = f.read()
-    lines = [line for line in content.splitlines() if "IN TXT" not in line]
+    lines = [line for line in content.splitlines() if not _is_acme_challenge_txt(line)]
     content = _bump_serial("\n".join(lines) + "\n")
     with open(zone_file_path, "w") as f:
         f.write(content)
-    logger.info(f"Cleared TXT records from {zone_file_path}")
+    logger.info(f"Cleared ACME-challenge TXT records from {zone_file_path}")

@@ -12,7 +12,7 @@ from compute_space.config import DefaultConfig
 from compute_space.core.dns import DnsZone
 from compute_space.core.dns import TxtRecord
 from compute_space.core.dns import append_txt_records
-from compute_space.core.dns import clear_txt
+from compute_space.core.dns import clear_acme_challenge_records
 from compute_space.core.dns import public_dns_zones
 from compute_space.core.dns import reload_coredns_for_domains
 from compute_space.core.dns import set_active_coredns
@@ -119,14 +119,35 @@ def test_append_txt_records_writes_absolute_fqdn_names_verbatim(tmp_path: Path) 
     assert "app.example.com.app.example.com" not in content
 
 
-def test_clear_txt_removes_records(tmp_path: Path) -> None:
+def test_clear_acme_challenge_records_removes_acme_txt(tmp_path: Path) -> None:
     zonefile = tmp_path / "zonefile"
     _write_zonefile(zonefile)
     append_txt_records(zonefile, [TxtRecord(record_name="_acme-challenge.app.example.com.", record_value="v")])
 
-    clear_txt(zonefile)
+    clear_acme_challenge_records(zonefile)
 
     assert "IN TXT" not in zonefile.read_text()
+
+
+def test_clear_acme_challenge_records_preserves_email_txt(tmp_path: Path) -> None:
+    # SPF (apex) and DMARC (_dmarc) TXT records must survive a cert renewal.
+    zonefile = tmp_path / "zonefile"
+    _write_zonefile(zonefile)
+    append_txt_records(
+        zonefile,
+        [
+            TxtRecord(record_name="_acme-challenge.app.example.com.", record_value="challenge"),
+            TxtRecord(record_name="@", record_value="v=spf1 include:amazonses.com -all"),
+            TxtRecord(record_name="_dmarc", record_value="v=DMARC1; p=quarantine"),
+        ],
+    )
+
+    clear_acme_challenge_records(zonefile)
+
+    text = zonefile.read_text()
+    assert "challenge" not in text  # ACME challenge removed
+    assert "v=spf1" in text  # SPF preserved
+    assert "v=DMARC1" in text  # DMARC preserved
 
 
 class _FakeProc:
