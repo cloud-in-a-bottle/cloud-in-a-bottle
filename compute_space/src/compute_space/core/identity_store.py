@@ -49,6 +49,20 @@ def get_instance_identity(db: sqlite3.Connection, config: Config) -> KeycloakCli
     return None
 
 
+def get_stored_instance_identity(db: sqlite3.Connection) -> KeycloakClientCredentials | None:
+    """The credential from the settings table only (no config fallback), or None.
+
+    Used by first-boot seeding to decide whether the table already holds a
+    credential, independent of any deprecated config fallback.
+    """
+    issuer = settings_store.get_setting(db, IMBUE_IDENTITY_ISSUER_URL_KEY)
+    client_id = settings_store.get_setting(db, IMBUE_IDENTITY_CLIENT_ID_KEY)
+    client_secret = settings_store.get_setting(db, IMBUE_IDENTITY_CLIENT_SECRET_KEY)
+    if issuer and client_id and client_secret:
+        return KeycloakClientCredentials(issuer_url=issuer, client_id=client_id, client_secret=client_secret)
+    return None
+
+
 def set_instance_identity(db: sqlite3.Connection, credential: KeycloakClientCredentials) -> None:
     """Store the shared per-instance credential in the settings table."""
     settings_store.set_setting(db, IMBUE_IDENTITY_ISSUER_URL_KEY, credential.issuer_url)
