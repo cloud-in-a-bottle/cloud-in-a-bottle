@@ -327,7 +327,7 @@ class TestSelfHost:
         """Create an API token and use it to access a protected endpoint."""
         r = session.post(
             f"{router_url}/api/tokens",
-            json={"name": "e2e-test-token", "expiry_hours": "1"},
+            json={"name": "e2e-test-token", "scopes": ["owner"], "expiry_hours": "1"},
             timeout=10,
         )
         assert r.status_code == 200
