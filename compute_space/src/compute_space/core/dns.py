@@ -329,6 +329,89 @@ def append_txt_records(zone_file_path: Path, records: list[TxtRecord]) -> None:
     logger.info(f"Appended {len(records)} TXT record(s)")
 
 
+@attr.s(auto_attribs=True, frozen=True)
+class DkimCname:
+    """One DKIM CNAME record SES requires the zone to publish.
+
+    ``name`` and ``target`` are absolute (SES returns fully-qualified names), so both
+    are written as FQDNs (trailing dot) into the zone file.
+    """
+
+    name: str
+    target: str
+
+
+def render_email_records(
+    domain: str,
+    *,
+    inbound_mail_host: str,
+    inbound_mail_ip: str,
+    dkim_cnames: list[DkimCname],
+    dmarc_rua: str | None = None,
+) -> str:
+    """Render the persistent email DNS records for ``domain`` as zone-file lines.
+
+    Produces SPF (apex TXT authorizing SES — outbound always relays via SES), a DMARC
+    policy (_dmarc TXT), the MX record, and the DKIM CNAMEs SES requires. Deterministic
+    given the inputs, so they can be re-applied idempotently on every boot.
+
+    Inbound is always direct to this instance: the MX points at the instance's own mail
+    host (``inbound_mail_host``, e.g. ``mail.<domain>``) and an A record is published for
+    that host -> the instance IP, so the instance's own mail server receives mail on port
+    25. Mail is never routed through OpenHost infrastructure inbound. Only outbound goes
+    through the central SES relay. ``domain`` is accepted for symmetry/logging; records
+    are keyed by ``@``/host relative to the zone $ORIGIN.
+    """
+    if not inbound_mail_host:
+        raise ValueError("inbound_mail_host is required")
+    if not inbound_mail_ip:
+        raise ValueError("inbound_mail_ip is required for the mail host A record")
+    lines: list[str] = ["; --- openhost email records (managed) ---"]
+    lines.append('@   IN TXT  "v=spf1 include:amazonses.com ~all"')
+    dmarc = "v=DMARC1; p=quarantine"
+    if dmarc_rua:
+        dmarc += f"; rua=mailto:{dmarc_rua}"
+    lines.append(f'_dmarc   IN TXT  "{dmarc}"')
+    host = inbound_mail_host.rstrip(".")
+    lines.append(f"@   IN MX   10 {host}.")
+    lines.append(f"{host}.   IN A   {inbound_mail_ip}")
+    for c in dkim_cnames:
+        lines.append(f"{c.name.rstrip('.')}.   IN CNAME  {c.target.rstrip('.')}.")
+    lines.append("; --- end openhost email records ---")
+    return "\n".join(lines) + "\n"
+
+
+def apply_email_records(
+    zone_file_path: Path,
+    domain: str,
+    *,
+    inbound_mail_host: str,
+    inbound_mail_ip: str,
+    dkim_cnames: list[DkimCname],
+    dmarc_rua: str | None = None,
+) -> None:
+    """Append the persistent email records to ``zone_file_path`` and bump the serial.
+
+    Called once after CoreDNS starts on each boot (the zone file is regenerated from
+    template there). Appending (rather than templating) keeps the DKIM tokens — only
+    known after the SES identity is created — out of the boot-time template.
+    """
+    block = render_email_records(
+        domain,
+        inbound_mail_host=inbound_mail_host,
+        inbound_mail_ip=inbound_mail_ip,
+        dkim_cnames=dkim_cnames,
+        dmarc_rua=dmarc_rua,
+    )
+    with open(zone_file_path) as f:
+        content = f.read()
+    content = _bump_serial(content)
+    content = content.rstrip("\n") + "\n" + block
+    with open(zone_file_path, "w") as f:
+        f.write(content)
+    logger.info(f"Applied {len(dkim_cnames)} DKIM CNAME(s) + SPF/DMARC/MX to {zone_file_path}")
+
+
 # ACME DNS-01 challenge TXT records are published at this owner name (relative to the
 # zone $ORIGIN, or as the absolute FQDN). clear_acme_challenge_records scopes its removal
 # to these so it never deletes persistent email TXT records (SPF at the apex, DMARC at
