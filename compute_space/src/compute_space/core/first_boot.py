@@ -119,20 +119,17 @@ def seed_first_boot(config: Config) -> None:
 def _seed_imbue_identity(db: sqlite3.Connection, fb: FirstBoot) -> None:
     """Seed the shared Imbue credential + connect URL from first_boot.toml, once.
 
-    Idempotent: only seeds when the settings table has no credential yet, so a
+    Each is seeded independently and only when absent from the settings table, so a
     later Connect-to-Imbue (which writes the same keys) is never clobbered by a
-    stale first_boot.toml left on disk. Requires all three credential parts.
+    stale first_boot.toml left on disk. The credential requires all three parts.
     """
-    if identity_store.get_stored_instance_identity(db) is not None:
-        return
-    if fb.imbue_identity_issuer_url and fb.imbue_identity_client_id and fb.imbue_identity_client_secret:
+    issuer = fb.imbue_identity_issuer_url
+    client_id = fb.imbue_identity_client_id
+    client_secret = fb.imbue_identity_client_secret
+    if issuer and client_id and client_secret and identity_store.get_stored_instance_identity(db) is None:
         identity_store.set_instance_identity(
             db,
-            KeycloakClientCredentials(
-                issuer_url=fb.imbue_identity_issuer_url,
-                client_id=fb.imbue_identity_client_id,
-                client_secret=fb.imbue_identity_client_secret,
-            ),
+            KeycloakClientCredentials(issuer_url=issuer, client_id=client_id, client_secret=client_secret),
         )
         logger.info("Seeded Imbue identity into the settings store")
     if fb.imbue_connect_base_url and settings_store.get_setting(db, identity_store.IMBUE_CONNECT_BASE_URL_KEY) is None:
