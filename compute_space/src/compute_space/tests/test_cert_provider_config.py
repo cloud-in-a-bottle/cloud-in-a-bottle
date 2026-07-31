@@ -99,20 +99,31 @@ def test_complete_cert_api_config_is_valid() -> None:
     assert cfg.cert_provider == CERT_PROVIDER_CERT_API
 
 
+def test_cert_api_provider_requires_base_url() -> None:
+    # Only the broker URL is validated at construction; the per-instance credential
+    # now lives in the DB settings table (the shared Imbue identity), so it can't be
+    # checked here and is verified at cert-acquisition time.
+    kwargs = _full_cert_api_kwargs()
+    kwargs["cert_api_base_url"] = None  # type: ignore[assignment]
+    with pytest.raises(ValueError, match="cert_api_base_url must be set"):
+        DefaultConfig(**kwargs)
+
+
 @pytest.mark.parametrize(
     "missing_field",
     [
-        "cert_api_base_url",
         "cert_api_keycloak_issuer_url",
         "cert_api_keycloak_client_id",
         "cert_api_keycloak_client_secret",
     ],
 )
-def test_cert_api_provider_requires_all_settings(missing_field: str) -> None:
+def test_cert_api_provider_no_longer_requires_keycloak_at_construction(missing_field: str) -> None:
+    # The cert_api_keycloak_* fields are a deprecated fallback; their absence is not
+    # a construction error (the credential can come from the settings table instead).
     kwargs = _full_cert_api_kwargs()
     kwargs[missing_field] = None  # type: ignore[assignment]
-    with pytest.raises(ValueError, match=f"{missing_field} must be set"):
-        DefaultConfig(**kwargs)
+    cfg = DefaultConfig(**kwargs)
+    assert cfg.cert_provider == CERT_PROVIDER_CERT_API
 
 
 def test_acme_provider_ignores_cert_api_settings() -> None:

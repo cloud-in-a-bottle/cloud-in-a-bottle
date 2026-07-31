@@ -6,10 +6,10 @@ from compute_space.config import CERT_PROVIDER_ACME
 from compute_space.config import Config
 from compute_space.core.domains import is_primary_domain
 from compute_space.core.domains import primary_domain
+from compute_space.core.identity_store import get_instance_identity
 from compute_space.core.tls.acquire_cert import acquire_tls_cert
 from compute_space.core.tls.acquire_cert_broker import acquire_tls_cert_via_broker
 from compute_space.core.tls.cert_api_client import CertApiClient
-from compute_space.core.tls.keycloak import KeycloakClientCredentials
 from compute_space.core.tls.keycloak import KeycloakTokenProvider
 
 
@@ -44,17 +44,13 @@ def acquire_cert_for_domain(
             )
         )
     else:
-        # cert_provider is guaranteed to be CERT_PROVIDER_CERT_API with all of
-        # the cert_api settings populated (validated in Config.__attrs_post_init__).
+        # cert_provider is guaranteed to be CERT_PROVIDER_CERT_API with the broker
+        # URL set (validated in Config.__attrs_post_init__). The credential is the
+        # shared per-instance Imbue identity, read live from the settings table
+        # (falling back to the deprecated cert_api_keycloak_* config fields).
         assert config.cert_api_base_url is not None
-        assert config.cert_api_keycloak_issuer_url is not None
-        assert config.cert_api_keycloak_client_id is not None
-        assert config.cert_api_keycloak_client_secret is not None
-        credentials = KeycloakClientCredentials(
-            issuer_url=config.cert_api_keycloak_issuer_url,
-            client_id=config.cert_api_keycloak_client_id,
-            client_secret=config.cert_api_keycloak_client_secret,
-        )
+        credentials = get_instance_identity(db, config)
+        assert credentials is not None
         # The token provider fetches a bearer from Keycloak (client-credentials) and
         # refreshes it transparently across the broker's finalize-poll loop.
         with KeycloakTokenProvider.create(credentials) as token_provider:

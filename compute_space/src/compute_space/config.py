@@ -105,16 +105,13 @@ class Config:
                 f"{CERT_PROVIDER_ACME!r} or {CERT_PROVIDER_CERT_API!r})"
             )
         if self.cert_provider == CERT_PROVIDER_CERT_API:
-            # The cert_api broker path needs the broker URL plus the per-instance
-            # Keycloak client-credentials; none have a usable default.
-            for name in (
-                "cert_api_base_url",
-                "cert_api_keycloak_issuer_url",
-                "cert_api_keycloak_client_id",
-                "cert_api_keycloak_client_secret",
-            ):
-                if not getattr(self, name):
-                    raise ValueError(f"{name} must be set in config to use the cert_api provider")
+            # The cert_api broker path needs the broker URL. The per-instance
+            # credential lives in the DB settings table (the shared Imbue identity),
+            # so it can't be validated here at construction time; its presence is
+            # checked at cert-acquisition time. The cert_api_keycloak_* config fields
+            # are a deprecated fallback for already-deployed instances.
+            if not self.cert_api_base_url:
+                raise ValueError("cert_api_base_url must be set in config to use the cert_api provider")
 
     def evolve(self, **kwargs: Any) -> Self:
         return attr.evolve(self, **kwargs)

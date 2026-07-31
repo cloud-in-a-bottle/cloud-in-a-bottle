@@ -26,13 +26,16 @@ apps_dir_override = "/home/host/openhost/apps"
 # bring-your-own ACME account key above (which is then ignored).  The broker
 # holds the ACME account, so this instance never sees ACME credentials.
 # cert_api_base_url defaults to the canonical broker; only set it to override.
-# Auth is Keycloak client-credentials: this instance's confidential client in
-# the openhost-customers realm.  client_secret is the only sensitive value.
+# Auth resolves from the shared Imbue credential (seeded via first_boot.toml into
+# the DB settings table); the deprecated cert_api_keycloak_* override below is
+# rendered only when explicitly provided (already-deployed instances).
 cert_provider = "cert_api"
 {% if cert_api_base_url is defined %}
 cert_api_base_url = "{{ cert_api_base_url }}"
 {% endif %}
+{% if cert_api_keycloak_issuer_url is defined and cert_api_keycloak_issuer_url %}
 cert_api_keycloak_issuer_url = "{{ cert_api_keycloak_issuer_url }}"
 cert_api_keycloak_client_id = "{{ cert_api_keycloak_client_id }}"
 cert_api_keycloak_client_secret = "{{ cert_api_keycloak_client_secret }}"
+{% endif %}
 {% endif %}
