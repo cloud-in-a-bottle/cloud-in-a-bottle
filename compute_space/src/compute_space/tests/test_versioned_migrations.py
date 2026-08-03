@@ -503,8 +503,6 @@ def _scan_migration_for_unsafe_ops(migration: Migration) -> list[str]:
     (the PRAGMA is a no-op inside a tx, which tends to silently defeat
     the author's intent). Extend as we encounter more gotchas.
     """
-    if migration.allow_pragma_foreign_keys:
-        return []
     findings: list[str] = []
     if isinstance(migration, SqlFileMigration):
         sql_path = Path(inspect.getfile(migration.__class__)).resolve().parent / migration.sql_file
@@ -519,6 +517,8 @@ def _scan_migration_for_unsafe_ops(migration: Migration) -> list[str]:
         findings.append(
             f"{type(migration).__module__}.{type(migration).__name__}: PRAGMA foreign_keys inside Python migration"
         )
+    if migration.allow_pragma_foreign_keys:
+        findings = [f for f in findings if "PRAGMA foreign_keys" not in f]
     return findings
 
 
