@@ -39,6 +39,7 @@ from compute_space.core.domains import remove_record
 from compute_space.core.domains import set_record_status
 from compute_space.core.domains import upsert_record
 from compute_space.core.logging import logger
+from compute_space.core.mdns import reload_mdns_for_domains
 from compute_space.core.tls.domain_certs import ensure_cert_for
 from compute_space.core.tls.renewal import CertStatus
 from compute_space.core.tls.renewal import get_cert_status
@@ -196,7 +197,11 @@ async def add_domain(
             cert_status=DomainCertStatus.ACQUIRING if data.tls else DomainCertStatus.ACTIVE,
         ),
     )
-    if not data.mdns:
+    if data.mdns:
+        # Update the running responder so it answers the new `.local` domain immediately (in-process,
+        # no restart).  CoreDNS is untouched — mDNS domains never get a public zone.
+        reload_mdns_for_domains(db)
+    else:
         # Make CoreDNS authoritative for the new public zone *before* acquisition: DNS-01 writes the
         # _acme-challenge TXT into this domain's zone file, which only resolves once CoreDNS serves
         # the zone.  Run off the event loop — the restart does a blocking terminate+wait(3s) — but
@@ -225,7 +230,10 @@ async def remove_domain(
     removed = get_record(db, name)
     if not remove_record(db, name):
         return Response(ErrorResponse(error="domain not found"), status_code=404)
-    if removed is not None and not removed.mdns:
+    if removed is not None and removed.mdns:
+        # Drop the `.local` domain from the running responder so it stops answering for it.
+        reload_mdns_for_domains(db)
+    elif removed is not None:
         # Drop the zone from CoreDNS so it stops answering for the removed public domain.  Off the
         # event loop — the restart blocks on a terminate+wait(3s).
         await anyio.to_thread.run_sync(reload_coredns_for_domains, config, db)

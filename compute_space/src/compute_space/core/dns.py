@@ -32,6 +32,7 @@ from compute_space.core.containers import CONTAINER_GATEWAY_IP
 from compute_space.core.domains import effective_domains
 from compute_space.core.domains import primary_domain_or_none
 from compute_space.core.logging import logger
+from compute_space.core.util import default_route_source_ip
 
 _TEMPLATES_DIR = Path(__file__).parent / "templates"
 # StrictUndefined so a template referencing a variable/attribute we forgot to pass raises instead
@@ -93,12 +94,7 @@ def _coredns_bind_ip(public_ip: str) -> str:
     NATed to a private VM address. The default-route source address is the local
     interface address that receives that NATed traffic.
     """
-    try:
-        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
-            sock.connect(("8.8.8.8", 80))
-            return str(sock.getsockname()[0])
-    except OSError:
-        return public_ip
+    return default_route_source_ip() or public_ip
 
 
 @attr.s(auto_attribs=True, frozen=True)

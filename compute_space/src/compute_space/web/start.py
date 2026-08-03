@@ -33,6 +33,9 @@ from compute_space.core.first_boot import owner_exists
 from compute_space.core.first_boot import seed_first_boot
 from compute_space.core.logging import logger
 from compute_space.core.logging import setup_file_logging
+from compute_space.core.mdns import MdnsResponder
+from compute_space.core.mdns import set_active_mdns
+from compute_space.core.mdns import start_mdns
 from compute_space.core.pinned_binary import get_pinned_binary
 from compute_space.core.pinned_binary import install_pinned_binary
 from compute_space.core.terminal import cleanup_all as cleanup_terminal_sessions
@@ -42,6 +45,7 @@ from compute_space.core.tls.renewal import get_cert_status
 from compute_space.core.tls.renewal import start_renewal_thread
 from compute_space.core.updates import RESTART_EXIT_CODE
 from compute_space.core.updates import initialize_shutdown_event
+from compute_space.core.util import default_route_source_ip
 from compute_space.db import get_db
 from compute_space.db import init_db
 from compute_space.web.app import create_app
@@ -136,6 +140,7 @@ def main() -> None:
     children: list[subprocess.Popen[bytes]] = []
     coredns: CoreDnsProcess | None = None
     caddy: CaddyProcess | None = None
+    mdns: MdnsResponder | None = None
     # One connection for the whole domain-dependent startup sequence (CoreDNS -> TLS cert -> Caddy);
     # the primary + cert/zone paths are read live from it.
     with closing(get_db()) as db:
@@ -156,6 +161,17 @@ def main() -> None:
             )
             # Register so /api/domains can regenerate zones + restart CoreDNS when a domain is added.
             set_active_coredns(coredns)
+
+        # Wildcard mDNS responder for any `.local` domain (resolves openhost.local + *.openhost.local
+        # on the LAN in place of public DNS).  Needs the LAN IP to advertise; skip if undiscoverable.
+        mdns_bases = tuple(d.name_no_port for d in domains if d.mdns)
+        if mdns_bases:
+            lan_ip = default_route_source_ip()
+            if lan_ip is None:
+                logger.warning("mDNS domain configured but no LAN IP found; not starting responder")
+            else:
+                mdns = start_mdns(mdns_bases, lan_ip)
+                set_active_mdns(mdns)
 
         if domains[0].tls:  # primary is a TLS domain
             _ensure_tls_cert(config, db)
@@ -216,6 +232,8 @@ def main() -> None:
         setup_completed = asyncio.run(_serve(create_setup_app(config), hypercorn_config))
         if not setup_completed:
             logger.info("Setup interrupted by signal; exiting")
+            if mdns is not None:
+                mdns.stop()
             _terminate_children(_all_children())
             time.sleep(0.1)
             os._exit(0)
@@ -226,6 +244,8 @@ def main() -> None:
     restart_requested = asyncio.run(_serve(app, hypercorn_config))
     logger.info(f"hypercorn serve returned, restart_requested={restart_requested}")
 
+    if mdns is not None:
+        mdns.stop()
     _terminate_children(_all_children())
 
     if restart_requested:

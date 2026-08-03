@@ -3,12 +3,24 @@ from __future__ import annotations
 import asyncio
 import functools
 import os
+import socket
 from collections.abc import Callable
 from collections.abc import Coroutine
 from pathlib import Path
 from typing import Any
 
 import attr
+
+
+def default_route_source_ip() -> str | None:
+    """The local address on the default-route interface — what a LAN/WAN peer reaches us at — or
+    None if it can't be determined.  The UDP connect assigns the source address without sending."""
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            sock.connect(("8.8.8.8", 80))
+            return str(sock.getsockname()[0])
+    except OSError:
+        return None
 
 
 def write_restricted(path: Path, content: str) -> None:
