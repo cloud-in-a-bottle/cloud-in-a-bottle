@@ -1,14 +1,15 @@
 BEGIN TRANSACTION;
 CREATE TABLE "api_tokens" (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    token_id TEXT NOT NULL UNIQUE,
     name TEXT NOT NULL,
     token_hash TEXT NOT NULL UNIQUE,
     expires_at TEXT NOT NULL,
     scopes TEXT NOT NULL,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
-INSERT INTO "api_tokens" VALUES(1,'ci-deploy','api-hash-ci','2099-01-01T00:00:00','["owner"]','2024-01-01T00:00:00');
-INSERT INTO "api_tokens" VALUES(2,'monitoring','api-hash-mon','2099-12-31T00:00:00','["owner"]','2024-03-01T00:00:00');
+INSERT INTO "api_tokens" VALUES(1,'tok_00000000000000000000000000000001','ci-deploy','api-hash-ci','2099-01-01T00:00:00','["owner"]','2024-01-01T00:00:00');
+INSERT INTO "api_tokens" VALUES(2,'tok_00000000000000000000000000000002','monitoring','api-hash-mon','2099-12-31T00:00:00','["owner"]','2024-03-01T00:00:00');
 CREATE TABLE "app_databases" (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 app_id TEXT NOT NULL,

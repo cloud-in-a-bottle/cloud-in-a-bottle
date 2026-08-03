@@ -70,9 +70,11 @@ class AuthenticatedUser(AuthenticatedAccessor):
 
 @attr.s(auto_attribs=True, frozen=True)
 class AuthenticatedAPIKey(AuthenticatedAccessor):
-    # Stable identity of the token, so handlers can attribute actions to it
-    # (e.g. stamp apps.installed_by on token-initiated deploys, or audit-log).
-    token_id: int
+    # Stable opaque identity of the token (the ``api_tokens.token_id`` string,
+    # e.g. "tok_ab12…"), so handlers can attribute actions to it — e.g. stamp
+    # apps.installed_by on token-initiated deploys, or audit-log.  This is a
+    # random string, not the numeric row id, mirroring apps.app_id vs apps.id.
+    token_id: str
     name: str
     # The scopes granted to this token (parsed from api_tokens.scopes).
     # `require_scope` checks membership; the special `owner` scope grants all.
@@ -84,6 +86,15 @@ class AuthenticatedApp(AuthenticatedAccessor):
     app_id: str
 
 
+# Prefix for the opaque ``api_tokens.token_id`` identity string.
+API_TOKEN_ID_PREFIX = "tok_"
+
+
+def new_token_id() -> str:
+    """Mint a fresh opaque token identity, e.g. ``tok_ab12…`` (128 bits)."""
+    return f"{API_TOKEN_ID_PREFIX}{secrets.token_hex(16)}"
+
+
 # Namespace prefix for ``apps.installed_by`` when a deploy is initiated by an
 # API token (a consumer app stores its app name there instead).  Kept in its
 # own namespace so a future "manage only the apps this token deployed"
@@ -91,7 +102,7 @@ class AuthenticatedApp(AuthenticatedAccessor):
 API_TOKEN_INSTALLED_BY_PREFIX = "apitoken:"
 
 
-def api_token_installed_by(token_id: int) -> str:
+def api_token_installed_by(token_id: str) -> str:
     """The ``apps.installed_by`` value stamped for a token-initiated deploy."""
     return f"{API_TOKEN_INSTALLED_BY_PREFIX}{token_id}"
 
@@ -141,7 +152,7 @@ def validate_api_token(token: str, db: sqlite3.Connection) -> AuthenticatedAPIKe
     token_hash = _hash(token)
 
     if row := db.execute(
-        "SELECT id, name, expires_at, scopes FROM api_tokens WHERE token_hash = ?",
+        "SELECT token_id, name, expires_at, scopes FROM api_tokens WHERE token_hash = ?",
         (token_hash,),
     ).fetchone():
         # NULL / empty expires_at means "never expires" — created via the
@@ -149,7 +160,7 @@ def validate_api_token(token: str, db: sqlite3.Connection) -> AuthenticatedAPIKe
         # compared.
         expires_at = row["expires_at"]
         accessor = AuthenticatedAPIKey(
-            token_id=row["id"],
+            token_id=row["token_id"],
             name=row["name"],
             scopes=parse_scopes(row["scopes"]),
         )

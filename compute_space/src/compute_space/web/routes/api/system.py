@@ -18,6 +18,8 @@ from litestar import post
 
 from compute_space import OPENHOST_PROJECT_DIR
 from compute_space.config import Config
+from compute_space.core.auth.auth import new_token_id
+from compute_space.core.auth.scopes import SCOPE_CATALOG
 from compute_space.core.auth.scopes import SYSTEM_ADMIN
 from compute_space.core.auth.scopes import SYSTEM_READ
 from compute_space.core.auth.scopes import TOKENS_MANAGE
@@ -49,12 +51,24 @@ DEFAULT_TOKEN_EXPIRY_HOURS: float = 8.0
 
 @attr.s(auto_attribs=True, frozen=True)
 class ApiToken:
-    id: int
+    # token_id is the opaque public identity ("tok_…") used for delete/patch,
+    # not the internal autoincrement row id (which is never exposed).
+    token_id: str
     name: str
     expires_at: str | None
     created_at: str
     expired: bool
     scopes: list[str]
+
+
+@attr.s(auto_attribs=True, frozen=True)
+class ScopeInfo:
+    """One entry of the scope catalog, surfaced by ``GET /api/token_scopes`` so
+    the CLI and web UI render scope choices from a single server-side source."""
+
+    name: str
+    description: str
+    owner_equivalent: bool
 
 
 @attr.s(auto_attribs=True, frozen=True)
@@ -82,6 +96,7 @@ class UpdateTokenRequest:
 @attr.s(auto_attribs=True, frozen=True)
 class CreatedToken:
     token: str
+    token_id: str
     name: str
     expires_at: str | None
     scopes: list[str]
@@ -150,10 +165,19 @@ class VersionInfo:
 # ─── API Tokens ────────────────────────────────────────────────────────────
 
 
+@get("/api/token_scopes", guards=[require_scope(TOKENS_MANAGE)])
+async def api_token_scopes(db: sqlite3.Connection) -> list[ScopeInfo]:
+    """The scope catalog, so the CLI and web UI render choices from one source."""
+    return [
+        ScopeInfo(name=s.name, description=s.description, owner_equivalent=s.owner_equivalent)
+        for s in SCOPE_CATALOG
+    ]
+
+
 @get("/api/tokens", guards=[require_scope(TOKENS_MANAGE)])
 async def api_tokens_list(db: sqlite3.Connection) -> list[ApiToken]:
     rows = db.execute(
-        "SELECT id, name, expires_at, created_at, scopes FROM api_tokens ORDER BY created_at DESC"
+        "SELECT token_id, name, expires_at, created_at, scopes FROM api_tokens ORDER BY created_at DESC"
     ).fetchall()
     now = datetime.now(UTC)
     tokens: list[ApiToken] = []
@@ -162,7 +186,7 @@ async def api_tokens_list(db: sqlite3.Connection) -> list[ApiToken]:
         expired = has_expiry and datetime.fromisoformat(r["expires_at"]) < now
         tokens.append(
             ApiToken(
-                id=r["id"],
+                token_id=r["token_id"],
                 name=r["name"],
                 expires_at=r["expires_at"] or None,
                 created_at=r["created_at"],
@@ -199,17 +223,19 @@ async def api_tokens_create(
 
     raw_token = secrets.token_urlsafe(32)
     token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
+    token_id = new_token_id()
     scopes_json = dump_scopes(requested_scopes)
 
     db.execute(
-        "INSERT INTO api_tokens (name, token_hash, expires_at, scopes) VALUES (?, ?, ?, ?)",
-        (name, token_hash, expires_at.isoformat() if expires_at else "", scopes_json),
+        "INSERT INTO api_tokens (token_id, name, token_hash, expires_at, scopes) VALUES (?, ?, ?, ?, ?)",
+        (token_id, name, token_hash, expires_at.isoformat() if expires_at else "", scopes_json),
     )
     db.commit()
 
     return Response(
         content=CreatedToken(
             token=raw_token,
+            token_id=token_id,
             name=name,
             expires_at=expires_at.isoformat() if expires_at else None,
             scopes=sorted(parse_scopes(scopes_json)),
@@ -219,15 +245,15 @@ async def api_tokens_create(
     )
 
 
-@patch("/api/tokens/{token_id:int}", status_code=200, guards=[require_scope(TOKENS_MANAGE)])
+@patch("/api/tokens/{token_id:str}", status_code=200, guards=[require_scope(TOKENS_MANAGE)])
 async def api_tokens_update(
-    token_id: int, data: UpdateTokenRequest, db: sqlite3.Connection
+    token_id: str, data: UpdateTokenRequest, db: sqlite3.Connection
 ) -> Response[OkResponse] | Response[ErrorResponse]:
     """Replace a token's scopes in place (the "update later" capability)."""
     if error := validate_requested_scopes(data.scopes):
         return Response(content=ErrorResponse(error=error), status_code=400)
     cursor = db.execute(
-        "UPDATE api_tokens SET scopes = ? WHERE id = ?",
+        "UPDATE api_tokens SET scopes = ? WHERE token_id = ?",
         (dump_scopes(data.scopes), token_id),
     )
     db.commit()
@@ -236,9 +262,9 @@ async def api_tokens_update(
     return Response(content=OkResponse(ok=True), status_code=200, media_type=MediaType.JSON)
 
 
-@delete("/api/tokens/{token_id:int}", guards=[require_scope(TOKENS_MANAGE)])
-async def api_tokens_delete(token_id: int, db: sqlite3.Connection) -> None:
-    db.execute("DELETE FROM api_tokens WHERE id = ?", (token_id,))
+@delete("/api/tokens/{token_id:str}", guards=[require_scope(TOKENS_MANAGE)])
+async def api_tokens_delete(token_id: str, db: sqlite3.Connection) -> None:
+    db.execute("DELETE FROM api_tokens WHERE token_id = ?", (token_id,))
     db.commit()
 
 
@@ -404,6 +430,7 @@ def restart_router() -> OkResponse:
 system_routes = Router(
     path="/",
     route_handlers=[
+        api_token_scopes,
         api_tokens_list,
         api_tokens_create,
         api_tokens_update,

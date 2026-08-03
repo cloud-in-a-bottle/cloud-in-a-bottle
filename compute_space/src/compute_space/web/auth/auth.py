@@ -183,8 +183,11 @@ def provide_accessor(request: Request[Any, Any, Any]) -> AuthenticatedAccessor |
     unauthenticated (the guard, not this dependency, is what enforces auth).
 
     The parameter is named ``request`` because that is Litestar's reserved
-    injection key for the connection; a ``Request`` is an ``ASGIConnection``, so
-    it satisfies ``authenticate()``.
+    injection key for the HTTP connection (there is no generic "connection"
+    key). ``Request`` is a subclass of ``ASGIConnection``, so it satisfies
+    ``authenticate()``. ``Request`` is generic over ``[User, Auth, State]``;
+    we constrain none of them, hence ``Request[Any, Any, Any]`` — matching the
+    house style used elsewhere in this module (e.g. ``login_required_redirect``).
 
     Wire it per-route via ``dependencies={"accessor": Provide(provide_accessor, sync_to_thread=False)}``.
     """

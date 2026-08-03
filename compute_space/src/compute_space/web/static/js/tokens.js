@@ -1,33 +1,29 @@
 // ─── API Tokens ───
 
 var TOKENS_URL = '/api/tokens';
+var SCOPES_URL = '/api/token_scopes';
 
-// Scope vocabulary, mirroring compute_space/core/auth/scopes.py. `ownerEquiv`
-// marks privilege-escalation scopes that trigger the warning. The server is the
-// source of truth and re-validates; this list only drives the UI.
-var SCOPES = [
-  {name: 'owner', desc: 'Full access (all scopes)', ownerEquiv: true},
-  {name: 'apps:read', desc: 'List apps, status, diagnostics', ownerEquiv: false},
-  {name: 'apps:logs', desc: 'Read app logs (may contain user data)', ownerEquiv: false},
-  {name: 'apps:manage', desc: 'Deploy, reload, stop, start, rename apps', ownerEquiv: false},
-  {name: 'apps:delete', desc: 'Remove apps', ownerEquiv: false},
-  {name: 'system:read', desc: 'Version, ports, storage/ssh status, logs', ownerEquiv: false},
-  {name: 'settings:read', desc: 'Read settings, owner username, remote', ownerEquiv: false},
-  {name: 'system:admin', desc: 'Toggle SSH, restart router, drop cache', ownerEquiv: true},
-  {name: 'settings:write', desc: 'Update settings, change owner password', ownerEquiv: true},
-  {name: 'storage:admin', desc: 'Configure archive backend / S3 creds', ownerEquiv: true},
-  {name: 'tokens:manage', desc: 'Create/list/delete API tokens', ownerEquiv: true},
-  {name: 'permissions:manage', desc: 'Grant/revoke app service permissions (all secrets)', ownerEquiv: true},
-  {name: 'identity:approve', desc: 'Sign federated identity tokens as owner', ownerEquiv: true},
-];
+// Scope catalog, fetched from the server (single source of truth in
+// core/auth/scopes.py) so this UI can't drift out of sync with the vocabulary.
+// Each entry: {name, description, owner_equivalent}.
+var SCOPES = [];
+
+function loadScopeCatalog() {
+  return fetch(SCOPES_URL, {credentials: 'same-origin'})
+    .then(function(r) { return r.json(); })
+    .then(function(scopes) {
+      SCOPES = scopes;
+      renderScopeCheckboxes();
+    });
+}
 
 function renderScopeCheckboxes() {
   var container = document.getElementById('token-scopes');
   container.innerHTML = SCOPES.map(function(s) {
-    var warn = s.ownerEquiv ? ' <span style="color:#8a4b00;">(owner-equivalent)</span>' : '';
+    var warn = s.owner_equivalent ? ' <span style="color:#8a4b00;">(owner-equivalent)</span>' : '';
     return '<label style="display:block; margin: 0.15em 0;">'
       + '<input type="checkbox" class="token-scope" value="' + s.name + '" onchange="onScopeChange()"> '
-      + '<code>' + s.name + '</code> — ' + s.desc + warn + '</label>';
+      + '<code>' + s.name + '</code> — ' + s.description + warn + '</label>';
   }).join('');
 }
 
@@ -38,6 +34,10 @@ function selectedScopes() {
     if (boxes[i].checked) out.push(boxes[i].value);
   }
   return out;
+}
+
+function _scopeMeta(name) {
+  return SCOPES.filter(function(s) { return s.name === name; })[0];
 }
 
 // Checking `owner` means "everything", so disable the rest to avoid confusion.
@@ -51,12 +51,12 @@ function onScopeChange() {
   }
   var anyOwnerEquiv = false;
   for (var j = 0; j < boxes.length; j++) {
-    var meta = SCOPES.filter(function(s) { return s.name === boxes[j].value; })[0];
+    var meta = _scopeMeta(boxes[j].value);
     if (boxes[j].value !== 'owner') {
       boxes[j].disabled = ownerChecked;
       if (ownerChecked) boxes[j].checked = false;
     }
-    if (boxes[j].checked && meta && meta.ownerEquiv) anyOwnerEquiv = true;
+    if (boxes[j].checked && meta && meta.owner_equivalent) anyOwnerEquiv = true;
   }
   document.getElementById('token-scope-warning').style.display = anyOwnerEquiv ? '' : 'none';
 }
@@ -78,7 +78,7 @@ function loadTokens() {
           + '<td>' + scopes + '</td>'
           + '<td>' + t.created_at + '</td>'
           + '<td' + (t.expired ? ' style="color:#c00;"' : '') + '>' + expiresDisplay + '</td>'
-          + '<td><button class="btn btn-danger" onclick="deleteToken(' + t.id + ')">Delete</button></td></tr>';
+          + '<td><button class="btn btn-danger" onclick="deleteToken(\'' + t.token_id + '\')">Delete</button></td></tr>';
       }).join('');
     });
 }
@@ -111,12 +111,12 @@ function createToken() {
     });
 }
 
-function deleteToken(id) {
+function deleteToken(tokenId) {
   if (!confirm('Delete this token? Any agents using it will lose access.')) return;
-  fetch(TOKENS_URL + '/' + id, {method: 'DELETE', credentials: 'same-origin'})
+  fetch(TOKENS_URL + '/' + encodeURIComponent(tokenId), {method: 'DELETE', credentials: 'same-origin'})
     .then(function() { loadTokens(); });
 }
 
-renderScopeCheckboxes();
+loadScopeCatalog();
 loadTokens();
 document.getElementById('token-name').value = 'token-' + Math.random().toString(36).slice(2, 8);

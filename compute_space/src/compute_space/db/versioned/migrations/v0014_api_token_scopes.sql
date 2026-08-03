@@ -1,5 +1,16 @@
--- v14: add api_tokens.scopes — a JSON array of scope strings that restricts
--- what a bearer token may do against the owner control plane.
+-- v14: add api_tokens.scopes (per-token permissions) and api_tokens.token_id
+-- (an opaque string identity, mirroring apps.app_id vs apps.id).
+--
+-- token_id is the stable handle used to attribute actions to a token
+-- (apps.installed_by, audit) and as the public REST id, instead of the
+-- enumerable autoincrement row id.  New tokens get a random 'tok_<hex>' from
+-- new_token_id(); existing rows are backfilled deterministically from their row
+-- id ('tok_' || the id as 32-hex) so the value is stable and unique without a
+-- random source (which would also make migration snapshots non-reproducible).
+-- Enumerable legacy ids are harmless: token_id is only an identifier, never a
+-- credential — you still need the bearer secret to authenticate.
+--
+-- --- scopes ---
 --
 -- Previously every API token was root-equivalent (any valid token passed
 -- require_owner_auth).  Scopes let a token be granted only a subset of
@@ -24,6 +35,7 @@
 
 CREATE TABLE api_tokens_v14 (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    token_id TEXT NOT NULL UNIQUE,
     name TEXT NOT NULL,
     token_hash TEXT NOT NULL UNIQUE,
     expires_at TEXT NOT NULL,
@@ -31,8 +43,9 @@ CREATE TABLE api_tokens_v14 (
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
-INSERT INTO api_tokens_v14 (id, name, token_hash, expires_at, scopes, created_at)
-SELECT id, name, token_hash, expires_at, '["owner"]', created_at FROM api_tokens;
+INSERT INTO api_tokens_v14 (id, token_id, name, token_hash, expires_at, scopes, created_at)
+SELECT id, 'tok_' || printf('%032x', id), name, token_hash, expires_at, '["owner"]', created_at
+FROM api_tokens;
 
 DROP TABLE api_tokens;
 ALTER TABLE api_tokens_v14 RENAME TO api_tokens;

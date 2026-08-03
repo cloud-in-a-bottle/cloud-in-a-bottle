@@ -402,7 +402,7 @@ class TestRouterCore:
         assert any(t["name"] == "test-token" for t in tokens)
 
         # Delete the token
-        token_id = next(t["id"] for t in tokens if t["name"] == "test-token")
+        token_id = next(t["token_id"] for t in tokens if t["name"] == "test-token")
         r = admin_session.delete(f"{base}/api/tokens/{token_id}")
         assert r.status_code == 204
 
@@ -432,7 +432,7 @@ class TestRouterCore:
 
         # Clean up
         tokens = admin_session.get(f"{base}/api/tokens").json()
-        token_id = next(t["id"] for t in tokens if t["name"] == "no-expiry")
+        token_id = next(t["token_id"] for t in tokens if t["name"] == "no-expiry")
         admin_session.delete(f"{base}/api/tokens/{token_id}")
 
     def test_api_token_invalid_rejected(self, router_process, config):

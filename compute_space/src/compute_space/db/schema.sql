@@ -65,16 +65,21 @@ CREATE TABLE IF NOT EXISTS sessions (
 CREATE INDEX IF NOT EXISTS sessions_user_id_idx ON sessions(user_id);
 
 
--- API tokens: long-lived bearer tokens.  ``scopes`` is a JSON array of scope
--- strings restricting what the token may do against the owner control plane;
--- the special scope 'owner' means "all scopes" (full access).  See
--- core/auth/scopes.py and docs/api_token_scopes_ai_generated.md.
+-- API tokens: long-lived bearer tokens.
 --
--- ``scopes`` is NOT NULL with NO default on purpose: a default would be a
--- silent privilege hole (an INSERT that omits scopes would mint a full-access
--- token).  Every write path must set scopes explicitly.
+-- ``token_id`` is an opaque string identity ("tok_<hex>") used as the public
+-- REST id and to attribute actions to a token (apps.installed_by, audit),
+-- mirroring apps.app_id vs apps.id — not the enumerable autoincrement row id.
+--
+-- ``scopes`` is a JSON array of scope strings restricting what the token may do
+-- against the owner control plane; the special scope 'owner' means "all scopes"
+-- (full access).  See core/auth/scopes.py and
+-- docs/api_token_scopes_ai_generated.md.  It is NOT NULL with NO default on
+-- purpose: a default would be a silent privilege hole (an INSERT that omits
+-- scopes would mint a full-access token).  Every write path sets it explicitly.
 CREATE TABLE IF NOT EXISTS api_tokens (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    token_id TEXT NOT NULL UNIQUE,
     name TEXT NOT NULL,
     token_hash TEXT NOT NULL UNIQUE,
     expires_at TEXT NOT NULL,

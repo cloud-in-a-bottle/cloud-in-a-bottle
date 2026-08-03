@@ -369,7 +369,7 @@ class TestSelfHost:
         tokens = r.json()
         matching = [t for t in tokens if t["name"] == "e2e-test-token"]
         assert matching, f"Token not found in list: {tokens}"
-        token_id = matching[0]["id"]
+        token_id = matching[0]["token_id"]
 
         # Delete it
         r = session.delete(f"{router_url}/api/tokens/{token_id}", timeout=10)

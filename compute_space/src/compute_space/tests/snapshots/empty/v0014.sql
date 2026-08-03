@@ -1,6 +1,7 @@
 BEGIN TRANSACTION;
 CREATE TABLE "api_tokens" (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    token_id TEXT NOT NULL UNIQUE,
     name TEXT NOT NULL,
     token_hash TEXT NOT NULL UNIQUE,
     expires_at TEXT NOT NULL,

@@ -24,6 +24,7 @@ from compute_space.core.auth.scopes import TOKENS_MANAGE
 from compute_space.db.connection import init_db
 from compute_space.db.versioned import apply_migrations
 from compute_space.web.routes.api.apps import api_apps
+from compute_space.web.routes.api.system import api_token_scopes
 from compute_space.web.routes.api.system import api_tokens_list
 
 from ._litestar_helpers import auth_cookie
@@ -40,8 +41,8 @@ def _seed_token(db_path: str, name: str, scopes_json: str, raw: str = "raw-secre
     conn = sqlite3.connect(db_path)
     try:
         conn.execute(
-            "INSERT INTO api_tokens (name, token_hash, expires_at, scopes) VALUES (?, ?, '', ?)",
-            (name, token_hash, scopes_json),
+            "INSERT INTO api_tokens (token_id, name, token_hash, expires_at, scopes) VALUES (?, ?, ?, '', ?)",
+            (f"tok_{raw}", name, token_hash, scopes_json),
         )
         conn.commit()
     finally:
@@ -112,13 +113,32 @@ def test_unknown_bearer_rejected(cfg: Any) -> None:
         assert client.get("/api/apps", headers=_bearer("bogus")).status_code == 401
 
 
-def test_v13_migration_backfills_existing_tokens_to_owner(tmp_path: Path) -> None:
-    """A token that predates scopes must become explicit ["owner"] (not empty,
-    not a silent default) so its full-access behaviour is preserved."""
-    db_path = str(tmp_path / "pre_v13.db")
+def test_scope_catalog_endpoint(cfg: Any) -> None:
+    # The catalog endpoint (single source the CLI/UI render from) needs
+    # tokens:manage and returns name/description/owner_equivalent entries.
+    token = _seed_token(cfg.db_path, "mgr", f'["{TOKENS_MANAGE}"]', raw="cat-tok")
+    reader = _seed_token(cfg.db_path, "rdr", f'["{APPS_READ}"]', raw="rdr-tok")
+    app = make_test_app(api_token_scopes)
+    with TestClient(app=app) as client:
+        r = client.get("/api/token_scopes", headers=_bearer(token))
+        assert r.status_code == 200
+        catalog = r.json()
+        names = {s["name"] for s in catalog}
+        assert {"owner", "apps:read", "tokens:manage"} <= names
+        owner = next(s for s in catalog if s["name"] == "owner")
+        assert owner["owner_equivalent"] is True
+        # out of scope for a non-tokens:manage token
+        assert client.get("/api/token_scopes", headers=_bearer(reader)).status_code == 401
+
+
+def test_v14_migration_backfills_existing_tokens(tmp_path: Path) -> None:
+    """A token that predates scopes must gain an explicit ["owner"] (not empty,
+    not a silent default) and a unique token_id, preserving its full access."""
+    db_path = str(tmp_path / "pre_v14.db")
     conn = sqlite3.connect(db_path)
     try:
-        # Minimal pre-v13 shape: api_tokens without a scopes column, stamped v12.
+        # Minimal pre-v14 api_tokens shape (no scopes/token_id), stamped at v13
+        # so only the v14 migration runs against it.
         conn.executescript(
             """
             CREATE TABLE api_tokens (
@@ -129,7 +149,7 @@ def test_v13_migration_backfills_existing_tokens_to_owner(tmp_path: Path) -> Non
                 created_at TEXT NOT NULL DEFAULT (datetime('now'))
             );
             CREATE TABLE schema_version (id INTEGER PRIMARY KEY CHECK (id = 1), version INTEGER NOT NULL);
-            INSERT INTO schema_version (id, version) VALUES (1, 12);
+            INSERT INTO schema_version (id, version) VALUES (1, 13);
             INSERT INTO api_tokens (name, token_hash, expires_at) VALUES ('legacy', 'deadbeef', '');
             """
         )
@@ -142,7 +162,8 @@ def test_v13_migration_backfills_existing_tokens_to_owner(tmp_path: Path) -> Non
     conn = sqlite3.connect(db_path)
     try:
         conn.row_factory = sqlite3.Row
-        row = conn.execute("SELECT scopes FROM api_tokens WHERE name = 'legacy'").fetchone()
+        row = conn.execute("SELECT token_id, scopes FROM api_tokens WHERE name = 'legacy'").fetchone()
     finally:
         conn.close()
     assert row["scopes"] == '["owner"]'
+    assert row["token_id"].startswith("tok_")

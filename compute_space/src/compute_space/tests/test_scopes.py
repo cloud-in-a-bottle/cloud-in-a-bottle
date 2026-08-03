@@ -7,11 +7,14 @@ on an out-of-scope route) lives in test_token_scope_enforcement.py.
 
 from __future__ import annotations
 
+import pytest
+
 from compute_space.core.auth.scopes import ALL_SCOPES
 from compute_space.core.auth.scopes import APPS_MANAGE
 from compute_space.core.auth.scopes import APPS_READ
 from compute_space.core.auth.scopes import OWNER
 from compute_space.core.auth.scopes import OWNER_EQUIVALENT_SCOPES
+from compute_space.core.auth.scopes import SCOPE_CATALOG
 from compute_space.core.auth.scopes import TOKENS_MANAGE
 from compute_space.core.auth.scopes import VALID_TOKEN_SCOPES
 from compute_space.core.auth.scopes import dump_scopes
@@ -47,18 +50,21 @@ def test_parse_dump_round_trip() -> None:
     assert dump_scopes({APPS_MANAGE, APPS_READ}) == dump_scopes({APPS_READ, APPS_MANAGE})
 
 
-def test_parse_fails_closed() -> None:
-    # None / empty / malformed / wrong-shape all yield NO access, never owner.
-    assert parse_scopes(None) == frozenset()
-    assert parse_scopes("") == frozenset()
-    assert parse_scopes("not json") == frozenset()
-    assert parse_scopes('{"not": "a list"}') == frozenset()
-    assert parse_scopes("123") == frozenset()
+def test_parse_raises_on_malformed() -> None:
+    # A corrupt scopes value must surface as an error, not silently become "no
+    # access" (which would masquerade as a permission denial and be hard to
+    # trace back to a formatting problem).
+    for bad in ["", "not json", '{"not": "a list"}', "123", '["ok", 42]']:
+        with pytest.raises(ValueError):
+            parse_scopes(bad)
 
 
-def test_parse_drops_unknown_scopes() -> None:
-    # Unknown scope strings are silently dropped (fail closed), known ones kept.
-    assert parse_scopes('["apps:read", "bogus:scope", 42]') == frozenset({APPS_READ})
+def test_parse_keeps_wellformed_unknown_scopes() -> None:
+    # A valid JSON array of strings parses even if a name is unrecognized;
+    # token_has_scope simply never matches the unknown name (forward-compat).
+    parsed = parse_scopes('["apps:read", "future:scope"]')
+    assert parsed == frozenset({APPS_READ, "future:scope"})
+    assert not token_has_scope(parsed, "some:other")
 
 
 def test_validate_requested_scopes() -> None:
@@ -81,3 +87,17 @@ def test_owner_equivalent_subset_of_all_scopes() -> None:
     assert OWNER_EQUIVALENT_SCOPES <= ALL_SCOPES
     assert TOKENS_MANAGE in OWNER_EQUIVALENT_SCOPES
     assert APPS_READ not in OWNER_EQUIVALENT_SCOPES
+
+
+def test_derived_sets_match_catalog() -> None:
+    # The derived sets are exactly the catalog — the single source of truth —
+    # so the CLI/UI (which render from the catalog via /api/token_scopes) stay
+    # 1-1 with what the guards enforce.
+    catalog_names = {s.name for s in SCOPE_CATALOG}
+    assert VALID_TOKEN_SCOPES == catalog_names
+    assert ALL_SCOPES == catalog_names - {OWNER}
+    assert OWNER_EQUIVALENT_SCOPES == {s.name for s in SCOPE_CATALOG if s.owner_equivalent and s.name != OWNER}
+    # Every scope has a non-empty human description for the UIs.
+    assert all(s.description for s in SCOPE_CATALOG)
+    # No duplicate names.
+    assert len(catalog_names) == len(SCOPE_CATALOG)
