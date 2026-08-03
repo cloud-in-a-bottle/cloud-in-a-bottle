@@ -169,8 +169,7 @@ class VersionInfo:
 async def api_token_scopes(db: sqlite3.Connection) -> list[ScopeInfo]:
     """The scope catalog, so the CLI and web UI render choices from one source."""
     return [
-        ScopeInfo(name=s.name, description=s.description, owner_equivalent=s.owner_equivalent)
-        for s in SCOPE_CATALOG
+        ScopeInfo(name=s.name, description=s.description, owner_equivalent=s.owner_equivalent) for s in SCOPE_CATALOG
     ]
 
 
