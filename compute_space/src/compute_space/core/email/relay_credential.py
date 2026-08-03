@@ -1,15 +1,15 @@
 """Fetch this instance's SMTP relay credential from the frontend at runtime.
 
 The relay credential (host/port + username/password) is deliberately NOT baked
-into the instance's config. Instead the router fetches it from the email frontend
-(imbue-hosted-spaces) using the same per-instance shared Imbue identity the
-instance already holds for cert-api/email, and the frontend has the backend derive
+into the instance's config. Instead the router fetches it from the Imbue email
+frontend using the same per-instance shared Imbue identity the instance already
+holds for cert-api/email, and the frontend has the backend derive
 ``HMAC(RELAY_SECRET, zone)``. This means:
 
   * nothing email-specific (no relay password) is stored in per-instance config,
     so enabling email needs no secret injection and upgrades never touch it;
   * rotating ``RELAY_SECRET`` (which lives only on the backend) rotates every
-    instance's credential automatically — the instance just refetches.
+    instance's credential automatically: the instance just refetches.
 
 The result is cached in-process with a short TTL so the mailbox app's
 relay-config calls and the inbound-auth check don't hit the frontend on every
