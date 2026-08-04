@@ -95,7 +95,8 @@ def test_drop_docker_cache_endpoint_success(
         "drop_docker_build_cache",
         lambda: "Total reclaimed space: 12.3MB",
     )
-    resp = client.post("/api/drop-docker-cache", cookies=cookies)
+    client.cookies.update(cookies)
+    resp = client.post("/api/drop-docker-cache")
     assert resp.status_code == 200
     assert resp.json() == {"ok": True, "output": "Total reclaimed space: 12.3MB"}
 
@@ -107,6 +108,7 @@ def test_drop_docker_cache_endpoint_failure(
         raise RuntimeError("podman engine error")
 
     monkeypatch.setattr(system_routes, "drop_docker_build_cache", _raise_error)
-    resp = client.post("/api/drop-docker-cache", cookies=cookies)
+    client.cookies.update(cookies)
+    resp = client.post("/api/drop-docker-cache")
     assert resp.status_code == 500
     assert resp.json() == {"error": "podman engine error"}

@@ -11,7 +11,9 @@ from litestar import Request
 from litestar import Router
 from litestar import get
 from litestar import post
+from litestar.di import NamedDependency
 from litestar.exceptions import HTTPException
+from litestar.params import FromQuery
 from litestar.response import Redirect
 
 from compute_space.config import Config
@@ -176,7 +178,9 @@ class ConnectStartResponse:
 
 
 @get("/api/settings/connect-imbue/status", guards=[require_owner_auth])
-async def connect_imbue_status(config: Config, db: sqlite3.Connection) -> ConnectStatusResponse:
+async def connect_imbue_status(
+    config: NamedDependency[Config], db: NamedDependency[sqlite3.Connection]
+) -> ConnectStatusResponse:
     return ConnectStatusResponse(
         available=bool(get_connect_base_url(db)),
         connected=get_instance_identity(db, config) is not None,
@@ -185,7 +189,9 @@ async def connect_imbue_status(config: Config, db: sqlite3.Connection) -> Connec
 
 @post("/api/settings/connect-imbue/start", status_code=200, guards=[require_owner_auth])
 async def connect_imbue_start(
-    config: Config, db: sqlite3.Connection, request: Request[Any, Any, Any]
+    config: NamedDependency[Config],
+    db: NamedDependency[sqlite3.Connection],
+    request: Request[Any, Any, Any],
 ) -> ConnectStartResponse:
     frontend = get_connect_base_url(db)
     if not frontend:
@@ -201,7 +207,11 @@ async def connect_imbue_start(
 
 
 @get("/api/settings/connect-imbue/callback", guards=[require_owner_auth], sync_to_thread=True)
-def connect_imbue_callback(config: Config, db: sqlite3.Connection, code: str = "") -> Redirect:
+def connect_imbue_callback(
+    config: NamedDependency[Config],
+    db: NamedDependency[sqlite3.Connection],
+    code: FromQuery[str] = "",
+) -> Redirect:
     """Exchange the one-time code and store the credential.
 
     Imbue returns the one-time code here (?code=). We exchange it for the credential
@@ -237,7 +247,9 @@ class ChangePasswordResponse:
 
 
 @post("/api/settings/change_password", status_code=200, guards=[require_owner_auth])
-async def change_password(data: ChangePasswordRequest, db: sqlite3.Connection) -> ChangePasswordResponse:
+async def change_password(
+    data: ChangePasswordRequest, db: NamedDependency[sqlite3.Connection]
+) -> ChangePasswordResponse:
     current = data.current_password.strip()
     new_pw = data.new_password.strip()
     confirm = data.confirm_password.strip()
@@ -267,12 +279,14 @@ async def change_password(data: ChangePasswordRequest, db: sqlite3.Connection) -
 
 
 @get("/api/settings/owner_username", guards=[require_owner_auth])
-async def get_owner_username(db: sqlite3.Connection) -> OwnerUsernameResponse:
+async def get_owner_username(db: NamedDependency[sqlite3.Connection]) -> OwnerUsernameResponse:
     return OwnerUsernameResponse(username=read_owner_username(db))
 
 
 @post("/api/settings/owner_username", status_code=200, guards=[require_owner_auth])
-async def set_owner_username(data: SetOwnerUsernameRequest, db: sqlite3.Connection) -> OwnerUsernameResponse:
+async def set_owner_username(
+    data: SetOwnerUsernameRequest, db: NamedDependency[sqlite3.Connection]
+) -> OwnerUsernameResponse:
     error = validate_owner_username(data.username)
     if error is not None:
         raise HTTPException(detail=error, status_code=400)

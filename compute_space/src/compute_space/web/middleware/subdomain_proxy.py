@@ -205,7 +205,7 @@ class SubdomainProxyMiddleware:
                 if scope["type"] == ScopeType.HTTP:
                     request: Request[Any, Any, Any] = Request(scope, receive, send)
                     response: Response[Any] = login_required_redirect(request)
-                    await response.to_asgi_response(app=None, request=request)(scope, receive, send)
+                    await response.to_asgi_response(None, request=request)(scope, receive, send)
                 else:
                     await send(
                         WebSocketCloseEvent(type="websocket.close", code=4401, reason="authentication required")

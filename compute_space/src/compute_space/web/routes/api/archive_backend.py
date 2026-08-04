@@ -13,6 +13,7 @@ from litestar import Response
 from litestar import Router
 from litestar import get
 from litestar import post
+from litestar.di import NamedDependency
 from litestar.params import Body
 
 from compute_space.config import Config
@@ -145,7 +146,10 @@ class ConfigureArchiveRequest:
 
 
 @get("/api/storage/archive_backend", guards=[require_owner_auth])
-async def get_archive_backend(db: sqlite3.Connection, config: Config) -> BackendStateResponse:
+async def get_archive_backend(
+    db: NamedDependency[sqlite3.Connection],
+    config: NamedDependency[Config],
+) -> BackendStateResponse:
     """Return current archive-backend state (secret redacted) plus archive_dir, meta_db_path, meta_dumps."""
     state = archive_backend.read_state(db)
     # The archive tier is always the JuiceFS mountpoint (local file backend or
@@ -203,8 +207,8 @@ async def test_connection(
 @post("/api/storage/archive_backend/configure", status_code=200, guards=[require_owner_auth])
 async def configure_archive_backend(
     data: Annotated[ConfigureArchiveRequest, Body(media_type=MediaType.JSON)],
-    db: sqlite3.Connection,
-    config: Config,
+    db: NamedDependency[sqlite3.Connection],
+    config: NamedDependency[Config],
 ) -> Response[BackendStateResponse] | Response[ErrorResponse]:
     """One-shot S3 configure / re-configure.  Allowed from ``'local'`` (the
     default — migrates local archive data into the bucket), the legacy

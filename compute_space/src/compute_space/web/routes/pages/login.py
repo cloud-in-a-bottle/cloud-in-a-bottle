@@ -7,10 +7,10 @@ from litestar import Response
 from litestar import Router
 from litestar import get
 from litestar import post
+from litestar.di import NamedDependency
 from litestar.response import Redirect
 from litestar.response import Template
 
-from compute_space.config import Config
 from compute_space.core.auth.auth import SESSION_COOKIE_NAME
 from compute_space.core.auth.auth import create_session
 from compute_space.core.auth.auth import revoke_session
@@ -41,7 +41,10 @@ def _validated_next(next_url: str, db: sqlite3.Connection) -> str | None:
 
 
 @get("/login")
-async def login_get(request: Request[Any, Any, Any], db: sqlite3.Connection) -> Response[Any]:
+async def login_get(
+    request: Request[Any, Any, Any],
+    db: NamedDependency[sqlite3.Connection],
+) -> Response[Any]:
     next_param = request.query_params.get("next", "")
     if authenticate(request, db=db) is not None:
         return Redirect(path=_validated_next(next_param, db) or "/")
@@ -49,7 +52,10 @@ async def login_get(request: Request[Any, Any, Any], db: sqlite3.Connection) -> 
 
 
 @post("/login", status_code=200)
-async def login_post(request: Request[Any, Any, Any], db: sqlite3.Connection) -> Response[Any]:
+async def login_post(
+    request: Request[Any, Any, Any],
+    db: NamedDependency[sqlite3.Connection],
+) -> Response[Any]:
     form = await request.form()
     password = form.get("password")
     next_url = form.get("next", "")
@@ -71,7 +77,10 @@ async def login_post(request: Request[Any, Any, Any], db: sqlite3.Connection) ->
 # /logout has no owner-auth guard (it must work for any session state), so guard it against
 # cross-site POSTs to prevent forced-logout CSRF.
 @post("/logout", status_code=200, guards=[require_same_origin])
-async def logout(request: Request[Any, Any, Any], db: sqlite3.Connection, config: Config) -> Response[Any]:
+async def logout(
+    request: Request[Any, Any, Any],
+    db: NamedDependency[sqlite3.Connection],
+) -> Response[Any]:
     if session_token := request.cookies.get(SESSION_COOKIE_NAME):
         revoke_session(session_token, db)
         db.commit()
