@@ -96,10 +96,10 @@ class EmailServiceAuthenticator:
             return AuthResult(success=False, handled=False)
         app_id = _authenticated_app_id(username, password)
         if app_id is None:
-            logger.info("email service: SMTP auth failed for app %r", username)
+            logger.info(f"email service: SMTP auth failed for app {username!r}")
             return AuthResult(success=False, handled=False)
         if not _app_may_send(app_id):
-            logger.info("email service: app %r lacks the email 'send' grant", username)
+            logger.info(f"email service: app {username!r} lacks the email 'send' grant")
             return AuthResult(success=False, handled=False)
         # Bind the authenticated app_id to the session for the DATA handler.
         return AuthResult(success=True, auth_data=app_id)
@@ -133,10 +133,10 @@ class EmailServiceHandler:
         try:
             _relay_to_smarthost(cred, raw, from_address, to_addresses)
         except smtplib.SMTPException as e:
-            logger.warning("email service: relay to smarthost failed: %s", e)
+            logger.warning(f"email service: relay to smarthost failed: {e}")
             return f"451 4.4.0 upstream relay failed: {e}"
         except OSError as e:
-            logger.warning("email service: smarthost connection failed: %s", e)
+            logger.warning(f"email service: smarthost connection failed: {e}")
             return f"451 4.4.0 upstream relay unreachable: {e}"
         return "250 OK message accepted for delivery"
 
@@ -145,7 +145,7 @@ class EmailServiceHandler:
         try:
             return get_relay_credential_provider(self._config).get(db)
         except RelayCredentialError as e:
-            logger.warning("email service: could not fetch relay credential: %s", e)
+            logger.warning(f"email service: could not fetch relay credential: {e}")
             return None
         finally:
             db.close()
@@ -212,9 +212,9 @@ def start_email_smtp_service(config: Config, *, hosts: list[str], port: int = RO
                 controller = _make_controller(config, host, port)
                 controller.start()
             except OSError as e:
-                logger.warning("email service: could not bind SMTP listener on %s:%d: %s", host, port, e)
+                logger.warning(f"email service: could not bind SMTP listener on {host}:{port}: {e}")
                 continue
-            logger.info("email service: SMTP submission listener started on %s:%d", host, port)
+            logger.info(f"email service: SMTP submission listener started on {host}:{port}")
             started.append(controller)
         _controllers = started
         return started
