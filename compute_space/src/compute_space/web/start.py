@@ -146,6 +146,7 @@ def main() -> None:
         zones = dns_zones(config, db)
         _require_configured_domain(domains)  # fail loud at boot, not late in the first request
 
+        lan_ip = default_route_source_ip()  # shared by CoreDNS `.local` zones and the mDNS responder
         if config.coredns_enabled:
             if not config.public_ip:
                 raise RuntimeError("Public IP must be set in config to use CoreDNS")
@@ -156,14 +157,14 @@ def main() -> None:
                 config.public_ip,
                 config.coredns_corefile_path,
                 coredns_bin=_ensure_coredns_binary(config),
-                lan_ip=default_route_source_ip(),
+                lan_ip=lan_ip,
             )
             # Register so /api/domains can regenerate zones + restart CoreDNS when a domain is added.
             set_active_coredns(coredns)
 
         # Start the wildcard mDNS responder if any `.local` domain is configured (zero-config LAN
         # discovery alongside CoreDNS); reconciled here and by /api/domains, so it toggles at runtime.
-        ensure_mdns_for_domains(db)
+        ensure_mdns_for_domains(db, lan_ip=lan_ip)
 
         if domains[0].tls:  # primary is a TLS domain
             _ensure_tls_cert(config, db)

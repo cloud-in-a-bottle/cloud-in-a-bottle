@@ -275,7 +275,7 @@ def get_active_coredns() -> CoreDnsProcess | None:
     return _active_coredns
 
 
-def reload_coredns_for_domains(config: Config, db: sqlite3.Connection) -> bool:
+def reload_coredns_for_domains(config: Config, db: sqlite3.Connection, lan_ip: str | None = None) -> bool:
     """Regenerate the Corefile + zone files from the config's current public-domain set and restart
     CoreDNS so it becomes authoritative for the new set (a new zone needs a restart; the ``file``
     plugin's ``reload`` only picks up edits to an *already-served* zone file).  No-op (returns
@@ -288,7 +288,7 @@ def reload_coredns_for_domains(config: Config, db: sqlite3.Connection) -> bool:
         config.public_ip,
         coredns.corefile_path,
         CONTAINER_GATEWAY_IP,
-        default_route_source_ip(),
+        lan_ip if lan_ip is not None else default_route_source_ip(),
     )
     coredns.restart()
     return True

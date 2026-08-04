@@ -44,6 +44,7 @@ from compute_space.core.mdns import ensure_mdns_for_domains
 from compute_space.core.tls.domain_certs import ensure_cert_for
 from compute_space.core.tls.renewal import CertStatus
 from compute_space.core.tls.renewal import get_cert_status
+from compute_space.core.util import default_route_source_ip
 from compute_space.db import get_db
 from compute_space.web.auth.auth import require_owner_auth
 
@@ -145,6 +146,14 @@ def _spawn_acquisition(config: Config, domain: Domain) -> None:
     threading.Thread(target=_run_acquisition, args=(config, domain), daemon=True).start()
 
 
+def _reconcile_coredns_and_mdns(config: Config, db: sqlite3.Connection) -> None:
+    """Regenerate CoreDNS zones then reconcile the mDNS responder, sharing one LAN-IP lookup.
+    Blocking (CoreDNS restart, socket bind + conflict probe); run via anyio.to_thread."""
+    lan_ip = default_route_source_ip()
+    reload_coredns_for_domains(config, db, lan_ip=lan_ip)
+    ensure_mdns_for_domains(db, lan_ip=lan_ip)
+
+
 async def _reload_caddy_after_response() -> None:
     """Regenerate + gracefully reload Caddy as a response background task.
 
@@ -167,8 +176,10 @@ def _validate_new_domain(config: Config, name: str, tls: bool, mdns: bool, db: s
         return "invalid domain name"
     if mdns and tls:
         return "mDNS (.local) domains are served over http; set tls=false"
-    if mdns and not is_local_name(name):
-        return "mDNS is only for .local domains"
+    if is_local_name(name) != mdns:
+        # CoreDNS keys a zone's record IP on the .local name while the responder keys on this flag;
+        # they must agree or a .local zone points at a LAN IP the multicast responder never answers.
+        return "mdns must be true for .local names and false otherwise"
     if any(d.name_no_port == name for d in effective_domains(db)):
         return "domain is already configured"
     return None
@@ -200,13 +211,11 @@ async def add_domain(
             cert_status=DomainCertStatus.ACQUIRING if data.tls else DomainCertStatus.ACTIVE,
         ),
     )
-    # Make CoreDNS authoritative for the new zone (public or `.local`) *before* any acquisition:
-    # DNS-01 writes the _acme-challenge TXT into this domain's zone file, which only resolves once
-    # CoreDNS serves the zone.  Off the event loop (the restart blocks on terminate+wait(3s)) but
-    # awaited so ordering before acquisition holds.  No-op when CoreDNS isn't running.
-    await anyio.to_thread.run_sync(reload_coredns_for_domains, config, db)
-    # Start (or refresh) the mDNS responder if this added the first/another `.local` domain.
-    ensure_mdns_for_domains(db)
+    # Make CoreDNS authoritative for the new zone + start/refresh the mDNS responder *before* any
+    # acquisition: DNS-01 writes the _acme-challenge TXT into this domain's zone file, which only
+    # resolves once CoreDNS serves the zone.  Off the event loop (CoreDNS restart, socket bind +
+    # conflict probe all block) but awaited so ordering before acquisition holds.
+    await anyio.to_thread.run_sync(_reconcile_coredns_and_mdns, config, db)
     if data.tls:
         _spawn_acquisition(config, domain)
     # Return the full updated list so the client repaints the table without a follow-up GET, and
@@ -231,11 +240,9 @@ async def remove_domain(
     if not remove_record(db, name):
         return Response(ErrorResponse(error="domain not found"), status_code=404)
     if removed is not None:
-        # Drop the zone from CoreDNS so it stops answering for the removed domain (off the event
-        # loop — the restart blocks on terminate+wait(3s)), and stop the responder if that was the
-        # last `.local` domain.
-        await anyio.to_thread.run_sync(reload_coredns_for_domains, config, db)
-        ensure_mdns_for_domains(db)
+        # Drop the zone from CoreDNS and stop the responder if that was the last `.local` domain.
+        # Off the event loop — the CoreDNS restart and the responder's thread-join (up to 2s) block.
+        await anyio.to_thread.run_sync(_reconcile_coredns_and_mdns, config, db)
     # Regenerate Caddy only after this response has been sent — see _reload_caddy_after_response.
     return Response(
         DomainListResponse(domains=_domain_list(config, db)),

@@ -74,10 +74,12 @@ def test_coredns_bind_ip_uses_default_route_source(monkeypatch: pytest.MonkeyPat
 
 
 def test_coredns_bind_ip_falls_back_to_public_ip(monkeypatch: pytest.MonkeyPatch) -> None:
-    def raise_os_error(*args: object) -> object:
+    def raise_os_error(*args: object, **kwargs: object) -> object:
         raise OSError("no route")
 
+    # Defeat both the default-route probe and the host-address fallback so no LAN IP is found.
     monkeypatch.setattr(socket, "socket", raise_os_error)
+    monkeypatch.setattr(socket, "getaddrinfo", raise_os_error)
 
     assert dns_mod._coredns_bind_ip("203.0.113.10") == "203.0.113.10"
 

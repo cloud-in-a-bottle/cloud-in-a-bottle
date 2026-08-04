@@ -22,6 +22,12 @@ repos:
         language: system
         pass_filenames: false
         types: [python]
+      - id: pixi-lock
+        name: "pixi lock (pinned)"
+        entry: scripts/regen_pixi_lock.sh
+        language: script
+        files: ^(pyproject\.toml|pixi\.lock)$
+        pass_filenames: false
   - repo: https://github.com/gitleaks/gitleaks
     rev: v8.24.2
     hooks:

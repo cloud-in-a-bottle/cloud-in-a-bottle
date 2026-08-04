@@ -42,6 +42,10 @@ def _is_local_source(ip: str) -> bool:
 # --- wire format -----------------------------------------------------------------------------
 
 
+def _normalize(name: str) -> str:
+    return name.rstrip(".").lower()
+
+
 def _encode_name(name: str) -> bytes:
     out = bytearray()
     for label in name.rstrip(".").split("."):
@@ -57,17 +61,26 @@ def _decode_name(data: bytes, offset: int) -> tuple[str, int]:
     labels: list[str] = []
     resume = offset
     jumped = False
+    lowest_pointer = len(data)  # RFC 1035: each pointer must jump strictly backwards, so this bounds the loop
+    total = 0
     while True:
         length = data[offset]
         if length & 0xC0 == 0xC0:
             if not jumped:
                 resume = offset + 2
-            offset = ((length & 0x3F) << 8) | data[offset + 1]
+            target = ((length & 0x3F) << 8) | data[offset + 1]
+            if target >= lowest_pointer:
+                raise ValueError("cyclic or forward mDNS compression pointer")
+            lowest_pointer = target
+            offset = target
             jumped = True
             continue
         offset += 1
         if length == 0:
             break
+        total += length + 1
+        if total > 255:
+            raise ValueError("mDNS name too long")
         labels.append(data[offset : offset + length].decode("ascii", "replace"))
         offset += length
     return ".".join(labels), (resume if jumped else offset)
@@ -97,9 +110,9 @@ def _parse_questions(data: bytes) -> tuple[bool, tuple[_Question, ...]]:
     return is_query, tuple(questions)
 
 
-def _parse_a_answers(data: bytes) -> tuple[str, ...] | None:
-    """The IPs of every A record in a *response*'s answer section, or None if it isn't a response.
-    Used only by the startup conflict probe, so it decodes just what it needs."""
+def _parse_a_answers(data: bytes) -> tuple[tuple[str, str], ...] | None:
+    """The (owner name, IP) of every A record in a *response*'s answer section, or None if it isn't a
+    response.  Used only by the startup conflict probe, so it decodes just what it needs."""
     if len(data) < 12:
         return None
     _ident, flags, qdcount, ancount = struct.unpack("!HHHH", data[:8])
@@ -109,15 +122,15 @@ def _parse_a_answers(data: bytes) -> tuple[str, ...] | None:
     for _ in range(qdcount):
         _name, offset = _decode_name(data, offset)
         offset += 4
-    ips: list[str] = []
+    records: list[tuple[str, str]] = []
     for _ in range(ancount):
-        _name, offset = _decode_name(data, offset)
+        name, offset = _decode_name(data, offset)
         rtype, _rclass, _ttl, rdlen = struct.unpack("!HHIH", data[offset : offset + 10])
         offset += 10
         if rtype == _TYPE_A and rdlen == 4:
-            ips.append(socket.inet_ntoa(data[offset : offset + 4]))
+            records.append((name, socket.inet_ntoa(data[offset : offset + 4])))
         offset += rdlen
-    return tuple(ips)
+    return tuple(records)
 
 
 def _a_record(name: str, ip: str, ttl: int, cache_flush: bool) -> bytes:
@@ -169,7 +182,7 @@ class MdnsResponder:
             self.lan_ip = lan_ip
 
     def _owns(self, qname: str) -> bool:
-        q = qname.rstrip(".").lower()
+        q = _normalize(qname)
         with self._lock:
             return any(q == b or q.endswith("." + b) for b in self._bases)
 
@@ -180,7 +193,11 @@ class MdnsResponder:
             except TimeoutError:
                 continue
             except OSError:
-                break
+                if self._stop.is_set():
+                    break  # stop() closed the socket to unblock us
+                logger.opt(exception=True).warning("mDNS: recvfrom failed; retrying")
+                self._stop.wait(1.0)  # throttle so a persistent error can't spin
+                continue
             try:
                 self._handle(data, addr)
             except Exception:  # noqa: BLE001 — a malformed peer packet must not kill the responder
@@ -232,19 +249,22 @@ def _open_socket() -> socket.socket:
 def _probe_conflict(sock: socket.socket, name: str, our_ip: str) -> str | None:
     """Send one query for ``name`` and briefly listen; returns another host's IP if one already
     answers for it, else None.  Best-effort — the caller warns and serves anyway (no renaming)."""
+    want = _normalize(name)
     sock.settimeout(0.25)
     try:
         sock.sendto(_build_query(name), (_MDNS_GROUP, _MDNS_PORT))
         while True:
             try:
                 data, _addr = sock.recvfrom(9000)
-            except TimeoutError:
+            except (TimeoutError, OSError):
                 return None
-            except OSError:
-                return None
-            ips = _parse_a_answers(data)
-            if ips and any(ip != our_ip for ip in ips):
-                return next(ip for ip in ips if ip != our_ip)
+            try:
+                records = _parse_a_answers(data)
+            except (ValueError, IndexError, struct.error):
+                continue  # malformed LAN chatter — keep listening
+            for rname, ip in records or ():
+                if _normalize(rname) == want and ip != our_ip:
+                    return ip
     finally:
         sock.settimeout(1.0)
 
@@ -282,7 +302,7 @@ def get_active_mdns() -> MdnsResponder | None:
     return _active_mdns
 
 
-def ensure_mdns_for_domains(db: sqlite3.Connection) -> None:
+def ensure_mdns_for_domains(db: sqlite3.Connection, lan_ip: str | None = None) -> None:
     """Reconcile the responder with the DB's ``.local`` (mDNS) domains: start it when the first one
     appears, refresh its served set + LAN IP, or stop it when the last one is removed.  In-process,
     no restart.  Called at boot and by /api/domains, so mDNS turns on/off at runtime."""
@@ -294,7 +314,8 @@ def ensure_mdns_for_domains(db: sqlite3.Connection) -> None:
             set_active_mdns(None)
             logger.info("Stopped mDNS responder (no .local domains)")
         return
-    lan_ip = default_route_source_ip()
+    if lan_ip is None:
+        lan_ip = default_route_source_ip()
     if responder is None:
         if lan_ip is None:
             logger.warning("mDNS domain configured but no LAN IP found; responder not started")

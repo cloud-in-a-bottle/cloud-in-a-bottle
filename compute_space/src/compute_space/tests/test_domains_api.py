@@ -218,6 +218,24 @@ def test_add_mdns_with_tls_rejected(cfg: Any, client: TestClient[Litestar]) -> N
     assert resp.status_code == 400
 
 
+def test_add_local_name_with_tls_rejected(cfg: Any, client: TestClient[Litestar]) -> None:
+    # A .local name can never get a public cert, so tls must be rejected before ACME is attempted.
+    cookies = _auth_cookie(cfg.db_path)
+    assert client.post("/api/domains", json={"name": "myhost.local", "tls": True}, cookies=cookies).status_code == 400
+
+
+def test_add_local_name_without_mdns_rejected(cfg: Any, client: TestClient[Litestar]) -> None:
+    # A .local zone would point at a LAN IP the responder never answers for unless mdns is set.
+    cookies = _auth_cookie(cfg.db_path)
+    assert client.post("/api/domains", json={"name": "myhost.local"}, cookies=cookies).status_code == 400
+
+
+def test_add_non_local_name_with_mdns_rejected(cfg: Any, client: TestClient[Litestar]) -> None:
+    cookies = _auth_cookie(cfg.db_path)
+    resp = client.post("/api/domains", json={"name": "host.example.org", "mdns": True}, cookies=cookies)
+    assert resp.status_code == 400
+
+
 # --- remove -------------------------------------------------------------------------
 
 
