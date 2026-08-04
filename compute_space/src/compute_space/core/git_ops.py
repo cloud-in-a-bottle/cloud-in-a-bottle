@@ -1,4 +1,3 @@
-import functools
 import re
 import urllib.parse
 from pathlib import Path
@@ -322,7 +321,8 @@ def github_web_url_from_local_repo(repo_path: Path) -> str | None:
     return github_web_url_from_remote_url(_strip_credentials(remote_url), branch)
 
 
-@functools.cache
-def running_checkout_source_url() -> str | None:
-    """Browsable GitHub link to the running OpenHost checkout; resolved once per process."""
-    return github_web_url_from_local_repo(OPENHOST_PROJECT_DIR)
+# The nav's "view source" link. Resolved once: it describes the code the process
+# is serving, which is fixed for its lifetime. ``set-remote`` rewrites origin
+# without restarting, but that pins where the next update comes from, not where
+# the running code came from.
+SOURCE_URL = github_web_url_from_local_repo(OPENHOST_PROJECT_DIR)

@@ -98,7 +98,7 @@ def _build_dashboard_app(cfg: Any) -> Litestar:
 def test_nav_shows_source_icon(cfg: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     """When a source URL resolves, the nav renders a GitHub link to that branch."""
     set_active_config(cfg)
-    monkeypatch.setattr(web_app, "running_checkout_source_url", lambda: "https://github.com/owner/repo/tree/feature")
+    monkeypatch.setattr(web_app, "SOURCE_URL", "https://github.com/owner/repo/tree/feature")
     cookie = auth_cookie(cfg, username="owner")
 
     with TestClient(app=_build_dashboard_app(cfg)) as client:
@@ -116,7 +116,7 @@ def test_nav_shows_source_icon(cfg: Any, monkeypatch: pytest.MonkeyPatch) -> Non
 def test_nav_hides_source_icon_when_unresolved(cfg: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     """A tarball deploy (no resolvable source) renders no source link at all."""
     set_active_config(cfg)
-    monkeypatch.setattr(web_app, "running_checkout_source_url", lambda: None)
+    monkeypatch.setattr(web_app, "SOURCE_URL", None)
     cookie = auth_cookie(cfg, username="owner")
 
     with TestClient(app=_build_dashboard_app(cfg)) as client:
