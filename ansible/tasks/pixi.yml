@@ -12,10 +12,10 @@
     line: 'export PATH="$HOME/.pixi/bin:$PATH"'
     create: yes
 
-# `--locked` fully materializes the env from the committed lock (incl. building the editable
-# package + its build deps) so ExecStart can boot offline; fails loudly if the lock is stale.
+# Materialize the full env (editable package + build deps) so ExecStart can boot offline; plain
+# `install` self-heals a stale lock by re-resolving instead of aborting the deploy.
 - name: Install pixi dependencies (caddy)
-  shell: /home/host/.pixi/bin/pixi install --locked
+  shell: /home/host/.pixi/bin/pixi install
   args:
     chdir: /home/host/openhost
 

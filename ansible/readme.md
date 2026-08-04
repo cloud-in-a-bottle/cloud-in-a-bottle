@@ -43,7 +43,6 @@ pass with `-e key=value`.
 | `openhost_commit` | `main` | exact commit SHA, overridden by openhost_branch |
 | `openhost_refspec` | *(none)* | extra ref to fetch, e.g. `refs/pull/N/merge` |
 | `local_http_only` | `false` | localhost mode: no TLS / CoreDNS / Caddy |
-| `mdns` | `false` | enable mdns responses for .local domains |
 | `bind_host` | `127.0.0.1` | router bind address |
 | `claim_token` | random (printed) | claim_token for `/setup` |
 | `acme_email` | `openhost@<domain>` | ACME account email (TLS mode) |

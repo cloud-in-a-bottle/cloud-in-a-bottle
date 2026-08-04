@@ -31,7 +31,7 @@ def _seed_dns_cfg(tmp_path: Path, *domains: Domain, **kw: Any) -> DefaultConfig:
     cfg.make_all_dirs()
     init_db(cfg.db_path)
     with closing(open_db(cfg)) as db:
-        seed_domains(db, primary, [DomainRecord(d.name, d.tls, d.mdns) for d in domains[1:]])
+        seed_domains(db, primary, [DomainRecord(d.name, d.tls) for d in domains[1:]])
     return cfg
 
 
@@ -271,7 +271,7 @@ def test_dns_zones_covers_every_domain_including_local(tmp_path: Path) -> None:
         tmp_path,
         Domain(name="host.example.com", tls=True),
         Domain(name="host.example.org", tls=True),
-        Domain(name="myhost.local", tls=False, mdns=True),
+        Domain(name="myhost.local", tls=False),
     )
     with closing(open_db(config)) as db:
         zones = dns_zones(config, db)
@@ -297,7 +297,30 @@ def test_local_zone_uses_lan_ip_public_zone_uses_public_ip(tmp_path: Path, monke
         lan_ip="192.168.1.50",
     )
     assert "*   IN A    203.0.113.10" in public_zone.read_text()  # public → public IP
-    assert "*   IN A    192.168.1.50" in local_zone.read_text()  # .local → LAN IP
+    # CoreDNS stays authoritative for the `.local` zone (so `*.myhost.local` resolves for a
+    # conditional-forwarder client, e.g. Windows), answering with the LAN IP.
+    assert "myhost.local:53" in corefile.read_text()
+    assert "*   IN A    192.168.1.50" in local_zone.read_text()
+
+
+def test_local_zone_dropped_when_no_lan_ip(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # With no LAN IP there is no honest answer for a `.local` name, and handing LAN clients the
+    # public IP sends their traffic off-box — so the zone is not published at all.
+    monkeypatch.setattr(dns_mod, "_coredns_bind_ip", lambda ip: "10.0.0.5")
+    monkeypatch.setattr(dns_mod, "_gateway_ip_is_bindable", lambda ip: False)
+    _stub_popen(monkeypatch)
+
+    corefile = tmp_path / "Corefile"
+    public_zone = tmp_path / "public.zone"
+    local_zone = tmp_path / "local.zone"
+    dns_mod.start_coredns(
+        (DnsZone("host.example.com", public_zone), DnsZone("myhost.local", local_zone)),
+        "203.0.113.10",
+        corefile,
+        lan_ip=None,
+    )
+    assert "myhost.local:53" not in corefile.read_text() and not local_zone.exists()
+    assert "host.example.com:53" in corefile.read_text()  # public zones unaffected
 
 
 def test_start_coredns_writes_a_zone_block_and_file_per_public_domain(
@@ -345,7 +368,7 @@ def test_reload_coredns_for_domains_regenerates_zones_and_restarts(
             first_proc = coredns.proc
 
             # Add a second public domain to the DB and reload: CoreDNS must now serve its zone too.
-            upsert_record(db, DomainRecord("host.example.org", tls=True, mdns=False))
+            upsert_record(db, DomainRecord("host.example.org", tls=True))
             assert reload_coredns_for_domains(config, db) is True
 
             cf = config.coredns_corefile_path.read_text()

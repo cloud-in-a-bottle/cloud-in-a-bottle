@@ -1,10 +1,9 @@
-{% set http_only = (local_http_only | default(false)) | bool %}
-{% set mdns_mode = (mdns | default(false)) | bool %}
 {# first_boot.toml: the fresh instance's primary domain + claim token, and (for managed spaces) the
-   shared Imbue credential. These values seed the DB once, then are ignored after. #}
+   shared Imbue credential. These values seed the DB once, then are ignored after.
+   mDNS is derived from the `.local` domain by the router, not seeded here (`no_tls` is derived in
+   group_vars/all.yml). #}
 domain = "{{ domain }}"
-tls = {{ 'false' if (http_only or mdns_mode) else 'true' }}
-mdns = {{ 'true' if mdns_mode else 'false' }}
+tls = {{ 'false' if (no_tls | bool) else 'true' }}
 claim_token = "{{ effective_claim_token }}"
 {% if imbue_connect_base_url is defined and imbue_connect_base_url %}
 imbue_connect_base_url = "{{ imbue_connect_base_url }}"

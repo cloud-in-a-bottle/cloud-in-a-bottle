@@ -21,6 +21,7 @@ from compute_space.config import Config
 from compute_space.core import identity_store
 from compute_space.core import settings_store
 from compute_space.core.domains import Domain
+from compute_space.core.domains import is_local_name
 from compute_space.core.domains import seed_domains
 from compute_space.core.logging import logger
 from compute_space.core.tls.keycloak import KeycloakClientCredentials
@@ -32,7 +33,6 @@ class FirstBoot:
     domain: str
     claim_token: str | None
     tls: bool
-    mdns: bool
     # The shared per-instance Imbue credential, injected for managed spaces. All
     # three parts present together, or all None (no identity seeded).
     imbue_identity_issuer_url: str | None = None
@@ -69,8 +69,9 @@ def read_first_boot() -> FirstBoot | None:
     return FirstBoot(
         domain=domain,
         claim_token=(str(data["claim_token"]) if data.get("claim_token") else None),
-        tls=bool(data.get("tls", True)),
-        mdns=bool(data.get("mdns", False)),
+        # The name wins over the seeded flag: a `.local` name can never get a public cert, so a
+        # disagreeing `tls = true` would leave the instance forever trying to acquire one.
+        tls=(not is_local_name(domain)) and bool(data.get("tls", True)),
         imbue_identity_issuer_url=(str(identity["issuer_url"]) if identity.get("issuer_url") else None),
         imbue_identity_client_id=(str(identity["client_id"]) if identity.get("client_id") else None),
         imbue_identity_client_secret=(str(identity["client_secret"]) if identity.get("client_secret") else None),
@@ -102,7 +103,7 @@ def seed_first_boot(config: Config) -> None:
     fb = read_first_boot()
     with closing(get_db()) as db:
         if fb is not None:
-            primary = Domain(name=fb.domain, tls=fb.tls, mdns=fb.mdns)
+            primary = Domain(name=fb.domain, tls=fb.tls)
             seed_domains(db, primary, [])
             _seed_imbue_identity(db, fb)
 

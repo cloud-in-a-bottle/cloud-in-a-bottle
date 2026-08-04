@@ -20,6 +20,7 @@ import sqlite3
 import subprocess
 import threading
 import time
+from contextlib import closing
 from pathlib import Path
 
 import attr
@@ -33,7 +34,9 @@ from compute_space.core.domains import effective_domains
 from compute_space.core.domains import is_local_name
 from compute_space.core.domains import primary_domain_or_none
 from compute_space.core.logging import logger
+from compute_space.core.mdns import ensure_mdns_for_domains
 from compute_space.core.util import default_route_source_ip
+from compute_space.db import get_db
 
 _TEMPLATES_DIR = Path(__file__).parent / "templates"
 # StrictUndefined so a template referencing a variable/attribute we forgot to pass raises instead
@@ -131,6 +134,17 @@ def dns_zones(config: Config, db: sqlite3.Connection) -> tuple[DnsZone, ...]:
     )
 
 
+def _publishable_zones(zones: tuple[DnsZone, ...], lan_ip: str | None) -> tuple[DnsZone, ...]:
+    """``.local`` zones only mean anything at the LAN IP, so with none discovered they are dropped
+    rather than published pointing at the public IP (which sends LAN clients off-box)."""
+    if lan_ip is not None:
+        return zones
+    dropped = tuple(z.domain for z in zones if is_local_name(z.domain))
+    if dropped:
+        logger.warning(f"No LAN IP found; CoreDNS will not serve {', '.join(dropped)}")
+    return tuple(z for z in zones if not is_local_name(z.domain))
+
+
 def _write_coredns_config(
     zones: tuple[DnsZone, ...],
     public_ip: str,
@@ -140,10 +154,11 @@ def _write_coredns_config(
 ) -> None:
     """Render the Corefile + one public (and, when applicable, container) zone file per zone.
 
-    ``.local`` zones resolve to ``lan_ip`` (falling back to ``public_ip`` when it can't be
-    discovered); public zones resolve to ``public_ip``.  The caller then spawns/re-spawns CoreDNS
-    against the fresh Corefile — a new zone server block needs a restart; zone *file* edits auto-reload.
+    ``.local`` zones (and their ``*`` wildcard) resolve to ``lan_ip``; public zones to ``public_ip``.
+    The caller then spawns/re-spawns CoreDNS against the fresh Corefile — a new zone server block
+    needs a restart; zone *file* edits auto-reload.
     """
+    zones = _publishable_zones(zones, lan_ip)
     bind_serial = int(time.time())
 
     # Only emit the container-facing view when the gateway IP is actually
@@ -169,7 +184,7 @@ def _write_coredns_config(
     for zone in zones:
         # Write zone file. this is the actual DNS data. CoreDNS watches for changes and auto-reloads.
         # `.local` zones point at the LAN IP so LAN clients reach the box directly, not the public IP.
-        record_ip = (lan_ip or public_ip) if is_local_name(zone.domain) else public_ip
+        record_ip = lan_ip if (is_local_name(zone.domain) and lan_ip) else public_ip
         zone.zonefile_path.parent.mkdir(parents=True, exist_ok=True)
         content = _jinja_env.get_template("zonefile").render(
             zone_domain=zone.domain,
@@ -292,6 +307,51 @@ def reload_coredns_for_domains(config: Config, db: sqlite3.Connection, lan_ip: s
     )
     coredns.restart()
     return True
+
+
+# Serializes republishing: /api/domains (an anyio worker thread) and the LAN-IP watcher both call
+# reconcile_lan_dns, and the responder registry is a plain global.
+_reconcile_lock = threading.Lock()
+
+
+def reconcile_lan_dns(config: Config, db: sqlite3.Connection, lan_ip: str | None = None) -> None:
+    """Republish every name the instance answers on: regenerate the CoreDNS zones, then reconcile the
+    mDNS responder — one LAN-IP lookup shared by both.  Blocking (CoreDNS restart, socket bind)."""
+    if lan_ip is None:
+        lan_ip = default_route_source_ip()
+    with _reconcile_lock:
+        reload_coredns_for_domains(config, db, lan_ip=lan_ip)
+        ensure_mdns_for_domains(db, lan_ip=lan_ip)
+
+
+_LAN_IP_POLL_SECONDS = 60
+
+
+def start_lan_ip_watcher(config: Config, poll_seconds: int = _LAN_IP_POLL_SECONDS) -> threading.Thread:
+    """Republish whenever the box's own address moves (DHCP renewal, wifi→ethernet, a NIC change).
+
+    Both the ``.local`` CoreDNS zones and the mDNS responder pin the IP they were built with, and the
+    responder re-asserts it every ``_TTL`` seconds, so without this a moved box advertises a dead
+    address until someone restarts it."""
+
+    def _watch() -> None:
+        current = default_route_source_ip()
+        while True:
+            time.sleep(poll_seconds)
+            try:
+                latest = default_route_source_ip()
+                if latest is None or latest == current:
+                    continue
+                logger.info(f"LAN IP moved {current} -> {latest}; republishing DNS")
+                current = latest
+                with closing(get_db()) as db:
+                    reconcile_lan_dns(config, db, lan_ip=latest)
+            except Exception:  # noqa: BLE001 — a transient failure must not kill the watcher
+                logger.opt(exception=True).warning("LAN IP watcher: republish failed; retrying next poll")
+
+    thread = threading.Thread(target=_watch, name="lan-ip-watcher", daemon=True)
+    thread.start()
+    return thread
 
 
 def _bump_serial(content: str) -> str:

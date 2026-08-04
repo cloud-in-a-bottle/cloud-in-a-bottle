@@ -1,7 +1,7 @@
 // ─── Domains ───
 // Owner-facing UI over /api/domains: list the hostnames this instance answers on,
-// add a secondary public domain (auto-acquires a TLS cert) or a local .local name,
-// and remove non-primary domains.
+// add a secondary domain (the server derives mDNS-vs-public from the name), and
+// remove non-primary domains.
 
 var DOMAINS_URL = '/api/domains';
 
@@ -66,19 +66,20 @@ function addDomain() {
   var name = document.getElementById('domain-name').value.trim();
   var msg = document.getElementById('domain-msg');
   if (!name) { alert('Enter a domain name.'); return; }
-  var type = document.getElementById('domain-type').value;
-  var body = {name: name, tls: type === 'public', mdns: type === 'mdns'};
   fetch(DOMAINS_URL, {
     method: 'POST',
     credentials: 'same-origin',
     headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify(body),
+    body: JSON.stringify({name: name}),
   })
     .then(function(r) { return r.json(); })
     .then(function(data) {
       if (data && data.error) { alert(data.error); return; }
       document.getElementById('domain-name').value = '';
-      if (body.tls) {
+      // The server derives mDNS-vs-public from the name (which it lowercases); a public one acquires a cert.
+      var lower = name.toLowerCase();
+      var added = ((data && data.domains) || []).filter(function(d) { return d.name === lower; })[0];
+      if (added && added.tls) {
         msg.textContent = 'Added. Acquiring a TLS certificate in the background — '
           + 'its DNS must be delegated to this instance for acquisition to succeed.';
         msg.className = 'hint';

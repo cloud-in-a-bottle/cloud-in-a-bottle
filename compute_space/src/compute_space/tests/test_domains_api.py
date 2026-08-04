@@ -150,13 +150,15 @@ def test_primary_with_expired_cert_not_active(cfg: Any, client: TestClient[Lites
 
 def test_add_local_domain_is_active_and_routable(cfg: Any, client: TestClient[Litestar]) -> None:
     cookies = _auth_cookie(cfg.db_path)
-    resp = client.post("/api/domains", json={"name": "myhost.local", "mdns": True}, cookies=cookies)
+    resp = client.post("/api/domains", json={"name": "myhost.local"}, cookies=cookies)
     assert resp.status_code == 202
     # POST returns the full updated list (so the UI repaints without a follow-up GET).
     body = resp.json()
     assert {d["name"] for d in body["domains"]} == {"host.example.com", "myhost.local"}
     added = next(d for d in body["domains"] if d["name"] == "myhost.local")
     assert added["scheme"] == "http" and added["cert_status"] == DomainCertStatus.ACTIVE  # http, nothing to acquire
+    # mDNS and the (absent) TLS are both derived from the .local name — the request carried neither.
+    assert added["mdns"] is True and added["tls"] is False
     # persisted + now routable via the DB-backed resolver
     with closing(open_db(cfg)) as db:
         assert Domain.match(db, "app.myhost.local") is not None
@@ -170,7 +172,7 @@ def test_add_tls_domain_acquires_and_becomes_active(
 ) -> None:
     monkeypatch.setattr(domains, "ensure_cert_for", lambda config, domain, db: None)  # "acquired"
     cookies = _auth_cookie(cfg.db_path)
-    resp = client.post("/api/domains", json={"name": "host.example.org", "tls": True}, cookies=cookies)
+    resp = client.post("/api/domains", json={"name": "host.example.org"}, cookies=cookies)
     assert resp.status_code == 202
     # acquisition ran synchronously → status settled to active
     info = next(
@@ -188,7 +190,7 @@ def test_add_tls_domain_records_acquisition_error(
 
     monkeypatch.setattr(domains, "ensure_cert_for", boom)
     cookies = _auth_cookie(cfg.db_path)
-    client.post("/api/domains", json={"name": "host.example.org", "tls": True}, cookies=cookies)
+    client.post("/api/domains", json={"name": "host.example.org"}, cookies=cookies)
     info = next(
         d for d in client.get("/api/domains", cookies=cookies).json()["domains"] if d["name"] == "host.example.org"
     )
@@ -201,9 +203,7 @@ def test_add_tls_domain_records_acquisition_error(
 
 def test_add_duplicate_rejected(cfg: Any, client: TestClient[Litestar]) -> None:
     cookies = _auth_cookie(cfg.db_path)
-    assert (
-        client.post("/api/domains", json={"name": "host.example.com", "tls": True}, cookies=cookies).status_code == 400
-    )
+    assert client.post("/api/domains", json={"name": "host.example.com"}, cookies=cookies).status_code == 400
 
 
 def test_add_invalid_name_rejected(cfg: Any, client: TestClient[Litestar]) -> None:
@@ -212,28 +212,14 @@ def test_add_invalid_name_rejected(cfg: Any, client: TestClient[Litestar]) -> No
     assert client.post("/api/domains", json={"name": "nodot"}, cookies=cookies).status_code == 400
 
 
-def test_add_mdns_with_tls_rejected(cfg: Any, client: TestClient[Litestar]) -> None:
+def test_public_name_derives_tls(cfg: Any, client: TestClient[Litestar], monkeypatch: pytest.MonkeyPatch) -> None:
+    # The name is the only input: a non-.local name is a public HTTPS domain, so it starts acquiring.
+    monkeypatch.setattr(domains, "_spawn_acquisition", lambda config, domain: None)
     cookies = _auth_cookie(cfg.db_path)
-    resp = client.post("/api/domains", json={"name": "myhost.local", "tls": True, "mdns": True}, cookies=cookies)
-    assert resp.status_code == 400
-
-
-def test_add_local_name_with_tls_rejected(cfg: Any, client: TestClient[Litestar]) -> None:
-    # A .local name can never get a public cert, so tls must be rejected before ACME is attempted.
-    cookies = _auth_cookie(cfg.db_path)
-    assert client.post("/api/domains", json={"name": "myhost.local", "tls": True}, cookies=cookies).status_code == 400
-
-
-def test_add_local_name_without_mdns_rejected(cfg: Any, client: TestClient[Litestar]) -> None:
-    # A .local zone would point at a LAN IP the responder never answers for unless mdns is set.
-    cookies = _auth_cookie(cfg.db_path)
-    assert client.post("/api/domains", json={"name": "myhost.local"}, cookies=cookies).status_code == 400
-
-
-def test_add_non_local_name_with_mdns_rejected(cfg: Any, client: TestClient[Litestar]) -> None:
-    cookies = _auth_cookie(cfg.db_path)
-    resp = client.post("/api/domains", json={"name": "host.example.org", "mdns": True}, cookies=cookies)
-    assert resp.status_code == 400
+    body = client.post("/api/domains", json={"name": "host.example.org"}, cookies=cookies).json()
+    added = next(d for d in body["domains"] if d["name"] == "host.example.org")
+    assert added["tls"] is True and added["mdns"] is False
+    assert added["scheme"] == "https" and added["cert_status"] == DomainCertStatus.ACQUIRING
 
 
 # --- remove -------------------------------------------------------------------------
@@ -241,7 +227,7 @@ def test_add_non_local_name_with_mdns_rejected(cfg: Any, client: TestClient[Lite
 
 def test_remove_runtime_domain(cfg: Any, client: TestClient[Litestar]) -> None:
     cookies = _auth_cookie(cfg.db_path)
-    client.post("/api/domains", json={"name": "myhost.local", "mdns": True}, cookies=cookies)
+    client.post("/api/domains", json={"name": "myhost.local"}, cookies=cookies)
     assert client.delete("/api/domains/myhost.local", cookies=cookies).status_code == 200
     names = {d["name"] for d in client.get("/api/domains", cookies=cookies).json()["domains"]}
     assert names == {"host.example.com"}

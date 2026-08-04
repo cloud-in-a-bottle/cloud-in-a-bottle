@@ -93,7 +93,7 @@ def _seed_cfg(config: Config, *domains: Domain) -> None:
     which reads the domain set and the primary from the DB — sees them."""
     init_db(config.db_path)
     with closing(open_db(config)) as db:
-        seed_domains(db, domains[0], [DomainRecord(d.name, d.tls, d.mdns) for d in domains[1:]])
+        seed_domains(db, domains[0], [DomainRecord(d.name, d.tls) for d in domains[1:]])
 
 
 def _config(tmp_path: Path) -> Config:

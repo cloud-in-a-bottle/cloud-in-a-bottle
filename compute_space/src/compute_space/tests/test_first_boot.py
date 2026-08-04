@@ -62,12 +62,15 @@ def test_seed_prefers_first_boot(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 def test_seed_first_boot_local_mdns(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     cfg = _cfg(tmp_path)
     config_dir = _point_config_env(monkeypatch, tmp_path)
-    (config_dir / "first_boot.toml").write_text('domain = "myhost.local"\ntls = false\nmdns = true\n')
+    # `tls = true` disagrees with the `.local` name; the name wins, or the instance would spend its
+    # life trying to acquire a cert it can never get.
+    (config_dir / "first_boot.toml").write_text('domain = "myhost.local"\ntls = true\n')
 
     seed_first_boot(cfg)
     with closing(open_db(cfg)) as db:
         recs = load_records(db)
-    assert recs[0].name == "myhost.local" and recs[0].tls is False and recs[0].mdns is True
+    assert recs[0].name == "myhost.local" and recs[0].tls is False
+    assert recs[0].to_domain().is_local is True  # mDNS derived from the .local name
 
 
 def test_seed_migrates_legacy_claim_file_without_first_boot(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

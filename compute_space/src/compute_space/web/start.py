@@ -27,6 +27,7 @@ from compute_space.core.dns import CoreDnsProcess
 from compute_space.core.dns import dns_zones
 from compute_space.core.dns import set_active_coredns
 from compute_space.core.dns import start_coredns
+from compute_space.core.dns import start_lan_ip_watcher
 from compute_space.core.domains import Domain
 from compute_space.core.domains import effective_domains
 from compute_space.core.first_boot import owner_exists
@@ -165,6 +166,8 @@ def main() -> None:
         # Start the wildcard mDNS responder if any `.local` domain is configured (zero-config LAN
         # discovery alongside CoreDNS); reconciled here and by /api/domains, so it toggles at runtime.
         ensure_mdns_for_domains(db, lan_ip=lan_ip)
+        # `lan_ip` is a snapshot: republish both if the box's address later moves (DHCP renewal).
+        start_lan_ip_watcher(config)
 
         if domains[0].tls:  # primary is a TLS domain
             _ensure_tls_cert(config, db)

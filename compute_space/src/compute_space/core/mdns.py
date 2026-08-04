@@ -8,6 +8,7 @@ import socket
 import sqlite3
 import struct
 import threading
+import time
 
 import attr
 
@@ -24,6 +25,7 @@ _CACHE_FLUSH = 0x8000  # top bit of an rrclass: responder tells peers to flush p
 _QU_BIT = 0x8000  # top bit of a question's qclass: querier wants a unicast response
 _TTL = 120  # seconds; short so a moved instance is re-learned quickly
 _LEGACY_TTL = 10  # RFC 6762 §6.7: legacy unicast responses cap TTL at 10s
+_PROBE_BUDGET = 0.75  # seconds; overall deadline so ambient LAN chatter can't keep the probe alive
 
 
 def _is_local_source(ip: str) -> bool:
@@ -93,12 +95,12 @@ class _Question:
     qclass: int
 
 
-def _parse_questions(data: bytes) -> tuple[bool, tuple[_Question, ...]]:
-    """Parse a message's header + question section.  Returns ``(is_query, questions)``; answer/
+def _parse_questions(data: bytes) -> tuple[int, bool, tuple[_Question, ...]]:
+    """Parse a message's header + question section.  Returns ``(ident, is_query, questions)``; answer/
     authority sections are ignored (we only respond to queries)."""
     if len(data) < 12:
         raise ValueError("short DNS packet")
-    _ident, flags, qdcount = struct.unpack("!HHH", data[:6])
+    ident, flags, qdcount = struct.unpack("!HHH", data[:6])
     is_query = (flags >> 15) & 1 == 0
     offset = 12
     questions: list[_Question] = []
@@ -107,7 +109,7 @@ def _parse_questions(data: bytes) -> tuple[bool, tuple[_Question, ...]]:
         qtype, qclass = struct.unpack("!HH", data[offset : offset + 4])
         offset += 4
         questions.append(_Question(name=name, qtype=qtype, qclass=qclass))
-    return is_query, tuple(questions)
+    return ident, is_query, tuple(questions)
 
 
 def _parse_a_answers(data: bytes) -> tuple[tuple[str, str], ...] | None:
@@ -143,15 +145,18 @@ def _build_query(name: str) -> bytes:
     return struct.pack("!HHHHHH", 0, 0, 1, 0, 0, 0) + _encode_name(name) + struct.pack("!HH", _TYPE_A, _CLASS_IN)
 
 
-def _build_response(names: tuple[str, ...], ip: str, questions: tuple[_Question, ...], legacy: bool) -> bytes:
+def _build_response(
+    names: tuple[str, ...], ip: str, questions: tuple[_Question, ...], legacy: bool, ident: int
+) -> bytes:
     """An mDNS/legacy-unicast response advertising ``ip`` for each name.
 
-    Multicast responses omit the question and set the cache-flush bit (RFC 6762 §6); legacy unicast
-    responses (querier not on :5353) echo the question, use short TTLs, and never set cache-flush.
+    Multicast responses omit the question, zero the transaction ID and set the cache-flush bit (RFC
+    6762 §6); legacy unicast responses (querier not on :5353) echo the query's ID and question, use
+    short TTLs, and never set cache-flush — a stub resolver drops any answer whose ID doesn't match.
     """
     ttl = _LEGACY_TTL if legacy else _TTL
     echoed = questions if legacy else ()
-    header = struct.pack("!HHHHHH", 0, 0x8400, len(echoed), len(names), 0, 0)
+    header = struct.pack("!HHHHHH", ident if legacy else 0, 0x8400, len(echoed), len(names), 0, 0)
     body = b"".join(_encode_name(q.name) + struct.pack("!HH", q.qtype, q.qclass & ~_QU_BIT) for q in echoed)
     body += b"".join(_a_record(name, ip, ttl, cache_flush=not legacy) for name in names)
     return header + body
@@ -176,10 +181,11 @@ class MdnsResponder:
         self._thread = threading.Thread(target=self._serve_loop, name="mdns", daemon=True)
         self._thread.start()
 
-    def update(self, bases: tuple[str, ...], lan_ip: str) -> None:
+    def update(self, bases: tuple[str, ...]) -> None:
+        """Swap the served set.  ``lan_ip`` is fixed for the socket's lifetime — it is baked into the
+        group membership, so a moved address is a rebind (see ``ensure_mdns_for_domains``)."""
         with self._lock:
             self._bases = bases
-            self.lan_ip = lan_ip
 
     def _owns(self, qname: str) -> bool:
         q = _normalize(qname)
@@ -206,7 +212,7 @@ class MdnsResponder:
     def _handle(self, data: bytes, addr: tuple[str, int]) -> None:
         if not _is_local_source(addr[0]):
             return  # never answer a routed unicast query from off-LAN
-        is_query, questions = _parse_questions(data)
+        ident, is_query, questions = _parse_questions(data)
         if not is_query:
             return
         matched = tuple(q for q in questions if q.qtype in (_TYPE_A, _TYPE_ANY) and self._owns(q.name))
@@ -215,7 +221,7 @@ class MdnsResponder:
         legacy = addr[1] != _MDNS_PORT  # querier on an ephemeral port -> conventional unicast DNS
         with self._lock:
             ip = self.lan_ip
-        packet = _build_response(tuple(q.name for q in matched), ip, matched, legacy)
+        packet = _build_response(tuple(q.name for q in matched), ip, matched, legacy, ident)
         wants_unicast = legacy or any(q.qclass & _QU_BIT for q in matched)
         self.sock.sendto(packet, addr if wants_unicast else (_MDNS_GROUP, _MDNS_PORT))
 
@@ -229,18 +235,35 @@ class MdnsResponder:
             self._thread.join(timeout=2)
 
 
-def _open_socket() -> socket.socket:
+def _join_group(sock: socket.socket, lan_ip: str) -> None:
+    """Join 224.0.0.251 on the interface that owns ``lan_ip``.
+
+    A wildcard join lets the kernel pick one interface off the route to the group — the default-route
+    NIC — so on a multi-homed box (separate WAN/LAN NICs, or a VPN owning the default route) queries
+    arriving on the LAN would never reach us.  Falls back to the wildcard if that interface is gone.
+    """
+    try:
+        sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_IF, socket.inet_aton(lan_ip))
+        sock.setsockopt(
+            socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, socket.inet_aton(_MDNS_GROUP) + socket.inet_aton(lan_ip)
+        )
+    except OSError:
+        logger.warning("mDNS: cannot join 224.0.0.251 on {}; using the default interface", lan_ip)
+        sock.setsockopt(
+            socket.IPPROTO_IP,
+            socket.IP_ADD_MEMBERSHIP,
+            struct.pack("=4sl", socket.inet_aton(_MDNS_GROUP), socket.INADDR_ANY),
+        )
+
+
+def _open_socket(lan_ip: str) -> socket.socket:
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     if hasattr(socket, "SO_REUSEPORT"):
         # Share :5353 with the OS mDNS stack (macOS mDNSResponder / Linux avahi) instead of fighting it.
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
     sock.bind(("", _MDNS_PORT))
-    sock.setsockopt(
-        socket.IPPROTO_IP,
-        socket.IP_ADD_MEMBERSHIP,
-        struct.pack("=4sl", socket.inet_aton(_MDNS_GROUP), socket.INADDR_ANY),
-    )
+    _join_group(sock, lan_ip)
     sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 255)  # RFC 6762 §11: mDNS uses TTL 255
     sock.settimeout(1.0)  # so _serve_loop wakes to observe _stop
     return sock
@@ -250,33 +273,37 @@ def _probe_conflict(sock: socket.socket, name: str, our_ip: str) -> str | None:
     """Send one query for ``name`` and briefly listen; returns another host's IP if one already
     answers for it, else None.  Best-effort — the caller warns and serves anyway (no renaming)."""
     want = _normalize(name)
+    # A busy LAN (Bonjour/AirPlay/Chromecast) delivers unrelated packets faster than the per-recv
+    # timeout, so only an overall deadline bounds this — and it blocks boot and /api/domains.
+    deadline = time.monotonic() + _PROBE_BUDGET
     sock.settimeout(0.25)
     try:
         sock.sendto(_build_query(name), (_MDNS_GROUP, _MDNS_PORT))
-        while True:
+        while time.monotonic() < deadline:
             try:
                 data, _addr = sock.recvfrom(9000)
             except (TimeoutError, OSError):
                 return None
             try:
                 records = _parse_a_answers(data)
-            except (ValueError, IndexError, struct.error):
-                continue  # malformed LAN chatter — keep listening
+            except (ValueError, IndexError, struct.error, OSError):
+                continue  # malformed LAN chatter (OSError: inet_ntoa on truncated rdata) — keep listening
             for rname, ip in records or ():
                 if _normalize(rname) == want and ip != our_ip:
                     return ip
+        return None
     finally:
         sock.settimeout(1.0)
 
 
 def mdns_bases(db: sqlite3.Connection) -> tuple[str, ...]:
     """The port-stripped names of every mDNS (``.local``) domain the instance answers on."""
-    return tuple(d.name_no_port for d in effective_domains(db) if d.mdns)
+    return tuple(d.name_no_port for d in effective_domains(db) if d.is_local)
 
 
 def start_mdns(bases: tuple[str, ...], lan_ip: str) -> MdnsResponder:
     """Bind the mDNS socket, warn on any pre-existing claimant, and start answering for ``bases``."""
-    sock = _open_socket()
+    sock = _open_socket(lan_ip)
     for base in bases:
         conflict = _probe_conflict(sock, base, lan_ip)
         if conflict is not None:
@@ -302,6 +329,15 @@ def get_active_mdns() -> MdnsResponder | None:
     return _active_mdns
 
 
+def _start_and_register(bases: tuple[str, ...], lan_ip: str) -> None:
+    try:
+        set_active_mdns(start_mdns(bases, lan_ip))
+    except OSError as exc:
+        # A :5353 bind clash (e.g. an avahi/systemd-resolved without SO_REUSEPORT) must never take
+        # the router down — degrade to no mDNS and keep serving.
+        logger.warning("mDNS responder failed to start ({}); continuing without it", exc)
+
+
 def ensure_mdns_for_domains(db: sqlite3.Connection, lan_ip: str | None = None) -> None:
     """Reconcile the responder with the DB's ``.local`` (mDNS) domains: start it when the first one
     appears, refresh its served set + LAN IP, or stop it when the last one is removed.  In-process,
@@ -320,11 +356,13 @@ def ensure_mdns_for_domains(db: sqlite3.Connection, lan_ip: str | None = None) -
         if lan_ip is None:
             logger.warning("mDNS domain configured but no LAN IP found; responder not started")
             return
-        try:
-            set_active_mdns(start_mdns(bases, lan_ip))
-        except OSError as exc:
-            # A :5353 bind clash (e.g. an avahi/systemd-resolved without SO_REUSEPORT) must never take
-            # the router down — degrade to no mDNS and keep serving.
-            logger.warning("mDNS responder failed to start ({}); continuing without it", exc)
+        _start_and_register(bases, lan_ip)
+    elif lan_ip is not None and lan_ip != responder.lan_ip:
+        # The socket's group membership is pinned to the interface it was opened on, so a moved
+        # address needs a fresh socket — not just a new advertised IP.
+        logger.info("mDNS: LAN IP moved {} -> {}; rebinding responder", responder.lan_ip, lan_ip)
+        responder.stop()
+        set_active_mdns(None)
+        _start_and_register(bases, lan_ip)
     else:
-        responder.update(bases, lan_ip or responder.lan_ip)
+        responder.update(bases)
