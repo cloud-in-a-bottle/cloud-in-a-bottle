@@ -68,5 +68,5 @@
 
 - name: Show claim URL
   debug:
-    msg: "Claim URL: {{ ('http://' + domain + ':8080') if (local_http_only | default(false) | bool) else ('https://' + domain) }}/setup?claim={{ effective_claim_token }}"
+    msg: "Claim URL: {{ ('http://' + domain + ':8080') if (local_http_only | default(false) | bool) else (('http://' + domain) if (mdns | default(false) | bool) else ('https://' + domain)) }}/setup?claim={{ effective_claim_token }}"
   when: (overwrite_existing | default(false) | bool) or not existing_first_boot.stat.exists

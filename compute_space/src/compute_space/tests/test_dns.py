@@ -13,7 +13,7 @@ from compute_space.core.dns import DnsZone
 from compute_space.core.dns import TxtRecord
 from compute_space.core.dns import append_txt_records
 from compute_space.core.dns import clear_txt
-from compute_space.core.dns import public_dns_zones
+from compute_space.core.dns import dns_zones
 from compute_space.core.dns import reload_coredns_for_domains
 from compute_space.core.dns import set_active_coredns
 from compute_space.core.domains import Domain
@@ -264,7 +264,7 @@ def test_container_view_forward_uses_discovered_resolvers_and_distinct_bind(
     assert "bind 10.0.0.5" not in catch_all
 
 
-def test_public_dns_zones_covers_every_public_domain_and_skips_mdns(tmp_path: Path) -> None:
+def test_dns_zones_covers_every_domain_including_local(tmp_path: Path) -> None:
     config = _seed_dns_cfg(
         tmp_path,
         Domain(name="host.example.com", tls=True),
@@ -272,12 +272,30 @@ def test_public_dns_zones_covers_every_public_domain_and_skips_mdns(tmp_path: Pa
         Domain(name="myhost.local", tls=False, mdns=True),
     )
     with closing(open_db(config)) as db:
-        zones = public_dns_zones(config, db)
-    # The mDNS domain is excluded (served by the responder, not CoreDNS).
-    assert [z.domain for z in zones] == ["host.example.com", "host.example.org"]
-    # Primary keeps the legacy zonefile path; the secondary gets a per-domain file under zones/.
+        zones = dns_zones(config, db)
+    # CoreDNS now serves the `.local` zone too (for conditional-forwarder clients, e.g. Windows).
+    assert [z.domain for z in zones] == ["host.example.com", "host.example.org", "myhost.local"]
+    # Primary keeps the legacy zonefile path; the others get a per-domain file under zones/.
     assert zones[0].zonefile_path == config.coredns_zonefile_path
     assert zones[1].zonefile_path == config.zones_dir / "host.example.org.zone"
+
+
+def test_local_zone_uses_lan_ip_public_zone_uses_public_ip(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(dns_mod, "_coredns_bind_ip", lambda ip: "10.0.0.5")
+    monkeypatch.setattr(dns_mod, "_gateway_ip_is_bindable", lambda ip: False)
+    _stub_popen(monkeypatch)
+
+    corefile = tmp_path / "Corefile"
+    public_zone = tmp_path / "public.zone"
+    local_zone = tmp_path / "local.zone"
+    dns_mod.start_coredns(
+        (DnsZone("host.example.com", public_zone), DnsZone("myhost.local", local_zone)),
+        "203.0.113.10",
+        corefile,
+        lan_ip="192.168.1.50",
+    )
+    assert "*   IN A    203.0.113.10" in public_zone.read_text()  # public → public IP
+    assert "*   IN A    192.168.1.50" in local_zone.read_text()  # .local → LAN IP
 
 
 def test_start_coredns_writes_a_zone_block_and_file_per_public_domain(
@@ -319,7 +337,7 @@ def test_reload_coredns_for_domains_regenerates_zones_and_restarts(
 
     config = _seed_dns_cfg(tmp_path, Domain(name="host.example.com", tls=True), public_ip="203.0.113.10")
     with closing(open_db(config)) as db:
-        coredns = dns_mod.start_coredns(public_dns_zones(config, db), config.public_ip, config.coredns_corefile_path)
+        coredns = dns_mod.start_coredns(dns_zones(config, db), config.public_ip, config.coredns_corefile_path)
         set_active_coredns(coredns)
         try:
             first_proc = coredns.proc

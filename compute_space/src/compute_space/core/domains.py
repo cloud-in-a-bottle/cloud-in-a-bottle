@@ -13,6 +13,12 @@ def _lowercase(s: str) -> str:
     return s.lower()
 
 
+def is_local_name(name: str) -> bool:
+    """True if ``name`` (port stripped) is an mDNS ``.local`` name — the one place that decides it."""
+    n = name.split(":")[0].lower()
+    return n == "local" or n.endswith(".local")
+
+
 @attr.s(auto_attribs=True, frozen=True)
 class Domain:
     """One hostname the instance answers on, with its scheme and discovery method.  The set lives in
@@ -34,6 +40,11 @@ class Domain:
     @property
     def scheme(self) -> str:
         return "https" if self.tls else "http"
+
+    @property
+    def is_local(self) -> bool:
+        """An mDNS ``.local`` name: CoreDNS resolves it to the LAN IP and it never gets a public cert."""
+        return is_local_name(self.name)
 
     def owns(self, host: str) -> bool:
         """True if ``host`` is this domain itself or one of its ``<app>.<domain>`` subdomains.

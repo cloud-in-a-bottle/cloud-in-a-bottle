@@ -3,6 +3,8 @@ from __future__ import annotations
 import socket
 import struct
 
+import pytest
+
 from compute_space.core import mdns
 
 
@@ -11,10 +13,14 @@ class _FakeSocket:
 
     def __init__(self) -> None:
         self.sent: list[tuple[bytes, tuple[str, int]]] = []
+        self.closed = False
 
     def sendto(self, data: bytes, addr: tuple[str, int]) -> int:
         self.sent.append((data, addr))
         return len(data)
+
+    def close(self) -> None:
+        self.closed = True
 
 
 def _responder(bases: tuple[str, ...], ip: str = "192.168.1.50") -> mdns.MdnsResponder:
@@ -76,6 +82,36 @@ def test_update_swaps_served_set() -> None:
     r._handle(mdns._build_query("app.newhost.local"), ("192.168.1.9", 5353))
     packet, _addr = r.sock.sent[0]  # type: ignore[attr-defined]
     assert mdns._parse_a_answers(packet) == ("10.0.0.2",)
+
+
+def test_drops_query_from_public_source() -> None:
+    r = _responder(("openhost.local",))
+    r._handle(mdns._build_query("openhost.local"), ("8.8.8.8", 5353))  # routed, off-LAN
+    assert r.sock.sent == []  # type: ignore[attr-defined]
+
+
+def test_answers_query_from_private_source() -> None:
+    assert mdns._is_local_source("192.168.1.9")
+    assert mdns._is_local_source("10.1.2.3")
+    assert not mdns._is_local_source("8.8.8.8")
+
+
+def test_ensure_starts_then_stops_responder(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake = _responder(("openhost.local",))
+    monkeypatch.setattr(mdns, "default_route_source_ip", lambda: "192.168.1.50")
+    monkeypatch.setattr(mdns, "start_mdns", lambda bases, lan_ip: fake)
+    mdns.set_active_mdns(None)
+
+    # First `.local` domain appears → responder starts.
+    monkeypatch.setattr(mdns, "mdns_bases", lambda db: ("openhost.local",))
+    mdns.ensure_mdns_for_domains(db=None)  # type: ignore[arg-type]
+    assert mdns.get_active_mdns() is fake
+
+    # Last `.local` domain removed → responder stops and deregisters.
+    monkeypatch.setattr(mdns, "mdns_bases", lambda db: ())
+    mdns.ensure_mdns_for_domains(db=None)  # type: ignore[arg-type]
+    assert mdns.get_active_mdns() is None
+    assert fake.sock.closed  # type: ignore[attr-defined]
 
 
 def test_a_record_wire_shape() -> None:

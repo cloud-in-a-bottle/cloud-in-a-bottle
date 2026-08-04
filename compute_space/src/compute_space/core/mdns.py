@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import ipaddress
 import socket
 import sqlite3
 import struct
@@ -23,6 +24,19 @@ _CACHE_FLUSH = 0x8000  # top bit of an rrclass: responder tells peers to flush p
 _QU_BIT = 0x8000  # top bit of a question's qclass: querier wants a unicast response
 _TTL = 120  # seconds; short so a moved instance is re-learned quickly
 _LEGACY_TTL = 10  # RFC 6762 §6.7: legacy unicast responses cap TTL at 10s
+
+
+def _is_local_source(ip: str) -> bool:
+    """True if ``ip`` is on a private/link-local/loopback network — the only peers we answer.
+
+    The socket binds ``0.0.0.0:5353`` so it also receives *unicast* datagrams sent straight to a
+    public IP; answering those would make an internet-facing box an mDNS reflection/amplification
+    vector (and leak the LAN IP).  LAN multicast senders are always private, so this is transparent.
+    """
+    try:
+        return ipaddress.ip_address(ip).is_private
+    except ValueError:
+        return False
 
 
 # --- wire format -----------------------------------------------------------------------------
@@ -173,6 +187,8 @@ class MdnsResponder:
                 logger.opt(exception=True).warning("mDNS: dropping unhandled query from {}", addr)
 
     def _handle(self, data: bytes, addr: tuple[str, int]) -> None:
+        if not _is_local_source(addr[0]):
+            return  # never answer a routed unicast query from off-LAN
         is_query, questions = _parse_questions(data)
         if not is_query:
             return
@@ -266,11 +282,28 @@ def get_active_mdns() -> MdnsResponder | None:
     return _active_mdns
 
 
-def reload_mdns_for_domains(db: sqlite3.Connection) -> bool:
-    """Update the running responder's served set (and re-read the LAN IP) from the DB's current mDNS
-    domains.  In-process, no restart.  No-op (False) when the responder isn't running."""
+def ensure_mdns_for_domains(db: sqlite3.Connection) -> None:
+    """Reconcile the responder with the DB's ``.local`` (mDNS) domains: start it when the first one
+    appears, refresh its served set + LAN IP, or stop it when the last one is removed.  In-process,
+    no restart.  Called at boot and by /api/domains, so mDNS turns on/off at runtime."""
+    bases = mdns_bases(db)
     responder = get_active_mdns()
+    if not bases:
+        if responder is not None:
+            responder.stop()
+            set_active_mdns(None)
+            logger.info("Stopped mDNS responder (no .local domains)")
+        return
+    lan_ip = default_route_source_ip()
     if responder is None:
-        return False
-    responder.update(mdns_bases(db), default_route_source_ip() or responder.lan_ip)
-    return True
+        if lan_ip is None:
+            logger.warning("mDNS domain configured but no LAN IP found; responder not started")
+            return
+        try:
+            set_active_mdns(start_mdns(bases, lan_ip))
+        except OSError as exc:
+            # A :5353 bind clash (e.g. an avahi/systemd-resolved without SO_REUSEPORT) must never take
+            # the router down — degrade to no mDNS and keep serving.
+            logger.warning("mDNS responder failed to start ({}); continuing without it", exc)
+    else:
+        responder.update(bases, lan_ip or responder.lan_ip)

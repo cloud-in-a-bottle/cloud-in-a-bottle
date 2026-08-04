@@ -7,6 +7,11 @@
 # Optional variables:
 #   -e public_ip=1.2.3.4         (defaults to target IP)
 #   -e initial_user=ubuntu        (defaults to root)
+#   -e mdns=true                  (LAN mode: `.local` domain, no public TLS.
+#                                  CoreDNS serves the `.local` zone (LAN IP) and
+#                                  the router publishes it via mDNS; Caddy serves
+#                                  http on :80. Use a `.local` domain, e.g.
+#                                  -e domain=openhost.local)
 #   -e openhost_branch=<branch>   (git branch to deploy; defaults to main)
 #   -e openhost_commit=<sha>      (exact commit to deploy; used if
 #                                  openhost_branch is unset)

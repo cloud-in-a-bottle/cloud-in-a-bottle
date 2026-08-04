@@ -24,7 +24,7 @@ from compute_space.core.caddy import set_active_caddy
 from compute_space.core.caddy import start_caddy
 from compute_space.core.caddy import unix_admin_address
 from compute_space.core.dns import CoreDnsProcess
-from compute_space.core.dns import public_dns_zones
+from compute_space.core.dns import dns_zones
 from compute_space.core.dns import set_active_coredns
 from compute_space.core.dns import start_coredns
 from compute_space.core.domains import Domain
@@ -33,9 +33,8 @@ from compute_space.core.first_boot import owner_exists
 from compute_space.core.first_boot import seed_first_boot
 from compute_space.core.logging import logger
 from compute_space.core.logging import setup_file_logging
-from compute_space.core.mdns import MdnsResponder
-from compute_space.core.mdns import set_active_mdns
-from compute_space.core.mdns import start_mdns
+from compute_space.core.mdns import ensure_mdns_for_domains
+from compute_space.core.mdns import get_active_mdns
 from compute_space.core.pinned_binary import get_pinned_binary
 from compute_space.core.pinned_binary import install_pinned_binary
 from compute_space.core.terminal import cleanup_all as cleanup_terminal_sessions
@@ -140,38 +139,31 @@ def main() -> None:
     children: list[subprocess.Popen[bytes]] = []
     coredns: CoreDnsProcess | None = None
     caddy: CaddyProcess | None = None
-    mdns: MdnsResponder | None = None
     # One connection for the whole domain-dependent startup sequence (CoreDNS -> TLS cert -> Caddy);
     # the primary + cert/zone paths are read live from it.
     with closing(get_db()) as db:
         domains = effective_domains(db)  # primary first
-        dns_zones = public_dns_zones(config, db)
+        zones = dns_zones(config, db)
         _require_configured_domain(domains)  # fail loud at boot, not late in the first request
 
         if config.coredns_enabled:
             if not config.public_ip:
                 raise RuntimeError("Public IP must be set in config to use CoreDNS")
-            # Authoritative for every public (non-mDNS) domain the instance answers on, so a
-            # secondary domain delegated to this box resolves too — not just the primary.
+            # Authoritative for every domain the instance answers on — public zones at the public IP,
+            # `.local` zones at the LAN IP — so delegated/conditional-forwarder clients resolve too.
             coredns = start_coredns(
-                dns_zones,
+                zones,
                 config.public_ip,
                 config.coredns_corefile_path,
                 coredns_bin=_ensure_coredns_binary(config),
+                lan_ip=default_route_source_ip(),
             )
             # Register so /api/domains can regenerate zones + restart CoreDNS when a domain is added.
             set_active_coredns(coredns)
 
-        # Wildcard mDNS responder for any `.local` domain (resolves openhost.local + *.openhost.local
-        # on the LAN in place of public DNS).  Needs the LAN IP to advertise; skip if undiscoverable.
-        mdns_bases = tuple(d.name_no_port for d in domains if d.mdns)
-        if mdns_bases:
-            lan_ip = default_route_source_ip()
-            if lan_ip is None:
-                logger.warning("mDNS domain configured but no LAN IP found; not starting responder")
-            else:
-                mdns = start_mdns(mdns_bases, lan_ip)
-                set_active_mdns(mdns)
+        # Start the wildcard mDNS responder if any `.local` domain is configured (zero-config LAN
+        # discovery alongside CoreDNS); reconciled here and by /api/domains, so it toggles at runtime.
+        ensure_mdns_for_domains(db)
 
         if domains[0].tls:  # primary is a TLS domain
             _ensure_tls_cert(config, db)
@@ -232,7 +224,7 @@ def main() -> None:
         setup_completed = asyncio.run(_serve(create_setup_app(config), hypercorn_config))
         if not setup_completed:
             logger.info("Setup interrupted by signal; exiting")
-            if mdns is not None:
+            if (mdns := get_active_mdns()) is not None:
                 mdns.stop()
             _terminate_children(_all_children())
             time.sleep(0.1)
@@ -244,7 +236,7 @@ def main() -> None:
     restart_requested = asyncio.run(_serve(app, hypercorn_config))
     logger.info(f"hypercorn serve returned, restart_requested={restart_requested}")
 
-    if mdns is not None:
+    if (mdns := get_active_mdns()) is not None:
         mdns.stop()
     _terminate_children(_all_children())
 

@@ -1,14 +1,19 @@
 {% set http_only = (local_http_only | default(false)) | bool %}
+{% set mdns_mode = (mdns | default(false)) | bool %}
+{% set no_tls = http_only or mdns_mode %}
 {# local_http_only: HTTP-only localhost mode (no TLS / CoreDNS / Caddy) for
    bringing an instance up before a public domain + DNS are ready.  The router
    serves plain HTTP directly on host:port (reach it via an SSH tunnel, or set
    -e bind_host=0.0.0.0 for LAN access).  Re-run without the flag for full
-   TLS + CoreDNS once DNS is in place. #}
+   TLS + CoreDNS once DNS is in place.
+   mdns: LAN mode for a `.local` domain (no public TLS).  CoreDNS + Caddy stay on
+   (CoreDNS serves the `.local` zone for conditional-forwarder clients, e.g. Windows;
+   the router's mDNS responder handles zero-config LAN discovery). #}
 [openhost]
 {# The primary domain and its TLS flag are set in first_boot.toml; this file is operational config. #}
 host = "{{ bind_host | default('127.0.0.1') }}"
-acquire_tls_cert_if_missing = {{ 'false' if http_only else 'true' }}
-{% if not http_only %}
+acquire_tls_cert_if_missing = {{ 'false' if no_tls else 'true' }}
+{% if not no_tls %}
 acme_account_key_path = "/home/host/openhost/ansible/secrets/certbot_private_key.json"
 acme_email = "{{ acme_email | default('openhost@' + domain) }}"
 {% if acme_directory_url is defined %}

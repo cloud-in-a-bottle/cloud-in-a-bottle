@@ -30,6 +30,7 @@ from jinja2 import StrictUndefined
 from compute_space.config import Config
 from compute_space.core.containers import CONTAINER_GATEWAY_IP
 from compute_space.core.domains import effective_domains
+from compute_space.core.domains import is_local_name
 from compute_space.core.domains import primary_domain_or_none
 from compute_space.core.logging import logger
 from compute_space.core.util import default_route_source_ip
@@ -111,12 +112,14 @@ class DnsZone:
         return self.zonefile_path.with_name(self.zonefile_path.name + ".container")
 
 
-def public_dns_zones(config: Config, db: sqlite3.Connection) -> tuple[DnsZone, ...]:
-    """The zones CoreDNS is authoritative for: every non-mDNS domain the instance answers on.
+def dns_zones(config: Config, db: sqlite3.Connection) -> tuple[DnsZone, ...]:
+    """Every zone CoreDNS is authoritative for — every domain the instance answers on.
 
-    mDNS ``.local`` domains are served by the wildcard mDNS responder, never CoreDNS/ACME, so
-    they are excluded.  The primary keeps the legacy ``zonefile`` path; additional public domains
-    get a per-domain file under ``zones/`` (see ``Config.coredns_zonefile_path_for``)."""
+    CoreDNS serves public *and* ``.local`` domains: public names resolve to the public IP, ``.local``
+    names to the box's LAN IP (so a client using CoreDNS as a conditional forwarder — e.g. Windows,
+    which can't do multi-label mDNS — reaches the box).  ``.local`` never gets a public cert (keyed on
+    ``tls``).  The primary keeps the legacy ``zonefile`` path; others get a per-domain file under
+    ``zones/`` (see ``Config.coredns_zonefile_path_for``)."""
     primary = primary_domain_or_none(db)
     primary_no_port = primary.name_no_port if primary else None
     return tuple(
@@ -125,7 +128,6 @@ def public_dns_zones(config: Config, db: sqlite3.Connection) -> tuple[DnsZone, .
             zonefile_path=config.coredns_zonefile_path_for(d.name_no_port, d.name_no_port == primary_no_port),
         )
         for d in effective_domains(db)
-        if not d.mdns
     )
 
 
@@ -134,12 +136,13 @@ def _write_coredns_config(
     public_ip: str,
     corefile_path: Path,
     container_gateway_ip: str | None,
+    lan_ip: str | None = None,
 ) -> None:
     """Render the Corefile + one public (and, when applicable, container) zone file per zone.
 
-    Returns nothing; the caller (start or restart) then spawns/re-spawns CoreDNS against the
-    freshly written Corefile.  CoreDNS auto-reloads zone *file* edits, but picking up a new zone
-    server block needs a restart.
+    ``.local`` zones resolve to ``lan_ip`` (falling back to ``public_ip`` when it can't be
+    discovered); public zones resolve to ``public_ip``.  The caller then spawns/re-spawns CoreDNS
+    against the fresh Corefile — a new zone server block needs a restart; zone *file* edits auto-reload.
     """
     bind_serial = int(time.time())
 
@@ -165,10 +168,12 @@ def _write_coredns_config(
 
     for zone in zones:
         # Write zone file. this is the actual DNS data. CoreDNS watches for changes and auto-reloads.
+        # `.local` zones point at the LAN IP so LAN clients reach the box directly, not the public IP.
+        record_ip = (lan_ip or public_ip) if is_local_name(zone.domain) else public_ip
         zone.zonefile_path.parent.mkdir(parents=True, exist_ok=True)
         content = _jinja_env.get_template("zonefile").render(
             zone_domain=zone.domain,
-            public_ip=public_ip,
+            record_ip=record_ip,
             # Current timestamp as initial SOA serial: simple, and always increasing across runs.
             serial=bind_serial,
         )
@@ -235,16 +240,18 @@ def start_coredns(
     corefile_path: Path,
     container_gateway_ip: str | None = CONTAINER_GATEWAY_IP,
     coredns_bin: str = "coredns",
+    lan_ip: str | None = None,
 ) -> CoreDnsProcess:
-    """Write CoreDNS config + zone files for every public domain, start CoreDNS, return the handle.
+    """Write CoreDNS config + zone files for every domain, start CoreDNS, return the handle.
 
-    When ``container_gateway_ip`` is set (the default, and the dummy ``openhost0`` gateway in
+    ``.local`` zones resolve to ``lan_ip`` (see ``_write_coredns_config``).  When
+    ``container_gateway_ip`` is set (the default, and the dummy ``openhost0`` gateway in
     production), a second server view per zone is bound there that resolves the zone wildcard to
     the gateway so pasta app containers can reach sibling apps' public HTTPS URLs through Caddy
     (NAT hairpin), with a catch-all forward for everything else.  Pass ``None`` to disable (e.g.
     in environments without the gateway interface).
     """
-    _write_coredns_config(zones, public_ip, corefile_path, container_gateway_ip)
+    _write_coredns_config(zones, public_ip, corefile_path, container_gateway_ip, lan_ip)
     logger.info(f"Starting CoreDNS for {', '.join(z.domain for z in zones)}")
     return CoreDnsProcess(
         proc=_spawn_coredns(corefile_path, coredns_bin),
@@ -276,7 +283,13 @@ def reload_coredns_for_domains(config: Config, db: sqlite3.Connection) -> bool:
     coredns = get_active_coredns()
     if coredns is None or not config.public_ip:
         return False
-    _write_coredns_config(public_dns_zones(config, db), config.public_ip, coredns.corefile_path, CONTAINER_GATEWAY_IP)
+    _write_coredns_config(
+        dns_zones(config, db),
+        config.public_ip,
+        coredns.corefile_path,
+        CONTAINER_GATEWAY_IP,
+        default_route_source_ip(),
+    )
     coredns.restart()
     return True
 

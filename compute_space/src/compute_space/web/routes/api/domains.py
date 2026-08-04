@@ -33,13 +33,14 @@ from compute_space.core.domains import DomainCertStatus
 from compute_space.core.domains import DomainRecord
 from compute_space.core.domains import effective_domains
 from compute_space.core.domains import get_record
+from compute_space.core.domains import is_local_name
 from compute_space.core.domains import load_records
 from compute_space.core.domains import primary_domain
 from compute_space.core.domains import remove_record
 from compute_space.core.domains import set_record_status
 from compute_space.core.domains import upsert_record
 from compute_space.core.logging import logger
-from compute_space.core.mdns import reload_mdns_for_domains
+from compute_space.core.mdns import ensure_mdns_for_domains
 from compute_space.core.tls.domain_certs import ensure_cert_for
 from compute_space.core.tls.renewal import CertStatus
 from compute_space.core.tls.renewal import get_cert_status
@@ -166,6 +167,8 @@ def _validate_new_domain(config: Config, name: str, tls: bool, mdns: bool, db: s
         return "invalid domain name"
     if mdns and tls:
         return "mDNS (.local) domains are served over http; set tls=false"
+    if mdns and not is_local_name(name):
+        return "mDNS is only for .local domains"
     if any(d.name_no_port == name for d in effective_domains(db)):
         return "domain is already configured"
     return None
@@ -197,16 +200,13 @@ async def add_domain(
             cert_status=DomainCertStatus.ACQUIRING if data.tls else DomainCertStatus.ACTIVE,
         ),
     )
-    if data.mdns:
-        # Update the running responder so it answers the new `.local` domain immediately (in-process,
-        # no restart).  CoreDNS is untouched — mDNS domains never get a public zone.
-        reload_mdns_for_domains(db)
-    else:
-        # Make CoreDNS authoritative for the new public zone *before* acquisition: DNS-01 writes the
-        # _acme-challenge TXT into this domain's zone file, which only resolves once CoreDNS serves
-        # the zone.  Run off the event loop — the restart does a blocking terminate+wait(3s) — but
-        # await it so ordering before acquisition holds.  (mDNS domains never touch CoreDNS.)
-        await anyio.to_thread.run_sync(reload_coredns_for_domains, config, db)
+    # Make CoreDNS authoritative for the new zone (public or `.local`) *before* any acquisition:
+    # DNS-01 writes the _acme-challenge TXT into this domain's zone file, which only resolves once
+    # CoreDNS serves the zone.  Off the event loop (the restart blocks on terminate+wait(3s)) but
+    # awaited so ordering before acquisition holds.  No-op when CoreDNS isn't running.
+    await anyio.to_thread.run_sync(reload_coredns_for_domains, config, db)
+    # Start (or refresh) the mDNS responder if this added the first/another `.local` domain.
+    ensure_mdns_for_domains(db)
     if data.tls:
         _spawn_acquisition(config, domain)
     # Return the full updated list so the client repaints the table without a follow-up GET, and
@@ -230,13 +230,12 @@ async def remove_domain(
     removed = get_record(db, name)
     if not remove_record(db, name):
         return Response(ErrorResponse(error="domain not found"), status_code=404)
-    if removed is not None and removed.mdns:
-        # Drop the `.local` domain from the running responder so it stops answering for it.
-        reload_mdns_for_domains(db)
-    elif removed is not None:
-        # Drop the zone from CoreDNS so it stops answering for the removed public domain.  Off the
-        # event loop — the restart blocks on a terminate+wait(3s).
+    if removed is not None:
+        # Drop the zone from CoreDNS so it stops answering for the removed domain (off the event
+        # loop — the restart blocks on terminate+wait(3s)), and stop the responder if that was the
+        # last `.local` domain.
         await anyio.to_thread.run_sync(reload_coredns_for_domains, config, db)
+        ensure_mdns_for_domains(db)
     # Regenerate Caddy only after this response has been sent — see _reload_caddy_after_response.
     return Response(
         DomainListResponse(domains=_domain_list(config, db)),
