@@ -336,6 +336,18 @@ def test_delegate_denied_to_app_not_deployed_by_caller(client: TestClient[Litest
     assert resp.status_code == 403
 
 
+def test_delegate_without_capability_does_not_leak_app_existence(client: TestClient[Litestar], cfg: Any) -> None:
+    # A caller lacking delegate_permissions must get 403 (capability checked
+    # first) rather than a 404 that would reveal whether the target app exists.
+    resp = client.post(
+        _url("delegate"),
+        headers=_headers(),
+        content=json.dumps({"app_id": "abcdefghijkm", "service": SVC, "grant": {"key": "X"}}),
+    )
+    assert resp.status_code == 403
+    assert resp.json()["error"] == "permission_required"
+
+
 def test_delegate_success_writes_grant_to_child(client: TestClient[Litestar], cfg: Any) -> None:
     target = _insert_app(cfg.db_path, name="child", installed_by=CALLER_APP_ID, port=19714)
     _grant(cfg.db_path, CALLER_APP_ID, {"capability": "delegate_permissions"})
