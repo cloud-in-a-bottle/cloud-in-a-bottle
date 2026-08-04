@@ -3,18 +3,30 @@ from __future__ import annotations
 import asyncio
 import sqlite3
 from enum import StrEnum
+from typing import Any
 
 import attr
 import bcrypt
+from litestar import Request
 from litestar import Router
 from litestar import get
 from litestar import post
 from litestar.di import NamedDependency
 from litestar.exceptions import HTTPException
+from litestar.params import FromQuery
+from litestar.response import Redirect
 
+from compute_space.config import Config
 from compute_space.core.auth.auth import read_owner_username
 from compute_space.core.auth.auth import update_owner_username
 from compute_space.core.auth.auth import validate_owner_username
+from compute_space.core.connect import ConnectError
+from compute_space.core.connect import build_connect_url
+from compute_space.core.connect import exchange_code_for_credential
+from compute_space.core.domains import primary_domain
+from compute_space.core.identity_store import get_connect_base_url
+from compute_space.core.identity_store import get_instance_identity
+from compute_space.core.identity_store import set_instance_identity
 from compute_space.core.system_agent import SystemAgentError
 from compute_space.core.system_agent import system_agent_apply
 from compute_space.core.system_agent import system_agent_fetch
@@ -148,6 +160,80 @@ async def restart_compute_space() -> None:
     trigger_restart()
 
 
+# --- Connect to Imbue -------------------------------------------------------
+
+
+@attr.s(auto_attribs=True, frozen=True)
+class ConnectStatusResponse:
+    # Whether the "Connect to Imbue" button should be shown (an Imbue URL is
+    # configured) and whether this instance already holds a credential.
+    available: bool
+    connected: bool
+
+
+@attr.s(auto_attribs=True, frozen=True)
+class ConnectStartResponse:
+    # The Imbue authorization URL the browser should be sent to.
+    redirect_url: str
+
+
+@get("/api/settings/connect-imbue/status", guards=[require_owner_auth])
+async def connect_imbue_status(
+    config: NamedDependency[Config], db: NamedDependency[sqlite3.Connection]
+) -> ConnectStatusResponse:
+    return ConnectStatusResponse(
+        available=bool(get_connect_base_url(db)),
+        connected=get_instance_identity(db, config) is not None,
+    )
+
+
+@post("/api/settings/connect-imbue/start", status_code=200, guards=[require_owner_auth])
+async def connect_imbue_start(
+    config: NamedDependency[Config],
+    db: NamedDependency[sqlite3.Connection],
+    request: Request[Any, Any, Any],
+) -> ConnectStartResponse:
+    frontend = get_connect_base_url(db)
+    if not frontend:
+        raise HTTPException(detail="Connect to Imbue is not available on this deployment", status_code=503)
+    # The one-time code is returned to this instance's own https origin, so derive
+    # it from the request (honoring proxy headers).
+    scheme = request.headers.get("x-forwarded-proto") or request.url.scheme
+    zone = primary_domain(db).name
+    host = request.headers.get("x-forwarded-host") or request.headers.get("host") or zone
+    instance_base = f"{scheme}://{host}"
+    redirect_url = build_connect_url(frontend, zone, instance_base)
+    return ConnectStartResponse(redirect_url=redirect_url)
+
+
+@get("/api/settings/connect-imbue/callback", guards=[require_owner_auth], sync_to_thread=True)
+def connect_imbue_callback(
+    config: NamedDependency[Config],
+    db: NamedDependency[sqlite3.Connection],
+    code: FromQuery[str] = "",
+) -> Redirect:
+    """Exchange the one-time code and store the credential.
+
+    Imbue returns the one-time code here (?code=). We exchange it for the credential
+    and write it into the DB settings table, which is read live by the services
+    that use it — so no restart is needed. Redirects back to Settings.
+
+    Sync + sync_to_thread so the blocking exchange (httpx) doesn't stall the event
+    loop for other (proxied app) traffic.
+    """
+    frontend = get_connect_base_url(db)
+    if not frontend:
+        raise HTTPException(detail="Connect to Imbue is not available on this deployment", status_code=503)
+    if not code.strip():
+        return Redirect(path="/settings?connect=error")
+    try:
+        credential = exchange_code_for_credential(frontend, code.strip())
+        set_instance_identity(db, credential)
+    except ConnectError as e:
+        raise HTTPException(detail=str(e), status_code=502) from e
+    return Redirect(path="/settings?connect=ok")
+
+
 @attr.s(auto_attribs=True, frozen=True)
 class ChangePasswordRequest:
     current_password: str
@@ -224,6 +310,9 @@ api_settings_routes = Router(
         check_for_updates,
         apply_update,
         restart_compute_space,
+        connect_imbue_status,
+        connect_imbue_start,
+        connect_imbue_callback,
         change_password,
         get_owner_username,
         set_owner_username,

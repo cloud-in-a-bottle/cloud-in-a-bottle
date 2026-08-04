@@ -67,6 +67,11 @@ testpaths = [
 ]
 # do NOT set --import-mode=importlib or change the import-mode.
 addopts = "-p no:randomly -v"
+filterwarnings = [
+    # Litestar 2.23+ deprecates name-inferred DI in favour of `NamedDependency[...]`
+    # Collapse repeated ones to not clog output
+    "once:.*Inferred dependency field:DeprecationWarning",
+]
 markers = [
     "requires_containers: needs --run-containers flag and a working rootless podman setup",
     "requires_tls: needs --run-tls flag, pebble, and coredns",

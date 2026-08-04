@@ -30,6 +30,7 @@ from compute_space.db.connection import init_db
 from compute_space.tests._litestar_helpers import auth_cookie
 from compute_space.tests._litestar_helpers import make_test_app
 from compute_space.tests.conftest import _make_test_config
+from compute_space.tests.conftest import primary_of
 from compute_space.web.routes.api.apps import _app_diagnostics_filename
 from compute_space.web.routes.api.apps import api_apps_routes
 from compute_space.web.routes.api.system import _diagnostics_filename
@@ -226,7 +227,7 @@ def test_platform_diagnostics_returns_bundle(
     body = resp.json()
     assert body["schema_version"] == DIAGNOSTICS_SCHEMA_VERSION
     assert body["generated_at"]
-    assert body["zone_domain"] == cfg.zone_domain
+    assert body["zone_domain"] == primary_of(cfg).name
     assert "openhost" in body
     assert "system" in body
     assert body["system"]["python_version"]

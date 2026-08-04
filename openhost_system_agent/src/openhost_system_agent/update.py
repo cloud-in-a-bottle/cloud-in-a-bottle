@@ -299,20 +299,15 @@ def set_remote_url(url: str) -> RemoteInfo:
     except RuntimeError:
         repo.create_remote("origin", url)
 
-    # An @ref pins the instance to that branch/commit (updates walk the tags but
-    # end there instead of the latest tag); no @ref clears the pin. Persist the
-    # pin only *after* the ref resolves and is checked out, so a bad @ref (typo,
-    # deleted branch) raises without leaving a broken pin behind that would make
-    # fetch_updates silently report UP_TO_DATE forever.
+    # An @ref pins to that branch/commit; the update walk (update apply) does the
+    # actual checkout+migrate+install+restart. Resolve it here so a bad @ref (typo,
+    # deleted branch) raises instead of leaving a broken pin that fetch_updates
+    # would report as UP_TO_DATE forever — but do NOT check out or restart, which
+    # would boot new code before its migrations run.
     if ref:
         _get_remote(repo).fetch()
-        try:
-            repo.refs[f"origin/{ref}"]
-            repo.git.checkout("-fB", ref, f"origin/{ref}")
-            repo.heads[ref].set_tracking_branch(repo.refs[f"origin/{ref}"])
-        except IndexError:
-            repo.git.checkout("-f", ref)
-        repo.git.clean("-fd")
+        if _resolve_ref_sha(repo, ref) is None:
+            raise RuntimeError(f"Ref '{ref}' could not be resolved on the remote. Check the branch or commit name.")
 
     _set_target_ref(repo, ref)
 

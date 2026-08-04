@@ -202,14 +202,14 @@ def _init_apps_db(db_path: str) -> None:
 
 
 def test_enforce_guard_noop_without_threshold(tmp_path, monkeypatch):
-    config = _make_test_config(tmp_path)
+    config = _make_test_config(tmp_path, seed_primary=False)
     _init_apps_db(config.db_path)
     # Should not do anything when no threshold is configured
     storage.enforce_storage_guard(config)
 
 
 def test_enforce_guard_stops_apps_when_low(tmp_path, monkeypatch):
-    config = _make_test_config(tmp_path, storage_min_free_mb=1000)
+    config = _make_test_config(tmp_path, seed_primary=False, storage_min_free_mb=1000)
     _init_apps_db(config.db_path)
 
     db = sqlite3.connect(config.db_path)
@@ -239,7 +239,7 @@ def test_enforce_guard_stops_apps_when_low(tmp_path, monkeypatch):
 
 
 def test_enforce_guard_skips_when_paused(tmp_path, monkeypatch):
-    config = _make_test_config(tmp_path, storage_min_free_mb=1000)
+    config = _make_test_config(tmp_path, seed_primary=False, storage_min_free_mb=1000)
     _init_apps_db(config.db_path)
 
     db = sqlite3.connect(config.db_path)
@@ -311,7 +311,7 @@ def test_guard_enabled_by_default() -> None:
     # The storage guard ships enabled with a modest threshold (per the decision on
     # PR #236: keep it config-only but on by default). A fresh DefaultConfig must
     # therefore carry a positive storage_min_free_mb so the guard actually runs.
-    cfg = DefaultConfig(zone_domain="x.example.com")
+    cfg = DefaultConfig()
     assert cfg.storage_min_free_mb > 0
     # And the guard treats that as an active threshold.
     assert storage.storage_min_free_bytes(cfg) == cfg.storage_min_free_mb * 1024 * 1024

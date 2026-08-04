@@ -48,6 +48,7 @@ from compute_space.core.apps import find_app_by_name
 from compute_space.core.apps import get_app_from_hostname
 from compute_space.core.auth.permissions_v2 import get_granted_permissions_v2
 from compute_space.core.containers import get_docker_logs
+from compute_space.core.domains import primary_domain_or_none
 from compute_space.core.installer import GRANT_KEY_CAPABILITY
 from compute_space.core.installer import GRANT_KEY_REPO_URL_PREFIX
 from compute_space.core.installer import INSTALLER_SERVICE_URL
@@ -126,6 +127,7 @@ def _inject_grant_url_if_global(
     service_url: str,
     consumer_app_id: str,
     config: Config,
+    db: sqlite3.Connection,
 ) -> ASGIResponse:
     """If the provider's 403 body is ``permission_required`` with a global-scoped
     grant request, decorate it with ``grant_url`` pointing at the owner-facing
@@ -146,7 +148,7 @@ def _inject_grant_url_if_global(
     if not isinstance(grant, (str, dict)):
         return response
 
-    required_grant["grant_url"] = _approve_grant_url(config, consumer_app_id, service_url, grant)
+    required_grant["grant_url"] = _approve_grant_url(consumer_app_id, service_url, grant, db)
 
     return ASGIResponse(
         body=json.dumps(body).encode(),
@@ -164,12 +166,18 @@ def _carry_response_headers(headers: MutableScopeHeaders) -> Iterable[tuple[str,
         yield k, v
 
 
-def _approve_grant_url(config: Config, consumer_app_id: str, service_url: str, grant: Any) -> str:
+def _approve_grant_url(consumer_app_id: str, service_url: str, grant: Any, db: sqlite3.Connection) -> str:
     # urlencode each value: service_url contains "/" and ":", grant is JSON with "{", "}",
     # ",", '"' — all of which break query-string parsing if interpolated raw.
     query = urlencode({"app": consumer_app_id, "service": service_url, "grant": json.dumps(grant, sort_keys=True)})
     approve_path = f"/approve-permissions-v2?{query}"
-    return f"https://{config.zone_domain}{approve_path}" if config.zone_domain else approve_path
+    # Cross-app approval is server-side (no browsing request in hand), so this stays on
+    # the canonical/primary domain; use its scheme rather than a hardcoded https so a
+    # plain-http primary (e.g. a `.local` instance) builds a correct URL.
+    primary = primary_domain_or_none(db)
+    if primary is None:
+        return approve_path
+    return f"{primary.scheme}://{primary.name}{approve_path}"
 
 
 def _cors_headers(origin: str) -> dict[str, str]:
@@ -190,13 +198,16 @@ def _add_cors_response_headers(response: ASGIResponse, request: Request[Any, Any
 
 @route(_CALL_PATH, http_method=[HttpMethod.OPTIONS])
 async def service_call_cors(
-    request: Request[Any, Any, Any], shortname: FromPath[str], rest: FromPath[str]
+    request: Request[Any, Any, Any],
+    shortname: FromPath[str],
+    rest: FromPath[str],
+    db: NamedDependency[sqlite3.Connection],
 ) -> Response[str]:
     """Hande CORS preflight HTTP OPTIONS request, respond with appropriate CORS headers."""
     origin = request.headers.get("Origin", None)
     # block CORS preflight if Origin is not a known app - no auth headers yet but we can at least verify this,
     # to help avoid XSRF from external sites.
-    if origin is None or get_app_from_hostname(origin) is None:
+    if origin is None or get_app_from_hostname(origin, db) is None:
         return Response(content="Forbidden", status_code=403, media_type=MediaType.TEXT)
     return Response(content="", status_code=204, headers=_cors_headers(origin))
 
@@ -287,7 +298,7 @@ async def service_call(
     )
 
     if response.status_code == 403:
-        response = _inject_grant_url_if_global(response, resolved.service_url, consumer_app_id, config)
+        response = _inject_grant_url_if_global(response, resolved.service_url, consumer_app_id, config, db)
 
     _add_cors_response_headers(response, request)
     return response
@@ -512,7 +523,7 @@ def _installer_permission_denied(
         "required_grant": {
             "grant": grant,
             "scope": "global",
-            "grant_url": _approve_grant_url(config, consumer_app_id, INSTALLER_SERVICE_URL, grant),
+            "grant_url": _approve_grant_url(consumer_app_id, INSTALLER_SERVICE_URL, grant, db),
         },
     }
     return Response(content=body, status_code=403, media_type=MediaType.JSON)

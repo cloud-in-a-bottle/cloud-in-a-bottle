@@ -15,7 +15,6 @@ from litestar.testing import TestClient
 from compute_space.config import provide_config
 from compute_space.core.app_id import new_app_id
 from compute_space.db import provide_db
-from compute_space.db.connection import init_db
 from compute_space.tests.conftest import _make_test_config
 from compute_space.web.routes.services_v2 import services_v2_routes
 
@@ -58,7 +57,8 @@ def cfg(tmp_path: Path) -> Any:
 
 @pytest.fixture
 def client(cfg: Any) -> Iterator[TestClient[Litestar]]:
-    init_db(cfg.db_path)
+    # _make_test_config already seeded testzone.local as the primary, so the app-origin host
+    # (<app>.testzone.local) resolves to a configured domain.
     _seed_app(cfg.db_path)
     with TestClient(app=_make_app()) as c:
         yield c
