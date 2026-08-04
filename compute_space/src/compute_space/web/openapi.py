@@ -1,60 +1,104 @@
-"""OpenAPI schema configuration, shared by the live ``/schema`` endpoint
-(see ``app.py``) and the committed-spec generator (see ``dump_openapi.py``)."""
+"""OpenAPI schema generation. The generated document is committed to
+``compute_space/openapi.yaml`` (see ``dump_openapi.py``), which is what the
+manual serves at ``/docs/openapi.yaml``.
 
+Imports nothing from ``routes`` — handlers reference the scheme and tag names
+below, so the dependency has to run this way.
+"""
+
+from collections.abc import Mapping
+from collections.abc import Sequence
 from typing import Any
 
 from litestar import Litestar
 from litestar.di import Provide
 from litestar.openapi import OpenAPIConfig
 from litestar.openapi.spec import Components
+from litestar.openapi.spec import ExternalDocumentation
 from litestar.openapi.spec import SecurityScheme
+from litestar.openapi.spec import Tag
 from litestar.serialization import decode_json
 from litestar.serialization import encode_json
-
-from compute_space.config import provide_config
-from compute_space.db import provide_db
-from compute_space.web.routes.manifest import ALL_ROUTERS
+from litestar.types import ControllerRouterHandler
 
 # Version of the HTTP API contract, independent of the deployed git sha
 # reported by ``GET /api/version``. Bump on breaking API-surface changes.
 API_VERSION = "1.0.0"
 
-_BEARER_SCHEME = "BearerToken"
+OWNER_SCHEME = "OwnerToken"
+APP_SCHEME = "AppToken"
 
-OPENAPI_CONFIG = OpenAPIConfig(
+# Operations whose real contract lives in a manual chapter rather than in this
+# document — tagged here so the generated page links out instead of pretending
+# the schema is the whole story.
+CROSS_APP_TAG = "Cross-app services"
+
+_OPENAPI_CONFIG = OpenAPIConfig(
     title="OpenHost Zone API",
     version=API_VERSION,
     description=(
-        "HTTP API the `oh` CLI and other owner clients call on a running "
-        "OpenHost zone. Every route requires an owner bearer token."
+        "HTTP API for a running OpenHost zone. Most routes are called by the "
+        "`oh` CLI and other owner clients with an owner token; `/health` and "
+        "the `/.well-known/` identity routes are public, and the cross-app "
+        "service proxy is called by apps with an app token."
     ),
-    security=[{_BEARER_SCHEME: []}],
+    security=[{OWNER_SCHEME: []}],
+    # Handler docstrings become the operation descriptions, so the prose lives
+    # next to the code it describes.
+    use_handler_docstrings=True,
+    # The chapter this document is embedded in — for readers who got the raw
+    # file instead. Relative because the zone domain differs per install.
+    external_docs=ExternalDocumentation(url="/docs/api", description="HTTP API chapter"),
+    tags=[
+        Tag(
+            name=CROSS_APP_TAG,
+            description=(
+                "Requests one app makes to another through the router. The path "
+                "after the shortname, the request body and the response are all "
+                "passed through to the provider app, so the contract belongs to "
+                "that service's own spec — not to this document."
+            ),
+            external_docs=ExternalDocumentation(
+                url="/docs/cross_app_services",
+                description="Cross-App Services",
+            ),
+        )
+    ],
     components=Components(
         security_schemes={
-            _BEARER_SCHEME: SecurityScheme(
+            OWNER_SCHEME: SecurityScheme(
                 type="http",
                 scheme="bearer",
                 description="Owner API token, sent as `Authorization: Bearer <token>`.",
-            )
+            ),
+            APP_SCHEME: SecurityScheme(
+                type="http",
+                scheme="bearer",
+                description=(
+                    "App token, injected by the router as `OPENHOST_APP_TOKEN` and "
+                    "sent as `Authorization: Bearer <token>`. Not an owner token — "
+                    "an owner token is rejected on these routes."
+                ),
+            ),
         }
     ),
 )
 
 
-def build_openapi_schema() -> dict[str, Any]:
-    """Generate the OpenAPI document from every registered router, matching
-    what the live app serves at ``/schema/openapi.json``. Endpoints opt out
-    per-handler via ``include_in_schema=False``. Round-tripped through
-    Litestar's serializer to resolve embedded attrs defaults to plain types."""
+def build_openapi_schema(
+    route_handlers: Sequence[ControllerRouterHandler],
+    dependencies: Mapping[str, Provide],
+) -> dict[str, Any]:
+    """Generate the OpenAPI document. Endpoints opt out per-handler via
+    ``include_in_schema=False``. Round-tripped through Litestar's serializer
+    to resolve embedded attrs defaults to plain types.
+
+    Takes the live app's routers and dependencies so injected params (config,
+    db) are recognized as DI rather than surfaced as query parameters."""
     app = Litestar(
-        route_handlers=list(ALL_ROUTERS),
-        # Mirror the app-level dependencies in app.py so injected params
-        # (config, db) are recognized as DI, not surfaced as query params.
-        dependencies={
-            "config": Provide(provide_config, sync_to_thread=False),
-            "db": Provide(provide_db),
-        },
-        openapi_config=OPENAPI_CONFIG,
+        route_handlers=list(route_handlers),
+        dependencies=dict(dependencies),
+        openapi_config=_OPENAPI_CONFIG,
     )
     schema: dict[str, Any] = decode_json(encode_json(app.openapi_schema.to_schema()))
     return schema

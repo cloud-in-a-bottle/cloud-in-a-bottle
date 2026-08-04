@@ -314,3 +314,69 @@ def test_docs_in_reserved_paths() -> None:
     PR keeps ``/docs`` on that list.
     """
     assert "/docs" in RESERVED_PATHS
+
+
+# -- raw HTML in chapters -------------------------------------------
+
+
+def test_raw_html_passes_through(tmp_path: Path) -> None:
+    """``api.md`` embeds the OpenAPI browser as raw HTML, so the renderer
+    must emit it rather than escaping it."""
+    repo_root = tmp_path / "repo"
+    src = repo_root / "docs" / "src"
+    _populate_fake_docs(src)
+    (src / "routing.md").write_text('# Routing\n\n<div id="redoc"></div>\n')
+    client, _cfg = _client(repo_root)
+    with client as c:
+        body = c.get("/docs/routing").text
+    assert '<div id="redoc"></div>' in body
+    assert "&lt;div" not in body
+
+
+# -- OpenAPI document -----------------------------------------------
+
+
+def test_openapi_yaml_is_served_under_docs(tmp_path: Path) -> None:
+    """The spec is served from ``/docs`` only — there is no ``/schema``. The
+    literal path must also win over the ``/docs/{slug}`` catch-all, whose slug
+    regex would otherwise 404 it."""
+    repo_root = tmp_path / "repo"
+    _populate_fake_docs(repo_root / "docs" / "src")
+    spec = repo_root / "compute_space" / "openapi.yaml"
+    spec.parent.mkdir(parents=True)
+    spec.write_text("openapi: 3.1.0\n")
+    client, _cfg = _client(repo_root)
+    with client as c:
+        resp = c.get("/docs/openapi.yaml")
+    assert resp.status_code == 200
+    assert resp.text == "openapi: 3.1.0\n"
+    assert resp.headers["content-type"].startswith("application/yaml")
+
+
+def test_missing_openapi_spec_returns_503(client_with_docs: TestClient[Litestar]) -> None:
+    """An incomplete checkout gets an actionable error, not a 404 or a blank
+    reference page."""
+    resp = client_with_docs.get("/docs/openapi.yaml")
+    assert resp.status_code == 503
+    assert "openapi spec is missing" in resp.text.lower()
+
+
+# -- shipped API chapter --------------------------------------------
+
+
+def _repo_docs_src() -> Path:
+    return Path(__file__).resolve().parents[4] / "docs" / "src"
+
+
+def test_api_chapter_is_listed_in_summary() -> None:
+    """The API reference must be reachable from the sidebar, not just by
+    guessing the URL."""
+    assert "(./api.md)" in (_repo_docs_src() / "SUMMARY.md").read_text(encoding="utf-8")
+
+
+def test_api_chapter_points_at_served_spec() -> None:
+    """The chapter reads the document the app serves; the spec is never
+    copied into ``docs/src``."""
+    body = (_repo_docs_src() / "api.md").read_text(encoding="utf-8")
+    assert '"/docs/openapi.yaml"' in body
+    assert not (_repo_docs_src() / "openapi.yaml").exists()

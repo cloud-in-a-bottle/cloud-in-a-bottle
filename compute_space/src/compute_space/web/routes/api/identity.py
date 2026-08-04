@@ -46,7 +46,8 @@ class IdentityApproveForm:
     callback: str
 
 
-@get("/.well-known/jwks.json", sync_to_thread=False)
+# Public: apps fetch this to verify JWTs before they hold any owner token.
+@get("/.well-known/jwks.json", sync_to_thread=False, security=[{}])
 def jwks() -> JwksResponse:
     """Expose the public key in JWKS format for app JWT verification."""
     public_key_pem = get_public_key_pem()
@@ -72,7 +73,7 @@ def jwks() -> JwksResponse:
     )
 
 
-@get("/.well-known/openhost-identity", sync_to_thread=False)
+@get("/.well-known/openhost-identity", sync_to_thread=False, security=[{}])
 def openhost_identity() -> ZoneIdentityResponse:
     """Public endpoint: expose this zone's identity (domain + public key)."""
     try:
@@ -86,7 +87,7 @@ def openhost_identity() -> ZoneIdentityResponse:
     )
 
 
-@get("/identity/approve", guards=[require_owner_auth])
+@get("/identity/approve", guards=[require_owner_auth], include_in_schema=False)
 async def identity_approve(callback: str, app_name: str, requesting_domain: str) -> Template:
     """Show the owner an approval page for a federated login request."""
     parsed = urllib.parse.urlparse(callback)
@@ -103,7 +104,7 @@ async def identity_approve(callback: str, app_name: str, requesting_domain: str)
     )
 
 
-@post("/identity/approve", status_code=302, guards=[require_owner_auth])
+@post("/identity/approve", status_code=302, guards=[require_owner_auth], include_in_schema=False)
 async def identity_approve_submit(
     data: Annotated[IdentityApproveForm, Body(media_type=RequestEncodingType.URL_ENCODED)],
 ) -> Redirect:

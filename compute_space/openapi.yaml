@@ -2,8 +2,10 @@
 info:
   title: OpenHost Zone API
   version: 1.0.0
-  description: HTTP API the `oh` CLI and other owner clients call on a running OpenHost
-    zone. Every route requires an owner bearer token.
+  description: HTTP API for a running OpenHost zone. Most routes are called by the
+    `oh` CLI and other owner clients with an owner token; `/health` and the `/.well-known/`
+    identity routes are public, and the cross-app service proxy is called by apps
+    with an app token.
 openapi: 3.1.0
 servers:
 - url: /
@@ -11,6 +13,7 @@ paths:
   /api/clone_and_get_app_info:
     post:
       summary: CloneAndGetAppInfo
+      description: Clone a repo and return its manifest info + temp clone dir.
       operationId: ApiCloneAndGetAppInfoCloneAndGetAppInfo
       requestBody:
         content:
@@ -20,40 +23,28 @@ paths:
         required: true
       responses:
         '200':
-          description: Request fulfilled, document follows
-          headers: {}
-          content:
-            application/json:
-              schema: {}
-        '400':
-          description: Bad request syntax or unsupported method
+          description: Manifest info plus the temp clone dir
           content:
             application/json:
               schema:
-                properties:
-                  status_code:
-                    type: integer
-                  detail:
-                    type: string
-                  extra:
-                    additionalProperties: {}
-                    type:
-                    - 'null'
-                    - object
-                    - array
-                type: object
-                required:
-                - detail
-                - status_code
-                description: Validation Exception
-                examples:
-                - status_code: 400
-                  detail: Bad Request
-                  extra: {}
+                $ref: '#/components/schemas/CloneInfoResponse'
+        '400':
+          description: Missing repo URL, or the clone failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Repo needs GitHub authorization first
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CloneAuthorizeResponse'
       deprecated: false
   /api/check_port:
     get:
       summary: CheckPort
+      description: Check if a host port is available. Returns {port, available, used_by}.
       operationId: ApiCheckPortCheckPort
       parameters:
       - name: port
@@ -103,6 +94,8 @@ paths:
   /api/add_app:
     post:
       summary: ApiAddApp
+      description: Install an app. Optionally takes a clone_dir from a prior clone_and_get_app_info
+        call.
       operationId: ApiAddAppApiAddApp
       requestBody:
         content:
@@ -112,36 +105,29 @@ paths:
         required: true
       responses:
         '200':
-          description: Request fulfilled, document follows
-          headers: {}
-          content:
-            application/json:
-              schema: {}
-        '400':
-          description: Bad request syntax or unsupported method
+          description: App installed; build started
           content:
             application/json:
               schema:
-                properties:
-                  status_code:
-                    type: integer
-                  detail:
-                    type: string
-                  extra:
-                    additionalProperties: {}
-                    type:
-                    - 'null'
-                    - object
-                    - array
-                type: object
-                required:
-                - detail
-                - status_code
-                description: Validation Exception
-                examples:
-                - status_code: 400
-                  detail: Bad Request
-                  extra: {}
+                $ref: '#/components/schemas/AddAppResponse'
+        '400':
+          description: Invalid repo, manifest, or app name
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Repo needs GitHub authorization first
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthRequiredResponse'
+        '503':
+          description: Archive backend unhealthy; refusing to deploy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
       deprecated: false
   /api/apps:
     get:
@@ -171,40 +157,38 @@ paths:
         deprecated: false
       responses:
         '200':
-          description: Request fulfilled, document follows
-          headers: {}
-          content:
-            application/json:
-              schema: {}
-        '400':
-          description: Bad request syntax or unsupported method
+          description: Current status and git info
           content:
             application/json:
               schema:
-                properties:
-                  status_code:
-                    type: integer
-                  detail:
-                    type: string
-                  extra:
-                    additionalProperties: {}
-                    type:
-                    - 'null'
-                    - object
-                    - array
-                type: object
-                required:
-                - detail
-                - status_code
-                description: Validation Exception
-                examples:
-                - status_code: 400
-                  detail: Bad Request
-                  extra: {}
+                $ref: '#/components/schemas/AppStatusResponse'
+        '400':
+          description: Malformed app_id
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: No app with that id
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
       deprecated: false
   /api/app_diagnostics/{app_id}:
     get:
       summary: AppDiagnostics
+      description: 'Return a per-app diagnostics bundle: app version + manifest git
+        checkout,
+
+        container status, and a slice of host/system info so the report is
+
+        self-contained.
+
+
+        ``?download=1`` adds a Content-Disposition header so browsers save the JSON
+
+        to a timestamped file instead of rendering it inline.'
       operationId: ApiAppDiagnosticsAppIdAppDiagnostics
       parameters:
       - name: app_id
@@ -224,36 +208,23 @@ paths:
         allowReserved: false
       responses:
         '200':
-          description: Request fulfilled, document follows
-          headers: {}
-          content:
-            application/json:
-              schema: {}
-        '400':
-          description: Bad request syntax or unsupported method
+          description: Per-app diagnostics bundle
           content:
             application/json:
               schema:
-                properties:
-                  status_code:
-                    type: integer
-                  detail:
-                    type: string
-                  extra:
-                    additionalProperties: {}
-                    type:
-                    - 'null'
-                    - object
-                    - array
-                type: object
-                required:
-                - detail
-                - status_code
-                description: Validation Exception
-                examples:
-                - status_code: 400
-                  detail: Bad Request
-                  extra: {}
+                $ref: '#/components/schemas/AppDiagnostics'
+        '400':
+          description: Malformed app_id
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: No app with that id
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
       deprecated: false
   /app_logs/{app_id}:
     get:
@@ -268,36 +239,23 @@ paths:
         deprecated: false
       responses:
         '200':
-          description: Request fulfilled, document follows
-          headers: {}
+          description: Container log text
           content:
             text/plain:
-              schema: {}
+              schema:
+                type: string
         '400':
-          description: Bad request syntax or unsupported method
+          description: Malformed app_id
           content:
             application/json:
               schema:
-                properties:
-                  status_code:
-                    type: integer
-                  detail:
-                    type: string
-                  extra:
-                    additionalProperties: {}
-                    type:
-                    - 'null'
-                    - object
-                    - array
-                type: object
-                required:
-                - detail
-                - status_code
-                description: Validation Exception
-                examples:
-                - status_code: 400
-                  detail: Bad Request
-                  extra: {}
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: No app with that id
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
       deprecated: false
   /stop_app/{app_id}:
     post:
@@ -312,40 +270,39 @@ paths:
         deprecated: false
       responses:
         '200':
-          description: Request fulfilled, document follows
-          headers: {}
-          content:
-            application/json:
-              schema: {}
-        '400':
-          description: Bad request syntax or unsupported method
+          description: App stopped
           content:
             application/json:
               schema:
-                properties:
-                  status_code:
-                    type: integer
-                  detail:
-                    type: string
-                  extra:
-                    additionalProperties: {}
-                    type:
-                    - 'null'
-                    - object
-                    - array
-                type: object
-                required:
-                - detail
-                - status_code
-                description: Validation Exception
-                examples:
-                - status_code: 400
-                  detail: Bad Request
-                  extra: {}
+                $ref: '#/components/schemas/OkResponse'
+        '400':
+          description: Malformed app_id
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: No app with that id
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: App is being removed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
       deprecated: false
   /reload_app/{app_id}:
     get:
       summary: ReloadAppAfterOauth
+      description: 'OAuth callback re-entry: the secrets app redirected the user back
+        here
+
+        after they granted GitHub access.  Resumes the update with ``continue_oauth=True``
+
+        so we don''t truncate the log file again or re-prompt for OAuth.'
       operationId: ReloadAppAppIdReloadAppAfterOauth
       parameters:
       - name: app_id
@@ -365,39 +322,41 @@ paths:
         allowReserved: false
       responses:
         '200':
-          description: Request fulfilled, document follows
-          headers: {}
-          content:
-            application/json:
-              schema: {}
-        '400':
-          description: Bad request syntax or unsupported method
+          description: Rebuild resumed, or the update needs new permissions approved
           content:
             application/json:
               schema:
-                properties:
-                  status_code:
-                    type: integer
-                  detail:
-                    type: string
-                  extra:
-                    additionalProperties: {}
-                    type:
-                    - 'null'
-                    - object
-                    - array
-                type: object
-                required:
-                - detail
-                - status_code
-                description: Validation Exception
-                examples:
-                - status_code: 400
-                  detail: Bad Request
-                  extra: {}
+                oneOf:
+                - $ref: '#/components/schemas/OkResponse'
+                - $ref: '#/components/schemas/PermissionsRequiredResponse'
+        '400':
+          description: Malformed app_id
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: No app with that id
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: App is being removed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Archive backend unhealthy; refusing to reload
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
       deprecated: false
     post:
       summary: ReloadApp
+      description: User-initiated reload, optionally pulling latest code via ``update``.
       operationId: ReloadAppAppIdReloadApp
       parameters:
       - name: app_id
@@ -414,40 +373,52 @@ paths:
         required: true
       responses:
         '200':
-          description: Request fulfilled, document follows
-          headers: {}
-          content:
-            application/json:
-              schema: {}
-        '400':
-          description: Bad request syntax or unsupported method
+          description: Rebuild started, or the update needs new permissions approved
           content:
             application/json:
               schema:
-                properties:
-                  status_code:
-                    type: integer
-                  detail:
-                    type: string
-                  extra:
-                    additionalProperties: {}
-                    type:
-                    - 'null'
-                    - object
-                    - array
-                type: object
-                required:
-                - detail
-                - status_code
-                description: Validation Exception
-                examples:
-                - status_code: 400
-                  detail: Bad Request
-                  extra: {}
+                oneOf:
+                - $ref: '#/components/schemas/OkResponse'
+                - $ref: '#/components/schemas/PermissionsRequiredResponse'
+        '400':
+          description: Malformed app_id
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: No app with that id
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: App is being removed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Archive backend unhealthy; refusing to reload
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
       deprecated: false
   /remove_app/{app_id}:
     post:
       summary: RemoveApp
+      description: 'Flip the row to ``status=''removing''`` and run teardown in a
+        thread.
+
+
+        Returns 202 immediately. The dashboard''s /api/apps poll picks up
+
+        the new status and renders ''Removing…'' until the row is deleted,
+
+        so reloading the page or opening a second tab still shows the
+
+        in-flight state.'
       operationId: RemoveAppAppIdRemoveApp
       parameters:
       - name: app_id
@@ -464,40 +435,37 @@ paths:
         required: true
       responses:
         '202':
-          description: Request accepted, processing continues off-line
-          headers: {}
-          content:
-            application/json:
-              schema: {}
-        '400':
-          description: Bad request syntax or unsupported method
+          description: Teardown accepted; poll /api/apps for progress
           content:
             application/json:
               schema:
-                properties:
-                  status_code:
-                    type: integer
-                  detail:
-                    type: string
-                  extra:
-                    additionalProperties: {}
-                    type:
-                    - 'null'
-                    - object
-                    - array
-                type: object
-                required:
-                - detail
-                - status_code
-                description: Validation Exception
-                examples:
-                - status_code: 400
-                  detail: Bad Request
-                  extra: {}
+                oneOf:
+                - $ref: '#/components/schemas/OkResponse'
+                - $ref: '#/components/schemas/RemoveAppAlreadyRemoving'
+        '400':
+          description: Malformed app_id
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: No app with that id
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Archive backend unhealthy; refusing to delete app data
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
       deprecated: false
   /rename_app/{app_id}:
     post:
       summary: RenameApp
+      description: Rename an app's label and subdomain. The app_id (cross-table identity)
+        stays the same.
       operationId: RenameAppAppIdRenameApp
       parameters:
       - name: app_id
@@ -514,40 +482,55 @@ paths:
         required: true
       responses:
         '200':
-          description: Request fulfilled, document follows
-          headers: {}
-          content:
-            application/json:
-              schema: {}
-        '400':
-          description: Bad request syntax or unsupported method
+          description: App renamed
           content:
             application/json:
               schema:
-                properties:
-                  status_code:
-                    type: integer
-                  detail:
-                    type: string
-                  extra:
-                    additionalProperties: {}
-                    type:
-                    - 'null'
-                    - object
-                    - array
-                type: object
-                required:
-                - detail
-                - status_code
-                description: Validation Exception
-                examples:
-                - status_code: 400
-                  detail: Bad Request
-                  extra: {}
+                $ref: '#/components/schemas/RenameAppResponse'
+        '400':
+          description: Malformed app_id
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: No app with that id
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: App is being removed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Rename partially applied; see the error body
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Archive backend unhealthy; refusing to rename
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
       deprecated: false
   /set_app_remote/{app_id}:
     post:
       summary: SetAppRemote
+      description: 'Edit an app''s git upstream (repo URL and/or ``@branch`` ref).
+
+
+        Persists the new value to ``apps.repo_url``; the next ``Update & Reload``
+
+        (``/reload_app`` with ``update=true``) re-points origin and checks out the
+
+        pinned ref. Only git-backed apps can have an upstream — builtin apps copied
+
+        from the apps/ directory have no ``.git`` to update.'
       operationId: SetAppRemoteAppIdSetAppRemote
       parameters:
       - name: app_id
@@ -564,40 +547,35 @@ paths:
         required: true
       responses:
         '200':
-          description: Request fulfilled, document follows
-          headers: {}
-          content:
-            application/json:
-              schema: {}
-        '400':
-          description: Bad request syntax or unsupported method
+          description: Upstream updated
           content:
             application/json:
               schema:
-                properties:
-                  status_code:
-                    type: integer
-                  detail:
-                    type: string
-                  extra:
-                    additionalProperties: {}
-                    type:
-                    - 'null'
-                    - object
-                    - array
-                type: object
-                required:
-                - detail
-                - status_code
-                description: Validation Exception
-                examples:
-                - status_code: 400
-                  detail: Bad Request
-                  extra: {}
+                $ref: '#/components/schemas/SetAppRemoteResponse'
+        '400':
+          description: Malformed app_id
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: No app with that id
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: App is being removed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
       deprecated: false
   /api/storage/archive_backend:
     get:
       summary: GetArchiveBackend
+      description: Return current archive-backend state (secret redacted) plus archive_dir,
+        meta_db_path, meta_dumps.
       operationId: ApiStorageArchiveBackendGetArchiveBackend
       responses:
         '200':
@@ -611,6 +589,8 @@ paths:
   /api/storage/archive_backend/test_connection:
     post:
       summary: TestConnection
+      description: Pre-flight S3 reachability/credentials check; doesn't touch the
+        DB or live mount.
       operationId: ApiStorageArchiveBackendTestConnectionTestConnection
       requestBody:
         content:
@@ -620,40 +600,30 @@ paths:
         required: true
       responses:
         '200':
-          description: Request fulfilled, document follows
-          headers: {}
-          content:
-            application/json:
-              schema: {}
-        '400':
-          description: Bad request syntax or unsupported method
+          description: Bucket reachable with these credentials
           content:
             application/json:
               schema:
-                properties:
-                  status_code:
-                    type: integer
-                  detail:
-                    type: string
-                  extra:
-                    additionalProperties: {}
-                    type:
-                    - 'null'
-                    - object
-                    - array
-                type: object
-                required:
-                - detail
-                - status_code
-                description: Validation Exception
-                examples:
-                - status_code: 400
-                  detail: Bad Request
-                  extra: {}
+                $ref: '#/components/schemas/TestConnectionOk'
+        '400':
+          description: Bad prefix, or S3 rejected the credentials
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TestConnectionError'
       deprecated: false
   /api/storage/archive_backend/configure:
     post:
       summary: ConfigureArchiveBackend
+      description: 'One-shot S3 configure / re-configure.  Allowed from ``''local''``
+        (the
+
+        default — migrates local archive data into the bucket), the legacy
+
+        ``''disabled''`` state (fresh format), or ``''s3''`` (migrates the archive
+        from
+
+        the current bucket to a new bucket/provider).'
       operationId: ApiStorageArchiveBackendConfigureConfigureArchiveBackend
       requestBody:
         content:
@@ -663,40 +633,34 @@ paths:
         required: true
       responses:
         '200':
-          description: Request fulfilled, document follows
-          headers: {}
-          content:
-            application/json:
-              schema: {}
-        '400':
-          description: Bad request syntax or unsupported method
+          description: Backend configured; state after the switch
           content:
             application/json:
               schema:
-                properties:
-                  status_code:
-                    type: integer
-                  detail:
-                    type: string
-                  extra:
-                    additionalProperties: {}
-                    type:
-                    - 'null'
-                    - object
-                    - array
-                type: object
-                required:
-                - detail
-                - status_code
-                description: Validation Exception
-                examples:
-                - status_code: 400
-                  detail: Bad Request
-                  extra: {}
+                $ref: '#/components/schemas/BackendStateResponse'
+        '400':
+          description: Invalid S3 settings
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Local archive data would migrate; re-send with confirm_migrate_local
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Migration failed partway; see the error body
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
       deprecated: false
   /api/permissions/v2:
     get:
       summary: ListPermissionsV2
+      description: List all V2 permissions, optionally filtered by app_id.
       operationId: ApiPermissionsV2ListPermissionsV2
       parameters:
       - name: app_id
@@ -749,6 +713,7 @@ paths:
   /api/permissions/v2/grant_global_scoped:
     post:
       summary: GrantGlobalScoped
+      description: Grant a global-scoped V2 permission (owner-authed).
       operationId: ApiPermissionsV2GrantGlobalScopedGrantGlobalScoped
       requestBody:
         content:
@@ -795,6 +760,7 @@ paths:
   /api/permissions/v2/revoke:
     post:
       summary: RevokeV2
+      description: Revoke a V2 permission.
       operationId: ApiPermissionsV2RevokeRevokeV2
       requestBody:
         content:
@@ -841,6 +807,13 @@ paths:
   /api/permissions/v2/grant_app_scoped:
     post:
       summary: GrantAppScoped
+      description: 'Grant an app-scoped V2 permission, authenticated with the provider
+        app''s token.
+
+
+        The calling app must be a registered provider for the specified service.
+
+        The permission is automatically scoped to the calling provider app.'
       operationId: ApiPermissionsV2GrantAppScopedGrantAppScoped
       requestBody:
         content:
@@ -887,6 +860,7 @@ paths:
   /api/services/v2:
     get:
       summary: ListServicesV2
+      description: List all registered V2 service providers.
       operationId: ApiServicesV2ListServicesV2
       responses:
         '200':
@@ -902,6 +876,8 @@ paths:
   /api/services/v2/providers:
     get:
       summary: DiscoverProviders
+      description: Discover providers for a service, optionally filtered by version
+        specifier.
       operationId: ApiServicesV2ProvidersDiscoverProviders
       parameters:
       - name: service
@@ -949,6 +925,7 @@ paths:
   /api/services/v2/defaults:
     get:
       summary: ListDefaults
+      description: List all default provider settings.
       operationId: ApiServicesV2DefaultsListDefaults
       responses:
         '200':
@@ -963,6 +940,7 @@ paths:
       deprecated: false
     post:
       summary: SetDefault
+      description: Set the default provider for a service.
       operationId: ApiServicesV2DefaultsSetDefault
       requestBody:
         content:
@@ -977,7 +955,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/services_v2_OkResponse'
+                $ref: '#/components/schemas/OkResponse'
         '400':
           description: Bad request syntax or unsupported method
           content:
@@ -1006,6 +984,8 @@ paths:
       deprecated: false
     delete:
       summary: RemoveDefault
+      description: Remove the default provider for a service (falls back to highest
+        version).
       operationId: ApiServicesV2DefaultsRemoveDefault
       requestBody:
         content:
@@ -1020,7 +1000,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/services_v2_OkResponse'
+                $ref: '#/components/schemas/OkResponse'
         '400':
           description: Bad request syntax or unsupported method
           content:
@@ -1260,36 +1240,17 @@ paths:
         required: true
       responses:
         '200':
-          description: Request fulfilled, document follows
-          headers: {}
-          content:
-            application/json:
-              schema: {}
-        '400':
-          description: Bad request syntax or unsupported method
+          description: The new token; shown once and not recoverable
           content:
             application/json:
               schema:
-                properties:
-                  status_code:
-                    type: integer
-                  detail:
-                    type: string
-                  extra:
-                    additionalProperties: {}
-                    type:
-                    - 'null'
-                    - object
-                    - array
-                type: object
-                required:
-                - detail
-                - status_code
-                description: Validation Exception
-                examples:
-                - status_code: 400
-                  detail: Bad Request
-                  extra: {}
+                $ref: '#/components/schemas/CreatedToken'
+        '400':
+          description: Expiry must be positive
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
       deprecated: false
   /api/tokens/{token_id}:
     delete:
@@ -1335,6 +1296,7 @@ paths:
   /api/compute_space_logs:
     get:
       summary: ComputeSpaceLogs
+      description: Return the tail (last 256 KiB) of the compute space log file.
       operationId: ApiComputeSpaceLogsComputeSpaceLogs
       responses:
         '200':
@@ -1360,9 +1322,17 @@ paths:
                 - {}
                 - $ref: '#/components/schemas/HealthOk'
       deprecated: false
+      security:
+      - {}
   /api/listening-ports:
     get:
       summary: ListeningPorts
+      description: 'Return TCP ports listening on external-facing or wildcard interfaces,
+        with classification.
+
+
+        Loopback-only listeners are excluded — they are not reachable from outside
+        the VM.'
       operationId: ApiListeningPortsListeningPorts
       responses:
         '200':
@@ -1390,6 +1360,7 @@ paths:
   /api/storage-guard:
     post:
       summary: ToggleStorageGuard
+      description: Pause or resume the storage guard.
       operationId: ApiStorageGuardToggleStorageGuard
       requestBody:
         content:
@@ -1460,18 +1431,30 @@ paths:
   /api/drop-docker-cache:
     post:
       summary: DropDockerCache
+      description: Drop the container build cache to free disk space.
       operationId: ApiDropDockerCacheDropDockerCache
       responses:
         '200':
-          description: Request fulfilled, document follows
-          headers: {}
+          description: Cache dropped; output is the reclaim summary
           content:
             application/json:
-              schema: {}
+              schema:
+                $ref: '#/components/schemas/DropCacheOk'
+        '500':
+          description: The prune command failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
       deprecated: false
   /api/version:
     get:
       summary: ApiVersion
+      description: 'Return git branch/SHA of the running openhost checkout.
+
+
+        If openhost wasn''t installed via git, sha/short_sha are empty and dirty is
+        False.'
       operationId: ApiVersionApiVersion
       responses:
         '200':
@@ -1485,6 +1468,17 @@ paths:
   /api/diagnostics:
     get:
       summary: ApiDiagnostics
+      description: 'Return a full instance diagnostics bundle for debugging.
+
+
+        Includes the OpenHost git checkout, host OS/Python/dependency versions,
+
+        container runtime info, disk usage, and a summary of every installed app.
+
+
+        ``?download=1`` adds a Content-Disposition header so browsers save the JSON
+
+        to a timestamped file instead of rendering it inline.'
       operationId: ApiDiagnosticsApiDiagnostics
       parameters:
       - name: download
@@ -1533,6 +1527,7 @@ paths:
   /restart_router:
     post:
       summary: RestartRouter
+      description: Restart the router systemd service to pick up code changes.
       operationId: RestartRouterRestartRouter
       responses:
         '200':
@@ -1541,11 +1536,12 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/system_OkResponse'
+                $ref: '#/components/schemas/OkResponse'
       deprecated: false
   /.well-known/jwks.json:
     get:
       summary: Jwks
+      description: Expose the public key in JWKS format for app JWT verification.
       operationId: WellKnownJwksJsonJwks
       responses:
         '200':
@@ -1556,9 +1552,13 @@ paths:
               schema:
                 $ref: '#/components/schemas/JwksResponse'
       deprecated: false
+      security:
+      - {}
   /.well-known/openhost-identity:
     get:
       summary: OpenhostIdentity
+      description: 'Public endpoint: expose this zone''s identity (domain + public
+        key).'
       operationId: WellKnownOpenhostIdentityOpenhostIdentity
       responses:
         '200':
@@ -1569,43 +1569,35 @@ paths:
               schema:
                 $ref: '#/components/schemas/ZoneIdentityResponse'
       deprecated: false
-  /identity/approve:
+      security:
+      - {}
+  /api/services/v2/call/{shortname}/{rest}:
     get:
-      summary: IdentityApprove
-      operationId: IdentityApproveIdentityApprove
+      tags:
+      - Cross-app services
+      summary: ServiceCall
+      description: 'Proxy a request to the provider declared under <shortname> in
+        the
+
+        consumer''s manifest.'
+      operationId: ApiServicesV2CallShortnameRestGetServiceCall
       parameters:
-      - name: callback
-        in: query
+      - name: shortname
+        in: path
         schema:
           type: string
         required: true
         deprecated: false
-        allowEmptyValue: false
-        allowReserved: false
-      - name: app_name
-        in: query
+      - name: rest
+        in: path
         schema:
           type: string
         required: true
         deprecated: false
-        allowEmptyValue: false
-        allowReserved: false
-      - name: requesting_domain
-        in: query
-        schema:
-          type: string
-        required: true
-        deprecated: false
-        allowEmptyValue: false
-        allowReserved: false
       responses:
         '200':
           description: Request fulfilled, document follows
           headers: {}
-          content:
-            text/html:
-              schema:
-                type: string
         '400':
           description: Bad request syntax or unsupported method
           content:
@@ -1631,26 +1623,47 @@ paths:
                 - status_code: 400
                   detail: Bad Request
                   extra: {}
+        '404':
+          description: shortname not declared in the caller's manifest
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProxyError'
+        '503':
+          description: no provider resolves for the declared service
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProxyError'
       deprecated: false
-    post:
-      summary: IdentityApproveSubmit
-      operationId: IdentityApproveIdentityApproveSubmit
-      requestBody:
-        content:
-          application/x-www-form-urlencoded:
-            schema:
-              $ref: '#/components/schemas/IdentityApproveForm'
+      security:
+      - AppToken: []
+    put:
+      tags:
+      - Cross-app services
+      summary: ServiceCall
+      description: 'Proxy a request to the provider declared under <shortname> in
+        the
+
+        consumer''s manifest.'
+      operationId: ApiServicesV2CallShortnameRestPutServiceCall
+      parameters:
+      - name: shortname
+        in: path
+        schema:
+          type: string
         required: true
+        deprecated: false
+      - name: rest
+        in: path
+        schema:
+          type: string
+        required: true
+        deprecated: false
       responses:
-        '302':
-          description: Redirect Response
-          headers:
-            location:
-              schema:
-                type: string
-              description: target path for the redirect
-              required: false
-              deprecated: false
+        '200':
+          description: Request fulfilled, document follows
+          headers: {}
         '400':
           description: Bad request syntax or unsupported method
           content:
@@ -1676,7 +1689,285 @@ paths:
                 - status_code: 400
                   detail: Bad Request
                   extra: {}
+        '404':
+          description: shortname not declared in the caller's manifest
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProxyError'
+        '503':
+          description: no provider resolves for the declared service
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProxyError'
       deprecated: false
+      security:
+      - AppToken: []
+    post:
+      tags:
+      - Cross-app services
+      summary: ServiceCall
+      description: 'Proxy a request to the provider declared under <shortname> in
+        the
+
+        consumer''s manifest.'
+      operationId: ApiServicesV2CallShortnameRestPostServiceCall
+      parameters:
+      - name: shortname
+        in: path
+        schema:
+          type: string
+        required: true
+        deprecated: false
+      - name: rest
+        in: path
+        schema:
+          type: string
+        required: true
+        deprecated: false
+      responses:
+        '200':
+          description: Request fulfilled, document follows
+          headers: {}
+        '400':
+          description: Bad request syntax or unsupported method
+          content:
+            application/json:
+              schema:
+                properties:
+                  status_code:
+                    type: integer
+                  detail:
+                    type: string
+                  extra:
+                    additionalProperties: {}
+                    type:
+                    - 'null'
+                    - object
+                    - array
+                type: object
+                required:
+                - detail
+                - status_code
+                description: Validation Exception
+                examples:
+                - status_code: 400
+                  detail: Bad Request
+                  extra: {}
+        '404':
+          description: shortname not declared in the caller's manifest
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProxyError'
+        '503':
+          description: no provider resolves for the declared service
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProxyError'
+      deprecated: false
+      security:
+      - AppToken: []
+    delete:
+      tags:
+      - Cross-app services
+      summary: ServiceCall
+      description: 'Proxy a request to the provider declared under <shortname> in
+        the
+
+        consumer''s manifest.'
+      operationId: ApiServicesV2CallShortnameRestDeleteServiceCall
+      parameters:
+      - name: shortname
+        in: path
+        schema:
+          type: string
+        required: true
+        deprecated: false
+      - name: rest
+        in: path
+        schema:
+          type: string
+        required: true
+        deprecated: false
+      responses:
+        '200':
+          description: Request fulfilled, document follows
+          headers: {}
+        '400':
+          description: Bad request syntax or unsupported method
+          content:
+            application/json:
+              schema:
+                properties:
+                  status_code:
+                    type: integer
+                  detail:
+                    type: string
+                  extra:
+                    additionalProperties: {}
+                    type:
+                    - 'null'
+                    - object
+                    - array
+                type: object
+                required:
+                - detail
+                - status_code
+                description: Validation Exception
+                examples:
+                - status_code: 400
+                  detail: Bad Request
+                  extra: {}
+        '404':
+          description: shortname not declared in the caller's manifest
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProxyError'
+        '503':
+          description: no provider resolves for the declared service
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProxyError'
+      deprecated: false
+      security:
+      - AppToken: []
+    head:
+      tags:
+      - Cross-app services
+      summary: ServiceCall
+      description: 'Proxy a request to the provider declared under <shortname> in
+        the
+
+        consumer''s manifest.'
+      operationId: ApiServicesV2CallShortnameRestHeadServiceCall
+      parameters:
+      - name: shortname
+        in: path
+        schema:
+          type: string
+        required: true
+        deprecated: false
+      - name: rest
+        in: path
+        schema:
+          type: string
+        required: true
+        deprecated: false
+      responses:
+        '200':
+          description: Request fulfilled, document follows
+          headers: {}
+        '400':
+          description: Bad request syntax or unsupported method
+          content:
+            application/json:
+              schema:
+                properties:
+                  status_code:
+                    type: integer
+                  detail:
+                    type: string
+                  extra:
+                    additionalProperties: {}
+                    type:
+                    - 'null'
+                    - object
+                    - array
+                type: object
+                required:
+                - detail
+                - status_code
+                description: Validation Exception
+                examples:
+                - status_code: 400
+                  detail: Bad Request
+                  extra: {}
+        '404':
+          description: shortname not declared in the caller's manifest
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProxyError'
+        '503':
+          description: no provider resolves for the declared service
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProxyError'
+      deprecated: false
+      security:
+      - AppToken: []
+    patch:
+      tags:
+      - Cross-app services
+      summary: ServiceCall
+      description: 'Proxy a request to the provider declared under <shortname> in
+        the
+
+        consumer''s manifest.'
+      operationId: ApiServicesV2CallShortnameRestPatchServiceCall
+      parameters:
+      - name: shortname
+        in: path
+        schema:
+          type: string
+        required: true
+        deprecated: false
+      - name: rest
+        in: path
+        schema:
+          type: string
+        required: true
+        deprecated: false
+      responses:
+        '200':
+          description: Request fulfilled, document follows
+          headers: {}
+        '400':
+          description: Bad request syntax or unsupported method
+          content:
+            application/json:
+              schema:
+                properties:
+                  status_code:
+                    type: integer
+                  detail:
+                    type: string
+                  extra:
+                    additionalProperties: {}
+                    type:
+                    - 'null'
+                    - object
+                    - array
+                type: object
+                required:
+                - detail
+                - status_code
+                description: Validation Exception
+                examples:
+                - status_code: 400
+                  detail: Bad Request
+                  extra: {}
+        '404':
+          description: shortname not declared in the caller's manifest
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProxyError'
+        '503':
+          description: no provider resolves for the declared service
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProxyError'
+      deprecated: false
+      security:
+      - AppToken: []
 components:
   schemas:
     AddAppRequest:
@@ -1706,6 +1997,23 @@ components:
       required:
       - repo_url
       title: AddAppRequest
+    AddAppResponse:
+      properties:
+        ok:
+          type: boolean
+        app_id:
+          type: string
+        app_name:
+          type: string
+        status:
+          type: string
+      type: object
+      required:
+      - app_id
+      - app_name
+      - ok
+      - status
+      title: AddAppResponse
     ApiToken:
       properties:
         id:
@@ -1728,6 +2036,76 @@ components:
       - id
       - name
       title: ApiToken
+    AppDiagnostics:
+      properties:
+        schema_version:
+          type: integer
+        generated_at:
+          type: string
+        zone_domain:
+          type: string
+        app_id:
+          type: string
+        name:
+          type: string
+        status:
+          type: string
+        version:
+          oneOf:
+          - type: string
+          - type: 'null'
+        runtime_type:
+          oneOf:
+          - type: string
+          - type: 'null'
+        error_message:
+          oneOf:
+          - type: string
+          - type: 'null'
+        container_id:
+          oneOf:
+          - type: string
+          - type: 'null'
+        git:
+          oneOf:
+          - $ref: '#/components/schemas/GitInfo'
+          - type: 'null'
+        health:
+          oneOf:
+          - $ref: '#/components/schemas/AppHealth'
+          - type: 'null'
+        resources:
+          oneOf:
+          - $ref: '#/components/schemas/AppResourceUsage'
+          - type: 'null'
+        system:
+          $ref: '#/components/schemas/SystemInfo'
+        container_runtime:
+          $ref: '#/components/schemas/ContainerRuntimeInfo'
+        resource_pressure:
+          $ref: '#/components/schemas/HostResourcePressure'
+        openhost:
+          $ref: '#/components/schemas/GitInfo'
+      type: object
+      required:
+      - app_id
+      - container_id
+      - container_runtime
+      - error_message
+      - generated_at
+      - git
+      - health
+      - name
+      - openhost
+      - resource_pressure
+      - resources
+      - runtime_type
+      - schema_version
+      - status
+      - system
+      - version
+      - zone_domain
+      title: AppDiagnostics
     AppDiagnosticsSummary:
       properties:
         app_id:
@@ -1837,6 +2215,40 @@ components:
       - memory_usage_bytes
       - running
       title: AppResourceUsage
+    AppStatusResponse:
+      properties:
+        status:
+          type: string
+        error:
+          oneOf:
+          - type: string
+          - type: 'null'
+        error_kind:
+          oneOf:
+          - type: string
+          - type: 'null'
+        git_branch:
+          oneOf:
+          - type: string
+          - type: 'null'
+        git_sha:
+          oneOf:
+          - type: string
+          - type: 'null'
+        git_dirty:
+          oneOf:
+          - type: boolean
+          - type: 'null'
+        container_id:
+          oneOf:
+          - type: string
+          - type: 'null'
+      type: object
+      required:
+      - error
+      - error_kind
+      - status
+      title: AppStatusResponse
     AppSummary:
       properties:
         app_id:
@@ -1856,6 +2268,17 @@ components:
       - name
       - status
       title: AppSummary
+    AuthRequiredResponse:
+      properties:
+        error:
+          type: string
+        authorize_url:
+          type: string
+      type: object
+      required:
+      - authorize_url
+      - error
+      title: AuthRequiredResponse
     BackendStateResponse:
       properties:
         backend:
@@ -1971,6 +2394,37 @@ components:
       required:
       - state
       title: CheckUpdatesResponse
+    CloneAuthorizeResponse:
+      properties:
+        authorize_url:
+          type: string
+      type: object
+      required:
+      - authorize_url
+      title: CloneAuthorizeResponse
+    CloneInfoResponse:
+      properties:
+        manifest:
+          additionalProperties: {}
+          type: object
+        clone_dir:
+          type: string
+        app_name:
+          type: string
+        validation_error:
+          oneOf:
+          - type: string
+          - type: 'null'
+        storage:
+          oneOf:
+          - $ref: '#/components/schemas/StorageSummary'
+          - type: 'null'
+      type: object
+      required:
+      - app_name
+      - clone_dir
+      - manifest
+      title: CloneInfoResponse
     CloneRequest:
       properties:
         repo_url:
@@ -2039,6 +2493,22 @@ components:
       required:
       - name
       title: CreateTokenRequest
+    CreatedToken:
+      properties:
+        token:
+          type: string
+        name:
+          type: string
+        expires_at:
+          oneOf:
+          - type: string
+          - type: 'null'
+      type: object
+      required:
+      - expires_at
+      - name
+      - token
+      title: CreatedToken
     DefaultEntry:
       properties:
         service_url:
@@ -2086,6 +2556,25 @@ components:
       - service_version
       - status
       title: DiscoveredProvider
+    DropCacheOk:
+      properties:
+        ok:
+          type: boolean
+        output:
+          type: string
+      type: object
+      required:
+      - ok
+      - output
+      title: DropCacheOk
+    ErrorResponse:
+      properties:
+        error:
+          type: string
+      type: object
+      required:
+      - error
+      title: ErrorResponse
     GitInfo:
       properties:
         branch:
@@ -2162,14 +2651,6 @@ components:
       - memory_total_bytes
       - memory_used_percent
       title: HostResourcePressure
-    IdentityApproveForm:
-      properties:
-        callback:
-          type: string
-      type: object
-      required:
-      - callback
-      title: IdentityApproveForm
     JwkRSA:
       properties:
         kty:
@@ -2248,6 +2729,14 @@ components:
       - latest_at
       - latest_key
       title: MetaDumpsSummary
+    OkResponse:
+      properties:
+        ok:
+          type: boolean
+      type: object
+      required:
+      - ok
+      title: OkResponse
     OwnerUsernameResponse:
       properties:
         username:
@@ -2258,6 +2747,23 @@ components:
       required:
       - username
       title: OwnerUsernameResponse
+    PermissionsRequiredResponse:
+      properties:
+        ok:
+          type: boolean
+        permissions_required:
+          items:
+            additionalProperties: {}
+            type: object
+          type: array
+        error:
+          type: string
+      type: object
+      required:
+      - error
+      - ok
+      - permissions_required
+      title: PermissionsRequiredResponse
     PlatformDiagnostics:
       properties:
         schema_version:
@@ -2326,6 +2832,17 @@ components:
       - service_version
       - status
       title: ProviderV2
+    ProxyError:
+      properties:
+        error:
+          type: string
+        message:
+          type: string
+      type: object
+      required:
+      - error
+      - message
+      title: ProxyError
     ReachabilityResult:
       properties:
         label:
@@ -2381,6 +2898,17 @@ components:
       - ref
       - url
       title: RemoteInfo
+    RemoveAppAlreadyRemoving:
+      properties:
+        ok:
+          type: boolean
+        already_removing:
+          type: boolean
+      type: object
+      required:
+      - already_removing
+      - ok
+      title: RemoveAppAlreadyRemoving
     RemoveAppRequest:
       properties:
         keep_data:
@@ -2406,6 +2934,21 @@ components:
       required:
       - name
       title: RenameAppRequest
+    RenameAppResponse:
+      properties:
+        ok:
+          type: boolean
+        name:
+          type: string
+        app_id:
+          oneOf:
+          - type: string
+          - type: 'null'
+      type: object
+      required:
+      - name
+      - ok
+      title: RenameAppResponse
     SetAppRemoteRequest:
       properties:
         repo_url:
@@ -2414,6 +2957,17 @@ components:
       required:
       - repo_url
       title: SetAppRemoteRequest
+    SetAppRemoteResponse:
+      properties:
+        ok:
+          type: boolean
+        repo_url:
+          type: string
+      type: object
+      required:
+      - ok
+      - repo_url
+      title: SetAppRemoteResponse
     SetDefaultRequest:
       properties:
         service_url:
@@ -2457,6 +3011,29 @@ components:
       required:
       - guard_paused
       title: StorageGuardResponse
+    StorageSummary:
+      properties:
+        app_data:
+          type: boolean
+        app_temp_data:
+          type: boolean
+        uses_archive:
+          type: boolean
+        requires_archive:
+          type: boolean
+        archive_backend:
+          type: string
+        archive_is_durable:
+          type: boolean
+      type: object
+      required:
+      - app_data
+      - app_temp_data
+      - archive_backend
+      - archive_is_durable
+      - requires_archive
+      - uses_archive
+      title: StorageSummary
     SystemInfo:
       properties:
         hostname:
@@ -2496,6 +3073,25 @@ components:
       - release
       - system
       title: SystemInfo
+    TestConnectionError:
+      properties:
+        ok:
+          type: boolean
+        error:
+          type: string
+      type: object
+      required:
+      - error
+      - ok
+      title: TestConnectionError
+    TestConnectionOk:
+      properties:
+        ok:
+          type: boolean
+      type: object
+      required:
+      - ok
+      title: TestConnectionOk
     TestConnectionRequest:
       properties:
         s3_bucket:
@@ -2557,26 +3153,28 @@ components:
       - protocol
       - public_key_pem
       title: ZoneIdentityResponse
-    services_v2_OkResponse:
-      properties:
-        ok:
-          type: boolean
-      type: object
-      required:
-      - ok
-      title: OkResponse
-    system_OkResponse:
-      properties:
-        ok:
-          type: boolean
-      type: object
-      required:
-      - ok
-      title: OkResponse
   securitySchemes:
-    BearerToken:
+    OwnerToken:
       type: http
       description: 'Owner API token, sent as `Authorization: Bearer <token>`.'
       scheme: bearer
+    AppToken:
+      type: http
+      description: 'App token, injected by the router as `OPENHOST_APP_TOKEN` and
+        sent as `Authorization: Bearer <token>`. Not an owner token — an owner token
+        is rejected on these routes.'
+      scheme: bearer
 security:
-- BearerToken: []
+- OwnerToken: []
+tags:
+- name: Cross-app services
+  description: Requests one app makes to another through the router. The path after
+    the shortname, the request body and the response are all passed through to the
+    provider app, so the contract belongs to that service's own spec — not to this
+    document.
+  externalDocs:
+    url: /docs/cross_app_services
+    description: Cross-App Services
+externalDocs:
+  url: /docs/api
+  description: HTTP API chapter

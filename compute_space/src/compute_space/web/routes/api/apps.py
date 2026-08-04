@@ -60,18 +60,12 @@ from compute_space.core.oauth import get_oauth_token
 from compute_space.core.ports import check_port_available
 from compute_space.core.services_v2 import ServiceNotAvailable
 from compute_space.web.auth.auth import require_owner_auth
+from compute_space.web.routes.api.responses import ErrorResponse
+from compute_space.web.routes.api.responses import OkResponse
+from compute_space.web.routes.api.responses import error_spec
+from compute_space.web.routes.api.responses import response_spec
 
 # ─── attrs request / response models ──────────────────────────────────────
-
-
-@attr.s(auto_attribs=True, frozen=True)
-class ErrorResponse:
-    error: str
-
-
-@attr.s(auto_attribs=True, frozen=True)
-class OkResponse:
-    ok: bool
 
 
 @attr.s(auto_attribs=True, frozen=True)
@@ -269,10 +263,30 @@ async def _pin_refless_to_landed_branch(repo_url: str | None, repo_path: str) ->
     return f"{base_url}@{landed}" if landed else None
 
 
+# ─── OpenAPI response declarations ─────────────────────────────────────────
+# Handlers return ``Response[A] | Response[B]``, which Litestar can't turn into
+# a schema; these map each status code to the body it actually carries.
+
+_APP_LOOKUP_ERRORS = {
+    400: error_spec("Malformed app_id"),
+    404: error_spec("No app with that id"),
+}
+_REMOVING = {409: error_spec("App is being removed")}
+
+
 # ─── routes ────────────────────────────────────────────────────────────────
 
 
-@post("/api/clone_and_get_app_info", status_code=200, guards=[require_owner_auth])
+@post(
+    "/api/clone_and_get_app_info",
+    status_code=200,
+    guards=[require_owner_auth],
+    responses={
+        200: response_spec(CloneInfoResponse, "Manifest info plus the temp clone dir"),
+        400: error_spec("Missing repo URL, or the clone failed"),
+        401: response_spec(CloneAuthorizeResponse, "Repo needs GitHub authorization first"),
+    },
+)
 async def clone_and_get_app_info(
     data: CloneRequest, db: sqlite3.Connection, config: Config
 ) -> Response[CloneInfoResponse] | Response[ErrorResponse] | Response[CloneAuthorizeResponse]:
@@ -323,7 +337,17 @@ async def check_port(
     )
 
 
-@post("/api/add_app", status_code=200, guards=[require_owner_auth])
+@post(
+    "/api/add_app",
+    status_code=200,
+    guards=[require_owner_auth],
+    responses={
+        200: response_spec(AddAppResponse, "App installed; build started"),
+        400: error_spec("Invalid repo, manifest, or app name"),
+        401: response_spec(AuthRequiredResponse, "Repo needs GitHub authorization first"),
+        503: error_spec("Archive backend unhealthy; refusing to deploy"),
+    },
+)
 async def api_add_app(
     data: AddAppRequest, db: sqlite3.Connection, config: Config
 ) -> Response[AddAppResponse] | Response[ErrorResponse] | Response[AuthRequiredResponse]:
@@ -456,7 +480,11 @@ async def _read_app_git_info(repo_path: str | None) -> tuple[str | None, str | N
     return branch, sha, dirty
 
 
-@get("/api/app_status/{app_id:str}", guards=[require_owner_auth])
+@get(
+    "/api/app_status/{app_id:str}",
+    guards=[require_owner_auth],
+    responses={200: response_spec(AppStatusResponse, "Current status and git info"), **_APP_LOOKUP_ERRORS},
+)
 async def app_status(app_id: str, db: sqlite3.Connection) -> Response[AppStatusResponse] | Response[ErrorResponse]:
     if not is_valid_app_id(app_id):
         return Response(content=ErrorResponse(error="Invalid app_id"), status_code=400)
@@ -496,7 +524,11 @@ def _app_diagnostics_filename(app_name: str) -> str:
     return f"openhost-app-diagnostics-{safe_name}-{stamp}.json"
 
 
-@get("/api/app_diagnostics/{app_id:str}", guards=[require_owner_auth])
+@get(
+    "/api/app_diagnostics/{app_id:str}",
+    guards=[require_owner_auth],
+    responses={200: response_spec(AppDiagnostics, "Per-app diagnostics bundle"), **_APP_LOOKUP_ERRORS},
+)
 async def app_diagnostics(
     app_id: str, db: sqlite3.Connection, config: Config, download: bool = False
 ) -> Response[AppDiagnostics] | Response[ErrorResponse]:
@@ -518,7 +550,15 @@ async def app_diagnostics(
     return Response(content=diagnostics, status_code=200, media_type=MediaType.JSON, headers=headers)
 
 
-@get("/app_logs/{app_id:str}", guards=[require_owner_auth], media_type=MediaType.TEXT)
+@get(
+    "/app_logs/{app_id:str}",
+    guards=[require_owner_auth],
+    media_type=MediaType.TEXT,
+    responses={
+        200: response_spec(str, "Container log text", media_type=MediaType.TEXT),
+        **_APP_LOOKUP_ERRORS,
+    },
+)
 async def app_logs(app_id: str, db: sqlite3.Connection, config: Config) -> Response[str] | Response[ErrorResponse]:
     app_row, err = _resolve_app_or_error(app_id, db)
     if err is not None:
@@ -528,7 +568,12 @@ async def app_logs(app_id: str, db: sqlite3.Connection, config: Config) -> Respo
     return Response(content=logs, status_code=200, media_type=MediaType.TEXT)
 
 
-@post("/stop_app/{app_id:str}", status_code=200, guards=[require_owner_auth])
+@post(
+    "/stop_app/{app_id:str}",
+    status_code=200,
+    guards=[require_owner_auth],
+    responses={200: response_spec(OkResponse, "App stopped"), **_APP_LOOKUP_ERRORS, **_REMOVING},
+)
 async def stop_app(app_id: str, db: sqlite3.Connection) -> Response[OkResponse] | Response[ErrorResponse]:
     app_row, err = _resolve_app_or_error(app_id, db)
     if err is not None:
@@ -782,7 +827,20 @@ async def _reload_app_impl(
     return Response(content=OkResponse(ok=True), status_code=200, media_type=MediaType.JSON)
 
 
-@post("/reload_app/{app_id:str}", status_code=200, guards=[require_owner_auth])
+@post(
+    "/reload_app/{app_id:str}",
+    status_code=200,
+    guards=[require_owner_auth],
+    responses={
+        200: response_spec(
+            OkResponse | PermissionsRequiredResponse,
+            "Rebuild started, or the update needs new permissions approved",
+        ),
+        **_APP_LOOKUP_ERRORS,
+        **_REMOVING,
+        503: error_spec("Archive backend unhealthy; refusing to reload"),
+    },
+)
 async def reload_app(
     app_id: str,
     db: sqlite3.Connection,
@@ -800,7 +858,19 @@ async def reload_app(
     )
 
 
-@get("/reload_app/{app_id:str}", guards=[require_owner_auth])
+@get(
+    "/reload_app/{app_id:str}",
+    guards=[require_owner_auth],
+    responses={
+        200: response_spec(
+            OkResponse | PermissionsRequiredResponse,
+            "Rebuild resumed, or the update needs new permissions approved",
+        ),
+        **_APP_LOOKUP_ERRORS,
+        **_REMOVING,
+        503: error_spec("Archive backend unhealthy; refusing to reload"),
+    },
+)
 async def reload_app_after_oauth(
     app_id: str,
     db: sqlite3.Connection,
@@ -826,7 +896,16 @@ async def reload_app_after_oauth(
     )
 
 
-@post("/remove_app/{app_id:str}", status_code=202, guards=[require_owner_auth])
+@post(
+    "/remove_app/{app_id:str}",
+    status_code=202,
+    guards=[require_owner_auth],
+    responses={
+        202: response_spec(OkResponse | RemoveAppAlreadyRemoving, "Teardown accepted; poll /api/apps for progress"),
+        **_APP_LOOKUP_ERRORS,
+        503: error_spec("Archive backend unhealthy; refusing to delete app data"),
+    },
+)
 async def remove_app(
     app_id: str,
     db: sqlite3.Connection,
@@ -949,7 +1028,18 @@ def _rename_app_storage_dirs(config: Config, old_name: str, new_name: str, archi
     return None
 
 
-@post("/rename_app/{app_id:str}", status_code=200, guards=[require_owner_auth])
+@post(
+    "/rename_app/{app_id:str}",
+    status_code=200,
+    guards=[require_owner_auth],
+    responses={
+        200: response_spec(RenameAppResponse, "App renamed"),
+        **_APP_LOOKUP_ERRORS,
+        **_REMOVING,
+        500: error_spec("Rename partially applied; see the error body"),
+        503: error_spec("Archive backend unhealthy; refusing to rename"),
+    },
+)
 async def rename_app(
     app_id: str,
     data: RenameAppRequest,
@@ -1079,7 +1169,16 @@ async def rename_app(
     )
 
 
-@post("/set_app_remote/{app_id:str}", status_code=200, guards=[require_owner_auth])
+@post(
+    "/set_app_remote/{app_id:str}",
+    status_code=200,
+    guards=[require_owner_auth],
+    responses={
+        200: response_spec(SetAppRemoteResponse, "Upstream updated"),
+        **_APP_LOOKUP_ERRORS,
+        **_REMOVING,
+    },
+)
 async def set_app_remote(
     app_id: str,
     data: SetAppRemoteRequest,

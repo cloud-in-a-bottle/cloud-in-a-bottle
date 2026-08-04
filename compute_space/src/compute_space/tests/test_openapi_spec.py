@@ -6,7 +6,12 @@ from __future__ import annotations
 
 from compute_space.web.dump_openapi import _DEFAULT_OUTPUT
 from compute_space.web.dump_openapi import render_openapi_yaml
+from compute_space.web.openapi import APP_SCHEME
+from compute_space.web.openapi import CROSS_APP_TAG
+from compute_space.web.openapi import OWNER_SCHEME
 from compute_space.web.openapi import build_openapi_schema
+from compute_space.web.routes.manifest import ALL_ROUTERS
+from compute_space.web.routes.manifest import APP_DEPENDENCIES
 
 
 def test_committed_openapi_yaml_is_up_to_date() -> None:
@@ -15,7 +20,7 @@ def test_committed_openapi_yaml_is_up_to_date() -> None:
 
 
 def test_schema_covers_api_only() -> None:
-    schema = build_openapi_schema()
+    schema = build_openapi_schema(ALL_ROUTERS, APP_DEPENDENCIES)
     paths = schema["paths"]
     assert "/api/apps" in paths
     # HTML/page routes are excluded via include_in_schema=False.
@@ -27,7 +32,73 @@ def test_schema_covers_api_only() -> None:
     assert "config" not in params
 
 
-def test_bearer_security_is_declared() -> None:
-    schema = build_openapi_schema()
-    assert schema["components"]["securitySchemes"]["BearerToken"]["scheme"] == "bearer"
-    assert {"BearerToken": []} in schema["security"]
+def test_owner_security_is_the_default() -> None:
+    schema = build_openapi_schema(ALL_ROUTERS, APP_DEPENDENCIES)
+    assert schema["components"]["securitySchemes"][OWNER_SCHEME]["scheme"] == "bearer"
+    assert {OWNER_SCHEME: []} in schema["security"]
+
+
+def test_public_routes_opt_out_of_owner_security() -> None:
+    """``/health`` and the identity routes take no token; the global owner
+    requirement must not be inherited there."""
+    paths = build_openapi_schema(ALL_ROUTERS, APP_DEPENDENCIES)["paths"]
+    for path in ("/health", "/.well-known/jwks.json", "/.well-known/openhost-identity"):
+        assert paths[path]["get"]["security"] == [{}], path
+
+
+def test_cross_app_proxy_declares_app_auth_and_links_out() -> None:
+    """The proxy takes an app token, not an owner token, and its real contract
+    lives in the manual — the tag has to carry that link."""
+    schema = build_openapi_schema(ALL_ROUTERS, APP_DEPENDENCIES)
+    proxy = schema["paths"]["/api/services/v2/call/{shortname}/{rest}"]["get"]
+    assert proxy["security"] == [{APP_SCHEME: []}]
+    assert proxy["tags"] == [CROSS_APP_TAG]
+    tag = next(t for t in schema["tags"] if t["name"] == CROSS_APP_TAG)
+    assert tag["externalDocs"]["url"] == "/docs/cross_app_services"
+
+
+def test_every_success_response_is_typed() -> None:
+    """A success response either carries a schema or carries no body at all.
+    ``Response[A] | Response[B]`` silently generates ``{}``, so this catches a
+    handler added without a ``responses=`` declaration.
+
+    The cross-app proxy is exempt: it returns whatever the provider returned.
+    """
+    paths = build_openapi_schema(ALL_ROUTERS, APP_DEPENDENCIES)["paths"]
+    untyped = []
+    for path, ops in paths.items():
+        if "services/v2/call" in path:
+            continue
+        for method, op in ops.items():
+            success = {k: v for k, v in op["responses"].items() if k.startswith("2")}
+            for code, spec in success.items():
+                content = spec.get("content")
+                if not content:
+                    continue  # 204 and friends: no body by definition
+                schema = next(iter(content.values())).get("schema")
+                if schema in ({}, None):
+                    untyped.append(f"{method.upper()} {path} -> {code}")
+    assert not untyped, f"untyped success responses: {untyped}"
+
+
+def test_error_bodies_are_declared() -> None:
+    """Handlers that return ``ErrorResponse`` on a 4xx/5xx must say so, rather
+    than leaving only Litestar's generic validation-error schema."""
+    paths = build_openapi_schema(ALL_ROUTERS, APP_DEPENDENCIES)["paths"]
+    assert paths["/api/app_status/{app_id}"]["get"]["responses"]["404"]["content"]
+    assert paths["/stop_app/{app_id}"]["post"]["responses"]["409"]["content"]
+    assert paths["/api/add_app"]["post"]["responses"]["503"]["content"]
+
+
+def test_generation_is_deterministic() -> None:
+    """``generate_examples`` produces random values, which would make the
+    committed document differ on every run and break the drift guard."""
+    assert render_openapi_yaml() == render_openapi_yaml()
+
+
+def test_cors_and_oauth_callback_stay_out() -> None:
+    """CORS preflight and the browser OAuth redirect target aren't part of the
+    contract — only the proxy itself is documented."""
+    paths = build_openapi_schema(ALL_ROUTERS, APP_DEPENDENCIES)["paths"]
+    assert "options" not in paths["/api/services/v2/call/{shortname}/{rest}"]
+    assert "/api/services/v2/oauth_callback" not in paths

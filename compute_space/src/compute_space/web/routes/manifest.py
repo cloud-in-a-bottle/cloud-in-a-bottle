@@ -1,8 +1,12 @@
-"""Router manifest shared by the live app (``app.py``) and the OpenAPI schema
-generator (``openapi.py``). What each router contributes to the schema is
-decided per-endpoint via ``include_in_schema`` on the handlers/routers, so
-the live ``/schema`` and the committed ``openapi.yaml`` cannot diverge."""
+"""Routers and dependencies shared by the live app (``app.py``) and the
+OpenAPI schema generator (``openapi.py``), so the served document describes
+the app that is actually running. What each router contributes to the schema
+is decided per-endpoint via ``include_in_schema``."""
 
+from litestar.di import Provide
+
+from compute_space.config import provide_config
+from compute_space.db import provide_db
 from compute_space.web.routes.api.apps import api_apps_routes
 from compute_space.web.routes.api.archive_backend import api_archive_backend_routes
 from compute_space.web.routes.api.identity import identity_routes
@@ -34,3 +38,8 @@ ALL_ROUTERS = [
     pages_system_routes,
     services_v2_routes,
 ]
+
+APP_DEPENDENCIES = {
+    "config": Provide(provide_config, sync_to_thread=False),
+    "db": Provide(provide_db),
+}

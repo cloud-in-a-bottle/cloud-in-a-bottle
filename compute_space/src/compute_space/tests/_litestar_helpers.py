@@ -10,13 +10,11 @@ from typing import Any
 
 import bcrypt
 from litestar import Litestar
-from litestar.di import Provide
 from litestar.handlers.base import BaseRouteHandler
 
-from compute_space.config import provide_config
 from compute_space.core.auth.auth import SESSION_COOKIE_NAME
 from compute_space.core.auth.auth import create_session
-from compute_space.db import provide_db
+from compute_space.web.routes.manifest import APP_DEPENDENCIES
 
 
 def seed_user(db_path: str, username: str = "owner", password: str = "testpass1") -> int:
@@ -61,10 +59,7 @@ def make_test_app(*route_handlers: Any) -> Litestar:
     """
     return Litestar(
         route_handlers=list(route_handlers),
-        dependencies={
-            "config": Provide(provide_config, sync_to_thread=False),
-            "db": Provide(provide_db),
-        },
+        dependencies=dict(APP_DEPENDENCIES),
         openapi_config=None,
     )
 

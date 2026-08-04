@@ -10,6 +10,10 @@
 - [Persistent Data & Archive](./data.md)
 - [Logs](./logs.md)
 
+# Reference
+
+- [HTTP API](./api.md)
+
 # Guides
 
 - [Creating an App](./creating_an_app.md)

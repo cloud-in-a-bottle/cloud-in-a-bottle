@@ -95,6 +95,12 @@ def _docs_src_dir() -> Path:
     return get_config().openhost_repo_path / "docs" / "src"
 
 
+def _openapi_spec_path() -> Path:
+    """The committed OpenAPI document, generated from the route handlers by
+    ``pixi run -e dev generate-openapi`` and kept in sync by a test."""
+    return get_config().openhost_repo_path / "compute_space" / "openapi.yaml"
+
+
 _DEFAULT_INDEX = "introduction"
 _SUMMARY_FILENAME = "SUMMARY.md"
 
@@ -147,9 +153,6 @@ def _build_md() -> MarkdownIt:
         for deep links from the sidebar / external linkers.
       * ``tasklists_plugin`` so ``- [x]`` markdown checklists
         render as proper checkboxes.
-      * ``html=False`` so embedded raw HTML in the markdown
-        sources is treated as plain text rather than executed
-        (defence-in-depth; nothing in our docs uses raw HTML).
       * A custom code-fence renderer that runs the contents
         through Pygments for syntax highlighting.
 
@@ -161,7 +164,9 @@ def _build_md() -> MarkdownIt:
     # and our manual already wraps its handful of URLs in proper
     # ``[text](url)`` syntax — auto-linking would just bring in a
     # new transitive dep for negligible UX gain.
-    md = MarkdownIt("gfm-like", {"html": False, "linkify": False, "typographer": True})
+    # ``html=True``: chapters may embed raw HTML (see ``api.md``, which
+    # embeds the OpenAPI browser).  Sources are repo files, not user input.
+    md = MarkdownIt("gfm-like", {"html": True, "linkify": False, "typographer": True})
     md.use(anchors_plugin, max_level=4, permalink=False)
     md.use(tasklists_plugin, enabled=True)
     md.add_render_rule("fence", _render_fence_with_pygments)
@@ -549,6 +554,30 @@ _TEMPLATE = """<!DOCTYPE html>
     }
     main.content .codehilite pre { background: transparent; padding: 0; }
     main.content ul, main.content ol { padding-left: 1.5em; }
+    /* OpenAPI browser embed (api.md).  Redoc ships its own styles, but the
+       prose rules above are more specific than its class selectors and would
+       otherwise repaint its code samples, links and tables — so hand those
+       properties back inside the container. */
+    main.content #redoc { margin: 1.5em 0; }
+    main.content #redoc a { color: inherit; }
+    main.content #redoc code,
+    main.content #redoc pre,
+    main.content #redoc pre code {
+      background: inherit;
+      color: inherit;
+      padding: inherit;
+      border-radius: inherit;
+      font-size: inherit;
+    }
+    main.content #redoc table,
+    main.content #redoc th,
+    main.content #redoc td {
+      border: inherit;
+      padding: inherit;
+      background: inherit;
+      width: auto;
+    }
+    main.content #redoc ul, main.content #redoc ol { padding-left: 0; }
     main.content hr { border: 0; border-top: 1px solid #ddd; margin: 2em 0; }
     main.content img { max-width: 100%; }
     .footer-nav {
@@ -700,6 +729,25 @@ def docs_index() -> Response[str]:
     return _render_doc(_DEFAULT_INDEX)
 
 
+@get("/docs/openapi.yaml", sync_to_thread=False)
+def docs_openapi_yaml() -> Response[str]:
+    """The OpenAPI document the ``api.md`` chapter renders, and the only URL
+    it is served from. Read off the checkout like the markdown is, so it
+    matches the commit this instance is running."""
+    path = _openapi_spec_path()
+    if not path.is_file():
+        return Response(
+            content=(
+                f"The OpenAPI spec is missing on this installation. Expected: {path}. "
+                "This usually means the OpenHost code checkout is incomplete; "
+                "reinstalling the openhost service should fix it."
+            ),
+            status_code=503,
+            media_type=MediaType.TEXT,
+        )
+    return Response(content=path.read_text(encoding="utf-8"), media_type="application/yaml")
+
+
 @get("/docs/{slug:str}", sync_to_thread=False)
 def docs_slug(slug: str) -> Response[str]:
     """Serve ``docs/src/<slug>.md`` rendered to HTML.
@@ -743,4 +791,8 @@ def _render_doc(slug: str) -> Response[str]:
     return Response(content=html, media_type=MediaType.HTML)
 
 
-docs_routes = Router(path="/", route_handlers=[docs_index, docs_slug], include_in_schema=False)
+docs_routes = Router(
+    path="/",
+    route_handlers=[docs_index, docs_openapi_yaml, docs_slug],
+    include_in_schema=False,
+)

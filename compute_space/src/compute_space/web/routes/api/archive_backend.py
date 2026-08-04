@@ -20,6 +20,9 @@ from compute_space.core import archive_backend
 from compute_space.core.archive_backend import BackendConfigureError
 from compute_space.core.archive_backend import BackendState
 from compute_space.web.auth.auth import require_owner_auth
+from compute_space.web.routes.api.responses import ErrorResponse
+from compute_space.web.routes.api.responses import error_spec
+from compute_space.web.routes.api.responses import response_spec
 
 
 @attr.s(auto_attribs=True, frozen=True)
@@ -59,11 +62,6 @@ class TestConnectionOk:
 @attr.s(auto_attribs=True, frozen=True)
 class TestConnectionError:
     ok: bool  # always False
-    error: str
-
-
-@attr.s(auto_attribs=True, frozen=True)
-class ErrorResponse:
     error: str
 
 
@@ -178,7 +176,15 @@ async def get_archive_backend(db: sqlite3.Connection, config: Config) -> Backend
     return _state_to_response(state, archive_dir, meta_db_path, meta_dumps, local_apps)
 
 
-@post("/api/storage/archive_backend/test_connection", status_code=200, guards=[require_owner_auth])
+@post(
+    "/api/storage/archive_backend/test_connection",
+    status_code=200,
+    guards=[require_owner_auth],
+    responses={
+        200: response_spec(TestConnectionOk, "Bucket reachable with these credentials"),
+        400: response_spec(TestConnectionError, "Bad prefix, or S3 rejected the credentials"),
+    },
+)
 async def test_connection(
     data: Annotated[TestConnectionRequest, Body(media_type=MediaType.JSON)],
 ) -> Response[TestConnectionOk] | Response[TestConnectionError]:
@@ -200,7 +206,17 @@ async def test_connection(
     return Response(content=TestConnectionOk(ok=True), status_code=200, media_type=MediaType.JSON)
 
 
-@post("/api/storage/archive_backend/configure", status_code=200, guards=[require_owner_auth])
+@post(
+    "/api/storage/archive_backend/configure",
+    status_code=200,
+    guards=[require_owner_auth],
+    responses={
+        200: response_spec(BackendStateResponse, "Backend configured; state after the switch"),
+        400: error_spec("Invalid S3 settings"),
+        409: error_spec("Local archive data would migrate; re-send with confirm_migrate_local"),
+        500: error_spec("Migration failed partway; see the error body"),
+    },
+)
 async def configure_archive_backend(
     data: Annotated[ConfigureArchiveRequest, Body(media_type=MediaType.JSON)],
     db: sqlite3.Connection,

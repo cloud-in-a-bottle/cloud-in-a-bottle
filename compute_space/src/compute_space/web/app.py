@@ -10,7 +10,6 @@ from litestar import Request
 from litestar import Response
 from litestar import route
 from litestar.contrib.jinja import JinjaTemplateEngine
-from litestar.di import Provide
 from litestar.exceptions import HTTPException
 from litestar.exceptions import NotAuthorizedException
 from litestar.exceptions.responses import create_exception_response
@@ -20,7 +19,6 @@ from litestar.types import ASGIApp
 
 from compute_space.config import Config
 from compute_space.config import get_config
-from compute_space.config import provide_config
 from compute_space.core import archive_backend
 from compute_space.core.auth.auth import read_owner_username
 from compute_space.core.auth.identity import load_identity_keys
@@ -31,11 +29,10 @@ from compute_space.core.startup import retry_pending_default_apps
 from compute_space.core.storage import start_storage_guard
 from compute_space.core.terminal import cleanup_all as cleanup_terminal
 from compute_space.db import get_db
-from compute_space.db import provide_db
 from compute_space.web.auth.auth import login_required_redirect
 from compute_space.web.middleware.subdomain_proxy import SubdomainProxyMiddleware
-from compute_space.web.openapi import OPENAPI_CONFIG
 from compute_space.web.routes.manifest import ALL_ROUTERS
+from compute_space.web.routes.manifest import APP_DEPENDENCIES
 
 
 def _make_static_url(static_dir: Path) -> Any:
@@ -195,15 +192,13 @@ def create_app(config: Config) -> ASGIApp:
         route_handlers=[static_router, *ALL_ROUTERS, setup_already_done],
         template_config=template_config,
         before_request=_reject_app_subdomain_requests,
-        dependencies={
-            "config": Provide(provide_config, sync_to_thread=False),
-            "db": Provide(provide_db),
-        },
+        dependencies=dict(APP_DEPENDENCIES),
         exception_handlers={
             NotAuthorizedException: _login_required_redirect,
             Exception: _log_unhandled_exception,
         },
         on_startup=[_install_template_globals],
-        openapi_config=OPENAPI_CONFIG,
+        # No Litestar-served /schema routes; the API reference lives under /docs.
+        openapi_config=None,
     )
     return SubdomainProxyMiddleware(litestar_app)
