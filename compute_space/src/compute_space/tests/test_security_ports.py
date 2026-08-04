@@ -13,6 +13,7 @@ from unittest import mock
 import pytest
 
 from compute_space.core.auth import security_audit as security
+from compute_space.core.email.service import ROUTER_SMTP_PORT
 
 _SS_FORMAT = "LISTEN  0  4096  {addr}  *:*"
 
@@ -34,6 +35,15 @@ def _classify(ports, port: int) -> str | None:
         if entry["port"] == port:
             return entry["classification"]
     return None
+
+
+def test_router_email_smtp_port_classified_secure(fake_ss) -> None:
+    """The router's outbound-email SMTP listener (ROUTER_SMTP_PORT) binds
+    127.0.0.1 + the container gateway only; it must be classified ``secure``
+    so the audit doesn't flag every email-enabled instance."""
+    fake_ss([f"127.0.0.1:{ROUTER_SMTP_PORT}", f"10.200.0.1:{ROUTER_SMTP_PORT}"])
+    ports = security.list_listening_ports(db=None)
+    assert _classify(ports, ROUTER_SMTP_PORT) == "secure"
 
 
 def test_juicefs_pprof_loopback_classified_secure(fake_ss) -> None:

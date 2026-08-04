@@ -166,6 +166,12 @@ def _secure_ports() -> dict[int, str]:
         # If the config isn't available (e.g. unit-testing the helper directly),
         # fall back to the public-only set.
         pass
+    # The router's outbound-email SMTP submission listener (email v2 service) binds
+    # 127.0.0.1 + 10.200.0.1 only (never public), and only when email is enabled;
+    # mark it expected so the audit doesn't flag it. Static import (no heavy deps).
+    from compute_space.core.email.service import ROUTER_SMTP_PORT  # noqa: PLC0415 — avoid import cycle
+
+    secure[ROUTER_SMTP_PORT] = "Router email service (SMTP)"
     return secure
 
 

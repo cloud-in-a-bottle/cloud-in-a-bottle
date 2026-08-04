@@ -25,11 +25,10 @@ inbound mail is unaffected (still delivered directly to Stalwart on 25).
 
 from __future__ import annotations
 
+import asyncio
 import smtplib
 import ssl
 import threading
-from email import message_from_bytes
-from email.policy import default as default_policy
 
 from aiosmtpd.controller import Controller
 from aiosmtpd.smtp import SMTP
@@ -126,10 +125,17 @@ class EmailServiceHandler:
         if not to_addresses:
             return "554 5.5.0 no recipients"
 
+        # Credential fetch (httpx) and the smarthost relay (smtplib) are blocking
+        # network I/O; run them off the aiosmtpd event loop so one slow upstream
+        # call can't stall every other in-flight SMTP session.
+        return await asyncio.to_thread(self._deliver, raw, from_address, to_addresses)
+
+    def _deliver(self, raw: bytes, from_address: str, to_addresses: list[str]) -> str:
+        """Blocking: fetch the relay credential and relay the message. Returns the
+        SMTP status line. Runs in a worker thread (see handle_DATA)."""
         cred = self._fetch_credential()
         if cred is None:
             return "451 4.3.0 email relay not configured on this instance"
-
         try:
             _relay_to_smarthost(cred, raw, from_address, to_addresses)
         except smtplib.SMTPException as e:
@@ -163,16 +169,6 @@ def _relay_to_smarthost(cred: RelayCredential, raw: bytes, from_address: str, to
     with smtplib.SMTP_SSL(host=cred.smtp_relay_host, port=cred.smtp_relay_port, context=context, timeout=30) as client:
         client.login(cred.smtp_relay_user, cred.smtp_relay_password)
         client.sendmail(from_address, to_addresses, raw)
-
-
-def header_from(raw: bytes) -> str | None:
-    """Best-effort message header From address (used by callers/tests)."""
-    try:
-        msg = message_from_bytes(raw, policy=default_policy)
-    except Exception:  # noqa: BLE001
-        return None
-    value = msg.get("From")
-    return str(value) if value is not None else None
 
 
 _controllers: list[Controller] = []
