@@ -1,0 +1,205 @@
+"""The OpenHost *platform* service: platform operations exposed to apps over the
+same v2 service interface they use to call other apps, but dispatched in-process
+by the router (like the ``installer`` service) rather than proxied to a provider
+app.
+
+Design (Zack's model, not the flat API-token-scope model):
+
+- Apps consume this service via a normal ``[[services.v2.consumes]]`` block and
+  call ``/api/services/v2/call/<shortname>/...``.  Auth is the app's
+  ``$OPENHOST_APP_TOKEN``; permissions are ordinary ``permissions_v2`` grants
+  keyed on ``(consumer_app_id, PLATFORM_SERVICE_URL)``.
+- The vocabulary of capabilities is roughly "what the ``oh`` CLI can do", gated
+  per-capability by grant payloads.
+- The headline capability is *propagating / non-escalating delegation*: an app
+  may deploy new apps, have full control over the apps **it** deployed, and
+  grant those apps any permission it **already holds** — so it can make copies
+  of (a subset of) its own privileges but never escalate.
+
+Grant payloads (JSON objects stored in ``permissions_v2.grant_payload``):
+
+    {"capability": "deploy", "repo_url_prefix": "https://github.com/acme/"}
+        Deploy new apps whose repo_url starts with the prefix ("" or "*" = any).
+        A token-/app-initiated deploy stamps ``apps.installed_by`` with the
+        caller, which is what "apps I deployed" below keys on.
+
+    {"capability": "manage_apps", "target": "own"}
+    {"capability": "manage_apps", "target": "all"}
+    {"capability": "manage_apps", "target": "<app_id>"}
+        Manage existing apps: view status/logs, stop/start/restart, remove.
+        ``own``  = only apps this caller deployed (installed_by == caller).
+        ``all``  = every app on the instance.
+        ``<id>`` = one specific app.
+        Managing apps does NOT include granting them permissions (that's
+        ``delegate_permissions``), matching Zack's "manage but not add
+        permissions".
+
+    {"capability": "system_read"}
+        Read-only platform/system info (version, disk, memory, ports, logs).
+
+    {"capability": "delegate_permissions"}
+        Allow the caller to grant a deployed app any permission the caller
+        itself already holds (bounded intersection — see
+        ``check_delegation_allowed``).  This is the escalation-sensitive one;
+        it never lets the caller hand out a grant it does not itself possess.
+
+Only dict-shaped grants with a recognized ``capability`` are honored; anything
+else is ignored (fail-closed).
+"""
+
+from __future__ import annotations
+
+import json
+from collections.abc import Mapping
+
+import attr
+
+from compute_space.core.auth.permissions_v2 import Grant
+from compute_space.core.auth.permissions_v2 import GrantAtom
+from compute_space.core.auth.permissions_v2 import GrantedPermission
+
+# ── Service identity ─────────────────────────────────────────────────────────
+PLATFORM_SERVICE_URL = "github.com/imbue-openhost/openhost/services/platform"
+PLATFORM_SERVICE_VERSION = "0.1.0"
+
+# ── Grant payload keys / capability names ────────────────────────────────────
+GRANT_KEY_CAPABILITY = "capability"
+GRANT_KEY_REPO_URL_PREFIX = "repo_url_prefix"
+GRANT_KEY_TARGET = "target"
+
+CAP_DEPLOY = "deploy"
+CAP_MANAGE_APPS = "manage_apps"
+CAP_SYSTEM_READ = "system_read"
+CAP_DELEGATE_PERMISSIONS = "delegate_permissions"
+
+ALL_CAPABILITIES: frozenset[str] = frozenset(
+    {CAP_DEPLOY, CAP_MANAGE_APPS, CAP_SYSTEM_READ, CAP_DELEGATE_PERMISSIONS}
+)
+
+# ``manage_apps`` target sentinels (anything else is treated as a concrete app_id).
+TARGET_OWN = "own"
+TARGET_ALL = "all"
+
+
+@attr.s(auto_attribs=True, frozen=True)
+class ManageScope:
+    """Resolved reach of a caller's ``manage_apps`` grants.
+
+    ``all`` wins over everything.  Otherwise the caller may manage apps it
+    deployed (``own``) and/or an explicit set of app_ids.
+    """
+
+    all_apps: bool = False
+    own_apps: bool = False
+    app_ids: frozenset[str] = attr.ib(factory=frozenset)
+
+    def allows(self, *, app_id: str, installed_by: str | None, caller_app_id: str) -> bool:
+        if self.all_apps:
+            return True
+        if self.own_apps and installed_by == caller_app_id:
+            return True
+        return app_id in self.app_ids
+
+
+def _dict_grants_with_capability(grants: list[Grant], capability: str) -> list[Mapping[str, GrantAtom]]:
+    """The dict-shaped grants whose ``capability`` equals ``capability``.
+
+    Non-dict grants (strings, lists) and grants for other capabilities are
+    skipped, so an unrecognized/mixed grant set never accidentally widens
+    access.
+    """
+    out: list[Mapping[str, GrantAtom]] = []
+    for g in grants:
+        if isinstance(g, dict) and g.get(GRANT_KEY_CAPABILITY) == capability:
+            out.append(g)
+    return out
+
+
+def check_deploy_allowed(repo_url: str, grants: list[Grant]) -> str | None:
+    """Return None if some ``deploy`` grant permits installing ``repo_url``,
+    else a human-readable reason for the 403.
+
+    ``repo_url_prefix`` of ``""`` or ``"*"`` matches any URL; otherwise the
+    requested URL must start with the prefix.
+    """
+    deploy_grants = _dict_grants_with_capability(grants, CAP_DEPLOY)
+    if not deploy_grants:
+        return "no deploy grant present"
+    for g in deploy_grants:
+        prefix = g.get(GRANT_KEY_REPO_URL_PREFIX, "")
+        if not isinstance(prefix, str):
+            continue
+        if prefix in ("", "*") or repo_url.startswith(prefix):
+            return None
+    return "no deploy grant matches the requested repo_url"
+
+
+def resolve_manage_scope(grants: list[Grant]) -> ManageScope:
+    """Fold a caller's ``manage_apps`` grants into a single :class:`ManageScope`."""
+    all_apps = False
+    own_apps = False
+    app_ids: set[str] = set()
+    for g in _dict_grants_with_capability(grants, CAP_MANAGE_APPS):
+        target = g.get(GRANT_KEY_TARGET, TARGET_OWN)
+        if not isinstance(target, str) or not target:
+            continue
+        if target == TARGET_ALL:
+            all_apps = True
+        elif target == TARGET_OWN:
+            own_apps = True
+        else:
+            app_ids.add(target)
+    return ManageScope(all_apps=all_apps, own_apps=own_apps, app_ids=frozenset(app_ids))
+
+
+def has_capability(grants: list[Grant], capability: str) -> bool:
+    """True if the caller holds at least one grant for ``capability``.
+
+    Used for capabilities that take no further parameters (``system_read``,
+    ``delegate_permissions``).
+    """
+    return bool(_dict_grants_with_capability(grants, capability))
+
+
+def _grant_identity(grant: Grant) -> str:
+    """Stable identity for a grant payload (order-insensitive JSON), so two
+    logically-equal grants compare equal regardless of key order."""
+    return json.dumps(grant, sort_keys=True)
+
+
+def caller_holds_grant(
+    caller_grants_for_service: list[GrantedPermission],
+    grant: Grant,
+) -> bool:
+    """True if the caller itself already holds ``grant`` for the target service.
+
+    The comparison is by canonical JSON identity so ``{"a":1,"b":2}`` matches
+    ``{"b":2,"a":1}``.  Only the grant *payload* is compared (scope/provider are
+    a separate concern handled by the delegation writer).
+    """
+    wanted = _grant_identity(grant)
+    return any(_grant_identity(gp.grant) == wanted for gp in caller_grants_for_service)
+
+
+def check_delegation_allowed(
+    *,
+    caller_platform_grants: list[Grant],
+    caller_grants_for_target_service: list[GrantedPermission],
+    grant_to_delegate: Grant,
+) -> str | None:
+    """Return None if the caller may delegate ``grant_to_delegate`` (for some
+    target service) to an app it deployed, else a reason for the 403.
+
+    Two independent conditions must both hold (fail-closed):
+
+    1. The caller must hold the ``delegate_permissions`` platform capability at
+       all.
+    2. The caller must **already possess** the exact grant it is trying to hand
+       out for that service (anti-escalation: you can only pass on privileges
+       you have, never mint new ones).
+    """
+    if not has_capability(caller_platform_grants, CAP_DELEGATE_PERMISSIONS):
+        return "caller lacks the delegate_permissions capability"
+    if not caller_holds_grant(caller_grants_for_target_service, grant_to_delegate):
+        return "caller does not itself hold the grant it is trying to delegate"
+    return None
