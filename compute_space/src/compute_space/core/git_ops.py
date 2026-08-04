@@ -1,9 +1,11 @@
+import functools
 import re
 import urllib.parse
 from pathlib import Path
 
 import git
 
+from compute_space import OPENHOST_PROJECT_DIR
 from compute_space.core.util import async_wrap
 
 
@@ -268,7 +270,7 @@ def hard_checkout_ref(repo_path: Path, ref: str) -> None:
     repo.git.clean("-fd")
 
 
-def github_web_url(remote_url: str, branch: str | None) -> str | None:
+def github_web_url_from_remote_url(remote_url: str, branch: str | None) -> str | None:
     """Browsable ``github.com`` URL for ``remote_url`` at ``branch``, or None.
 
     Converts an origin remote (HTTPS, credential-bearing, or SCP-style SSH) into a
@@ -296,7 +298,7 @@ def github_web_url(remote_url: str, branch: str | None) -> str | None:
     return url
 
 
-def get_github_source_url(repo_path: Path) -> str | None:
+def github_web_url_from_local_repo(repo_path: Path) -> str | None:
     """Browsable GitHub link to the checkout at ``repo_path`` (current branch/fork).
 
     Best-effort and non-raising: it only surfaces a "view source" link, so a tarball
@@ -317,4 +319,10 @@ def get_github_source_url(repo_path: Path) -> str | None:
         return None
     if not remote_url:
         return None
-    return github_web_url(_strip_credentials(remote_url), branch)
+    return github_web_url_from_remote_url(_strip_credentials(remote_url), branch)
+
+
+@functools.cache
+def running_checkout_source_url() -> str | None:
+    """Browsable GitHub link to the running OpenHost checkout; resolved once per process."""
+    return github_web_url_from_local_repo(OPENHOST_PROJECT_DIR)

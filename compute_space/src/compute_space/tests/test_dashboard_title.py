@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import sqlite3
 from collections.abc import Iterator
+from contextlib import closing
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +24,9 @@ from litestar.testing import TestClient
 from compute_space.config import provide_config
 from compute_space.config import set_active_config
 from compute_space.core.auth.auth import update_owner_username
+from compute_space.core.domains import Domain
+from compute_space.core.domains import seed_domains
+from compute_space.db import get_db
 from compute_space.db import provide_db
 from compute_space.db.connection import init_db
 from compute_space.web.app import _template_globals
@@ -102,7 +106,7 @@ def test_heading_uses_owner_username_when_set(cfg: Any) -> None:
         resp = client.get("/dashboard", cookies=cookie)
     assert resp.status_code == 200
     assert "alice's personal compute space" in resp.text
-    # The zone subdomain must no longer drive the heading.
+    # The zone subdomain must not drive the heading.
     assert "alice-zone's personal compute space" not in resp.text
 
 
@@ -126,6 +130,19 @@ def test_settings_renders_logout_button(cfg: Any) -> None:
     assert "Log out" not in dashboard_resp.text
 
 
+def test_settings_renders_domains_section(cfg: Any) -> None:
+    """The settings page exposes the Domains management UI over /api/domains."""
+    set_active_config(cfg)
+    cookie = auth_cookie(cfg, username="owner")
+
+    with TestClient(app=_build_app(cfg)) as client:
+        settings_resp = client.get("/settings", cookies=cookie)
+    assert settings_resp.status_code == 200
+    assert ">Domains</h2>" in settings_resp.text
+    assert 'onclick="addDomain()"' in settings_resp.text
+    assert "js/domains.js" in settings_resp.text
+
+
 def test_owner_name_global_reads_live(cfg: Any) -> None:
     set_active_config(cfg)
     globals_ = _template_globals(cfg, Path("static"))
@@ -140,3 +157,23 @@ def test_owner_name_global_reads_live(cfg: Any) -> None:
     # Changing the username is reflected immediately (read live, not cached).
     _seed_username(cfg.db_path, "carol")
     assert owner_name() == "carol"
+
+
+def test_zone_name_global_reads_live(tmp_path: Path) -> None:
+    cfg = _make_test_config(tmp_path, zone_domain="alice-zone.example.com", seed_primary=False)
+    init_db(cfg.db_path)
+    set_active_config(cfg)
+    globals_ = _template_globals(cfg, Path("static"))
+    zone_domain = globals_["zone_domain"]
+    zone_name = globals_["zone_name"]
+
+    # Pre-seed (no primary row) -> empty/None so the heading falls back.
+    assert zone_domain() == ""
+    assert zone_name() is None
+
+    with closing(get_db()) as db:
+        seed_domains(db, Domain(name="alice-zone.example.com", tls=False), [])
+
+    # A primary seeded after construction is reflected immediately (read live, not cached).
+    assert zone_domain() == "alice-zone.example.com"
+    assert zone_name() == "alice-zone"

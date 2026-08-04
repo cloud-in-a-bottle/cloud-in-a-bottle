@@ -59,6 +59,7 @@ from __future__ import annotations
 
 import re
 import threading
+from contextlib import closing
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -78,10 +79,11 @@ from pygments.formatters import HtmlFormatter
 from pygments.lexers import get_lexer_by_name
 from pygments.util import ClassNotFound
 
-from compute_space import OPENHOST_PROJECT_DIR
 from compute_space.config import get_config
 from compute_space.core.auth.auth import read_owner_username
-from compute_space.core.git_ops import get_github_source_url
+from compute_space.core.domains import Domain
+from compute_space.core.domains import primary_domain_or_none
+from compute_space.core.git_ops import running_checkout_source_url
 from compute_space.core.logging import logger
 from compute_space.db import get_db
 
@@ -103,7 +105,7 @@ _SUMMARY_FILENAME = "SUMMARY.md"
 # Resolved once at import: the running checkout's branch/fork is fixed for the
 # process, and the shared nav's "view source" mark (rendered via _nav_header.html)
 # needs it in this route's standalone Jinja environment. None on tarball deploys.
-_SOURCE_URL = get_github_source_url(OPENHOST_PROJECT_DIR)
+_SOURCE_URL = running_checkout_source_url()
 
 
 # ─── Space navigation header ────────────────────────────────────────
@@ -116,29 +118,24 @@ def _space_display_name() -> str | None:
     Every lookup is wrapped defensively: the docs template renders
     through a standalone Jinja environment (not the app engine), so the
     header must degrade gracefully rather than break the manual if the
-    DB or config is unavailable (e.g. pre-setup, or the route-level test
-    harness that stubs a minimal config without ``zone_domain``).
+    DB or the active primary domain is unavailable (e.g. pre-setup, or a
+    route-level test harness).
     """
     owner: str | None = None
+    primary: Domain | None = None
     try:
-        db = get_db()
-        try:
+        with closing(get_db()) as db:
             owner = read_owner_username(db)
-        finally:
-            db.close()
+            primary = primary_domain_or_none(db)
     except Exception as exc:
         # Benign pre-setup / uninitialised-DB paths (and the route-level
         # test harness) land here; the header just falls back to the zone
         # name.  Debug-level so we don't spam ERROR logs for an expected,
         # non-fatal condition.
-        logger.debug("could not read owner username for docs header: {}", exc)
+        logger.debug("could not read docs header identity: {}", exc)
     if owner:
         return owner
-    try:
-        zone_domain = get_config().zone_domain
-    except Exception:
-        return None
-    return zone_domain.split(".")[0] if zone_domain else None
+    return primary.name.split(".")[0] if primary else None
 
 
 # ─── Markdown engine ────────────────────────────────────────────────
@@ -426,6 +423,7 @@ _TEMPLATE = """<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
+  <meta name="robots" content="noindex">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{{ page_title }} - OpenHost Manual</title>
   <style>

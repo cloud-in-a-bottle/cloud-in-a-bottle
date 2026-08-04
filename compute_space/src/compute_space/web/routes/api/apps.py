@@ -46,6 +46,7 @@ from compute_space.core.containers import stop_app_process
 from compute_space.core.containers import stop_container
 from compute_space.core.diagnostics import AppDiagnostics
 from compute_space.core.diagnostics import collect_app_diagnostics
+from compute_space.core.domains import primary_domain
 from compute_space.core.git_ops import UnsupportedRepoUrlError
 from compute_space.core.git_ops import get_branch_name
 from compute_space.core.git_ops import get_head_sha
@@ -281,7 +282,7 @@ async def clone_and_get_app_info(
     if not repo_url:
         return Response(content=ErrorResponse(error="No repository URL provided"), status_code=400)
 
-    add_app_url = f"//{config.zone_domain}/add_app?repo={repo_url}"
+    add_app_url = f"//{primary_domain(db).name}/add_app?repo={repo_url}"
     manifest, clone_dir, error, authorize_url = await clone_with_github_fallback(repo_url, return_to=add_app_url)
 
     if authorize_url:
@@ -511,7 +512,7 @@ async def app_diagnostics(
     if err is not None:
         return err
     assert app_row is not None
-    diagnostics = await collect_app_diagnostics(app_row, config)
+    diagnostics = await collect_app_diagnostics(app_row, config, db)
     headers = None
     if download:
         headers = {"Content-Disposition": f'attachment; filename="{_app_diagnostics_filename(app_row["name"])}"'}
@@ -685,7 +686,7 @@ async def _reload_app_impl(
             if not pull_ok and is_github_repo_url(repo_url):
                 lf.write("Attempting git pull with github oauth\n")
                 lf.flush()
-                return_to = f"//{config.zone_domain}/reload_app/{app_id}?continue_oauth_update=1"
+                return_to = f"//{primary_domain(db).name}/reload_app/{app_id}?continue_oauth_update=1"
                 try:
                     token = await get_oauth_token("github", ["repo"], return_to=return_to)
                 except ServiceNotAvailable as e:
@@ -766,12 +767,30 @@ async def _reload_app_impl(
                 return Redirect(path=f"/app_detail/{app_name}")
             return Response(content=perm_gate, status_code=200, media_type=MediaType.JSON)
 
-    await asyncio.to_thread(stop_app_process, app_row)
-    db.execute(
-        "UPDATE apps SET status = 'building', container_id = NULL, error_message = NULL WHERE app_id = ?",
+    # Atomically claim the reload before touching the running container.
+    # ``WHERE status NOT IN (<transient states>)`` makes concurrent reloads
+    # safe: only the first request flips the row to 'building' and spawns a
+    # worker; a second one gets rowcount=0 and is refused. Without this,
+    # spamming "Reload" spawns several reload_app_background threads that race
+    # to create the same ``openhost-<name>`` container and fail with
+    # "container name is already in use". ``continue_oauth`` resumes a reload
+    # this same request already began on its initial POST (status is still the
+    # pre-reload one, since the POST bounced to OAuth before claiming), so it
+    # proceeds regardless of the rowcount.
+    cursor = db.execute(
+        "UPDATE apps SET status = 'building', container_id = NULL, error_message = NULL "
+        "WHERE app_id = ? AND status NOT IN ('building', 'starting', 'removing')",
         (app_id,),
     )
     db.commit()
+    if cursor.rowcount == 0 and not continue_oauth:
+        return Response(
+            content=ErrorResponse(error="App is already reloading"),
+            status_code=409,
+            media_type=MediaType.JSON,
+        )
+
+    await asyncio.to_thread(stop_app_process, app_row)
 
     Thread(
         target=reload_app_background,

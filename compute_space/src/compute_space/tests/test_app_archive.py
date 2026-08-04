@@ -272,10 +272,7 @@ def test_deprovision_data_handles_missing_archive_subdir(tmp_path) -> None:
 
 
 def _config(**kwargs) -> DefaultConfig:  # type: ignore[no-untyped-def]
-    base = dict(
-        zone_domain="example.com",
-        my_openhost_redirect_domain="my.example.com",
-    )
+    base = dict(my_openhost_redirect_domain="my.example.com")
     base.update(kwargs)
     return DefaultConfig(**base)  # type: ignore[arg-type]
 

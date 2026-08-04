@@ -19,12 +19,16 @@ import argparse
 import shutil
 import subprocess
 import sys
+from contextlib import closing
 from pathlib import Path
 
 from compute_space import COMPUTE_SPACE_PACKAGE_DIR
 from compute_space import OPENHOST_PROJECT_DIR
+from compute_space.core.domains import primary_domain
+from compute_space.db import get_db
 from compute_space.tests.local_stack import make_local_stack_config
 from compute_space.tests.utils import make_router_env
+from compute_space.tests.utils import write_first_boot_beside
 
 
 def main() -> int:
@@ -58,13 +62,17 @@ def main() -> int:
     )
     config_path = str(data_dir / "config.toml")
     config.to_toml(config_path)
+    with closing(get_db()) as db:
+        primary = primary_domain(db)
+    write_first_boot_beside(config_path, primary)
 
+    zone_domain = primary.name
     print(f"data dir:  {data_dir}")
-    print(f"zone:      {config.zone_domain}")
+    print(f"zone:      {zone_domain}")
     print()
-    print(f"  first run:  http://{config.zone_domain}/setup   (pick an owner password)")
-    print(f"  dashboard:  http://{config.zone_domain}/dashboard")
-    print(f"  apps:       http://<app-name>.{config.zone_domain}/")
+    print(f"  first run:  http://{zone_domain}/setup   (pick an owner password)")
+    print(f"  dashboard:  http://{zone_domain}/dashboard")
+    print(f"  apps:       http://<app-name>.{zone_domain}/")
     print(flush=True)
 
     proc = subprocess.run(

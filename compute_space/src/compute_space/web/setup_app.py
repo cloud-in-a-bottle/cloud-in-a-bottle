@@ -6,6 +6,7 @@ When the setup handler successfully creates the owner row, it triggers shutdown 
 
 import os
 import secrets
+from contextlib import closing
 from pathlib import Path
 from typing import Any
 
@@ -29,7 +30,11 @@ from compute_space.core.auth.auth import DEFAULT_OWNER_USERNAME
 from compute_space.core.auth.auth import create_session
 from compute_space.core.auth.auth import validate_owner_username
 from compute_space.core.default_apps import deploy_default_apps
+from compute_space.core.domains import primary_domain
 from compute_space.core.logging import logger
+from compute_space.core.settings_store import CLAIM_TOKEN_KEY
+from compute_space.core.settings_store import delete_setting
+from compute_space.core.settings_store import get_setting
 from compute_space.core.updates import is_shutdown_pending
 from compute_space.core.updates import trigger_restart
 from compute_space.db import get_db
@@ -41,16 +46,15 @@ from compute_space.web.auth.cookies import build_session_cookie
 _setup_completed: bool = False
 
 
-def _verify_claim_token(claim_token: str, claim_token_path: str) -> bool:
-    """Compare ``claim_token`` against the token written to ``claim_token_path``."""
+def _verify_claim_token(claim_token: str) -> bool:
+    """Compare ``claim_token`` against the token seeded into the DB ``settings`` store (from
+    ``first_boot.toml`` or the legacy claim-token file at startup)."""
     if not claim_token:
         return False
-    try:
-        with open(claim_token_path) as f:
-            content = f.read().strip()
-    except FileNotFoundError:
+    with closing(get_db()) as db:
+        stored_token = get_setting(db, CLAIM_TOKEN_KEY)
+    if not stored_token:
         return False
-    stored_token = content.split(":", 1)[0]
     return secrets.compare_digest(claim_token, stored_token)
 
 
@@ -76,7 +80,7 @@ async def root_redirect() -> Response[None]:
 @get("/setup")
 async def setup_get(request: Request[Any, Any, Any], config: Config) -> Template | Response[str]:
     claim_token = request.query_params.get("claim", "")
-    if _claim_token_required(config) and not _verify_claim_token(claim_token, config.claim_token_path):
+    if _claim_token_required(config) and not _verify_claim_token(claim_token):
         return _claim_unauthorized()
     return Template(template_name="setup.html", context={"claim": claim_token})
 
@@ -85,7 +89,7 @@ async def setup_get(request: Request[Any, Any, Any], config: Config) -> Template
 async def setup_post(request: Request[Any, Any, Any], config: Config) -> Response[Any]:
     form = await request.form()
     form_claim = form.get("claim", "")
-    if _claim_token_required(config) and not _verify_claim_token(form_claim, config.claim_token_path):
+    if _claim_token_required(config) and not _verify_claim_token(form_claim):
         return _claim_unauthorized()
 
     password = form.get("password", "")
@@ -121,6 +125,9 @@ async def setup_post(request: Request[Any, Any, Any], config: Config) -> Respons
     session_token = create_session(user_id, db)
     db.commit()
 
+    # The claim token has done its job — drop it from the settings store, and best-effort remove
+    # the legacy file too (it's only a seed source; may linger on upgraded instances).
+    delete_setting(db, CLAIM_TOKEN_KEY)
     try:
         os.remove(config.claim_token_path)
     except OSError:
@@ -139,12 +146,15 @@ async def setup_post(request: Request[Any, Any, Any], config: Config) -> Respons
     # app time to come up before the next navigation.
     body = (
         "<!doctype html><html><head><meta http-equiv=refresh content='2; url=/'>"
+        "<meta name=robots content=noindex>"
         "<title>OpenHost — restarting</title></head>"
         "<body style='font-family:system-ui;text-align:center;margin-top:4em;'>"
         "<p>Setup complete. Restarting…</p></body></html>"
     )
     response = Response(content=body, status_code=200, media_type=MediaType.HTML)
-    response.set_cookie(build_session_cookie(session_token, cookie_domain=config.zone_domain_no_port))
+    # Setup is always served on the primary domain; scope the cookie to it (no middleware here to
+    # stash a request domain).
+    response.set_cookie(build_session_cookie(session_token, primary_domain(db)))
 
     global _setup_completed  # noqa: PLW0603
     _setup_completed = True

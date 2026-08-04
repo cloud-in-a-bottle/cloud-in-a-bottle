@@ -1,14 +1,38 @@
 from __future__ import annotations
 
 import socket
+from contextlib import closing
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 import compute_space.core.dns as dns_mod
+from compute_space.config import DefaultConfig
+from compute_space.core.dns import DnsZone
 from compute_space.core.dns import TxtRecord
 from compute_space.core.dns import append_txt_records
 from compute_space.core.dns import clear_txt
+from compute_space.core.dns import public_dns_zones
+from compute_space.core.dns import reload_coredns_for_domains
+from compute_space.core.dns import set_active_coredns
+from compute_space.core.domains import Domain
+from compute_space.core.domains import DomainRecord
+from compute_space.core.domains import seed_domains
+from compute_space.core.domains import upsert_record
+from compute_space.db import init_db
+from compute_space.tests.conftest import open_db
+
+
+def _seed_dns_cfg(tmp_path: Path, *domains: Domain, **kw: Any) -> DefaultConfig:
+    """A config whose DB is seeded with ``domains`` (primary first), for the DB-backed zone builder."""
+    primary = domains[0]
+    cfg = DefaultConfig(data_root_dir=str(tmp_path), **kw)
+    cfg.make_all_dirs()
+    init_db(cfg.db_path)
+    with closing(open_db(cfg)) as db:
+        seed_domains(db, primary, [DomainRecord(d.name, d.tls, d.mdns) for d in domains[1:]])
+    return cfg
 
 
 def _write_zonefile(path: Path, serial: int = 100) -> None:
@@ -109,7 +133,11 @@ class _FakeProc:
     pid = 4242
     stdout = None
 
-    def wait(self) -> int:
+    def wait(self, timeout: float | None = None) -> int:
+        return 0
+
+    def poll(self) -> int:
+        # Report already-exited so CoreDnsProcess.restart() skips the terminate path.
         return 0
 
 
@@ -127,7 +155,12 @@ def test_container_dns_view_rendered_when_gateway_bindable(tmp_path: Path, monke
 
     corefile = tmp_path / "Corefile"
     zonefile = tmp_path / "zonefile"
-    dns_mod.start_coredns("app.example.com", "203.0.113.10", corefile, zonefile, container_gateway_ip="10.200.0.1")
+    dns_mod.start_coredns(
+        (dns_mod.DnsZone("app.example.com", zonefile),),
+        "203.0.113.10",
+        corefile,
+        container_gateway_ip="10.200.0.1",
+    )
 
     cf = corefile.read_text()
     # Public view binds the discovered local IP; container view binds the gateway.
@@ -151,7 +184,12 @@ def test_container_dns_view_skipped_when_gateway_not_bindable(tmp_path: Path, mo
 
     corefile = tmp_path / "Corefile"
     zonefile = tmp_path / "zonefile"
-    dns_mod.start_coredns("app.example.com", "203.0.113.10", corefile, zonefile, container_gateway_ip="10.200.0.1")
+    dns_mod.start_coredns(
+        (dns_mod.DnsZone("app.example.com", zonefile),),
+        "203.0.113.10",
+        corefile,
+        container_gateway_ip="10.200.0.1",
+    )
 
     cf = corefile.read_text()
     assert "bind 10.200.0.1" not in cf
@@ -213,7 +251,7 @@ def test_container_view_forward_uses_discovered_resolvers_and_distinct_bind(
     _stub_popen(monkeypatch)
 
     corefile = tmp_path / "Corefile"
-    dns_mod.start_coredns("app.example.com", "203.0.113.10", corefile, tmp_path / "zonefile")
+    dns_mod.start_coredns((dns_mod.DnsZone("app.example.com", tmp_path / "zonefile"),), "203.0.113.10", corefile)
     cf = corefile.read_text()
 
     assert "bind 10.0.0.5" in cf  # public/authoritative view
@@ -224,3 +262,83 @@ def test_container_view_forward_uses_discovered_resolvers_and_distinct_bind(
     catch_all = cf.split(".:53 {", 1)[1]
     assert "bind 10.200.0.1" in catch_all
     assert "bind 10.0.0.5" not in catch_all
+
+
+def test_public_dns_zones_covers_every_public_domain_and_skips_mdns(tmp_path: Path) -> None:
+    config = _seed_dns_cfg(
+        tmp_path,
+        Domain(name="host.example.com", tls=True),
+        Domain(name="host.example.org", tls=True),
+        Domain(name="myhost.local", tls=False, mdns=True),
+    )
+    with closing(open_db(config)) as db:
+        zones = public_dns_zones(config, db)
+    # The mDNS domain is excluded (served by the responder, not CoreDNS).
+    assert [z.domain for z in zones] == ["host.example.com", "host.example.org"]
+    # Primary keeps the legacy zonefile path; the secondary gets a per-domain file under zones/.
+    assert zones[0].zonefile_path == config.coredns_zonefile_path
+    assert zones[1].zonefile_path == config.zones_dir / "host.example.org.zone"
+
+
+def test_start_coredns_writes_a_zone_block_and_file_per_public_domain(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(dns_mod, "_coredns_bind_ip", lambda ip: "10.0.0.5")
+    monkeypatch.setattr(dns_mod, "_gateway_ip_is_bindable", lambda ip: False)
+    _stub_popen(monkeypatch)
+
+    corefile = tmp_path / "Corefile"
+    primary_zone = tmp_path / "zonefile"
+    secondary_zone = tmp_path / "zones" / "host.example.org.zone"
+    dns_mod.start_coredns(
+        (DnsZone("host.example.com", primary_zone), DnsZone("host.example.org", secondary_zone)),
+        "203.0.113.10",
+        corefile,
+    )
+
+    cf = corefile.read_text()
+    # Both domains get their own authoritative server block referencing their own zone file.
+    assert "host.example.com:53 {" in cf
+    assert "host.example.org:53 {" in cf
+    assert str(primary_zone) in cf
+    assert str(secondary_zone) in cf
+
+    # Each zone file is authoritative for its own origin and serves the wildcard A at the public IP.
+    assert "$ORIGIN host.example.com." in primary_zone.read_text()
+    secondary_text = secondary_zone.read_text()
+    assert "$ORIGIN host.example.org." in secondary_text
+    assert "*   IN A    203.0.113.10" in secondary_text
+
+
+def test_reload_coredns_for_domains_regenerates_zones_and_restarts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(dns_mod, "_coredns_bind_ip", lambda ip: "10.0.0.5")
+    monkeypatch.setattr(dns_mod, "_gateway_ip_is_bindable", lambda ip: False)
+    _stub_popen(monkeypatch)
+
+    config = _seed_dns_cfg(tmp_path, Domain(name="host.example.com", tls=True), public_ip="203.0.113.10")
+    with closing(open_db(config)) as db:
+        coredns = dns_mod.start_coredns(public_dns_zones(config, db), config.public_ip, config.coredns_corefile_path)
+        set_active_coredns(coredns)
+        try:
+            first_proc = coredns.proc
+
+            # Add a second public domain to the DB and reload: CoreDNS must now serve its zone too.
+            upsert_record(db, DomainRecord("host.example.org", tls=True, mdns=False))
+            assert reload_coredns_for_domains(config, db) is True
+
+            cf = config.coredns_corefile_path.read_text()
+            assert "host.example.org:53 {" in cf
+            assert (config.zones_dir / "host.example.org.zone").exists()
+            # restart() replaced the process so the new Corefile (new zone) takes effect.
+            assert coredns.proc is not first_proc
+        finally:
+            set_active_coredns(None)
+
+
+def test_reload_coredns_for_domains_noop_when_not_running(tmp_path: Path) -> None:
+    set_active_coredns(None)
+    config = _seed_dns_cfg(tmp_path, Domain(name="host.example.com", tls=True), public_ip="203.0.113.10")
+    with closing(open_db(config)) as db:
+        assert reload_coredns_for_domains(config, db) is False

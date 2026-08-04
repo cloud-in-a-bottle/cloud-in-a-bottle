@@ -3,7 +3,7 @@
 The nav header (``_nav_header.html``, included by both ``layout.html`` and the
 standalone docs template) surfaces a GitHub icon linking to the exact branch/fork
 of OpenHost the instance is running. The link is built from the running checkout's
-origin remote + current branch via ``get_github_source_url`` and exposed to
+origin remote + current branch via ``github_web_url_from_local_repo`` and exposed to
 templates as the ``source_url`` global; it is hidden entirely when that is None
 (tarball deploy, detached HEAD with no branch, non-GitHub remote, ...).
 """
@@ -24,7 +24,7 @@ from litestar.testing import TestClient
 import compute_space.web.app as web_app
 from compute_space.config import provide_config
 from compute_space.config import set_active_config
-from compute_space.core.git_ops import github_web_url
+from compute_space.core.git_ops import github_web_url_from_remote_url
 from compute_space.db import provide_db
 from compute_space.db.connection import init_db
 from compute_space.web.app import _template_globals
@@ -61,7 +61,7 @@ from .conftest import _make_test_config
     ],
 )
 def test_github_web_url(remote_url: str, branch: str | None, expected: str | None) -> None:
-    assert github_web_url(remote_url, branch) == expected
+    assert github_web_url_from_remote_url(remote_url, branch) == expected
 
 
 @pytest.fixture
@@ -98,7 +98,7 @@ def _build_dashboard_app(cfg: Any) -> Litestar:
 def test_nav_shows_source_icon(cfg: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     """When a source URL resolves, the nav renders a GitHub link to that branch."""
     set_active_config(cfg)
-    monkeypatch.setattr(web_app, "get_github_source_url", lambda _p: "https://github.com/owner/repo/tree/feature")
+    monkeypatch.setattr(web_app, "running_checkout_source_url", lambda: "https://github.com/owner/repo/tree/feature")
     cookie = auth_cookie(cfg, username="owner")
 
     with TestClient(app=_build_dashboard_app(cfg)) as client:
@@ -115,7 +115,7 @@ def test_nav_shows_source_icon(cfg: Any, monkeypatch: pytest.MonkeyPatch) -> Non
 def test_nav_hides_source_icon_when_unresolved(cfg: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     """A tarball deploy (no resolvable source) renders no source link at all."""
     set_active_config(cfg)
-    monkeypatch.setattr(web_app, "get_github_source_url", lambda _p: None)
+    monkeypatch.setattr(web_app, "running_checkout_source_url", lambda: None)
     cookie = auth_cookie(cfg, username="owner")
 
     with TestClient(app=_build_dashboard_app(cfg)) as client:

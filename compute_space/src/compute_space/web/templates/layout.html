@@ -1,9 +1,10 @@
 {#- Owner username (if set) takes precedence over the zone subdomain for the
    instance name shown in the title + heading. Computed once and reused below. -#}
-{%- set display_name = owner_name() or zone_name -%}
+{%- set display_name = owner_name() or zone_name() -%}
 <!DOCTYPE html>
 <html>
 <head>
+  <meta name="robots" content="noindex">
   <title>{% if display_name %}{{ display_name }}'s personal compute space{% else %}OpenHost{% endif %}{% block title_suffix %}{% endblock %}</title>
   <style>
     /* Always reserve the vertical scrollbar gutter so the centred body doesn't

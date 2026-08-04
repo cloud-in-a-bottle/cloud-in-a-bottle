@@ -316,8 +316,12 @@ def test_set_remote_url_pins_and_clears_target(tmp_path: Path, monkeypatch: pyte
     local = _clone_at(remote, tmp_path / "local", checkout="v1.0.0")
     monkeypatch.setattr(update_mod, "_repo", lambda: local)
 
+    head_before = local.head.commit.hexsha
     update_mod.set_remote_url(f"file://{remote}@feature")
     assert update_mod._get_target_ref(local) == "feature"
+    # Pinning only records the target — the walk (update apply) does the checkout,
+    # so HEAD must not move (moving it would boot new code before migrations run).
+    assert local.head.commit.hexsha == head_before
 
     update_mod.set_remote_url(f"file://{remote}")
     assert update_mod._get_target_ref(local) is None
@@ -703,7 +707,7 @@ def test_set_remote_url_bad_ref_does_not_persist_broken_pin(tmp_path: Path, monk
     local = _clone_at(remote, tmp_path / "local", checkout="v1.0.0")
     monkeypatch.setattr(update_mod, "_repo", lambda: local)
 
-    with pytest.raises(git.GitCommandError):
+    with pytest.raises(RuntimeError, match="could not be resolved"):
         update_mod.set_remote_url(f"file://{remote}@nonexistent-branch")
 
     # No broken pin left behind.
@@ -723,7 +727,7 @@ def test_set_remote_url_bad_re_pin_keeps_prior_working_pin(tmp_path: Path, monke
     update_mod.set_remote_url(f"file://{remote}@feature")
     assert update_mod._get_target_ref(local) == "feature"
 
-    with pytest.raises(git.GitCommandError):
+    with pytest.raises(RuntimeError, match="could not be resolved"):
         update_mod.set_remote_url(f"file://{remote}@nonexistent-branch")
 
     # The good pin survives the failed re-pin.
