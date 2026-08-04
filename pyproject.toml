@@ -70,7 +70,7 @@ addopts = "-p no:randomly -v"
 filterwarnings = [
     # Litestar 2.23+ deprecates name-inferred DI in favour of `NamedDependency[...]`
     # Collapse repeated ones to not clog output
-    "once:.*Inferred dependency field:DeprecationWarning",
+    "once:.*Inferred dependency field:litestar.exceptions.LitestarDeprecationWarning",
 ]
 markers = [
     "requires_containers: needs --run-containers flag and a working rootless podman setup",

@@ -16,8 +16,8 @@ from typing import Any
 
 import pytest
 from litestar import Litestar
-from litestar.contrib.jinja import JinjaTemplateEngine
 from litestar.di import Provide
+from litestar.plugins.jinja import JinjaTemplateEngine
 from litestar.template.config import TemplateConfig
 from litestar.testing import TestClient
 
@@ -102,7 +102,8 @@ def test_nav_shows_source_icon(cfg: Any, monkeypatch: pytest.MonkeyPatch) -> Non
     cookie = auth_cookie(cfg, username="owner")
 
     with TestClient(app=_build_dashboard_app(cfg)) as client:
-        resp = client.get("/dashboard", cookies=cookie)
+        client.cookies.update(cookie)
+        resp = client.get("/dashboard")
 
     assert resp.status_code == 200
     assert 'class="nav-source"' in resp.text
@@ -119,7 +120,8 @@ def test_nav_hides_source_icon_when_unresolved(cfg: Any, monkeypatch: pytest.Mon
     cookie = auth_cookie(cfg, username="owner")
 
     with TestClient(app=_build_dashboard_app(cfg)) as client:
-        resp = client.get("/dashboard", cookies=cookie)
+        client.cookies.update(cookie)
+        resp = client.get("/dashboard")
 
     assert resp.status_code == 200
     # The always-present nav <style> block references ``.nav-source``; assert the
