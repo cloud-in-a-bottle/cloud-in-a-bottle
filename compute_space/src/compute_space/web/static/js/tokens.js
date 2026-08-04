@@ -21,9 +21,12 @@ function renderScopeCheckboxes() {
   var container = document.getElementById('token-scopes');
   container.innerHTML = SCOPES.map(function(s) {
     var warn = s.owner_equivalent ? ' <span style="color:#8a4b00;">(owner-equivalent)</span>' : '';
+    // Escape even though the catalog is server-hardcoded, for defense-in-depth
+    // and consistency with loadTokens() (escape every server value we splice in).
+    var name = escapeHtml(s.name);
     return '<label style="display:block; margin: 0.15em 0;">'
-      + '<input type="checkbox" class="token-scope" value="' + s.name + '" onchange="onScopeChange()"> '
-      + '<code>' + s.name + '</code> — ' + s.description + warn + '</label>';
+      + '<input type="checkbox" class="token-scope" value="' + name + '" onchange="onScopeChange()"> '
+      + '<code>' + name + '</code> — ' + escapeHtml(s.description) + warn + '</label>';
   }).join('');
 }
 
