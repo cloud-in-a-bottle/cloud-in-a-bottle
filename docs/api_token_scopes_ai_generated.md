@@ -99,10 +99,17 @@ migration, hashed tokens, JSON-in-a-TEXT-column as already used by
 `apps.public_paths` and `permissions_v2.grant_payload`):
 
 ```sql
--- migration vNNNN_api_token_scopes.sql
-ALTER TABLE api_tokens ADD COLUMN scopes TEXT NOT NULL DEFAULT '["owner"]';
--- JSON array of scope strings, e.g. '["apps:read","apps:logs"]'.
--- Existing rows default to '["owner"]' so current tokens keep full access.
+-- migration v0014_api_token_scopes.sql
+-- scopes is a JSON array of scope strings, e.g. '["apps:read","apps:logs"]'.
+--
+-- NOTE: the implemented migration does NOT use a DB-level DEFAULT.  A default
+-- would be a silent privilege hole (an INSERT that forgot to set scopes would
+-- mint a full-access token), so the column is `scopes TEXT NOT NULL` with no
+-- default and every write path sets scopes explicitly.  Since SQLite can't add
+-- a NOT-NULL-no-default column to a table with existing rows, the migration
+-- rebuilds the table (create new shape, INSERT ... SELECT stamping '["owner"]'
+-- and a backfilled token_id on existing rows, DROP old, RENAME) so pre-scopes
+-- tokens keep full access via an explicit '["owner"]' on each row.
 ```
 
 We deliberately do **not** add a child `api_token_scopes` table for v1. A
