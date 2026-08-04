@@ -11,11 +11,11 @@ from litestar import MediaType
 from litestar import Request
 from litestar import Response
 from litestar import route
-from litestar.contrib.jinja import JinjaTemplateEngine
 from litestar.di import Provide
 from litestar.exceptions import HTTPException
 from litestar.exceptions import NotAuthorizedException
 from litestar.exceptions.responses import create_exception_response
+from litestar.plugins.jinja import JinjaTemplateEngine
 from litestar.static_files import create_static_files_router
 from litestar.template.config import TemplateConfig
 from litestar.types import ASGIApp

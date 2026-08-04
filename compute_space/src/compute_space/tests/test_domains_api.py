@@ -117,7 +117,8 @@ def test_list_requires_auth(client: TestClient[Litestar]) -> None:
 
 
 def test_list_shows_primary(cfg: Any, client: TestClient[Litestar]) -> None:
-    resp = client.get("/api/domains", cookies=_auth_cookie(cfg.db_path))
+    client.cookies.update(_auth_cookie(cfg.db_path))
+    resp = client.get("/api/domains")
     assert resp.status_code == 200
     domains = resp.json()["domains"]
     assert len(domains) == 1
@@ -132,7 +133,8 @@ def test_primary_with_cert_on_disk_reports_active(cfg: Any, client: TestClient[L
     # Regression: the seeded primary stores cert_status='none', but a valid cert on disk — which is
     # what Caddy actually serves — must report active, not 'none'.
     _write_cert(cfg.tls_cert_path, cfg.tls_key_path)
-    info = next(d for d in client.get("/api/domains", cookies=_auth_cookie(cfg.db_path)).json()["domains"])
+    client.cookies.update(_auth_cookie(cfg.db_path))
+    info = next(d for d in client.get("/api/domains").json()["domains"])
     assert info["name"] == "host.example.com" and info["cert_status"] == "active"
 
 
@@ -140,7 +142,8 @@ def test_primary_with_expired_cert_not_active(cfg: Any, client: TestClient[Lites
     # An expired cert still has files on disk (so a mere existence check would say 'active'), but
     # browsers reject it — it must surface as an error, not active.
     _write_cert(cfg.tls_cert_path, cfg.tls_key_path, days_valid=-1)
-    info = next(d for d in client.get("/api/domains", cookies=_auth_cookie(cfg.db_path)).json()["domains"])
+    client.cookies.update(_auth_cookie(cfg.db_path))
+    info = next(d for d in client.get("/api/domains").json()["domains"])
     assert info["cert_status"] == DomainCertStatus.ERROR
     assert "expired" in (info["error_message"] or "")
 
@@ -149,8 +152,8 @@ def test_primary_with_expired_cert_not_active(cfg: Any, client: TestClient[Lites
 
 
 def test_add_local_domain_is_active_and_routable(cfg: Any, client: TestClient[Litestar]) -> None:
-    cookies = _auth_cookie(cfg.db_path)
-    resp = client.post("/api/domains", json={"name": "myhost.local", "mdns": True}, cookies=cookies)
+    client.cookies.update(_auth_cookie(cfg.db_path))
+    resp = client.post("/api/domains", json={"name": "myhost.local", "mdns": True})
     assert resp.status_code == 202
     # POST returns the full updated list (so the UI repaints without a follow-up GET).
     body = resp.json()
@@ -169,13 +172,11 @@ def test_add_tls_domain_acquires_and_becomes_active(
     cfg: Any, client: TestClient[Litestar], sync_acquisition: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(domains, "ensure_cert_for", lambda config, domain, db: None)  # "acquired"
-    cookies = _auth_cookie(cfg.db_path)
-    resp = client.post("/api/domains", json={"name": "host.example.org", "tls": True}, cookies=cookies)
+    client.cookies.update(_auth_cookie(cfg.db_path))
+    resp = client.post("/api/domains", json={"name": "host.example.org", "tls": True})
     assert resp.status_code == 202
     # acquisition ran synchronously → status settled to active
-    info = next(
-        d for d in client.get("/api/domains", cookies=cookies).json()["domains"] if d["name"] == "host.example.org"
-    )
+    info = next(d for d in client.get("/api/domains").json()["domains"] if d["name"] == "host.example.org")
     assert info["cert_status"] == DomainCertStatus.ACTIVE
     assert info["scheme"] == "https"
 
@@ -187,11 +188,9 @@ def test_add_tls_domain_records_acquisition_error(
         raise RuntimeError("DNS not delegated")
 
     monkeypatch.setattr(domains, "ensure_cert_for", boom)
-    cookies = _auth_cookie(cfg.db_path)
-    client.post("/api/domains", json={"name": "host.example.org", "tls": True}, cookies=cookies)
-    info = next(
-        d for d in client.get("/api/domains", cookies=cookies).json()["domains"] if d["name"] == "host.example.org"
-    )
+    client.cookies.update(_auth_cookie(cfg.db_path))
+    client.post("/api/domains", json={"name": "host.example.org", "tls": True})
+    info = next(d for d in client.get("/api/domains").json()["domains"] if d["name"] == "host.example.org")
     assert info["cert_status"] == DomainCertStatus.ERROR
     assert "DNS not delegated" in info["error_message"]
 
@@ -200,21 +199,19 @@ def test_add_tls_domain_records_acquisition_error(
 
 
 def test_add_duplicate_rejected(cfg: Any, client: TestClient[Litestar]) -> None:
-    cookies = _auth_cookie(cfg.db_path)
-    assert (
-        client.post("/api/domains", json={"name": "host.example.com", "tls": True}, cookies=cookies).status_code == 400
-    )
+    client.cookies.update(_auth_cookie(cfg.db_path))
+    assert client.post("/api/domains", json={"name": "host.example.com", "tls": True}).status_code == 400
 
 
 def test_add_invalid_name_rejected(cfg: Any, client: TestClient[Litestar]) -> None:
-    cookies = _auth_cookie(cfg.db_path)
-    assert client.post("/api/domains", json={"name": "not a domain"}, cookies=cookies).status_code == 400
-    assert client.post("/api/domains", json={"name": "nodot"}, cookies=cookies).status_code == 400
+    client.cookies.update(_auth_cookie(cfg.db_path))
+    assert client.post("/api/domains", json={"name": "not a domain"}).status_code == 400
+    assert client.post("/api/domains", json={"name": "nodot"}).status_code == 400
 
 
 def test_add_mdns_with_tls_rejected(cfg: Any, client: TestClient[Litestar]) -> None:
-    cookies = _auth_cookie(cfg.db_path)
-    resp = client.post("/api/domains", json={"name": "myhost.local", "tls": True, "mdns": True}, cookies=cookies)
+    client.cookies.update(_auth_cookie(cfg.db_path))
+    resp = client.post("/api/domains", json={"name": "myhost.local", "tls": True, "mdns": True})
     assert resp.status_code == 400
 
 
@@ -222,18 +219,18 @@ def test_add_mdns_with_tls_rejected(cfg: Any, client: TestClient[Litestar]) -> N
 
 
 def test_remove_runtime_domain(cfg: Any, client: TestClient[Litestar]) -> None:
-    cookies = _auth_cookie(cfg.db_path)
-    client.post("/api/domains", json={"name": "myhost.local", "mdns": True}, cookies=cookies)
-    assert client.delete("/api/domains/myhost.local", cookies=cookies).status_code == 200
-    names = {d["name"] for d in client.get("/api/domains", cookies=cookies).json()["domains"]}
+    client.cookies.update(_auth_cookie(cfg.db_path))
+    client.post("/api/domains", json={"name": "myhost.local", "mdns": True})
+    assert client.delete("/api/domains/myhost.local").status_code == 200
+    names = {d["name"] for d in client.get("/api/domains").json()["domains"]}
     assert names == {"host.example.com"}
 
 
 def test_remove_primary_rejected(cfg: Any, client: TestClient[Litestar]) -> None:
-    cookies = _auth_cookie(cfg.db_path)
-    assert client.delete("/api/domains/host.example.com", cookies=cookies).status_code == 400
+    client.cookies.update(_auth_cookie(cfg.db_path))
+    assert client.delete("/api/domains/host.example.com").status_code == 400
 
 
 def test_remove_unknown_domain_404(cfg: Any, client: TestClient[Litestar]) -> None:
-    cookies = _auth_cookie(cfg.db_path)
-    assert client.delete("/api/domains/nope.example.net", cookies=cookies).status_code == 404
+    client.cookies.update(_auth_cookie(cfg.db_path))
+    assert client.delete("/api/domains/nope.example.net").status_code == 404

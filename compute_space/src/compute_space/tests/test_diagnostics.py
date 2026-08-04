@@ -221,7 +221,8 @@ def test_platform_diagnostics_returns_bundle(
     cfg: Any, system_client: TestClient[Litestar], cookies: dict[str, str]
 ) -> None:
     _seed_app(cfg.db_path, "myapp", manifest_raw=_MINIMAL_MANIFEST)
-    resp = system_client.get("/api/diagnostics", cookies=cookies)
+    system_client.cookies.update(cookies)
+    resp = system_client.get("/api/diagnostics")
     assert resp.status_code == 200
     body = resp.json()
     assert body["schema_version"] == DIAGNOSTICS_SCHEMA_VERSION
@@ -242,7 +243,8 @@ def test_platform_diagnostics_returns_bundle(
 def test_platform_diagnostics_download_header(
     cfg: Any, system_client: TestClient[Litestar], cookies: dict[str, str]
 ) -> None:
-    resp = system_client.get("/api/diagnostics?download=1", cookies=cookies)
+    system_client.cookies.update(cookies)
+    resp = system_client.get("/api/diagnostics?download=1")
     assert resp.status_code == 200
     disp = resp.headers.get("content-disposition", "")
     assert "attachment" in disp
@@ -254,7 +256,8 @@ def test_platform_diagnostics_version_falls_back_to_column(
 ) -> None:
     # No manifest_raw -> version must fall back to the stored apps.version column.
     _seed_app(cfg.db_path, "noman", version="9.9", manifest_raw=None)
-    resp = system_client.get("/api/diagnostics", cookies=cookies)
+    system_client.cookies.update(cookies)
+    resp = system_client.get("/api/diagnostics")
     names = {a["name"]: a for a in resp.json()["apps"]}
     assert names["noman"]["version"] == "9.9"
 
@@ -274,18 +277,21 @@ def test_app_diagnostics_requires_auth(apps_client: TestClient[Litestar]) -> Non
 
 
 def test_app_diagnostics_404_when_missing(apps_client: TestClient[Litestar], cookies: dict[str, str]) -> None:
-    resp = apps_client.get(f"/api/app_diagnostics/{new_app_id()}", cookies=cookies)
+    apps_client.cookies.update(cookies)
+    resp = apps_client.get(f"/api/app_diagnostics/{new_app_id()}")
     assert resp.status_code == 404
 
 
 def test_app_diagnostics_400_on_bad_id(apps_client: TestClient[Litestar], cookies: dict[str, str]) -> None:
-    resp = apps_client.get("/api/app_diagnostics/not a valid id", cookies=cookies)
+    apps_client.cookies.update(cookies)
+    resp = apps_client.get("/api/app_diagnostics/not a valid id")
     assert resp.status_code == 400
 
 
 def test_app_diagnostics_returns_bundle(cfg: Any, apps_client: TestClient[Litestar], cookies: dict[str, str]) -> None:
     app_id = _seed_app(cfg.db_path, "myapp", manifest_raw=_MINIMAL_MANIFEST)
-    resp = apps_client.get(f"/api/app_diagnostics/{app_id}", cookies=cookies)
+    apps_client.cookies.update(cookies)
+    resp = apps_client.get(f"/api/app_diagnostics/{app_id}")
     assert resp.status_code == 200
     body = resp.json()
     assert body["schema_version"] == DIAGNOSTICS_SCHEMA_VERSION
@@ -302,7 +308,8 @@ def test_app_diagnostics_returns_bundle(cfg: Any, apps_client: TestClient[Litest
 
 def test_app_diagnostics_download_header(cfg: Any, apps_client: TestClient[Litestar], cookies: dict[str, str]) -> None:
     app_id = _seed_app(cfg.db_path, "myapp")
-    resp = apps_client.get(f"/api/app_diagnostics/{app_id}?download=1", cookies=cookies)
+    apps_client.cookies.update(cookies)
+    resp = apps_client.get(f"/api/app_diagnostics/{app_id}?download=1")
     assert resp.status_code == 200
     disp = resp.headers.get("content-disposition", "")
     assert "attachment" in disp
@@ -442,7 +449,8 @@ def test_platform_diagnostics_survives_storage_failure(
         "compute_space.core.diagnostics.storage_status",
         side_effect=OSError("disk gone"),
     ):
-        resp = system_client.get("/api/diagnostics", cookies=cookies)
+        system_client.cookies.update(cookies)
+        resp = system_client.get("/api/diagnostics")
     assert resp.status_code == 200
     # Storage degrades to an empty dict rather than sinking the whole bundle.
     assert resp.json()["storage"] == {}
@@ -460,7 +468,8 @@ def test_platform_diagnostics_survives_db_failure(cfg: Any) -> None:
 
 
 def test_platform_diagnostics_no_apps(cfg: Any, system_client: TestClient[Litestar], cookies: dict[str, str]) -> None:
-    resp = system_client.get("/api/diagnostics", cookies=cookies)
+    system_client.cookies.update(cookies)
+    resp = system_client.get("/api/diagnostics")
     assert resp.status_code == 200
     assert resp.json()["apps"] == []
 
@@ -474,7 +483,8 @@ def test_openhost_git_info_stable_shape_when_not_a_checkout(
         return None
 
     with patch("compute_space.core.diagnostics._collect_git_info", side_effect=_none):
-        resp = system_client.get("/api/diagnostics", cookies=cookies)
+        system_client.cookies.update(cookies)
+        resp = system_client.get("/api/diagnostics")
     assert resp.status_code == 200
     oh = resp.json()["openhost"]
     assert oh["sha"] == ""
@@ -525,7 +535,8 @@ def test_app_diagnostics_surfaces_git(
     repo_path = tmp_path / "app_repo"
     _init_git_repo(repo_path, remote_url="https://github.com/owner/app.git")
     app_id = _seed_app(cfg.db_path, "gitapp", manifest_raw=_MINIMAL_MANIFEST, repo_path=str(repo_path))
-    resp = apps_client.get(f"/api/app_diagnostics/{app_id}", cookies=cookies)
+    apps_client.cookies.update(cookies)
+    resp = apps_client.get(f"/api/app_diagnostics/{app_id}")
     assert resp.status_code == 200
     git_info = resp.json()["git"]
     assert git_info is not None
@@ -537,7 +548,8 @@ def test_app_diagnostics_git_none_for_non_git_app(
     cfg: Any, apps_client: TestClient[Litestar], cookies: dict[str, str]
 ) -> None:
     app_id = _seed_app(cfg.db_path, "builtin", repo_path="/nonexistent")
-    resp = apps_client.get(f"/api/app_diagnostics/{app_id}", cookies=cookies)
+    apps_client.cookies.update(cookies)
+    resp = apps_client.get(f"/api/app_diagnostics/{app_id}")
     assert resp.status_code == 200
     assert resp.json()["git"] is None
 
@@ -796,7 +808,8 @@ def test_platform_bundle_has_new_fields(
     cfg: Any, system_client: TestClient[Litestar], cookies: dict[str, str]
 ) -> None:
     _seed_app(cfg.db_path, "myapp", manifest_raw=_MINIMAL_MANIFEST)
-    body = system_client.get("/api/diagnostics", cookies=cookies).json()
+    system_client.cookies.update(cookies)
+    body = system_client.get("/api/diagnostics").json()
     assert body["schema_version"] == 2
     assert "resource_pressure" in body
     assert "reachability" in body
@@ -808,7 +821,8 @@ def test_platform_bundle_has_new_fields(
 
 def test_app_bundle_has_new_fields(cfg: Any, apps_client: TestClient[Litestar], cookies: dict[str, str]) -> None:
     app_id = _seed_app(cfg.db_path, "myapp", manifest_raw=_MINIMAL_MANIFEST)
-    body = apps_client.get(f"/api/app_diagnostics/{app_id}", cookies=cookies).json()
+    apps_client.cookies.update(cookies)
+    body = apps_client.get(f"/api/app_diagnostics/{app_id}").json()
     assert body["schema_version"] == 2
     assert "health" in body
     assert "resources" in body
@@ -987,7 +1001,8 @@ def test_one_bad_app_does_not_drop_the_others(
         return await real_summary(row)
 
     with patch("compute_space.core.diagnostics._collect_app_summary", side_effect=_flaky_summary):
-        body = system_client.get("/api/diagnostics", cookies=cookies).json()
+        system_client.cookies.update(cookies)
+        body = system_client.get("/api/diagnostics").json()
     names = {a["name"] for a in body["apps"]}
     # good-a blew up, but good-b must still be present.
     assert "good-b" in names
@@ -1074,7 +1089,8 @@ def test_platform_bundle_fully_json_serializable_all_fields(
     non-serializable field (e.g. a stray Path/datetime) would surface as a 500
     rather than silently. Also asserts every declared nested field is present."""
     _seed_app(cfg.db_path, "myapp", manifest_raw=_MINIMAL_MANIFEST)
-    resp = system_client.get("/api/diagnostics", cookies=cookies)
+    system_client.cookies.update(cookies)
+    resp = system_client.get("/api/diagnostics")
     assert resp.status_code == 200
     body = resp.json()
     # It round-trips through JSON cleanly.
@@ -1116,7 +1132,8 @@ def test_app_bundle_resource_limits_come_from_manifest_columns(
     """The per-app bundle must surface the manifest memory/cpu limits from the
     apps row even when the container isn't running (so limits are always visible)."""
     app_id = _seed_app_with_limits(cfg.db_path, "limited", memory_mb=512, cpu_cores=1.5)
-    body = apps_client.get(f"/api/app_diagnostics/{app_id}", cookies=cookies).json()
+    apps_client.cookies.update(cookies)
+    body = apps_client.get(f"/api/app_diagnostics/{app_id}").json()
     res = body["resources"]
     assert res["memory_mb_limit"] == 512
     assert res["cpu_cores_limit"] == 1.5

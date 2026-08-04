@@ -18,8 +18,9 @@ from litestar import Response
 from litestar import get
 from litestar import post
 from litestar.background_tasks import BackgroundTask
-from litestar.contrib.jinja import JinjaTemplateEngine
+from litestar.di import NamedDependency
 from litestar.di import Provide
+from litestar.plugins.jinja import JinjaTemplateEngine
 from litestar.response import Template
 from litestar.static_files import create_static_files_router
 from litestar.template.config import TemplateConfig
@@ -78,7 +79,7 @@ async def root_redirect() -> Response[None]:
 
 
 @get("/setup")
-async def setup_get(request: Request[Any, Any, Any], config: Config) -> Template | Response[str]:
+async def setup_get(request: Request[Any, Any, Any], config: NamedDependency[Config]) -> Template | Response[str]:
     claim_token = request.query_params.get("claim", "")
     if _claim_token_required(config) and not _verify_claim_token(claim_token):
         return _claim_unauthorized()
@@ -86,7 +87,7 @@ async def setup_get(request: Request[Any, Any, Any], config: Config) -> Template
 
 
 @post("/setup", status_code=200)
-async def setup_post(request: Request[Any, Any, Any], config: Config) -> Response[Any]:
+async def setup_post(request: Request[Any, Any, Any], config: NamedDependency[Config]) -> Response[Any]:
     form = await request.form()
     form_claim = form.get("claim", "")
     if _claim_token_required(config) and not _verify_claim_token(form_claim):

@@ -22,7 +22,9 @@ from litestar import delete
 from litestar import get
 from litestar import post
 from litestar.background_tasks import BackgroundTask
+from litestar.di import NamedDependency
 from litestar.enums import MediaType
+from litestar.params import FromPath
 
 from compute_space.config import Config
 from compute_space.config import get_config
@@ -171,13 +173,15 @@ def _validate_new_domain(config: Config, name: str, tls: bool, mdns: bool, db: s
 
 
 @get("/api/domains", guards=[require_owner_auth])
-async def list_domains(config: Config, db: sqlite3.Connection) -> DomainListResponse:
+async def list_domains(config: NamedDependency[Config], db: NamedDependency[sqlite3.Connection]) -> DomainListResponse:
     return DomainListResponse(domains=_domain_list(config, db))
 
 
 @post("/api/domains", status_code=202, guards=[require_owner_auth])
 async def add_domain(
-    data: AddDomainRequest, config: Config, db: sqlite3.Connection
+    data: AddDomainRequest,
+    config: NamedDependency[Config],
+    db: NamedDependency[sqlite3.Connection],
 ) -> Response[DomainListResponse] | Response[ErrorResponse]:
     name = data.name.strip().lower()
     error = _validate_new_domain(config, name, data.tls, data.mdns, db)
@@ -217,7 +221,9 @@ async def add_domain(
 
 @delete("/api/domains/{name:str}", status_code=200, guards=[require_owner_auth])
 async def remove_domain(
-    name: str, config: Config, db: sqlite3.Connection
+    name: FromPath[str],
+    config: NamedDependency[Config],
+    db: NamedDependency[sqlite3.Connection],
 ) -> Response[DomainListResponse] | Response[ErrorResponse]:
     name = name.strip().lower()
     if name == primary_domain(db).name_no_port:
