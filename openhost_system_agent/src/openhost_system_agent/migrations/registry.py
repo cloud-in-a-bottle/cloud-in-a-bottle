@@ -11,8 +11,9 @@ from openhost_system_agent.migrations.versions.v0004_pixi_version import Migrati
 from openhost_system_agent.migrations.versions.v0005_pixi_ownership_failsafe import Migration0005PixiOwnershipFailsafe
 from openhost_system_agent.migrations.versions.v0006_journald_size_cap import Migration0006JournaldSizeCap
 from openhost_system_agent.migrations.versions.v0007_seed_domains_and_scrub import Migration0007SeedDomainsAndScrub
-from openhost_system_agent.migrations.versions.v0008_seed_imbue_identity_and_scrub import (
-    Migration0008SeedImbueIdentityAndScrub,
+from openhost_system_agent.migrations.versions.v0008_restart_on_failure import Migration0008RestartOnFailure
+from openhost_system_agent.migrations.versions.v0009_seed_imbue_identity_and_scrub import (
+    Migration0009SeedImbueIdentityAndScrub,
 )
 
 # Numbered migrations in apply order. Versions MUST start at 2 and be
@@ -24,7 +25,8 @@ REGISTRY: list[SystemMigration] = [
     Migration0005PixiOwnershipFailsafe(),
     Migration0006JournaldSizeCap(),
     Migration0007SeedDomainsAndScrub(),
-    Migration0008SeedImbueIdentityAndScrub(),
+    Migration0008RestartOnFailure(),
+    Migration0009SeedImbueIdentityAndScrub(),
 ]
 
 

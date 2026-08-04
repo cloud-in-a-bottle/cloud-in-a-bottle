@@ -1,4 +1,4 @@
-"""Tests for the v8 migration: the OLD-instance (upgrade) capture of the config-file
+"""Tests for the v9 migration: the OLD-instance (upgrade) capture of the config-file
 ``cert_api_keycloak_*`` credential into the router DB ``settings`` table as the shared
 ``imbue_identity_*`` credential, followed by scrubbing those lines from config.toml.
 
@@ -13,11 +13,11 @@ import sqlite3
 import tomllib
 from pathlib import Path
 
-from openhost_system_agent.migrations.versions.v0008_seed_imbue_identity_and_scrub import _CLIENT_ID_KEY
-from openhost_system_agent.migrations.versions.v0008_seed_imbue_identity_and_scrub import _CLIENT_SECRET_KEY
-from openhost_system_agent.migrations.versions.v0008_seed_imbue_identity_and_scrub import _ISSUER_KEY
-from openhost_system_agent.migrations.versions.v0008_seed_imbue_identity_and_scrub import _SCHEMA
-from openhost_system_agent.migrations.versions.v0008_seed_imbue_identity_and_scrub import migrate
+from openhost_system_agent.migrations.versions.v0009_seed_imbue_identity_and_scrub import _CLIENT_ID_KEY
+from openhost_system_agent.migrations.versions.v0009_seed_imbue_identity_and_scrub import _CLIENT_SECRET_KEY
+from openhost_system_agent.migrations.versions.v0009_seed_imbue_identity_and_scrub import _ISSUER_KEY
+from openhost_system_agent.migrations.versions.v0009_seed_imbue_identity_and_scrub import _SCHEMA
+from openhost_system_agent.migrations.versions.v0009_seed_imbue_identity_and_scrub import migrate
 
 _FULL_CONFIG = (
     "[openhost]\n"

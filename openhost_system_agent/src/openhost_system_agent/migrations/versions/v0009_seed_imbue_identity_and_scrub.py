@@ -1,4 +1,4 @@
-"""v8: migrate an OLD instance's per-instance Keycloak credential from ``config.toml`` into the
+"""v9: migrate an OLD instance's per-instance Keycloak credential from ``config.toml`` into the
 router DB ``settings`` table, then scrub the now-captured ``cert_api_keycloak_*`` lines.
 
 Before the shared-identity work, an instance's per-instance credential lived in ``config.toml`` as
@@ -148,8 +148,8 @@ def _identity_in_settings(db_path: str) -> bool:
         return False
 
 
-class Migration0008SeedImbueIdentityAndScrub(SystemMigration):
-    version = 8
+class Migration0009SeedImbueIdentityAndScrub(SystemMigration):
+    version = 9
 
     def up(self) -> None:
         migrate()
