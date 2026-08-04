@@ -504,7 +504,8 @@ def _scan_migration_for_unsafe_ops(migration: Migration) -> list[str]:
     the author's intent). Extend as we encounter more gotchas.
     """
     findings: list[str] = []
-    if isinstance(migration, SqlFileMigration):
+    check_pragma = not migration.allow_pragma_foreign_keys
+    if check_pragma and isinstance(migration, SqlFileMigration):
         sql_path = Path(inspect.getfile(migration.__class__)).resolve().parent / migration.sql_file
         if sql_path.exists() and _PRAGMA_FK_RE.search(sql_path.read_text()):
             findings.append(f"{sql_path.name}: PRAGMA foreign_keys inside SQL migration body")
@@ -513,12 +514,10 @@ def _scan_migration_for_unsafe_ops(migration: Migration) -> list[str]:
         src = inspect.getsource(type(migration))
     except (OSError, TypeError):
         src = ""
-    if _PRAGMA_FK_RE.search(src):
+    if check_pragma and _PRAGMA_FK_RE.search(src):
         findings.append(
             f"{type(migration).__module__}.{type(migration).__name__}: PRAGMA foreign_keys inside Python migration"
         )
-    if migration.allow_pragma_foreign_keys:
-        findings = [f for f in findings if "PRAGMA foreign_keys" not in f]
     return findings
 
 
