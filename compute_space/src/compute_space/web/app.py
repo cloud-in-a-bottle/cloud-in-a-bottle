@@ -28,6 +28,7 @@ from compute_space.core.auth.identity import load_identity_keys
 from compute_space.core.domains import Domain
 from compute_space.core.domains import primary_domain_or_none
 from compute_space.core.first_boot import seed_first_boot
+from compute_space.core.git_ops import SOURCE_URL
 from compute_space.core.image_pruner import start_image_pruner
 from compute_space.core.logging import logger
 from compute_space.core.startup import check_app_status
@@ -123,6 +124,7 @@ def _template_globals(config: Config, static_dir: Path) -> dict[str, Any]:
         "app_url": app_url,
         "owner_name": owner_name,
         "static_url": _make_static_url(static_dir),
+        "source_url": SOURCE_URL,
     }
 
 

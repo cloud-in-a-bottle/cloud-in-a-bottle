@@ -84,6 +84,7 @@ from compute_space.config import get_config
 from compute_space.core.auth.auth import read_owner_username
 from compute_space.core.domains import Domain
 from compute_space.core.domains import primary_domain_or_none
+from compute_space.core.git_ops import SOURCE_URL
 from compute_space.core.logging import logger
 from compute_space.db import get_db
 
@@ -430,6 +431,11 @@ _TEMPLATE = """<!DOCTYPE html>
        flip from light (Dashboard) to dark (Docs) mid-navigation.  Keeping
        the two in lockstep is the whole point: the manual should look like
        just another in-space page. */
+    /* Match layout.html: always reserve the scrollbar gutter so the centred
+       column doesn't shift sideways when navigating to/from a page whose height
+       toggles the vertical scrollbar. Progressive enhancement — unsupported
+       browsers simply ignore it. */
+    html { scrollbar-gutter: stable; }
     body {
       font-family: -apple-system, system-ui, sans-serif;
       color: #222;
@@ -739,6 +745,7 @@ def _render_doc(slug: str) -> Response[str]:
         next_link=next_l,
         pygments_css=PYGMENTS_CSS,
         display_name=_space_display_name(),
+        source_url=SOURCE_URL,
     )
     return Response(content=html, media_type=MediaType.HTML)
 
