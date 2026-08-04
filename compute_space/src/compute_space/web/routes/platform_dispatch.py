@@ -46,6 +46,7 @@ from compute_space.core.containers import stop_container
 from compute_space.core.installer import InstallError
 from compute_space.core.installer import install_from_repo_url
 from compute_space.core.logging import logger
+from compute_space.core.platform_service import CAP_DELEGATE_PERMISSIONS
 from compute_space.core.platform_service import CAP_SYSTEM_READ
 from compute_space.core.platform_service import PLATFORM_SERVICE_URL
 from compute_space.core.platform_service import PLATFORM_SERVICE_VERSION
@@ -314,6 +315,13 @@ async def _handle_delegate(
     if not target_app_id or not service or grant is None:
         return _json_error("bad_request", "app_id, service, and grant are required", 400)
 
+    # Check the delegate capability FIRST, before touching the apps table, so a
+    # caller without delegate_permissions can't probe app existence via the
+    # 404-vs-403 distinction.
+    caller_platform_grants = _platform_grants(consumer_app_id)
+    if not has_capability(caller_platform_grants, CAP_DELEGATE_PERMISSIONS):
+        return _permission_denied("caller lacks the delegate_permissions capability")
+
     # The target must be an app THIS caller deployed.
     row = db.execute("SELECT installed_by FROM apps WHERE app_id = ?", (target_app_id,)).fetchone()
     if row is None:
@@ -321,8 +329,7 @@ async def _handle_delegate(
     if row["installed_by"] != consumer_app_id:
         return _permission_denied(f"{consumer_app_id} did not deploy {target_app_id!r}; cannot delegate to it")
 
-    # Both delegation gates (capability held + caller already holds the grant).
-    caller_platform_grants = _platform_grants(consumer_app_id)
+    # Remaining delegation gate (caller already holds the exact grant).
     caller_grants_for_service = get_granted_permissions_v2(consumer_app_id, service)
     if (
         reason := check_delegation_allowed(
