@@ -13,6 +13,7 @@
 # Reference
 
 - [HTTP API](./api.md)
+- [Bundled Service Specs](./bundled_services.md)
 
 # Guides
 

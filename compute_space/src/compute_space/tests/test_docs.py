@@ -361,6 +361,61 @@ def test_missing_openapi_spec_returns_503(client_with_docs: TestClient[Litestar]
     assert "openapi spec is missing" in resp.text.lower()
 
 
+# -- bundled service specs ------------------------------------------
+
+
+def _client_with_services(tmp_path: Path) -> tuple[TestClient[Litestar], Path]:
+    repo_root = tmp_path / "repo"
+    _populate_fake_docs(repo_root / "docs" / "src")
+    services = repo_root / "services"
+    for name in ("secrets", "oauth"):
+        (services / name).mkdir(parents=True)
+        (services / name / "openapi.yaml").write_text(f"openapi: 3.0.3\ninfo:\n  title: {name}\n")
+    (services / "no_spec").mkdir()
+    client, _cfg = _client(repo_root)
+    return client, services
+
+
+def test_services_index_lists_only_dirs_with_a_spec(tmp_path: Path) -> None:
+    """The chapter renders whatever this returns, so a service directory
+    without an ``openapi.yaml`` must not appear."""
+    client, _ = _client_with_services(tmp_path)
+    with client as c:
+        assert c.get("/docs/services").json() == ["oauth", "secrets"]
+
+
+def test_service_spec_is_served(tmp_path: Path) -> None:
+    client, _ = _client_with_services(tmp_path)
+    with client as c:
+        resp = c.get("/docs/services/secrets/openapi.yaml")
+    assert resp.status_code == 200
+    assert "title: secrets" in resp.text
+    assert resp.headers["content-type"].startswith("application/yaml")
+
+
+def test_services_index_empty_without_services_dir(client_with_docs: TestClient[Litestar]) -> None:
+    assert client_with_docs.get("/docs/services").json() == []
+
+
+@pytest.mark.parametrize("name", ["%2E%2E", "..%2F..%2Fetc", "secrets%2F..", ".", "no_spec", "nope"])
+def test_service_spec_rejects_traversal_and_unknown(tmp_path: Path, name: str) -> None:
+    """``{name}`` indexes the filesystem, so it gets the same containment rule
+    as the markdown slug."""
+    client, _ = _client_with_services(tmp_path)
+    with client as c:
+        assert c.get(f"/docs/services/{name}/openapi.yaml").status_code == 404
+
+
+def test_services_chapter_is_listed_and_discovers_dynamically() -> None:
+    """The chapter must read the index endpoint rather than hardcoding service
+    names, so adding a service needs no doc edit."""
+    body = (_repo_docs_src() / "bundled_services.md").read_text(encoding="utf-8")
+    assert '"/docs/services"' in body
+    assert "(./bundled_services.md)" in (_repo_docs_src() / "SUMMARY.md").read_text(encoding="utf-8")
+    for name in ("secrets", "oauth"):
+        assert f"/docs/services/{name}/" not in body
+
+
 # -- shipped API chapter --------------------------------------------
 
 

@@ -95,6 +95,11 @@ def _docs_src_dir() -> Path:
     return get_config().openhost_repo_path / "docs" / "src"
 
 
+def _services_dir() -> Path:
+    """Where the bundled service specs live, one ``<name>/openapi.yaml`` each."""
+    return get_config().openhost_repo_path / "services"
+
+
 def _openapi_spec_path() -> Path:
     """The committed OpenAPI document, generated from the route handlers by
     ``pixi run -e dev generate-openapi`` and kept in sync by a test."""
@@ -554,30 +559,31 @@ _TEMPLATE = """<!DOCTYPE html>
     }
     main.content .codehilite pre { background: transparent; padding: 0; }
     main.content ul, main.content ol { padding-left: 1.5em; }
-    /* OpenAPI browser embed (api.md).  Redoc ships its own styles, but the
-       prose rules above are more specific than its class selectors and would
-       otherwise repaint its code samples, links and tables — so hand those
-       properties back inside the container. */
-    main.content #redoc { margin: 1.5em 0; }
-    main.content #redoc a { color: inherit; }
-    main.content #redoc code,
-    main.content #redoc pre,
-    main.content #redoc pre code {
+    /* OpenAPI browser embeds (api.md, bundled_services.md).  Redoc ships its
+       own styles, but the prose rules above are more specific than its class
+       selectors and would otherwise repaint its code samples, links and
+       tables — so hand those properties back inside the container. */
+    main.content .redoc-embed { margin: 1.5em 0; }
+    main.content .redoc-embed a { color: inherit; }
+    main.content .redoc-embed code,
+    main.content .redoc-embed pre,
+    main.content .redoc-embed pre code {
       background: inherit;
       color: inherit;
       padding: inherit;
       border-radius: inherit;
       font-size: inherit;
     }
-    main.content #redoc table,
-    main.content #redoc th,
-    main.content #redoc td {
+    main.content .redoc-embed table,
+    main.content .redoc-embed th,
+    main.content .redoc-embed td {
       border: inherit;
       padding: inherit;
       background: inherit;
       width: auto;
     }
-    main.content #redoc ul, main.content #redoc ol { padding-left: 0; }
+    main.content .redoc-embed ul, main.content .redoc-embed ol { padding-left: 0; }
+    main.content .service-spec-title { margin-top: 2.5em; font-size: 1.3em; }
     main.content hr { border: 0; border-top: 1px solid #ddd; margin: 2em 0; }
     main.content img { max-width: 100%; }
     .footer-nav {
@@ -748,6 +754,32 @@ def docs_openapi_yaml() -> Response[str]:
     return Response(content=path.read_text(encoding="utf-8"), media_type="application/yaml")
 
 
+@get("/docs/services", sync_to_thread=False)
+def docs_services_index() -> list[str]:
+    """Names of the bundled services that ship an OpenAPI spec. The
+    ``bundled_services.md`` chapter reads this to decide what to render, so
+    adding ``services/<name>/openapi.yaml`` needs no doc edit."""
+    services = _services_dir()
+    if not services.is_dir():
+        return []
+    return sorted(p.parent.name for p in services.glob("*/openapi.yaml") if _SLUG_RE.match(p.parent.name))
+
+
+@get("/docs/services/{name:str}/openapi.yaml", sync_to_thread=False)
+def docs_service_spec(name: str) -> Response[str]:
+    """Serve ``services/<name>/openapi.yaml`` off the checkout.
+
+    Same containment rule as the markdown route: the resolved path has to sit
+    under ``services/`` or it's a 404."""
+    if not _SLUG_RE.match(name):
+        raise NotFoundException()
+    services = _services_dir()
+    candidate = (services / name / "openapi.yaml").resolve()
+    if not candidate.is_file() or services.resolve() not in candidate.parents:
+        raise NotFoundException()
+    return Response(content=candidate.read_text(encoding="utf-8"), media_type="application/yaml")
+
+
 @get("/docs/{slug:str}", sync_to_thread=False)
 def docs_slug(slug: str) -> Response[str]:
     """Serve ``docs/src/<slug>.md`` rendered to HTML.
@@ -793,6 +825,6 @@ def _render_doc(slug: str) -> Response[str]:
 
 docs_routes = Router(
     path="/",
-    route_handlers=[docs_index, docs_openapi_yaml, docs_slug],
+    route_handlers=[docs_index, docs_openapi_yaml, docs_services_index, docs_service_spec, docs_slug],
     include_in_schema=False,
 )

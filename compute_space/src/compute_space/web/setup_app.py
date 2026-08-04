@@ -188,4 +188,6 @@ def create_setup_app(config: Config) -> Litestar:
         route_handlers=[root_redirect, setup_get, setup_post, health, static_router],
         template_config=template_config,
         dependencies={"config": Provide(provide_config, sync_to_thread=False)},
+        # Matches app.py: no Litestar-served /schema routes anywhere.
+        openapi_config=None,
     )

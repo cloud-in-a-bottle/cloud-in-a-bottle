@@ -59,7 +59,7 @@ test, so you can generate a client without a zone to hand.
 
 ## Reference
 
-<div id="redoc"></div>
+<div id="redoc" class="redoc-embed"></div>
 <script src="https://cdn.jsdelivr.net/npm/redoc@2.5.0/bundles/redoc.standalone.js"></script>
 <script>
   Redoc.init(
