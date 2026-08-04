@@ -56,6 +56,7 @@ from compute_space.core.installer import InstallError
 from compute_space.core.installer import check_install_allowed
 from compute_space.core.installer import install_from_repo_url
 from compute_space.core.manifest import parse_manifest_from_string
+from compute_space.core.platform_service import PLATFORM_SERVICE_URL
 from compute_space.core.services_v2 import ServiceNotAvailable
 from compute_space.core.services_v2 import ShortnameNotDeclared
 from compute_space.core.services_v2 import lookup_shortname
@@ -64,6 +65,7 @@ from compute_space.web.auth.auth import require_app_auth
 from compute_space.web.auth.auth import verify_app_auth
 from compute_space.web.helpers.proxy import proxy_http_request
 from compute_space.web.helpers.proxy import proxy_websocket_request
+from compute_space.web.routes.platform_dispatch import handle_platform_request
 
 _CALL_PATH = "/api/services/v2/call/{shortname:str}/{rest:path}"
 _HTTP_METHODS = [
@@ -214,6 +216,15 @@ class InstallerServiceRequest:
 
 
 @attr.s(auto_attribs=True, frozen=True)
+class PlatformServiceRequest:
+    """A call to the router-internal platform service (dispatched in-process,
+    like the installer)."""
+
+    service_url: str
+    version_spec: str
+
+
+@attr.s(auto_attribs=True, frozen=True)
 class ServiceRequest:
     service_url: str
     version_spec: str
@@ -229,11 +240,16 @@ def _service_call_common(
     rest: str,
     db: sqlite3.Connection,
     provider_app_id: str | None = None,
-) -> ServiceRequest | InstallerServiceRequest:
+) -> ServiceRequest | InstallerServiceRequest | PlatformServiceRequest:
     service_url, version_spec = lookup_shortname(consumer_app_id, shortname, db)
 
     if service_url == INSTALLER_SERVICE_URL:
         return InstallerServiceRequest(
+            service_url=service_url,
+            version_spec=version_spec,
+        )
+    elif service_url == PLATFORM_SERVICE_URL:
+        return PlatformServiceRequest(
             service_url=service_url,
             version_spec=version_spec,
         )
@@ -285,6 +301,12 @@ async def service_call(
         )
         return installer_response.to_asgi_response(app=request.app, request=request)
 
+    if isinstance(resolved, PlatformServiceRequest):
+        platform_response = await handle_platform_request(
+            consumer_app_id, resolved.version_spec, rest, request, db, config
+        )
+        return platform_response.to_asgi_response(app=request.app, request=request)
+
     response = await proxy_http_request(
         request,
         target_port=resolved.provider_port,
@@ -323,9 +345,9 @@ async def service_call_ws(socket: WebSocket[Any, Any, Any], shortname: str, rest
         await socket.close(code=4503, reason=e.message)
         return
 
-    if isinstance(resolved, InstallerServiceRequest):
+    if isinstance(resolved, (InstallerServiceRequest, PlatformServiceRequest)):
         await socket.accept()
-        await socket.close(code=1011, reason="Installer service is not available over WebSocket")
+        await socket.close(code=1011, reason="This router-internal service is not available over WebSocket")
         return
 
     await proxy_websocket_request(
