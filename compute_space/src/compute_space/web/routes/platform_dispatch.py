@@ -153,9 +153,7 @@ async def _handle_deploy(
     try:
         # Stamp installed_by with the caller so "manage apps I deployed" and
         # non-escalating delegation can key on provenance.
-        result = await install_from_repo_url(
-            repo_url, config, db, app_name=app_name, installed_by=consumer_app_id
-        )
+        result = await install_from_repo_url(repo_url, config, db, app_name=app_name, installed_by=consumer_app_id)
     except InstallError as exc:
         return _json_error("deploy_failed", exc.message, exc.status_code)
 

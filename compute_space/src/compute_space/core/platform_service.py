@@ -72,9 +72,7 @@ CAP_MANAGE_APPS = "manage_apps"
 CAP_SYSTEM_READ = "system_read"
 CAP_DELEGATE_PERMISSIONS = "delegate_permissions"
 
-ALL_CAPABILITIES: frozenset[str] = frozenset(
-    {CAP_DEPLOY, CAP_MANAGE_APPS, CAP_SYSTEM_READ, CAP_DELEGATE_PERMISSIONS}
-)
+ALL_CAPABILITIES: frozenset[str] = frozenset({CAP_DEPLOY, CAP_MANAGE_APPS, CAP_SYSTEM_READ, CAP_DELEGATE_PERMISSIONS})
 
 # ``manage_apps`` target sentinels (anything else is treated as a concrete app_id).
 TARGET_OWN = "own"
