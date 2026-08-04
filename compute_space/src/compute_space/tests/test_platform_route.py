@@ -148,9 +148,7 @@ def test_deploy_without_grant_denied(client: TestClient[Litestar]) -> None:
     assert resp.json()["error"] == "permission_required"
 
 
-def test_deploy_with_matching_grant_succeeds_and_stamps_installed_by(
-    client: TestClient[Litestar], cfg: Any
-) -> None:
+def test_deploy_with_matching_grant_succeeds_and_stamps_installed_by(client: TestClient[Litestar], cfg: Any) -> None:
     _grant(cfg.db_path, CALLER_APP_ID, {"capability": "deploy", "repo_url_prefix": "*"})
     captured: dict[str, Any] = {}
 
@@ -287,9 +285,7 @@ def test_system_requires_grant(client: TestClient[Litestar]) -> None:
 
 def test_system_with_grant(client: TestClient[Litestar], cfg: Any) -> None:
     _grant(cfg.db_path, CALLER_APP_ID, {"capability": "system_read"})
-    with mock.patch(
-        "compute_space.web.routes.platform_dispatch.storage_status", return_value={"disk": "ok"}
-    ):
+    with mock.patch("compute_space.web.routes.platform_dispatch.storage_status", return_value={"disk": "ok"}):
         resp = client.get(_url("system"), headers=_headers())
     assert resp.status_code == 200
     assert resp.json()["storage"] == {"disk": "ok"}
