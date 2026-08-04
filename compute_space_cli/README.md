@@ -56,10 +56,14 @@ oh app remove cool-app                       # remove app + data
 oh app remove cool-app --keep-data           # remove but keep data
 oh app rename cool-app new-name              # rename app
 
-oh tokens list                               # list API tokens
-oh tokens create --name "ci" --expiry-hours 72
-oh tokens delete 3                           # delete by token ID
+oh tokens list                               # list API tokens (shows each token's id + scopes)
+oh tokens scopes                             # list the grantable scopes (and which are owner-equivalent)
+oh tokens create --name "ci" --expiry-hours 72 --scope apps:read --scope apps:logs
+oh tokens create --name "full" --expiry-hours 72   # no --scope => owner (full access)
+oh tokens delete tok_ab12cd34                # delete by token id (from `oh tokens list`)
 ```
+
+Tokens are scoped: pass `--scope` (repeatable) to grant only what a token needs; omitting it defaults to `owner` (full access). Scopes marked owner-equivalent by `oh tokens scopes` can escalate to full control, so grant them only to fully-trusted callers.
 
 `oh logs` shows zone-level router logs (deploy errors, routing issues). `oh app logs` shows a specific app's container output.
 

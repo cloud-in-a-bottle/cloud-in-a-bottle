@@ -341,7 +341,8 @@ class TokensCmd:
                 help=(
                     "Grant scope (repeatable), e.g. --scope apps:read --scope apps:logs. "
                     'Defaults to "owner" (full access) if none given. Run `oh tokens scopes` '
-                    "to see all scopes; owner and the *:admin/*:manage scopes are owner-equivalent."
+                    "for the authoritative list, including which scopes are owner-equivalent "
+                    "(privilege-escalating)."
                 ),
             ),
         ] = None,

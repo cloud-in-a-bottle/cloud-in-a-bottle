@@ -61,6 +61,17 @@ function onScopeChange() {
   document.getElementById('token-scope-warning').style.display = anyOwnerEquiv ? '' : 'none';
 }
 
+// HTML-escape a value before interpolating it into innerHTML.  Token names are
+// caller-controlled (a tokens:manage token can create a token with an arbitrary
+// name), so rendering them raw would be stored XSS that runs in the owner's
+// browser session — a privilege-escalation path from a narrowly-scoped token to
+// full owner.  Applied to every server value we splice into markup.
+function escapeHtml(value) {
+  return String(value == null ? '' : value).replace(/[&<>"']/g, function(c) {
+    return {'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c];
+  });
+}
+
 function loadTokens() {
   fetch(TOKENS_URL, {credentials: 'same-origin'})
     .then(function(r) { return r.json(); })
@@ -72,13 +83,13 @@ function loadTokens() {
       table.style.display = ''; noTokens.style.display = 'none';
       tbody.innerHTML = tokens.map(function(t) {
         var style = t.expired ? ' style="color:#888;text-decoration:line-through;"' : '';
-        var expiresDisplay = t.expires_at ? t.expires_at : 'Never';
-        var scopes = (t.scopes || []).map(function(s) { return '<code>' + s + '</code>'; }).join(' ') || '—';
-        return '<tr><td' + style + '>' + t.name + '</td>'
+        var expiresDisplay = t.expires_at ? escapeHtml(t.expires_at) : 'Never';
+        var scopes = (t.scopes || []).map(function(s) { return '<code>' + escapeHtml(s) + '</code>'; }).join(' ') || '—';
+        return '<tr><td' + style + '>' + escapeHtml(t.name) + '</td>'
           + '<td>' + scopes + '</td>'
-          + '<td>' + t.created_at + '</td>'
+          + '<td>' + escapeHtml(t.created_at) + '</td>'
           + '<td' + (t.expired ? ' style="color:#c00;"' : '') + '>' + expiresDisplay + '</td>'
-          + '<td><button class="btn btn-danger" onclick="deleteToken(\'' + t.token_id + '\')">Delete</button></td></tr>';
+          + '<td><button class="btn btn-danger" onclick="deleteToken(\'' + escapeHtml(t.token_id) + '\')">Delete</button></td></tr>';
       }).join('');
     });
 }

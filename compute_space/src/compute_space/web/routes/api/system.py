@@ -165,9 +165,13 @@ class VersionInfo:
 # ─── API Tokens ────────────────────────────────────────────────────────────
 
 
-@get("/api/token_scopes", guards=[require_scope(TOKENS_MANAGE)])
-async def api_token_scopes(db: sqlite3.Connection) -> list[ScopeInfo]:
-    """The scope catalog, so the CLI and web UI render choices from one source."""
+@get("/api/token_scopes", guards=[require_scope(TOKENS_MANAGE)], sync_to_thread=False)
+async def api_token_scopes() -> list[ScopeInfo]:
+    """The scope catalog, so the CLI and web UI render choices from one source.
+
+    Reads only the in-memory ``SCOPE_CATALOG`` — no DB param, so Litestar
+    doesn't open a per-request connection this handler would never use.
+    """
     return [
         ScopeInfo(name=s.name, description=s.description, owner_equivalent=s.owner_equivalent) for s in SCOPE_CATALOG
     ]
