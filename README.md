@@ -41,6 +41,7 @@ openhost up --dev
 # (for example: http://my-app.lvh.me:8080)
 openhost up --dev --zone-domain lvh.me
 
+
 # check prerequisites
 openhost doctor
 
