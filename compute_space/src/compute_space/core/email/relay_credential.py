@@ -133,3 +133,33 @@ class RelayCredentialProvider:
             )
         except (KeyError, TypeError, ValueError) as e:
             raise RelayCredentialError(f"relay-config response malformed: {e}") from e
+
+
+# Process-wide relay-credential providers, keyed on the config fields the
+# credential depends on (NOT id(config): provide_config() hands each request a
+# freshly-built Config, so an id()-based key would never hit the TTL cache and
+# would leak a provider per request). The identity/zone the credential also
+# depends on are sourced live from the DB and keyed inside the provider itself.
+_relay_providers: dict[tuple[object, ...], RelayCredentialProvider] = {}
+_relay_providers_lock = threading.Lock()
+
+
+def _relay_provider_key(config: Config) -> tuple[object, ...]:
+    """A stable key over the config fields the relay credential depends on."""
+    return (config.email_proxy_base_url, config.email_custom_domain_normalized)
+
+
+def get_relay_credential_provider(config: Config) -> RelayCredentialProvider:
+    """Return the shared, cached relay-credential provider for this config.
+
+    Both the router SMTP email service and any owner-facing route share one
+    provider per distinct config so the frontend fetch is cached (short TTL)
+    across all callers rather than refetched per request.
+    """
+    key = _relay_provider_key(config)
+    with _relay_providers_lock:
+        provider = _relay_providers.get(key)
+        if provider is None:
+            provider = RelayCredentialProvider(config=config)
+            _relay_providers[key] = provider
+        return provider

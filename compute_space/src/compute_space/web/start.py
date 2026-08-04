@@ -29,7 +29,10 @@ from compute_space.core.dns import set_active_coredns
 from compute_space.core.dns import start_coredns
 from compute_space.core.domains import Domain
 from compute_space.core.domains import effective_domains
+from compute_space.core.email.enablement import email_enabled
 from compute_space.core.email.provision import provision_email_records
+from compute_space.core.email.smtp_service import ROUTER_SMTP_PORT
+from compute_space.core.email.smtp_service import start_email_smtp_service
 from compute_space.core.first_boot import owner_exists
 from compute_space.core.first_boot import seed_first_boot
 from compute_space.core.logging import logger
@@ -165,6 +168,15 @@ def main() -> None:
         # No-op unless email is enabled; best-effort (never blocks boot).
         if config.coredns_enabled:
             provision_email_records(config, db)
+
+        # Router-mediated outbound email: start the local SMTP submission listener
+        # apps relay through (permissioned via the 'email' v2 service). Only when
+        # email is enabled; binds loopback + the container gateway, never public.
+        if email_enabled(config, db):
+            smtp_hosts = ["127.0.0.1"]
+            if config.host != "0.0.0.0":
+                smtp_hosts.append("10.200.0.1")
+            start_email_smtp_service(config, hosts=smtp_hosts, port=ROUTER_SMTP_PORT)
 
         # Caddy reverse proxy. mainly for TLS termination, but also some other features.
         # The acquired file cert covers the primary domain (a wildcard for it);

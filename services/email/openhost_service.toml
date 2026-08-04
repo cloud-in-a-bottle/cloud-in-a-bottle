@@ -1,0 +1,3 @@
+[service]
+name = "email"
+description = "Outbound email sending, relayed by the router over SMTP submission"

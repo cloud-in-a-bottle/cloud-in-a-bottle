@@ -6,6 +6,7 @@ requires-python = ">=3.12"
 dependencies = [
     "PyJWT[crypto]",
     "acme>=5.4.0",
+    "aiosmtpd",
     "argon2-cffi",
     "attrs",
     "bcrypt>=4.1",

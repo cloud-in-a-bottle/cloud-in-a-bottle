@@ -147,9 +147,6 @@ class Config:
     # "mail.mydomain.com"). When set, the instance serves it as a second authoritative zone and publishes the same
     # SPF/DKIM/DMARC/MX records, so mail can send/receive as that domain in addition to the built-in <zone> subdomain.
     email_custom_domain: str | None
-    # App name(s) allowed to fetch the SMTP relay config from /api/email/relay-config. The relay credential is not
-    # stored on the instance; it is fetched at runtime and the endpoint is scoped to these mailbox app names.
-    email_mailbox_app_names: list[str]
     # Default apps (bare dirnames or remote git URLs, same as ``default_apps``) auto-deployed ONLY when email is
     # enabled — the mailbox server + webmail client. Kept separate from ``default_apps`` so a non-email instance has
     # no mailbox; appended by ``effective_default_apps`` when email is enabled.
@@ -372,10 +369,9 @@ class Config:
     def effective_default_apps(self, email_on: bool) -> list[str]:
         """The apps to auto-deploy: ``default_apps`` plus the email apps when email is on.
 
-        The mailbox + webmail apps are only useful (and only correctly scoped for
-        the relay-config endpoint) when email is on, so they are appended here
-        rather than living in ``default_apps`` — an instance with email off ships
-        no mailbox.  De-duplicated preserving order so an operator who already
+        The mailbox + webmail apps are only useful when email is on, so they are
+        appended here rather than living in ``default_apps`` — an instance with
+        email off ships no mailbox.  De-duplicated preserving order so an operator who already
         listed one of them in ``default_apps`` doesn't get it twice.  ``email_on``
         is threaded in by the caller (email enablement needs the DB).
         """
@@ -489,9 +485,7 @@ class DefaultConfig(Config):
     email_proxy_base_url: str | None = None
     email_dmarc_rua: str | None = None
     email_custom_domain: str | None = None
-    email_mailbox_app_names: list[str] = attr.Factory(lambda: ["stalwart-email-server"])
     # The mailbox server + webmail client, deployed only when email is enabled (see effective_default_apps).
-    # Stalwart's manifest name must stay in email_mailbox_app_names for it to be allowed to fetch the relay config.
     email_default_apps: list[str] = attr.Factory(
         lambda: [
             "https://github.com/imbue-openhost/openhost-stalwart-email-server",

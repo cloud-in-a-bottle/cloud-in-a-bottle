@@ -32,10 +32,6 @@ def test_email_fields_default_to_none() -> None:
     assert cfg.email_custom_domain is None
 
 
-def test_email_mailbox_app_names_default() -> None:
-    assert DefaultConfig().email_mailbox_app_names == ["stalwart-email-server"]
-
-
 def test_email_default_apps_default() -> None:
     assert DefaultConfig().email_default_apps == [_STALWART, _BULWARK]
 
@@ -247,7 +243,6 @@ def test_email_fields_round_trip_through_toml(tmp_path: Path) -> None:
     assert reloaded.email_proxy_base_url == "https://openhost.imbue.com"
     assert reloaded.email_dmarc_rua == "dmarc-reports@example.com"
     assert reloaded.email_custom_domain == "mail.mydomain.com"
-    assert reloaded.email_mailbox_app_names == ["stalwart-email-server"]
     assert reloaded.email_default_apps == [_STALWART, _BULWARK]
 
 
@@ -260,7 +255,7 @@ def test_email_toml_omits_unset_none_fields() -> None:
     assert "email_dmarc_rua" not in section
     assert "email_custom_domain" not in section
     # The list fields always have a (non-None) default, so they DO render.
-    assert section["email_mailbox_app_names"] == ["stalwart-email-server"]
+    assert section["email_default_apps"] == [_STALWART, _BULWARK]
 
 
 def test_email_toml_renders_set_fields() -> None:

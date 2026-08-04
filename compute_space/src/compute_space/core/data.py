@@ -8,6 +8,7 @@ import subprocess
 
 from compute_space.core.containers import ROUTER_GATEWAY_HOST
 from compute_space.core.containers import ROUTER_LOOPBACK_HOST
+from compute_space.core.email.service import ROUTER_SMTP_PORT
 from compute_space.core.logging import logger
 from compute_space.core.manifest import AppManifest
 
@@ -158,14 +159,18 @@ def provision_data(
     # Generate app token for cross-app service calls
     env_vars["OPENHOST_APP_TOKEN"] = secrets_mod.token_urlsafe(32)
 
-    if manifest.network_host:
-        # network_host containers share the host's network namespace, so
-        # localhost IS the host.  host.containers.internal doesn't exist.
-        env_vars["OPENHOST_ROUTER_URL"] = f"http://{ROUTER_LOOPBACK_HOST}:{port}"
-    else:
-        # Pasta containers: 127.0.0.1 is the container itself, not the host.
-        # host.containers.internal (podman's host-gateway alias) reaches the host.
-        env_vars["OPENHOST_ROUTER_URL"] = f"http://{ROUTER_GATEWAY_HOST}:{port}"
+    # The host apps use to reach the router (same for HTTP and the email SMTP
+    # listener): the loopback for network_host containers, the podman host-gateway
+    # alias for pasta containers.
+    router_host = ROUTER_LOOPBACK_HOST if manifest.network_host else ROUTER_GATEWAY_HOST
+    env_vars["OPENHOST_ROUTER_URL"] = f"http://{router_host}:{port}"
+
+    # Endpoint of the router's outbound email SMTP submission listener (the
+    # 'email' v2 service). Apps granted the email 'send' permission relay through
+    # this with SMTP AUTH (username = app name, password = OPENHOST_APP_TOKEN); the
+    # router attaches the real relay credential and forwards to the Imbue smarthost.
+    env_vars["OPENHOST_SMTP_HOST"] = router_host
+    env_vars["OPENHOST_SMTP_PORT"] = str(ROUTER_SMTP_PORT)
 
     # Zone identity info so apps can build federated auth flows
     env_vars["OPENHOST_ZONE_DOMAIN"] = zone_domain
