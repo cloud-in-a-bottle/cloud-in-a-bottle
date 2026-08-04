@@ -38,11 +38,11 @@ Twelve scopes, grouped into three tiers.
 |---|---|---|---|
 | `apps:read` | read | List apps, status, diagnostics | `GET /api/apps`, `/api/app_status/*`, `/api/app_diagnostics/*` |
 | `apps:logs` | read (⚠ user data) | Read app logs | `GET /app_logs/*` |
-| `system:read` | read | Version, ports, storage/ssh status, compute_space logs | `/api/version`, `/api/listening-ports`, `/api/ssh-status`, `/api/storage-status`, `/api/compute_space_logs`, `/api/diagnostics` |
+| `system:read` | read | Version, ports, storage/ssh status, compute_space logs, list domains | `/api/version`, `/api/listening-ports`, `/api/ssh-status`, `/api/storage-status`, `/api/compute_space_logs`, `/api/diagnostics`, `GET /api/domains` |
 | `settings:read` | read | Read settings, owner username, remote | `/api/settings/get-remote`, `/api/settings/owner_username` |
-| `apps:manage` | write | Deploy, clone, reload, stop, start, rename, set-remote | `/api/add_app`, `/api/clone_and_get_app_info`, `/reload_app/*`, `/stop_app/*`, `/rename_app/*`, `/set_app_remote/*`, `/api/check_port` |
+| `apps:manage` | write | Deploy, clone, reload, stop, rename, set-remote | `/api/add_app`, `/api/clone_and_get_app_info`, `/reload_app/*`, `/stop_app/*`, `/rename_app/*`, `/set_app_remote/*`, `/api/check_port` |
 | `apps:delete` | write (destructive) | Remove apps | `POST /remove_app/*` |
-| `system:admin` | **owner-equiv** | Toggle SSH, restart router, drop docker cache, storage-guard | `/toggle-ssh`, `/restart_router`, `/api/drop-docker-cache`, `/api/storage-guard` |
+| `system:admin` | **owner-equiv** | Toggle SSH, restart router, drop docker cache, storage-guard, add/remove domains | `/toggle-ssh`, `/restart_router`, `/api/drop-docker-cache`, `/api/storage-guard`, `POST`/`DELETE /api/domains` |
 | `settings:write` | **owner-equiv** | Update settings, **change password**, restart compute_space | `/api/settings/update`, `/api/settings/change_password`, `/api/settings/set-remote`, `/api/settings/restart_compute_space`, `/api/settings/owner_username` (POST) |
 | `storage:admin` | **owner-equiv** | Configure archive backend / S3 creds | `/api/storage/archive_backend/*` |
 | `tokens:manage` | **owner-equiv** | Create/list/delete API tokens | `/api/tokens*` |

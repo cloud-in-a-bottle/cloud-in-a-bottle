@@ -20,12 +20,17 @@ from litestar.testing import TestClient
 from compute_space.config import set_active_config
 from compute_space.core.auth.scopes import APPS_READ
 from compute_space.core.auth.scopes import OWNER
+from compute_space.core.auth.scopes import SYSTEM_ADMIN
+from compute_space.core.auth.scopes import SYSTEM_READ
 from compute_space.core.auth.scopes import TOKENS_MANAGE
 from compute_space.db.connection import init_db
 from compute_space.db.versioned import apply_migrations
 from compute_space.web.routes.api.apps import api_apps
+from compute_space.web.routes.api.domains import add_domain
+from compute_space.web.routes.api.domains import list_domains
 from compute_space.web.routes.api.system import api_token_scopes
 from compute_space.web.routes.api.system import api_tokens_list
+from compute_space.web.routes.api.system import api_tokens_update
 
 from ._litestar_helpers import auth_cookie
 from ._litestar_helpers import make_test_app
@@ -129,6 +134,116 @@ def test_scope_catalog_endpoint(cfg: Any) -> None:
         assert owner["owner_equivalent"] is True
         # out of scope for a non-tokens:manage token
         assert client.get("/api/token_scopes", headers=_bearer(reader)).status_code == 401
+
+
+def _token_scopes(db_path: str, name: str) -> str | None:
+    """Read the stored scopes JSON for a seeded token by name."""
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute("SELECT scopes FROM api_tokens WHERE name = ?", (name,)).fetchone()
+    finally:
+        conn.close()
+    return row["scopes"] if row else None
+
+
+def test_domains_scope_enforcement(cfg: Any) -> None:
+    # GET /api/domains is system:read; POST /api/domains is system:admin.  A
+    # system:read token may list but not add; an unrelated scope is denied on
+    # both.  (The flat scope model means system:admin does not imply
+    # system:read, matching ssh_status/toggle_ssh and storage-status/guard.)
+    reader = _seed_token(cfg.db_path, "sys-reader", f'["{SYSTEM_READ}"]', raw="sys-read-tok")
+    admin = _seed_token(cfg.db_path, "sys-admin", f'["{SYSTEM_ADMIN}"]', raw="sys-admin-tok")
+    apps_reader = _seed_token(cfg.db_path, "apps-reader", f'["{APPS_READ}"]', raw="apps-read-tok2")
+    app = make_test_app(list_domains, add_domain)
+    with TestClient(app=app) as client:
+        # system:read: list allowed, add denied.
+        assert client.get("/api/domains", headers=_bearer(reader)).status_code == 200
+        assert client.post("/api/domains", json={"name": "x.local"}, headers=_bearer(reader)).status_code == 401
+        # apps:read: both denied (no system scope).
+        assert client.get("/api/domains", headers=_bearer(apps_reader)).status_code == 401
+        # system:admin: list denied (admin doesn't imply read in the flat model).
+        assert client.get("/api/domains", headers=_bearer(admin)).status_code == 401
+
+
+def test_patch_tokens_rewrites_scopes(cfg: Any) -> None:
+    # A tokens:manage token may edit another token's scopes in place, keyed by
+    # the opaque token_id; the new scopes are validated and persisted.
+    mgr = _seed_token(cfg.db_path, "tok-mgr", f'["{TOKENS_MANAGE}"]', raw="mgr-tok")
+    _seed_token(cfg.db_path, "target", f'["{APPS_READ}"]', raw="target-tok")
+    app = make_test_app(api_tokens_update)
+    with TestClient(app=app) as client:
+        resp = client.patch(
+            "/api/tokens/tok_target-tok",
+            json={"scopes": [APPS_READ, "apps:logs"]},
+            headers=_bearer(mgr),
+        )
+        assert resp.status_code == 200
+        assert resp.json()["ok"] is True
+    assert _token_scopes(cfg.db_path, "target") == '["apps:logs", "apps:read"]'
+
+
+def test_patch_tokens_rejects_unknown_scope(cfg: Any) -> None:
+    mgr = _seed_token(cfg.db_path, "tok-mgr", f'["{TOKENS_MANAGE}"]', raw="mgr2-tok")
+    _seed_token(cfg.db_path, "target", f'["{APPS_READ}"]', raw="target2-tok")
+    app = make_test_app(api_tokens_update)
+    with TestClient(app=app) as client:
+        resp = client.patch(
+            "/api/tokens/tok_target2-tok",
+            json={"scopes": ["not:a:scope"]},
+            headers=_bearer(mgr),
+        )
+        assert resp.status_code == 400
+    assert _token_scopes(cfg.db_path, "target") == '["apps:read"]'
+
+
+def test_patch_tokens_rejects_empty_scopes(cfg: Any) -> None:
+    # Updating a token to an empty scope list is rejected; the row is untouched.
+    mgr = _seed_token(cfg.db_path, "tok-mgr", f'["{TOKENS_MANAGE}"]', raw="mgr3-tok")
+    _seed_token(cfg.db_path, "target", f'["{APPS_READ}"]', raw="target-empty-tok")
+    app = make_test_app(api_tokens_update)
+    with TestClient(app=app) as client:
+        resp = client.patch(
+            "/api/tokens/tok_target-empty-tok",
+            json={"scopes": []},
+            headers=_bearer(mgr),
+        )
+        assert resp.status_code == 400
+    assert _token_scopes(cfg.db_path, "target") == '["apps:read"]'
+
+
+def test_patch_tokens_unknown_id_returns_404(cfg: Any) -> None:
+    # Updating a nonexistent token id returns 404 and creates no row.
+    mgr = _seed_token(cfg.db_path, "tok-mgr", f'["{TOKENS_MANAGE}"]', raw="mgr404-tok")
+    app = make_test_app(api_tokens_update)
+    with TestClient(app=app) as client:
+        resp = client.patch(
+            "/api/tokens/tok_does-not-exist",
+            json={"scopes": [APPS_READ]},
+            headers=_bearer(mgr),
+        )
+        assert resp.status_code == 404
+    conn = sqlite3.connect(cfg.db_path)
+    try:
+        count = conn.execute("SELECT COUNT(*) FROM api_tokens").fetchone()[0]
+    finally:
+        conn.close()
+    assert count == 1  # only the manager token exists
+
+
+def test_patch_tokens_requires_tokens_manage_scope(cfg: Any) -> None:
+    # A token without tokens:manage cannot edit scopes (escalation guard).
+    reader = _seed_token(cfg.db_path, "reader", f'["{APPS_READ}"]', raw="reader-tok")
+    _seed_token(cfg.db_path, "target", f'["{APPS_READ}"]', raw="target3-tok")
+    app = make_test_app(api_tokens_update)
+    with TestClient(app=app) as client:
+        resp = client.patch(
+            "/api/tokens/tok_target3-tok",
+            json={"scopes": [OWNER]},
+            headers=_bearer(reader),
+        )
+        assert resp.status_code == 401
+    assert _token_scopes(cfg.db_path, "target") == '["apps:read"]'
 
 
 def test_v14_migration_backfills_existing_tokens(tmp_path: Path) -> None:

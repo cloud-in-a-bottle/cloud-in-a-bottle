@@ -351,6 +351,9 @@ class TokensCmd:
         # the CLI makes the default explicit: an unscoped `tokens create` asks
         # for owner (full access), matching the pre-scopes behaviour.
         scopes = scope or ["owner"]
+        # make_api_request already prints the server error and exits(1) on any
+        # non-2xx (e.g. a 400 for an unknown scope), so a successful return here
+        # is guaranteed to be a created-token body.
         result = make_api_request(
             cfg.url,
             cfg.token,
@@ -358,8 +361,6 @@ class TokensCmd:
             "/api/tokens",
             data={"name": name, "expiry_hours": expiry_hours, "scopes": scopes},
         ).json()
-        if "error" in result:
-            raise cappa.Exit(f"Error: {result['error']}", code=1)
         print(f"Token: {result['token']}")
         print(f"  name: {result.get('name', name)}")
         print(f"  expires: {result.get('expires_at') or 'never'}")

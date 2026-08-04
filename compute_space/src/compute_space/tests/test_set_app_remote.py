@@ -8,6 +8,7 @@ next update.
 
 from __future__ import annotations
 
+import hashlib
 import os
 import sqlite3
 import subprocess
@@ -21,6 +22,7 @@ from litestar.testing import TestClient
 import compute_space.web.routes.api.apps as apps_routes
 from compute_space.core.app_id import new_app_id
 from compute_space.core.apps import git_pull
+from compute_space.core.auth.auth import api_token_installed_by
 from compute_space.core.manifest import parse_manifest
 from compute_space.db.connection import init_db
 from compute_space.web.routes.api.apps import api_apps_routes
@@ -28,6 +30,92 @@ from compute_space.web.routes.api.apps import api_apps_routes
 from ._litestar_helpers import auth_cookie
 from ._litestar_helpers import make_test_app
 from .conftest import _make_test_config
+
+
+def _seed_owner_token(db_path: str, token_id: str, raw: str, name: str = "installer") -> str:
+    """Insert a never-expiring owner-scoped api_tokens row; return its token_id."""
+    token_hash = hashlib.sha256(raw.encode()).hexdigest()
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute(
+            "INSERT INTO api_tokens (token_id, name, token_hash, expires_at, scopes) VALUES (?, ?, ?, '', ?)",
+            (token_id, name, token_hash, '["owner"]'),
+        )
+        conn.commit()
+        return token_id
+    finally:
+        conn.close()
+
+
+def _make_add_app_clone(clone: Path) -> None:
+    clone.mkdir()
+    (clone / "openhost.toml").write_text(
+        '[app]\nname = "myapp"\nversion = "0.1.0"\n[runtime.container]\nimage = "Dockerfile"\nport = 8080\n'
+    )
+
+
+def _fake_add_app_deps(clone: Path) -> tuple[Any, Any, dict[str, Any]]:
+    """(fake_clone, fake_insert_and_deploy, capture) for driving api_add_app."""
+    manifest = parse_manifest(str(clone))
+    captured: dict[str, Any] = {}
+
+    def fake_insert_and_deploy(*args: Any, **kwargs: Any) -> str:
+        captured["installed_by"] = kwargs.get("installed_by")
+        return new_app_id()
+
+    async def fake_clone(repo_url: str, return_to: str) -> tuple[Any, str, None, None]:
+        return manifest, str(clone), None, None
+
+    return fake_clone, fake_insert_and_deploy, captured
+
+
+def test_add_app_by_token_stamps_installed_by_with_token_identity(cfg: Any, tmp_path: Path) -> None:
+    """A token-initiated deploy stamps apps.installed_by with the token's opaque
+    identity (``apitoken:tok_…``) so a future ownership scope can attribute the
+    app to the token that installed it."""
+    clone = tmp_path / "clone"
+    _make_add_app_clone(clone)
+    fake_clone, fake_insert, captured = _fake_add_app_deps(clone)
+    token_id = _seed_owner_token(cfg.db_path, token_id="tok_deploy", raw="deploy-tok")
+
+    with (
+        mock.patch.object(apps_routes, "clone_with_github_fallback", side_effect=fake_clone),
+        mock.patch.object(apps_routes, "validate_manifest", return_value=None),
+        mock.patch.object(apps_routes, "move_clone_to_app_temp_dir", return_value=str(clone)),
+        mock.patch.object(apps_routes, "insert_and_deploy", side_effect=fake_insert),
+        TestClient(app=make_test_app(api_apps_routes)) as client,
+    ):
+        resp = client.post(
+            "/api/add_app",
+            json={"repo_url": f"file://{clone}"},
+            headers={"Authorization": "Bearer deploy-tok"},
+        )
+    assert resp.status_code == 200, resp.text
+    assert captured["installed_by"] == api_token_installed_by(token_id), captured
+
+
+def test_add_app_by_session_owner_leaves_installed_by_none(cfg: Any, tmp_path: Path) -> None:
+    """An owner-initiated (session) deploy leaves installed_by as None — attribution
+    is only for token installs."""
+    clone = tmp_path / "clone"
+    _make_add_app_clone(clone)
+    fake_clone, fake_insert, captured = _fake_add_app_deps(clone)
+
+    cookies = auth_cookie(cfg)
+    with (
+        mock.patch.object(apps_routes, "clone_with_github_fallback", side_effect=fake_clone),
+        mock.patch.object(apps_routes, "validate_manifest", return_value=None),
+        mock.patch.object(apps_routes, "move_clone_to_app_temp_dir", return_value=str(clone)),
+        mock.patch.object(apps_routes, "insert_and_deploy", side_effect=fake_insert),
+        TestClient(app=make_test_app(api_apps_routes)) as client,
+    ):
+        resp = client.post(
+            "/api/add_app",
+            json={"repo_url": f"file://{clone}"},
+            cookies=cookies,
+        )
+    assert resp.status_code == 200, resp.text
+    assert captured["installed_by"] is None, captured
 
 
 @pytest.fixture

@@ -26,6 +26,8 @@ from litestar.enums import MediaType
 
 from compute_space.config import Config
 from compute_space.config import get_config
+from compute_space.core.auth.scopes import SYSTEM_ADMIN
+from compute_space.core.auth.scopes import SYSTEM_READ
 from compute_space.core.caddy import reload_caddy_for_domains
 from compute_space.core.dns import reload_coredns_for_domains
 from compute_space.core.domains import Domain
@@ -43,7 +45,7 @@ from compute_space.core.tls.domain_certs import ensure_cert_for
 from compute_space.core.tls.renewal import CertStatus
 from compute_space.core.tls.renewal import get_cert_status
 from compute_space.db import get_db
-from compute_space.web.auth.auth import require_owner_auth
+from compute_space.web.auth.auth import require_scope
 
 # A DNS label per RFC 1123 (letters/digits/hyphen, not starting/ending with hyphen), and a
 # name is one-or-more labels joined by dots (so it has at least one dot: `foo.local`, not `foo`).
@@ -170,12 +172,12 @@ def _validate_new_domain(config: Config, name: str, tls: bool, mdns: bool, db: s
     return None
 
 
-@get("/api/domains", guards=[require_owner_auth])
+@get("/api/domains", guards=[require_scope(SYSTEM_READ)])
 async def list_domains(config: Config, db: sqlite3.Connection) -> DomainListResponse:
     return DomainListResponse(domains=_domain_list(config, db))
 
 
-@post("/api/domains", status_code=202, guards=[require_owner_auth])
+@post("/api/domains", status_code=202, guards=[require_scope(SYSTEM_ADMIN)])
 async def add_domain(
     data: AddDomainRequest, config: Config, db: sqlite3.Connection
 ) -> Response[DomainListResponse] | Response[ErrorResponse]:
@@ -215,7 +217,7 @@ async def add_domain(
     )
 
 
-@delete("/api/domains/{name:str}", status_code=200, guards=[require_owner_auth])
+@delete("/api/domains/{name:str}", status_code=200, guards=[require_scope(SYSTEM_ADMIN)])
 async def remove_domain(
     name: str, config: Config, db: sqlite3.Connection
 ) -> Response[DomainListResponse] | Response[ErrorResponse]:

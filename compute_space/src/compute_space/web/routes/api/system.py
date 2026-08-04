@@ -255,9 +255,10 @@ async def api_tokens_update(
         "UPDATE api_tokens SET scopes = ? WHERE token_id = ?",
         (dump_scopes(data.scopes), token_id),
     )
-    db.commit()
     if cursor.rowcount == 0:
+        # No such token — nothing changed, so don't commit a vacuous transaction.
         return Response(content=ErrorResponse(error="Token not found"), status_code=404)
+    db.commit()
     return Response(content=OkResponse(ok=True), status_code=200, media_type=MediaType.JSON)
 
 

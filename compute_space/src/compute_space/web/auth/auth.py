@@ -191,7 +191,11 @@ def provide_accessor(request: Request[Any, Any, Any]) -> AuthenticatedAccessor |
 
     Wire it per-route via ``dependencies={"accessor": Provide(provide_accessor, sync_to_thread=False)}``.
     """
-    return authenticate(request, db=get_db())
+    # ``get_db()`` opens a fresh connection with no lifecycle management, so close
+    # it here rather than leaking one connection per request until GC (matching
+    # ``verify_app_auth``'s ``with closing(get_db())`` usage).
+    with closing(get_db()) as db:
+        return authenticate(request, db=db)
 
 
 def require_scope(required_scope: str) -> Guard:
