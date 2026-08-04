@@ -2,11 +2,14 @@
 
 The unit is a Jinja2 template (``ansible/templates/openhost.service.j2``) with a
 single ``host_uid`` variable, installed verbatim by
-``ansible/tasks/install_openhost_units.yml``. There is no ansible-side test
-harness in this repo, so these tests render the template directly and pin the
-behaviors we care about — chiefly the crash-restart policy, which is what keeps
-an instance (and its own authoritative DNS) from staying dark after a transient
-compute_space crash.
+``ansible/tasks/install_openhost_units.yml`` on fresh provisioning. The same
+directives are also emitted by ``build_openhost_service_unit`` in the system
+agent, which rewrites the installed unit during self-update migrations (see the
+system-agent ``test_service_unit.py`` for the builder side and the byte-for-byte
+directive agreement between the two). These tests render the ansible template
+directly and pin the behaviors we care about — chiefly the crash-restart policy,
+which is what keeps an instance (and its own authoritative DNS) from staying dark
+after a transient compute_space crash.
 """
 
 from __future__ import annotations
