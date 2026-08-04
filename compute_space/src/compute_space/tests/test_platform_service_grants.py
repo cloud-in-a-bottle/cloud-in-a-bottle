@@ -6,6 +6,7 @@ non-escalating delegation rule.  All checks must fail closed.
 
 from __future__ import annotations
 
+from compute_space.core.auth.permissions_v2 import Grant
 from compute_space.core.auth.permissions_v2 import GrantedPermission
 from compute_space.core.platform_service import CAP_DELEGATE_PERMISSIONS
 from compute_space.core.platform_service import CAP_SYSTEM_READ
@@ -22,27 +23,27 @@ def test_deploy_no_grants_denied() -> None:
 
 
 def test_deploy_wildcard_prefix_allows_any() -> None:
-    g = [{"capability": "deploy", "repo_url_prefix": "*"}]
+    g: list[Grant] = [{"capability": "deploy", "repo_url_prefix": "*"}]
     assert check_deploy_allowed("https://github.com/anyone/thing", g) is None
 
 
 def test_deploy_empty_prefix_allows_any() -> None:
-    g = [{"capability": "deploy", "repo_url_prefix": ""}]
+    g: list[Grant] = [{"capability": "deploy", "repo_url_prefix": ""}]
     assert check_deploy_allowed("https://x/y", g) is None
 
 
 def test_deploy_matching_prefix_allows() -> None:
-    g = [{"capability": "deploy", "repo_url_prefix": "https://github.com/acme/"}]
+    g: list[Grant] = [{"capability": "deploy", "repo_url_prefix": "https://github.com/acme/"}]
     assert check_deploy_allowed("https://github.com/acme/widget", g) is None
 
 
 def test_deploy_non_matching_prefix_denied() -> None:
-    g = [{"capability": "deploy", "repo_url_prefix": "https://github.com/acme/"}]
+    g: list[Grant] = [{"capability": "deploy", "repo_url_prefix": "https://github.com/acme/"}]
     assert check_deploy_allowed("https://github.com/evil/x", g) is not None
 
 
 def test_deploy_ignores_other_capabilities_and_non_dicts() -> None:
-    g = ["some-string", {"capability": "manage_apps", "target": "all"}, ["list"]]
+    g: list[Grant] = ["some-string", {"capability": "manage_apps", "target": "all"}, ["list"]]
     # No deploy grant present among these -> denied.
     assert check_deploy_allowed("https://github.com/acme/x", g) is not None
 
