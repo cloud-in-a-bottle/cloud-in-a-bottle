@@ -147,9 +147,7 @@ def test_get_sends_bearer_to_relay_config_endpoint(db: sqlite3.Connection, monke
     assert seen["auth"] == "Bearer fake-token"
 
 
-def test_get_ignores_extra_response_fields(
-    db: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_get_ignores_extra_response_fields(db: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch) -> None:
     # The credential only needs the four SMTP-login fields; any extra keys the
     # frontend returns (e.g. zone_domain) are ignored and don't break parsing.
     cfg = _seed_enabled(db)
