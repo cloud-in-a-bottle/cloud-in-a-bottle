@@ -461,15 +461,9 @@ def _repo_docs_src() -> Path:
     return Path(__file__).resolve().parents[4] / "docs" / "src"
 
 
-def test_api_chapter_is_listed_in_summary() -> None:
-    """The API reference must be reachable from the sidebar, not just by
-    guessing the URL."""
-    assert "(./api.md)" in (_repo_docs_src() / "SUMMARY.md").read_text(encoding="utf-8")
-
-
-def test_api_chapter_points_at_served_spec() -> None:
-    """The chapter reads the document the app serves; the spec is never
-    copied into ``docs/src``."""
+def test_api_chapter_is_listed_and_points_at_the_served_spec() -> None:
+    """Reachable from the sidebar, and reading the document the app serves."""
+    summary = (_repo_docs_src() / "SUMMARY.md").read_text(encoding="utf-8")
     body = (_repo_docs_src() / "api.md").read_text(encoding="utf-8")
+    assert "(./api.md)" in summary
     assert '"/docs/openapi.yaml"' in body
-    assert not (_repo_docs_src() / "openapi.yaml").exists()

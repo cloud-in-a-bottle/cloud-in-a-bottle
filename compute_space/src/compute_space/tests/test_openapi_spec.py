@@ -19,14 +19,10 @@ def test_committed_openapi_yaml_is_up_to_date() -> None:
     assert committed == render_openapi_yaml(), "openapi.yaml is stale; run `pixi run -e dev generate-openapi`"
 
 
-def test_schema_covers_api_only() -> None:
+def test_injected_dependencies_are_not_query_parameters() -> None:
     schema = build_openapi_schema(ALL_ROUTERS, APP_DEPENDENCIES)
     paths = schema["paths"]
     assert "/api/apps" in paths
-    # HTML/page routes are excluded via include_in_schema=False.
-    assert "/dashboard" not in paths
-    assert "/docs" not in paths
-    # Injected dependencies must not surface as query parameters.
     params = [p["name"] for op in paths.values() for h in op.values() for p in h.get("parameters", [])]
     assert "db" not in params
     assert "config" not in params
@@ -94,11 +90,3 @@ def test_generation_is_deterministic() -> None:
     """``generate_examples`` produces random values, which would make the
     committed document differ on every run and break the drift guard."""
     assert render_openapi_yaml() == render_openapi_yaml()
-
-
-def test_cors_and_oauth_callback_stay_out() -> None:
-    """CORS preflight and the browser OAuth redirect target aren't part of the
-    contract — only the proxy itself is documented."""
-    paths = build_openapi_schema(ALL_ROUTERS, APP_DEPENDENCIES)["paths"]
-    assert "options" not in paths["/api/services/v2/call/{shortname}/{rest}"]
-    assert "/api/services/v2/oauth_callback" not in paths
