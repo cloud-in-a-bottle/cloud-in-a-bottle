@@ -9,6 +9,7 @@ from argparse import Namespace
 
 import pytest
 
+from self_host_cli import config_gen
 from self_host_cli.doctor import _check_container_runtime
 from self_host_cli.doctor import _check_pixi
 from self_host_cli.doctor import _check_port
@@ -27,6 +28,41 @@ from self_host_cli.up import _resolve_zone_domain
 # ---------------------------------------------------------------------------
 # Argument parsing
 # ---------------------------------------------------------------------------
+
+
+class TestGenerateConfig:
+    def _run(self, tmp_path, monkeypatch, domain="host.example.com"):
+        cfg = tmp_path / "config.toml"
+        monkeypatch.setattr(config_gen, "_CONFIG_PATH", str(cfg))
+        config_gen.generate_config(domain=domain, data_dir=str(tmp_path))
+        return cfg, tmp_path / "first_boot.toml"
+
+    def test_domain_seeds_via_first_boot_not_config(self, tmp_path, monkeypatch):
+        cfg, first_boot = self._run(tmp_path, monkeypatch)
+        # The domain lives in first_boot.toml, not config.toml.
+        assert "zone_domain" not in cfg.read_text()
+        fb = first_boot.read_text()
+        assert 'domain = "host.example.com"' in fb
+        assert "tls = false" in fb  # local mode is HTTP-only
+
+    def test_first_boot_is_write_once(self, tmp_path, monkeypatch):
+        _, first_boot = self._run(tmp_path, monkeypatch, domain="first.example.com")
+        # A second `up` with a different domain must not clobber the consumed seed.
+        self._run(tmp_path, monkeypatch, domain="second.example.com")
+        assert 'domain = "first.example.com"' in first_boot.read_text()
+
+    def test_bare_up_seeds_localhost(self, tmp_path, monkeypatch):
+        # Bare `openhost up` (no domain) must still seed a domain so the router boots on localhost.
+        _, first_boot = self._run(tmp_path, monkeypatch, domain="")
+        assert 'domain = "localhost"' in first_boot.read_text()
+
+    def test_blank_seed_is_reseeded(self, tmp_path, monkeypatch):
+        # A first_boot.toml left blank by an aborted run must be re-seeded, not preserved (else boot
+        # stays wedged: read_first_boot ignores the blank domain and nothing seeds the DB).
+        first_boot = tmp_path / "first_boot.toml"
+        first_boot.write_text('domain = ""\ntls = false\n')
+        self._run(tmp_path, monkeypatch, domain="host.example.com")
+        assert 'domain = "host.example.com"' in first_boot.read_text()
 
 
 class TestArgParsing:

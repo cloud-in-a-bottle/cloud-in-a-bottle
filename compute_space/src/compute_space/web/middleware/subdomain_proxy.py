@@ -1,3 +1,4 @@
+from contextlib import closing
 from typing import Any
 
 from litestar import Request
@@ -14,14 +15,17 @@ from litestar.types.asgi_types import HTTPResponseBodyEvent
 from litestar.types.asgi_types import HTTPResponseStartEvent
 from litestar.types.asgi_types import WebSocketCloseEvent
 
-from compute_space.config import get_config
 from compute_space.core.apps import get_app_from_hostname
 from compute_space.core.apps import is_public_path
+from compute_space.core.containers import ROUTER_INTERNAL_HOSTS
+from compute_space.core.domains import Domain
 from compute_space.core.logging import logger
+from compute_space.db import get_db
 from compute_space.web.auth.auth import login_required_redirect
 from compute_space.web.auth.auth import verify_owner_auth
 from compute_space.web.helpers.proxy import proxy_http_request
 from compute_space.web.helpers.proxy import proxy_websocket_request
+from compute_space.web.helpers.zone import ZONE_SCOPE_KEY
 
 IS_OWNER_HEADER = ("X-OpenHost-Is-Owner", "true")
 
@@ -81,14 +85,14 @@ async def _send_internal_error(scope: Scope, send: Send) -> None:
         pass
 
 
-def _looks_like_app_subdomain(netloc: str) -> bool:
-    """True iff ``netloc`` looks like ``<something>.<zone_domain>`` (i.e. the
-    request hit what looks like an app subdomain of the configured zone).
-    The router itself answers on ``zone_domain`` exactly, not on a subdomain.
-    """
-    host = netloc.split(":", 1)[0]
-    zone = get_config().zone_domain
-    return bool(zone) and host.endswith("." + zone)
+async def _send_not_found(scope: Scope, receive: Receive, send: Send) -> None:
+    """404 (HTTP) / close (WS) — for a host or app-subdomain this router doesn't serve."""
+    if scope["type"] == ScopeType.HTTP:
+        request: Request[Any, Any, Any] = Request(scope, receive, send)
+        response: Response[Any] = Response(content=None, status_code=404)
+        await response.to_asgi_response(app=None, request=request)(scope, receive, send)
+    else:
+        await send(WebSocketCloseEvent(type="websocket.close", code=4404, reason="not found"))
 
 
 class SubdomainProxyMiddleware:
@@ -134,19 +138,35 @@ class SubdomainProxyMiddleware:
             await _send_bad_request(scope, send)
             return
 
-        app = get_app_from_hostname(netloc)
-        if not app:
-            if _looks_like_app_subdomain(netloc):
-                # The hostname looks like an app subdomain but no app is deployed
-                # there — return 404 instead of falling through to the router
-                if scope["type"] == ScopeType.HTTP:
-                    request: Request[Any, Any, Any] = Request(scope, receive, send)
-                    response: Response[Any] = Response(content=None, status_code=404)
-                    await response.to_asgi_response(app=None, request=request)(scope, receive, send)
-                else:
-                    await send(WebSocketCloseEvent(type="websocket.close", code=4404, reason="no such app"))
+        # Resolve which configured Domain this request arrived on.
+        with closing(get_db()) as db:
+            zone = Domain.match(db, netloc)
+            app = get_app_from_hostname(netloc, db) if zone is not None else None
+            looks_like_app = zone is not None and app is None and zone.is_app_subdomain(netloc)
+
+        if zone is None:
+            if netloc.split(":")[0].lower() in ROUTER_INTERNAL_HOSTS:
+                # App→router service-proxy calls arrive here via OPENHOST_ROUTER_URL (the container→host
+                # gateway), which isn't a configured domain.  Defer to Litestar; those routes are auth-gated.
+                await self.app(scope, receive, send)
                 return
-            # Router subdomain (or unrelated host) — defer to Litestar.
+            # Unmatched host — not a configured domain or one of its subdomains.  Don't serve it (no
+            # fallback to the primary).  Public traffic always arrives via Caddy with the original
+            # domain Host, so this only rejects direct-by-IP / unknown-Host requests to the full app.
+            await _send_not_found(scope, receive, send)
+            return
+
+        # Stash the arriving Domain so downstream handlers (login redirect, cookies, absolute-URL
+        # building) stay on it rather than the single canonical domain.
+        scope[ZONE_SCOPE_KEY] = zone  # type: ignore[literal-required]
+
+        if app is None:
+            if looks_like_app:
+                # A subdomain of a configured domain, but no app is deployed there — 404 rather than
+                # falling through to the router.
+                await _send_not_found(scope, receive, send)
+                return
+            # The bare configured domain — the router itself; defer to Litestar.
             await self.app(scope, receive, send)
             return
 
@@ -161,10 +181,14 @@ class SubdomainProxyMiddleware:
         #  - client IP: connection.client is always Caddy; recover the real one
         #    from the X-Forwarded-For Caddy set (see _resolve_forwarded_for).
         # Setting Host / X-Forwarded-Host preserves the original Host so apps that build absolute URLs don't use the proxy's internal hostname.
+        # Proto follows the domain the request arrived on (https for a TLS domain,
+        # http for an mDNS `.local` domain), so an app served on both sees the
+        # right scheme per request rather than one global value.  ``zone`` is the
+        # matched Domain (unmatched hosts already 404'd above).
         extra_headers = [
             ("Host", netloc),
             ("X-Forwarded-Host", netloc),
-            ("X-Forwarded-Proto", "https" if get_config().tls_enabled else "http"),
+            ("X-Forwarded-Proto", zone.scheme),
         ]
         if forwarded_for := _resolve_forwarded_for(connection):
             extra_headers.append(("X-Forwarded-For", forwarded_for))
@@ -180,9 +204,9 @@ class SubdomainProxyMiddleware:
                 # exception handler would emit, dispatched via Litestar's
                 # Redirect→ASGI machinery.  WS: refuse the handshake.
                 if scope["type"] == ScopeType.HTTP:
-                    request = Request(scope, receive, send)
-                    response = login_required_redirect(request)
-                    await response.to_asgi_response(app=None, request=request)(scope, receive, send)
+                    request: Request[Any, Any, Any] = Request(scope, receive, send)
+                    response: Response[Any] = login_required_redirect(request)
+                    await response.to_asgi_response(None, request=request)(scope, receive, send)
                 else:
                     await send(
                         WebSocketCloseEvent(type="websocket.close", code=4401, reason="authentication required")

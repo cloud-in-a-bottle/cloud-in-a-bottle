@@ -45,6 +45,7 @@ import boto3
 import botocore.exceptions  # noqa: F401  -- imported for ``except`` matching downstream
 
 from compute_space.config import Config
+from compute_space.core.domains import primary_domain_or_none
 from compute_space.core.logging import logger
 from compute_space.core.pinned_binary import get_pinned_binary
 from compute_space.core.pinned_binary import install_pinned_binary
@@ -73,7 +74,7 @@ DEFAULT_VOLUME_NAME = "openhost"
 _VOLUME_NAME_MAX = 63
 
 
-def default_volume_name_for_zone(config: Config) -> str:
+def default_volume_name_for_zone(db: sqlite3.Connection) -> str:
     """A unique, JuiceFS-valid volume name for this zone.
 
     Derived from the zone domain so that when a zone migrates its local archive
@@ -83,7 +84,8 @@ def default_volume_name_for_zone(config: Config) -> str:
     sanitised names would otherwise coincide (e.g. very long domains truncated
     to the same head) stay distinct.
     """
-    zone = (config.zone_domain or "").split(":", 1)[0].lower()
+    primary = primary_domain_or_none(db)
+    zone = primary.name_no_port if primary else ""
     # Map anything outside [a-z0-9-] to '-', collapse runs, trim edge dashes.
     slug = re.sub(r"[^a-z0-9-]+", "-", zone).strip("-")
     slug = re.sub(r"-{2,}", "-", slug)
@@ -666,7 +668,7 @@ def attach_on_startup(config: Config, db: sqlite3.Connection) -> None:
             # exists keeps its name (its objects are already keyed under it).
             volume_name = state.juicefs_volume_name
             if not _local_volume_formatted(config) and volume_name == DEFAULT_VOLUME_NAME:
-                volume_name = default_volume_name_for_zone(config)
+                volume_name = default_volume_name_for_zone(db)
                 _set_juicefs_volume_name(db, volume_name)
             _ensure_local_volume_formatted(config, volume_name)
             mount(config)
@@ -1236,11 +1238,11 @@ def configure_backend(
     elif migrating_from_local:
         existing = state.juicefs_volume_name or DEFAULT_VOLUME_NAME
         if existing == DEFAULT_VOLUME_NAME:
-            volume = juicefs_volume_name or s3_prefix or default_volume_name_for_zone(config)
+            volume = juicefs_volume_name or s3_prefix or default_volume_name_for_zone(db)
         else:
             volume = existing
     else:
-        volume = juicefs_volume_name or s3_prefix or default_volume_name_for_zone(config)
+        volume = juicefs_volume_name or s3_prefix or default_volume_name_for_zone(db)
 
     try:
         if not is_juicefs_installed(config):

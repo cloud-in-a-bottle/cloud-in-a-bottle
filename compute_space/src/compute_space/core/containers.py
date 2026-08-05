@@ -42,6 +42,15 @@ CONTAINER_ROOT = "/data"
 # and the openhost0 systemd-networkd unit.
 CONTAINER_GATEWAY_IP = "10.200.0.1"
 
+# Hostnames that reach the host gateway from inside an app container: podman's native alias plus the
+# docker-compat alias (both registered via ``--add-host`` below), and loopback for network_host.  Apps
+# reach the router's service proxy on one of these (see ``OPENHOST_ROUTER_URL`` in data.py); the
+# subdomain proxy allows them so app→router calls aren't rejected as unknown hosts.
+ROUTER_GATEWAY_HOST = "host.containers.internal"
+_DOCKER_COMPAT_HOST = "host.docker.internal"
+ROUTER_LOOPBACK_HOST = "127.0.0.1"
+ROUTER_INTERNAL_HOSTS = frozenset({ROUTER_GATEWAY_HOST, _DOCKER_COMPAT_HOST, ROUTER_LOOPBACK_HOST})
+
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]|\x1b\([AB0-9]|\x1b[=>]|\x0f|\r")
 
 # Prefix on RuntimeError messages when the build failure is a corrupted
@@ -298,8 +307,8 @@ def run_container(
                 "-p",
                 f"127.0.0.1:{local_port}:{manifest.container_port}",
                 # host.docker.internal kept for compatibility with existing apps.
-                "--add-host=host.docker.internal:host-gateway",
-                "--add-host=host.containers.internal:host-gateway",
+                f"--add-host={_DOCKER_COMPAT_HOST}:host-gateway",
+                f"--add-host={ROUTER_GATEWAY_HOST}:host-gateway",
                 # Point the container's resolver at the container-facing CoreDNS
                 # view bound on the gateway.  That view answers `*.zone_domain`
                 # with the gateway IP (where Caddy is reachable) and forwards

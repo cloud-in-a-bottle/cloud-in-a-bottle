@@ -1,6 +1,7 @@
 # note: we don't need to handle CORS in the main auth path because cross-origin requests are not allowed.
 # the only allowed cross-origin requests go thru the services interface which handles its own CORS.
 import sqlite3
+from contextlib import closing
 from typing import Any
 from urllib.parse import quote
 from urllib.parse import urlparse
@@ -12,7 +13,6 @@ from litestar.exceptions import NotAuthorizedException
 from litestar.handlers.base import BaseRouteHandler
 from litestar.response import Redirect
 
-from compute_space.config import get_config
 from compute_space.core.apps import get_app_from_hostname
 from compute_space.core.auth.auth import SESSION_COOKIE_NAME
 from compute_space.core.auth.auth import AuthenticatedAPIKey
@@ -22,7 +22,9 @@ from compute_space.core.auth.auth import AuthenticatedUser
 from compute_space.core.auth.auth import validate_api_token
 from compute_space.core.auth.auth import validate_app_token
 from compute_space.core.auth.auth import validate_session_token
+from compute_space.core.domains import Domain
 from compute_space.db import get_db
+from compute_space.web.helpers.zone import zone_for_request
 
 AnyConnection = ASGIConnection[Any, Any, Any, Any]
 
@@ -136,17 +138,18 @@ def verify_app_auth(connection: AnyConnection) -> str:
 
     returns `app_id` if authed; raises NotAuthorizedException if not authenticated.
     """
-    accessor = authenticate(connection, db=get_db())
-    origin = get_connection_origin(connection)
+    with closing(get_db()) as db:
+        accessor = authenticate(connection, db=db)
+        origin = get_connection_origin(connection)
 
-    if isinstance(accessor, AuthenticatedUser):
-        if origin is not None and (app := get_app_from_hostname(origin)) is not None:
-            # requests from app js come from the user's browser with the user's auth.
-            # Origin will always be set by the browser on these cross-origin requests.
-            return app.app_id
-    if isinstance(accessor, AuthenticatedApp):
-        # server-side app requests.
-        return accessor.app_id
+        if isinstance(accessor, AuthenticatedUser):
+            if origin is not None and (app := get_app_from_hostname(origin, db)) is not None:
+                # requests from app js come from the user's browser with the user's auth.
+                # Origin will always be set by the browser on these cross-origin requests.
+                return app.app_id
+        if isinstance(accessor, AuthenticatedApp):
+            # server-side app requests.
+            return accessor.app_id
     raise NotAuthorizedException(detail="app authentication required")
 
 
@@ -176,24 +179,25 @@ def require_same_origin(connection: AnyConnection, _route_handler: BaseRouteHand
     verify_same_origin(connection)
 
 
-def build_login_url(netloc: str, path: str, query: str) -> str:
-    """Build an absolute ``/login?next=<original>`` URL on the zone domain.
+def build_login_url(zone: Domain, netloc: str, path: str, query: str) -> str:
+    """Build an absolute ``/login?next=<original>`` URL on ``zone`` — the domain the
+    request arrived on.
 
-    Caller passes URL parts so this works from either a Litestar ``Request`` or
-    a raw ASGI scope without coupling either side to the other.
+    Redirecting to the arriving domain (rather than always the canonical one) is what
+    lets login happen on ``myhost.local`` when the user came in on ``myhost.local`` and
+    on the public domain when they came in there — no forced bounce to a single domain.
 
-    The redirect target is absolute (zone domain) so this works when called from
-    an app-subdomain request — a relative ``/login`` would otherwise resolve
-    against the app's host instead of the router's.
+    Caller passes URL parts so this works from either a Litestar ``Request`` or a raw ASGI
+    scope.  The redirect target is absolute so it works from an app-subdomain request — a
+    relative ``/login`` would otherwise resolve against the app's host, not the router's.
     """
-    config = get_config()
-    proto = "https" if config.tls_enabled else "http"
-    # `request.url` always reports HTTP because Caddy terminated TLS before
-    # forwarding to hypercorn — rebuild with the configured proto.
+    proto = zone.scheme
+    # `request.url` always reports HTTP because Caddy terminated TLS before forwarding to
+    # hypercorn — rebuild with the arriving domain's scheme.
     next_url = f"{proto}://{netloc}{path}"
     if query:
         next_url = f"{next_url}?{query}"
-    return f"{proto}://{config.zone_domain}/login?next={quote(next_url, safe='')}"
+    return f"{proto}://{zone.name}/login?next={quote(next_url, safe='')}"
 
 
 def login_required_redirect(request: Request[Any, Any, Any]) -> Response[Any]:
@@ -202,4 +206,5 @@ def login_required_redirect(request: Request[Any, Any, Any]) -> Response[Any]:
     This should only be called for non-API HTTP requests.
     In general you should just raise a NotAuthorizedException and let litestar call this for you.
     """
-    return Redirect(path=build_login_url(request.url.netloc, request.url.path, request.url.query))
+    zone = zone_for_request(request)
+    return Redirect(path=build_login_url(zone, request.url.netloc, request.url.path, request.url.query))

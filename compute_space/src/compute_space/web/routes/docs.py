@@ -59,6 +59,7 @@ from __future__ import annotations
 
 import re
 import threading
+from contextlib import closing
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -69,6 +70,7 @@ from litestar import Response
 from litestar import Router
 from litestar import get
 from litestar.exceptions import NotFoundException
+from litestar.params import FromPath
 from markdown_it import MarkdownIt
 from markupsafe import escape as html_escape
 from mdit_py_plugins.anchors import anchors_plugin
@@ -80,6 +82,9 @@ from pygments.util import ClassNotFound
 
 from compute_space.config import get_config
 from compute_space.core.auth.auth import read_owner_username
+from compute_space.core.domains import Domain
+from compute_space.core.domains import primary_domain_or_none
+from compute_space.core.git_ops import SOURCE_URL
 from compute_space.core.logging import logger
 from compute_space.db import get_db
 
@@ -109,29 +114,24 @@ def _space_display_name() -> str | None:
     Every lookup is wrapped defensively: the docs template renders
     through a standalone Jinja environment (not the app engine), so the
     header must degrade gracefully rather than break the manual if the
-    DB or config is unavailable (e.g. pre-setup, or the route-level test
-    harness that stubs a minimal config without ``zone_domain``).
+    DB or the active primary domain is unavailable (e.g. pre-setup, or a
+    route-level test harness).
     """
     owner: str | None = None
+    primary: Domain | None = None
     try:
-        db = get_db()
-        try:
+        with closing(get_db()) as db:
             owner = read_owner_username(db)
-        finally:
-            db.close()
+            primary = primary_domain_or_none(db)
     except Exception as exc:
         # Benign pre-setup / uninitialised-DB paths (and the route-level
         # test harness) land here; the header just falls back to the zone
         # name.  Debug-level so we don't spam ERROR logs for an expected,
         # non-fatal condition.
-        logger.debug("could not read owner username for docs header: {}", exc)
+        logger.debug("could not read docs header identity: {}", exc)
     if owner:
         return owner
-    try:
-        zone_domain = get_config().zone_domain
-    except Exception:
-        return None
-    return zone_domain.split(".")[0] if zone_domain else None
+    return primary.name.split(".")[0] if primary else None
 
 
 # ─── Markdown engine ────────────────────────────────────────────────
@@ -431,6 +431,11 @@ _TEMPLATE = """<!DOCTYPE html>
        flip from light (Dashboard) to dark (Docs) mid-navigation.  Keeping
        the two in lockstep is the whole point: the manual should look like
        just another in-space page. */
+    /* Match layout.html: always reserve the scrollbar gutter so the centred
+       column doesn't shift sideways when navigating to/from a page whose height
+       toggles the vertical scrollbar. Progressive enhancement — unsupported
+       browsers simply ignore it. */
+    html { scrollbar-gutter: stable; }
     body {
       font-family: -apple-system, system-ui, sans-serif;
       color: #222;
@@ -702,7 +707,7 @@ def docs_index() -> Response[str]:
 
 
 @get("/docs/{slug:str}", sync_to_thread=False)
-def docs_slug(slug: str) -> Response[str]:
+def docs_slug(slug: FromPath[str]) -> Response[str]:
     """Serve ``docs/src/<slug>.md`` rendered to HTML.
 
     ``slug`` is the markdown filename without extension.  Anything
@@ -740,6 +745,7 @@ def _render_doc(slug: str) -> Response[str]:
         next_link=next_l,
         pygments_css=PYGMENTS_CSS,
         display_name=_space_display_name(),
+        source_url=SOURCE_URL,
     )
     return Response(content=html, media_type=MediaType.HTML)
 

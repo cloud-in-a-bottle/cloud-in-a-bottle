@@ -23,10 +23,12 @@ from loguru import logger
 from compute_space import OPENHOST_PROJECT_DIR
 from compute_space.core.caddy import generate_caddyfile
 from compute_space.core.data import provision_data
+from compute_space.core.domains import Domain
 from compute_space.core.manifest import AppManifest
 from compute_space.tests.conftest import _make_config_and_env
 from compute_space.tests.conftest import _start_router_process
 from compute_space.tests.conftest import _stop_router_process
+from compute_space.tests.conftest import primary_of
 from compute_space.tests.container import container_cleanup
 from compute_space.tests.utils import app_id_for
 from compute_space.tests.utils import wait_app_removed
@@ -105,25 +107,26 @@ def test_pre_setup_health(tmp_path):
 
 
 def test_caddyfile_http_redirect():
-    """When TLS is enabled, port 80 redirects to HTTPS."""
+    """A TLS domain serves https and redirects its http site to https."""
+    cert = Path("/etc/ssl/cert.pem")
+    key = Path("/etc/ssl/key.pem")
     caddyfile = generate_caddyfile(
-        tls_enabled=True,
-        tls_cert_path=Path("/etc/ssl/cert.pem"),
-        tls_key_path=Path("/etc/ssl/key.pem"),
-        web_server_port=8080,
+        (Domain("host.example.com", tls=True),),
+        8080,
+        lambda name: (cert, key) if name == "host.example.com" else None,
     )
 
-    # Should have an :80 block with a permanent redirect to https
-    assert ":80 {" in caddyfile
-    assert "redir https://{host}{uri} permanent" in caddyfile
-
-    # Should also have an :443 block with TLS configured
-    assert ":443 {" in caddyfile
+    # https site for the domain + its wildcard, using the acquired file cert
+    assert "https://host.example.com, https://*.host.example.com {" in caddyfile
     assert "tls /etc/ssl/cert.pem /etc/ssl/key.pem" in caddyfile
 
-    # The :80 block should NOT reverse_proxy (it only redirects)
-    lines_in_80_block = caddyfile.split(":80 {")[1].split("}")[0]
-    assert "reverse_proxy" not in lines_in_80_block
+    # scoped http site that redirects to https (not a global :80 catch-all)
+    assert "http://host.example.com, http://*.host.example.com {" in caddyfile
+    assert "redir https://{host}{uri} permanent" in caddyfile
+
+    # the http (redirect) block should NOT reverse_proxy
+    redirect_block = caddyfile.split("http://host.example.com")[1].split("}")[0]
+    assert "reverse_proxy" not in redirect_block
 
 
 def _setup_owner(session, base_url, password="testpass123", username=None, timeout=30):
@@ -542,12 +545,12 @@ def _wait_for_url(session, url, timeout=30, expect_status=200):
 
 def _zone_url(config):
     """Zone base URL — resolves to 127.0.0.1 via the DNS fixture in conftest.py."""
-    return f"http://{config.zone_domain}:{config.port}"
+    return f"http://{primary_of(config).name}:{config.port}"
 
 
 def _app_url(config, app_name):
     """App subdomain base URL — same DNS trick applies."""
-    return f"http://{app_name}.{config.zone_domain}:{config.port}"
+    return f"http://{app_name}.{primary_of(config).name}:{config.port}"
 
 
 @requires_containers
@@ -828,7 +831,7 @@ class TestContainerRestart:
             # Verify proxy works
             _wait_for_url(
                 session,
-                f"http://{self.APP_NAME}.{config.zone_domain}:{self.ROUTER_PORT}/health",
+                f"http://{self.APP_NAME}.{primary_of(config).name}:{self.ROUTER_PORT}/health",
                 timeout=30,
             )
 
@@ -1471,21 +1474,35 @@ class TestGitUrlDeployE2E:
         assert r.json().get("app_name") == self.APP_NAME
 
     def test_app_detail_running(self, admin_session, config):
-        """Wait for the Git-cloned app to finish building and reach running status."""
+        """Wait for the Git-cloned app to finish building and reach running status.
+
+        Polls the ``/api/app_status`` DB status rather than substring-matching
+        the ``/app_detail`` HTML: that page inlines a ``.status-running`` CSS
+        rule via layout.html, so ``"running" in r.text`` is true regardless of
+        the app's actual status and would let this gate pass while the app is
+        still 'building'/'starting'.  A settled 'running' status is a genuine
+        precondition for the later reload test, which is refused with 409 while
+        the app sits in a transient state.
+        """
         base_url = _zone_url(config)
         deadline = time.time() + 120
-        r = None
+        status = None
         while time.time() < deadline:
             app_id = app_id_for(admin_session, base_url, self.APP_NAME)
             if app_id:
-                r = admin_session.get(
-                    f"{base_url}/app_detail/{self.APP_NAME}",
-                )
-                if r.status_code == 200 and "running" in r.text:
-                    break
+                sr = admin_session.get(f"{base_url}/api/app_status/{app_id}")
+                if sr.status_code == 200:
+                    status = sr.json().get("status")
+                    if status == "running":
+                        break
+                    if status == "error":
+                        pytest.fail(f"Git-deployed app entered error state: {sr.json().get('error')}")
             time.sleep(2)
-        assert r is not None and r.status_code == 200
-        assert "running" in r.text
+        assert status == "running", f"Git-deployed app did not reach running status (last status={status})"
+
+        # The app_detail page should also render and report the running status.
+        r = admin_session.get(f"{base_url}/app_detail/{self.APP_NAME}")
+        assert r.status_code == 200
 
     # -- proxy: verify the cloned app works --
 

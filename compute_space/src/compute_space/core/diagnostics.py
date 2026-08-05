@@ -38,6 +38,7 @@ import httpx
 from compute_space import OPENHOST_PROJECT_DIR
 from compute_space.config import Config
 from compute_space.core.containers import is_container_running
+from compute_space.core.domains import primary_domain_or_none
 from compute_space.core.git_ops import get_branch_name
 from compute_space.core.git_ops import get_head_sha
 from compute_space.core.git_ops import get_remote_url
@@ -733,6 +734,16 @@ async def _collect_app_summary(row: sqlite3.Row) -> AppDiagnosticsSummary:
     )
 
 
+def _zone_domain(db: sqlite3.Connection) -> str:
+    """The primary domain name for the bundle, or "" — diagnostics must survive a broken DB."""
+    try:
+        primary = primary_domain_or_none(db)
+    except Exception:
+        logger.opt(exception=True).warning("Failed to read primary domain for diagnostics")
+        return ""
+    return primary.name if primary else ""
+
+
 async def collect_platform_diagnostics(db: sqlite3.Connection, config: Config) -> PlatformDiagnostics:
     """Assemble the full instance diagnostics bundle."""
     openhost_git = await _collect_git_info(OPENHOST_PROJECT_DIR)
@@ -770,7 +781,7 @@ async def collect_platform_diagnostics(db: sqlite3.Connection, config: Config) -
     return PlatformDiagnostics(
         schema_version=DIAGNOSTICS_SCHEMA_VERSION,
         generated_at=datetime.now(UTC).isoformat(),
-        zone_domain=config.zone_domain,
+        zone_domain=_zone_domain(db),
         openhost=openhost_git,
         system=_collect_system_info(),
         container_runtime=_collect_container_runtime(),
@@ -782,7 +793,7 @@ async def collect_platform_diagnostics(db: sqlite3.Connection, config: Config) -
     )
 
 
-async def collect_app_diagnostics(row: sqlite3.Row, config: Config) -> AppDiagnostics:
+async def collect_app_diagnostics(row: sqlite3.Row, config: Config, db: sqlite3.Connection) -> AppDiagnostics:
     """Assemble a per-app diagnostics bundle for the given ``apps`` row."""
     version, runtime_type = _manifest_fields(row["manifest_raw"])
     if version is None:
@@ -803,7 +814,7 @@ async def collect_app_diagnostics(row: sqlite3.Row, config: Config) -> AppDiagno
     return AppDiagnostics(
         schema_version=DIAGNOSTICS_SCHEMA_VERSION,
         generated_at=datetime.now(UTC).isoformat(),
-        zone_domain=config.zone_domain,
+        zone_domain=_zone_domain(db),
         app_id=row["app_id"],
         name=row["name"],
         status=row["status"],
