@@ -171,8 +171,6 @@ def _cred() -> RelayCredential:
         smtp_relay_port=465,
         smtp_relay_user=_ZONE,
         smtp_relay_password="hmac-pw",
-        zone_domain=_ZONE,
-        custom_domain=None,
     )
 
 

@@ -129,8 +129,6 @@ def test_get_returns_credential_when_enabled(db: sqlite3.Connection, monkeypatch
         smtp_relay_port=465,
         smtp_relay_user=_ZONE,
         smtp_relay_password="hmac-derived-pw",
-        zone_domain=_ZONE,
-        custom_domain=None,
     )
 
 
@@ -149,24 +147,20 @@ def test_get_sends_bearer_to_relay_config_endpoint(db: sqlite3.Connection, monke
     assert seen["auth"] == "Bearer fake-token"
 
 
-def test_get_carries_custom_domain_through(db: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch) -> None:
-    cfg = _seed_enabled(db, custom_domain="mail.mydomain.com")
-    _install_transport(monkeypatch, lambda req: httpx.Response(200, json=_relay_body()))
-    cred = RelayCredentialProvider(config=cfg).get(db)
-    assert cred is not None
-    assert cred.custom_domain == "mail.mydomain.com"
-
-
-def test_get_falls_back_to_zone_when_zone_domain_absent(
+def test_get_ignores_extra_response_fields(
     db: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    # The credential only needs the four SMTP-login fields; any extra keys the
+    # frontend returns (e.g. zone_domain) are ignored and don't break parsing.
     cfg = _seed_enabled(db)
     body = _relay_body()
-    del body["zone_domain"]
+    body["zone_domain"] = "ignored.example.com"
+    body["custom_domain"] = "also-ignored.example.com"
     _install_transport(monkeypatch, lambda req: httpx.Response(200, json=body))
     cred = RelayCredentialProvider(config=cfg).get(db)
     assert cred is not None
-    assert cred.zone_domain == _ZONE
+    assert cred.smtp_relay_host == "smtp.openhost.imbue.com"
+    assert not hasattr(cred, "zone_domain")
 
 
 def test_get_coerces_port_to_int(db: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch) -> None:

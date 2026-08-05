@@ -41,14 +41,16 @@ _CACHE_TTL_SECONDS = 300.0
 
 @attr.s(auto_attribs=True, frozen=True)
 class RelayCredential:
-    """The SMTP smarthost config the mailbox app needs to relay outbound mail."""
+    """The SMTP smarthost login the router needs to relay outbound mail.
+
+    Just the four SMTP-connect fields; From-scope is enforced centrally at the
+    proxy, so the instance-side relay never needs the zone/custom-domain here.
+    """
 
     smtp_relay_host: str
     smtp_relay_port: int
     smtp_relay_user: str
     smtp_relay_password: str
-    zone_domain: str
-    custom_domain: str | None
 
 
 class RelayCredentialError(RuntimeError):
@@ -95,18 +97,13 @@ class RelayCredentialProvider:
             now = self.monotonic()  # type: ignore[operator]
             if self._cached is not None and self._cache_key == key and now < self._expires_at:
                 return self._cached
-            cred = self._fetch(credentials, zone, custom_domain)
+            cred = self._fetch(credentials)
             self._cached = cred
             self._cache_key = key
             self._expires_at = now + _CACHE_TTL_SECONDS
             return cred
 
-    def _fetch(
-        self,
-        credentials: KeycloakClientCredentials,
-        zone: str,
-        custom_domain: str | None,
-    ) -> RelayCredential:
+    def _fetch(self, credentials: KeycloakClientCredentials) -> RelayCredential:
         base_url = self.config.email_proxy_base_url
         assert base_url is not None  # guaranteed by email_enabled
         url = f"{base_url.rstrip('/')}/api/email/relay-config"
@@ -128,8 +125,6 @@ class RelayCredentialProvider:
                 smtp_relay_port=int(body["smtp_relay_port"]),
                 smtp_relay_user=body["smtp_relay_user"],
                 smtp_relay_password=body["smtp_relay_password"],
-                zone_domain=body.get("zone_domain") or zone,
-                custom_domain=custom_domain,
             )
         except (KeyError, TypeError, ValueError) as e:
             raise RelayCredentialError(f"relay-config response malformed: {e}") from e
