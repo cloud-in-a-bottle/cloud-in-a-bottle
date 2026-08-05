@@ -106,6 +106,7 @@ def _openapi_spec_path() -> Path:
     return get_config().openhost_repo_path / "compute_space" / "openapi.yaml"
 
 
+_REDOC_MARKER = "redoc-embed"
 _DEFAULT_INDEX = "introduction"
 _SUMMARY_FILENAME = "SUMMARY.md"
 
@@ -237,6 +238,7 @@ class _SidebarLink:
 
     title: str
     slug: str  # filename without .md, e.g. "manifest_spec"
+    standalone: bool = False  # opens in a new tab; see _is_standalone
 
 
 @dataclass(frozen=True)
@@ -296,13 +298,17 @@ def _parse_summary(summary_text: str) -> tuple[_SidebarSection, ...]:
         if m_link:
             slug = _slug_from_href(m_link.group("href"))
             if slug:
-                current_links.append(_SidebarLink(title=m_link.group("title"), slug=slug))
+                current_links.append(
+                    _SidebarLink(title=m_link.group("title"), slug=slug, standalone=_is_standalone(slug))
+                )
             continue
         m_intro = _SUMMARY_INTRO_RE.match(line)
         if m_intro and current_title is None:
             slug = _slug_from_href(m_intro.group("href"))
             if slug:
-                intro_links.append(_SidebarLink(title=m_intro.group("title"), slug=slug))
+                intro_links.append(
+                    _SidebarLink(title=m_intro.group("title"), slug=slug, standalone=_is_standalone(slug))
+                )
             continue
 
     _flush()
@@ -335,6 +341,31 @@ def _slug_from_href(href: str) -> str | None:
 
 _render_cache_lock = threading.Lock()
 _render_cache: dict[str, tuple[float, str]] = {}
+
+
+_standalone_cache: dict[str, tuple[float, bool]] = {}
+
+
+def _is_standalone(slug: str) -> bool:
+    """Whether a chapter renders as its own full-width page.
+
+    True for chapters embedding an OpenAPI browser: those renderers expect a
+    whole viewport, and squeezing one into the prose column next to the manual
+    sidebar leaves both fighting over ~740px.  Detected from the source rather
+    than a hand-kept list, so it can't drift from the chapters themselves."""
+    try:
+        path = _resolve_doc_path(slug)
+        mtime = path.stat().st_mtime
+    except (NotFoundException, OSError):
+        return False
+    with _render_cache_lock:
+        cached = _standalone_cache.get(slug)
+        if cached and cached[0] == mtime:
+            return cached[1]
+    result = _REDOC_MARKER in path.read_text(encoding="utf-8")
+    with _render_cache_lock:
+        _standalone_cache[slug] = (mtime, result)
+    return result
 
 
 def _cached_render(slug: str, path: Path) -> str:
@@ -601,6 +632,17 @@ _TEMPLATE = """<!DOCTYPE html>
        exactly like layout.html's bare <h1>, so the title + nav land at the
        same vertical position on both pages. */
     .space-header { max-width: 960px; margin: 2em auto 0; padding: 0 1em; }
+    /* Reference chapters render standalone: no manual sidebar, full window.
+       Redoc wants a whole viewport — inside the 960px prose column it collapses
+       to one cramped pane and stacks its own sidebar next to the manual's.  The
+       sidebar still lists these pages; it just opens them in a new tab.  Prose
+       keeps a readable measure; only the embed runs the full width. */
+    .layout.standalone { max-width: none; padding: 0 1.5em; }
+    .layout.standalone main.content { padding-left: 0; }
+    .layout.standalone main.content > * { max-width: 46em; }
+    .layout.standalone main.content > .redoc-embed { max-width: none; }
+    /* New-tab marker on sidebar entries that leave the manual's layout. */
+    aside.sidebar li a .ext { opacity: 0.55; margin-left: 0.3em; vertical-align: -0.1em; }
     .space-header h1.space-title { font-size: 2em; font-weight: bold; margin: 0.67em 0; }
     nav#main-nav { display: flex; align-items: flex-end; gap: 0.25em; border-bottom: 1px solid #e8e8e8; }
     nav#main-nav .nav-tab {
@@ -621,7 +663,8 @@ _TEMPLATE = """<!DOCTYPE html>
     <h1 class="space-title">{% if display_name %}{{ display_name }}'s personal compute space{% else %}OpenHost{% endif %}</h1>
     {% include "_nav_header.html" %}
   </header>
-  <div class="layout">
+  <div class="layout{% if standalone %} standalone{% endif %}">
+    {% if not standalone %}
     <aside class="sidebar">
       <h1><a href="/docs/">OpenHost Manual</a></h1>
       {% for section in sections %}
@@ -630,15 +673,17 @@ _TEMPLATE = """<!DOCTYPE html>
           <ul>
             {% for link in section.links %}
               <li><a href="/docs/{{ link.slug }}"
-                     {% if link.slug == current_slug %}class="active"{% endif %}>{{ link.title }}</a></li>
+                     {% if link.standalone %}target="_blank" rel="noopener"{% endif %}
+                     {% if link.slug == current_slug %}class="active"{% endif %}>{{ link.title }}{% if link.standalone %}<svg class="ext" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true"><path d="M14 4h6v6"/><path d="M20 4 10 14"/><path d="M18 14v6H4V6h6"/></svg>{% endif %}</a></li>
             {% endfor %}
           </ul>
         </div>
       {% endfor %}
     </aside>
+    {% endif %}
     <main class="content">
       {{ content_html | safe }}
-      {% if prev_link or next_link %}
+      {% if not standalone and (prev_link or next_link) %}
         <div class="footer-nav">
           <div>{% if prev_link %}← <a href="/docs/{{ prev_link.slug }}">{{ prev_link.title }}</a>{% endif %}</div>
           <div>{% if next_link %}<a href="/docs/{{ next_link.slug }}">{{ next_link.title }}</a> →{% endif %}</div>
@@ -704,7 +749,7 @@ def _read_summary() -> tuple[_SidebarSection, ...]:
             if first_line and first_line[0].startswith("# ")
             else slug.replace("_", " ").title()
         )
-        links.append(_SidebarLink(title=title, slug=slug))
+        links.append(_SidebarLink(title=title, slug=slug, standalone=_is_standalone(slug)))
     return (_SidebarSection(title="", links=tuple(links)),)
 
 
@@ -813,6 +858,7 @@ def _render_doc(slug: str) -> Response[str]:
     html = _COMPILED_TEMPLATE.render(
         sections=sections,
         current_slug=slug,
+        standalone=_REDOC_MARKER in content_html,
         content_html=content_html,
         page_title=page_title,
         prev_link=prev_l,

@@ -21,7 +21,7 @@ Each spec's `description` documents the permission grant format that service
 expects. The router enforces the grants; the service validates them again on its
 own side before returning anything.
 
-<div id="service-specs"></div>
+<div id="service-specs" class="redoc-embed"></div>
 <script src="https://cdn.jsdelivr.net/npm/redoc@2.5.0/bundles/redoc.standalone.js"></script>
 <script>
   (async () => {
@@ -37,7 +37,6 @@ own side before returning anything.
       title.textContent = name;
       host.appendChild(title);
       const pane = document.createElement("div");
-      pane.className = "redoc-embed";
       host.appendChild(pane);
       Redoc.init(`/docs/services/${name}/openapi.yaml`, {hideDownloadButton: true, nativeScrollbars: true}, pane);
     }

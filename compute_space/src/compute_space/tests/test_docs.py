@@ -28,6 +28,7 @@ What we cover:
 
 from __future__ import annotations
 
+import re
 import time
 from collections.abc import Iterator
 from pathlib import Path
@@ -56,8 +57,10 @@ def _clear_render_cache() -> Iterator[None]:
     """Reset the module-global mtime cache between tests so each
     test starts from a clean slate."""
     docs_routes._render_cache.clear()
+    docs_routes._standalone_cache.clear()
     yield
     docs_routes._render_cache.clear()
+    docs_routes._standalone_cache.clear()
 
 
 def _populate_fake_docs(src_dir: Path) -> None:
@@ -359,6 +362,41 @@ def test_missing_openapi_spec_returns_503(client_with_docs: TestClient[Litestar]
     resp = client_with_docs.get("/docs/openapi.yaml")
     assert resp.status_code == 503
     assert "openapi spec is missing" in resp.text.lower()
+
+
+def _client_with_a_reference_chapter(tmp_path: Path) -> TestClient[Litestar]:
+    repo_root = tmp_path / "repo"
+    src = repo_root / "docs" / "src"
+    _populate_fake_docs(src)
+    (src / "manifest_spec.md").write_text('# Ref\n\n<div class="redoc-embed"></div>\n')
+    client, _cfg = _client(repo_root)
+    return client
+
+
+def test_reference_chapter_renders_without_the_manual_sidebar(tmp_path: Path) -> None:
+    """An OpenAPI browser wants the whole viewport; beside the manual sidebar
+    it gets ~740px and collapses. Reference chapters drop the sidebar and the
+    prev/next footer, keeping only the space-wide nav header."""
+    with _client_with_a_reference_chapter(tmp_path) as c:
+        ref = c.get("/docs/manifest_spec").text
+        prose = c.get("/docs/routing").text
+    assert '<aside class="sidebar">' not in ref
+    assert '<div class="footer-nav">' not in ref
+    assert "nav-tab" in ref, "the space nav header stays, so there's a way back"
+    assert '<aside class="sidebar">' in prose
+    assert '<div class="footer-nav">' in prose
+
+
+def test_sidebar_opens_reference_chapters_in_a_new_tab(tmp_path: Path) -> None:
+    """They leave the manual's layout, so the sidebar marks them rather than
+    navigating the reader out of it silently."""
+    with _client_with_a_reference_chapter(tmp_path) as c:
+        html = c.get("/docs/routing").text
+    ref_link = re.search(r'<li><a href="/docs/manifest_spec"([^>]*)>', html)
+    prose_link = re.search(r'<li><a href="/docs/routing"([^>]*)>', html)
+    assert ref_link and 'target="_blank"' in ref_link.group(1)
+    assert 'class="ext"' in html, "new-tab entries carry the icon"
+    assert prose_link and 'target="_blank"' not in prose_link.group(1)
 
 
 # -- bundled service specs ------------------------------------------
