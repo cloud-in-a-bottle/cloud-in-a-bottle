@@ -25,6 +25,8 @@ from compute_space.core.caddy import start_caddy
 from compute_space.core.caddy import unix_admin_address
 from compute_space.core.dns import CoreDnsProcess
 from compute_space.core.dns import dns_zones
+from compute_space.core.dns import lan_addresses
+from compute_space.core.dns import reconcile_lan_dns
 from compute_space.core.dns import set_active_coredns
 from compute_space.core.dns import start_coredns
 from compute_space.core.dns import start_lan_ip_watcher
@@ -36,6 +38,7 @@ from compute_space.core.logging import logger
 from compute_space.core.logging import setup_file_logging
 from compute_space.core.mdns import ensure_mdns_for_domains
 from compute_space.core.mdns import get_active_mdns
+from compute_space.core.mdns import mdns_bases
 from compute_space.core.pinned_binary import get_pinned_binary
 from compute_space.core.pinned_binary import install_pinned_binary
 from compute_space.core.terminal import cleanup_all as cleanup_terminal_sessions
@@ -45,7 +48,6 @@ from compute_space.core.tls.renewal import get_cert_status
 from compute_space.core.tls.renewal import start_renewal_thread
 from compute_space.core.updates import RESTART_EXIT_CODE
 from compute_space.core.updates import initialize_shutdown_event
-from compute_space.core.util import default_route_source_ip
 from compute_space.db import get_db
 from compute_space.db import init_db
 from compute_space.web.app import create_app
@@ -147,7 +149,9 @@ def main() -> None:
         zones = dns_zones(config, db)
         _require_configured_domain(domains)  # fail loud at boot, not late in the first request
 
-        lan_ip = default_route_source_ip()  # shared by CoreDNS `.local` zones and the mDNS responder
+        # Shared by the CoreDNS `.local` zones and the mDNS responder.  IPv6 is gated on the http
+        # edge answering, which it can't be doing yet — the post-Caddy reconcile below picks it up.
+        lan_ip, lan_ip6 = lan_addresses()
         if config.coredns_enabled:
             if not config.public_ip:
                 raise RuntimeError("Public IP must be set in config to use CoreDNS")
@@ -159,15 +163,14 @@ def main() -> None:
                 config.coredns_corefile_path,
                 coredns_bin=_ensure_coredns_binary(config),
                 lan_ip=lan_ip,
+                lan_ip6=lan_ip6,
             )
             # Register so /api/domains can regenerate zones + restart CoreDNS when a domain is added.
             set_active_coredns(coredns)
 
         # Start the wildcard mDNS responder if any `.local` domain is configured (zero-config LAN
         # discovery alongside CoreDNS); reconciled here and by /api/domains, so it toggles at runtime.
-        ensure_mdns_for_domains(db, lan_ip=lan_ip)
-        # `lan_ip` is a snapshot: republish both if the box's address later moves (DHCP renewal).
-        start_lan_ip_watcher(config)
+        ensure_mdns_for_domains(db, lan_ip=lan_ip, lan_ip6=lan_ip6)
 
         if domains[0].tls:  # primary is a TLS domain
             _ensure_tls_cert(config, db)
@@ -194,6 +197,14 @@ def main() -> None:
             raise RuntimeError(
                 "A TLS domain is configured but start_caddy is False. Caddy is required for TLS termination."
             )
+
+        if mdns_bases(db):
+            # The edge is up now, so the IPv6 reachability probe can finally succeed — republish so
+            # `.local` gets its AAAA.  Skipped entirely on public-only instances (no extra restart).
+            reconcile_lan_dns(config, db)
+            lan_ip, lan_ip6 = lan_addresses()
+        # The addresses are a snapshot: republish if they later move (DHCP renewal, v6 coming or going).
+        start_lan_ip_watcher(config, published=(lan_ip, lan_ip6))
 
     def _all_children() -> list[subprocess.Popen[bytes]]:
         # Read caddy.proc / coredns.proc at shutdown time: restart() may have replaced them.

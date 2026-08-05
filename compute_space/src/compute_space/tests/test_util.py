@@ -12,7 +12,7 @@ def _no_default_route(*args: object, **kwargs: object) -> object:
 
 
 def test_primary_probe_preferred(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(util, "_lan_ip_from_host", lambda: "192.168.1.99")
+    monkeypatch.setattr(util, "_lan_ip_from_host", lambda family: "192.168.1.99")
 
     class _Sock:
         def __enter__(self) -> _Sock:
@@ -33,7 +33,7 @@ def test_primary_probe_preferred(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_fallback_when_no_default_route(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(socket, "socket", _no_default_route)
-    monkeypatch.setattr(util, "_lan_ip_from_host", lambda: "192.168.1.42")
+    monkeypatch.setattr(util, "_lan_ip_from_host", lambda family: "192.168.1.42")
     assert util.default_route_source_ip() == "192.168.1.42"
 
 
@@ -89,5 +89,5 @@ def test_primary_loopback_falls_through_to_fallback(monkeypatch: pytest.MonkeyPa
             return ("127.0.0.1", 0)
 
     monkeypatch.setattr(socket, "socket", lambda *a, **k: _Sock())
-    monkeypatch.setattr(util, "_lan_ip_from_host", lambda: "10.1.2.3")
+    monkeypatch.setattr(util, "_lan_ip_from_host", lambda family: "10.1.2.3")
     assert util.default_route_source_ip() == "10.1.2.3"

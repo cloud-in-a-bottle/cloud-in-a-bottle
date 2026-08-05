@@ -17,8 +17,11 @@ from compute_space.core.logging import logger
 from compute_space.core.util import default_route_source_ip
 
 _MDNS_GROUP = "224.0.0.251"
+_MDNS_GROUP6 = "ff02::fb"
 _MDNS_PORT = 5353
 _TYPE_A = 1
+_TYPE_AAAA = 28
+_TYPE_NSEC = 47
 _TYPE_ANY = 255
 _CLASS_IN = 0x0001
 _CACHE_FLUSH = 0x8000  # top bit of an rrclass: responder tells peers to flush prior records
@@ -28,17 +31,23 @@ _LEGACY_TTL = 10  # RFC 6762 §6.7: legacy unicast responses cap TTL at 10s
 _PROBE_BUDGET = 0.75  # seconds; overall deadline so ambient LAN chatter can't keep the probe alive
 
 
-def _is_local_source(ip: str) -> bool:
-    """True if ``ip`` is on a private/link-local/loopback network — the only peers we answer.
+def _is_local_source(ip: str, our_ip6: str | None = None) -> bool:
+    """True if ``ip`` is a peer on our local link — the only ones we answer.
 
-    The socket binds ``0.0.0.0:5353`` so it also receives *unicast* datagrams sent straight to a
-    public IP; answering those would make an internet-facing box an mDNS reflection/amplification
-    vector (and leak the LAN IP).  LAN multicast senders are always private, so this is transparent.
+    The sockets bind the wildcard address, so they also receive *unicast* datagrams sent straight to
+    a routable address; answering those would make an internet-facing box an mDNS reflection vector
+    (and leak the LAN IP).  IPv4 LAN senders are always private.  IPv6 LAN senders often hold a
+    *global* SLAAC address, so those are accepted only when they share our ``/64``.
     """
     try:
-        return ipaddress.ip_address(ip).is_private
+        addr = ipaddress.ip_address(ip.split("%")[0])
     except ValueError:
         return False
+    if addr.is_private:  # v4 RFC 1918, or v6 link-local (fe80::/10) / ULA (fc00::/7)
+        return True
+    if not isinstance(addr, ipaddress.IPv6Address) or our_ip6 is None:
+        return False
+    return addr in ipaddress.IPv6Network(f"{our_ip6}/64", strict=False)
 
 
 # --- wire format -----------------------------------------------------------------------------
@@ -141,49 +150,114 @@ def _a_record(name: str, ip: str, ttl: int, cache_flush: bool) -> bytes:
     return _encode_name(name) + struct.pack("!HHIH", _TYPE_A, rrclass, ttl, len(rdata)) + rdata
 
 
+def _aaaa_record(name: str, ip6: str, ttl: int, cache_flush: bool) -> bytes:
+    rrclass = _CLASS_IN | (_CACHE_FLUSH if cache_flush else 0)
+    rdata = socket.inet_pton(socket.AF_INET6, ip6)
+    return _encode_name(name) + struct.pack("!HHIH", _TYPE_AAAA, rrclass, ttl, len(rdata)) + rdata
+
+
+def _type_bitmap(types: tuple[int, ...]) -> bytes:
+    """RFC 4034 §4.1.2 type bit map.  Every type we serve is < 256, so it's a single window-0 block."""
+    width = max(types) // 8 + 1
+    bitmap = bytearray(width)
+    for rrtype in types:
+        bitmap[rrtype // 8] |= 0x80 >> (rrtype % 8)
+    return bytes([0, width]) + bytes(bitmap)
+
+
+def _nsec_record(name: str, served: tuple[int, ...], ttl: int, cache_flush: bool) -> bytes:
+    """RFC 6762 §6.1 negative response: ``name`` exists with exactly ``served`` and nothing else.
+
+    ``getaddrinfo`` asks A and AAAA together and waits for both, so without this a client's query for
+    a type we don't have stalls until its resolver times out (5s on macOS/glibc).  The bitmap must
+    list every type we actually serve — it is a positive denial of everything omitted, which clients
+    cache for the TTL.
+    """
+    rrclass = _CLASS_IN | (_CACHE_FLUSH if cache_flush else 0)
+    rdata = _encode_name(name) + _type_bitmap(served)  # mDNS: next-domain-name is the record's own name
+    return _encode_name(name) + struct.pack("!HHIH", _TYPE_NSEC, rrclass, ttl, len(rdata)) + rdata
+
+
+def _dedupe(names: tuple[str, ...]) -> tuple[str, ...]:
+    return tuple(dict.fromkeys(names))
+
+
 def _build_query(name: str) -> bytes:
     return struct.pack("!HHHHHH", 0, 0, 1, 0, 0, 0) + _encode_name(name) + struct.pack("!HH", _TYPE_A, _CLASS_IN)
 
 
-def _build_response(
-    names: tuple[str, ...], ip: str, questions: tuple[_Question, ...], legacy: bool, ident: int
-) -> bytes:
-    """An mDNS/legacy-unicast response advertising ``ip`` for each name.
+def _build_response(questions: tuple[_Question, ...], ip: str, ip6: str | None, legacy: bool, ident: int) -> bytes:
+    """A response to every question in ``questions`` (all of which we own): the address records for
+    the types asked for, and an NSEC denial for a type we don't serve.
 
-    Multicast responses omit the question, zero the transaction ID and set the cache-flush bit (RFC
-    6762 §6); legacy unicast responses (querier not on :5353) echo the query's ID and question, use
-    short TTLs, and never set cache-flush — a stub resolver drops any answer whose ID doesn't match.
+    The other served type and an NSEC always ride along in the additional section, so a client that
+    asked for A learns the AAAA (or its absence) from the same packet and its parallel query needn't
+    wait.  Multicast responses omit the question, zero the transaction ID and set the cache-flush bit
+    (RFC 6762 §6); legacy unicast responses (querier not on :5353) echo the query's ID and question,
+    use short TTLs, and never set cache-flush — a stub resolver drops an answer whose ID differs.
     """
     ttl = _LEGACY_TTL if legacy else _TTL
+    flush = not legacy
+    served = (_TYPE_A, _TYPE_AAAA) if ip6 is not None else (_TYPE_A,)
+
+    def _record(rrtype: int, name: str) -> bytes:
+        if rrtype == _TYPE_A:
+            return _a_record(name, ip, ttl, flush)
+        assert ip6 is not None  # AAAA is in `served` only when we have an address
+        return _aaaa_record(name, ip6, ttl, flush)
+
+    answers: list[bytes] = []
+    additional: list[bytes] = []
+    for name in _dedupe(tuple(q.name for q in questions)):
+        asked = {q.qtype for q in questions if q.name == name}
+        wanted = tuple(t for t in served if t in asked or _TYPE_ANY in asked)
+        if not wanted:
+            answers.append(_nsec_record(name, served, ttl, flush))
+            continue
+        answers += [_record(t, name) for t in wanted]
+        additional += [_record(t, name) for t in served if t not in wanted]
+        additional.append(_nsec_record(name, served, ttl, flush))
+
     echoed = questions if legacy else ()
-    header = struct.pack("!HHHHHH", ident if legacy else 0, 0x8400, len(echoed), len(names), 0, 0)
+    header = struct.pack("!HHHHHH", ident if legacy else 0, 0x8400, len(echoed), len(answers), 0, len(additional))
     body = b"".join(_encode_name(q.name) + struct.pack("!HH", q.qtype, q.qclass & ~_QU_BIT) for q in echoed)
-    body += b"".join(_a_record(name, ip, ttl, cache_flush=not legacy) for name in names)
-    return header + body
+    return header + body + b"".join(answers) + b"".join(additional)
 
 
 # --- responder -------------------------------------------------------------------------------
 
 
-@attr.s(auto_attribs=True)
-class MdnsResponder:
-    """Answers multicast ``.local`` queries for ``_bases`` (and their ``*.base`` subdomains) with
-    ``lan_ip``.  In-process; ``update()`` swaps the served set live, ``stop()`` tears it down."""
+@attr.s(auto_attribs=True, frozen=True)
+class Transport:
+    """One mDNS socket and the multicast address group responses go to on its address family."""
 
     sock: socket.socket
+    group: tuple[object, ...]
+
+
+@attr.s(auto_attribs=True)
+class MdnsResponder:
+    """Answers ``.local`` queries for ``_bases`` (and their ``*.base`` subdomains) with ``lan_ip``
+    and, when the box has one, ``lan_ip6``.  One thread per transport (IPv4 multicast, and IPv6 when
+    available); ``update()`` swaps the served set live, ``stop()`` tears it all down."""
+
+    transports: tuple[Transport, ...]
     lan_ip: str
+    lan_ip6: str | None
     _bases: tuple[str, ...]
     _stop: threading.Event = attr.ib(factory=threading.Event, init=False, eq=False, repr=False)
     _lock: threading.Lock = attr.ib(factory=threading.Lock, init=False, eq=False, repr=False)
-    _thread: threading.Thread | None = attr.ib(default=None, init=False, eq=False, repr=False)
+    _threads: list[threading.Thread] = attr.ib(factory=list, init=False, eq=False, repr=False)
 
     def start(self) -> None:
-        self._thread = threading.Thread(target=self._serve_loop, name="mdns", daemon=True)
-        self._thread.start()
+        for i, transport in enumerate(self.transports):
+            thread = threading.Thread(target=self._serve_loop, args=(transport,), name=f"mdns-{i}", daemon=True)
+            thread.start()
+            self._threads.append(thread)
 
     def update(self, bases: tuple[str, ...]) -> None:
-        """Swap the served set.  ``lan_ip`` is fixed for the socket's lifetime — it is baked into the
-        group membership, so a moved address is a rebind (see ``ensure_mdns_for_domains``)."""
+        """Swap the served set.  The addresses are fixed for the sockets' lifetime — they're baked
+        into the group memberships, so a moved address is a rebind (see ``ensure_mdns_for_domains``)."""
         with self._lock:
             self._bases = bases
 
@@ -192,10 +266,10 @@ class MdnsResponder:
         with self._lock:
             return any(q == b or q.endswith("." + b) for b in self._bases)
 
-    def _serve_loop(self) -> None:
+    def _serve_loop(self, transport: Transport) -> None:
         while not self._stop.is_set():
             try:
-                data, addr = self.sock.recvfrom(9000)
+                data, addr = transport.sock.recvfrom(9000)
             except TimeoutError:
                 continue
             except OSError:
@@ -205,34 +279,37 @@ class MdnsResponder:
                 self._stop.wait(1.0)  # throttle so a persistent error can't spin
                 continue
             try:
-                self._handle(data, addr)
+                self._handle(transport, data, addr)
             except Exception:  # noqa: BLE001 — a malformed peer packet must not kill the responder
                 logger.opt(exception=True).warning("mDNS: dropping unhandled query from {}", addr)
 
-    def _handle(self, data: bytes, addr: tuple[str, int]) -> None:
-        if not _is_local_source(addr[0]):
+    def _handle(self, transport: Transport, data: bytes, addr: tuple[object, ...]) -> None:
+        with self._lock:
+            ip, ip6 = self.lan_ip, self.lan_ip6
+        if not _is_local_source(str(addr[0]), ip6):
             return  # never answer a routed unicast query from off-LAN
         ident, is_query, questions = _parse_questions(data)
         if not is_query:
             return
-        matched = tuple(q for q in questions if q.qtype in (_TYPE_A, _TYPE_ANY) and self._owns(q.name))
+        # Every question for a name we own gets a reply — an address record, or an NSEC denial for a
+        # type we don't serve.  Staying silent leaves the querier waiting out its resolver timeout.
+        matched = tuple(q for q in questions if self._owns(q.name))
         if not matched:
             return
         legacy = addr[1] != _MDNS_PORT  # querier on an ephemeral port -> conventional unicast DNS
-        with self._lock:
-            ip = self.lan_ip
-        packet = _build_response(tuple(q.name for q in matched), ip, matched, legacy, ident)
+        packet = _build_response(matched, ip, ip6, legacy, ident)
         wants_unicast = legacy or any(q.qclass & _QU_BIT for q in matched)
-        self.sock.sendto(packet, addr if wants_unicast else (_MDNS_GROUP, _MDNS_PORT))
+        transport.sock.sendto(packet, addr if wants_unicast else transport.group)
 
     def stop(self) -> None:
         self._stop.set()
-        try:
-            self.sock.close()
-        except OSError:
-            pass
-        if self._thread is not None:
-            self._thread.join(timeout=2)
+        for transport in self.transports:
+            try:
+                transport.sock.close()
+            except OSError:
+                pass
+        for thread in self._threads:
+            thread.join(timeout=2)
 
 
 def _join_group(sock: socket.socket, lan_ip: str) -> None:
@@ -256,17 +333,79 @@ def _join_group(sock: socket.socket, lan_ip: str) -> None:
         )
 
 
-def _open_socket(lan_ip: str) -> socket.socket:
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+def _share_port(sock: socket.socket) -> None:
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     if hasattr(socket, "SO_REUSEPORT"):
         # Share :5353 with the OS mDNS stack (macOS mDNSResponder / Linux avahi) instead of fighting it.
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+
+
+def _open_socket(lan_ip: str) -> socket.socket:
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    _share_port(sock)
     sock.bind(("", _MDNS_PORT))
     _join_group(sock, lan_ip)
     sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 255)  # RFC 6762 §11: mDNS uses TTL 255
     sock.settimeout(1.0)  # so _serve_loop wakes to observe _stop
     return sock
+
+
+def _interface_index(ip6: str) -> int:
+    """Kernel index of the interface holding ``ip6``; 0 lets the kernel choose.
+
+    IPv6 multicast joins take an interface index, not an address.  ``/proc/net/if_inet6`` is the
+    stdlib-free way to map one to the other on Linux (the deploy target); elsewhere we fall back to
+    the default interface rather than not joining at all.
+    """
+    packed = socket.inet_pton(socket.AF_INET6, ip6).hex()
+    try:
+        with open("/proc/net/if_inet6") as f:
+            for line in f:
+                parts = line.split()
+                if len(parts) >= 2 and parts[0] == packed:
+                    return int(parts[1], 16)
+    except (OSError, ValueError):
+        pass
+    return 0
+
+
+def _open_socket6(lan_ip6: str) -> socket.socket:
+    """An IPv6 mDNS socket joined to ff02::fb on the interface holding ``lan_ip6``."""
+    sock = socket.socket(socket.AF_INET6, socket.SOCK_DGRAM)
+    try:
+        # v6-only: the IPv4 transport is its own socket, and a dual-stack bind would collide with it.
+        sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
+        _share_port(sock)
+        sock.bind(("", _MDNS_PORT))
+        index = _interface_index(lan_ip6)
+        mreq = socket.inet_pton(socket.AF_INET6, _MDNS_GROUP6) + struct.pack("@I", index)
+        sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_JOIN_GROUP, mreq)
+        sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_MULTICAST_HOPS, 255)
+        if index:
+            sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_MULTICAST_IF, struct.pack("@I", index))
+    except (OSError, AttributeError):
+        sock.close()
+        raise
+    sock.settimeout(1.0)
+    return sock
+
+
+def _open_transports(lan_ip: str, lan_ip6: str | None) -> tuple[Transport, ...]:
+    """The IPv4 transport, plus the IPv6 one when the box has an address for it.
+
+    IPv6 is best-effort: a kernel without it, or a join the interface won't accept, must not cost us
+    the IPv4 responder — we still serve AAAA *records* over IPv4, only v6-only queriers lose out.
+    """
+    transports = [Transport(sock=_open_socket(lan_ip), group=(_MDNS_GROUP, _MDNS_PORT))]
+    if lan_ip6 is not None:
+        try:
+            index = _interface_index(lan_ip6)
+            transports.append(
+                Transport(sock=_open_socket6(lan_ip6), group=(_MDNS_GROUP6, _MDNS_PORT, 0, index)),
+            )
+        except (OSError, AttributeError) as exc:
+            logger.warning(f"mDNS: no IPv6 transport ({exc}); serving AAAA over IPv4 only")
+    return tuple(transports)
 
 
 def _probe_conflict(sock: socket.socket, name: str, our_ip: str) -> str | None:
@@ -301,16 +440,17 @@ def mdns_bases(db: sqlite3.Connection) -> tuple[str, ...]:
     return tuple(d.name_no_port for d in effective_domains(db) if d.is_local)
 
 
-def start_mdns(bases: tuple[str, ...], lan_ip: str) -> MdnsResponder:
-    """Bind the mDNS socket, warn on any pre-existing claimant, and start answering for ``bases``."""
-    sock = _open_socket(lan_ip)
-    for base in bases:
-        conflict = _probe_conflict(sock, base, lan_ip)
+def start_mdns(bases: tuple[str, ...], lan_ip: str, lan_ip6: str | None = None) -> MdnsResponder:
+    """Bind the mDNS sockets, warn on any pre-existing claimant, and start answering for ``bases``."""
+    transports = _open_transports(lan_ip, lan_ip6)
+    for base in bases:  # probe on IPv4 only — a name clash is a clash whatever family finds it
+        conflict = _probe_conflict(transports[0].sock, base, lan_ip)
         if conflict is not None:
             logger.warning("mDNS: {} already claimed on the LAN by {}; serving {} anyway", base, conflict, lan_ip)
-    responder = MdnsResponder(sock=sock, lan_ip=lan_ip, bases=bases)
+    responder = MdnsResponder(transports=transports, lan_ip=lan_ip, lan_ip6=lan_ip6, bases=bases)
     responder.start()
-    logger.info("Started mDNS responder for {} -> {}", ", ".join(bases), lan_ip)
+    served = lan_ip if lan_ip6 is None else f"{lan_ip}, {lan_ip6}"
+    logger.info("Started mDNS responder for {} -> {}", ", ".join(bases), served)
     return responder
 
 
@@ -329,19 +469,19 @@ def get_active_mdns() -> MdnsResponder | None:
     return _active_mdns
 
 
-def _start_and_register(bases: tuple[str, ...], lan_ip: str) -> None:
+def _start_and_register(bases: tuple[str, ...], lan_ip: str, lan_ip6: str | None) -> None:
     try:
-        set_active_mdns(start_mdns(bases, lan_ip))
+        set_active_mdns(start_mdns(bases, lan_ip, lan_ip6))
     except OSError as exc:
         # A :5353 bind clash (e.g. an avahi/systemd-resolved without SO_REUSEPORT) must never take
         # the router down — degrade to no mDNS and keep serving.
         logger.warning("mDNS responder failed to start ({}); continuing without it", exc)
 
 
-def ensure_mdns_for_domains(db: sqlite3.Connection, lan_ip: str | None = None) -> None:
+def ensure_mdns_for_domains(db: sqlite3.Connection, lan_ip: str | None = None, lan_ip6: str | None = None) -> None:
     """Reconcile the responder with the DB's ``.local`` (mDNS) domains: start it when the first one
-    appears, refresh its served set + LAN IP, or stop it when the last one is removed.  In-process,
-    no restart.  Called at boot and by /api/domains, so mDNS turns on/off at runtime."""
+    appears, refresh its served set, or stop it when the last one is removed.  In-process, no
+    restart.  Called at boot and by /api/domains, so mDNS turns on/off at runtime."""
     bases = mdns_bases(db)
     responder = get_active_mdns()
     if not bases:
@@ -356,13 +496,19 @@ def ensure_mdns_for_domains(db: sqlite3.Connection, lan_ip: str | None = None) -
         if lan_ip is None:
             logger.warning("mDNS domain configured but no LAN IP found; responder not started")
             return
-        _start_and_register(bases, lan_ip)
-    elif lan_ip is not None and lan_ip != responder.lan_ip:
-        # The socket's group membership is pinned to the interface it was opened on, so a moved
-        # address needs a fresh socket — not just a new advertised IP.
-        logger.info("mDNS: LAN IP moved {} -> {}; rebinding responder", responder.lan_ip, lan_ip)
+        _start_and_register(bases, lan_ip, lan_ip6)
+    elif lan_ip is not None and (lan_ip, lan_ip6) != (responder.lan_ip, responder.lan_ip6):
+        # (A vanished LAN IP falls through to `update`: keep serving the last known address rather
+        # than tearing down the responder over a transient lookup failure.)
+        # Group memberships are pinned to the interfaces the sockets were opened on, so a moved
+        # address needs fresh sockets — not just a new advertised IP.
+        logger.info(
+            "mDNS: addresses moved {} -> {}; rebinding responder",
+            (responder.lan_ip, responder.lan_ip6),
+            (lan_ip, lan_ip6),
+        )
         responder.stop()
         set_active_mdns(None)
-        _start_and_register(bases, lan_ip)
+        _start_and_register(bases, lan_ip, lan_ip6)
     else:
         responder.update(bases)

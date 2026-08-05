@@ -36,6 +36,7 @@ from compute_space.core.domains import primary_domain_or_none
 from compute_space.core.logging import logger
 from compute_space.core.mdns import ensure_mdns_for_domains
 from compute_space.core.util import default_route_source_ip
+from compute_space.core.util import is_reachable
 from compute_space.db import get_db
 
 _TEMPLATES_DIR = Path(__file__).parent / "templates"
@@ -101,6 +102,27 @@ def _coredns_bind_ip(public_ip: str) -> str:
     return default_route_source_ip() or public_ip
 
 
+# The http edge (Caddy) serves `.local` on plain http; an address it doesn't answer on is one we
+# must not publish.
+_EDGE_HTTP_PORT = 80
+
+
+def publishable_lan_ip6() -> str | None:
+    """The box's IPv6 address, but only once the http edge actually answers on it.
+
+    Clients prefer IPv6 (RFC 6724), so an AAAA nothing listens on makes every connection a
+    timeout-then-fallback — worse than serving no AAAA at all.  Re-evaluated by the LAN-IP watcher,
+    so v6 appearing (or the edge coming up after us at boot) is picked up without a restart.
+    """
+    ip6 = default_route_source_ip(socket.AF_INET6)
+    if ip6 is None:
+        return None
+    if not is_reachable(ip6, _EDGE_HTTP_PORT):
+        logger.info(f"IPv6 {ip6} found but nothing answers on :{_EDGE_HTTP_PORT}; not publishing AAAA")
+        return None
+    return ip6
+
+
 @attr.s(auto_attribs=True, frozen=True)
 class DnsZone:
     """One authoritative zone CoreDNS serves: a public domain plus the path to its zone file.
@@ -151,6 +173,7 @@ def _write_coredns_config(
     corefile_path: Path,
     container_gateway_ip: str | None,
     lan_ip: str | None = None,
+    lan_ip6: str | None = None,
 ) -> None:
     """Render the Corefile + one public (and, when applicable, container) zone file per zone.
 
@@ -175,6 +198,8 @@ def _write_coredns_config(
     corefile = _jinja_env.get_template("Corefile").render(
         zones=zones,
         bind_ip=_coredns_bind_ip(public_ip),
+        # Binding the v6 address too lets a v6-only client use us as a conditional forwarder.
+        bind_ip6=lan_ip6,
         container_gateway_ip=container_gateway_ip,
         upstream_dns=" ".join(_host_upstream_resolvers()),
     )
@@ -184,11 +209,14 @@ def _write_coredns_config(
     for zone in zones:
         # Write zone file. this is the actual DNS data. CoreDNS watches for changes and auto-reloads.
         # `.local` zones point at the LAN IP so LAN clients reach the box directly, not the public IP.
-        record_ip = lan_ip if (is_local_name(zone.domain) and lan_ip) else public_ip
+        is_local = is_local_name(zone.domain)
+        record_ip = lan_ip if (is_local and lan_ip) else public_ip
         zone.zonefile_path.parent.mkdir(parents=True, exist_ok=True)
         content = _jinja_env.get_template("zonefile").render(
             zone_domain=zone.domain,
             record_ip=record_ip,
+            # Only `.local` gets AAAA: public zones resolve to `public_ip`, which has no v6 counterpart.
+            record_ip6=lan_ip6 if is_local else None,
             # Current timestamp as initial SOA serial: simple, and always increasing across runs.
             serial=bind_serial,
         )
@@ -256,6 +284,7 @@ def start_coredns(
     container_gateway_ip: str | None = CONTAINER_GATEWAY_IP,
     coredns_bin: str = "coredns",
     lan_ip: str | None = None,
+    lan_ip6: str | None = None,
 ) -> CoreDnsProcess:
     """Write CoreDNS config + zone files for every domain, start CoreDNS, return the handle.
 
@@ -266,7 +295,7 @@ def start_coredns(
     (NAT hairpin), with a catch-all forward for everything else.  Pass ``None`` to disable (e.g.
     in environments without the gateway interface).
     """
-    _write_coredns_config(zones, public_ip, corefile_path, container_gateway_ip, lan_ip)
+    _write_coredns_config(zones, public_ip, corefile_path, container_gateway_ip, lan_ip, lan_ip6)
     logger.info(f"Starting CoreDNS for {', '.join(z.domain for z in zones)}")
     return CoreDnsProcess(
         proc=_spawn_coredns(corefile_path, coredns_bin),
@@ -290,7 +319,9 @@ def get_active_coredns() -> CoreDnsProcess | None:
     return _active_coredns
 
 
-def reload_coredns_for_domains(config: Config, db: sqlite3.Connection, lan_ip: str | None = None) -> bool:
+def reload_coredns_for_domains(
+    config: Config, db: sqlite3.Connection, lan_ip: str | None = None, lan_ip6: str | None = None
+) -> bool:
     """Regenerate the Corefile + zone files from the config's current public-domain set and restart
     CoreDNS so it becomes authoritative for the new set (a new zone needs a restart; the ``file``
     plugin's ``reload`` only picks up edits to an *already-served* zone file).  No-op (returns
@@ -304,6 +335,7 @@ def reload_coredns_for_domains(config: Config, db: sqlite3.Connection, lan_ip: s
         coredns.corefile_path,
         CONTAINER_GATEWAY_IP,
         lan_ip if lan_ip is not None else default_route_source_ip(),
+        lan_ip6,
     )
     coredns.restart()
     return True
@@ -314,38 +346,48 @@ def reload_coredns_for_domains(config: Config, db: sqlite3.Connection, lan_ip: s
 _reconcile_lock = threading.Lock()
 
 
-def reconcile_lan_dns(config: Config, db: sqlite3.Connection, lan_ip: str | None = None) -> None:
+def lan_addresses() -> tuple[str | None, str | None]:
+    """The IPv4 and (reachability-gated) IPv6 addresses we publish for ``.local`` names."""
+    return default_route_source_ip(), publishable_lan_ip6()
+
+
+def reconcile_lan_dns(
+    config: Config, db: sqlite3.Connection, lan_ip: str | None = None, lan_ip6: str | None = None
+) -> None:
     """Republish every name the instance answers on: regenerate the CoreDNS zones, then reconcile the
-    mDNS responder — one LAN-IP lookup shared by both.  Blocking (CoreDNS restart, socket bind)."""
+    mDNS responder — one address lookup shared by both.  Blocking (CoreDNS restart, socket bind)."""
     if lan_ip is None:
-        lan_ip = default_route_source_ip()
+        lan_ip, lan_ip6 = lan_addresses()
     with _reconcile_lock:
-        reload_coredns_for_domains(config, db, lan_ip=lan_ip)
-        ensure_mdns_for_domains(db, lan_ip=lan_ip)
+        reload_coredns_for_domains(config, db, lan_ip=lan_ip, lan_ip6=lan_ip6)
+        ensure_mdns_for_domains(db, lan_ip=lan_ip, lan_ip6=lan_ip6)
 
 
 _LAN_IP_POLL_SECONDS = 60
 
 
-def start_lan_ip_watcher(config: Config, poll_seconds: int = _LAN_IP_POLL_SECONDS) -> threading.Thread:
-    """Republish whenever the box's own address moves (DHCP renewal, wifi→ethernet, a NIC change).
+def start_lan_ip_watcher(
+    config: Config, published: tuple[str | None, str | None], poll_seconds: int = _LAN_IP_POLL_SECONDS
+) -> threading.Thread:
+    """Republish whenever the addresses we publish change — a DHCP renewal, wifi→ethernet, a NIC
+    change, or IPv6 becoming reachable (or going away).
 
-    Both the ``.local`` CoreDNS zones and the mDNS responder pin the IP they were built with, and the
-    responder re-asserts it every ``_TTL`` seconds, so without this a moved box advertises a dead
-    address until someone restarts it."""
+    Both the ``.local`` CoreDNS zones and the mDNS responder pin the addresses they were built with,
+    and the responder re-asserts them every ``_TTL`` seconds, so without this a moved box advertises
+    a dead address until someone restarts it.  ``published`` is what the caller already put out."""
 
     def _watch() -> None:
-        current = default_route_source_ip()
+        current = published
         while True:
             time.sleep(poll_seconds)
             try:
-                latest = default_route_source_ip()
-                if latest is None or latest == current:
+                latest = lan_addresses()
+                if latest[0] is None or latest == current:
                     continue
-                logger.info(f"LAN IP moved {current} -> {latest}; republishing DNS")
+                logger.info(f"LAN addresses moved {current} -> {latest}; republishing DNS")
                 current = latest
                 with closing(get_db()) as db:
-                    reconcile_lan_dns(config, db, lan_ip=latest)
+                    reconcile_lan_dns(config, db, lan_ip=latest[0], lan_ip6=latest[1])
             except Exception:  # noqa: BLE001 — a transient failure must not kill the watcher
                 logger.opt(exception=True).warning("LAN IP watcher: republish failed; retrying next poll")
 

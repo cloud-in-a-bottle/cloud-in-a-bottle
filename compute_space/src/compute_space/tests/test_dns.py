@@ -303,6 +303,39 @@ def test_local_zone_uses_lan_ip_public_zone_uses_public_ip(tmp_path: Path, monke
     assert "*   IN A    192.168.1.50" in local_zone.read_text()
 
 
+def test_local_zone_gets_aaaa_and_v6_bind(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(dns_mod, "_coredns_bind_ip", lambda ip: "10.0.0.5")
+    monkeypatch.setattr(dns_mod, "_gateway_ip_is_bindable", lambda ip: False)
+    _stub_popen(monkeypatch)
+
+    corefile = tmp_path / "Corefile"
+    public_zone = tmp_path / "public.zone"
+    local_zone = tmp_path / "local.zone"
+    dns_mod.start_coredns(
+        (DnsZone("host.example.com", public_zone), DnsZone("myhost.local", local_zone)),
+        "203.0.113.10",
+        corefile,
+        lan_ip="192.168.1.50",
+        lan_ip6="fd00::5",
+    )
+    assert "*   IN AAAA fd00::5" in local_zone.read_text()
+    # Public zones resolve to public_ip, which has no v6 counterpart — no AAAA there.
+    assert "AAAA" not in public_zone.read_text()
+    # Binding the v6 address too lets a v6-only client use us as a conditional forwarder.
+    assert "bind 10.0.0.5 fd00::5" in corefile.read_text()
+
+
+def test_publishable_lan_ip6_requires_a_listening_edge(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Publishing an AAAA nothing answers on makes clients (which prefer v6) hang on connect and
+    # fall back — the exact stall this whole change set removes.
+    monkeypatch.setattr(dns_mod, "default_route_source_ip", lambda family: "fd00::5")
+    monkeypatch.setattr(dns_mod, "is_reachable", lambda ip, port: False)
+    assert dns_mod.publishable_lan_ip6() is None
+
+    monkeypatch.setattr(dns_mod, "is_reachable", lambda ip, port: True)
+    assert dns_mod.publishable_lan_ip6() == "fd00::5"
+
+
 def test_local_zone_dropped_when_no_lan_ip(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # With no LAN IP there is no honest answer for a `.local` name, and handing LAN clients the
     # public IP sends their traffic off-box — so the zone is not published at all.
