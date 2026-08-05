@@ -1,14 +1,10 @@
 """Router-mediated outbound email: the ``email`` v2 service, spoken over SMTP.
 
-Zack's model: email is an OpenHost-provided service (not an app). Any app that
-wants to send mail requests the ``email`` service's ``send`` grant in its
-manifest; the router runs a local SMTP submission listener that the app relays
-through, and the router attaches the real relay credential and forwards to the
-Imbue email proxy smarthost. The app never sees that credential.
-
-This replaces the previous app-scoped model where the mailbox app fetched the
-raw SMTP relay password over ``/api/email/relay-config`` (an allowlist of app
-names) and relayed to the Imbue proxy itself.
+Email is an OpenHost-provided service (not an app). Any app that wants to send
+mail requests the ``email`` service's ``send`` grant in its manifest; the router
+runs a local SMTP submission listener that the app relays through, and the router
+attaches the real relay credential and forwards to the Imbue email proxy
+smarthost. The app never sees that credential.
 
 Auth: the app connects with SMTP AUTH LOGIN/PLAIN, username = its app name,
 password = its ``OPENHOST_APP_TOKEN`` (the same per-app bearer used for HTTP
