@@ -160,8 +160,9 @@ class SubdomainProxyMiddleware:
         #    clear when TLS is on), matching build_login_url.
         #  - client IP: connection.client is always Caddy; recover the real one
         #    from the X-Forwarded-For Caddy set (see _resolve_forwarded_for).
-        # X-Forwarded-Host preserves the original Host so apps that build absolute URLs don't use the proxy's internal hostname.
+        # Setting Host / X-Forwarded-Host preserves the original Host so apps that build absolute URLs don't use the proxy's internal hostname.
         extra_headers = [
+            ("Host", netloc),
             ("X-Forwarded-Host", netloc),
             ("X-Forwarded-Proto", "https" if get_config().tls_enabled else "http"),
         ]
@@ -196,7 +197,7 @@ class SubdomainProxyMiddleware:
             proxied = await proxy_http_request(
                 Request(scope, receive, send),
                 target_port=app.local_port,
-                extra_headers=[*extra_headers, ("Host", netloc)],
+                extra_headers=extra_headers,
             )
             await proxied(scope, receive, send)
         else:
