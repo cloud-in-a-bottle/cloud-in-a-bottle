@@ -23,7 +23,6 @@ class DkimRecord:
 
 @attr.s(auto_attribs=True, frozen=True)
 class IdentityResult:
-    domain: str
     verified: bool
     dkim_records: tuple[DkimRecord, ...]
 
@@ -96,7 +95,6 @@ def _parse_identity(resp: httpx.Response) -> IdentityResult:
         body = resp.json()
         records = tuple(DkimRecord(name=r["name"], value=r["value"]) for r in body.get("dkim_records", []))
         return IdentityResult(
-            domain=body["domain"],
             verified=bool(body.get("verified")),
             dkim_records=records,
         )

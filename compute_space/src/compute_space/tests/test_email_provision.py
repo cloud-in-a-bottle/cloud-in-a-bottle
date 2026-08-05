@@ -90,7 +90,6 @@ class _FakeClient:
         self.requested.append(domain)
         target = domain or _ZONE
         return IdentityResult(
-            domain=target,
             verified=False,
             dkim_records=(DkimRecord(name=f"tok._domainkey.{target}", value="tok.dkim.amazonses.com"),),
         )
@@ -370,7 +369,6 @@ def test_custom_domain_error_does_not_prevent_primary(tmp_path: Path, monkeypatc
             if domain is not None:
                 raise EmailProxyError("custom domain identity failed")
             return IdentityResult(
-                domain=_ZONE,
                 verified=False,
                 dkim_records=(DkimRecord(name=f"tok._domainkey.{_ZONE}", value="tok.dkim.amazonses.com"),),
             )

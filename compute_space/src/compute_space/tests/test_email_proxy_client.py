@@ -50,7 +50,6 @@ def test_ensure_identity_parses_200() -> None:
     client = _client(lambda req: httpx.Response(200, json=_identity_body()))
     result = client.ensure_identity()
     assert isinstance(result, IdentityResult)
-    assert result.domain == "alice.example.com"
     assert result.verified is False
     assert result.dkim_records == (
         DkimRecord(name="a._domainkey.alice.example.com", value="a.dkim.amazonses.com"),
@@ -63,7 +62,6 @@ def test_ensure_identity_accepts_201_created() -> None:
     # treated as an error, or a freshly-created identity skips publishing records.
     client = _client(lambda req: httpx.Response(201, json=_identity_body()))
     result = client.ensure_identity()
-    assert result.domain == "alice.example.com"
     assert len(result.dkim_records) == 2
 
 
@@ -98,16 +96,7 @@ def test_ensure_identity_ignores_extra_fields() -> None:
     body = _identity_body()
     body["unexpected"] = "ignored"
     client = _client(lambda req: httpx.Response(200, json=body))
-    assert client.ensure_identity().domain == "alice.example.com"
-
-
-def test_ensure_identity_missing_domain_raises_email_proxy_error() -> None:
-    # A 2xx with a malformed body (missing required "domain") surfaces as a clean
-    # EmailProxyError, not a raw KeyError.
-    body = {"verified": True, "dkim_records": []}
-    client = _client(lambda req: httpx.Response(200, json=body))
-    with pytest.raises(EmailProxyError, match="malformed"):
-        client.ensure_identity()
+    assert len(client.ensure_identity().dkim_records) == 2
 
 
 def test_ensure_identity_malformed_dkim_record_raises_email_proxy_error() -> None:
