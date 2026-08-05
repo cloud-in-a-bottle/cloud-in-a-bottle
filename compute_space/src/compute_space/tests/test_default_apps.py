@@ -15,6 +15,8 @@ import pytest
 from compute_space.config import DefaultConfig
 from compute_space.core import default_apps as da
 from compute_space.core.app_id import new_app_id
+from compute_space.core.domains import Domain
+from compute_space.core.domains import seed_domains
 from compute_space.core.manifest import parse_manifest
 from compute_space.db.schema import schema_path
 
@@ -24,8 +26,6 @@ def _make_cfg(tmp_path: Path, *, apps_dir: Path, default_apps: list[str]) -> Def
         host="127.0.0.1",
         data_root_dir=str(tmp_path),
         apps_dir_override=str(apps_dir),
-        zone_domain="testzone.local",
-        tls_enabled=False,
         start_caddy=False,
         default_apps=default_apps,
     )
@@ -35,10 +35,12 @@ def _make_cfg(tmp_path: Path, *, apps_dir: Path, default_apps: list[str]) -> Def
 
 def _seed_db(db_path: str) -> None:
     conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
     try:
         with open(schema_path()) as f:
             conn.executescript(f.read())
         conn.commit()
+        seed_domains(conn, Domain("testzone.local", tls=False), [])  # deploy reads primary_domain(db).name
     finally:
         conn.close()
 
@@ -288,8 +290,6 @@ def test_backup_in_default_factory():
     cfg = DefaultConfig(
         host="127.0.0.1",
         data_root_dir="/tmp/fake",
-        zone_domain="test.local",
-        tls_enabled=False,
         start_caddy=False,
     )
     backup_entries = [s for s in cfg.default_apps if "openhost-backup" in s.lower()]
@@ -305,8 +305,6 @@ def test_catalog_in_default_factory():
     cfg = DefaultConfig(
         host="127.0.0.1",
         data_root_dir="/tmp/fake",
-        zone_domain="test.local",
-        tls_enabled=False,
         start_caddy=False,
     )
     catalog_entries = [s for s in cfg.default_apps if "openhost-catalog" in s.lower()]
@@ -318,8 +316,6 @@ def test_filestash_in_default_factory():
     cfg = DefaultConfig(
         host="127.0.0.1",
         data_root_dir="/tmp/fake",
-        zone_domain="test.local",
-        tls_enabled=False,
         start_caddy=False,
     )
     filestash_entries = [s for s in cfg.default_apps if "openhost-filestash" in s.lower()]
@@ -336,8 +332,6 @@ def test_oauth_provider_in_default_factory():
     cfg = DefaultConfig(
         host="127.0.0.1",
         data_root_dir="/tmp/fake",
-        zone_domain="test.local",
-        tls_enabled=False,
         start_caddy=False,
     )
     assert "oauth_provider" in cfg.default_apps, f"oauth_provider not in default_apps: {cfg.default_apps}"

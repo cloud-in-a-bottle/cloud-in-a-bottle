@@ -161,12 +161,14 @@ async function setRemote() {
       const err = await resp.json();
       throw new Error(err.detail || 'failed to set remote');
     }
-    try {
-      await fetch('/api/settings/restart_compute_space', {method: 'POST'});
-    } catch (e) {
-      // Expected — server may die before responding
-    }
-    showRestartOverlay();
+    // Only records the pin — it deliberately does NOT restart. Moving to the new
+    // ref is the update walk's job (checkout+migrate+install+restart, in order),
+    // so surface it as an available update instead of rebooting onto unmigrated code.
+    msg.textContent = 'Remote saved.';
+    msg.className = '';
+    msg.style.display = '';
+    btn.disabled = false;
+    await checkForUpdates();
   } catch (e) {
     msg.textContent = e.message;
     msg.className = 'error';
@@ -647,9 +649,76 @@ function loadArchiveBackend() {
     });
 }
 
+// --- Connect to Imbue -------------------------------------------------------
+
+async function loadConnectImbueStatus() {
+  const section = document.getElementById('connect-imbue-section');
+  const state = document.getElementById('connect-imbue-state');
+  const btn = document.getElementById('connect-imbue-btn');
+  try {
+    const resp = await fetch('/api/settings/connect-imbue/status');
+    if (!resp.ok) return;  // feature not present; leave the section hidden
+    const data = await resp.json();
+    if (!data.available) return;  // no Imbue URL configured
+    section.style.display = '';
+    if (data.connected) {
+      state.textContent = 'Connected to Imbue.';
+      btn.textContent = 'Reconnect to Imbue';
+    } else {
+      state.textContent = 'Not connected.';
+      btn.textContent = 'Connect to Imbue';
+    }
+    btn.style.display = '';
+  } catch (e) {
+    // Non-fatal: the section just stays hidden.
+  }
+}
+
+async function connectImbue() {
+  clearError();
+  const btn = document.getElementById('connect-imbue-btn');
+  const msg = document.getElementById('connect-imbue-msg');
+  btn.disabled = true;
+  try {
+    const resp = await fetch('/api/settings/connect-imbue/start', { method: 'POST' });
+    if (!resp.ok) {
+      const err = await resp.json();
+      throw new Error(err.detail || 'failed to start');
+    }
+    const data = await resp.json();
+    // Hand off to Imbue to authorize; it returns to this instance's callback,
+    // which stores the credential.
+    window.location.href = data.redirect_url;
+  } catch (e) {
+    btn.disabled = false;
+    msg.textContent = 'Could not start connect: ' + e.message;
+    msg.className = 'error';
+    msg.style.display = '';
+  }
+}
+
+// Surface the ?connect=ok|error result of a completed callback round-trip.
+(function showConnectResult() {
+  const params = new URLSearchParams(window.location.search);
+  const result = params.get('connect');
+  if (!result) return;
+  const msg = document.getElementById('connect-imbue-msg');
+  if (!msg) return;
+  if (result === 'ok') {
+    msg.textContent = 'Connected to Imbue.';
+    msg.className = '';
+    msg.style.color = '#2ea043';
+  } else {
+    msg.textContent = 'Connecting to Imbue failed. Please try again.';
+    msg.className = 'error';
+  }
+  msg.style.display = '';
+})();
+
 loadOwnerUsername();
 loadRemote();
 checkForUpdates();
 updateSshStatus();
 setInterval(updateSshStatus, 5000);
 loadArchiveBackend();
+loadConnectImbueStatus();

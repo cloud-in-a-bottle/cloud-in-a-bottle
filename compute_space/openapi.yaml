@@ -657,6 +657,73 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
       deprecated: false
+  /api/domains:
+    get:
+      summary: ListDomains
+      operationId: ApiDomainsListDomains
+      responses:
+        '200':
+          description: Request fulfilled, document follows
+          headers: {}
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DomainListResponse'
+      deprecated: false
+    post:
+      summary: AddDomain
+      operationId: ApiDomainsAddDomain
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AddDomainRequest'
+        required: true
+      responses:
+        '202':
+          description: Domain accepted; any cert acquisition runs in the background
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DomainListResponse'
+        '400':
+          description: Invalid, duplicate, or TLS-flagged mDNS name
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+      deprecated: false
+  /api/domains/{name}:
+    delete:
+      summary: RemoveDomain
+      operationId: ApiDomainsNameRemoveDomain
+      parameters:
+      - name: name
+        in: path
+        schema:
+          type: string
+        required: true
+        deprecated: false
+      responses:
+        '200':
+          description: The remaining domains
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DomainListResponse'
+        '400':
+          description: The primary domain cannot be removed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: No such domain
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+      deprecated: false
   /api/permissions/v2:
     get:
       summary: ListPermissionsV2
@@ -1113,6 +1180,96 @@ paths:
         '204':
           description: Request fulfilled, nothing follows
           headers: {}
+      deprecated: false
+  /api/settings/connect-imbue/status:
+    get:
+      summary: ConnectImbueStatus
+      operationId: ApiSettingsConnectImbueStatusConnectImbueStatus
+      responses:
+        '200':
+          description: Request fulfilled, document follows
+          headers: {}
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConnectStatusResponse'
+      deprecated: false
+  /api/settings/connect-imbue/start:
+    post:
+      summary: ConnectImbueStart
+      operationId: ApiSettingsConnectImbueStartConnectImbueStart
+      responses:
+        '200':
+          description: Request fulfilled, document follows
+          headers: {}
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConnectStartResponse'
+      deprecated: false
+  /api/settings/connect-imbue/callback:
+    get:
+      summary: ConnectImbueCallback
+      description: 'Exchange the one-time code and store the credential.
+
+
+        Imbue returns the one-time code here (?code=). We exchange it for the credential
+
+        and write it into the DB settings table, which is read live by the services
+
+        that use it — so no restart is needed. Redirects back to Settings.
+
+
+        Sync + sync_to_thread so the blocking exchange (httpx) doesn''t stall the
+        event
+
+        loop for other (proxied app) traffic.'
+      operationId: ApiSettingsConnectImbueCallbackConnectImbueCallback
+      parameters:
+      - name: code
+        in: query
+        schema:
+          type: string
+          default: ''
+        required: false
+        deprecated: false
+        allowEmptyValue: false
+        allowReserved: false
+      responses:
+        '200':
+          description: Redirect Response
+          headers:
+            location:
+              schema:
+                type: string
+              description: target path for the redirect
+              required: false
+              deprecated: false
+        '400':
+          description: Bad request syntax or unsupported method
+          content:
+            application/json:
+              schema:
+                properties:
+                  status_code:
+                    type: integer
+                  detail:
+                    type: string
+                  extra:
+                    additionalProperties: {}
+                    type:
+                    - 'null'
+                    - object
+                    - array
+                type: object
+                required:
+                - detail
+                - status_code
+                description: Validation Exception
+                examples:
+                - status_code: 400
+                  detail: Bad Request
+                  extra: {}
       deprecated: false
   /api/settings/change_password:
     post:
@@ -2014,6 +2171,18 @@ components:
       - ok
       - status
       title: AddAppResponse
+    AddDomainRequest:
+      properties:
+        name:
+          type: string
+        tls:
+          type: boolean
+        mdns:
+          type: boolean
+      type: object
+      required:
+      - name
+      title: AddDomainRequest
     ApiToken:
       properties:
         id:
@@ -2459,6 +2628,25 @@ components:
       - s3_bucket
       - s3_secret_access_key
       title: ConfigureArchiveRequest
+    ConnectStartResponse:
+      properties:
+        redirect_url:
+          type: string
+      type: object
+      required:
+      - redirect_url
+      title: ConnectStartResponse
+    ConnectStatusResponse:
+      properties:
+        available:
+          type: boolean
+        connected:
+          type: boolean
+      type: object
+      required:
+      - available
+      - connected
+      title: ConnectStatusResponse
     ContainerRuntimeInfo:
       properties:
         available:
@@ -2556,6 +2744,53 @@ components:
       - service_version
       - status
       title: DiscoveredProvider
+    DomainCertStatus:
+      type: string
+      enum:
+      - none
+      - acquiring
+      - active
+      - error
+      title: DomainCertStatus
+      description: Per-domain cert/acquisition status surfaced by /api/domains.
+    DomainInfo:
+      properties:
+        name:
+          type: string
+        tls:
+          type: boolean
+        mdns:
+          type: boolean
+        scheme:
+          type: string
+        cert_status:
+          $ref: '#/components/schemas/DomainCertStatus'
+        error_message:
+          oneOf:
+          - type: string
+          - type: 'null'
+        is_primary:
+          type: boolean
+      type: object
+      required:
+      - cert_status
+      - error_message
+      - is_primary
+      - mdns
+      - name
+      - scheme
+      - tls
+      title: DomainInfo
+    DomainListResponse:
+      properties:
+        domains:
+          items:
+            $ref: '#/components/schemas/DomainInfo'
+          type: array
+      type: object
+      required:
+      - domains
+      title: DomainListResponse
     DropCacheOk:
       properties:
         ok:

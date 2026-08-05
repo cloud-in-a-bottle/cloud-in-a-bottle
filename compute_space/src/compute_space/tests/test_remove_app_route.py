@@ -63,7 +63,8 @@ def test_remove_returns_202_and_marks_removing(
     app_id = _seed_app(cfg.db_path, "myapp")
 
     with patch("compute_space.web.routes.api.apps.Thread") as Thread:
-        resp = client.post(f"/remove_app/{app_id}", cookies=cookies)
+        client.cookies.update(cookies)
+        resp = client.post(f"/remove_app/{app_id}")
 
     assert resp.status_code == 202
     assert resp.json() == {"ok": True}
@@ -81,7 +82,8 @@ def test_remove_returns_202_and_marks_removing(
 def test_remove_404_when_app_missing(client: TestClient[Litestar], cookies: dict[str, str]) -> None:
     with patch("compute_space.web.routes.api.apps.Thread") as Thread:
         # Mint a valid-shaped id that won't exist in the DB.
-        resp = client.post(f"/remove_app/{new_app_id()}", cookies=cookies)
+        client.cookies.update(cookies)
+        resp = client.post(f"/remove_app/{new_app_id()}")
 
     assert resp.status_code == 404
     body = resp.json()
@@ -103,7 +105,8 @@ def test_remove_rolls_back_if_thread_spawn_fails(
     failing_thread.return_value.start.side_effect = RuntimeError("can't start new thread")
 
     with patch("compute_space.web.routes.api.apps.Thread", failing_thread):
-        resp = client.post(f"/remove_app/{app_id}", cookies=cookies)
+        client.cookies.update(cookies)
+        resp = client.post(f"/remove_app/{app_id}")
 
     assert resp.status_code == 503
     assert "removal worker" in resp.json()["error"].lower()
@@ -122,8 +125,9 @@ def test_concurrent_removes_only_spawn_one_worker(
     app_id = _seed_app(cfg.db_path, "myapp")
 
     with patch("compute_space.web.routes.api.apps.Thread") as Thread:
-        resp1 = client.post(f"/remove_app/{app_id}", cookies=cookies)
-        resp2 = client.post(f"/remove_app/{app_id}", cookies=cookies)
+        client.cookies.update(cookies)
+        resp1 = client.post(f"/remove_app/{app_id}")
+        resp2 = client.post(f"/remove_app/{app_id}")
 
     assert resp1.status_code == 202
     assert resp1.json() == {"ok": True}
@@ -137,20 +141,23 @@ def test_concurrent_removes_only_spawn_one_worker(
 
 def test_stop_app_refuses_when_removing(cfg: Any, client: TestClient[Litestar], cookies: dict[str, str]) -> None:
     app_id = _seed_app(cfg.db_path, "myapp", status="removing")
-    resp = client.post(f"/stop_app/{app_id}", cookies=cookies)
+    client.cookies.update(cookies)
+    resp = client.post(f"/stop_app/{app_id}")
     assert resp.status_code == 409
     assert "removed" in resp.json()["error"].lower()
 
 
 def test_reload_app_refuses_when_removing(cfg: Any, client: TestClient[Litestar], cookies: dict[str, str]) -> None:
     app_id = _seed_app(cfg.db_path, "myapp", status="removing")
-    resp = client.post(f"/reload_app/{app_id}", cookies=cookies)
+    client.cookies.update(cookies)
+    resp = client.post(f"/reload_app/{app_id}")
     assert resp.status_code == 409
     assert "removed" in resp.json()["error"].lower()
 
 
 def test_rename_app_refuses_when_removing(cfg: Any, client: TestClient[Litestar], cookies: dict[str, str]) -> None:
     app_id = _seed_app(cfg.db_path, "myapp", status="removing")
-    resp = client.post(f"/rename_app/{app_id}", json={"name": "newname"}, cookies=cookies)
+    client.cookies.update(cookies)
+    resp = client.post(f"/rename_app/{app_id}", json={"name": "newname"})
     assert resp.status_code == 409
     assert "removed" in resp.json()["error"].lower()

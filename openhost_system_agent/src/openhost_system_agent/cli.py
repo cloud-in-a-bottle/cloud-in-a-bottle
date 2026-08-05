@@ -8,6 +8,7 @@ import attr
 import attrs
 import cappa
 
+from openhost_system_agent.migrations.runner import apply_system_migrations
 from openhost_system_agent.status import get_migration_status
 from openhost_system_agent.update import apply_update
 from openhost_system_agent.update import fetch_updates
@@ -48,6 +49,17 @@ class UpdateCmd:
         # success, so it never returns; only failures surface here.
         try:
             apply_update()
+        except Exception as e:
+            _error(str(e))
+
+    @cappa.command(
+        name="migrate", help="Apply pending system migrations for the current checkout (no fetch/checkout/restart)."
+    )
+    def migrate(self) -> None:
+        # Decoupled from the apply walk so migrations can run at boot (openhost.service ExecStartPre)
+        # or when the code is already at the target (dev branch, dirty tree) — the walk bails first.
+        try:
+            print(json.dumps({"ok": True, "applied": apply_system_migrations()}))
         except Exception as e:
             _error(str(e))
 

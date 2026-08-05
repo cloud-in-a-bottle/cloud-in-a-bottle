@@ -190,11 +190,14 @@ def test_page_carries_space_nav_header(client_with_docs: TestClient[Litestar]) -
 
 
 def test_docs_nav_link_stays_in_same_tab(client_with_docs: TestClient[Litestar]) -> None:
-    """The Docs nav link must not open in a new tab — no
-    ``target="_blank"`` on any nav tab in the rendered header."""
+    """The nav *tabs* must not open in a new tab — no ``target="_blank"`` on any
+    ``nav-tab`` anchor. (The separate provenance "view source" link deliberately
+    does open a new tab, so we assert on the tabs specifically, not the whole nav.)
+    """
     resp = client_with_docs.get("/docs/")
-    body = resp.text
-    assert 'target="_blank"' not in body
+    tab_anchors = re.findall(r'<a[^>]*class="nav-tab"[^>]*>', resp.text)
+    assert tab_anchors, "expected nav tabs in the rendered docs header"
+    assert all('target="_blank"' not in anchor for anchor in tab_anchors)
 
 
 def test_internal_md_links_rewritten(client_with_docs: TestClient[Litestar]) -> None:

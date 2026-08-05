@@ -1,5 +1,6 @@
 ---
-# Domain-DEPENDENT last mile: render config.toml, write the claim token, and
+# Domain-DEPENDENT last mile: render config.toml, write first_boot.toml (the
+# domain + claim-token seed the router captures into the DB on first boot), and
 # show the claim URL. Needs `domain` (and the cert_provider/cert_api_* vars the
 # config template references). Imported by setup.yml (full run), local_setup.yml,
 # and finalize.yml (warm-pool claim-time). Deliberately contains NOTHING that a
@@ -33,47 +34,39 @@
   when: (overwrite_existing | default(false) | bool) or not existing_config.stat.exists
   register: config_file
 
-# First-boot claim token. `claim_token_required = true` is baked into the
-# rendered config above, so /setup rejects every caller unless their request
-# carries a token matching this file. If the operator doesn't pass
-# `-e claim_token=…`, we generate a fresh URL-safe random one and print the
-# claim URL at the end of the play — handing the secret to the human who
-# will claim the workspace. vm-manager passes the var to control the value.
-# setup_app deletes this file after a successful claim, so on re-deploys
-# (where the instance is already claimed) the rewritten file is inert.
-- name: Ensure claim-token directory exists
-  file:
-    path: /home/host/.openhost/local_compute_space/persistent_data/openhost
-    state: directory
-    owner: host
-    group: host
-    mode: "0755"
-
-# On a re-deploy we leave an existing claim token alone (skip unless forced), so
-# a claim URL already handed out keeps working and we don't churn the secret.
-# A claimed instance has no token file (setup_app deletes it after claim), so
-# this writes a fresh — inert — one there, same as before. Pass
-# -e overwrite_existing=true to rotate the token on a still-unclaimed instance.
-- name: Stat existing claim token
+# First-boot seed: domain + claim token → first_boot.toml, consumed once by the router on first
+# boot (domain → the DB `domains` table, token → the DB `settings` store), after which the DB is
+# authoritative and this file is ignored. `claim_token_required = true` is baked into config.toml,
+# so /setup rejects every caller unless their request carries a token matching the one seeded here.
+# If the operator doesn't pass `-e claim_token=…`, we generate a fresh URL-safe random one and print
+# the claim URL at the end of the play — handing the secret to the human who will claim the
+# workspace. vm-manager passes the var to control the value. setup_app clears the token from the DB
+# after a successful claim, so on re-deploys (where the instance is already claimed) the rewritten
+# — and here skipped — file is inert.
+#
+# On a re-deploy we leave an existing first_boot.toml alone (skip unless forced): it's consumed once,
+# so re-writing it can't change an already-seeded domain, and a claim URL already handed out keeps
+# working. Pass -e overwrite_existing=true to rotate the token on a still-unclaimed instance.
+- name: Stat existing first_boot.toml
   ansible.builtin.stat:
-    path: /home/host/.openhost/local_compute_space/persistent_data/openhost/claim_token
-  register: existing_claim_token
+    path: /home/host/.openhost/local_compute_space/first_boot.toml
+  register: existing_first_boot
 
 - name: Resolve effective claim token
   set_fact:
     effective_claim_token: "{{ claim_token | default(lookup('password', '/dev/null length=32 chars=ascii_letters,digits')) }}"
-  when: (overwrite_existing | default(false) | bool) or not existing_claim_token.stat.exists
+  when: (overwrite_existing | default(false) | bool) or not existing_first_boot.stat.exists
 
-- name: Write claim token
-  copy:
-    content: "{{ effective_claim_token }}"
-    dest: /home/host/.openhost/local_compute_space/persistent_data/openhost/claim_token
+- name: Write first_boot.toml seed
+  template:
+    src: templates/first_boot.toml.j2
+    dest: /home/host/.openhost/local_compute_space/first_boot.toml
     owner: host
     group: host
     mode: "0600"
-  when: (overwrite_existing | default(false) | bool) or not existing_claim_token.stat.exists
+  when: (overwrite_existing | default(false) | bool) or not existing_first_boot.stat.exists
 
 - name: Show claim URL
   debug:
     msg: "Claim URL: {{ ('http://' + domain + ':8080') if (local_http_only | default(false) | bool) else ('https://' + domain) }}/setup?claim={{ effective_claim_token }}"
-  when: (overwrite_existing | default(false) | bool) or not existing_claim_token.stat.exists
+  when: (overwrite_existing | default(false) | bool) or not existing_first_boot.stat.exists

@@ -4,6 +4,7 @@ from pathlib import Path
 
 import git
 
+from compute_space import OPENHOST_PROJECT_DIR
 from compute_space.core.util import async_wrap
 
 
@@ -266,3 +267,62 @@ def hard_checkout_ref(repo_path: Path, ref: str) -> None:
     # checkout -f resets tracked files but leaves untracked files behind, which can
     # shadow modules removed/renamed between revisions. Match origin/ref fully.
     repo.git.clean("-fd")
+
+
+def github_web_url_from_remote_url(remote_url: str, branch: str | None) -> str | None:
+    """Browsable ``github.com`` URL for ``remote_url`` at ``branch``, or None.
+
+    Converts an origin remote (HTTPS, credential-bearing, or SCP-style SSH) into a
+    ``https://github.com/<owner>/<repo>[/tree/<branch>]`` link. Returns None when the
+    remote isn't a GitHub repo so callers can simply hide the link.
+    """
+    if not is_github_repo_url(remote_url):
+        return None
+    if _SCP_STYLE_SSH_RE.match(remote_url):
+        # SCP shorthand (git@github.com:owner/repo.git): path follows the first colon.
+        path = remote_url.split(":", 1)[1]
+    else:
+        parsed = urllib.parse.urlparse(remote_url)
+        if parsed.scheme not in _KNOWN_SCHEMES:
+            parsed = urllib.parse.urlparse("https://" + remote_url)
+        path = parsed.path
+    path = path.strip("/")
+    if path.endswith(".git"):
+        path = path[: -len(".git")]
+    if not path:
+        return None
+    url = f"https://github.com/{path}"
+    if branch:
+        url = f"{url}/tree/{urllib.parse.quote(branch)}"
+    return url
+
+
+def github_web_url_from_local_repo(repo_path: Path) -> str | None:
+    """Browsable GitHub link to the checkout at ``repo_path`` (current branch/fork).
+
+    Best-effort and non-raising: it only surfaces a "view source" link, so a tarball
+    deploy (no ``.git``), a detached HEAD, a missing ``origin``, or a non-GitHub remote
+    all simply yield None instead of an error.
+    """
+    try:
+        repo = git.Repo(repo_path)
+    except (git.InvalidGitRepositoryError, git.NoSuchPathError):
+        return None
+    try:
+        branch: str | None = repo.active_branch.name
+    except TypeError:
+        branch = None
+    try:
+        remote_url = _get_remote(repo).url
+    except RemoteNotSetError:
+        return None
+    if not remote_url:
+        return None
+    return github_web_url_from_remote_url(_strip_credentials(remote_url), branch)
+
+
+# The nav's "view source" link. Resolved once: it describes the code the process
+# is serving, which is fixed for its lifetime. ``set-remote`` rewrites origin
+# without restarting, but that pins where the next update comes from, not where
+# the running code came from.
+SOURCE_URL = github_web_url_from_local_repo(OPENHOST_PROJECT_DIR)

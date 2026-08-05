@@ -39,6 +39,7 @@ from compute_space.core.data import provision_data
 from compute_space.core.manifest import AppManifest
 from compute_space.db import provide_db
 from compute_space.db.connection import init_db
+from compute_space.tests._litestar_helpers import stash_zone_middleware
 from compute_space.tests.conftest import _make_test_config
 from compute_space.web.routes.api.settings import api_settings_routes
 from compute_space.web.routes.pages.login import pages_login_routes
@@ -167,6 +168,7 @@ def _make_login_app() -> Litestar:
             "config": Provide(provide_config, sync_to_thread=False),
             "db": Provide(provide_db),
         },
+        middleware=[stash_zone_middleware],
         openapi_config=None,
     )
 
@@ -314,17 +316,18 @@ def test_route_get_requires_auth(settings_client: TestClient[Litestar]) -> None:
 
 def test_route_get_returns_current_value(cfg: Any, settings_client: TestClient[Litestar]) -> None:
     cookies = _auth_cookie(cfg, username="zack")
-    resp = settings_client.get("/api/settings/owner_username", cookies=cookies)
+    settings_client.cookies.update(cookies)
+    resp = settings_client.get("/api/settings/owner_username")
     assert resp.status_code == 200
     assert resp.json() == {"username": "zack"}
 
 
 def test_route_set_updates_user_row(cfg: Any, settings_client: TestClient[Litestar]) -> None:
     cookies = _auth_cookie(cfg, username="owner")
+    settings_client.cookies.update(cookies)
     resp = settings_client.post(
         "/api/settings/owner_username",
         json={"username": "alice"},
-        cookies=cookies,
     )
     assert resp.status_code == 200, resp.text
     assert resp.json() == {"username": "alice"}
@@ -347,7 +350,8 @@ def test_route_set_rejects_invalid(
     needle: str,
 ) -> None:
     cookies = _auth_cookie(cfg, username="owner")
-    resp = settings_client.post("/api/settings/owner_username", json=payload, cookies=cookies)
+    settings_client.cookies.update(cookies)
+    resp = settings_client.post("/api/settings/owner_username", json=payload)
     assert resp.status_code == 400, resp.text
     body = resp.json()
     assert needle in body["detail"]

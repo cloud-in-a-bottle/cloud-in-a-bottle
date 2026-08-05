@@ -1,27 +1,32 @@
 import atexit
-import sqlite3
+from contextlib import closing
 from pathlib import Path
 from typing import Any
 
+from jinja2 import pass_context
+from jinja2.runtime import Context
 from litestar import HttpMethod
 from litestar import Litestar
 from litestar import MediaType
 from litestar import Request
 from litestar import Response
 from litestar import route
-from litestar.contrib.jinja import JinjaTemplateEngine
 from litestar.exceptions import HTTPException
 from litestar.exceptions import NotAuthorizedException
 from litestar.exceptions.responses import create_exception_response
+from litestar.plugins.jinja import JinjaTemplateEngine
 from litestar.static_files import create_static_files_router
 from litestar.template.config import TemplateConfig
 from litestar.types import ASGIApp
 
 from compute_space.config import Config
-from compute_space.config import get_config
 from compute_space.core import archive_backend
 from compute_space.core.auth.auth import read_owner_username
 from compute_space.core.auth.identity import load_identity_keys
+from compute_space.core.domains import Domain
+from compute_space.core.domains import primary_domain_or_none
+from compute_space.core.first_boot import seed_first_boot
+from compute_space.core.git_ops import SOURCE_URL
 from compute_space.core.image_pruner import start_image_pruner
 from compute_space.core.logging import logger
 from compute_space.core.startup import check_app_status
@@ -30,6 +35,7 @@ from compute_space.core.storage import start_storage_guard
 from compute_space.core.terminal import cleanup_all as cleanup_terminal
 from compute_space.db import get_db
 from compute_space.web.auth.auth import login_required_redirect
+from compute_space.web.helpers.zone import ZONE_SCOPE_KEY
 from compute_space.web.middleware.subdomain_proxy import SubdomainProxyMiddleware
 from compute_space.web.routes.manifest import ALL_ROUTERS
 from compute_space.web.routes.manifest import APP_DEPENDENCIES
@@ -55,12 +61,28 @@ def _make_static_url(static_dir: Path) -> Any:
 
 
 def _template_globals(config: Config, static_dir: Path) -> dict[str, Any]:
-    zone_domain = config.zone_domain
-    zone_name = zone_domain.split(".")[0] if zone_domain else None
+    def primary() -> Domain | None:
+        with closing(get_db()) as db:
+            return primary_domain_or_none(db)
 
-    def app_url(app_name: str) -> str:
-        proto = "https" if config.tls_enabled else "http"
-        return f"{proto}://{app_name}.{zone_domain}/"
+    @pass_context
+    def app_url(context: Context, app_name: str) -> str:
+        """Absolute URL to an app, on the domain the current request arrived on.
+        Falls back to the live primary when the render had no proxied request."""
+        request = context.get("request")
+        stashed = request.scope.get(ZONE_SCOPE_KEY) if request is not None else None
+        zone = stashed if isinstance(stashed, Domain) else primary()
+        if zone is None:
+            return f"//{app_name}/"  # pre-seed only: no primary yet, emit a scheme/host-relative link
+        return f"{zone.scheme}://{app_name}.{zone.name}/"
+
+    def zone_domain() -> str:
+        p = primary()
+        return p.name if p else ""
+
+    def zone_name() -> str | None:
+        zd = zone_domain()
+        return zd.split(".")[0] if zd else None
 
     def owner_name() -> str | None:
         """The owner's configured username, or None if unset / pre-setup.
@@ -86,6 +108,7 @@ def _template_globals(config: Config, static_dir: Path) -> dict[str, Any]:
         "app_url": app_url,
         "owner_name": owner_name,
         "static_url": _make_static_url(static_dir),
+        "source_url": SOURCE_URL,
     }
 
 
@@ -95,7 +118,7 @@ def _full_app_bootstrap(config: Config) -> None:
     DB / keys / logging are already initialized in ``start.py``; this only covers the
     heavier setup steps that don't make sense for the setup-only app.
     """
-    db = sqlite3.connect(config.db_path)
+    db = get_db()  # row_factory=Row; the archive derives its per-zone volume from the domains store
     try:
         archive_backend.attach_on_startup(config, db)
     finally:
@@ -105,6 +128,9 @@ def _full_app_bootstrap(config: Config) -> None:
     start_storage_guard(config)
     start_image_pruner(config)
     retry_pending_default_apps(config)
+    # The DB `domains` table is the source of truth.  Seed it once (+ claim token) from
+    # first_boot.toml; everything reads the primary live from the DB thereafter.
+    seed_first_boot(config)
 
 
 @route(
@@ -152,13 +178,18 @@ def _reject_app_subdomain_requests(request: Request[Any, Any, Any]) -> Response[
 
     App-subdomain traffic is supposed to be intercepted by SubdomainProxyMiddleware
     (outer ASGI) before Litestar ever sees it.  If a request reaches Litestar with
-    a ``*.zone_domain`` Host — e.g. the middleware was bypassed in a test or a
-    deployment variant — refuse it rather than accidentally serve a router route
-    (like /health) under the app's hostname.
+    an app-subdomain Host of any configured domain — e.g. the middleware was
+    bypassed in a test or a deployment variant — refuse it rather than accidentally
+    serve a router route (like /health) under the app's hostname.
     """
-    host = request.url.netloc.split(":", 1)[0]
-    zone = get_config().zone_domain
-    if zone and host.endswith("." + zone):
+    netloc = request.url.netloc
+    stashed = request.scope.get(ZONE_SCOPE_KEY)
+    if isinstance(stashed, Domain):
+        matched: Domain | None = stashed
+    else:
+        with closing(get_db()) as db:
+            matched = Domain.match(db, netloc)
+    if matched is not None and matched.is_app_subdomain(netloc):
         return Response(content=None, status_code=404)
     return None
 

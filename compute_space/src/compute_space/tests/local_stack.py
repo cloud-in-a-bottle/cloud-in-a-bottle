@@ -9,7 +9,9 @@ All owner requests must go through the zone domain (not 127.0.0.1) so the sessio
 scoped to the zone domain — is accepted by the client and sent to app subdomains.
 """
 
+import sqlite3
 import subprocess
+from contextlib import closing
 
 import attr
 import requests
@@ -17,6 +19,10 @@ import requests
 from compute_space.config import Config
 from compute_space.config import DefaultConfig
 from compute_space.core.auth.auth import SESSION_COOKIE_NAME
+from compute_space.core.domains import Domain
+from compute_space.core.domains import primary_domain
+from compute_space.core.domains import seed_domains
+from compute_space.db.connection import init_db
 from compute_space.tests.utils import poll
 from compute_space.tests.utils import wait_app_running
 
@@ -39,20 +45,22 @@ def make_local_stack_config(
     (e.g. the repo's apps/); None keeps the default under data_root_dir.
     """
     config: Config = DefaultConfig(
-        zone_domain=f"{zone_name}.localhost:{port}",
         host="127.0.0.1",
         port=port,
         data_root_dir=data_root_dir,
         apps_dir_override=apps_dir_override,
         port_range_start=port_range_start,
         port_range_end=port_range_end,
-        tls_enabled=False,
         start_caddy=False,
         claim_token_required=False,
     )
     if default_apps is not None:
         config = config.evolve(default_apps=default_apps)
     config.make_all_dirs()
+    init_db(config.db_path)
+    with closing(sqlite3.connect(config.db_path)) as db:
+        db.row_factory = sqlite3.Row
+        seed_domains(db, Domain(name=f"{zone_name}.localhost:{port}", tls=False), [])
     return config
 
 
@@ -63,12 +71,17 @@ class LocalStack:
     # app names deployed via deploy_app, so remove_deployed_app_containers can clean up
     deployed_app_names: list[str] = attr.Factory(list)
 
+    def _primary_name(self) -> str:
+        with closing(sqlite3.connect(self.config.db_path)) as db:
+            db.row_factory = sqlite3.Row
+            return primary_domain(db).name
+
     @property
     def router_url(self) -> str:
-        return f"http://{self.config.zone_domain}"
+        return f"http://{self._primary_name()}"
 
     def app_url(self, app_name: str) -> str:
-        return f"http://{app_name}.{self.config.zone_domain}"
+        return f"http://{app_name}.{self._primary_name()}"
 
     def remove_deployed_app_containers(self) -> None:
         """Remove app containers after the router is gone.

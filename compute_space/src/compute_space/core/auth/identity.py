@@ -15,6 +15,7 @@ Flow (from the perspective of this zone's owner visiting a remote app):
 4. Redirects back to callback URL with the signed identity token
 """
 
+import sqlite3
 import time
 from pathlib import Path
 
@@ -22,7 +23,7 @@ import jwt as pyjwt
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 
-from compute_space.config import get_config
+from compute_space.core.domains import primary_domain_or_none
 from compute_space.core.logging import logger
 from compute_space.core.util import write_restricted
 
@@ -81,18 +82,23 @@ def load_identity_keys(data_dir: str) -> None:
         logger.warning("Could not load/generate identity keys: %s", e)
 
 
-def get_zone_identity() -> dict[str, str]:
+def _zone_domain_name(db: sqlite3.Connection) -> str:
+    primary = primary_domain_or_none(db)
+    return primary.name if primary else "localhost"
+
+
+def get_zone_identity(db: sqlite3.Connection) -> dict[str, str]:
     """Return this zone's public identity info."""
     if _identity_public_key is None:
         raise RuntimeError("Identity keys not loaded. Call load_identity_keys() after disk mount.")
     return {
-        "domain": get_config().zone_domain or "localhost",
+        "domain": _zone_domain_name(db),
         "public_key_pem": _identity_public_key,
         "protocol": "openhost-identity-v1",
     }
 
 
-def sign_identity_token(callback_url: str) -> str:
+def sign_identity_token(callback_url: str, db: sqlite3.Connection) -> str:
     """Sign an identity assertion token for the owner.
 
     Returns a JWT signed with this zone's persistent identity key containing:
@@ -105,7 +111,7 @@ def sign_identity_token(callback_url: str) -> str:
 
     now = int(time.time())
     payload = {
-        "sub": get_config().zone_domain or "localhost",
+        "sub": _zone_domain_name(db),
         "aud": callback_url,
         "iat": now,
         "exp": now + IDENTITY_TOKEN_EXPIRY,

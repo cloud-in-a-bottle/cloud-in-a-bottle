@@ -141,7 +141,7 @@
 <br>
 <style>
   /* Keep the app action buttons on a single row. The full set (Stop / Reload /
-     Update & Reload / Copy Diagnostics / Edit / Remove / Remove & Data) is a
+     Update & Reload / Copy Diagnostics / Edit / Remove / Remove App & Data) is a
      little wider than the 960px content column, which previously made it wrap
      onto two lines. Slightly tighter padding + gap gets it close, and
      nowrap + horizontal auto-scroll guarantees it stays on one line (scrolling
@@ -175,7 +175,7 @@
     {% endif %}
   {% endif %}
   <button class="btn" onclick="if(confirm('Remove {{ app.name }} but keep its databases and files? You can re-deploy later to the same app name to reuse the data.')) appAction('/remove_app/{{ app.app_id }}', {keep_data: true}, {isRemove: true, label: 'Removing (keeping data)'})">Remove (Keep Data)</button>
-  <button class="btn btn-danger" onclick="if(confirm('Remove {{ app.name }}? This deletes all app data permanently.')) appAction('/remove_app/{{ app.app_id }}', {}, {isRemove: true, label: 'Removing'})">Remove &amp; Data</button>
+  <button class="btn btn-danger" onclick="if(confirm('Remove {{ app.name }}? This deletes all app data permanently.')) appAction('/remove_app/{{ app.app_id }}', {}, {isRemove: true, label: 'Removing'})">Remove App &amp; Data</button>
   <span id="app-action-msg" style="margin-left:0.5em;"></span>
 </div>
 

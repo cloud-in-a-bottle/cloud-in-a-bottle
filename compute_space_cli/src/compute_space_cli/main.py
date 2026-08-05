@@ -241,8 +241,12 @@ class AppCmd:
         app_name: Annotated[str, cappa.Arg(help="App name")],
         cfg: Annotated[config.Instance, Dep(resolve_instance)],
         shell: Annotated[str, cappa.Arg(long=True, help="Shell to invoke inside container")] = "sh",
+        args: Annotated[
+            list[str] | None,
+            cappa.Arg(num_args=-1, help="Command to run inside the container (default: interactive shell)"),
+        ] = None,
     ) -> None:
-        """Open an interactive shell inside an app's container."""
+        """Run a command inside an app's container, or open a shell if no command is given."""
         _SHELL_SHORTHANDS = {"bash": "/usr/bin/bash", "sh": "/bin/sh"}
         shell = _SHELL_SHORTHANDS.get(shell, shell)
 
@@ -258,8 +262,16 @@ class AppCmd:
             print(f"No running container for {app_name} (status: {status.get('status')})", file=sys.stderr)
             raise SystemExit(1)
 
-        remote_cmd = f"cd ~/openhost && /home/host/.pixi/bin/pixi run -e dev podman exec -it {shlex.quote(container_id)} {shlex.quote(shell)}"
-        cmd = [ssh_bin, "-t"]
+        interactive = not args and sys.stdin.isatty()
+        exec_flags = "-it" if interactive else "-i"
+        exec_cmd = f"podman exec {exec_flags} {shlex.quote(container_id)} {shlex.quote(shell)}"
+        if args:
+            exec_cmd += f" -c {shlex.quote(' '.join(args))}"
+
+        remote_cmd = f"cd ~/openhost && /home/host/.pixi/bin/pixi run -e dev {exec_cmd}"
+        cmd = [ssh_bin]
+        if interactive:
+            cmd.append("-t")
         if cfg.ssh_key:
             cmd += ["-i", cfg.ssh_key]
         cmd += [f"host@{cfg.hostname}", remote_cmd]

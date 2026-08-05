@@ -16,6 +16,9 @@ from litestar import Response
 from litestar import Router
 from litestar import get
 from litestar import post
+from litestar.di import NamedDependency
+from litestar.params import FromPath
+from litestar.params import FromQuery
 from litestar.params import Parameter
 from litestar.response import Redirect
 
@@ -46,6 +49,7 @@ from compute_space.core.containers import stop_app_process
 from compute_space.core.containers import stop_container
 from compute_space.core.diagnostics import AppDiagnostics
 from compute_space.core.diagnostics import collect_app_diagnostics
+from compute_space.core.domains import primary_domain
 from compute_space.core.git_ops import UnsupportedRepoUrlError
 from compute_space.core.git_ops import get_branch_name
 from compute_space.core.git_ops import get_head_sha
@@ -288,14 +292,16 @@ _REMOVING = {409: error_spec("App is being removed")}
     },
 )
 async def clone_and_get_app_info(
-    data: CloneRequest, db: sqlite3.Connection, config: Config
+    data: CloneRequest,
+    db: NamedDependency[sqlite3.Connection],
+    config: NamedDependency[Config],
 ) -> Response[CloneInfoResponse] | Response[ErrorResponse] | Response[CloneAuthorizeResponse]:
     """Clone a repo and return its manifest info + temp clone dir."""
     repo_url = data.repo_url.strip()
     if not repo_url:
         return Response(content=ErrorResponse(error="No repository URL provided"), status_code=400)
 
-    add_app_url = f"//{config.zone_domain}/add_app?repo={repo_url}"
+    add_app_url = f"//{primary_domain(db).name}/add_app?repo={repo_url}"
     manifest, clone_dir, error, authorize_url = await clone_with_github_fallback(repo_url, return_to=add_app_url)
 
     if authorize_url:
@@ -326,7 +332,7 @@ async def clone_and_get_app_info(
 
 @get("/api/check_port", guards=[require_owner_auth])
 async def check_port(
-    port: Annotated[int, Parameter(ge=1, le=65535)], db: sqlite3.Connection
+    port: Annotated[int, Parameter(ge=1, le=65535)], db: NamedDependency[sqlite3.Connection]
 ) -> Response[CheckPortResponse]:
     """Check if a host port is available. Returns {port, available, used_by}."""
     available, used_by = check_port_available(port, db)
@@ -349,7 +355,9 @@ async def check_port(
     },
 )
 async def api_add_app(
-    data: AddAppRequest, db: sqlite3.Connection, config: Config
+    data: AddAppRequest,
+    db: NamedDependency[sqlite3.Connection],
+    config: NamedDependency[Config],
 ) -> Response[AddAppResponse] | Response[ErrorResponse] | Response[AuthRequiredResponse]:
     """Install an app. Optionally takes a clone_dir from a prior clone_and_get_app_info call."""
     repo_url = data.repo_url.strip()
@@ -451,7 +459,7 @@ async def api_add_app(
 
 
 @get("/api/apps", guards=[require_owner_auth])
-async def api_apps(db: sqlite3.Connection) -> list[AppSummary]:
+async def api_apps(db: NamedDependency[sqlite3.Connection]) -> list[AppSummary]:
     rows = db.execute("SELECT app_id, name, status, error_message FROM apps ORDER BY name").fetchall()
     return [
         AppSummary(
@@ -485,7 +493,9 @@ async def _read_app_git_info(repo_path: str | None) -> tuple[str | None, str | N
     guards=[require_owner_auth],
     responses={200: response_spec(AppStatusResponse, "Current status and git info"), **_APP_LOOKUP_ERRORS},
 )
-async def app_status(app_id: str, db: sqlite3.Connection) -> Response[AppStatusResponse] | Response[ErrorResponse]:
+async def app_status(
+    app_id: FromPath[str], db: NamedDependency[sqlite3.Connection]
+) -> Response[AppStatusResponse] | Response[ErrorResponse]:
     if not is_valid_app_id(app_id):
         return Response(content=ErrorResponse(error="Invalid app_id"), status_code=400)
     app_row = db.execute(
@@ -530,7 +540,10 @@ def _app_diagnostics_filename(app_name: str) -> str:
     responses={200: response_spec(AppDiagnostics, "Per-app diagnostics bundle"), **_APP_LOOKUP_ERRORS},
 )
 async def app_diagnostics(
-    app_id: str, db: sqlite3.Connection, config: Config, download: bool = False
+    app_id: FromPath[str],
+    db: NamedDependency[sqlite3.Connection],
+    config: NamedDependency[Config],
+    download: FromQuery[bool] = False,
 ) -> Response[AppDiagnostics] | Response[ErrorResponse]:
     """Return a per-app diagnostics bundle: app version + manifest git checkout,
     container status, and a slice of host/system info so the report is
@@ -543,7 +556,7 @@ async def app_diagnostics(
     if err is not None:
         return err
     assert app_row is not None
-    diagnostics = await collect_app_diagnostics(app_row, config)
+    diagnostics = await collect_app_diagnostics(app_row, config, db)
     headers = None
     if download:
         headers = {"Content-Disposition": f'attachment; filename="{_app_diagnostics_filename(app_row["name"])}"'}
@@ -559,7 +572,11 @@ async def app_diagnostics(
         **_APP_LOOKUP_ERRORS,
     },
 )
-async def app_logs(app_id: str, db: sqlite3.Connection, config: Config) -> Response[str] | Response[ErrorResponse]:
+async def app_logs(
+    app_id: FromPath[str],
+    db: NamedDependency[sqlite3.Connection],
+    config: NamedDependency[Config],
+) -> Response[str] | Response[ErrorResponse]:
     app_row, err = _resolve_app_or_error(app_id, db)
     if err is not None:
         return err
@@ -574,7 +591,9 @@ async def app_logs(app_id: str, db: sqlite3.Connection, config: Config) -> Respo
     guards=[require_owner_auth],
     responses={200: response_spec(OkResponse, "App stopped"), **_APP_LOOKUP_ERRORS, **_REMOVING},
 )
-async def stop_app(app_id: str, db: sqlite3.Connection) -> Response[OkResponse] | Response[ErrorResponse]:
+async def stop_app(
+    app_id: FromPath[str], db: NamedDependency[sqlite3.Connection]
+) -> Response[OkResponse] | Response[ErrorResponse]:
     app_row, err = _resolve_app_or_error(app_id, db)
     if err is not None:
         return err
@@ -730,7 +749,7 @@ async def _reload_app_impl(
             if not pull_ok and is_github_repo_url(repo_url):
                 lf.write("Attempting git pull with github oauth\n")
                 lf.flush()
-                return_to = f"//{config.zone_domain}/reload_app/{app_id}?continue_oauth_update=1"
+                return_to = f"//{primary_domain(db).name}/reload_app/{app_id}?continue_oauth_update=1"
                 try:
                     token = await get_oauth_token("github", ["repo"], return_to=return_to)
                 except ServiceNotAvailable as e:
@@ -811,12 +830,30 @@ async def _reload_app_impl(
                 return Redirect(path=f"/app_detail/{app_name}")
             return Response(content=perm_gate, status_code=200, media_type=MediaType.JSON)
 
-    await asyncio.to_thread(stop_app_process, app_row)
-    db.execute(
-        "UPDATE apps SET status = 'building', container_id = NULL, error_message = NULL WHERE app_id = ?",
+    # Atomically claim the reload before touching the running container.
+    # ``WHERE status NOT IN (<transient states>)`` makes concurrent reloads
+    # safe: only the first request flips the row to 'building' and spawns a
+    # worker; a second one gets rowcount=0 and is refused. Without this,
+    # spamming "Reload" spawns several reload_app_background threads that race
+    # to create the same ``openhost-<name>`` container and fail with
+    # "container name is already in use". ``continue_oauth`` resumes a reload
+    # this same request already began on its initial POST (status is still the
+    # pre-reload one, since the POST bounced to OAuth before claiming), so it
+    # proceeds regardless of the rowcount.
+    cursor = db.execute(
+        "UPDATE apps SET status = 'building', container_id = NULL, error_message = NULL "
+        "WHERE app_id = ? AND status NOT IN ('building', 'starting', 'removing')",
         (app_id,),
     )
     db.commit()
+    if cursor.rowcount == 0 and not continue_oauth:
+        return Response(
+            content=ErrorResponse(error="App is already reloading"),
+            status_code=409,
+            media_type=MediaType.JSON,
+        )
+
+    await asyncio.to_thread(stop_app_process, app_row)
 
     Thread(
         target=reload_app_background,
@@ -842,9 +879,9 @@ async def _reload_app_impl(
     },
 )
 async def reload_app(
-    app_id: str,
-    db: sqlite3.Connection,
-    config: Config,
+    app_id: FromPath[str],
+    db: NamedDependency[sqlite3.Connection],
+    config: NamedDependency[Config],
     data: ReloadAppRequest = ReloadAppRequest(),  # noqa: B008 — Litestar resolves this at dependency-injection time
 ) -> Response[OkResponse] | Response[ErrorResponse] | Response[PermissionsRequiredResponse] | Redirect:
     """User-initiated reload, optionally pulling latest code via ``update``."""
@@ -872,10 +909,10 @@ async def reload_app(
     },
 )
 async def reload_app_after_oauth(
-    app_id: str,
-    db: sqlite3.Connection,
-    config: Config,
-    continue_oauth_update: Annotated[bool, Parameter(query="continue_oauth_update", required=False)] = False,
+    app_id: FromPath[str],
+    db: NamedDependency[sqlite3.Connection],
+    config: NamedDependency[Config],
+    continue_oauth_update: FromQuery[bool] = False,
 ) -> Response[OkResponse] | Response[ErrorResponse] | Response[PermissionsRequiredResponse] | Redirect:
     """OAuth callback re-entry: the secrets app redirected the user back here
     after they granted GitHub access.  Resumes the update with ``continue_oauth=True``
@@ -907,9 +944,9 @@ async def reload_app_after_oauth(
     },
 )
 async def remove_app(
-    app_id: str,
-    db: sqlite3.Connection,
-    config: Config,
+    app_id: FromPath[str],
+    db: NamedDependency[sqlite3.Connection],
+    config: NamedDependency[Config],
     data: RemoveAppRequest = RemoveAppRequest(),  # noqa: B008 — body is optional; default = remove with keep_data=False
 ) -> Response[OkResponse] | Response[RemoveAppAlreadyRemoving] | Response[ErrorResponse]:
     """Flip the row to ``status='removing'`` and run teardown in a thread.
@@ -1041,10 +1078,10 @@ def _rename_app_storage_dirs(config: Config, old_name: str, new_name: str, archi
     },
 )
 async def rename_app(
-    app_id: str,
+    app_id: FromPath[str],
     data: RenameAppRequest,
-    db: sqlite3.Connection,
-    config: Config,
+    db: NamedDependency[sqlite3.Connection],
+    config: NamedDependency[Config],
 ) -> Response[RenameAppResponse] | Response[ErrorResponse]:
     """Rename an app's label and subdomain. The app_id (cross-table identity) stays the same."""
     new_name = data.name.strip()
@@ -1180,9 +1217,9 @@ async def rename_app(
     },
 )
 async def set_app_remote(
-    app_id: str,
+    app_id: FromPath[str],
     data: SetAppRemoteRequest,
-    db: sqlite3.Connection,
+    db: NamedDependency[sqlite3.Connection],
 ) -> Response[SetAppRemoteResponse] | Response[ErrorResponse]:
     """Edit an app's git upstream (repo URL and/or ``@branch`` ref).
 

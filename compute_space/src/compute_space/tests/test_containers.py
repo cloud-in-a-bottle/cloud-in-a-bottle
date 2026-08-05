@@ -71,6 +71,14 @@ def test_build_image_uses_podman_build(monkeypatch: pytest.MonkeyPatch) -> None:
         "error: content digest sha256:deadbeef: not found",
         "Error: storage-driver errored: something happened",
         "Error: layer not known: sha256:whatever",
+        # Overlay short-name "link" corruption (empty link file): buildah
+        # fails mounting the next build layer.  Observed on rootless podman
+        # after a concurrent initial build.
+        "Error: identifier is not a container: preparing container for next step: "
+        'mounting new container "e156": readlink '
+        "/home/host/.local/share/containers/storage/overlay/l: invalid argument",
+        # Same corruption surfacing at container start (bare overlay dir).
+        "Error: readlink /home/host/.local/share/containers/storage/overlay: invalid argument",
     ],
 )
 def test_build_image_detects_every_known_cache_corrupt_fragment(
@@ -97,6 +105,10 @@ def test_build_image_detects_every_known_cache_corrupt_fragment(
         "error: content digest sha256:deadbeef: not found",
         "Error: storage-driver errored: something happened",
         "Error: layer not known: sha256:whatever",
+        "Error: identifier is not a container: preparing container for next step: "
+        'mounting new container "e156": readlink '
+        "/home/host/.local/share/containers/storage/overlay/l: invalid argument",
+        "Error: readlink /home/host/.local/share/containers/storage/overlay: invalid argument",
     ],
 )
 def test_build_image_streaming_path_detects_cache_corrupt(
@@ -250,6 +262,13 @@ def test_build_image_streaming_path_reaps_child_on_timeout(tmp_path, monkeypatch
         # would help; dropping the local cache would not.
         "Error: initializing source docker://registry.example.com/unknown@sha256:abc: image not found",
         "Error: pulling image sha256:abc123: manifest not found in registry",
+        # readlink/EINVAL unrelated to overlay storage — the overlay
+        # matcher must require "overlay" on the same line, so a bare
+        # readlink failure in the app's own build script must NOT trip it.
+        "readlink /app/config/link: invalid argument",
+        # Mentions overlay but is normal driver progress, not a readlink
+        # EINVAL — must not match.
+        "Mounted overlay lowerdir for layer sha256:abc successfully",
     ],
 )
 def test_build_image_does_not_misclassify_innocuous_output_as_cache_corrupt(

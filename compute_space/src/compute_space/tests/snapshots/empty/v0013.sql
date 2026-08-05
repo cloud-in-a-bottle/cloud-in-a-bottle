@@ -66,6 +66,15 @@ CREATE TABLE "archive_backend" (
     state_message TEXT
 );
 INSERT INTO "archive_backend" VALUES(1,'local',NULL,NULL,NULL,NULL,NULL,NULL,'openhost',NULL,NULL);
+CREATE TABLE domains (
+    name          TEXT PRIMARY KEY,
+    tls           INTEGER NOT NULL DEFAULT 0,
+    mdns          INTEGER NOT NULL DEFAULT 0,
+    is_primary    INTEGER NOT NULL DEFAULT 0,
+    cert_status   TEXT NOT NULL DEFAULT 'none' CHECK(cert_status IN ('none', 'acquiring', 'active', 'error')),
+    error_message TEXT,
+    created_at    TEXT NOT NULL DEFAULT (datetime('now'))
+);
 CREATE TABLE "permissions_v2" (
                 consumer_app_id TEXT NOT NULL,
                 service_url TEXT NOT NULL,
@@ -79,7 +88,7 @@ CREATE TABLE schema_version (
     id INTEGER PRIMARY KEY CHECK (id = 1),
     version INTEGER NOT NULL
 );
-INSERT INTO "schema_version" VALUES(1,12);
+INSERT INTO "schema_version" VALUES(1,13);
 CREATE TABLE "service_defaults" (
                 service_url TEXT PRIMARY KEY,
                 app_id TEXT NOT NULL,
@@ -98,6 +107,10 @@ CREATE TABLE sessions (
     user_id    INTEGER NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
     expires_at TEXT NOT NULL
 );
+CREATE TABLE settings (
+    key   TEXT PRIMARY KEY,
+    value TEXT
+);
 CREATE TABLE users (
     user_id INTEGER PRIMARY KEY AUTOINCREMENT,
     username TEXT NOT NULL UNIQUE,
@@ -108,4 +121,5 @@ CREATE INDEX idx_apps_status ON apps(status);
 CREATE UNIQUE INDEX idx_apps_app_id ON apps(app_id);
 CREATE UNIQUE INDEX idx_port_mappings_host_port ON app_port_mappings(host_port);
 CREATE INDEX sessions_user_id_idx ON sessions(user_id);
+CREATE UNIQUE INDEX idx_domains_one_primary ON domains(is_primary) WHERE is_primary = 1;
 COMMIT;

@@ -6,6 +6,8 @@ import shutil
 import stat
 import subprocess
 
+from compute_space.core.containers import ROUTER_GATEWAY_HOST
+from compute_space.core.containers import ROUTER_LOOPBACK_HOST
 from compute_space.core.logging import logger
 from compute_space.core.manifest import AppManifest
 
@@ -159,11 +161,11 @@ def provision_data(
     if manifest.network_host:
         # network_host containers share the host's network namespace, so
         # localhost IS the host.  host.containers.internal doesn't exist.
-        env_vars["OPENHOST_ROUTER_URL"] = f"http://127.0.0.1:{port}"
+        env_vars["OPENHOST_ROUTER_URL"] = f"http://{ROUTER_LOOPBACK_HOST}:{port}"
     else:
         # Pasta containers: 127.0.0.1 is the container itself, not the host.
         # host.containers.internal (podman's host-gateway alias) reaches the host.
-        env_vars["OPENHOST_ROUTER_URL"] = f"http://host.containers.internal:{port}"
+        env_vars["OPENHOST_ROUTER_URL"] = f"http://{ROUTER_GATEWAY_HOST}:{port}"
 
     # Zone identity info so apps can build federated auth flows
     env_vars["OPENHOST_ZONE_DOMAIN"] = zone_domain

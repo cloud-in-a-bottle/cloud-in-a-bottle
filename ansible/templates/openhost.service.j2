@@ -10,6 +10,14 @@ Description=OpenHost Compute Space
 # a hardcoded UID and the value differs across cloud providers.
 After=network-online.target user@{{ host_uid }}.service
 Wants=network-online.target user@{{ host_uid }}.service
+# Crash limiter for Restart=on-failure (see [Service]): if the service fails more
+# than StartLimitBurst times within StartLimitIntervalSec, systemd stops retrying
+# and leaves it `failed` (recover with `systemctl reset-failed openhost`). This
+# both stops a broken build from flapping forever and caps how fast a persistent
+# cert-acquisition crash could hit an ACME endpoint. Successful exits (code 0 and
+# the update-flow's SuccessExitStatus=42) do not count toward the burst.
+StartLimitIntervalSec=1800
+StartLimitBurst=5
 
 [Service]
 Type=simple
@@ -39,13 +47,37 @@ Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/{{ host_uid }}/bus
 # broken) pixi env.
 ExecStartPre=-+/usr/local/bin/openhost-reclaim-pixi
 ExecStart=/home/host/.pixi/bin/pixi run python -m compute_space
-# Don't auto-restart on crash (can blow through certbot rate limits).
-# RestartForceExitStatus=42 overrides Restart=no for exit code 42 only,
-# which is used by the self-update flow to trigger a clean restart.
-Restart=no
+# Auto-restart on crash, but rate-limited. compute_space is the parent of the
+# in-process CoreDNS + Caddy children (see core/dns.py, core/caddy.py), so when
+# it dies they die with it and the instance loses authoritative DNS *and* HTTP/S
+# at once — including its own nameserver, so nothing about the box resolves.
+# Recovering from a transient crash (OOM, a bad request path, etc.) without a
+# human rebooting is worth far more than staying dark.
+#
+# The historical reason this was Restart=no was ACME rate limits: instances used
+# to carry a shared Let's Encrypt account key and re-ran cert acquisition on every
+# boot, so a crash loop could burn the account's weekly quota. That risk is now
+# bounded on two fronts: (1) a boot with a valid cached cert on disk makes zero
+# ACME calls (_ensure_tls_cert short-circuits on CertStatus.OK, see web/start.py);
+# (2) managed instances no longer hold an account key at all — they get certs from
+# the server-side openhost-cert-api broker (Google Trust Services, not LE). The
+# StartLimit below is the backstop for the remaining window (BYO-ACME + a missing
+# cert): at most StartLimitBurst acquisition attempts per StartLimitIntervalSec,
+# which is nowhere near any CA's rate limit.
+#
+# RestartForceExitStatus=42 keeps the self-update clean-restart path working (the
+# update flow exits 42 on purpose; see updates.py RESTART_EXIT_CODE). Because 42
+# is also SuccessExitStatus, an update restart is a "success" exit and does NOT
+# count against StartLimitBurst — only genuine failures do — so frequent updates
+# can't trip the crash limiter.
+Restart=on-failure
 RestartForceExitStatus=42
 SuccessExitStatus=42
-RestartSec=3
+# Wait between restarts so a fast crash loop can't spin the CPU or race ACME.
+RestartSec=30
+# Give up (unit enters `failed`) after 5 failures inside a 30-minute window, so a
+# genuinely broken build stops flapping and a persistent cert-acquisition crash
+# can make at most ~5 ACME attempts per half hour. StartLimit* live in [Unit].
 # this will kill other processes in the group (eg caddy etc) after the main process exits
 TimeoutStopSec=5
 
