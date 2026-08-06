@@ -1,10 +1,5 @@
-"""OpenAPI schema generation. The generated document is committed to
-``compute_space/openapi.yaml`` (see ``dump_openapi.py``), which is what the
-manual serves at ``/docs/openapi.yaml``.
-
-Imports nothing from ``routes`` — handlers reference the scheme and tag names
-below, so the dependency has to run this way.
-"""
+"""OpenAPI schema generation, dumped to ``compute_space/openapi.yaml``.
+Imports nothing from ``routes``: handlers reference the names below."""
 
 from collections.abc import Mapping
 from collections.abc import Sequence
@@ -89,12 +84,8 @@ def build_openapi_schema(
     route_handlers: Sequence[ControllerRouterHandler],
     dependencies: Mapping[str, Provide],
 ) -> dict[str, Any]:
-    """Generate the OpenAPI document. Endpoints opt out per-handler via
-    ``include_in_schema=False``. Round-tripped through Litestar's serializer
-    to resolve embedded attrs defaults to plain types.
-
-    Takes the live app's routers and dependencies so injected params (config,
-    db) are recognized as DI rather than surfaced as query parameters."""
+    """Takes the live app's routers and dependencies so injected params read as
+    DI, not query parameters. Round-tripped to resolve attrs defaults."""
     app = Litestar(
         route_handlers=list(route_handlers),
         dependencies=dict(dependencies),

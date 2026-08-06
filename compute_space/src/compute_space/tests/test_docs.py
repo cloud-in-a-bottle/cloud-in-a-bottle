@@ -325,18 +325,20 @@ def test_docs_in_reserved_paths() -> None:
 # -- raw HTML in chapters -------------------------------------------
 
 
-def test_raw_html_passes_through(tmp_path: Path) -> None:
-    """``api.md`` embeds the OpenAPI browser as raw HTML, so the renderer
-    must emit it rather than escaping it."""
+def test_raw_html_passes_through_only_in_embed_chapters(tmp_path: Path) -> None:
+    """Chapters embedding the OpenAPI browser need their raw HTML emitted;
+    everywhere else it stays inert, so stray angle brackets render as text."""
     repo_root = tmp_path / "repo"
     src = repo_root / "docs" / "src"
     _populate_fake_docs(src)
-    (src / "routing.md").write_text('# Routing\n\n<div id="redoc"></div>\n')
+    (src / "routing.md").write_text('# Routing\n\n<div class="redoc-embed"></div>\n')
+    (src / "logs.md").write_text("# Logs\n\nPoint it at <your-zone>/api/apps.\n")
     client, _cfg = _client(repo_root)
     with client as c:
-        body = c.get("/docs/routing").text
-    assert '<div id="redoc"></div>' in body
-    assert "&lt;div" not in body
+        embed_body = c.get("/docs/routing").text
+        prose_body = c.get("/docs/logs").text
+    assert '<div class="redoc-embed"></div>' in embed_body
+    assert "&lt;your-zone&gt;" in prose_body
 
 
 # -- OpenAPI document -----------------------------------------------

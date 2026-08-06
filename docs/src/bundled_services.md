@@ -26,7 +26,17 @@ own side before returning anything.
 <script>
   (async () => {
     const host = document.getElementById("service-specs");
-    const names = await (await fetch("/docs/services")).json();
+    if (typeof Redoc === "undefined") {
+      host.textContent = "Could not load the spec browser (no CDN access). The raw documents are at /docs/services/<name>/openapi.yaml.";
+      return;
+    }
+    let names;
+    try {
+      names = await (await fetch("/docs/services")).json();
+    } catch (e) {
+      host.textContent = "Could not list the bundled services.";
+      return;
+    }
     if (!names.length) {
       host.textContent = "No bundled service specs found in this checkout.";
       return;

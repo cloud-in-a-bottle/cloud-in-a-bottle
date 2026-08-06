@@ -1,7 +1,5 @@
-"""Routers and dependencies shared by the live app (``app.py``) and the
-OpenAPI schema generator (``openapi.py``), so the served document describes
-the app that is actually running. What each router contributes to the schema
-is decided per-endpoint via ``include_in_schema``."""
+"""Routers and dependencies shared by the live app and the schema generator, so
+the document describes the running app. Per-endpoint: ``include_in_schema``."""
 
 from litestar.di import Provide
 

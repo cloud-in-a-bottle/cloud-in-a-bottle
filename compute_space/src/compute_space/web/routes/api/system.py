@@ -224,7 +224,15 @@ def compute_space_logs() -> Response[str]:
 # ─── Health & Security ─────────────────────────────────────────────────────
 
 
-@get("/health", sync_to_thread=False, security=[{}])
+@get(
+    "/health",
+    sync_to_thread=False,
+    security=[{}],
+    responses={
+        200: response_spec(HealthOk, "Serving normally"),
+        503: response_spec(HealthRestarting, "A restart is pending; not serving"),
+    },
+)
 def health() -> Response[HealthRestarting] | HealthOk:
     if is_shutdown_pending():
         return Response(content=HealthRestarting(status="restarting"), status_code=503)

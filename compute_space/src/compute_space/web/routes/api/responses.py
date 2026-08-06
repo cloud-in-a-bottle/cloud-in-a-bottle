@@ -1,6 +1,5 @@
-"""Response shapes shared across the API routers, plus the helper that
-declares them to OpenAPI. One definition each, so the generated document
-doesn't carry three interchangeable copies of the same error body."""
+"""Response shapes shared across the API routers, and the helpers that declare
+them to OpenAPI. One definition each, so the document carries no duplicates."""
 
 from typing import Any
 
@@ -32,3 +31,9 @@ def response_spec(data_container: Any, description: str, media_type: MediaType =
 
 def error_spec(description: str) -> ResponseSpec:
     return response_spec(ErrorResponse, description)
+
+
+def redirect_spec(description: str) -> ResponseSpec:
+    """A 302 with no body. Browser-facing handlers redirect instead of
+    answering with JSON, and a client that follows blindly gets HTML."""
+    return ResponseSpec(data_container=None, description=description, generate_examples=False)

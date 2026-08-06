@@ -335,6 +335,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '302':
+          description: Back to the dashboard or app page — the default without ?continue_oauth_update
         '404':
           description: No app with that id
           content:
@@ -386,6 +388,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '302':
+          description: To the GitHub authorize URL, or back to the app page
         '404':
           description: No app with that id
           content:
@@ -488,7 +492,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/RenameAppResponse'
         '400':
-          description: Malformed app_id
+          description: Malformed app_id, or the new name is empty, invalid, or reserved
           content:
             application/json:
               schema:
@@ -500,7 +504,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '409':
-          description: App is being removed
+          description: App is being removed, or the new name is already in use
           content:
             application/json:
               schema:
@@ -1470,14 +1474,17 @@ paths:
       operationId: HealthHealth
       responses:
         '200':
-          description: Request fulfilled, document follows
-          headers: {}
+          description: Serving normally
           content:
             application/json:
               schema:
-                oneOf:
-                - {}
-                - $ref: '#/components/schemas/HealthOk'
+                $ref: '#/components/schemas/HealthOk'
+        '503':
+          description: A restart is pending; not serving
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthRestarting'
       deprecated: false
       security:
       - {}
@@ -2842,6 +2849,14 @@ components:
       required:
       - status
       title: HealthOk
+    HealthRestarting:
+      properties:
+        status:
+          type: string
+      type: object
+      required:
+      - status
+      title: HealthRestarting
     HostResourcePressure:
       properties:
         memory_total_bytes:

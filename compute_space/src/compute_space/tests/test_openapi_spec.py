@@ -4,6 +4,8 @@ generated from the API route handlers. Regenerate with
 
 from __future__ import annotations
 
+from typing import Any
+
 from compute_space.web.dump_openapi import _DEFAULT_OUTPUT
 from compute_space.web.dump_openapi import render_openapi_yaml
 from compute_space.web.openapi import APP_SCHEME
@@ -53,13 +55,19 @@ def test_cross_app_proxy_declares_app_auth_and_links_out() -> None:
     assert tag["externalDocs"]["url"] == "/docs/cross_app_services"
 
 
-def test_every_success_response_is_typed() -> None:
-    """A success response either carries a schema or carries no body at all.
-    ``Response[A] | Response[B]`` silently generates ``{}``, so this catches a
-    handler added without a ``responses=`` declaration.
+def _is_untyped(schema: dict[str, Any] | None) -> bool:
+    """An empty schema matches any JSON, so it documents nothing. A union
+    renders as ``oneOf``, where one empty branch is just as permissive."""
+    if schema in ({}, None):
+        return True
+    assert schema is not None
+    branches = schema.get("oneOf") or schema.get("anyOf") or []
+    return any(_is_untyped(b) for b in branches)
 
-    The cross-app proxy is exempt: it returns whatever the provider returned.
-    """
+
+def test_every_success_response_is_typed() -> None:
+    """A success response carries a schema that constrains it, or no body at
+    all. Catches a handler added without the ``responses=`` a union needs."""
     paths = build_openapi_schema(ALL_ROUTERS, APP_DEPENDENCIES)["paths"]
     untyped = []
     for path, ops in paths.items():
@@ -72,7 +80,7 @@ def test_every_success_response_is_typed() -> None:
                 if not content:
                     continue  # 204 and friends: no body by definition
                 schema = next(iter(content.values())).get("schema")
-                if schema in ({}, None):
+                if _is_untyped(schema):
                     untyped.append(f"{method.upper()} {path} -> {code}")
     assert not untyped, f"untyped success responses: {untyped}"
 

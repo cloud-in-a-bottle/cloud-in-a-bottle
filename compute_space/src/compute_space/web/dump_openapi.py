@@ -1,8 +1,5 @@
-"""Write the OpenAPI document to a committed ``openapi.yaml``.
-
-Run via ``pixi run -e dev generate-openapi``. The manual serves this file at
-``/docs/openapi.yaml``; a drift-guard test keeps it in sync with the route
-handlers (see ``tests/test_openapi_spec.py``)."""
+"""Write the OpenAPI document to a committed ``openapi.yaml``, via
+``pixi run -e dev generate-openapi``. A test guards it against drift."""
 
 import sys
 from pathlib import Path

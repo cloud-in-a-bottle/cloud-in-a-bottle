@@ -50,6 +50,19 @@ resolution and grants work.
 Browser pages — the dashboard, login, the approval screens — aren't in the
 reference at all: they serve HTML to a session cookie, not JSON to a token.
 
+## When the token is rejected
+
+Auth failure is handled the same way on every owner route, so the reference
+doesn't repeat it per operation. Send `Accept: application/json` and a missing,
+expired or revoked token gets `401` with an `{"error": ...}` body. Without that
+header you get a `302` to `/login` instead — an HTML page, which is what a
+plain `curl` sees. Always send the header from a script.
+
+`401` means something different on `/api/clone_and_get_app_info` and
+`/api/add_app`: there it carries an `authorize_url` for a repo that needs
+GitHub authorization, and your owner token was fine. Check for the field
+rather than assuming the token expired.
+
 ## Machine-readable spec
 
 `GET /docs/openapi.yaml` serves the raw OpenAPI 3.1 document — point a client
@@ -59,12 +72,23 @@ test, so you can generate a client without a zone to hand.
 
 ## Reference
 
+The browser below renders the spec, and needs to reach a CDN to do it. On an
+offline or egress-filtered zone it won't load — read
+[/docs/openapi.yaml](/docs/openapi.yaml) directly instead.
+
 <div id="redoc" class="redoc-embed"></div>
 <script src="https://cdn.jsdelivr.net/npm/redoc@2.5.0/bundles/redoc.standalone.js"></script>
 <script>
-  Redoc.init(
-    "/docs/openapi.yaml",
-    {hideDownloadButton: true, expandResponses: "200,201", nativeScrollbars: true},
-    document.getElementById("redoc")
-  );
+  (() => {
+    const host = document.getElementById("redoc");
+    if (typeof Redoc === "undefined") {
+      host.textContent = "Could not load the spec browser (no CDN access). The raw document is at /docs/openapi.yaml.";
+      return;
+    }
+    Redoc.init(
+      "/docs/openapi.yaml",
+      {hideDownloadButton: true, expandResponses: "200,201", nativeScrollbars: true},
+      host
+    );
+  })();
 </script>

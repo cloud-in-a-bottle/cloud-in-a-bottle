@@ -67,6 +67,7 @@ from compute_space.web.auth.auth import require_owner_auth
 from compute_space.web.routes.api.responses import ErrorResponse
 from compute_space.web.routes.api.responses import OkResponse
 from compute_space.web.routes.api.responses import error_spec
+from compute_space.web.routes.api.responses import redirect_spec
 from compute_space.web.routes.api.responses import response_spec
 
 # ─── attrs request / response models ──────────────────────────────────────
@@ -873,6 +874,7 @@ async def _reload_app_impl(
             OkResponse | PermissionsRequiredResponse,
             "Rebuild started, or the update needs new permissions approved",
         ),
+        302: redirect_spec("To the GitHub authorize URL, or back to the app page"),
         **_APP_LOOKUP_ERRORS,
         **_REMOVING,
         503: error_spec("Archive backend unhealthy; refusing to reload"),
@@ -903,6 +905,7 @@ async def reload_app(
             OkResponse | PermissionsRequiredResponse,
             "Rebuild resumed, or the update needs new permissions approved",
         ),
+        302: redirect_spec("Back to the dashboard or app page — the default without ?continue_oauth_update"),
         **_APP_LOOKUP_ERRORS,
         **_REMOVING,
         503: error_spec("Archive backend unhealthy; refusing to reload"),
@@ -1071,8 +1074,9 @@ def _rename_app_storage_dirs(config: Config, old_name: str, new_name: str, archi
     guards=[require_owner_auth],
     responses={
         200: response_spec(RenameAppResponse, "App renamed"),
-        **_APP_LOOKUP_ERRORS,
-        **_REMOVING,
+        400: error_spec("Malformed app_id, or the new name is empty, invalid, or reserved"),
+        404: error_spec("No app with that id"),
+        409: error_spec("App is being removed, or the new name is already in use"),
         500: error_spec("Rename partially applied; see the error body"),
         503: error_spec("Archive backend unhealthy; refusing to rename"),
     },

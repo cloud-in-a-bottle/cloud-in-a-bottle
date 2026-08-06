@@ -149,30 +149,19 @@ def _space_display_name() -> str | None:
 # ─── Markdown engine ────────────────────────────────────────────────
 
 
-def _build_md() -> MarkdownIt:
-    """Construct the shared markdown renderer.
+def _build_md(allow_html: bool) -> MarkdownIt:
+    """Construct a shared markdown renderer: ``gfm-like`` plus heading anchors,
+    tasklists, and Pygments-highlighted fences. Stateless and thread-safe.
 
-    Configured with:
-      * ``commonmark`` baseline + GFM-style tables/strikethrough/
-        autolinks (via the ``gfm-like`` preset).
-      * ``anchors_plugin`` to auto-link ``<h2>``/``<h3>`` headings
-        for deep links from the sidebar / external linkers.
-      * ``tasklists_plugin`` so ``- [x]`` markdown checklists
-        render as proper checkboxes.
-      * A custom code-fence renderer that runs the contents
-        through Pygments for syntax highlighting.
-
-    The renderer is stateless and thread-safe — a single shared
-    instance per process suffices.
+    ``allow_html`` only for chapters that embed an OpenAPI browser — everywhere
+    else raw HTML stays inert, so stray angle brackets render as text.
     """
     # ``linkify=False``: bare URLs in the prose are NOT auto-linked.
     # The alternative requires the optional ``linkify-it-py`` dep,
     # and our manual already wraps its handful of URLs in proper
     # ``[text](url)`` syntax — auto-linking would just bring in a
     # new transitive dep for negligible UX gain.
-    # ``html=True``: chapters may embed raw HTML (see ``api.md``, which
-    # embeds the OpenAPI browser).  Sources are repo files, not user input.
-    md = MarkdownIt("gfm-like", {"html": True, "linkify": False, "typographer": True})
+    md = MarkdownIt("gfm-like", {"html": allow_html, "linkify": False, "typographer": True})
     md.use(anchors_plugin, max_level=4, permalink=False)
     md.use(tasklists_plugin, enabled=True)
     md.add_render_rule("fence", _render_fence_with_pygments)
@@ -226,7 +215,8 @@ def _render_fence_with_pygments(
 PYGMENTS_CSS = HtmlFormatter(style="default").get_style_defs(".codehilite")
 
 
-_MD = _build_md()
+_MD = _build_md(allow_html=False)
+_MD_EMBED = _build_md(allow_html=True)
 
 
 # ─── Sidebar / SUMMARY.md parsing ───────────────────────────────────
@@ -347,12 +337,8 @@ _standalone_cache: dict[str, tuple[float, bool]] = {}
 
 
 def _is_standalone(slug: str) -> bool:
-    """Whether a chapter renders as its own full-width page.
-
-    True for chapters embedding an OpenAPI browser: those renderers expect a
-    whole viewport, and squeezing one into the prose column next to the manual
-    sidebar leaves both fighting over ~740px.  Detected from the source rather
-    than a hand-kept list, so it can't drift from the chapters themselves."""
+    """Whether a chapter renders full-width and may embed raw HTML: true for
+    OpenAPI browsers, which need a viewport. Read from the source, not a list."""
     try:
         path = _resolve_doc_path(slug)
         mtime = path.stat().st_mtime
@@ -382,7 +368,8 @@ def _cached_render(slug: str, path: Path) -> str:
         cached = _render_cache.get(slug)
         if cached and cached[0] == mtime:
             return cached[1]
-    html = _MD.render(path.read_text(encoding="utf-8"))
+    renderer = _MD_EMBED if _is_standalone(slug) else _MD
+    html = renderer.render(path.read_text(encoding="utf-8"))
     html = _rewrite_internal_links(html)
     with _render_cache_lock:
         _render_cache[slug] = (mtime, html)
@@ -596,10 +583,8 @@ _TEMPLATE = """<!DOCTYPE html>
     }
     main.content .codehilite pre { background: transparent; padding: 0; }
     main.content ul, main.content ol { padding-left: 1.5em; }
-    /* OpenAPI browser embeds (api.md, bundled_services.md).  Redoc ships its
-       own styles, but the prose rules above are more specific than its class
-       selectors and would otherwise repaint its code samples, links and
-       tables — so hand those properties back inside the container. */
+    /* The prose rules above outrank Redoc's own class selectors, so hand those
+       properties back inside the embed. */
     main.content .redoc-embed { margin: 1.5em 0; }
     main.content .redoc-embed a { color: inherit; }
     main.content .redoc-embed code,
@@ -638,11 +623,8 @@ _TEMPLATE = """<!DOCTYPE html>
        exactly like layout.html's bare <h1>, so the title + nav land at the
        same vertical position on both pages. */
     .space-header { max-width: 960px; margin: 2em auto 0; padding: 0 1em; }
-    /* Reference chapters render standalone: no manual sidebar, full window.
-       Redoc wants a whole viewport — inside the 960px prose column it collapses
-       to one cramped pane and stacks its own sidebar next to the manual's.  The
-       sidebar still lists these pages; it just opens them in a new tab.  Prose
-       keeps a readable measure; only the embed runs the full width. */
+    /* Reference chapters drop the manual sidebar: Redoc needs the full window
+       and stacks its own sidebar. Prose keeps a readable measure. */
     .layout.standalone { max-width: none; padding: 0 1.5em; }
     .layout.standalone main.content { padding-left: 0; }
     .layout.standalone main.content > * { max-width: 46em; }
@@ -691,8 +673,10 @@ _TEMPLATE = """<!DOCTYPE html>
       {{ content_html | safe }}
       {% if not standalone and (prev_link or next_link) %}
         <div class="footer-nav">
-          <div>{% if prev_link %}← <a href="/docs/{{ prev_link.slug }}">{{ prev_link.title }}</a>{% endif %}</div>
-          <div>{% if next_link %}<a href="/docs/{{ next_link.slug }}">{{ next_link.title }}</a> →{% endif %}</div>
+          <div>{% if prev_link %}← <a href="/docs/{{ prev_link.slug }}"
+                 {% if prev_link.standalone %}target="_blank" rel="noopener"{% endif %}>{{ prev_link.title }}</a>{% endif %}</div>
+          <div>{% if next_link %}<a href="/docs/{{ next_link.slug }}"
+                 {% if next_link.standalone %}target="_blank" rel="noopener"{% endif %}>{{ next_link.title }}</a> →{% endif %}</div>
         </div>
       {% endif %}
     </main>
@@ -817,7 +801,7 @@ def docs_services_index() -> list[str]:
 
 
 @get("/docs/services/{name:str}/openapi.yaml", sync_to_thread=False)
-def docs_service_spec(name: str) -> Response[str]:
+def docs_service_spec(name: FromPath[str]) -> Response[str]:
     """Serve ``services/<name>/openapi.yaml`` off the checkout.
 
     Same containment rule as the markdown route: the resolved path has to sit
@@ -864,7 +848,7 @@ def _render_doc(slug: str) -> Response[str]:
     html = _COMPILED_TEMPLATE.render(
         sections=sections,
         current_slug=slug,
-        standalone=_REDOC_MARKER in content_html,
+        standalone=_is_standalone(slug),
         content_html=content_html,
         page_title=page_title,
         prev_link=prev_l,
