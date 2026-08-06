@@ -108,53 +108,85 @@ def test_has_capability_system_read() -> None:
 # ── delegation (anti-escalation) ─────────────────────────────────────────────
 
 
-def _gp(grant: object) -> GrantedPermission:
-    return GrantedPermission(grant=grant, scope="global", provider_app_id=None)  # type: ignore[arg-type]
+def _gp(grant: object, scope: str = "global", provider: str | None = None) -> GrantedPermission:
+    return GrantedPermission(grant=grant, scope=scope, provider_app_id=provider)  # type: ignore[arg-type]
 
 
 def test_delegation_denied_without_capability() -> None:
-    reason = check_delegation_allowed(
+    d = check_delegation_allowed(
         caller_platform_grants=[{"capability": "deploy", "repo_url_prefix": "*"}],
         caller_grants_for_target_service=[_gp({"key": "DB_URL"})],
         grant_to_delegate={"key": "DB_URL"},
     )
-    assert reason is not None and "delegate_permissions" in reason
+    assert d.reason is not None and "delegate_permissions" in d.reason
+    assert d.granted is None
 
 
 def test_delegation_denied_when_caller_lacks_the_grant() -> None:
     # Caller has the capability but does NOT itself hold the grant it wants to
     # hand out -> escalation attempt, denied.
-    reason = check_delegation_allowed(
+    d = check_delegation_allowed(
         caller_platform_grants=[{"capability": CAP_DELEGATE_PERMISSIONS}],
         caller_grants_for_target_service=[_gp({"key": "PUBLIC"})],
         grant_to_delegate={"key": "SECRET"},
     )
-    assert reason is not None and "does not itself hold" in reason
+    assert d.reason is not None and "does not itself hold" in d.reason
 
 
 def test_delegation_allowed_when_caller_holds_grant_and_capability() -> None:
-    reason = check_delegation_allowed(
+    d = check_delegation_allowed(
         caller_platform_grants=[{"capability": CAP_DELEGATE_PERMISSIONS}],
         caller_grants_for_target_service=[_gp({"key": "SECRET"})],
         grant_to_delegate={"key": "SECRET"},
     )
-    assert reason is None
+    assert d.reason is None
+    assert d.granted is not None and d.granted.scope == "global"
 
 
 def test_delegation_grant_identity_is_key_order_insensitive() -> None:
     # {"a":1,"b":2} held; delegating {"b":2,"a":1} must be recognized as the same.
-    reason = check_delegation_allowed(
+    d = check_delegation_allowed(
         caller_platform_grants=[{"capability": CAP_DELEGATE_PERMISSIONS}],
         caller_grants_for_target_service=[_gp({"a": 1, "b": 2})],
         grant_to_delegate={"b": 2, "a": 1},
     )
-    assert reason is None
+    assert d.reason is None
 
 
 def test_delegation_string_grant_matches() -> None:
-    reason = check_delegation_allowed(
+    d = check_delegation_allowed(
         caller_platform_grants=[{"capability": CAP_DELEGATE_PERMISSIONS}],
         caller_grants_for_target_service=[_gp("FULL_ACCESS")],
         grant_to_delegate="FULL_ACCESS",
     )
-    assert reason is None
+    assert d.reason is None
+
+
+def test_delegation_preserves_app_scope_no_widening_to_global() -> None:
+    # Caller holds the grant ONLY app-scoped to provider X.  Delegation must copy
+    # that exact (app, X) scope to the child — never widen it to global, which
+    # would let the child use it against any provider (privilege escalation).
+    d = check_delegation_allowed(
+        caller_platform_grants=[{"capability": CAP_DELEGATE_PERMISSIONS}],
+        caller_grants_for_target_service=[_gp({"key": "DB_URL"}, scope="app", provider="ProviderX")],
+        grant_to_delegate={"key": "DB_URL"},
+    )
+    assert d.reason is None
+    assert d.granted is not None
+    assert d.granted.scope == "app"
+    assert d.granted.provider_app_id == "ProviderX"
+
+
+def test_delegation_prefers_app_scoped_match_when_both_exist() -> None:
+    # If the caller holds the same payload both app-scoped and global, the
+    # narrower (app-scoped) authority is what gets delegated.
+    d = check_delegation_allowed(
+        caller_platform_grants=[{"capability": CAP_DELEGATE_PERMISSIONS}],
+        caller_grants_for_target_service=[
+            _gp({"key": "DB_URL"}, scope="global"),
+            _gp({"key": "DB_URL"}, scope="app", provider="ProviderX"),
+        ],
+        grant_to_delegate={"key": "DB_URL"},
+    )
+    assert d.reason is None
+    assert d.granted is not None and d.granted.scope == "app"

@@ -85,12 +85,19 @@ def _seed_caller(
         db.close()
 
 
-def _grant(db_path: str, consumer: str, grant: Grant, service: str = PLATFORM_SERVICE_URL) -> None:
+def _grant(
+    db_path: str,
+    consumer: str,
+    grant: Grant,
+    service: str = PLATFORM_SERVICE_URL,
+    scope: str = "global",
+    provider: str | None = None,
+) -> None:
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     try:
         with mock.patch("compute_space.core.auth.permissions_v2.get_db", return_value=conn):
-            grant_permission_v2(consumer, service, grant)
+            grant_permission_v2(consumer, service, grant, scope=scope, provider_app_id=provider)
     finally:
         conn.close()
 
@@ -269,6 +276,28 @@ def test_stop_own_app(client: TestClient[Litestar], cfg: Any) -> None:
     assert status == "stopped"
 
 
+def test_start_own_app(client: TestClient[Litestar], cfg: Any) -> None:
+    _grant(cfg.db_path, CALLER_APP_ID, {"capability": "manage_apps", "target": "own"})
+    aid = _insert_app(cfg.db_path, name="mine", installed_by=CALLER_APP_ID, status="stopped", port=19730)
+    with mock.patch("compute_space.web.routes.platform_dispatch.start_app_process") as start:
+        resp = client.post(_url(f"apps/{aid}/start"), headers=_headers())
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["status"] == "starting"
+    start.assert_called_once()
+
+
+def test_start_surfaces_error_as_400(client: TestClient[Litestar], cfg: Any) -> None:
+    _grant(cfg.db_path, CALLER_APP_ID, {"capability": "manage_apps", "target": "own"})
+    aid = _insert_app(cfg.db_path, name="mine", installed_by=CALLER_APP_ID, status="stopped", port=19731)
+    with mock.patch(
+        "compute_space.web.routes.platform_dispatch.start_app_process",
+        side_effect=RuntimeError("port in use"),
+    ):
+        resp = client.post(_url(f"apps/{aid}/start"), headers=_headers())
+    assert resp.status_code == 400
+    assert resp.json()["error"] == "start_failed"
+
+
 def test_remove_own_app_claims_and_spawns(client: TestClient[Litestar], cfg: Any) -> None:
     _grant(cfg.db_path, CALLER_APP_ID, {"capability": "manage_apps", "target": "own"})
     aid = _insert_app(cfg.db_path, name="mine", installed_by=CALLER_APP_ID, port=19710)
@@ -386,17 +415,60 @@ def test_delegate_success_writes_grant_to_child(client: TestClient[Litestar], cf
         content=json.dumps({"app_id": target, "service": SVC, "grant": {"key": "DB_URL"}}),
     )
     assert resp.status_code == 200, resp.text
-    # The child now holds exactly the delegated grant for SVC.
+    # The child now holds exactly the delegated grant for SVC, at global scope
+    # (the caller's grant was global).
     conn = sqlite3.connect(cfg.db_path)
     try:
         row = conn.execute(
-            "SELECT grant_payload FROM permissions_v2 WHERE consumer_app_id = ? AND service_url = ?",
+            "SELECT grant_payload, scope, provider_app_id FROM permissions_v2 "
+            "WHERE consumer_app_id = ? AND service_url = ?",
             (target, SVC),
         ).fetchone()
     finally:
         conn.close()
     assert row is not None
     assert json.loads(row[0]) == {"key": "DB_URL"}
+    assert row[1] == "global"
+
+
+def test_delegate_app_scoped_grant_is_not_widened_to_global(client: TestClient[Litestar], cfg: Any) -> None:
+    # The caller holds the grant ONLY app-scoped to provider X; the delegated
+    # grant on the child must stay app-scoped to X, not become global.
+    target = _insert_app(cfg.db_path, name="child", installed_by=CALLER_APP_ID, port=19715)
+    _grant(cfg.db_path, CALLER_APP_ID, {"capability": "delegate_permissions"})
+    _grant(cfg.db_path, CALLER_APP_ID, {"key": "DB_URL"}, service=SVC, scope="app", provider="ProviderX")
+    resp = client.post(
+        _url("delegate"),
+        headers=_headers(),
+        content=json.dumps({"app_id": target, "service": SVC, "grant": {"key": "DB_URL"}}),
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["scope"] == "app"
+    conn = sqlite3.connect(cfg.db_path)
+    try:
+        row = conn.execute(
+            "SELECT scope, provider_app_id FROM permissions_v2 WHERE consumer_app_id = ? AND service_url = ?",
+            (target, SVC),
+        ).fetchone()
+    finally:
+        conn.close()
+    assert row is not None
+    assert row[0] == "app"
+    assert row[1] == "ProviderX"
+
+
+def test_delegate_to_nonexistent_app_returns_403_not_404(client: TestClient[Litestar], cfg: Any) -> None:
+    # A caller WITH delegate_permissions still must not learn (via 404) whether
+    # an arbitrary app exists; a non-deployed/missing target is a uniform 403.
+    _grant(cfg.db_path, CALLER_APP_ID, {"capability": "delegate_permissions"})
+    _grant(cfg.db_path, CALLER_APP_ID, {"key": "DB_URL"}, service=SVC)
+    resp = client.post(
+        _url("delegate"),
+        headers=_headers(),
+        content=json.dumps({"app_id": "abcdefghijkm", "service": SVC, "grant": {"key": "DB_URL"}}),
+    )
+    assert resp.status_code == 403
+    assert resp.json()["error"] == "permission_required"
 
 
 # ── misc ─────────────────────────────────────────────────────────────────────
