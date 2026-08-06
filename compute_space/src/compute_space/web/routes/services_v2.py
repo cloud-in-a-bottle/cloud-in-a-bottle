@@ -207,6 +207,7 @@ def _add_cors_response_headers(response: ASGIResponse, request: Request[Any, Any
             response.headers.add(k, v)
 
 
+# only gives CORS to allow non-simple request, so not in openAPI
 @route(_CALL_PATH, http_method=[HttpMethod.OPTIONS], include_in_schema=False)
 async def service_call_cors(
     request: Request[Any, Any, Any],
@@ -214,7 +215,7 @@ async def service_call_cors(
     rest: FromPath[str],
     db: NamedDependency[sqlite3.Connection],
 ) -> Response[str]:
-    """Hande CORS preflight HTTP OPTIONS request, respond with appropriate CORS headers."""
+    """Handle CORS preflight HTTP OPTIONS request, respond with appropriate CORS headers."""
     origin = request.headers.get("Origin", None)
     # block CORS preflight if Origin is not a known app - no auth headers yet but we can at least verify this,
     # to help avoid XSRF from external sites.
@@ -372,6 +373,7 @@ async def service_call_ws(
     )
 
 
+# not in openAPI since only a landing page for callback
 @get("/api/services/v2/oauth_callback", include_in_schema=False)
 async def oauth_callback_proxy_v2(request: Request[Any, Any, Any]) -> ASGIResponse:
     """Proxy OAuth provider callbacks to the correct oauth service app.

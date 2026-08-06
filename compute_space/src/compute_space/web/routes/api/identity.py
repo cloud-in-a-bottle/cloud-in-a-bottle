@@ -89,6 +89,7 @@ def openhost_identity(db: NamedDependency[sqlite3.Connection]) -> ZoneIdentityRe
     )
 
 
+# not documented in openAPI because it redirects with http fields
 @get("/identity/approve", guards=[require_owner_auth], include_in_schema=False)
 async def identity_approve(callback: str, app_name: str, requesting_domain: str) -> Template:
     """Show the owner an approval page for a federated login request."""
@@ -106,6 +107,7 @@ async def identity_approve(callback: str, app_name: str, requesting_domain: str)
     )
 
 
+# not documented in openAPI because it redirects with http fields
 @post("/identity/approve", status_code=302, guards=[require_owner_auth], include_in_schema=False)
 async def identity_approve_submit(
     data: Annotated[IdentityApproveForm, Body(media_type=RequestEncodingType.URL_ENCODED)],

@@ -21,6 +21,19 @@ Each spec's `description` documents the permission grant format that service
 expects. The router enforces the grants; the service validates them again on its
 own side before returning anything.
 
+## Machine-readable specs
+
+`GET /docs/services` lists the service names this zone ships; each spec is at
+`GET /docs/services/<name>/openapi.yaml`. The same files are committed to the
+OpenHost repo under `services/<name>/openapi.yaml`, so you can generate a client
+against a service without a zone to hand.
+
+## Reference
+
+The browser below renders each spec, and needs to reach a CDN to do it. On an
+offline or egress-filtered zone it won't load — read the raw documents at the
+URLs above instead.
+
 <div id="service-specs" class="redoc-embed"></div>
 <script src="https://cdn.jsdelivr.net/npm/redoc@2.5.0/bundles/redoc.standalone.js"></script>
 <script>

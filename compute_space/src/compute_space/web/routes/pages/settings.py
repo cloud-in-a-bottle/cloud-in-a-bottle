@@ -10,4 +10,5 @@ async def settings_page() -> Template:
     return Template(template_name="settings.html")
 
 
+# excluded due to user-facing html page rather than api
 pages_settings_routes = Router(path="/", route_handlers=[settings_page], include_in_schema=False)

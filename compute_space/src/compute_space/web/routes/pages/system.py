@@ -63,6 +63,7 @@ async def terminal_ws(socket: WebSocket[Any, Any, Any]) -> None:
     await handle_terminal_ws(_LitestarTerminalAdapter(socket))
 
 
+# excluded due to user-facing html page rather than api
 pages_system_routes = Router(
     path="/",
     route_handlers=[system_page, diagnostics_page, terminal_page, terminal_ws],

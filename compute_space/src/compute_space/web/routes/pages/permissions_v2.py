@@ -46,4 +46,5 @@ async def approve_permissions_v2(
     )
 
 
+# excluded due to user-facing html page rather than api
 pages_permissions_v2_routes = Router(path="/", route_handlers=[approve_permissions_v2], include_in_schema=False)

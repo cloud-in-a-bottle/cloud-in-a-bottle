@@ -90,4 +90,5 @@ async def logout(
     return response
 
 
+# excluded due to user-facing html page rather than api
 pages_login_routes = Router(path="/", route_handlers=[login_get, login_post, logout], include_in_schema=False)

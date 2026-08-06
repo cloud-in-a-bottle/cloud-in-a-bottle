@@ -32,8 +32,13 @@ def stash_zone_middleware(app: ASGIApp) -> ASGIApp:
 
     async def middleware(scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] in ("http", "websocket"):
-            with closing(get_db()) as db:
-                scope[ZONE_SCOPE_KEY] = primary_domain_or_none(db)
+            try:
+                db = get_db()
+            except RuntimeError:
+                db = None  # app under test never called init_db(); no zone to stash
+            if db is not None:
+                with closing(db):
+                    scope[ZONE_SCOPE_KEY] = primary_domain_or_none(db)
         await app(scope, receive, send)
 
     return middleware
