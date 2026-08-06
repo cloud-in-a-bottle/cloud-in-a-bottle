@@ -38,7 +38,7 @@ grants (same flow as any other service).
 |---|---|---|
 | `deploy` | `{capability:"deploy", repo_url_prefix:"..."}` | Deploy new apps whose repo_url starts with the prefix (`""`/`"*"` = any). The new app's `installed_by` is stamped with the caller. |
 | `manage_apps` | `{capability:"manage_apps", target:"own"\|"all"\|"<app_id>"}` | View status/logs, stop/start, remove. `own` = apps this caller deployed; `all` = every app; `<app_id>` = one app. Does **not** include granting permissions. |
-| `system_read` | `{capability:"system_read"}` | Read-only system info (storage snapshot; disk/mem/etc). |
+| `system_read` | `{capability:"system_read"}` | Read-only system info: version (git branch/SHA), storage snapshot, external listening ports, and a tail of the platform log. |
 | `delegate_permissions` | `{capability:"delegate_permissions"}` | Grant an app **the caller deployed** any permission the **caller already holds** — never more (non-escalating). |
 
 ## Endpoints
