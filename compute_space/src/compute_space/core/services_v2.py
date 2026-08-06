@@ -1,13 +1,39 @@
+import json
 import sqlite3
+from typing import Any
+from urllib.parse import urlencode
 
 from packaging.specifiers import InvalidSpecifier
 from packaging.specifiers import SpecifierSet
 from packaging.version import InvalidVersion
 from packaging.version import Version
 
+from compute_space.core.domains import primary_domain_or_none
 from compute_space.core.manifest import AppManifest
 from compute_space.core.manifest import parse_manifest_from_string
 from compute_space.db.connection import make_atomic_with_savepoint
+
+
+def build_grant_approval_url(consumer_app_id: str, service_url: str, grant: Any, db: sqlite3.Connection) -> str:
+    """Absolute URL to the owner-facing ``/approve-permissions-v2`` page for a
+    (consumer, service, grant) request, on the primary domain.
+
+    Used to decorate ``permission_required`` 403s (from proxied providers and
+    from the router-internal installer/platform services) so the caller can
+    surface a one-click owner-approval link.  Each value is urlencoded because
+    ``service_url`` contains ``/`` and ``:`` and ``grant`` is JSON.
+    """
+    query = urlencode(
+        {"app": consumer_app_id, "service": service_url, "grant": json.dumps(grant, sort_keys=True)}
+    )
+    approve_path = f"/approve-permissions-v2?{query}"
+    # Server-side (no browsing request in hand), so build on the canonical/primary
+    # domain; use its scheme so a plain-http primary (e.g. a `.local` instance)
+    # gets a correct URL rather than a hardcoded https.
+    primary = primary_domain_or_none(db)
+    if primary is None:
+        return approve_path
+    return f"{primary.scheme}://{primary.name}{approve_path}"
 
 
 class ServiceNotAvailable(Exception):

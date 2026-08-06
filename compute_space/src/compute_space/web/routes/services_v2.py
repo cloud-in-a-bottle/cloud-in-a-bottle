@@ -22,7 +22,6 @@ import json
 import sqlite3
 from collections.abc import Iterable
 from typing import Any
-from urllib.parse import urlencode
 
 import attr
 from litestar import HttpMethod
@@ -48,7 +47,6 @@ from compute_space.core.apps import find_app_by_name
 from compute_space.core.apps import get_app_from_hostname
 from compute_space.core.auth.permissions_v2 import get_granted_permissions_v2
 from compute_space.core.containers import get_docker_logs
-from compute_space.core.domains import primary_domain_or_none
 from compute_space.core.installer import GRANT_KEY_CAPABILITY
 from compute_space.core.installer import GRANT_KEY_REPO_URL_PREFIX
 from compute_space.core.installer import INSTALLER_SERVICE_URL
@@ -61,6 +59,7 @@ from compute_space.core.manifest import parse_manifest_from_string
 from compute_space.core.platform_service import PLATFORM_SERVICE_URL
 from compute_space.core.services_v2 import ServiceNotAvailable
 from compute_space.core.services_v2 import ShortnameNotDeclared
+from compute_space.core.services_v2 import build_grant_approval_url
 from compute_space.core.services_v2 import lookup_shortname
 from compute_space.core.services_v2 import resolve_provider
 from compute_space.web.auth.auth import require_app_auth
@@ -169,17 +168,9 @@ def _carry_response_headers(headers: MutableScopeHeaders) -> Iterable[tuple[str,
 
 
 def _approve_grant_url(consumer_app_id: str, service_url: str, grant: Any, db: sqlite3.Connection) -> str:
-    # urlencode each value: service_url contains "/" and ":", grant is JSON with "{", "}",
-    # ",", '"' — all of which break query-string parsing if interpolated raw.
-    query = urlencode({"app": consumer_app_id, "service": service_url, "grant": json.dumps(grant, sort_keys=True)})
-    approve_path = f"/approve-permissions-v2?{query}"
-    # Cross-app approval is server-side (no browsing request in hand), so this stays on
-    # the canonical/primary domain; use its scheme rather than a hardcoded https so a
-    # plain-http primary (e.g. a `.local` instance) builds a correct URL.
-    primary = primary_domain_or_none(db)
-    if primary is None:
-        return approve_path
-    return f"{primary.scheme}://{primary.name}{approve_path}"
+    # Thin wrapper kept for the existing call sites; the shared builder lives in
+    # core.services_v2 so the platform service can reuse it too.
+    return build_grant_approval_url(consumer_app_id, service_url, grant, db)
 
 
 def _cors_headers(origin: str) -> dict[str, str]:
