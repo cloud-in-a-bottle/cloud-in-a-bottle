@@ -314,17 +314,32 @@ def test_remove_own_app_claims_and_spawns(client: TestClient[Litestar], cfg: Any
     assert status == "removing"
 
 
-def test_manage_missing_app_under_own_scope_404(client: TestClient[Litestar], cfg: Any) -> None:
+def test_manage_missing_app_under_own_scope_403_no_existence_leak(client: TestClient[Litestar], cfg: Any) -> None:
+    # An own-scope caller must NOT be able to tell a missing app from an
+    # existing-but-not-owned one: both are a uniform 403, so it can't enumerate
+    # app_ids by probing.
     _grant(cfg.db_path, CALLER_APP_ID, {"capability": "manage_apps", "target": "own"})
-    resp = client.get(_url("apps/abcdefghijkm/status"), headers=_headers())
-    # own/all callers may learn of a missing app (404); narrow app_id callers get 403.
-    assert resp.status_code == 404
+    # missing app
+    missing = client.get(_url("apps/abcdefghijkm/status"), headers=_headers())
+    # existing app owned by someone else
+    other = _insert_app(cfg.db_path, name="not-mine", installed_by="someone-else", port=19740)
+    existing = client.get(_url(f"apps/{other}/status"), headers=_headers())
+    assert missing.status_code == 403
+    assert existing.status_code == 403
 
 
 def test_manage_missing_app_under_specific_scope_403(client: TestClient[Litestar], cfg: Any) -> None:
     _grant(cfg.db_path, CALLER_APP_ID, {"capability": "manage_apps", "target": "some-other-id"})
     resp = client.get(_url("apps/abcdefghijkm/status"), headers=_headers())
     assert resp.status_code == 403
+
+
+def test_manage_missing_app_under_all_scope_404(client: TestClient[Litestar], cfg: Any) -> None:
+    # An 'all' caller can enumerate every app anyway, so a genuinely missing id
+    # is a plain 404 for it (no leak beyond what it can already see).
+    _grant(cfg.db_path, CALLER_APP_ID, {"capability": "manage_apps", "target": "all"})
+    resp = client.get(_url("apps/abcdefghijkm/status"), headers=_headers())
+    assert resp.status_code == 404
 
 
 # ── system_read ──────────────────────────────────────────────────────────────
