@@ -26,7 +26,7 @@ Grant payloads (JSON objects stored in ``permissions_v2.grant_payload``):
     {"capability": "manage_apps", "target": "own"}
     {"capability": "manage_apps", "target": "all"}
     {"capability": "manage_apps", "target": "<app_id>"}
-        Manage existing apps: view status/logs, stop/start/restart, remove.
+        Manage existing apps: view status/logs, stop/start, remove.
         ``own``  = only apps this caller deployed (installed_by == caller).
         ``all``  = every app on the instance.
         ``<id>`` = one specific app.
@@ -98,16 +98,28 @@ class ManageScope:
         return app_id in self.app_ids
 
 
+def is_known_capability(capability: object) -> bool:
+    """True iff ``capability`` is one of the platform service's capabilities."""
+    return isinstance(capability, str) and capability in ALL_CAPABILITIES
+
+
 def _dict_grants_with_capability(grants: list[Grant], capability: str) -> list[Mapping[str, GrantAtom]]:
     """The dict-shaped grants whose ``capability`` equals ``capability``.
 
-    Non-dict grants (strings, lists) and grants for other capabilities are
-    skipped, so an unrecognized/mixed grant set never accidentally widens
-    access.
+    Non-dict grants (strings, lists), grants for other capabilities, and grants
+    naming an unknown capability are all skipped, so an unrecognized/mixed grant
+    set never accidentally widens access.  (``capability`` itself is always a
+    known ``CAP_*`` value at every call site, so the ``is_known_capability``
+    guard only ever filters the stored grant, never the requested capability.)
     """
     out: list[Mapping[str, GrantAtom]] = []
     for g in grants:
-        if isinstance(g, dict) and g.get(GRANT_KEY_CAPABILITY) == capability:
+        if not isinstance(g, dict):
+            continue
+        cap = g.get(GRANT_KEY_CAPABILITY)
+        if not is_known_capability(cap):
+            continue
+        if cap == capability:
             out.append(g)
     return out
 
@@ -164,18 +176,42 @@ def _grant_identity(grant: Grant) -> str:
     return json.dumps(grant, sort_keys=True)
 
 
-def caller_holds_grant(
+def matching_held_grant(
     caller_grants_for_service: list[GrantedPermission],
     grant: Grant,
-) -> bool:
-    """True if the caller itself already holds ``grant`` for the target service.
+) -> GrantedPermission | None:
+    """Return the caller's own :class:`GrantedPermission` whose payload equals
+    ``grant`` for the target service, or ``None`` if the caller holds no such
+    grant.
 
-    The comparison is by canonical JSON identity so ``{"a":1,"b":2}`` matches
-    ``{"b":2,"a":1}``.  Only the grant *payload* is compared (scope/provider are
-    a separate concern handled by the delegation writer).
+    Payloads are compared by canonical JSON so key order doesn't matter.  The
+    full ``GrantedPermission`` (including its ``scope`` and ``provider_app_id``)
+    is returned so the delegation writer can copy the caller's *exact* authority
+    to the child — never a broader one.  If the caller holds the same payload at
+    more than one scope, the narrowest (app-scoped) match is preferred so
+    delegation can't accidentally widen to global.
     """
     wanted = _grant_identity(grant)
-    return any(_grant_identity(gp.grant) == wanted for gp in caller_grants_for_service)
+    matches = [gp for gp in caller_grants_for_service if _grant_identity(gp.grant) == wanted]
+    if not matches:
+        return None
+    # Prefer an app-scoped match (narrower) over a global one.
+    app_scoped = [gp for gp in matches if gp.scope == "app"]
+    return app_scoped[0] if app_scoped else matches[0]
+
+
+@attr.s(auto_attribs=True, frozen=True)
+class DelegationDecision:
+    """Result of :func:`check_delegation_allowed`.
+
+    ``reason`` is non-None on denial.  On approval, ``granted`` carries the
+    caller's own matching grant (scope + provider_app_id) that the writer must
+    copy verbatim to the child — copying the caller's exact authority is what
+    keeps delegation non-escalating.
+    """
+
+    reason: str | None
+    granted: GrantedPermission | None = None
 
 
 def check_delegation_allowed(
@@ -183,20 +219,26 @@ def check_delegation_allowed(
     caller_platform_grants: list[Grant],
     caller_grants_for_target_service: list[GrantedPermission],
     grant_to_delegate: Grant,
-) -> str | None:
-    """Return None if the caller may delegate ``grant_to_delegate`` (for some
-    target service) to an app it deployed, else a reason for the 403.
+) -> DelegationDecision:
+    """Decide whether the caller may delegate ``grant_to_delegate`` (for some
+    target service) to an app it deployed.
 
     Two independent conditions must both hold (fail-closed):
 
-    1. The caller must hold the ``delegate_permissions`` platform capability at
-       all.
-    2. The caller must **already possess** the exact grant it is trying to hand
-       out for that service (anti-escalation: you can only pass on privileges
-       you have, never mint new ones).
+    1. The caller must hold the ``delegate_permissions`` platform capability.
+    2. The caller must **already possess** a grant with the same payload for
+       that service (anti-escalation: you can only pass on privileges you have,
+       never mint new ones).
+
+    On approval the returned :class:`DelegationDecision` carries the caller's
+    own matching grant, whose ``scope``/``provider_app_id`` the writer copies to
+    the child so the delegated authority is never broader than the caller's
+    (e.g. an app-scoped grant is delegated app-scoped to the same provider, not
+    widened to global).
     """
     if not has_capability(caller_platform_grants, CAP_DELEGATE_PERMISSIONS):
-        return "caller lacks the delegate_permissions capability"
-    if not caller_holds_grant(caller_grants_for_target_service, grant_to_delegate):
-        return "caller does not itself hold the grant it is trying to delegate"
-    return None
+        return DelegationDecision(reason="caller lacks the delegate_permissions capability")
+    held = matching_held_grant(caller_grants_for_target_service, grant_to_delegate)
+    if held is None:
+        return DelegationDecision(reason="caller does not itself hold the grant it is trying to delegate")
+    return DelegationDecision(reason=None, granted=held)

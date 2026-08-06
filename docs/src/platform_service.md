@@ -52,7 +52,7 @@ POST /apps/<app_id>/stop                                      cap: manage_apps (
 POST /apps/<app_id>/start                                     cap: manage_apps (scoped)
 POST /apps/<app_id>/remove  {keep_data?}                      cap: manage_apps (scoped)
 GET  /system                                                  cap: system_read
-POST /delegate              {app_id, service, grant, scope?}  cap: delegate_permissions
+POST /delegate              {app_id, service, grant}         cap: delegate_permissions
 ```
 
 ## The propagating (non-escalating) delegation

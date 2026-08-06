@@ -16,3 +16,4 @@
 - [OAuth in Apps](./oauth.md)
 - [Cross-App Services](./cross_app_services.md)
 - [Running in a Local QEMU VM](./deploying.md)
+- [Platform Service](./platform_service.md)

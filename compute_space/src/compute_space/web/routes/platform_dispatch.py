@@ -16,7 +16,7 @@ Endpoints (rooted under the consumer's platform shortname):
     POST /apps/<app_id>/start                                   cap: manage_apps (scoped)
     POST /apps/<app_id>/remove       {keep_data?}               cap: manage_apps (scoped)
     GET  /system                                                cap: system_read
-    POST /delegate  {app_id, service, grant, scope?}            cap: delegate_permissions
+    POST /delegate  {app_id, service, grant}                     cap: delegate_permissions
 
 All permission checks fail closed and are enforced here by the router (the
 platform has no provider app to defer to).
@@ -391,11 +391,13 @@ async def _handle_delegate(
 ) -> Response[Any]:
     """Grant one of the caller's OWN permissions to an app the caller deployed.
 
-    Body: {app_id, service, grant, scope?}.  Enforces both delegation gates:
-    the caller must hold ``delegate_permissions``, must already hold the exact
-    ``grant`` for ``service``, and the target app must be one the caller
-    deployed (installed_by == caller).  This is the non-escalating
-    "make copies of my privileges" primitive.
+    Body: {app_id, service, grant}.  Enforces all delegation gates: the caller
+    must hold ``delegate_permissions``, must already hold a grant with this
+    payload for ``service``, and the target app must be one the caller deployed
+    (installed_by == caller).  The child receives the caller's grant at the
+    caller's own scope/provider (never broader), so this is the non-escalating
+    "make copies of my privileges" primitive.  The scope is inherited from the
+    caller's grant, not taken from the request.
     """
     try:
         body = await request.json()
@@ -422,23 +424,39 @@ async def _handle_delegate(
             db=db,
         )
 
-    # The target must be an app THIS caller deployed.
+    # The target must be an app THIS caller deployed.  A missing app and an app
+    # the caller didn't deploy return the SAME 403 so a caller can't probe which
+    # arbitrary app_ids exist (it can only ever act on apps it deployed).
     row = db.execute("SELECT installed_by FROM apps WHERE app_id = ?", (target_app_id,)).fetchone()
-    if row is None:
-        return _json_error("not_found", f"app {target_app_id!r} not found", 404)
-    if row["installed_by"] != consumer_app_id:
-        return _permission_denied(f"{consumer_app_id} did not deploy {target_app_id!r}; cannot delegate to it")
+    if row is None or row["installed_by"] != consumer_app_id:
+        return _permission_denied(f"{consumer_app_id} may not delegate to {target_app_id!r}")
 
-    # Remaining delegation gate (caller already holds the exact grant).
+    # Remaining delegation gate: the caller must already hold a grant with this
+    # payload for the service.  The decision carries the caller's own matching
+    # grant so we copy its EXACT scope/provider to the child — never broader.
     caller_grants_for_service = get_granted_permissions_v2(consumer_app_id, service)
-    if (
-        reason := check_delegation_allowed(
-            caller_platform_grants=caller_platform_grants,
-            caller_grants_for_target_service=caller_grants_for_service,
-            grant_to_delegate=grant,
-        )
-    ) is not None:
-        return _permission_denied(reason)
+    decision = check_delegation_allowed(
+        caller_platform_grants=caller_platform_grants,
+        caller_grants_for_target_service=caller_grants_for_service,
+        grant_to_delegate=grant,
+    )
+    if decision.reason is not None or decision.granted is None:
+        return _permission_denied(decision.reason or "delegation not allowed")
 
-    grant_permission_v2(target_app_id, service, grant, scope="global")
-    return _json_ok({"ok": True, "app_id": target_app_id, "service": service, "grant": grant})
+    held = decision.granted
+    grant_permission_v2(
+        target_app_id,
+        service,
+        held.grant,
+        scope=held.scope,
+        provider_app_id=held.provider_app_id,
+    )
+    return _json_ok(
+        {
+            "ok": True,
+            "app_id": target_app_id,
+            "service": service,
+            "grant": held.grant,
+            "scope": held.scope,
+        }
+    )
