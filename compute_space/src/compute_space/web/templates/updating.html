@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="robots" content="noindex">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Updating&hellip;</title>
+  <style>
+    body { font-family: -apple-system, system-ui, sans-serif; max-width: 640px; margin: 3em auto; padding: 0 1em; color: #222; }
+    h1 { font-size: 1.4em; display: flex; align-items: center; gap: 0.5em; }
+    .sp { display: inline-block; width: 1em; height: 1em; border: 2px solid #ddd; border-top-color: #36c; border-radius: 50%; animation: r 1s linear infinite; }
+    @keyframes r { to { transform: rotate(360deg); } }
+    ul { list-style: none; padding: 0; }
+    li { padding: 0.4em 0.6em; border-left: 2px solid #ddd; margin: 0.2em 0; }
+    li.done { border-color: #080; }
+    li.failed { border-color: #c00; color: #c00; }
+    .ts { color: #888; font-size: 0.8em; margin-right: 0.6em; }
+    .hint { color: #666; font-size: 0.9em; margin-top: 1.5em; }
+  </style>
+</head>
+<body>
+  <h1><span class="sp" id="sp"></span> Updating this instance&hellip;</h1>
+  <ul id="log"><li>Starting&hellip;</li></ul>
+  <p class="hint">This page refreshes automatically. The instance may briefly go offline while it restarts &mdash; that is expected. Please keep this tab open.</p>
+  <script src="{{ static_url('js/update-progress.js') }}"></script>
+</body>
+</html>

@@ -27,12 +27,17 @@ from compute_space.core.domains import primary_domain
 from compute_space.core.identity_store import get_connect_base_url
 from compute_space.core.identity_store import get_instance_identity
 from compute_space.core.identity_store import set_instance_identity
+from compute_space.core.logging import logger
+from compute_space.core.seamless_update import clear_update_token
+from compute_space.core.seamless_update import new_update_token
+from compute_space.core.seamless_update import persist_update_token
 from compute_space.core.system_agent import SystemAgentError
 from compute_space.core.system_agent import system_agent_apply
 from compute_space.core.system_agent import system_agent_fetch
 from compute_space.core.system_agent import system_agent_get_remote
 from compute_space.core.system_agent import system_agent_set_remote
 from compute_space.core.system_agent import system_agent_status
+from compute_space.core.update_progress import read_progress
 from compute_space.core.updates import trigger_restart
 from compute_space.core.util import not_blank
 from compute_space.web.auth.auth import require_owner_auth
@@ -72,6 +77,13 @@ class SetOwnerUsernameRequest:
 class CheckUpdatesResponse:
     state: str
     error: str | None = None
+
+
+@attr.s(auto_attribs=True, frozen=True)
+class ApplyUpdateResponse:
+    # Token the browser carries to the detached updater during the downtime
+    # window so it recognizes the owner's tab and streams live progress logs.
+    token: str
 
 
 @attr.s(auto_attribs=True, frozen=True)
@@ -135,12 +147,40 @@ async def check_for_updates() -> CheckUpdatesResponse:
 _apply_lock = asyncio.Lock()
 
 
-@post("/api/settings/update", status_code=204, guards=[require_owner_auth])
-async def apply_update() -> None:
+async def _run_apply_and_restart() -> None:
+    """Run the (blocking) agent apply. On success the agent restarts openhost,
+    killing this process; only failures return here, where we clear the token so
+    a later visitor doesn't see a stale, unrelated progress log.
+
+    Invariant: this is only ever scheduled by apply_update AFTER it has acquired
+    _apply_lock and handed ownership here, so this coroutine always holds the lock
+    and must release it (directly, not via a locked() check) on the failure path."""
+    try:
+        await system_agent_apply()
+    except SystemAgentError:
+        logger.exception("system agent apply failed")
+        await clear_update_token()
+    finally:
+        # Release the serialization lock so the owner can retry after a failure.
+        # (On success this never runs — the process is gone.)
+        _apply_lock.release()
+
+
+@post("/api/settings/update", status_code=200, guards=[require_owner_auth])
+async def apply_update() -> ApplyUpdateResponse:
+    # Acquire without releasing on the happy path: the background apply task owns
+    # the lock for the rest of this process's life and releases it only if the
+    # apply fails (see _run_apply_and_restart). A locked() check gives the owner
+    # a clear 409 instead of blocking.
     if _apply_lock.locked():
         raise HTTPException(detail="An update is already in progress.", status_code=409)
+    await _apply_lock.acquire()
 
-    async with _apply_lock:
+    # Ownership of the lock transfers to the background apply task only once it is
+    # successfully scheduled. Until then, ANY error (expected or not) must release
+    # it, or a single failed precheck would wedge updates forever.
+    handed_off = False
+    try:
         try:
             migration_status = await system_agent_status()
         except SystemAgentError as e:
@@ -149,10 +189,36 @@ async def apply_update() -> None:
         if not migration_status.ok and migration_status.reason != "behind":
             raise HTTPException(detail=migration_status.message, status_code=409)
 
-        try:
-            await system_agent_apply()
-        except SystemAgentError as e:
-            raise HTTPException(detail=str(e), status_code=500) from e
+        # Mint + persist the token BEFORE kicking off the apply so the updater
+        # (launched by the agent at the end of the walk) can match the owner's tab
+        # the instant it comes up. Persisting runs via the root agent so it works
+        # regardless of updater-dir ownership. The apply then runs as a background
+        # task so this response — carrying the token — reaches the browser before
+        # the restart kills this process.
+        token = new_update_token()
+        await persist_update_token(token)
+        asyncio.ensure_future(_run_apply_and_restart())
+        handed_off = True
+        return ApplyUpdateResponse(token=token)
+    finally:
+        if not handed_off and _apply_lock.locked():
+            _apply_lock.release()
+
+
+@attr.s(auto_attribs=True, frozen=True)
+class UpdateProgressResponse:
+    entries: list[dict[str, Any]]
+    terminal: bool
+
+
+@get("/updates", guards=[require_owner_auth])
+async def update_progress() -> UpdateProgressResponse:
+    # Served by compute_space while it is UP during the (long) apply phase, so the
+    # /updating page streams live progress before the brief final restart. The
+    # detached updater serves the SAME path+shape during that restart. Owner-authed
+    # here (cookie); the updater authenticates via the URL token instead.
+    view = read_progress()
+    return UpdateProgressResponse(entries=view.entries, terminal=view.terminal)
 
 
 @post("/api/settings/restart_compute_space", status_code=204, guards=[require_owner_auth])
@@ -309,6 +375,7 @@ api_settings_routes = Router(
         set_remote,
         check_for_updates,
         apply_update,
+        update_progress,
         restart_compute_space,
         connect_imbue_status,
         connect_imbue_start,

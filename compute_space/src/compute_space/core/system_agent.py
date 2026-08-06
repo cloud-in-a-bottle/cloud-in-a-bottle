@@ -97,3 +97,15 @@ def system_agent_get_remote() -> RemoteInfo:
 @async_wrap
 def system_agent_status() -> MigrationStatus:
     return _call_system_agent_sync(MigrationStatus, "status")
+
+
+@async_wrap
+def system_agent_set_update_token(token: str) -> None:
+    # Written via the (root) agent so it lands in the root-managed updater dir
+    # regardless of directory ownership, and is readable by the root updater.
+    _run_system_agent("updater", "set-token", token, timeout=30)
+
+
+@async_wrap
+def system_agent_clear_update_token() -> None:
+    _run_system_agent("updater", "clear-token", timeout=30)

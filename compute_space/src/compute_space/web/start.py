@@ -64,6 +64,10 @@ def _terminate_children(children: list[subprocess.Popen[bytes]]) -> None:
 def _bootstrap(config: Config) -> None:
     """One-time process-wide initialization shared by the setup and full apps."""
     set_active_config(config)
+    # Point the shared updater-path helpers (openhost_system_agent.updater.paths)
+    # at this instance's data dir so compute_space reads the same update progress
+    # log / token file the detached updater and the root apply walk use.
+    os.environ["OPENHOST_DATA_DIR"] = str(config.openhost_data_path)
     setup_file_logging(Path(os.path.dirname(config.db_path)) / "compute_space.log")
     load_keys(config.keys_dir)
     init_db(config.db_path)

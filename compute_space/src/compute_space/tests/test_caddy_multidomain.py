@@ -249,3 +249,97 @@ def test_reload_cold_restarts_when_admin_off(tmp_path: Path, monkeypatch: pytest
 
     assert ran == []  # never shelled out to `caddy reload`
     assert len(spawned) == 1  # cold restart instead
+
+
+# ── _spawn_caddy bind-retry (self-update handoff) ────────────────────────────
+
+
+class _RunningProc:
+    """Caddy that binds successfully: wait() blocks (raises TimeoutExpired)."""
+
+    pid = 100
+
+    def poll(self) -> None:
+        return None
+
+    def wait(self, timeout: float | None = None) -> int:
+        raise subprocess.TimeoutExpired(cmd="caddy", timeout=timeout or 0)
+
+
+class _DeadProc:
+    """Caddy that exited immediately (bind conflict): wait() returns non-zero."""
+
+    pid = 101
+    returncode = 1
+
+    def poll(self) -> int:
+        return 1
+
+    def wait(self, timeout: float | None = None) -> int:
+        return 1
+
+
+_ADDR_IN_USE_LINE = "Error: loading initial config: ... listen tcp :443: bind: address already in use"
+
+
+class _FakeThread:
+    """Stand-in for the log-streaming thread; join() is a no-op in tests."""
+
+    def join(self, timeout: float | None = None) -> None:
+        pass
+
+
+def test_spawn_caddy_returns_on_successful_bind(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    spawns: list[int] = []
+    monkeypatch.setattr(caddy, "_spawn_caddy_once", lambda p: (spawns.append(1) or _RunningProc(), [], _FakeThread()))  # type: ignore[func-returns-value,arg-type]
+    monkeypatch.setattr(caddy.time, "sleep", lambda _: None)
+    proc = caddy._spawn_caddy(tmp_path / "Caddyfile")
+    assert isinstance(proc, _RunningProc)
+    assert len(spawns) == 1  # bound first try, no retry
+
+
+def test_spawn_caddy_retries_until_ports_free(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    # First two spawns hit a bind conflict (updater still holds :443), third binds.
+    seq = [
+        (_DeadProc(), [_ADDR_IN_USE_LINE], _FakeThread()),
+        (_DeadProc(), [_ADDR_IN_USE_LINE], _FakeThread()),
+        (_RunningProc(), [], _FakeThread()),
+    ]
+    calls = {"n": 0}
+
+    def fake_once(_p):  # type: ignore[no-untyped-def]
+        triple = seq[calls["n"]]
+        calls["n"] += 1
+        return triple
+
+    monkeypatch.setattr(caddy, "_spawn_caddy_once", fake_once)
+    monkeypatch.setattr(caddy.time, "sleep", lambda _: None)
+    proc = caddy._spawn_caddy(tmp_path / "Caddyfile")
+    assert isinstance(proc, _RunningProc)
+    assert calls["n"] == 3  # retried past the two conflicts
+
+
+def test_spawn_caddy_gives_up_after_window(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    # Ports never free (persistent bind conflict): after the retry window, return
+    # the dead proc so the caller sees the failure rather than a false "Caddy up".
+    monkeypatch.setattr(caddy, "_spawn_caddy_once", lambda p: (_DeadProc(), [_ADDR_IN_USE_LINE], _FakeThread()))  # type: ignore[arg-type]
+    monkeypatch.setattr(caddy.time, "sleep", lambda _: None)
+    monkeypatch.setattr(caddy, "_CADDY_BIND_RETRY_SECONDS", 0.0)
+    proc = caddy._spawn_caddy(tmp_path / "Caddyfile")
+    assert isinstance(proc, _DeadProc)
+
+
+def test_spawn_caddy_fails_fast_on_non_bind_error(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    # A config/syntax error (NOT a bind conflict) must not be retried — return the
+    # dead proc immediately instead of spinning the whole retry window.
+    calls = {"n": 0}
+
+    def fake_once(_p):  # type: ignore[no-untyped-def]
+        calls["n"] += 1
+        return _DeadProc(), ["Error: adapting config: unexpected token"], _FakeThread()
+
+    monkeypatch.setattr(caddy, "_spawn_caddy_once", fake_once)
+    monkeypatch.setattr(caddy.time, "sleep", lambda _: None)
+    proc = caddy._spawn_caddy(tmp_path / "Caddyfile")
+    assert isinstance(proc, _DeadProc)
+    assert calls["n"] == 1  # no retry on a non-bind failure

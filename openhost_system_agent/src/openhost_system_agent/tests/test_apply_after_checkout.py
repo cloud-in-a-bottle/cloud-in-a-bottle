@@ -248,6 +248,10 @@ def test_main_reclaims_host_ownership_before_migrations_and_install() -> None:
         patch.object(aac, "_ensure_repo_trusted"),
         patch.object(aac, "apply_system_migrations", side_effect=lambda: order.append("migrations")),
         patch.object(aac, "reclaim_host_ownership", side_effect=lambda: order.append("reclaim")),
+        # The detached updater launch is a best-effort cosmetic side effect just
+        # before the restart; stub it so the test neither spawns a real systemd
+        # scope nor pollutes the subprocess-call ordering asserted below.
+        patch.object(aac, "launch_updater", return_value=True),
         patch("openhost_system_agent.apply_after_checkout.subprocess.run", side_effect=_install) as mock_run,
         patch.object(aac, "_next_step", return_value=None),
     ):

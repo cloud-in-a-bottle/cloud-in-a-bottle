@@ -15,6 +15,12 @@ from openhost_system_agent.update import fetch_updates
 from openhost_system_agent.update import get_remote_info
 from openhost_system_agent.update import set_remote_url
 from openhost_system_agent.update import show_diff
+from openhost_system_agent.updater.launcher import launch_updater
+from openhost_system_agent.updater.paths import clear_token
+from openhost_system_agent.updater.paths import tls_cert_path
+from openhost_system_agent.updater.paths import tls_key_path
+from openhost_system_agent.updater.paths import write_token
+from openhost_system_agent.updater.server import run as run_updater_server
 
 
 def _output(obj: object) -> None:
@@ -88,13 +94,37 @@ class StatusCmd:
         _output(get_migration_status())
 
 
+@cappa.command(name="updater", help="Seamless-update downtime server (internal; launched by compute_space).")
+@attrs.define
+class UpdaterCmd:
+    @cappa.command(name="launch", help="Launch the detached updater mini-server (survives the compute_space restart).")
+    def launch(self) -> None:
+        # Best-effort and cosmetic: report whether the detached server started,
+        # but never fail the caller — the update proceeds either way.
+        print(json.dumps({"ok": True, "launched": launch_updater()}))
+
+    @cappa.command(name="serve", help="Run the updater mini-server in the foreground (invoked inside the scope).")
+    def serve(self) -> None:
+        run_updater_server(tls_cert_path(), tls_key_path())
+
+    @cappa.command(name="set-token", help="Persist the update token so the updater can auth the owner tab.")
+    def set_token(self, token: Annotated[str, cappa.Arg(help="Opaque update token minted by compute_space")]) -> None:
+        write_token(token)
+        print(json.dumps({"ok": True}))
+
+    @cappa.command(name="clear-token", help="Remove the update token (e.g. after a failed apply).")
+    def clear_token(self) -> None:
+        clear_token()
+        print(json.dumps({"ok": True}))
+
+
 @cappa.command(
     name="openhost_system_agent",
     help="OpenHost system agent — host-level updates and migrations.",
 )
 @attrs.define
 class SystemAgent:
-    subcommand: cappa.Subcommands[UpdateCmd | StatusCmd]
+    subcommand: cappa.Subcommands[UpdateCmd | StatusCmd | UpdaterCmd]
 
 
 def main() -> None:

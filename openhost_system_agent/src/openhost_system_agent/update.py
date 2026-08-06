@@ -14,6 +14,7 @@ from openhost_system_agent.protocol import DiffCommit
 from openhost_system_agent.protocol import DiffResult
 from openhost_system_agent.protocol import FetchResult
 from openhost_system_agent.protocol import RemoteInfo
+from openhost_system_agent.updater import progress
 
 _PACKAGE_DIR = Path(__file__).resolve().parent
 _PROJECT_DIR = _PACKAGE_DIR.parent.parent.parent
@@ -260,6 +261,11 @@ def apply_update() -> NoReturn:
     if repo.is_dirty(untracked_files=True):
         raise RuntimeError("Working tree has uncommitted changes. Stash or commit first.")
 
+    # Fresh progress log for this apply, so the updater never shows stale lines
+    # from a previous run. Best-effort; never raises.
+    progress.reset_progress()
+    progress.record("fetch", "Fetching latest code\u2026")
+
     repo.git.fetch("origin", "--tags")
     if not _get_sorted_tags(repo) and _get_target_ref(repo) is None:
         raise RuntimeError("No tags found on remote. Tag a release first.")
@@ -269,6 +275,7 @@ def apply_update() -> NoReturn:
     step = _next_step(repo)
     if step is not None:
         logger.info(f"Checking out {step}...")
+        progress.record("checkout", f"Checking out {step}\u2026", ref=step)
         repo.git.checkout(_resolve_ref_sha(repo, step) or step)
         repo.git.clean("-fd")
 

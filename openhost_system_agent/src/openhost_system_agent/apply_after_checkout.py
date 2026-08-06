@@ -33,6 +33,8 @@ from pathlib import Path
 
 from openhost_system_agent.migrations.runner import apply_system_migrations
 from openhost_system_agent.reclaim import reclaim_host_ownership
+from openhost_system_agent.updater import progress
+from openhost_system_agent.updater.launcher import launch_updater
 
 PIXI_BIN = "/home/host/.pixi/bin/pixi"
 
@@ -162,25 +164,40 @@ def main() -> None:
 
     # Migrations run before install so a toolchain upgrade (e.g. pixi) takes
     # effect before deps are installed for this checkout.
+    progress.record("migrate", "Applying system migrations\u2026")
     apply_system_migrations()
 
     # Install as the unprivileged 'host' user, not root. The openhost service
     # runs as host via `pixi run`, and pixi tracks its PyPI sync per-user; a
     # root install leaves root-owned files in the env that the host service
     # then can't update, so its `pixi run` fails with EACCES.
+    progress.record("install", "Installing dependencies\u2026")
     result = subprocess.run(["sudo", "-u", "host", "-H", PIXI_BIN, "install"], cwd=project, timeout=300)
     if result.returncode != 0:
+        progress.record(progress.PHASE_FAILED, f"Dependency install failed (exit {result.returncode}).")
         print(f"pixi install failed (exit {result.returncode})", file=sys.stderr)
         sys.exit(1)
 
     nxt = _next_step(project)
     if nxt:
         # Check out the resolved commit (a branch tip becomes detached HEAD).
+        progress.record("checkout", f"Checking out {nxt}\u2026", ref=nxt)
         subprocess.run(["git", "checkout", _resolve_ref_sha(project, nxt) or nxt], cwd=project, check=True, timeout=60)
         subprocess.run(["git", "clean", "-fd"], cwd=project, check=True, timeout=60)
         # Tail-call into the next ref's code, replacing this process so the
         # walk stays a single process regardless of how many steps we're behind.
         os.execv(sys.executable, [sys.executable, str(Path(__file__).resolve())])
+
+    # Destination reached. Record "done" BEFORE the restart: the restart kills
+    # this process, so anything after systemctl may never run. The updater
+    # server tails the log and reloads the browser onto the fresh dashboard.
+    progress.record(progress.PHASE_DONE, "Update complete. Restarting\u2026")
+
+    # Launch the detached downtime server just before the restart, so it is
+    # ready to bind 80/443 the instant Caddy releases them. It runs in its own
+    # systemd scope and therefore survives the cgroup-wide SIGTERM below.
+    # Best-effort: launch_updater never raises.
+    launch_updater()
 
     # On the destination: restart openhost so the new code takes over. When the
     # update was triggered from the dashboard this process shares openhost's
