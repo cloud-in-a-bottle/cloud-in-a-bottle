@@ -23,9 +23,7 @@ def build_grant_approval_url(consumer_app_id: str, service_url: str, grant: Any,
     surface a one-click owner-approval link.  Each value is urlencoded because
     ``service_url`` contains ``/`` and ``:`` and ``grant`` is JSON.
     """
-    query = urlencode(
-        {"app": consumer_app_id, "service": service_url, "grant": json.dumps(grant, sort_keys=True)}
-    )
+    query = urlencode({"app": consumer_app_id, "service": service_url, "grant": json.dumps(grant, sort_keys=True)})
     approve_path = f"/approve-permissions-v2?{query}"
     # Server-side (no browsing request in hand), so build on the canonical/primary
     # domain; use its scheme so a plain-http primary (e.g. a `.local` instance)
