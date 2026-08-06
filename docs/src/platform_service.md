@@ -1,9 +1,9 @@
-# The OpenHost platform service (prototype)
+# The OpenHost platform service
 
-> Prototype implementing the platform-access design: apps reach platform
-> operations over the **same** v2 service interface they use to call other
-> apps, served in-process by the router (like the `installer` service) and
-> gated by ordinary `permissions_v2` grants — **not** by flat API-token scopes.
+> Apps reach platform operations over the **same** v2 service interface they use
+> to call other apps, served in-process by the router (like the `installer`
+> service) and gated by ordinary `permissions_v2` grants tied to the calling
+> app's identity.
 
 ## Why
 
@@ -73,7 +73,7 @@ The router grants `G` on `S` to B **only if**:
 So A can hand out copies of (a subset of) its own privileges but can never mint
 a grant it doesn't have — no privilege escalation.
 
-## Not in this prototype (deferred, per design)
+## Not included yet (tracked as follow-ups)
 
 - SSH access to the compute space.
 - Write access to platform settings.

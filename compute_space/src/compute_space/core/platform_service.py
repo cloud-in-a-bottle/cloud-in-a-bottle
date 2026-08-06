@@ -3,7 +3,7 @@ same v2 service interface they use to call other apps, but dispatched in-process
 by the router (like the ``installer`` service) rather than proxied to a provider
 app.
 
-Design (Zack's model, not the flat API-token-scope model):
+Design:
 
 - Apps consume this service via a normal ``[[services.v2.consumes]]`` block and
   call ``/api/services/v2/call/<shortname>/...``.  Auth is the app's
@@ -30,9 +30,8 @@ Grant payloads (JSON objects stored in ``permissions_v2.grant_payload``):
         ``own``  = only apps this caller deployed (installed_by == caller).
         ``all``  = every app on the instance.
         ``<id>`` = one specific app.
-        Managing apps does NOT include granting them permissions (that's
-        ``delegate_permissions``), matching Zack's "manage but not add
-        permissions".
+        Managing apps does NOT include granting them permissions — that is a
+        separate capability (``delegate_permissions``).
 
     {"capability": "system_read"}
         Read-only platform/system info (version, disk, memory, ports, logs).
