@@ -235,6 +235,25 @@ def test_list_apps_all_sees_everything(client: TestClient[Litestar], cfg: Any) -
     assert {"mine", "theirs"} <= names
 
 
+def test_logs_own_app_allowed(client: TestClient[Litestar], cfg: Any) -> None:
+    _grant(cfg.db_path, CALLER_APP_ID, {"capability": "manage_apps", "target": "own"})
+    aid = _insert_app(cfg.db_path, name="mine", installed_by=CALLER_APP_ID, port=19750)
+    with mock.patch(
+        "compute_space.web.routes.platform_dispatch.get_docker_logs", return_value="line1\nline2\n"
+    ) as gl:
+        resp = client.get(_url(f"apps/{aid}/logs"), headers=_headers())
+    assert resp.status_code == 200
+    assert resp.text == "line1\nline2\n"
+    gl.assert_called_once()
+
+
+def test_logs_others_app_denied_under_own(client: TestClient[Litestar], cfg: Any) -> None:
+    _grant(cfg.db_path, CALLER_APP_ID, {"capability": "manage_apps", "target": "own"})
+    aid = _insert_app(cfg.db_path, name="theirs", installed_by="other", port=19751)
+    resp = client.get(_url(f"apps/{aid}/logs"), headers=_headers())
+    assert resp.status_code == 403
+
+
 def test_status_own_app_allowed(client: TestClient[Litestar], cfg: Any) -> None:
     _grant(cfg.db_path, CALLER_APP_ID, {"capability": "manage_apps", "target": "own"})
     aid = _insert_app(cfg.db_path, name="mine", installed_by=CALLER_APP_ID, port=19705)
