@@ -1,38 +1,20 @@
 # Bundled Service Specs
 
-These are the services that ship with OpenHost. Each one is a normal app that
-declares itself a provider — nothing about them is privileged — so their specs
-double as worked examples of what a provider looks like.
-
-A consumer app reaches these through the router, not directly:
+This page documents the API routes of the bundled service apps in Openhost. They hold the same permissions as other apps, but just are default. A consumer app reaches these through the router, not directly:
 
 ```
-GET|POST|WS [OPENHOST_ROUTER_URL]/api/services/v2/call/<shortname>/<rest>
+GET|POST|WS [OPENHOST_ROUTER_URL]/api/services/v2/call/<name>/<rest>
 ```
 
-`<shortname>` is the name you gave the service in your own manifest's
-`[[services.v2.consumes]]` block, and `<rest>` is the path below — so a call to
-`/get` on a service you consume as `secrets` becomes
-`/api/services/v2/call/secrets/get`. See
-[Cross-App Services](./cross_app_services.md) for how providers are resolved and
-how permission grants are declared and approved.
+`<name>` is the name of the app, which is mutable. `<rest>` is the remainder of the path. See [cross_app_services](./cross_app_services.md) for conventions on providers and permissions. 
 
-Each spec's `description` documents the permission grant format that service
-expects. The router enforces the grants; the service validates them again on its
-own side before returning anything.
+The `description` sections document requirements for each request. The router enforces the grants to and from the service.
 
 ## Machine-readable specs
 
-`GET /docs/services` lists the service names this zone ships; each spec is at
-`GET /docs/services/<name>/openapi.yaml`. The same files are committed to the
-OpenHost repo under `services/<name>/openapi.yaml`, so you can generate a client
-against a service without a zone to hand.
+`GET /docs/services` lists the service names exposed by all the apps. The default apps serve plain docs at `GET /docs/services/<name>/openapi.yaml`, which are also in the Openhost repo at `services/<name>/openapi.yaml`.
 
 ## Reference
-
-The browser below renders each spec, and needs to reach a CDN to do it. On an
-offline or egress-filtered zone it won't load — read the raw documents at the
-URLs above instead.
 
 <div id="service-specs" class="redoc-embed"></div>
 <script src="https://cdn.jsdelivr.net/npm/redoc@2.5.0/bundles/redoc.standalone.js"></script>

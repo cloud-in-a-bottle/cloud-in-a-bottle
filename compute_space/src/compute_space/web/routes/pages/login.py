@@ -51,7 +51,9 @@ async def login_get(
     return Template(template_name="login.html", context={"next": next_param})
 
 
-@post("/login", status_code=200)
+# Also unauthenticated and state-changing (it mints a session), so guard it against
+# cross-site POSTs the same way /logout is.
+@post("/login", status_code=200, guards=[require_same_origin])
 async def login_post(
     request: Request[Any, Any, Any],
     db: NamedDependency[sqlite3.Connection],

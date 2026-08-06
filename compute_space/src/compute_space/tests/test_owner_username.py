@@ -465,6 +465,22 @@ def test_login_creates_session_resolving_to_persisted_username(cfg: Any, login_c
     assert _session_username_after(cfg.db_path) == "alice"
 
 
+def test_login_rejects_cross_origin_request(cfg: Any, login_client: TestClient[Litestar]) -> None:
+    """A cross-site POST to /login (login CSRF) must be rejected without minting a
+    session, so a hostile page can't land the operator in a session it chose."""
+    _seed_user(cfg.db_path, "alice", password="loginpass1")
+
+    resp = login_client.post(
+        "/login",
+        data={"password": "loginpass1"},
+        headers={"Origin": "https://evil.example.com"},
+        follow_redirects=False,
+    )
+
+    assert resp.status_code == 401, resp.text
+    assert _session_count(cfg.db_path) == 0
+
+
 # ---------------------------------------------------------------------------
 # /logout: the control surfaced by the dashboard nav button must revoke the
 # session and clear the cookie. The button is just a form POST to this route,
