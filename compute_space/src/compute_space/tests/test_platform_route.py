@@ -145,7 +145,29 @@ def _headers(token: str = CALLER_TOKEN) -> dict[str, str]:
 def test_deploy_without_grant_denied(client: TestClient[Litestar]) -> None:
     resp = client.post(_url("deploy"), headers=_headers(), content=json.dumps({"repo_url": "https://github.com/a/b"}))
     assert resp.status_code == 403
-    assert resp.json()["error"] == "permission_required"
+    body = resp.json()
+    assert body["error"] == "permission_required"
+    # A denied call carries a one-click owner-approval link for the grant it needs.
+    rg = body["required_grant"]
+    assert rg["grant"] == {"capability": "deploy", "repo_url_prefix": "https://github.com/a/b"}
+    assert "/approve-permissions-v2?" in rg["grant_url"]
+    # The platform service_url is present (url-encoded) in the approval link.
+    assert "services%2Fplatform" in rg["grant_url"]
+
+
+def test_manage_denial_proposes_own_grant_url(client: TestClient[Litestar]) -> None:
+    resp = client.get(_url("apps"), headers=_headers())
+    assert resp.status_code == 403
+    rg = resp.json()["required_grant"]
+    assert rg["grant"] == {"capability": "manage_apps", "target": "own"}
+    assert "/approve-permissions-v2?" in rg["grant_url"]
+
+
+def test_system_denial_proposes_system_read_grant_url(client: TestClient[Litestar]) -> None:
+    resp = client.get(_url("system"), headers=_headers())
+    assert resp.status_code == 403
+    rg = resp.json()["required_grant"]
+    assert rg["grant"] == {"capability": "system_read"}
 
 
 def test_deploy_with_matching_grant_succeeds_and_stamps_installed_by(client: TestClient[Litestar], cfg: Any) -> None:

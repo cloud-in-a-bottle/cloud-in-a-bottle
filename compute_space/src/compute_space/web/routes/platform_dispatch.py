@@ -56,13 +56,20 @@ from compute_space.core.installer import install_from_repo_url
 from compute_space.core.logging import get_log_path
 from compute_space.core.logging import logger
 from compute_space.core.platform_service import CAP_DELEGATE_PERMISSIONS
+from compute_space.core.platform_service import CAP_DEPLOY
+from compute_space.core.platform_service import CAP_MANAGE_APPS
 from compute_space.core.platform_service import CAP_SYSTEM_READ
+from compute_space.core.platform_service import GRANT_KEY_CAPABILITY
+from compute_space.core.platform_service import GRANT_KEY_REPO_URL_PREFIX
+from compute_space.core.platform_service import GRANT_KEY_TARGET
 from compute_space.core.platform_service import PLATFORM_SERVICE_URL
 from compute_space.core.platform_service import PLATFORM_SERVICE_VERSION
+from compute_space.core.platform_service import TARGET_OWN
 from compute_space.core.platform_service import check_delegation_allowed
 from compute_space.core.platform_service import check_deploy_allowed
 from compute_space.core.platform_service import has_capability
 from compute_space.core.platform_service import resolve_manage_scope
+from compute_space.core.services_v2 import build_grant_approval_url
 from compute_space.core.storage import storage_status
 
 
@@ -74,19 +81,41 @@ def _json_ok(body: dict[str, Any]) -> Response[dict[str, Any]]:
     return Response(content=body, status_code=200, media_type=MediaType.JSON)
 
 
-def _permission_denied(message: str) -> Response[dict[str, Any]]:
+def _permission_denied(
+    message: str,
+    *,
+    consumer_app_id: str | None = None,
+    proposed_grant: Any = None,
+    db: sqlite3.Connection | None = None,
+) -> Response[dict[str, Any]]:
     """403 with a machine-readable ``permission_required`` shape (parallels the
-    installer's denial body so clients can handle both uniformly)."""
-    return Response(
-        content={"error": "permission_required", "message": message},
-        status_code=403,
-        media_type=MediaType.JSON,
-    )
+    installer's denial body so clients can handle both uniformly).
+
+    When a concrete ``proposed_grant`` (plus ``consumer_app_id`` and ``db``) is
+    supplied, decorate the body with a ``required_grant`` carrying a one-click
+    owner-approval ``grant_url`` for the platform service — so a denied app can
+    prompt the owner to approve exactly the grant it needs.
+    """
+    body: dict[str, Any] = {"error": "permission_required", "message": message}
+    if proposed_grant is not None and consumer_app_id is not None and db is not None:
+        body["required_grant"] = {
+            "grant": proposed_grant,
+            "scope": "global",
+            "grant_url": build_grant_approval_url(consumer_app_id, PLATFORM_SERVICE_URL, proposed_grant, db),
+        }
+    return Response(content=body, status_code=403, media_type=MediaType.JSON)
 
 
 def _platform_grants(consumer_app_id: str) -> list[Any]:
     """The caller's grant payloads for the platform service."""
     return [gp.grant for gp in get_granted_permissions_v2(consumer_app_id, PLATFORM_SERVICE_URL)]
+
+
+# Proposed grants offered to the owner on a denial, so a denied app gets a
+# one-click approval link for the least-privilege grant that would unblock it.
+_GRANT_MANAGE_OWN = {GRANT_KEY_CAPABILITY: CAP_MANAGE_APPS, GRANT_KEY_TARGET: TARGET_OWN}
+_GRANT_SYSTEM_READ = {GRANT_KEY_CAPABILITY: CAP_SYSTEM_READ}
+_GRANT_DELEGATE = {GRANT_KEY_CAPABILITY: CAP_DELEGATE_PERMISSIONS}
 
 
 def _version_ok(version_spec: str) -> Response[dict[str, Any]] | None:
@@ -157,7 +186,10 @@ async def _handle_deploy(
 
     grants = _platform_grants(consumer_app_id)
     if (reason := check_deploy_allowed(repo_url, grants)) is not None:
-        return _permission_denied(reason)
+        # Propose a deploy grant covering exactly the requested repo_url so the
+        # owner can approve it in one click.
+        proposed = {GRANT_KEY_CAPABILITY: CAP_DEPLOY, GRANT_KEY_REPO_URL_PREFIX: repo_url}
+        return _permission_denied(reason, consumer_app_id=consumer_app_id, proposed_grant=proposed, db=db)
 
     try:
         # Stamp installed_by with the caller so "manage apps I deployed" and
@@ -178,7 +210,9 @@ async def _handle_deploy(
 def _handle_list_apps(consumer_app_id: str, db: sqlite3.Connection) -> Response[Any]:
     scope = resolve_manage_scope(_platform_grants(consumer_app_id))
     if not (scope.all_apps or scope.own_apps or scope.app_ids):
-        return _permission_denied("no manage_apps grant present")
+        return _permission_denied(
+            "no manage_apps grant present", consumer_app_id=consumer_app_id, proposed_grant=_GRANT_MANAGE_OWN, db=db
+        )
     rows = db.execute("SELECT app_id, name, status, error_message, installed_by FROM apps ORDER BY name").fetchall()
     apps = [
         {"app_id": r["app_id"], "name": r["name"], "status": r["status"], "error": r["error_message"]}
@@ -202,7 +236,9 @@ def _load_manageable_app(
     """
     scope = resolve_manage_scope(_platform_grants(consumer_app_id))
     if not (scope.all_apps or scope.own_apps or scope.app_ids):
-        return None, _permission_denied("no manage_apps grant present")
+        return None, _permission_denied(
+            "no manage_apps grant present", consumer_app_id=consumer_app_id, proposed_grant=_GRANT_MANAGE_OWN, db=db
+        )
     row = db.execute(
         "SELECT app_id, name, status, error_message, container_id, installed_by FROM apps WHERE app_id = ?",
         (app_id,),
@@ -324,7 +360,9 @@ async def _version_info() -> dict[str, Any]:
 async def _handle_system(consumer_app_id: str, db: sqlite3.Connection, config: Config) -> Response[Any]:
     """Read-only system info: version, storage, external listening ports, log tail."""
     if not has_capability(_platform_grants(consumer_app_id), CAP_SYSTEM_READ):
-        return _permission_denied("no system_read grant present")
+        return _permission_denied(
+            "no system_read grant present", consumer_app_id=consumer_app_id, proposed_grant=_GRANT_SYSTEM_READ, db=db
+        )
 
     version = await _version_info()
     # Off-loop: storage snapshot + ss/podman walks are blocking.
@@ -377,7 +415,12 @@ async def _handle_delegate(
     # 404-vs-403 distinction.
     caller_platform_grants = _platform_grants(consumer_app_id)
     if not has_capability(caller_platform_grants, CAP_DELEGATE_PERMISSIONS):
-        return _permission_denied("caller lacks the delegate_permissions capability")
+        return _permission_denied(
+            "caller lacks the delegate_permissions capability",
+            consumer_app_id=consumer_app_id,
+            proposed_grant=_GRANT_DELEGATE,
+            db=db,
+        )
 
     # The target must be an app THIS caller deployed.
     row = db.execute("SELECT installed_by FROM apps WHERE app_id = ?", (target_app_id,)).fetchone()
