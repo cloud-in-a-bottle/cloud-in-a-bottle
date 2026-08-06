@@ -116,21 +116,37 @@ class DnsZone:
 
 
 def public_dns_zones(config: Config, db: sqlite3.Connection) -> tuple[DnsZone, ...]:
-    """The zones CoreDNS is authoritative for: every non-mDNS domain the instance answers on.
+    """The zones CoreDNS is authoritative for: every non-mDNS domain the instance answers on,
+    plus the delegated custom mail domain (if configured).
 
     mDNS ``.local`` domains are served by the wildcard mDNS responder, never CoreDNS/ACME, so
     they are excluded.  The primary keeps the legacy ``zonefile`` path; additional public domains
-    get a per-domain file under ``zones/`` (see ``Config.coredns_zonefile_path_for``)."""
+    get a per-domain file under ``zones/`` (see ``Config.coredns_zonefile_path_for``).
+
+    The custom mail domain is a *mail-only* zone: the owner delegates it here with one NS record
+    so the instance can serve its SPF/DKIM/DMARC/MX (published by email provisioning).  It is NOT a
+    web-routing domain (no Caddy site, no TLS cert), so it lives outside the ``domains`` table and
+    is appended here as a DNS-only zone.  Without this, email provisioning would write the custom
+    domain's records into a zone file CoreDNS never serves."""
     primary = primary_domain_or_none(db)
     primary_no_port = primary.name_no_port if primary else None
-    return tuple(
+    zones = [
         DnsZone(
             domain=d.name_no_port,
             zonefile_path=config.coredns_zonefile_path_for(d.name_no_port, d.name_no_port == primary_no_port),
         )
         for d in effective_domains(db)
         if not d.mdns
-    )
+    ]
+    custom_mail = config.email_custom_domain_normalized
+    if custom_mail is not None and not any(z.domain == custom_mail for z in zones):
+        zones.append(
+            DnsZone(
+                domain=custom_mail,
+                zonefile_path=config.coredns_zonefile_path_for(custom_mail, is_primary=False),
+            )
+        )
+    return tuple(zones)
 
 
 def _write_coredns_config(
