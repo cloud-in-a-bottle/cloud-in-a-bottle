@@ -227,12 +227,14 @@ def _load_manageable_app(
 ) -> tuple[sqlite3.Row | None, Response[dict[str, Any]] | None]:
     """Load an app row and authorize the caller's manage scope against it.
 
-    Returns (row, None) if allowed; (None, error_response) otherwise.  A caller
-    that cannot manage the app gets 403 whether or not the app exists, so this
-    does not leak the existence of apps outside the caller's scope... except we
-    must still 404 a genuinely missing app for a caller who *could* manage it
-    (e.g. an ``all`` or ``own`` grant), so existence is only revealed within the
-    caller's own reach.
+    Returns (row, None) if allowed; (None, error_response) otherwise.
+
+    Existence-leak rule: a missing app and an out-of-reach app return the SAME
+    403 for any caller that cannot already see the whole instance.  Only an
+    ``all``-scope caller — which can enumerate every app anyway — gets a 404 for
+    a genuinely missing id.  In particular an ``own``-only (or specific-app_id)
+    caller can never distinguish "doesn't exist" from "exists but not mine", so
+    it can't probe arbitrary app_ids.
     """
     scope = resolve_manage_scope(_platform_grants(consumer_app_id))
     if not (scope.all_apps or scope.own_apps or scope.app_ids):
@@ -243,13 +245,14 @@ def _load_manageable_app(
         "SELECT app_id, name, status, error_message, container_id, installed_by FROM apps WHERE app_id = ?",
         (app_id,),
     ).fetchone()
-    if row is None:
-        # Only reveal 404 to a caller broad enough to see it anyway; a
-        # narrowly-scoped caller gets a uniform 403 so it can't probe existence.
-        if scope.all_apps or scope.own_apps:
+    if row is None or not scope.allows(
+        app_id=row["app_id"], installed_by=row["installed_by"], caller_app_id=consumer_app_id
+    ):
+        # An ``all`` caller already sees every app, so a missing id is a plain
+        # 404 for it.  Everyone else gets a uniform 403 whether the app is
+        # missing or simply out of reach, so existence can't be probed.
+        if row is None and scope.all_apps:
             return None, _json_error("not_found", f"app {app_id!r} not found", 404)
-        return None, _permission_denied(f"{consumer_app_id} may not manage {app_id!r}")
-    if not scope.allows(app_id=row["app_id"], installed_by=row["installed_by"], caller_app_id=consumer_app_id):
         return None, _permission_denied(f"{consumer_app_id} may not manage {app_id!r}")
     return row, None
 
