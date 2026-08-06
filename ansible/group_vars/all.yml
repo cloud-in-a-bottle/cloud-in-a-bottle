@@ -6,13 +6,10 @@
 # The domain with any `:port` stripped — same normalization as the router's `is_local_name`.
 domain_host: "{{ (domain | default('') | lower).split(':')[0] }}"
 
-# mDNS LAN mode: a `.local` domain gets no public TLS.  CoreDNS + Caddy stay on (CoreDNS serves the
-# `.local` zone for conditional-forwarder clients, e.g. Windows; the router's mDNS responder handles
-# zero-config discovery).  MUST match compute_space/core/domains.py:is_local_name.
+# mDNS LAN mode: a `.local` primary is served over plain http.  Only the claim URL needs this here —
+# the router derives the primary's `tls` from the name itself (core/domains.py:is_local_name), which
+# test_ansible_local_rule pins this expression against.
 mdns_mode: "{{ domain_host == 'local' or domain_host.endswith('.local') }}"
-
-# No public certificate: either HTTP-only localhost mode or mDNS LAN mode.
-no_tls: "{{ (local_http_only | default(false) | bool) or (mdns_mode | bool) }}"
 
 # Base URL the instance is reachable at, used for the claim URL.
 claim_base_url: >-

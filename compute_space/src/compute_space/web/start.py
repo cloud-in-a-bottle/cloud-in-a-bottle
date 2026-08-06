@@ -198,13 +198,14 @@ def main() -> None:
                 "A TLS domain is configured but start_caddy is False. Caddy is required for TLS termination."
             )
 
-        if mdns_bases(db):
-            # The edge is up now, so the IPv6 reachability probe can finally succeed — republish so
-            # `.local` gets its AAAA.  Skipped entirely on public-only instances (no extra restart).
-            reconcile_lan_dns(config, db)
-            lan_ip, lan_ip6 = lan_addresses()
+        # The edge is up now, so the IPv6 reachability probe can finally succeed.  Re-read before
+        # arming the watcher, or its first poll reads the pre-Caddy snapshot as a move and restarts.
+        published = lan_addresses()
+        if published != (lan_ip, lan_ip6) and mdns_bases(db):
+            # Republish so `.local` gets its AAAA.  Public-only instances don't use these addresses.
+            reconcile_lan_dns(config, db, lan_ip=published[0], lan_ip6=published[1])
         # The addresses are a snapshot: republish if they later move (DHCP renewal, v6 coming or going).
-        start_lan_ip_watcher(config, published=(lan_ip, lan_ip6))
+        start_lan_ip_watcher(config, published=published)
 
     def _all_children() -> list[subprocess.Popen[bytes]]:
         # Read caddy.proc / coredns.proc at shutdown time: restart() may have replaced them.

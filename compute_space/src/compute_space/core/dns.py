@@ -167,6 +167,16 @@ def _publishable_zones(zones: tuple[DnsZone, ...], lan_ip: str | None) -> tuple[
     return tuple(z for z in zones if not is_local_name(z.domain))
 
 
+def _existing_txt_lines(zonefile_path: Path) -> list[str]:
+    """TXT records live only in the zone file, so a regeneration must carry them over — an in-flight
+    DNS-01 ``_acme-challenge`` would otherwise vanish mid-validation (``clear_txt`` removes them)."""
+    try:
+        with open(zonefile_path) as f:
+            return [line for line in f.read().splitlines() if "IN TXT" in line]
+    except OSError:
+        return []
+
+
 def _write_coredns_config(
     zones: tuple[DnsZone, ...],
     public_ip: str,
@@ -212,6 +222,7 @@ def _write_coredns_config(
         is_local = is_local_name(zone.domain)
         record_ip = lan_ip if (is_local and lan_ip) else public_ip
         zone.zonefile_path.parent.mkdir(parents=True, exist_ok=True)
+        txt_lines = _existing_txt_lines(zone.zonefile_path)
         content = _jinja_env.get_template("zonefile").render(
             zone_domain=zone.domain,
             record_ip=record_ip,
@@ -221,7 +232,7 @@ def _write_coredns_config(
             serial=bind_serial,
         )
         with open(zone.zonefile_path, "w") as f:
-            f.write(content)
+            f.write(content + "".join(f"{line}\n" for line in txt_lines))
 
         if container_gateway_ip:
             container_content = _jinja_env.get_template("zonefile_container").render(

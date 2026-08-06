@@ -413,6 +413,26 @@ def test_reload_coredns_for_domains_regenerates_zones_and_restarts(
             set_active_coredns(None)
 
 
+def test_reload_preserves_in_flight_challenge_txt_records(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(dns_mod, "_coredns_bind_ip", lambda ip: "10.0.0.5")
+    monkeypatch.setattr(dns_mod, "_gateway_ip_is_bindable", lambda ip: False)
+    _stub_popen(monkeypatch)
+
+    config = _seed_dns_cfg(tmp_path, Domain(name="host.example.com", tls=True), public_ip="203.0.113.10")
+    with closing(open_db(config)) as db:
+        coredns = dns_mod.start_coredns(dns_zones(config, db), config.public_ip, config.coredns_corefile_path)
+        set_active_coredns(coredns)
+        try:
+            zonefile = dns_zones(config, db)[0].zonefile_path
+            append_txt_records(zonefile, [TxtRecord(record_name="_acme-challenge", record_value="token")])
+
+            assert reload_coredns_for_domains(config, db) is True
+
+            assert '_acme-challenge   IN TXT  "token"' in zonefile.read_text()
+        finally:
+            set_active_coredns(None)
+
+
 def test_reload_coredns_for_domains_noop_when_not_running(tmp_path: Path) -> None:
     set_active_coredns(None)
     config = _seed_dns_cfg(tmp_path, Domain(name="host.example.com", tls=True), public_ip="203.0.113.10")
