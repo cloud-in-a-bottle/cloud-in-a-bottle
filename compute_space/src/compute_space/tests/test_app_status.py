@@ -70,7 +70,8 @@ def test_current_marker_maps_to_build_cache_corrupt_error_kind(
         error_message=f"{BUILD_CACHE_CORRUPT_MARKER} Container build cache is corrupted.",
         port=20110,
     )
-    resp = client.get(f"/api/app_status/{app_id}", cookies=cookies)
+    client.cookies.update(cookies)
+    resp = client.get(f"/api/app_status/{app_id}")
     assert resp.status_code == 200
     payload = resp.json()
     assert payload["error_kind"] == "build_cache_corrupt"
@@ -87,7 +88,8 @@ def test_legacy_marker_still_maps_to_build_cache_corrupt_error_kind(
         error_message="[CACHE_CORRUPT] Docker build cache is corrupted.",
         port=20111,
     )
-    resp = client.get(f"/api/app_status/{app_id}", cookies=cookies)
+    client.cookies.update(cookies)
+    resp = client.get(f"/api/app_status/{app_id}")
     assert resp.status_code == 200
     payload = resp.json()
     assert payload["error_kind"] == "build_cache_corrupt"
@@ -102,7 +104,8 @@ def test_unrelated_error_message_has_no_error_kind(
         error_message="App started but not responding to HTTP",
         port=20112,
     )
-    resp = client.get(f"/api/app_status/{app_id}", cookies=cookies)
+    client.cookies.update(cookies)
+    resp = client.get(f"/api/app_status/{app_id}")
     assert resp.status_code == 200
     payload = resp.json()
     assert payload["error_kind"] is None

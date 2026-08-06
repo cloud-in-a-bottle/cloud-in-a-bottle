@@ -9,8 +9,8 @@ from typing import Any
 
 import pytest
 from litestar import Litestar
-from litestar.contrib.jinja import JinjaTemplateEngine
 from litestar.di import Provide
+from litestar.plugins.jinja import JinjaTemplateEngine
 from litestar.template.config import TemplateConfig
 from litestar.testing import TestClient
 
@@ -81,7 +81,8 @@ SERVICE = "github.com/x/mailer"
 def test_settings_page_renders_services_section(cfg: Any) -> None:
     cookie = auth_cookie(cfg)
     with TestClient(app=_build_app(cfg)) as client:
-        resp = client.get("/settings", cookies=cookie)
+        client.cookies.update(cookie)
+        resp = client.get("/settings")
     assert resp.status_code == 200
     assert "Services" in resp.text
     assert 'id="services-status"' in resp.text
@@ -93,7 +94,8 @@ def test_list_services_returns_all_providers(cfg: Any) -> None:
     _seed_provider(cfg.db_path, "apptwo000002", "mailer-b", 21002, SERVICE, "2.0")
     cookie = auth_cookie(cfg)
     with TestClient(app=_build_app(cfg)) as client:
-        resp = client.get("/api/services/v2", cookies=cookie)
+        client.cookies.update(cookie)
+        resp = client.get("/api/services/v2")
     assert resp.status_code == 200
     names = sorted(p["app_name"] for p in resp.json())
     assert names == ["mailer-a", "mailer-b"]
@@ -104,33 +106,27 @@ def test_set_and_clear_default_provider(cfg: Any) -> None:
     _seed_provider(cfg.db_path, "apptwo000002", "mailer-b", 21002, SERVICE, "2.0")
     cookie = auth_cookie(cfg)
     with TestClient(app=_build_app(cfg)) as client:
+        client.cookies.update(cookie)
         # Initially no default.
-        assert client.get("/api/services/v2/defaults", cookies=cookie).json() == []
+        assert client.get("/api/services/v2/defaults").json() == []
 
         # Set (what the UI's "Save" with a provider selected sends).
-        r = client.post(
-            "/api/services/v2/defaults",
-            json={"service_url": SERVICE, "app_id": "apptwo000002"},
-            cookies=cookie,
-        )
+        r = client.post("/api/services/v2/defaults", json={"service_url": SERVICE, "app_id": "apptwo000002"})
         assert r.status_code == 200
-        defaults = client.get("/api/services/v2/defaults", cookies=cookie).json()
+        defaults = client.get("/api/services/v2/defaults").json()
         assert defaults == [{"service_url": SERVICE, "app_id": "apptwo000002", "app_name": "mailer-b"}]
 
         # Clear (what "Save" with "(no default)" selected sends).
-        r = client.request("DELETE", "/api/services/v2/defaults", json={"service_url": SERVICE}, cookies=cookie)
+        r = client.request("DELETE", "/api/services/v2/defaults", json={"service_url": SERVICE})
         assert r.status_code == 200
-        assert client.get("/api/services/v2/defaults", cookies=cookie).json() == []
+        assert client.get("/api/services/v2/defaults").json() == []
 
 
 def test_set_default_rejects_non_provider(cfg: Any) -> None:
     _seed_provider(cfg.db_path, "appone000001", "mailer-a", 21001, SERVICE, "1.0")
     cookie = auth_cookie(cfg)
     with TestClient(app=_build_app(cfg)) as client:
+        client.cookies.update(cookie)
         # An app that doesn't provide this service can't be made its default.
-        r = client.post(
-            "/api/services/v2/defaults",
-            json={"service_url": SERVICE, "app_id": "apptwo000002"},
-            cookies=cookie,
-        )
+        r = client.post("/api/services/v2/defaults", json={"service_url": SERVICE, "app_id": "apptwo000002"})
     assert r.status_code == 404

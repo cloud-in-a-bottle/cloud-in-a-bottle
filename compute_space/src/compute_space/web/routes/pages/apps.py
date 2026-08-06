@@ -1,10 +1,15 @@
 import sqlite3
 from pathlib import Path
+from typing import Any
 from urllib.parse import urlencode
 
+from litestar import Request
 from litestar import Router
 from litestar import get
+from litestar.di import NamedDependency
 from litestar.exceptions import HTTPException
+from litestar.params import FromPath
+from litestar.params import FromQuery
 from litestar.response import Template
 
 from compute_space.config import Config
@@ -13,6 +18,7 @@ from compute_space.core.apps import deserialize_links
 from compute_space.core.apps import manifest_ungranted_permissions_v2
 from compute_space.core.auth.permissions_v2 import get_all_permissions_v2
 from compute_space.core.containers import get_docker_logs
+from compute_space.core.domains import Domain
 from compute_space.core.git_ops import UnsupportedRepoUrlError
 from compute_space.core.git_ops import get_head_sha
 from compute_space.core.git_ops import get_remote_url
@@ -22,6 +28,7 @@ from compute_space.core.manifest import parse_manifest_from_string
 from compute_space.core.services_v2 import ServiceNotAvailable
 from compute_space.core.services_v2 import resolve_provider
 from compute_space.web.auth.auth import require_owner_auth
+from compute_space.web.helpers.zone import zone_for_request
 
 EDIT_APP_SERVICE_URL = "github.com/imbue-openhost/claude-code-container/services/open-workspace"
 EDIT_APP_VERSION_SPEC = "<1.0"
@@ -33,13 +40,19 @@ CATALOG_REPO_URL = "https://github.com/imbue-openhost/openhost-catalog"
 
 
 @get(["/", "/dashboard"], guards=[require_owner_auth])
-async def dashboard(db: sqlite3.Connection) -> Template:
+async def dashboard(db: NamedDependency[sqlite3.Connection]) -> Template:
     apps_list = db.execute("SELECT * FROM apps ORDER BY name").fetchall()
     return Template(template_name="dashboard.html", context={"apps": apps_list})
 
 
 @get("/app_detail/{app_name:str}", guards=[require_owner_auth])
-async def app_detail(app_name: str, db: sqlite3.Connection, config: Config, next: str = "") -> Template:
+async def app_detail(
+    request: Request[Any, Any, Any],
+    app_name: FromPath[str],
+    db: NamedDependency[sqlite3.Connection],
+    config: NamedDependency[Config],
+    next: FromQuery[str] = "",
+) -> Template:
     if not is_valid_app_name(app_name):
         raise HTTPException(detail="Invalid app name", status_code=400)
     app_row = db.execute("SELECT * FROM apps WHERE name = ?", (app_name,)).fetchone()
@@ -86,7 +99,9 @@ async def app_detail(app_name: str, db: sqlite3.Connection, config: Config, next
         except Exception:
             logger.opt(exception=True).warning("Failed to parse manifest for permission display (app %s)", app_id)
 
-    edit_app = await _resolve_edit_app(app_row["repo_url"], app_row["repo_path"], db, config)
+    edit_app = await _resolve_edit_app(
+        app_row["repo_url"], app_row["repo_path"], db, config, zone_for_request(request)
+    )
 
     return Template(
         template_name="app_detail.html",
@@ -110,6 +125,7 @@ async def _resolve_edit_app(
     repo_path: str,
     db: sqlite3.Connection,
     config: Config,
+    zone: Domain,
 ) -> dict[str, str] | None:
     """Describe an "Edit this app" affordance for the template.
 
@@ -164,18 +180,22 @@ async def _resolve_edit_app(
         logger.warning("resolve_provider returned unknown app_id %s", provider_app_id)
         return repo_link_fallback
 
-    proto = "https" if config.tls_enabled else "http"
     # Pass repo+ref in the query string too: the openhost router 302's
     # unauthenticated POSTs to /login, and the post-login redirect comes back
     # as a GET (only 307/308 preserve method), dropping the form body. Query
     # params survive the bounce, and the provider falls back to them.
     qs = urlencode({"repo": base_url, "ref": ref})
-    action = f"{proto}://{provider_row['name']}.{config.zone_domain}{endpoint}?{qs}"
+    # Build the provider URL on the domain the operator is currently browsing, so the
+    # POST stays same-domain (and any login bounce stays on that domain) rather than
+    # jumping to the canonical one.
+    action = f"{zone.scheme}://{provider_row['name']}.{zone.name}{endpoint}?{qs}"
     return {"mode": "service", "action": action, "repo": base_url, "ref": ref}
 
 
 @get("/add_app", guards=[require_owner_auth])
-async def add_app(db: sqlite3.Connection, repo: str = "", next: str = "") -> Template:
+async def add_app(
+    db: NamedDependency[sqlite3.Connection], repo: FromQuery[str] = "", next: FromQuery[str] = ""
+) -> Template:
     catalog_installed = db.execute("SELECT 1 FROM apps WHERE name = ?", (CATALOG_APP_NAME,)).fetchone() is not None
     return Template(
         template_name="add_app.html",
@@ -190,7 +210,7 @@ async def add_app(db: sqlite3.Connection, repo: str = "", next: str = "") -> Tem
 
 
 @get("/update_review/{app_name:str}", guards=[require_owner_auth])
-async def update_review(app_name: str, db: sqlite3.Connection) -> Template:
+async def update_review(app_name: FromPath[str], db: NamedDependency[sqlite3.Connection]) -> Template:
     """Full-page review of the settings an update changes, mirroring the deploy
     page. The diff itself is produced by the reload gate and handed to this page
     by the browser (sessionStorage); the page validates the app exists."""

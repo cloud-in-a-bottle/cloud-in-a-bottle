@@ -42,6 +42,15 @@ CONTAINER_ROOT = "/data"
 # and the openhost0 systemd-networkd unit.
 CONTAINER_GATEWAY_IP = "10.200.0.1"
 
+# Hostnames that reach the host gateway from inside an app container: podman's native alias plus the
+# docker-compat alias (both registered via ``--add-host`` below), and loopback for network_host.  Apps
+# reach the router's service proxy on one of these (see ``OPENHOST_ROUTER_URL`` in data.py); the
+# subdomain proxy allows them so app→router calls aren't rejected as unknown hosts.
+ROUTER_GATEWAY_HOST = "host.containers.internal"
+_DOCKER_COMPAT_HOST = "host.docker.internal"
+ROUTER_LOOPBACK_HOST = "127.0.0.1"
+ROUTER_INTERNAL_HOSTS = frozenset({ROUTER_GATEWAY_HOST, _DOCKER_COMPAT_HOST, ROUTER_LOOPBACK_HOST})
+
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]|\x1b\([AB0-9]|\x1b[=>]|\x0f|\r")
 
 # Prefix on RuntimeError messages when the build failure is a corrupted
@@ -80,6 +89,10 @@ DEFAULT_CAPABILITIES: frozenset[str] = frozenset(
 _BUILD_CACHE_CORRUPT_FRAGMENTS_UNCONDITIONAL = (
     "storage-driver errored",
     "layer not known",
+    # buildah aborts a build step when the overlay layer it just tried to
+    # mount is unusable (see _OVERLAY_LINK_CORRUPT_RE) and then reports the
+    # discarded build container as "identifier is not a container".
+    "identifier is not a container",
 )
 
 # The "missing local layer blob" error from containers-storage.  The
@@ -87,11 +100,21 @@ _BUILD_CACHE_CORRUPT_FRAGMENTS_UNCONDITIONAL = (
 # errors that happen to mention a sha256 digest.
 _MISSING_LAYER_RE = re.compile(r"content digest sha256:[0-9a-f]+:\s*not found", re.IGNORECASE)
 
+# containers-storage overlay corruption: when a layer's short-name "link"
+# file is empty or missing, the overlay driver assembles a lowerdir that
+# resolves to the bare `overlay`/`overlay/l` directory, and the mount
+# fails with `readlink <...>/overlay[/l]: invalid argument` — at build
+# time ("mounting new container") or at container start.  Retrying reuses
+# the same corrupt cached layer, so only a cache prune fixes it.
+# Requiring "readlink", "overlay" and "invalid argument" on one line keeps
+# this from matching unrelated readlink/EINVAL noise.
+_OVERLAY_LINK_CORRUPT_RE = re.compile(r"readlink .*overlay.*: invalid argument", re.IGNORECASE)
+
 
 def _is_build_cache_corrupt_line(line: str) -> bool:
     if any(frag in line for frag in _BUILD_CACHE_CORRUPT_FRAGMENTS_UNCONDITIONAL):
         return True
-    return bool(_MISSING_LAYER_RE.search(line))
+    return bool(_MISSING_LAYER_RE.search(line) or _OVERLAY_LINK_CORRUPT_RE.search(line))
 
 
 def _log_path(app_name: str, temp_data_dir: str) -> str:
@@ -284,8 +307,8 @@ def run_container(
                 "-p",
                 f"127.0.0.1:{local_port}:{manifest.container_port}",
                 # host.docker.internal kept for compatibility with existing apps.
-                "--add-host=host.docker.internal:host-gateway",
-                "--add-host=host.containers.internal:host-gateway",
+                f"--add-host={_DOCKER_COMPAT_HOST}:host-gateway",
+                f"--add-host={ROUTER_GATEWAY_HOST}:host-gateway",
                 # Point the container's resolver at the container-facing CoreDNS
                 # view bound on the gateway.  That view answers `*.zone_domain`
                 # with the gateway IP (where Caddy is reachable) and forwards

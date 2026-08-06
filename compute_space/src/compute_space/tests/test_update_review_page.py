@@ -7,8 +7,8 @@ from typing import Any
 
 import pytest
 from litestar import Litestar
-from litestar.contrib.jinja import JinjaTemplateEngine
 from litestar.di import Provide
+from litestar.plugins.jinja import JinjaTemplateEngine
 from litestar.template.config import TemplateConfig
 from litestar.testing import TestClient
 
@@ -72,7 +72,8 @@ def test_review_page_renders_for_known_app(cfg: Any) -> None:
     _seed_app(cfg.db_path)
 
     with TestClient(app=_build_app(cfg)) as client:
-        resp = client.get("/update_review/myapp", cookies=cookie)
+        client.cookies.update(cookie)
+        resp = client.get("/update_review/myapp")
     assert resp.status_code == 200
     assert "Review Update" in resp.text
     assert "/reload_app/someappid00" in resp.text
@@ -85,5 +86,6 @@ def test_review_page_404_for_unknown_app(cfg: Any) -> None:
     cookie = auth_cookie(cfg)
 
     with TestClient(app=_build_app(cfg)) as client:
-        resp = client.get("/update_review/ghost", cookies=cookie)
+        client.cookies.update(cookie)
+        resp = client.get("/update_review/ghost")
     assert resp.status_code == 404

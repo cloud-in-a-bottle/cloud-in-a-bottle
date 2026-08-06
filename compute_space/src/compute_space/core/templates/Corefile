@@ -1,24 +1,28 @@
-{{ zone_domain }}:53 {
+{% for zone in zones %}
+{{ zone.domain }}:53 {
     bind {{ bind_ip }}
-    file {{ zone_file_path }} {
+    file {{ zone.zonefile_path }} {
         reload 2s
     }
     log
     errors
 }
+{% endfor %}
 {% if container_gateway_ip %}
 # Container-facing view.  Pasta app containers point their resolver here (see
-# core/containers.py --dns).  It answers the zone wildcard with the gateway IP
+# core/containers.py --dns).  It answers each zone's wildcard with the gateway IP
 # so containers reach sibling apps' public HTTPS URLs through Caddy (hairpin),
 # and forwards everything else upstream so normal name resolution still works.
-{{ zone_domain }}:53 {
+{% for zone in zones %}
+{{ zone.domain }}:53 {
     bind {{ container_gateway_ip }}
-    file {{ container_zone_file_path }} {
+    file {{ zone.container_zonefile_path }} {
         reload 2s
     }
     log
     errors
 }
+{% endfor %}
 .:53 {
     bind {{ container_gateway_ip }}
     forward . {{ upstream_dns }}

@@ -11,6 +11,7 @@ from litestar import Response
 from litestar import Router
 from litestar import get
 from litestar import post
+from litestar.di import NamedDependency
 from litestar.params import Body
 
 from compute_space.core.auth.permissions_v2 import get_all_permissions_v2
@@ -93,7 +94,7 @@ def revoke_v2(
 def grant_app_scoped(
     request: Request[Any, Any, Any],
     data: Annotated[dict[str, Any], Body(media_type=MediaType.JSON)],
-    db: sqlite3.Connection,
+    db: NamedDependency[sqlite3.Connection],
 ) -> Response[dict[str, Any]]:
     """Grant an app-scoped V2 permission, authenticated with the provider app's token.
 

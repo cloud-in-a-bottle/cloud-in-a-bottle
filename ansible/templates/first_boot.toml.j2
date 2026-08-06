@@ -1,0 +1,17 @@
+{% set http_only = (local_http_only | default(false)) | bool %}
+{# first_boot.toml: the fresh instance's primary domain + claim token, and (for managed spaces) the
+   shared Imbue credential. These values seed the DB once, then are ignored after. #}
+domain = "{{ domain }}"
+tls = {{ 'false' if http_only else 'true' }}
+claim_token = "{{ effective_claim_token }}"
+{% if imbue_connect_base_url is defined and imbue_connect_base_url %}
+imbue_connect_base_url = "{{ imbue_connect_base_url }}"
+{% endif %}
+{% if imbue_identity_issuer_url is defined and imbue_identity_issuer_url %}
+# Shared per-instance Imbue credential (client-credentials), seeded into the DB settings table on
+# first boot. One credential authenticates this instance to every Imbue service.
+[imbue_identity]
+issuer_url = "{{ imbue_identity_issuer_url }}"
+client_id = "{{ imbue_identity_client_id }}"
+client_secret = "{{ imbue_identity_client_secret }}"
+{% endif %}

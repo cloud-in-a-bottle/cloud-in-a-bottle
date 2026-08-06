@@ -5,6 +5,7 @@ import sqlite3
 import subprocess
 import time
 from collections.abc import Iterator
+from contextlib import closing
 from pathlib import Path
 from typing import Any
 
@@ -16,11 +17,16 @@ from compute_space import OPENHOST_PROJECT_DIR
 from compute_space.config import Config
 from compute_space.config import DefaultConfig
 from compute_space.config import set_active_config
+from compute_space.core.domains import Domain
+from compute_space.core.domains import primary_domain
+from compute_space.core.domains import seed_domains
+from compute_space.db.connection import init_db
 from compute_space.db.schema import schema_path
 from compute_space.tests.utils import kill_tree
 from compute_space.tests.utils import make_router_env
 from compute_space.tests.utils import managed_router
 from compute_space.tests.utils import router_cmd
+from compute_space.tests.utils import write_first_boot_beside
 
 ROUTER_PORT = 18080
 OWNER_PASSWORD = "testpass123"
@@ -51,16 +57,35 @@ def _resolve_test_zone_to_localhost() -> Iterator[None]:
         socket.getaddrinfo = real_getaddrinfo
 
 
+def open_db(config: Config) -> sqlite3.Connection:
+    """A file-backed connection to the config's DB, configured like the app's ``get_db()`` — for
+    tests that call the DB-backed stores directly (which take a connection, not a config)."""
+    conn = sqlite3.connect(config.db_path)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys=ON")
+    return conn
+
+
+def primary_of(config: Config) -> Domain:
+    """The instance's primary domain, read live from the config's DB (the source of truth)."""
+    with closing(open_db(config)) as db:
+        return primary_domain(db)
+
+
 def _make_test_config(tmp_path: Path, **overrides: Any) -> Config:
-    """Create a DefaultConfig with temp dirs under tmp_path. Returns the Config object."""
+    """Build a DefaultConfig with temp dirs under tmp_path and register it active.  Unless
+    ``seed_primary=False``, migrate the DB and seed ``zone_domain`` as the primary (the domain is
+    DB-owned now, so most tests need a seeded primary)."""
+    zone_domain = overrides.pop("zone_domain", "testzone.local")
+    tls_enabled = overrides.pop("tls_enabled", False)
+    seed_primary = overrides.pop("seed_primary", True)
+    overrides.pop("domains", None)  # extra domains are seeded explicitly by tests that need them
     cfg = DefaultConfig(
         host="127.0.0.1",
         data_root_dir=str(tmp_path),
         apps_dir_override=str(OPENHOST_PROJECT_DIR / "apps"),
         port_range_start=overrides.pop("port_range_start", 19000),
         port_range_end=overrides.pop("port_range_end", 19099),
-        zone_domain=overrides.pop("zone_domain", "testzone.local"),
-        tls_enabled=overrides.pop("tls_enabled", False),
         start_caddy=overrides.pop("start_caddy", False),
         # Off by default in tests so existing test setup flows keep working;
         # the integration test that exercises the gate sets it to True
@@ -70,6 +95,10 @@ def _make_test_config(tmp_path: Path, **overrides: Any) -> Config:
     )
     cfg.make_all_dirs()
     set_active_config(cfg)
+    if seed_primary:
+        init_db(cfg.db_path)
+        with closing(open_db(cfg)) as db:
+            seed_domains(db, Domain(name=zone_domain, tls=tls_enabled), [])
     return cfg
 
 
@@ -78,6 +107,7 @@ def _make_config_and_env(tmp_path: Path, **overrides: Any) -> tuple[Config, dict
     config = _make_test_config(tmp_path, **overrides)
     config_path = str(tmp_path / "config.toml")
     config.to_toml(config_path)
+    write_first_boot_beside(config_path, primary_of(config))
     return config, make_router_env(config_path)
 
 
@@ -160,7 +190,7 @@ def admin_session(router_process: subprocess.Popen[bytes], config: Config) -> re
     down so start.py can boot the full app — poll a full-app-only path
     afterwards so callers see a ready router.
     """
-    base_url = f"http://{config.zone_domain}:{config.port}"
+    base_url = f"http://{primary_of(config).name}:{config.port}"
     s = requests.Session()
     r = s.post(
         f"{base_url}/setup",

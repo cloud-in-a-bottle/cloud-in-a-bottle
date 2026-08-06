@@ -450,7 +450,8 @@ def test_reload_route_refuses_when_new_permission_unapproved(
     )
 
     with _mocked_reload_side_effects() as m:
-        resp = client.post(f"/reload_app/{app_id}", json={"update": True}, cookies=cookies)
+        client.cookies.update(cookies)
+        resp = client.post(f"/reload_app/{app_id}", json={"update": True})
 
     assert resp.status_code == 200
     body = resp.json()
@@ -473,10 +474,10 @@ def test_reload_route_grants_and_reloads_when_approved(
     )
 
     with _mocked_reload_side_effects() as m:
+        client.cookies.update(cookies)
         resp = client.post(
             f"/reload_app/{app_id}",
             json={"update": True, "approve_new_permissions": True},
-            cookies=cookies,
         )
 
     assert resp.status_code == 200
@@ -496,7 +497,8 @@ def test_reload_route_proceeds_when_no_new_permissions(
     app_id = _seed_git_app_with_consumes(cfg, repo, "")  # no consumes
 
     with _mocked_reload_side_effects() as m:
-        resp = client.post(f"/reload_app/{app_id}", json={"update": True}, cookies=cookies)
+        client.cookies.update(cookies)
+        resp = client.post(f"/reload_app/{app_id}", json={"update": True})
 
     assert resp.status_code == 200
     assert resp.json() == {"ok": True}
@@ -519,7 +521,8 @@ def test_plain_reload_does_not_gate_declared_but_ungranted_permission(
         patch("compute_space.web.routes.api.apps.stop_app_process") as stop,
         patch("compute_space.web.routes.api.apps.Thread") as thread,
     ):
-        resp = client.post(f"/reload_app/{app_id}", json={"update": False}, cookies=cookies)
+        client.cookies.update(cookies)
+        resp = client.post(f"/reload_app/{app_id}", json={"update": False})
 
     assert resp.status_code == 200
     assert resp.json() == {"ok": True}
@@ -540,7 +543,8 @@ def test_reload_route_lists_all_new_permissions(
     app_id = _seed_git_app_with_consumes(cfg, repo, consumes)
 
     with _mocked_reload_side_effects():
-        resp = client.post(f"/reload_app/{app_id}", json={"update": True}, cookies=cookies)
+        client.cookies.update(cookies)
+        resp = client.post(f"/reload_app/{app_id}", json={"update": True})
 
     body = resp.json()
     assert body["ok"] is False
@@ -564,7 +568,8 @@ def test_reload_route_only_gates_the_newly_added_permission(
 
     # Without approval: refused, and only the NEW one is listed.
     with _mocked_reload_side_effects() as m:
-        resp = client.post(f"/reload_app/{app_id}", json={"update": True}, cookies=cookies)
+        client.cookies.update(cookies)
+        resp = client.post(f"/reload_app/{app_id}", json={"update": True})
     body = resp.json()
     assert body["ok"] is False
     assert len(body["permissions_required"]) == 1
@@ -573,9 +578,8 @@ def test_reload_route_only_gates_the_newly_added_permission(
 
     # With approval: proceeds; now both are held.
     with _mocked_reload_side_effects() as m:
-        resp = client.post(
-            f"/reload_app/{app_id}", json={"update": True, "approve_new_permissions": True}, cookies=cookies
-        )
+        client.cookies.update(cookies)
+        resp = client.post(f"/reload_app/{app_id}", json={"update": True, "approve_new_permissions": True})
     assert resp.json() == {"ok": True}
     held = {
         (p.service_url, tuple(sorted(p.grant.items())) if isinstance(p.grant, dict) else p.grant)
@@ -668,7 +672,8 @@ def test_refused_update_rolls_back_working_tree(
         patch("compute_space.web.routes.api.apps.Thread") as thread,
     ):
         # sanity: the pulled v2 really does declare a new consume
-        resp = client.post(f"/reload_app/{app_id}", json={"update": True}, cookies=cookies)
+        client.cookies.update(cookies)
+        resp = client.post(f"/reload_app/{app_id}", json={"update": True})
 
     assert resp.status_code == 200
     assert resp.json()["ok"] is False, "update declaring a new permission must be refused"
@@ -785,8 +790,9 @@ def test_reload_route_gates_on_settings_change(
         cfg, repo, _BASE.format(version="2.0.0", memory=256), _BASE.format(version="1.0.0", memory=128)
     )
 
+    client.cookies.update(cookies)
     with _mocked_reload_side_effects() as m:
-        resp = client.post(f"/reload_app/{app_id}", json={"update": True}, cookies=cookies)
+        resp = client.post(f"/reload_app/{app_id}", json={"update": True})
     body = resp.json()
     assert body["ok"] is False
     assert body["review_required"] is True
@@ -794,8 +800,6 @@ def test_reload_route_gates_on_settings_change(
     m["thread"].assert_not_called()
 
     with _mocked_reload_side_effects() as m:
-        resp = client.post(
-            f"/reload_app/{app_id}", json={"update": True, "approve_new_permissions": True}, cookies=cookies
-        )
+        resp = client.post(f"/reload_app/{app_id}", json={"update": True, "approve_new_permissions": True})
     assert resp.json() == {"ok": True}
     m["thread"].assert_called_once()

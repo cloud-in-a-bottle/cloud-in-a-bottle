@@ -1,18 +1,22 @@
-"""Manage the VM-side CoreDNS zone file.
+"""Manage the VM-side CoreDNS zone files.
 
-The VM runs CoreDNS authoritative for its zone domain (e.g. alice.host.imbue.com).
-This module writes and updates the zone file. CoreDNS watches for SOA serial
-changes and auto-reloads.
+The VM runs CoreDNS authoritative for every public domain the instance answers on
+(e.g. alice.host.imbue.com plus any additional delegated domains).  Each public
+domain is a separate authoritative zone with its own zone file; this module writes
+and updates them.  CoreDNS watches for SOA serial changes and auto-reloads the zone
+data, but a *new* zone (a new server block in the Corefile) requires a CoreDNS
+restart — see ``reload_coredns_for_domains``.
 
-For DNS-01 ACME challenges, the router calls append_txt_records() to add TXT
-records, waits for CoreDNS to pick them up, then calls clear_txt() after the cert
-is issued.
+For DNS-01 ACME challenges, the router calls append_txt_records() on a domain's own
+zone file to add TXT records, waits for CoreDNS to pick them up, then calls
+clear_txt() after the cert is issued.
 """
 
 from __future__ import annotations
 
 import re
 import socket
+import sqlite3
 import subprocess
 import threading
 import time
@@ -21,12 +25,18 @@ from pathlib import Path
 import attr
 from jinja2 import Environment
 from jinja2 import FileSystemLoader
+from jinja2 import StrictUndefined
 
+from compute_space.config import Config
 from compute_space.core.containers import CONTAINER_GATEWAY_IP
+from compute_space.core.domains import effective_domains
+from compute_space.core.domains import primary_domain_or_none
 from compute_space.core.logging import logger
 
 _TEMPLATES_DIR = Path(__file__).parent / "templates"
-_jinja_env = Environment(loader=FileSystemLoader(_TEMPLATES_DIR))
+# StrictUndefined so a template referencing a variable/attribute we forgot to pass raises instead
+# of silently rendering an empty string (e.g. a blank `file` path that CoreDNS would reject).
+_jinja_env = Environment(loader=FileSystemLoader(_TEMPLATES_DIR), undefined=StrictUndefined)
 
 _SERIAL_RE = re.compile(r"^(\s+)(\d+)(\s+;\s*serial\s*)$", re.MULTILINE)
 
@@ -91,24 +101,50 @@ def _coredns_bind_ip(public_ip: str) -> str:
         return public_ip
 
 
-def start_coredns(
-    zone_domain: str,
+@attr.s(auto_attribs=True, frozen=True)
+class DnsZone:
+    """One authoritative zone CoreDNS serves: a public domain plus the path to its zone file.
+
+    The ``.container`` view's zone file lives next to it (``container_zonefile_path``)."""
+
+    domain: str
+    zonefile_path: Path
+
+    @property
+    def container_zonefile_path(self) -> Path:
+        return self.zonefile_path.with_name(self.zonefile_path.name + ".container")
+
+
+def public_dns_zones(config: Config, db: sqlite3.Connection) -> tuple[DnsZone, ...]:
+    """The zones CoreDNS is authoritative for: every non-mDNS domain the instance answers on.
+
+    mDNS ``.local`` domains are served by the wildcard mDNS responder, never CoreDNS/ACME, so
+    they are excluded.  The primary keeps the legacy ``zonefile`` path; additional public domains
+    get a per-domain file under ``zones/`` (see ``Config.coredns_zonefile_path_for``)."""
+    primary = primary_domain_or_none(db)
+    primary_no_port = primary.name_no_port if primary else None
+    return tuple(
+        DnsZone(
+            domain=d.name_no_port,
+            zonefile_path=config.coredns_zonefile_path_for(d.name_no_port, d.name_no_port == primary_no_port),
+        )
+        for d in effective_domains(db)
+        if not d.mdns
+    )
+
+
+def _write_coredns_config(
+    zones: tuple[DnsZone, ...],
     public_ip: str,
     corefile_path: Path,
-    zonefile_path: Path,
-    container_gateway_ip: str | None = CONTAINER_GATEWAY_IP,
-    coredns_bin: str = "coredns",
-) -> subprocess.Popen[bytes]:
-    """Write CoreDNS config + zone file, start CoreDNS, return the process.
+    container_gateway_ip: str | None,
+) -> None:
+    """Render the Corefile + one public (and, when applicable, container) zone file per zone.
 
-    When ``container_gateway_ip`` is set (the default, and the dummy
-    ``openhost0`` gateway in production), a second server view is bound there
-    that resolves the zone wildcard to the gateway so pasta app containers can
-    reach sibling apps' public HTTPS URLs through Caddy (NAT hairpin), with a
-    catch-all forward for everything else.  Pass ``None`` to disable (e.g. in
-    environments without the gateway interface).
+    Returns nothing; the caller (start or restart) then spawns/re-spawns CoreDNS against the
+    freshly written Corefile.  CoreDNS auto-reloads zone *file* edits, but picking up a new zone
+    server block needs a restart.
     """
-
     bind_serial = int(time.time())
 
     # Only emit the container-facing view when the gateway IP is actually
@@ -118,42 +154,42 @@ def start_coredns(
         logger.info("Container gateway %s not bindable; skipping container-facing DNS view", container_gateway_ip)
         container_gateway_ip = None
 
-    # Container-facing zone file: the wildcard points at the gateway IP.  Lives
-    # next to the public zone file with a `.container` suffix.
-    container_zonefile_path = zonefile_path.with_name(zonefile_path.name + ".container")
+    corefile_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Write Corefile. this is coredns's config.
+    # Write Corefile. this is coredns's config — one server block per zone (plus the
+    # container-facing views + catch-all forward when the gateway is bindable).
     corefile = _jinja_env.get_template("Corefile").render(
-        zone_domain=zone_domain,
+        zones=zones,
         bind_ip=_coredns_bind_ip(public_ip),
-        zone_file_path=zonefile_path,
         container_gateway_ip=container_gateway_ip,
-        container_zone_file_path=container_zonefile_path,
         upstream_dns=" ".join(_host_upstream_resolvers()),
     )
     with open(corefile_path, "w") as f:
         f.write(corefile)
 
-    # Write zone file. this is the actual DNS data. CoreDNS watches for changes to this file and auto-reloads.
-    content = _jinja_env.get_template("zonefile").render(
-        zone_domain=zone_domain,
-        public_ip=public_ip,
-        # Use current timestamp as initial SOA serial. This is simple and ensures it's always increasing on each run.
-        serial=bind_serial,
-    )
-    with open(zonefile_path, "w") as f:
-        f.write(content)
-
-    if container_gateway_ip:
-        container_content = _jinja_env.get_template("zonefile_container").render(
-            zone_domain=zone_domain,
-            gateway_ip=container_gateway_ip,
+    for zone in zones:
+        # Write zone file. this is the actual DNS data. CoreDNS watches for changes and auto-reloads.
+        zone.zonefile_path.parent.mkdir(parents=True, exist_ok=True)
+        content = _jinja_env.get_template("zonefile").render(
+            zone_domain=zone.domain,
+            public_ip=public_ip,
+            # Current timestamp as initial SOA serial: simple, and always increasing across runs.
             serial=bind_serial,
         )
-        with open(container_zonefile_path, "w") as f:
-            f.write(container_content)
+        with open(zone.zonefile_path, "w") as f:
+            f.write(content)
 
-    logger.info(f"Starting CoreDNS for {zone_domain}")
+        if container_gateway_ip:
+            container_content = _jinja_env.get_template("zonefile_container").render(
+                zone_domain=zone.domain,
+                gateway_ip=container_gateway_ip,
+                serial=bind_serial,
+            )
+            with open(zone.container_zonefile_path, "w") as f:
+                f.write(container_content)
+
+
+def _spawn_coredns(corefile_path: Path, coredns_bin: str) -> subprocess.Popen[bytes]:
     proc = subprocess.Popen(
         [coredns_bin, "-conf", corefile_path],
         stdout=subprocess.PIPE,
@@ -168,8 +204,85 @@ def start_coredns(
         logger.warning(f"CoreDNS exited with code {proc.returncode}")
 
     threading.Thread(target=_stream_coredns_logs, args=(proc,), daemon=True).start()
-    logger.info(f"Started CoreDNS for {zone_domain} (pid {proc.pid})")
+    logger.info(f"Started CoreDNS (pid {proc.pid})")
     return proc
+
+
+@attr.s(auto_attribs=True)
+class CoreDnsProcess:
+    """Handle to the running CoreDNS child.  Mutable: restart() replaces proc with a fresh one so
+    it picks up a regenerated Corefile (new zones).  Mirrors ``CaddyProcess``."""
+
+    proc: subprocess.Popen[bytes]
+    corefile_path: Path
+    coredns_bin: str
+    # Serializes restart() to match CaddyProcess — insurance against a future background caller racing
+    # two coredns onto :53 (today's callers are already serialized on the event loop).
+    _restart_lock: threading.Lock = attr.ib(factory=threading.Lock, init=False, eq=False, repr=False)
+
+    def restart(self) -> None:
+        with self._restart_lock:
+            if self.proc.poll() is None:
+                self.proc.terminate()
+                try:
+                    self.proc.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    logger.warning(f"CoreDNS (pid {self.proc.pid}) did not exit after terminate, killing")
+                    self.proc.kill()
+                    self.proc.wait()
+            self.proc = _spawn_coredns(self.corefile_path, self.coredns_bin)
+
+
+def start_coredns(
+    zones: tuple[DnsZone, ...],
+    public_ip: str,
+    corefile_path: Path,
+    container_gateway_ip: str | None = CONTAINER_GATEWAY_IP,
+    coredns_bin: str = "coredns",
+) -> CoreDnsProcess:
+    """Write CoreDNS config + zone files for every public domain, start CoreDNS, return the handle.
+
+    When ``container_gateway_ip`` is set (the default, and the dummy ``openhost0`` gateway in
+    production), a second server view per zone is bound there that resolves the zone wildcard to
+    the gateway so pasta app containers can reach sibling apps' public HTTPS URLs through Caddy
+    (NAT hairpin), with a catch-all forward for everything else.  Pass ``None`` to disable (e.g.
+    in environments without the gateway interface).
+    """
+    _write_coredns_config(zones, public_ip, corefile_path, container_gateway_ip)
+    logger.info(f"Starting CoreDNS for {', '.join(z.domain for z in zones)}")
+    return CoreDnsProcess(
+        proc=_spawn_coredns(corefile_path, coredns_bin),
+        corefile_path=corefile_path,
+        coredns_bin=coredns_bin,
+    )
+
+
+# The live CoreDnsProcess, registered by start.py so request handlers (e.g. /api/domains) can
+# regenerate the zone config and restart CoreDNS when the domain set changes.  Mirrors the
+# active-Caddy registry.  None when CoreDNS isn't running (dev / .local-only / tests).
+_active_coredns: CoreDnsProcess | None = None
+
+
+def set_active_coredns(coredns: CoreDnsProcess | None) -> None:
+    global _active_coredns
+    _active_coredns = coredns
+
+
+def get_active_coredns() -> CoreDnsProcess | None:
+    return _active_coredns
+
+
+def reload_coredns_for_domains(config: Config, db: sqlite3.Connection) -> bool:
+    """Regenerate the Corefile + zone files from the config's current public-domain set and restart
+    CoreDNS so it becomes authoritative for the new set (a new zone needs a restart; the ``file``
+    plugin's ``reload`` only picks up edits to an *already-served* zone file).  No-op (returns
+    False) when CoreDNS isn't running or no public IP is configured."""
+    coredns = get_active_coredns()
+    if coredns is None or not config.public_ip:
+        return False
+    _write_coredns_config(public_dns_zones(config, db), config.public_ip, coredns.corefile_path, CONTAINER_GATEWAY_IP)
+    coredns.restart()
+    return True
 
 
 def _bump_serial(content: str) -> str:

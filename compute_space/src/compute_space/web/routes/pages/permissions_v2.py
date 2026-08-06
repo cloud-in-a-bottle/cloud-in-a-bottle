@@ -3,6 +3,7 @@ import sqlite3
 
 from litestar import Router
 from litestar import get
+from litestar.di import NamedDependency
 from litestar.exceptions import HTTPException
 from litestar.response import Template
 
@@ -12,7 +13,7 @@ from compute_space.web.auth.auth import require_owner_auth
 
 @get("/approve-permissions-v2", guards=[require_owner_auth])
 async def approve_permissions_v2(
-    db: sqlite3.Connection,
+    db: NamedDependency[sqlite3.Connection],
     app: str,
     service: str,
     grant: str,
