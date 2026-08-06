@@ -285,10 +285,20 @@ def test_system_requires_grant(client: TestClient[Litestar]) -> None:
 
 def test_system_with_grant(client: TestClient[Litestar], cfg: Any) -> None:
     _grant(cfg.db_path, CALLER_APP_ID, {"capability": "system_read"})
-    with mock.patch("compute_space.web.routes.platform_dispatch.storage_status", return_value={"disk": "ok"}):
+    with (
+        mock.patch("compute_space.web.routes.platform_dispatch.storage_status", return_value={"disk": "ok"}),
+        mock.patch("compute_space.web.routes.platform_dispatch.list_listening_ports", return_value=[]),
+        mock.patch("compute_space.web.routes.platform_dispatch._read_log_tail", return_value="log line\n"),
+    ):
         resp = client.get(_url("system"), headers=_headers())
     assert resp.status_code == 200
-    assert resp.json()["storage"] == {"disk": "ok"}
+    body = resp.json()
+    # The read-only system surface: version, storage, ports, and a log tail.
+    assert body["storage"] == {"disk": "ok"}
+    assert set(body["version"].keys()) == {"branch", "sha", "short_sha", "dirty"}
+    assert body["listening_ports"] == []
+    assert body["ports_enumeration_failed"] is True  # empty list => enumeration failed
+    assert body["logs_tail"] == "log line\n"
 
 
 # ── delegate (non-escalating) ────────────────────────────────────────────────

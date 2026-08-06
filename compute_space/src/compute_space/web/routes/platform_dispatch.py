@@ -24,6 +24,8 @@ platform has no provider app to defer to).
 
 from __future__ import annotations
 
+import asyncio
+import os
 import sqlite3
 from threading import Thread
 from typing import Any
@@ -35,16 +37,23 @@ from packaging.specifiers import InvalidSpecifier
 from packaging.specifiers import SpecifierSet
 from packaging.version import Version
 
+from compute_space import OPENHOST_PROJECT_DIR
 from compute_space.config import Config
 from compute_space.core.apps import remove_app_background
 from compute_space.core.apps import start_app_process
 from compute_space.core.auth.permissions_v2 import get_granted_permissions_v2
 from compute_space.core.auth.permissions_v2 import grant_permission_v2
+from compute_space.core.auth.security_audit import external_ports
+from compute_space.core.auth.security_audit import list_listening_ports
 from compute_space.core.containers import get_docker_logs
 from compute_space.core.containers import stop_app_process
 from compute_space.core.containers import stop_container
+from compute_space.core.git_ops import get_branch_name
+from compute_space.core.git_ops import get_head_sha
+from compute_space.core.git_ops import is_dirty
 from compute_space.core.installer import InstallError
 from compute_space.core.installer import install_from_repo_url
+from compute_space.core.logging import get_log_path
 from compute_space.core.logging import logger
 from compute_space.core.platform_service import CAP_DELEGATE_PERMISSIONS
 from compute_space.core.platform_service import CAP_SYSTEM_READ
@@ -116,7 +125,7 @@ async def handle_platform_request(
         return _handle_list_apps(consumer_app_id, db)
 
     if method == "GET" and parts == ["system"]:
-        return _handle_system(consumer_app_id, db, config)
+        return await _handle_system(consumer_app_id, db, config)
 
     if method == "POST" and parts == ["delegate"]:
         return await _handle_delegate(consumer_app_id, request, db)
@@ -279,11 +288,61 @@ async def _handle_app_action(
 # ── system_read ──────────────────────────────────────────────────────────────
 
 
-def _handle_system(consumer_app_id: str, db: sqlite3.Connection, config: Config) -> Response[Any]:
+# Cap the platform-logs tail we hand back so a system_read caller can't pull the
+# whole (up to 10 MB) rotated log in one request.
+_LOG_TAIL_BYTES = 64 * 1024
+
+
+def _read_log_tail() -> str | None:
+    """Return the tail of the compute-space log, or None if not configured."""
+    log_path = get_log_path()
+    if log_path is None:
+        return None
+    try:
+        with open(log_path, "rb") as f:
+            size = f.seek(0, os.SEEK_END)
+            f.seek(max(0, size - _LOG_TAIL_BYTES))
+            text = f.read().decode("utf-8", errors="replace")
+        if size > _LOG_TAIL_BYTES:
+            text = text[text.find("\n") + 1 :]
+        return text
+    except OSError:
+        return None
+
+
+async def _version_info() -> dict[str, Any]:
+    """Git branch/SHA of the running openhost checkout (empty if not a checkout)."""
+    try:
+        sha = await get_head_sha(OPENHOST_PROJECT_DIR)
+        branch = await get_branch_name(OPENHOST_PROJECT_DIR)
+        dirty = await is_dirty(OPENHOST_PROJECT_DIR)
+    except Exception:
+        return {"branch": None, "sha": "", "short_sha": "", "dirty": False}
+    return {"branch": branch, "sha": sha, "short_sha": sha[:8], "dirty": dirty}
+
+
+async def _handle_system(consumer_app_id: str, db: sqlite3.Connection, config: Config) -> Response[Any]:
+    """Read-only system info: version, storage, external listening ports, log tail."""
     if not has_capability(_platform_grants(consumer_app_id), CAP_SYSTEM_READ):
         return _permission_denied("no system_read grant present")
-    # Reuse the same storage snapshot the dashboard uses; kept read-only.
-    return _json_ok({"storage": storage_status(config)})
+
+    version = await _version_info()
+    # Off-loop: storage snapshot + ss/podman walks are blocking.
+    storage = await asyncio.to_thread(storage_status, config)
+    all_ports = await asyncio.to_thread(list_listening_ports, db)
+    # ListeningPort is a TypedDict, so it's already JSON-serializable.
+    ports = list(external_ports(all_ports))
+    logs_tail = await asyncio.to_thread(_read_log_tail)
+
+    return _json_ok(
+        {
+            "version": version,
+            "storage": storage,
+            "listening_ports": ports,
+            "ports_enumeration_failed": not all_ports,
+            "logs_tail": logs_tail,
+        }
+    )
 
 
 # ── delegate (non-escalating) ────────────────────────────────────────────────
