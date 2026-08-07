@@ -74,6 +74,7 @@ from litestar.params import FromPath
 from markdown_it import MarkdownIt
 from markupsafe import escape as html_escape
 from mdit_py_plugins.anchors import anchors_plugin
+from mdit_py_plugins.attrs import attrs_plugin
 from mdit_py_plugins.tasklists import tasklists_plugin
 from pygments import highlight
 from pygments.formatters import HtmlFormatter
@@ -147,6 +148,10 @@ def _space_display_name() -> str | None:
 
 # ─── Markdown engine ────────────────────────────────────────────────
 
+# Attributes a chapter may set on a link.  Anything else and markdown-it leaves the
+# whole ``{...}`` as visible literal text, so a typo shows up rather than passing through.
+_MD_LINK_ATTRS = ("target", "rel")
+
 
 def _build_md() -> MarkdownIt:
     """Construct a shared markdown renderer: ``gfm-like`` plus heading anchors,
@@ -162,6 +167,9 @@ def _build_md() -> MarkdownIt:
     md = MarkdownIt("gfm-like", {"html": False, "linkify": False, "typographer": True})
     md.use(anchors_plugin, max_level=4, permalink=False)
     md.use(tasklists_plugin, enabled=True)
+    # ``[text](url){target=_blank}`` — the only way to leave the manual's tab, since
+    # raw HTML is inert.  Allowlisted so markdown can't set arbitrary attributes.
+    md.use(attrs_plugin, allowed=_MD_LINK_ATTRS)
     md.add_render_rule("fence", _render_fence_with_pygments)
     return md
 

@@ -42,4 +42,4 @@ Individual requests can also have other `401` errors, each documented below.
 
 `GET /docs/openapi.yaml` returns the raw OpenAPI yaml in the Openhost repo at `compute_space/openapi.yaml`. 
 
-[HTTP API Reference](/docs/reference/api).
+[API Reference](/docs/reference/api){target=_blank rel=noopener}

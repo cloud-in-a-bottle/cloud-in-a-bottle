@@ -336,6 +336,22 @@ def test_raw_html_in_chapters_stays_inert(tmp_path: Path) -> None:
     assert "&lt;your-zone&gt;" in prose_body
 
 
+def test_a_link_can_open_in_a_new_tab_but_set_nothing_else(tmp_path: Path) -> None:
+    """``{target=_blank}`` is a chapter's only way out of the manual's tab, raw HTML
+    being inert. Attributes off the allowlist stay literal text instead."""
+    repo_root = tmp_path / "repo"
+    src = repo_root / "docs" / "src"
+    _populate_fake_docs(src)
+    (src / "logs.md").write_text(
+        "# Logs\n\n[out](/docs/reference/api){target=_blank rel=noopener}\n\n[bad](/x){onclick=alert(1)}\n"
+    )
+    client, _cfg = _client(repo_root)
+    with client as c:
+        body = c.get("/docs/logs").text
+    assert '<a href="/docs/reference/api" target="_blank" rel="noopener">' in body
+    assert '<a href="/x">bad</a>' in body
+
+
 # -- OpenAPI document -----------------------------------------------
 
 

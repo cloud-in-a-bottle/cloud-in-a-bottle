@@ -14,4 +14,4 @@ The `description` sections document requirements for each request. The router en
 
 `GET /docs/services` lists the service names exposed by all the apps. The default apps serve plain docs at `GET /docs/services/<name>/openapi.yaml`, which are also in the Openhost repo at `services/<name>/openapi.yaml`.
 
-[Bundled Service Reference](/docs/reference/services).
+[Bundled Service Reference](/docs/reference/services){target=_blank rel=noopener}
