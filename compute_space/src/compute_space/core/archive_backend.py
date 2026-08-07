@@ -1427,14 +1427,9 @@ def configure_backend(
         assert state.s3_bucket is not None
         assert state.s3_access_key_id is not None
         assert state.s3_secret_access_key is not None
-        # Skip reclaim in the degenerate case where the new store is the SAME
-        # bucket+endpoint+prefix as the old (a no-op "migration"): deleting the
-        # prefix would wipe the data we just kept in place.
-        same_location = (
-            state.s3_bucket == s3_bucket
-            and (state.s3_endpoint or None) == (s3_endpoint or None)
-            and (state.s3_region or None) == (s3_region or None)
-        )
+        # Check for whether the source is the same location and do not delete if so
+        source_volume = state.juicefs_volume_name or DEFAULT_VOLUME_NAME
+        same_location = state.s3_bucket == s3_bucket and source_volume == volume
         if not same_location:
             _remove_s3_object_prefix(
                 s3_bucket=state.s3_bucket,
