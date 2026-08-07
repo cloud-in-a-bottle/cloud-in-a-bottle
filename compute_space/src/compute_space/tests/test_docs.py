@@ -57,10 +57,8 @@ def _clear_render_cache() -> Iterator[None]:
     """Reset the module-global mtime cache between tests so each
     test starts from a clean slate."""
     docs_routes._render_cache.clear()
-    docs_routes._standalone_cache.clear()
     yield
     docs_routes._render_cache.clear()
-    docs_routes._standalone_cache.clear()
 
 
 def _populate_fake_docs(src_dir: Path) -> None:
@@ -325,19 +323,16 @@ def test_docs_in_reserved_paths() -> None:
 # -- raw HTML in chapters -------------------------------------------
 
 
-def test_raw_html_passes_through_only_in_embed_chapters(tmp_path: Path) -> None:
-    """Chapters embedding the OpenAPI browser need their raw HTML emitted;
-    everywhere else it stays inert, so stray angle brackets render as text."""
+def test_raw_html_in_chapters_stays_inert(tmp_path: Path) -> None:
+    """Prose is the only thing chapters carry, so stray angle brackets render as
+    text rather than markup."""
     repo_root = tmp_path / "repo"
     src = repo_root / "docs" / "src"
     _populate_fake_docs(src)
-    (src / "routing.md").write_text('# Routing\n\n<div class="redoc-embed"></div>\n')
     (src / "logs.md").write_text("# Logs\n\nPoint it at <your-zone>/api/apps.\n")
     client, _cfg = _client(repo_root)
     with client as c:
-        embed_body = c.get("/docs/routing").text
         prose_body = c.get("/docs/logs").text
-    assert '<div class="redoc-embed"></div>' in embed_body
     assert "&lt;your-zone&gt;" in prose_body
 
 
@@ -369,39 +364,27 @@ def test_missing_openapi_spec_returns_503(client_with_docs: TestClient[Litestar]
     assert "openapi spec is missing" in resp.text.lower()
 
 
-def _client_with_a_reference_chapter(tmp_path: Path) -> TestClient[Litestar]:
-    repo_root = tmp_path / "repo"
-    src = repo_root / "docs" / "src"
-    _populate_fake_docs(src)
-    (src / "manifest_spec.md").write_text('# Ref\n\n<div class="redoc-embed"></div>\n')
-    client, _cfg = _client(repo_root)
-    return client
+@pytest.mark.parametrize(
+    ("path", "container_id"),
+    [("/docs/reference/api", "redoc"), ("/docs/reference/services", "service-specs")],
+)
+def test_reference_pages_render_bare(client_with_docs: TestClient[Litestar], path: str, container_id: str) -> None:
+    """Redoc renders its own full-window layout, so these pages carry none of the
+    space chrome — no nav tabs, no manual sidebar — just the mount point + bundle."""
+    html = client_with_docs.get(path).text
+    assert f'<div id="{container_id}"></div>' in html
+    assert "/static/vendor/redoc.js" in html
+    assert "nav-tab" not in html
+    assert '<aside class="sidebar">' not in html
+    assert "space-header" not in html
 
 
-def test_reference_chapter_renders_without_the_manual_sidebar(tmp_path: Path) -> None:
-    """An OpenAPI browser wants the whole viewport; beside the manual sidebar
-    it gets ~740px and collapses. Reference chapters drop the sidebar and the
-    prev/next footer, keeping only the space-wide nav header."""
-    with _client_with_a_reference_chapter(tmp_path) as c:
-        ref = c.get("/docs/manifest_spec").text
-        prose = c.get("/docs/routing").text
-    assert '<aside class="sidebar">' not in ref
-    assert '<div class="footer-nav">' not in ref
-    assert "nav-tab" in ref, "the space nav header stays, so there's a way back"
-    assert '<aside class="sidebar">' in prose
-    assert '<div class="footer-nav">' in prose
-
-
-def test_sidebar_opens_reference_chapters_in_a_new_tab(tmp_path: Path) -> None:
-    """They leave the manual's layout, so the sidebar marks them rather than
-    navigating the reader out of it silently."""
-    with _client_with_a_reference_chapter(tmp_path) as c:
-        html = c.get("/docs/routing").text
-    ref_link = re.search(r'<li><a href="/docs/manifest_spec"([^>]*)>', html)
-    prose_link = re.search(r'<li><a href="/docs/routing"([^>]*)>', html)
-    assert ref_link and 'target="_blank"' in ref_link.group(1)
-    assert 'class="ext"' in html, "new-tab entries carry the icon"
-    assert prose_link and 'target="_blank"' not in prose_link.group(1)
+def test_reference_pages_are_not_chapters(client_with_docs: TestClient[Litestar]) -> None:
+    """They live outside the manual, so they are neither in the sidebar nor
+    reachable as a markdown slug."""
+    html = client_with_docs.get("/docs/routing").text
+    assert "/docs/reference/" not in html
+    assert client_with_docs.get("/docs/api_reference").status_code == 404
 
 
 # -- bundled service specs ------------------------------------------
@@ -449,14 +432,15 @@ def test_service_spec_rejects_traversal_and_unknown(tmp_path: Path, name: str) -
         assert c.get(f"/docs/services/{name}/openapi.yaml").status_code == 404
 
 
-def test_services_chapter_is_listed_and_discovers_dynamically() -> None:
-    """The chapter must read the index endpoint rather than hardcoding service
-    names, so adding a service needs no doc edit."""
-    body = (_repo_docs_src() / "bundled_services.md").read_text(encoding="utf-8")
-    assert '"/docs/services"' in body
+def test_services_reference_is_linked_and_discovers_dynamically() -> None:
+    """The browser must read the index endpoint rather than hardcoding service
+    names, so adding a service needs no code edit."""
+    js = docs_routes._SERVICE_REFERENCE_JS
+    assert '"/docs/services"' in js
+    assert "/docs/reference/services" in (_repo_docs_src() / "bundled_services.md").read_text(encoding="utf-8")
     assert "(./bundled_services.md)" in (_repo_docs_src() / "SUMMARY.md").read_text(encoding="utf-8")
     for name in ("secrets", "oauth"):
-        assert f"/docs/services/{name}/" not in body
+        assert f"/docs/services/{name}/" not in js
 
 
 # -- shipped API chapter --------------------------------------------
@@ -467,8 +451,9 @@ def _repo_docs_src() -> Path:
 
 
 def test_api_chapter_is_listed_and_points_at_the_served_spec() -> None:
-    """Reachable from the sidebar, and reading the document the app serves."""
+    """Reachable from the sidebar, linking the browser that reads the document
+    the app serves."""
     summary = (_repo_docs_src() / "SUMMARY.md").read_text(encoding="utf-8")
-    body = (_repo_docs_src() / "api.md").read_text(encoding="utf-8")
     assert "(./api.md)" in summary
-    assert '"/docs/openapi.yaml"' in body
+    assert "/docs/reference/api" in (_repo_docs_src() / "api.md").read_text(encoding="utf-8")
+    assert '"/docs/openapi.yaml"' in docs_routes._API_REFERENCE_JS

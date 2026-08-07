@@ -111,7 +111,6 @@ def _openapi_spec_path() -> Path:
     return get_config().openhost_repo_path / "compute_space" / "openapi.yaml"
 
 
-_REDOC_MARKER = "redoc-embed"
 _DEFAULT_INDEX = "introduction"
 _SUMMARY_FILENAME = "SUMMARY.md"
 
@@ -149,19 +148,18 @@ def _space_display_name() -> str | None:
 # ─── Markdown engine ────────────────────────────────────────────────
 
 
-def _build_md(allow_html: bool) -> MarkdownIt:
+def _build_md() -> MarkdownIt:
     """Construct a shared markdown renderer: ``gfm-like`` plus heading anchors,
     tasklists, and Pygments-highlighted fences. Stateless and thread-safe.
 
-    ``allow_html`` only for chapters that embed an OpenAPI browser — everywhere
-    else raw HTML stays inert, so stray angle brackets render as text.
+    Raw HTML stays inert, so stray angle brackets in the prose render as text.
     """
     # ``linkify=False``: bare URLs in the prose are NOT auto-linked.
     # The alternative requires the optional ``linkify-it-py`` dep,
     # and our manual already wraps its handful of URLs in proper
     # ``[text](url)`` syntax — auto-linking would just bring in a
     # new transitive dep for negligible UX gain.
-    md = MarkdownIt("gfm-like", {"html": allow_html, "linkify": False, "typographer": True})
+    md = MarkdownIt("gfm-like", {"html": False, "linkify": False, "typographer": True})
     md.use(anchors_plugin, max_level=4, permalink=False)
     md.use(tasklists_plugin, enabled=True)
     md.add_render_rule("fence", _render_fence_with_pygments)
@@ -215,8 +213,7 @@ def _render_fence_with_pygments(
 PYGMENTS_CSS = HtmlFormatter(style="default").get_style_defs(".codehilite")
 
 
-_MD = _build_md(allow_html=False)
-_MD_EMBED = _build_md(allow_html=True)
+_MD = _build_md()
 
 
 # ─── Sidebar / SUMMARY.md parsing ───────────────────────────────────
@@ -228,7 +225,6 @@ class _SidebarLink:
 
     title: str
     slug: str  # filename without .md, e.g. "manifest_spec"
-    standalone: bool = False  # opens in a new tab; see _is_standalone
 
 
 @dataclass(frozen=True)
@@ -288,17 +284,13 @@ def _parse_summary(summary_text: str) -> tuple[_SidebarSection, ...]:
         if m_link:
             slug = _slug_from_href(m_link.group("href"))
             if slug:
-                current_links.append(
-                    _SidebarLink(title=m_link.group("title"), slug=slug, standalone=_is_standalone(slug))
-                )
+                current_links.append(_SidebarLink(title=m_link.group("title"), slug=slug))
             continue
         m_intro = _SUMMARY_INTRO_RE.match(line)
         if m_intro and current_title is None:
             slug = _slug_from_href(m_intro.group("href"))
             if slug:
-                intro_links.append(
-                    _SidebarLink(title=m_intro.group("title"), slug=slug, standalone=_is_standalone(slug))
-                )
+                intro_links.append(_SidebarLink(title=m_intro.group("title"), slug=slug))
             continue
 
     _flush()
@@ -333,27 +325,6 @@ _render_cache_lock = threading.Lock()
 _render_cache: dict[str, tuple[float, str]] = {}
 
 
-_standalone_cache: dict[str, tuple[float, bool]] = {}
-
-
-def _is_standalone(slug: str) -> bool:
-    """Whether a chapter renders full-width and may embed raw HTML: true for
-    OpenAPI browsers, which need a viewport. Read from the source, not a list."""
-    try:
-        path = _resolve_doc_path(slug)
-        mtime = path.stat().st_mtime
-    except (NotFoundException, OSError):
-        return False
-    with _render_cache_lock:
-        cached = _standalone_cache.get(slug)
-        if cached and cached[0] == mtime:
-            return cached[1]
-    result = _REDOC_MARKER in path.read_text(encoding="utf-8")
-    with _render_cache_lock:
-        _standalone_cache[slug] = (mtime, result)
-    return result
-
-
 def _cached_render(slug: str, path: Path) -> str:
     """Render ``path`` to HTML, caching by file mtime so we don't
     re-render unchanged files on every request.
@@ -368,8 +339,7 @@ def _cached_render(slug: str, path: Path) -> str:
         cached = _render_cache.get(slug)
         if cached and cached[0] == mtime:
             return cached[1]
-    renderer = _MD_EMBED if _is_standalone(slug) else _MD
-    html = renderer.render(path.read_text(encoding="utf-8"))
+    html = _MD.render(path.read_text(encoding="utf-8"))
     html = _rewrite_internal_links(html)
     with _render_cache_lock:
         _render_cache[slug] = (mtime, html)
@@ -583,29 +553,6 @@ _TEMPLATE = """<!DOCTYPE html>
     }
     main.content .codehilite pre { background: transparent; padding: 0; }
     main.content ul, main.content ol { padding-left: 1.5em; }
-    /* The prose rules above outrank Redoc's own class selectors, so hand those
-       properties back inside the embed. */
-    main.content .redoc-embed { margin: 1.5em 0; }
-    main.content .redoc-embed a { color: inherit; }
-    main.content .redoc-embed code,
-    main.content .redoc-embed pre,
-    main.content .redoc-embed pre code {
-      background: inherit;
-      color: inherit;
-      padding: inherit;
-      border-radius: inherit;
-      font-size: inherit;
-    }
-    main.content .redoc-embed table,
-    main.content .redoc-embed th,
-    main.content .redoc-embed td {
-      border: inherit;
-      padding: inherit;
-      background: inherit;
-      width: auto;
-    }
-    main.content .redoc-embed ul, main.content .redoc-embed ol { padding-left: 0; }
-    main.content .service-spec-title { margin-top: 2.5em; font-size: 1.3em; }
     main.content hr { border: 0; border-top: 1px solid #ddd; margin: 2em 0; }
     main.content img { max-width: 100%; }
     .footer-nav {
@@ -623,14 +570,6 @@ _TEMPLATE = """<!DOCTYPE html>
        exactly like layout.html's bare <h1>, so the title + nav land at the
        same vertical position on both pages. */
     .space-header { max-width: 960px; margin: 2em auto 0; padding: 0 1em; }
-    /* Reference chapters drop the manual sidebar: Redoc needs the full window
-       and stacks its own sidebar. Prose keeps a readable measure. */
-    .layout.standalone { max-width: none; padding: 0 1.5em; }
-    .layout.standalone main.content { padding-left: 0; }
-    .layout.standalone main.content > * { max-width: 46em; }
-    .layout.standalone main.content > .redoc-embed { max-width: none; }
-    /* New-tab marker on sidebar entries that leave the manual's layout. */
-    aside.sidebar li a .ext { opacity: 0.55; margin-left: 0.3em; vertical-align: -0.1em; }
     .space-header h1.space-title { font-size: 2em; font-weight: bold; margin: 0.67em 0; }
     nav#main-nav { display: flex; align-items: flex-end; gap: 0.25em; border-bottom: 1px solid #e8e8e8; }
     nav#main-nav .nav-tab {
@@ -651,8 +590,7 @@ _TEMPLATE = """<!DOCTYPE html>
     <h1 class="space-title">{% if display_name %}{{ display_name }}'s personal compute space{% else %}OpenHost{% endif %}</h1>
     {% include "_nav_header.html" %}
   </header>
-  <div class="layout{% if standalone %} standalone{% endif %}">
-    {% if not standalone %}
+  <div class="layout">
     <aside class="sidebar">
       <h1><a href="/docs/">OpenHost Manual</a></h1>
       {% for section in sections %}
@@ -661,28 +599,96 @@ _TEMPLATE = """<!DOCTYPE html>
           <ul>
             {% for link in section.links %}
               <li><a href="/docs/{{ link.slug }}"
-                     {% if link.standalone %}target="_blank" rel="noopener"{% endif %}
-                     {% if link.slug == current_slug %}class="active"{% endif %}>{{ link.title }}{% if link.standalone %}<svg class="ext" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true"><path d="M14 4h6v6"/><path d="M20 4 10 14"/><path d="M18 14v6H4V6h6"/></svg>{% endif %}</a></li>
+                     {% if link.slug == current_slug %}class="active"{% endif %}>{{ link.title }}</a></li>
             {% endfor %}
           </ul>
         </div>
       {% endfor %}
     </aside>
-    {% endif %}
     <main class="content">
       {{ content_html | safe }}
-      {% if not standalone and (prev_link or next_link) %}
+      {% if prev_link or next_link %}
         <div class="footer-nav">
-          <div>{% if prev_link %}← <a href="/docs/{{ prev_link.slug }}"
-                 {% if prev_link.standalone %}target="_blank" rel="noopener"{% endif %}>{{ prev_link.title }}</a>{% endif %}</div>
-          <div>{% if next_link %}<a href="/docs/{{ next_link.slug }}"
-                 {% if next_link.standalone %}target="_blank" rel="noopener"{% endif %}>{{ next_link.title }}</a> →{% endif %}</div>
+          <div>{% if prev_link %}← <a href="/docs/{{ prev_link.slug }}">{{ prev_link.title }}</a>{% endif %}</div>
+          <div>{% if next_link %}<a href="/docs/{{ next_link.slug }}">{{ next_link.title }}</a> →{% endif %}</div>
         </div>
       {% endif %}
     </main>
   </div>
 </body>
 </html>
+"""
+
+
+# The OpenAPI browsers are not manual chapters: Redoc renders its own full-window
+# three-pane layout with its own sidebar, so it gets the bare document — no space
+# header, no nav tabs, no manual sidebar.  Reached by link from the prose chapters.
+_REFERENCE_TEMPLATE = """<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="robots" content="noindex">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ page_title }}</title>
+  <style>
+    html, body { margin: 0; padding: 0; }
+    body { font-family: -apple-system, system-ui, sans-serif; color: #222; background: #fff; }
+    .service-spec-title { margin: 2.5em 0 0 1.5rem; font-size: 1.3em; }
+  </style>
+</head>
+<body>
+  <div id="{{ container_id }}"></div>
+  <script src="/static/vendor/redoc.js"></script>
+  <script>{{ init_js | safe }}</script>
+</body>
+</html>
+"""
+
+# Each browser's init script.  Both degrade to a message pointing at the raw
+# document if the pinned Redoc bundle is missing (see web/vendor_assets.py).
+_API_REFERENCE_JS = """
+  (() => {
+    const host = document.getElementById("redoc");
+    if (typeof Redoc === "undefined") {
+      host.textContent = "Could not load the spec browser. The raw document is at /docs/openapi.yaml.";
+      return;
+    }
+    Redoc.init(
+      "/docs/openapi.yaml",
+      {hideDownloadButton: true, expandResponses: "200,201", nativeScrollbars: true},
+      host
+    );
+  })();
+"""
+
+_SERVICE_REFERENCE_JS = """
+  (async () => {
+    const host = document.getElementById("service-specs");
+    if (typeof Redoc === "undefined") {
+      host.textContent = "Could not load the spec browser. The raw documents are at /docs/services/<name>/openapi.yaml.";
+      return;
+    }
+    let names;
+    try {
+      names = await (await fetch("/docs/services")).json();
+    } catch (e) {
+      host.textContent = "Could not list the bundled services.";
+      return;
+    }
+    if (!names.length) {
+      host.textContent = "No bundled service specs found in this checkout.";
+      return;
+    }
+    for (const name of names) {
+      const title = document.createElement("h2");
+      title.className = "service-spec-title";
+      title.textContent = name;
+      host.appendChild(title);
+      const pane = document.createElement("div");
+      host.appendChild(pane);
+      Redoc.init(`/docs/services/${name}/openapi.yaml`, {hideDownloadButton: true, nativeScrollbars: true}, pane);
+    }
+  })();
 """
 
 
@@ -695,6 +701,7 @@ _TEMPLATE = """<!DOCTYPE html>
 _TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "templates"
 _JINJA_ENV = Environment(loader=FileSystemLoader(str(_TEMPLATES_DIR)), autoescape=True)
 _COMPILED_TEMPLATE = _JINJA_ENV.from_string(_TEMPLATE)
+_COMPILED_REFERENCE_TEMPLATE = _JINJA_ENV.from_string(_REFERENCE_TEMPLATE)
 
 
 def _flatten_links(sections: tuple[_SidebarSection, ...]) -> list[_SidebarLink]:
@@ -739,7 +746,7 @@ def _read_summary() -> tuple[_SidebarSection, ...]:
             if first_line and first_line[0].startswith("# ")
             else slug.replace("_", " ").title()
         )
-        links.append(_SidebarLink(title=title, slug=slug, standalone=_is_standalone(slug)))
+        links.append(_SidebarLink(title=title, slug=slug))
     return (_SidebarSection(title="", links=tuple(links)),)
 
 
@@ -772,7 +779,7 @@ def docs_index() -> Response[str]:
 
 @get("/docs/openapi.yaml", sync_to_thread=False)
 def docs_openapi_yaml() -> Response[str]:
-    """The OpenAPI document the ``api.md`` chapter renders, and the only URL
+    """The OpenAPI document the ``api_reference.md`` chapter renders, and the only URL
     it is served from. Read off the checkout like the markdown is, so it
     matches the commit this instance is running."""
     path = _openapi_spec_path()
@@ -792,7 +799,7 @@ def docs_openapi_yaml() -> Response[str]:
 @get("/docs/services", sync_to_thread=False)
 def docs_services_index() -> list[str]:
     """Names of the bundled services that ship an OpenAPI spec. The
-    ``bundled_services.md`` chapter reads this to decide what to render, so
+    ``service_reference.md`` chapter reads this to decide what to render, so
     adding ``services/<name>/openapi.yaml`` needs no doc edit."""
     services = _services_dir()
     if not services.is_dir():
@@ -813,6 +820,23 @@ def docs_service_spec(name: FromPath[str]) -> Response[str]:
     if not candidate.is_file() or services.resolve() not in candidate.parents:
         raise NotFoundException()
     return Response(content=candidate.read_text(encoding="utf-8"), media_type="application/yaml")
+
+
+def _reference_page(page_title: str, container_id: str, init_js: str) -> Response[str]:
+    html = _COMPILED_REFERENCE_TEMPLATE.render(page_title=page_title, container_id=container_id, init_js=init_js)
+    return Response(content=html, media_type=MediaType.HTML)
+
+
+@get("/docs/reference/api", sync_to_thread=False)
+def docs_api_reference() -> Response[str]:
+    """The OpenAPI browser for the instance's own HTTP API, linked from ``api.md``."""
+    return _reference_page("HTTP API Reference", "redoc", _API_REFERENCE_JS)
+
+
+@get("/docs/reference/services", sync_to_thread=False)
+def docs_service_reference() -> Response[str]:
+    """The OpenAPI browser for every bundled service spec, linked from ``bundled_services.md``."""
+    return _reference_page("Bundled Service Reference", "service-specs", _SERVICE_REFERENCE_JS)
 
 
 @get("/docs/{slug:str}", sync_to_thread=False)
@@ -848,7 +872,6 @@ def _render_doc(slug: str) -> Response[str]:
     html = _COMPILED_TEMPLATE.render(
         sections=sections,
         current_slug=slug,
-        standalone=_is_standalone(slug),
         content_html=content_html,
         page_title=page_title,
         prev_link=prev_l,
@@ -862,6 +885,14 @@ def _render_doc(slug: str) -> Response[str]:
 
 docs_routes = Router(
     path="/",
-    route_handlers=[docs_index, docs_openapi_yaml, docs_services_index, docs_service_spec, docs_slug],
+    route_handlers=[
+        docs_index,
+        docs_openapi_yaml,
+        docs_services_index,
+        docs_service_spec,
+        docs_api_reference,
+        docs_service_reference,
+        docs_slug,
+    ],
     include_in_schema=False,
 )

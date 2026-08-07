@@ -38,25 +38,8 @@ Otherwise, you get `302` redirected to `/login`.
 
 Individual requests can also have other `401` errors, each documented below. 
 
-## Plain spec
-
-`GET /docs/openapi.yaml` returns the raw OpenAPI doc in the Openhost repo at `compute_space/openapi.yaml`. 
-
 ## Reference
 
-<div id="redoc" class="redoc-embed"></div>
-<script src="/static/vendor/redoc.js"></script>
-<script>
-  (() => {
-    const host = document.getElementById("redoc");
-    if (typeof Redoc === "undefined") {
-      host.textContent = "Could not load the spec browser. The raw document is at /docs/openapi.yaml.";
-      return;
-    }
-    Redoc.init(
-      "/docs/openapi.yaml",
-      {hideDownloadButton: true, expandResponses: "200,201", nativeScrollbars: true},
-      host
-    );
-  })();
-</script>
+`GET /docs/openapi.yaml` returns the raw OpenAPI yaml in the Openhost repo at `compute_space/openapi.yaml`. 
+
+[HTTP API Reference](/docs/reference/api).
