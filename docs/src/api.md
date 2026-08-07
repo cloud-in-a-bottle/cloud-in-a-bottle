@@ -45,12 +45,12 @@ Individual requests can also have other `401` errors, each documented below.
 ## Reference
 
 <div id="redoc" class="redoc-embed"></div>
-<script src="https://cdn.jsdelivr.net/npm/redoc@2.5.0/bundles/redoc.standalone.js"></script>
+<script src="/static/vendor/redoc.js"></script>
 <script>
   (() => {
     const host = document.getElementById("redoc");
     if (typeof Redoc === "undefined") {
-      host.textContent = "Could not load the spec browser (no CDN access). The raw document is at /docs/openapi.yaml.";
+      host.textContent = "Could not load the spec browser. The raw document is at /docs/openapi.yaml.";
       return;
     }
     Redoc.init(

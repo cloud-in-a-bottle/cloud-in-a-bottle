@@ -31,6 +31,9 @@ env/
 # Test fixtures (pebble ACME server binary + certs)
 tests/pebble/
 
+# Third-party browser JS/CSS; provisioning downloads these (compute_space/web/vendor_assets.py)
+compute_space/src/compute_space/web/static/vendor/
+
 # ACME account key (provided out-of-band; CI writes from secrets.ACME_ACCOUNT_KEY)
 ansible/secrets/certbot_private_key.json
 .claude/settings.json

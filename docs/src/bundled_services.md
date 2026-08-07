@@ -17,12 +17,12 @@ The `description` sections document requirements for each request. The router en
 ## Reference
 
 <div id="service-specs" class="redoc-embed"></div>
-<script src="https://cdn.jsdelivr.net/npm/redoc@2.5.0/bundles/redoc.standalone.js"></script>
+<script src="/static/vendor/redoc.js"></script>
 <script>
   (async () => {
     const host = document.getElementById("service-specs");
     if (typeof Redoc === "undefined") {
-      host.textContent = "Could not load the spec browser (no CDN access). The raw documents are at /docs/services/<name>/openapi.yaml.";
+      host.textContent = "Could not load the spec browser. The raw documents are at /docs/services/<name>/openapi.yaml.";
       return;
     }
     let names;

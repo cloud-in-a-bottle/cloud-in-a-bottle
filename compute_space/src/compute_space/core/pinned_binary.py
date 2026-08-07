@@ -16,7 +16,6 @@ from __future__ import annotations
 import hashlib
 import io
 import os
-import shutil
 import tarfile
 import urllib.error
 import urllib.request
@@ -100,6 +99,36 @@ def get_pinned_binary(name: str) -> PinnedBinary:
     return binary
 
 
+def download_bytes(url: str, what: str) -> bytes:
+    """Fetch ``url`` whole, raising a RuntimeError naming ``what`` if it can't be reached."""
+    try:
+        with urllib.request.urlopen(url, timeout=120) as resp:
+            data: bytes = resp.read()
+    except (TimeoutError, urllib.error.URLError) as exc:
+        raise RuntimeError(f"Failed to download {what}: {exc}") from exc
+    return data
+
+
+def verify_sha256(data: bytes, expected: str, what: str) -> None:
+    actual = hashlib.sha256(data).hexdigest()
+    if actual != expected:
+        raise RuntimeError(f"{what} sha256 mismatch (expected {expected}, got {actual}).  Refusing to install.")
+
+
+def read_tar_member(archive: bytes, member_name: str, what: str) -> bytes:
+    """Return one member's bytes from the gzipped tar ``archive``."""
+    with tarfile.open(fileobj=io.BytesIO(archive), mode="r:gz") as tar:
+        try:
+            member = tar.getmember(member_name)
+        except KeyError:
+            raise RuntimeError(f"{what} archive is missing the {member_name!r} entry") from None
+        extracted = tar.extractfile(member)
+        if extracted is None:
+            raise RuntimeError(f"{what} archive entry {member_name!r} was unreadable")
+        with extracted:
+            return extracted.read()
+
+
 def install_pinned_binary(binary: PinnedBinary, dest_path: str) -> None:
     """Download + verify sha256 + extract ``binary`` to ``dest_path``.  Idempotent."""
     if os.path.isfile(dest_path) and os.access(dest_path, os.X_OK):
@@ -107,27 +136,10 @@ def install_pinned_binary(binary: PinnedBinary, dest_path: str) -> None:
     os.makedirs(os.path.dirname(dest_path), exist_ok=True)
     arch = host_arch()
     asset = binary.asset_for(arch)
-    logger.info("Downloading %s %s for %s", binary.name, binary.version, arch)
-    try:
-        with urllib.request.urlopen(asset.url, timeout=120) as resp:
-            tarball_bytes = resp.read()
-    except (TimeoutError, urllib.error.URLError) as exc:
-        raise RuntimeError(f"Failed to download {binary.name}: {exc}") from exc
-
-    actual_sha = hashlib.sha256(tarball_bytes).hexdigest()
-    if actual_sha != asset.sha256:
-        raise RuntimeError(
-            f"{binary.name} tarball sha256 mismatch (expected {asset.sha256}, got {actual_sha}).  Refusing to install."
-        )
-
-    with tarfile.open(fileobj=io.BytesIO(tarball_bytes), mode="r:gz") as tar:
-        member = next((m for m in tar.getmembers() if m.name == binary.archive_member), None)
-        if member is None:
-            raise RuntimeError(f"{binary.name} tarball missing the {binary.archive_member!r} entry")
-        f = tar.extractfile(member)
-        if f is None:
-            raise RuntimeError(f"{binary.name} tarball entry {binary.archive_member!r} was unreadable")
-        with f, open(dest_path, "wb") as out:
-            shutil.copyfileobj(f, out)
+    logger.info("Downloading {} {} for {}", binary.name, binary.version, arch)
+    tarball_bytes = download_bytes(asset.url, binary.name)
+    verify_sha256(tarball_bytes, asset.sha256, f"{binary.name} tarball")
+    with open(dest_path, "wb") as out:
+        out.write(read_tar_member(tarball_bytes, binary.archive_member, binary.name))
     os.chmod(dest_path, 0o700)
-    logger.info("%s installed at %s", binary.name, dest_path)
+    logger.info("{} installed at {}", binary.name, dest_path)

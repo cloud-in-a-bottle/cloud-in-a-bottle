@@ -1,0 +1,11 @@
+---
+# Fetch the third-party browser JS/CSS the web UI serves from /static/vendor.
+# Pins (url + sha256) live in compute_space/web/vendor_assets.py -- the downloader runs from there so
+# provisioning and local dev share one manifest.  The files are gitignored, so sync_code's git clean keeps them.
+
+- name: Download pinned web vendor assets
+  shell: /home/host/.pixi/bin/pixi run python -m compute_space.web.vendor_assets
+  args:
+    chdir: /home/host/openhost
+  register: web_vendor_assets
+  changed_when: web_vendor_assets.stdout is match('downloaded ')

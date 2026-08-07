@@ -50,6 +50,7 @@
     ansible_become_method: sudo
   tasks:
     - import_tasks: tasks/pixi.yml
+    - import_tasks: tasks/web_vendor_assets.yml
     - import_tasks: tasks/coredns.yml
       when: not (local_http_only | default(false) | bool)
     - import_tasks: tasks/write_openhost_config.yml

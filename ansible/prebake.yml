@@ -62,6 +62,7 @@
     - import_tasks: tasks/reclaim_pixi.yml
     - import_tasks: tasks/sync_code.yml
     - import_tasks: tasks/pixi.yml
+    - import_tasks: tasks/web_vendor_assets.yml
     - import_tasks: tasks/coredns.yml
       when: not (local_http_only | default(false) | bool)
     - import_tasks: tasks/install_openhost_units.yml

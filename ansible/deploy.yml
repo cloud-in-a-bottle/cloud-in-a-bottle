@@ -10,4 +10,5 @@
   tasks:
     - import_tasks: tasks/reclaim_pixi.yml
     - import_tasks: tasks/sync_code.yml
+    - import_tasks: tasks/web_vendor_assets.yml
     - import_tasks: tasks/restart_openhost_service.yml
