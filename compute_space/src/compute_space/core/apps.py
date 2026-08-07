@@ -1,4 +1,3 @@
-import asyncio
 import hashlib
 import json
 import os
@@ -8,7 +7,6 @@ import subprocess
 import tempfile
 import threading
 import time
-import urllib.parse
 from collections.abc import Callable
 from typing import Any
 
@@ -37,7 +35,11 @@ from compute_space.core.data import provision_data
 from compute_space.core.data import rmtree_with_sudo_fallback
 from compute_space.core.domains import Domain
 from compute_space.core.domains import primary_domain
+from compute_space.core.git_ops import CloneFailed
 from compute_space.core.git_ops import UnsupportedRepoUrlError
+from compute_space.core.git_ops import clone_repo
+from compute_space.core.git_ops import github_token_git_config
+from compute_space.core.git_ops import inject_github_token_in_url
 from compute_space.core.git_ops import is_github_repo_url
 from compute_space.core.git_ops import is_ssh_url
 from compute_space.core.git_ops import parse_repo_url
@@ -184,44 +186,16 @@ def find_app_by_name(name: str) -> App | None:
     return App.from_row(row) if row else None
 
 
-def inject_github_token_in_url(url: str, token: str) -> str:
-    """Inject a GitHub OAuth token into an HTTP(S) URL for authentication."""
-    parsed = urllib.parse.urlparse(url)
-    if parsed.scheme in ("http", "https") and parsed.hostname:
-        host_port = parsed.hostname
-        if parsed.port:
-            host_port = f"{parsed.hostname}:{parsed.port}"
-        return parsed._replace(netloc=f"{token}@{host_port}").geturl()
-    return url
-
-
-def github_token_git_config(token: str | None) -> list[str]:
-    """Ephemeral ``git -c`` args that authenticate GitHub HTTPS fetches.
-
-    Rides in GIT_CONFIG_PARAMETERS, which git propagates to child processes —
-    including recursive submodule clones/fetches — so private submodules
-    authenticate without the token ever being written to a git config file.
-    """
-    if not token:
-        return []
-    return ["-c", f"url.https://{token}@github.com/.insteadOf=https://github.com/"]
-
-
-async def _remote_ref_is_commit(clone_url: str, ref: str, github_token: str | None) -> bool:
-    """Whether ``ref`` must be checked out as a commit rather than passed to
-    ``git clone --branch`` (which only accepts a branch or tag). Asks the remote
-    whether ``ref`` names a branch or tag; if it doesn't, it's a commit. A failed
-    probe defaults to the branch/tag path so clone can surface the real error."""
-    result = await asyncio.to_thread(
-        subprocess.run,
-        ["git", *github_token_git_config(github_token), "ls-remote", "--heads", "--tags", clone_url, ref],
-        capture_output=True,
-        text=True,
-        timeout=30,
-    )
-    if result.returncode != 0:
-        return False
-    return not result.stdout.strip()
+def _plain_dir_to_copy(base_url: str) -> str | None:
+    """The directory a ``file://`` URL points at when it holds no git repo — git
+    can't clone one, so it is copied instead. None when the URL should be cloned."""
+    if not base_url.startswith("file://"):
+        return None
+    local_path = base_url[len("file://") :]
+    if not os.path.isdir(local_path):
+        raise CloneFailed(f"Local path does not exist: {local_path}")
+    is_git = os.path.isdir(os.path.join(local_path, ".git")) or os.path.isfile(os.path.join(local_path, "HEAD"))
+    return None if is_git else local_path
 
 
 async def clone_and_read_manifest(
@@ -235,113 +209,27 @@ async def clone_and_read_manifest(
         base_url, ref = parse_repo_url(repo_url)
     except UnsupportedRepoUrlError as e:
         return None, None, str(e)
-    clone_url = base_url
-
-    # For file:// URLs, copy the directory if it's not a git repo
-    if base_url.startswith("file://"):
-        local_path = base_url[len("file://") :]
-        if not os.path.isdir(local_path):
-            return None, None, f"Local path does not exist: {local_path}"
-        is_git = os.path.isdir(os.path.join(local_path, ".git")) or os.path.isfile(os.path.join(local_path, "HEAD"))
-        if not is_git:
-            tmp_parent = tempfile.mkdtemp(prefix="openhost-clone-")
-            clone_dir = os.path.join(tmp_parent, "repo")
-            try:
-                shutil.copytree(local_path, clone_dir)
-                manifest = parse_manifest(clone_dir)
-                return manifest, clone_dir, None
-            except ValueError as e:
-                rmtree_with_sudo_fallback(tmp_parent, raise_on_failure=False)
-                return None, None, str(e)
-            except Exception as e:
-                rmtree_with_sudo_fallback(tmp_parent, raise_on_failure=False)
-                return None, None, f"Copy failed: {e}"
-
-    if github_token:
-        clone_url = inject_github_token_in_url(base_url, github_token)
 
     tmp_parent = tempfile.mkdtemp(prefix="openhost-clone-")
     clone_dir = os.path.join(tmp_parent, "repo")
     try:
-        # `git clone --branch` accepts a branch or tag but NOT a bare commit
-        # hash, so a commit ref clones the default branch and is checked out
-        # below; branch/tag refs use --branch here.
-        ref_is_commit = ref is not None and await _remote_ref_is_commit(clone_url, ref, github_token)
-        clone_cmd = [
-            "git",
-            *github_token_git_config(github_token),
-            "clone",
-            "--recurse-submodules",
-            "--shallow-submodules",
-        ]
-        if ref and not ref_is_commit:
-            clone_cmd.extend(["--branch", ref])
-        clone_cmd.extend([clone_url, clone_dir])
-        result = await asyncio.to_thread(subprocess.run, clone_cmd, capture_output=True, text=True, timeout=120)
-        if result.returncode != 0:
-            rmtree_with_sudo_fallback(tmp_parent, raise_on_failure=False)
-            stderr = result.stderr.strip()
-            if github_token:
-                stderr = stderr.replace(github_token, "***")
-            return None, None, f"Git clone failed: {stderr}"
-        # If we cloned with a token, reset the remote URL so the token isn't persisted
-        if github_token and clone_url != base_url:
-            await asyncio.to_thread(
-                subprocess.run,
-                ["git", "remote", "set-url", "origin", base_url],
-                cwd=clone_dir,
-                capture_output=True,
-                timeout=10,
-            )
-            # Relative .gitmodules URLs resolved against the token-bearing clone
-            # URL, so the recorded submodule URLs may embed the token; re-sync
-            # them against the now-clean origin.
-            if os.path.exists(os.path.join(clone_dir, ".gitmodules")):
-                await asyncio.to_thread(
-                    subprocess.run,
-                    ["git", "submodule", "sync", "--recursive"],
-                    cwd=clone_dir,
-                    capture_output=True,
-                    timeout=30,
-                )
-        # A commit-hash ref couldn't be passed to --branch; check it out now
-        # (the full clone already has the object) and resync submodules to it.
-        if ref_is_commit:
-            assert ref is not None
-            checkout = await asyncio.to_thread(
-                subprocess.run,
-                ["git", "checkout", "--force", ref],
-                cwd=clone_dir,
-                capture_output=True,
-                text=True,
-                timeout=60,
-            )
-            if checkout.returncode != 0:
-                rmtree_with_sudo_fallback(tmp_parent, raise_on_failure=False)
-                stderr = checkout.stderr.strip()
-                if github_token:
-                    stderr = stderr.replace(github_token, "***")
-                return None, None, f"Git checkout of {ref} failed: {stderr}"
-            if os.path.exists(os.path.join(clone_dir, ".gitmodules")):
-                await asyncio.to_thread(
-                    subprocess.run,
-                    ["git", *github_token_git_config(github_token), "submodule", "update", "--init", "--recursive"],
-                    cwd=clone_dir,
-                    capture_output=True,
-                    timeout=120,
-                )
-        try:
-            manifest = parse_manifest(clone_dir)
-        except ValueError as e:
-            rmtree_with_sudo_fallback(tmp_parent, raise_on_failure=False)
-            return None, None, str(e)
-        return manifest, clone_dir, None
+        plain_dir = _plain_dir_to_copy(base_url)
+        if plain_dir is None:
+            await clone_repo(clone_dir, base_url, ref, github_token)
+        else:
+            try:
+                shutil.copytree(plain_dir, clone_dir)
+            except OSError as e:
+                raise CloneFailed(f"Copy failed: {e}") from e
+        return parse_manifest(clone_dir), clone_dir, None
+    except (CloneFailed, ValueError) as e:  # ValueError: unparseable manifest
+        error = str(e)
     except subprocess.TimeoutExpired:
-        rmtree_with_sudo_fallback(tmp_parent, raise_on_failure=False)
-        return None, None, "Git clone timed out"
+        error = "Git clone timed out"
     except Exception as e:
-        rmtree_with_sudo_fallback(tmp_parent, raise_on_failure=False)
-        return None, None, f"Clone failed: {e}"
+        error = f"Clone failed: {e}"
+    rmtree_with_sudo_fallback(tmp_parent, raise_on_failure=False)
+    return None, None, error
 
 
 def move_clone_to_app_temp_dir(clone_dir: str, app_name: str, config: Config) -> str:
