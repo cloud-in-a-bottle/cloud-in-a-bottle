@@ -1,8 +1,8 @@
-# HTTP API
+# Openhost API
 
-Users take actions on the compute space using the dashboard or the `oh` CLI, which go through the HTTP API documented here, in OpenAPI format. Custom tooling can also use and consume these API endpoints. The reference is generated on the latest commit using Litestar's OpenAPI framework.
+Users take actions on the Openhost level using the dashboard or the `oh` CLI, which go through the HTTP API documented here in OpenAPI format. Custom tooling can also use and consume these API endpoints. The reference is generated on the latest commit using Litestar's OpenAPI framework.
 
-This page documents all external calls to the instance. The [cross_app_services](./cross_app_services.md) page documents how apps can discover and interact with each other, and the [bundled_services](./bundled_services.md) page documents the API for Openhost-default service apps. 
+All external calls to the instance are documented here. The [cross_app_services](./cross_app_services.md) page documents how apps can discover and interact with each other, and the [bundled_services](./bundled_services.md) page documents the API for Openhost-default service apps. 
 
 Static parts of browser pages and redirects are not documented. 
 

@@ -207,10 +207,10 @@ def _render_fence_with_pygments(
     return rendered
 
 
-# Pygments CSS — embedded in the response so we don't need a
-# separate route for it.  Uses the same colour palette
-# (light) as the dashboard's .log-output panel.
-PYGMENTS_CSS = HtmlFormatter(style="default").get_style_defs(".codehilite")
+# Pygments CSS — embedded in the response so we don't need a separate route for it.
+# A dark style, because fenced code renders on the dashboard's dark .log-output panel;
+# a light one puts near-white tokens on near-white background.
+PYGMENTS_CSS = HtmlFormatter(style="native").get_style_defs(".codehilite")
 
 
 _MD = _build_md()
@@ -544,14 +544,16 @@ _TEMPLATE = """<!DOCTYPE html>
       font-size: 0.85em;
       line-height: 1.45;
     }
-    main.content pre code, main.content pre .codehilite {
+    main.content pre code {
       background: transparent;
       color: inherit;
       padding: 0;
       border-radius: 0;
       font-size: 1em;
     }
-    main.content .codehilite pre { background: transparent; padding: 0; }
+    /* Pygments wraps a highlighted fence in <div class="codehilite"> around the <pre>
+       and paints that wrapper; the <pre> stays the panel, so the wrapper draws nothing. */
+    main.content .codehilite { background: transparent; }
     main.content ul, main.content ol { padding-left: 1.5em; }
     main.content hr { border: 0; border-top: 1px solid #ddd; margin: 2em 0; }
     main.content img { max-width: 100%; }
