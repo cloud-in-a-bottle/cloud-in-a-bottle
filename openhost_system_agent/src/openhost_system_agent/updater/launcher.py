@@ -1,7 +1,6 @@
-# Launches the updater as its own transient systemd service (systemd-run, no
-# --scope) so it lands in a separate cgroup and survives the cgroup-wide SIGTERM
-# from `systemctl restart openhost`, and so systemd-run returns immediately
-# instead of blocking on the long-lived server.
+# Launches the updater as its own transient systemd service so it survives the
+# cgroup-wide SIGTERM from `systemctl restart openhost` (a plain child would be
+# killed by the restart it is meant to cover).
 
 from __future__ import annotations
 
@@ -25,8 +24,6 @@ def _systemd_run_available() -> bool:
 
 
 def _reset_stale_scope() -> None:
-    # A lingering unit from an aborted run would make the new systemd-run fail
-    # with "unit already exists".
     try:
         subprocess.run(
             ["systemctl", "stop", _SCOPE_UNIT],
@@ -53,7 +50,6 @@ def launch_updater() -> bool:
 
     _reset_stale_scope()
 
-    # Clear any stale ready marker so the wait below observes THIS launch.
     marker = ready_marker_path()
     try:
         marker.unlink(missing_ok=True)
@@ -65,9 +61,8 @@ def launch_updater() -> bool:
         f"--unit={_SCOPE_UNIT}",
         "--collect",
         sys.executable,
-        # Call main() via -c rather than `-m openhost_system_agent.cli`: under -m
-        # the module loads as __main__ and cappa's dispatch to `updater serve`
-        # exits without running the blocking server.
+        # `-c` rather than `-m`: under -m the module loads as __main__ and cappa's
+        # dispatch to `updater serve` exits without running the blocking server.
         "-c",
         "import sys; sys.argv=['openhost_system_agent','updater','serve']; "
         "from openhost_system_agent.cli import main; main()",
@@ -82,9 +77,8 @@ def launch_updater() -> bool:
         logger.warning(f"systemd-run for updater exited {result.returncode}: {result.stderr.strip()}")
         return False
 
-    # Wait for the updater to reach its bind loop before returning, so the
-    # caller's restart opens the downtime window with the updater already poised
-    # to grab 80/443. Bounded so a non-starting updater can't stall the restart.
+    # Wait (briefly) for the updater to reach its bind loop so the caller's
+    # restart opens the downtime window with it already poised to grab 80/443.
     deadline = time.monotonic() + _READY_WAIT_SECONDS
     while time.monotonic() < deadline:
         if marker.exists():

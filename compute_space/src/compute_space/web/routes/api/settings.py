@@ -140,25 +140,14 @@ async def check_for_updates() -> CheckUpdatesResponse:
     return CheckUpdatesResponse(state=state, error=_GIT_STATE_NOTICE.get(fetch_result.state))
 
 
-# Serializes apply_update: the agent checks out tags and runs migrations on a
-# shared repo, so two concurrent applies would race. On success the agent
-# restarts compute_space (killing this process), so the lock is only released
-# on failure, leaving the host free to retry.
+# Serializes apply_update. The background apply task owns the lock for the rest of
+# the process's life and releases it only on failure (on success the restart kills
+# the process). _apply_tasks holds a strong ref so the loop doesn't GC the task.
 _apply_lock = asyncio.Lock()
-
-# asyncio only keeps weak refs to tasks, so hold a strong ref to the fire-and-
-# forget apply task to keep the loop from GC-ing it mid-run.
 _apply_tasks: set[asyncio.Task[None]] = set()
 
 
 async def _run_apply_and_restart() -> None:
-    """Run the blocking agent apply. On success the agent restarts openhost,
-    killing this process; only failures return here.
-
-    Always scheduled by apply_update AFTER it acquires _apply_lock and hands
-    ownership here, so this coroutine always holds the lock and releases it on the
-    failure path.
-    """
     try:
         await system_agent_apply()
     except SystemAgentError:
@@ -170,15 +159,11 @@ async def _run_apply_and_restart() -> None:
 
 @post("/api/settings/update", status_code=200, guards=[require_owner_auth])
 async def apply_update() -> ApplyUpdateResponse:
-    # Acquire but don't release on the happy path: the background apply task owns
-    # the lock for the rest of this process's life. A locked() check gives a clear
-    # 409 instead of blocking.
     if _apply_lock.locked():
         raise HTTPException(detail="An update is already in progress.", status_code=409)
     await _apply_lock.acquire()
 
-    # Until the apply task is scheduled, ANY error must release the lock or a
-    # failed precheck would wedge updates forever.
+    # Any error before the apply task is scheduled must release the lock.
     handed_off = False
     try:
         try:
@@ -189,9 +174,8 @@ async def apply_update() -> ApplyUpdateResponse:
         if not migration_status.ok and migration_status.reason != "behind":
             raise HTTPException(detail=migration_status.message, status_code=409)
 
-        # Mint + persist the token BEFORE the apply so the updater can match the
-        # owner's tab the instant it comes up. The apply runs as a background task
-        # so this response reaches the browser before the restart kills us.
+        # Persist the token, then run the apply in the background so this response
+        # (carrying the token) reaches the browser before the restart kills us.
         token = new_update_token()
         await persist_update_token(token)
         task = asyncio.create_task(_run_apply_and_restart())

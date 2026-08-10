@@ -1,12 +1,9 @@
-// Drives the /updating page: polls /updates for live progress and reloads into
-// /settings once the update finishes and the dashboard is back. /updates is
-// served by compute_space (owner-authed) during the apply phase and by the
-// detached updater (token-authed) during the brief final restart.
+// Drives the /updating page: polls /updates for progress and returns to /settings
+// once the update is done and the dashboard is back.
 (function () {
   var params = new URLSearchParams(window.location.search);
   var token = params.get('token') || '';
-  // Persist the token so it survives reloads served by the updater, which serves
-  // the same page for every path, sometimes without the token in the URL.
+  // Persist the token so it survives updater-served reloads that lack it in the URL.
   try {
     if (token) {
       sessionStorage.setItem('openhost_update_token', token);

@@ -18,17 +18,14 @@ def updater_dir() -> Path:
 
 
 def progress_log_path() -> Path:
-    """Append-only JSONL log the updater tails and streams to the browser."""
     return updater_dir() / "progress.jsonl"
 
 
 def token_path() -> Path:
-    """File holding the update token minted by compute_space (written 0600)."""
     return updater_dir() / "token"
 
 
 def write_token(token: str) -> None:
-    """Persist the update token 0600 into the updater dir (run as root)."""
     d = updater_dir()
     d.mkdir(parents=True, exist_ok=True)
     path = token_path()
@@ -37,12 +34,10 @@ def write_token(token: str) -> None:
 
 
 def clear_token() -> None:
-    """Remove the update token if present. Idempotent."""
     token_path().unlink(missing_ok=True)
 
 
 def ready_marker_path() -> Path:
-    """Marker the updater touches once it is in its bind-retry loop."""
     return updater_dir() / "serve.ready"
 
 

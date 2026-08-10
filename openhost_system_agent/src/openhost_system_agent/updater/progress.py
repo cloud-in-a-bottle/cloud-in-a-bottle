@@ -12,9 +12,8 @@ from openhost_system_agent.updater.paths import updater_dir
 
 
 def _ensure_updater_dir() -> None:
-    # The apply walk writes here as root, but compute_space (as ``host``) must
-    # also write the token, so when running as root chown the dir back to
-    # ``host`` — otherwise host would get EACCES. Best-effort; never raises.
+    # Chown back to host when run as root so compute_space (which runs as host)
+    # can also write into this dir.
     d = updater_dir()
     d.mkdir(parents=True, exist_ok=True)
     if os.geteuid() == 0:
@@ -40,10 +39,8 @@ def _now() -> str:
     return datetime.datetime.now(datetime.UTC).isoformat()
 
 
-# Writes here are best-effort: this is cosmetic telemetry, so a logging failure
-# must never abort or delay a real host update.
+# Progress writes are best-effort cosmetic telemetry: never fail a real update.
 def reset_progress() -> None:
-    """Truncate the progress log at the start of a fresh apply."""
     try:
         _ensure_updater_dir()
         path = progress_log_path()
@@ -54,7 +51,6 @@ def reset_progress() -> None:
 
 
 def record(phase: str, message: str, ref: str | None = None) -> None:
-    """Append one progress entry as a JSON line. Best-effort; never raises."""
     entry = ProgressEntry(ts=_now(), phase=phase, message=message, ref=ref)
     try:
         _ensure_updater_dir()
@@ -65,7 +61,6 @@ def record(phase: str, message: str, ref: str | None = None) -> None:
 
 
 def read_entries() -> list[dict[str, object]]:
-    """Read the progress log, tolerating a partially-written final line. Never raises."""
     entries: list[dict[str, object]] = []
     try:
         text = progress_log_path().read_text(encoding="utf-8")
@@ -78,13 +73,11 @@ def read_entries() -> list[dict[str, object]]:
         try:
             obj = json.loads(stripped)
         except json.JSONDecodeError:
-            # A half-written final line; skip until it is complete.
-            continue
+            continue  # skip a half-written final line
         if isinstance(obj, dict):
             entries.append(obj)
     return entries
 
 
 def is_terminal(entries: list[dict[str, object]]) -> bool:
-    """True once the last entry is a terminal phase (done/failed)."""
     return bool(entries) and entries[-1].get("phase") in (PHASE_DONE, PHASE_FAILED)

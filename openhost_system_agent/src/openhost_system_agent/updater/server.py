@@ -1,6 +1,5 @@
-# Detached stdlib-only mini web server that covers the compute_space downtime
-# window: it retry-binds 80/443 once Caddy releases them, terminates TLS, serves
-# the update page, then releases the ports once the new compute_space is back.
+# Stdlib-only web server that serves the update page on 80/443 while compute_space
+# is restarting, then releases the ports once it is back on 127.0.0.1:8080.
 
 from __future__ import annotations
 
@@ -22,13 +21,8 @@ from openhost_system_agent.updater.paths import ready_marker_path
 from openhost_system_agent.updater.paths import token_path
 from openhost_system_agent.updater.paths import updater_dir
 
-# Matches compute_space's default port (config.py DefaultConfig.port).
 _COMPUTE_SPACE_PORT = 8080
-
-# Hard ceiling on how long the updater holds 80/443, so it can never permanently
-# squat the ports and lock out a compute_space that came back unexpectedly.
 _MAX_LIFETIME_SECONDS = 30 * 60
-
 _BIND_WAIT_SECONDS = 60
 _BIND_RETRY_INTERVAL = 0.02
 _READY_POLL_INTERVAL = 0.1
@@ -49,10 +43,8 @@ def _is_terminal(entries: list[dict[str, object]]) -> bool:
     return progress.is_terminal(entries)
 
 
-# Both compute_space (Jinja) and this updater render the update page from the same
-# source files (shared CSS, body fragment, polling JS) to avoid drift.
-# server.py -> updater -> openhost_system_agent -> src -> openhost_system_agent
-# -> <repo root>, i.e. parents[4].
+# Render the update page from the same source files as compute_space's /updating
+# template so the two never drift.
 _REPO_ROOT = Path(__file__).resolve().parents[4]
 _WEB_DIR = _REPO_ROOT / "compute_space" / "src" / "compute_space" / "web"
 _CSS_PATH = _WEB_DIR / "static" / "css" / "update-progress.css"
@@ -117,8 +109,8 @@ class _Handler(BaseHTTPRequestHandler):
             self._serve_updates()
             return
         if path == "/health":
-            # Answer 503 while the updater owns the port: the real dashboard is
-            # NOT up, and the page probes /health to decide when to redirect.
+            # 503 while the updater owns the port: the page probes /health to
+            # know when the real dashboard is back.
             self._respond(503, "text/plain; charset=utf-8", b"updating")
             return
         self._respond(200, "text/html; charset=utf-8", _page())
@@ -192,13 +184,8 @@ def _serve_on(sock: socket.socket, ssl_ctx: ssl.SSLContext | None) -> ThreadingH
 
 
 def run(cert_path: Path, key_path: Path) -> None:
-    """Cover the compute_space downtime window, then release the ports."""
-    logger.info(f"updater run() starting; ssl_cert={cert_path} exists={cert_path.exists()}")
     ssl_ctx = _make_ssl_context(cert_path, key_path)
-    logger.info(f"updater ssl_ctx built: {ssl_ctx is not None}")
-
     https_sock, http_sock = _acquire_ports_during_downtime(ssl_ctx)
-    logger.info(f"updater acquire returned https={https_sock is not None} http={http_sock is not None}")
 
     servers: list[ThreadingHTTPServer] = []
     if https_sock is not None:
@@ -207,9 +194,8 @@ def run(cert_path: Path, key_path: Path) -> None:
         servers.append(_serve_on(http_sock, None))
 
     if not servers:
-        logger.warning("updater got no ports; nothing to cover, exiting")
         return
-    logger.info(f"updater serving on {len(servers)} port(s); holding until compute_space is back")
+    logger.info(f"updater serving on {len(servers)} port(s) until compute_space is back")
 
     try:
         deadline = time.monotonic() + _MAX_LIFETIME_SECONDS
@@ -218,8 +204,7 @@ def run(cert_path: Path, key_path: Path) -> None:
                 break
             time.sleep(_READY_POLL_INTERVAL)
     finally:
-        # Close listening sockets FIRST so :443/:80 are freed for the new Caddy
-        # before the slower per-connection server teardown.
+        # Close the listening sockets first so the ports free before teardown.
         for httpd in servers:
             try:
                 httpd.socket.close()
@@ -237,13 +222,9 @@ def run(cert_path: Path, key_path: Path) -> None:
 def _acquire_ports_during_downtime(
     ssl_ctx: ssl.SSLContext | None,
 ) -> tuple[socket.socket | None, socket.socket | None]:
-    """Retry-bind 80/443 until the restart frees them from Caddy.
-
-    The bind-wait window only starts counting once compute_space first goes
-    offline, so a still-up compute_space at launch is NOT mistaken for "already
-    recovered" (bounded by an absolute ceiling so a never-firing restart can't
-    hang us forever).
-    """
+    # Wait for the restart to free 80/443, then grab them. The bind-wait window
+    # only starts once compute_space first goes offline, so a still-up
+    # compute_space at launch isn't mistaken for "already recovered".
     https_sock: socket.socket | None = None
     http_sock: socket.socket | None = None
 
@@ -264,21 +245,15 @@ def _acquire_ports_during_downtime(
 
         ready = _compute_space_ready()
         if not ready and not downtime_seen:
-            # Restart took compute_space offline: downtime window has begun.
             downtime_seen = True
             bind_deadline = time.monotonic() + _BIND_WAIT_SECONDS
-            logger.info("updater: compute_space went down; downtime window started, racing for 443/80")
         elif downtime_seen and ready:
-            # compute_space came back before we grabbed a port; close any partial
-            # bind so we don't squat a port.
             _close(https_sock, http_sock)
             return None, None
         elif bind_deadline is not None and time.monotonic() > bind_deadline:
             _close(https_sock, http_sock)
             return None, None
 
-        # Tight retry to grab 443 the instant the dying Caddy releases it, before
-        # the freshly-started Caddy can rebind it.
         time.sleep(_BIND_RETRY_INTERVAL)
 
     return https_sock, http_sock

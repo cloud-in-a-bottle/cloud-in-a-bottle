@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import datetime as _dt
 import json
+import os
 import socket
 import ssl
 import time
+from collections.abc import Callable
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -15,6 +17,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import NameOID
 
+from openhost_system_agent.cli import UpdaterCmd
 from openhost_system_agent.updater import launcher
 from openhost_system_agent.updater import paths
 from openhost_system_agent.updater import progress
@@ -24,74 +27,11 @@ from openhost_system_agent.updater import server
 @pytest.fixture
 def data_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setenv(paths._DATA_DIR_ENV, str(tmp_path))
+    (tmp_path / "updater").mkdir(parents=True, exist_ok=True)
     return tmp_path
 
 
-# ── paths ───────────────────────────────────────────────────────────────────
-
-
-def test_paths_honor_env(data_dir: Path) -> None:
-    assert paths.data_dir() == data_dir
-    assert paths.updater_dir() == data_dir / "updater"
-    assert paths.progress_log_path() == data_dir / "updater" / "progress.jsonl"
-    assert paths.token_path() == data_dir / "updater" / "token"
-    assert paths.tls_cert_path() == data_dir / "openhost-tls-cert.pem"
-    assert paths.tls_key_path() == data_dir / "openhost-tls-key.pem"
-
-
-# ── progress log ─────────────────────────────────────────────────────────────
-
-
-def test_progress_reset_and_record(data_dir: Path) -> None:
-    progress.reset_progress()
-    progress.record("fetch", "Fetching")
-    progress.record("migrate", "Migrating", ref="v1.2.3")
-    progress.record(progress.PHASE_DONE, "Done")
-
-    lines = paths.progress_log_path().read_text().strip().splitlines()
-    assert len(lines) == 3
-    entries = [json.loads(x) for x in lines]
-    assert entries[0]["phase"] == "fetch"
-    assert entries[1]["ref"] == "v1.2.3"
-    assert entries[2]["phase"] == "done"
-    # Every entry has a timestamp.
-    assert all(e.get("ts") for e in entries)
-
-
-def test_progress_reset_truncates_stale(data_dir: Path) -> None:
-    progress.record("fetch", "old run")
-    progress.reset_progress()
-    assert paths.progress_log_path().read_text() == ""
-
-
-def test_progress_record_never_raises_on_bad_dir(monkeypatch: pytest.MonkeyPatch) -> None:
-    # Point at an unwritable path; record must swallow the error, not raise.
-    monkeypatch.setenv(paths._DATA_DIR_ENV, "/proc/nonexistent/cannot/create")
-    progress.record("fetch", "should not raise")  # no exception = pass
-
-
-# ── server: progress tailing + terminal detection ────────────────────────────
-
-
-def test_tail_progress_skips_partial_lines(data_dir: Path) -> None:
-    progress.reset_progress()
-    progress.record("fetch", "one")
-    # Append a half-written final line (no newline / invalid json).
-    with open(paths.progress_log_path(), "a") as f:
-        f.write('{"phase": "migrate"')  # truncated, no closing brace
-    entries = server._tail_progress()
-    assert len(entries) == 1
-    assert entries[0]["phase"] == "fetch"
-
-
-def test_is_terminal(data_dir: Path) -> None:
-    assert server._is_terminal([]) is False
-    assert server._is_terminal([{"phase": "fetch"}]) is False
-    assert server._is_terminal([{"phase": "done"}]) is True
-    assert server._is_terminal([{"phase": "failed"}]) is True
-
-
-# ── server: token gating over real TLS ───────────────────────────────────────
+# ── shared TLS + HTTP helpers ─────────────────────────────────────────────────
 
 
 def _self_signed(cert_path: Path, key_path: Path) -> None:
@@ -117,29 +57,6 @@ def _self_signed(cert_path: Path, key_path: Path) -> None:
     )
 
 
-@pytest.fixture
-def running_server(data_dir: Path) -> Iterator[int]:
-    (data_dir / "updater").mkdir(parents=True, exist_ok=True)
-    paths.token_path().write_text("goodtoken")
-    progress.reset_progress()
-    progress.record("migrate", "Applying migrations")
-    progress.record(progress.PHASE_DONE, "Complete")
-
-    cert = data_dir / "openhost-tls-cert.pem"
-    key = data_dir / "openhost-tls-key.pem"
-    _self_signed(cert, key)
-    ctx = server._make_ssl_context(cert, key)
-    sock = server._try_bind("127.0.0.1", 0)  # ephemeral port
-    assert sock is not None
-    port = sock.getsockname()[1]
-    httpd = server._serve_on(sock, ctx)
-    try:
-        yield port
-    finally:
-        httpd.shutdown()
-        httpd.server_close()
-
-
 def _get(port: int, path: str) -> tuple[int, bytes]:
     ctx = ssl.create_default_context()
     ctx.check_hostname = False
@@ -159,50 +76,235 @@ def _get(port: int, path: str) -> tuple[int, bytes]:
     return status, body
 
 
-def test_server_page_renders_with_token(running_server: int) -> None:
+def _open_fds() -> list[str]:
+    try:
+        return os.listdir("/proc/self/fd")
+    except OSError:
+        return []
+
+
+# ── paths ─────────────────────────────────────────────────────────────────────
+
+
+def test_paths_honor_env(data_dir: Path) -> None:
+    assert paths.data_dir() == data_dir
+    assert paths.updater_dir() == data_dir / "updater"
+    assert paths.progress_log_path() == data_dir / "updater" / "progress.jsonl"
+    assert paths.token_path() == data_dir / "updater" / "token"
+    assert paths.tls_cert_path() == data_dir / "openhost-tls-cert.pem"
+    assert paths.tls_key_path() == data_dir / "openhost-tls-key.pem"
+
+
+# ── progress log: record / reset ───────────────────────────────────────────────
+
+
+def test_progress_reset_and_record(data_dir: Path) -> None:
+    progress.reset_progress()
+    progress.record("fetch", "Fetching")
+    progress.record("migrate", "Migrating", ref="v1.2.3")
+    progress.record(progress.PHASE_DONE, "Done")
+
+    lines = paths.progress_log_path().read_text().strip().splitlines()
+    assert len(lines) == 3
+    entries = [json.loads(x) for x in lines]
+    assert entries[0]["phase"] == "fetch"
+    assert entries[1]["ref"] == "v1.2.3"
+    assert entries[2]["phase"] == "done"
+    # Every entry has a timestamp.
+    assert all(e.get("ts") for e in entries)
+
+
+def test_progress_reset_truncates_stale(data_dir: Path) -> None:
+    progress.record("fetch", "old run")
+    progress.reset_progress()
+    assert paths.progress_log_path().read_text() == ""
+
+
+def test_record_never_raises_on_bad_dir(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Point at an unwritable path; record must swallow the error, not raise.
+    monkeypatch.setenv(paths._DATA_DIR_ENV, "/proc/nonexistent/cannot/create")
+    progress.record("fetch", "should not raise")  # no exception = pass
+
+
+def test_record_message_with_newline_stays_one_entry(data_dir: Path) -> None:
+    # A newline in the message must be JSON-escaped so it stays a single JSONL line.
+    progress.record("fetch", "line1\nline2")
+    entries = progress.read_entries()
+    assert len(entries) == 1
+    assert entries[0]["message"] == "line1\nline2"
+
+
+# ── progress log: read_entries tolerance ───────────────────────────────────────
+
+
+def test_read_entries_blank_lines_between(data_dir: Path) -> None:
+    paths.progress_log_path().write_text(
+        json.dumps({"phase": "fetch"}) + "\n\n" + json.dumps({"phase": "done"}) + "\n"
+    )
+    entries = progress.read_entries()
+    assert [e["phase"] for e in entries] == ["fetch", "done"]
+
+
+def test_read_entries_trailing_partial_line(data_dir: Path) -> None:
+    with open(paths.progress_log_path(), "w") as f:
+        f.write(json.dumps({"phase": "fetch"}) + "\n")
+        f.write('{"phase": "migr')  # cut off mid-write
+    entries = progress.read_entries()
+    assert len(entries) == 1
+    assert entries[0]["phase"] == "fetch"
+
+
+def test_read_entries_non_json_line_skipped(data_dir: Path) -> None:
+    paths.progress_log_path().write_text("not json at all\n" + json.dumps({"phase": "fetch"}) + "\n")
+    entries = progress.read_entries()
+    assert [e["phase"] for e in entries] == ["fetch"]
+
+
+# ── progress log: is_terminal ───────────────────────────────────────────────────
+
+
+def test_is_terminal(data_dir: Path) -> None:
+    assert progress.is_terminal([]) is False
+    assert progress.is_terminal([{"phase": "fetch"}]) is False
+    assert progress.is_terminal([{"phase": "fetch"}, {"phase": "done"}]) is True
+    assert progress.is_terminal([{"phase": "failed"}]) is True
+    # Only the LAST entry matters: a "done" mid-log followed by work is not terminal.
+    assert progress.is_terminal([{"phase": "done"}, {"phase": "install"}]) is False
+
+
+# ── server: token gating + page rendering over real TLS ────────────────────────
+
+
+@pytest.fixture
+def server_factory(data_dir: Path) -> Iterator[Callable[[str | None, list[dict[str, object]]], int]]:
+    cert = data_dir / "openhost-tls-cert.pem"
+    key = data_dir / "openhost-tls-key.pem"
+    _self_signed(cert, key)
+    ctx = server._make_ssl_context(cert, key)
+    started: list[object] = []
+
+    def make(token: str | None, entries: list[dict[str, object]]) -> int:
+        if token is not None:
+            paths.write_token(token)
+        progress.reset_progress()
+        for e in entries:
+            progress.record(str(e.get("phase", "x")), str(e.get("message", "")), ref=e.get("ref"))  # type: ignore[arg-type]
+        sock = server._try_bind("127.0.0.1", 0)
+        assert sock is not None
+        port = int(sock.getsockname()[1])  # read BEFORE _serve_on wraps/replaces the socket
+        httpd = server._serve_on(sock, ctx)
+        started.append(httpd)
+        return port
+
+    yield make
+    for httpd in started:
+        try:
+            httpd.shutdown()  # type: ignore[attr-defined]
+            httpd.server_close()  # type: ignore[attr-defined]
+        except OSError:
+            pass
+
+
+def test_server_page_renders_with_token(
+    server_factory: Callable[[str | None, list[dict[str, object]]], int],
+) -> None:
     # The single updating page renders for any path. The page's JS reads the token
     # from the URL (same as the compute_space page) to fetch the live log, so the
     # token is NOT embedded in the markup.
-    status, body = _get(running_server, "/?token=goodtoken")
+    port = server_factory("tok", [{"phase": "migrate", "message": "Migrating"}])
+    status, body = _get(port, "/?token=tok")
     assert status == 200
     assert b"Updating this instance" in body
 
 
-def test_server_page_renders_without_token(running_server: int) -> None:
+def test_server_page_renders_without_token(
+    server_factory: Callable[[str | None, list[dict[str, object]]], int],
+) -> None:
     # Same page without a token — still a clean, styled updating page (no logs,
-    # just the spinner + message), never a raw error.
-    status, body = _get(running_server, "/")
+    # just the spinner + message), never a raw error, served for an arbitrary path.
+    port = server_factory("tok", [])
+    status, body = _get(port, "/random/deep/path")
     assert status == 200
     assert b"Updating this instance" in body
     assert b"This instance is updating and will be back shortly" in body
 
 
-def test_server_health_returns_503_while_updating(running_server: int) -> None:
+def test_server_health_returns_503_while_updating(
+    server_factory: Callable[[str | None, list[dict[str, object]]], int],
+) -> None:
     # /health must NOT report OK while the updater owns the port, or the page
     # would think the real dashboard is back and redirect to a still-down route.
-    status, _ = _get(running_server, "/health")
+    port = server_factory("tok", [])
+    status, _ = _get(port, "/health")
     assert status == 503
 
 
-def test_server_updates_authed_returns_progress(running_server: int) -> None:
-    status, body = _get(running_server, "/updates?token=goodtoken")
+def test_server_updates_forbidden_without_or_wrong_token(
+    server_factory: Callable[[str | None, list[dict[str, object]]], int],
+) -> None:
+    port = server_factory("tok", [{"phase": "done", "message": "d"}])
+    assert _get(port, "/updates")[0] == 403
+    assert _get(port, "/updates?token=wrong")[0] == 403
+
+
+def test_server_updates_authed_returns_progress(
+    server_factory: Callable[[str | None, list[dict[str, object]]], int],
+) -> None:
+    port = server_factory("tok", [{"phase": "migrate", "message": "m"}, {"phase": "done", "message": "d"}])
+    status, body = _get(port, "/updates?token=tok")
     assert status == 200
     payload = json.loads(body)
     assert payload["terminal"] is True
+    assert len(payload["entries"]) == 2
     assert payload["entries"][0]["phase"] == "migrate"
 
 
-def test_server_updates_wrong_token_forbidden(running_server: int) -> None:
-    status, _ = _get(running_server, "/updates?token=wrong")
-    assert status == 403
+def test_server_updates_empty_progress(
+    server_factory: Callable[[str | None, list[dict[str, object]]], int],
+) -> None:
+    port = server_factory("tok", [])
+    status, body = _get(port, "/updates?token=tok")
+    assert status == 200
+    payload = json.loads(body)
+    assert payload["entries"] == [] and payload["terminal"] is False
 
 
-def test_server_updates_no_token_forbidden(running_server: int) -> None:
-    status, _ = _get(running_server, "/updates")
-    assert status == 403
+def test_server_updates_reflects_live_append(
+    server_factory: Callable[[str | None, list[dict[str, object]]], int],
+) -> None:
+    port = server_factory("tok", [{"phase": "fetch", "message": "f"}])
+    _, b1 = _get(port, "/updates?token=tok")
+    assert len(json.loads(b1)["entries"]) == 1
+    progress.record("done", "complete")
+    _, b2 = _get(port, "/updates?token=tok")
+    p2 = json.loads(b2)
+    assert len(p2["entries"]) == 2 and p2["terminal"] is True
 
 
-# ── server: bind + readiness helpers ─────────────────────────────────────────
+def test_server_token_rotation_mid_flight(
+    server_factory: Callable[[str | None, list[dict[str, object]]], int],
+) -> None:
+    # If the token file changes, the server honors the NEW token (reads live).
+    port = server_factory("tok1", [])
+    assert _get(port, "/updates?token=tok1")[0] == 200
+    paths.write_token("tok2")
+    assert _get(port, "/updates?token=tok1")[0] == 403
+    assert _get(port, "/updates?token=tok2")[0] == 200
+
+
+# ── server: token file / ssl context ───────────────────────────────────────────
+
+
+def test_read_token_file_empty_is_none(data_dir: Path) -> None:
+    paths.write_token("")
+    assert server._read_token_file() is None
+
+
+def test_make_ssl_context_missing_files_returns_none(tmp_path: Path) -> None:
+    assert server._make_ssl_context(tmp_path / "no.pem", tmp_path / "no.key") is None
+
+
+# ── server: bind helpers ────────────────────────────────────────────────────────
 
 
 def test_try_bind_conflict_returns_none() -> None:
@@ -214,6 +316,28 @@ def test_try_bind_conflict_returns_none() -> None:
     second = server._try_bind("127.0.0.1", port)
     first.close()
     assert second is None
+
+
+def test_try_bind_no_fd_leak_on_conflict() -> None:
+    # Repeated failed binds (as during the handoff retry loop) must not leak fds.
+    s = server._try_bind("127.0.0.1", 0)
+    assert s is not None
+    port = s.getsockname()[1]
+    before = len(_open_fds())
+    for _ in range(50):
+        assert server._try_bind("127.0.0.1", port) is None  # always conflicts
+    after = len(_open_fds())
+    s.close()
+    assert after - before < 5
+
+
+def test_try_bind_privileged_port_without_root_returns_none() -> None:
+    if os.geteuid() == 0:
+        pytest.skip("running as root can bind privileged ports")
+    assert server._try_bind("0.0.0.0", 443) is None
+
+
+# ── server: compute_space readiness ─────────────────────────────────────────────
 
 
 def test_compute_space_ready_detects_listener(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -238,93 +362,89 @@ def test_compute_space_not_ready_when_nothing_listening(monkeypatch: pytest.Monk
     assert server._compute_space_ready() is False
 
 
-def test_make_ssl_context_missing_files_returns_none(tmp_path: Path) -> None:
-    assert server._make_ssl_context(tmp_path / "no.pem", tmp_path / "no.key") is None
-
-
-# ── run / acquire_ports_during_downtime lifecycle ────────────────────────────
+# ── server: _acquire_ports_during_downtime lifecycle ────────────────────────────
 
 
 def test_acquire_waits_until_downtime_then_binds(monkeypatch: pytest.MonkeyPatch) -> None:
     # At launch compute_space is UP and the ports are held by Caddy (bind fails).
     # The updater must keep waiting, NOT exit. Once compute_space goes down and a
     # bind succeeds, it returns the socket.
-    state = {"up": True, "bind_ok": False, "polls": 0}
+    state = {"polls": 0, "free": False}
+    fake = object()
 
-    def fake_ready() -> bool:
+    def ready() -> bool:
         state["polls"] += 1
-        # After a few polls, simulate the restart taking compute_space down and
-        # freeing the port.
-        if state["polls"] >= 3:
-            state["up"] = False
-            state["bind_ok"] = True
-        return bool(state["up"])
+        if state["polls"] >= 4:
+            state["free"] = True
+        return not state["free"]
 
-    fake_sock = object()
-
-    def fake_bind(host: str, port: int):  # type: ignore[no-untyped-def]
-        return fake_sock if state["bind_ok"] else None
-
-    monkeypatch.setattr(server, "_compute_space_ready", fake_ready)
-    monkeypatch.setattr(server, "_try_bind", fake_bind)
+    monkeypatch.setattr(server, "_compute_space_ready", ready)
+    monkeypatch.setattr(server, "_try_bind", lambda h, p: fake if state["free"] and p == 443 else None)
     monkeypatch.setattr("openhost_system_agent.updater.server.time.sleep", lambda _: None)
+    https, _ = server._acquire_ports_during_downtime(ssl_ctx=object())  # type: ignore[arg-type]
+    assert https is fake and state["polls"] >= 4
 
+
+def test_acquire_returns_none_if_recovered_before_bind(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Downtime is observed once, then compute_space comes back before we grab a
+    # port — nothing left to cover.
+    seq = iter([False, True])
+    monkeypatch.setattr(server, "_compute_space_ready", lambda: next(seq, True))
+    monkeypatch.setattr(server, "_try_bind", lambda h, p: None)
+    monkeypatch.setattr("openhost_system_agent.updater.server.time.sleep", lambda _: None)
     https, http = server._acquire_ports_during_downtime(ssl_ctx=object())  # type: ignore[arg-type]
-    # It waited through "still up" polls and only bound once downtime began.
-    assert https is fake_sock
-    assert state["polls"] >= 3
+    assert https is None and http is None
 
 
-def test_acquire_gives_up_if_downtime_seen_but_never_binds(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_acquire_gives_up_after_bind_window(monkeypatch: pytest.MonkeyPatch) -> None:
     # compute_space goes down but we never manage to grab the port (Caddy rebinds
     # faster than we retry). After the bind-wait window we give up, not spin.
-    monkeypatch.setattr(server, "_BIND_WAIT_SECONDS", 0.05)
-    monkeypatch.setattr(server, "_compute_space_ready", lambda: False)  # always "down"
-    monkeypatch.setattr(server, "_try_bind", lambda *a: None)  # never succeeds
+    monkeypatch.setattr(server, "_BIND_WAIT_SECONDS", 0.02)
+    monkeypatch.setattr(server, "_compute_space_ready", lambda: False)
+    monkeypatch.setattr(server, "_try_bind", lambda h, p: None)
     monkeypatch.setattr("openhost_system_agent.updater.server.time.sleep", lambda _: None)
-
     https, http = server._acquire_ports_during_downtime(ssl_ctx=object())  # type: ignore[arg-type]
     assert https is None and http is None
 
 
 def test_acquire_closes_partial_bind_on_giveup(monkeypatch: pytest.MonkeyPatch) -> None:
     # We grab port 80 but never 443 (443 requires TLS which we hold). On giving up
-    # we must close the 80 socket rather than leak it. Uses a real ephemeral
-    # socket for 80 and forces 443 to keep failing.
+    # we must close the 80 socket rather than leak it.
     real80 = server._try_bind("127.0.0.1", 0)
     assert real80 is not None
-
-    def fake_bind(host: str, port: int):  # type: ignore[no-untyped-def]
-        return None if port == 443 else real80
-
-    monkeypatch.setattr(server, "_BIND_WAIT_SECONDS", 0.05)
+    monkeypatch.setattr(server, "_BIND_WAIT_SECONDS", 0.02)
     monkeypatch.setattr(server, "_compute_space_ready", lambda: False)
-    monkeypatch.setattr(server, "_try_bind", fake_bind)
+    monkeypatch.setattr(server, "_try_bind", lambda h, p: None if p == 443 else real80)
     monkeypatch.setattr("openhost_system_agent.updater.server.time.sleep", lambda _: None)
-
     https, http = server._acquire_ports_during_downtime(ssl_ctx=object())  # type: ignore[arg-type]
     assert https is None and http is None
-    # The port-80 socket must have been closed (fileno() == -1 once closed).
-    assert real80.fileno() == -1
+    assert real80.fileno() == -1  # closed, not leaked
 
 
-def test_acquire_returns_none_if_recovered_before_bind(monkeypatch: pytest.MonkeyPatch) -> None:
-    # Downtime is observed once, then compute_space comes back before we grab a
-    # port — nothing left to cover.
-    seq = iter([False, True, True, True, True])
-
-    def fake_ready() -> bool:
-        try:
-            return next(seq)
-        except StopIteration:
-            return True
-
-    monkeypatch.setattr(server, "_compute_space_ready", fake_ready)
-    monkeypatch.setattr(server, "_try_bind", lambda *a: None)
+def test_acquire_no_tls_uses_port80(monkeypatch: pytest.MonkeyPatch) -> None:
+    # When there is no ssl_ctx, holding :80 alone is enough to cover downtime.
+    fake80 = object()
+    monkeypatch.setattr(server, "_compute_space_ready", lambda: False)
+    monkeypatch.setattr(server, "_try_bind", lambda h, p: fake80 if p == 80 else None)
     monkeypatch.setattr("openhost_system_agent.updater.server.time.sleep", lambda _: None)
+    https, http = server._acquire_ports_during_downtime(ssl_ctx=None)
+    assert https is None and http is fake80
 
-    https, http = server._acquire_ports_during_downtime(ssl_ctx=object())  # type: ignore[arg-type]
-    assert https is None and http is None
+
+# ── server: run() lifecycle ─────────────────────────────────────────────────────
+
+
+def test_run_serves_then_releases_when_ready(data_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    cert = data_dir / "openhost-tls-cert.pem"
+    key = data_dir / "openhost-tls-key.pem"
+    _self_signed(cert, key)
+    real = server._try_bind("127.0.0.1", 0)
+    assert real is not None
+    monkeypatch.setattr(server, "_acquire_ports_during_downtime", lambda ctx: (real, None))
+    monkeypatch.setattr(server, "_compute_space_ready", lambda: True)  # already back
+    monkeypatch.setattr("openhost_system_agent.updater.server.time.sleep", lambda _: None)
+    server.run(cert, key)
+    assert real.fileno() == -1  # released / closed
 
 
 def test_run_returns_when_no_ports_acquired(data_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -335,7 +455,7 @@ def test_run_returns_when_no_ports_acquired(data_dir: Path, monkeypatch: pytest.
     assert time.monotonic() - start < 2
 
 
-# ── token persistence ────────────────────────────────────────────────────────
+# ── token persistence ───────────────────────────────────────────────────────────
 
 
 def test_write_and_clear_token(data_dir: Path) -> None:
@@ -349,7 +469,19 @@ def test_write_and_clear_token(data_dir: Path) -> None:
     paths.clear_token()
 
 
-# ── launcher ─────────────────────────────────────────────────────────────────
+def test_set_token_resets_stale_progress(data_dir: Path) -> None:
+    # A prior run's terminal "done" must be cleared when a new token is set, so
+    # the /updating page's first poll doesn't see stale terminal state and bounce.
+    progress.record("done", "old run")
+    assert progress.is_terminal(progress.read_entries()) is True
+
+    UpdaterCmd().set_token("freshtoken")
+
+    assert progress.read_entries() == []  # log cleared
+    assert paths.token_path().read_text() == "freshtoken"
+
+
+# ── launcher ─────────────────────────────────────────────────────────────────────
 
 
 def test_launch_updater_no_systemd_run(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -357,41 +489,31 @@ def test_launch_updater_no_systemd_run(monkeypatch: pytest.MonkeyPatch) -> None:
     assert launcher.launch_updater() is False
 
 
-def test_launch_updater_success(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_launch_updater_success(data_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("openhost_system_agent.updater.launcher.shutil.which", lambda _: "/usr/bin/systemd-run")
     monkeypatch.setattr(launcher, "_reset_stale_scope", lambda: None)
-    calls: list[list[str]] = []
 
     class _Ok:
         returncode = 0
         stderr = ""
 
-    def _run(cmd, **kwargs):  # type: ignore[no-untyped-def]
-        calls.append(cmd)
+    def _run(cmd, **kw):  # type: ignore[no-untyped-def]
+        paths.ready_marker_path().parent.mkdir(parents=True, exist_ok=True)
+        paths.ready_marker_path().write_text("")
         return _Ok()
 
     monkeypatch.setattr("openhost_system_agent.updater.launcher.subprocess.run", _run)
     monkeypatch.setattr("openhost_system_agent.updater.launcher.time.sleep", lambda _: None)
     assert launcher.launch_updater() is True
-    assert calls[0][0] == "systemd-run"
-    # Transient service (no --scope) so systemd-run returns immediately instead
-    # of blocking on the long-lived server.
-    assert "--scope" not in calls[0]
-    # Runs the CLI entrypoint via `python -c` (not `-m`, which mis-dispatches
-    # under __main__), invoking `updater serve`.
-    joined = " ".join(calls[0])
-    assert "-c" in calls[0]
-    assert "updater" in joined and "serve" in joined
-    assert "from openhost_system_agent.cli import main" in joined
 
 
-def test_launch_updater_systemd_run_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_launch_updater_systemd_run_nonzero(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("openhost_system_agent.updater.launcher.shutil.which", lambda _: "/usr/bin/systemd-run")
     monkeypatch.setattr(launcher, "_reset_stale_scope", lambda: None)
 
     class _Fail:
         returncode = 1
-        stderr = "boom"
+        stderr = "unit exists"
 
     monkeypatch.setattr("openhost_system_agent.updater.launcher.subprocess.run", lambda *a, **k: _Fail())
     assert launcher.launch_updater() is False
@@ -406,3 +528,61 @@ def test_launch_updater_never_raises_on_oserror(monkeypatch: pytest.MonkeyPatch)
 
     monkeypatch.setattr("openhost_system_agent.updater.launcher.subprocess.run", _boom)
     assert launcher.launch_updater() is False
+
+
+def test_launch_updater_command_shape(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("openhost_system_agent.updater.launcher.shutil.which", lambda _: "/usr/bin/systemd-run")
+    monkeypatch.setattr(launcher, "_reset_stale_scope", lambda: None)
+    captured: list[list[str]] = []
+
+    class _Ok:
+        returncode = 0
+        stderr = ""
+
+    def _run(cmd, **kw):  # type: ignore[no-untyped-def]
+        captured.append(cmd)
+        return _Ok()
+
+    monkeypatch.setattr("openhost_system_agent.updater.launcher.subprocess.run", _run)
+    monkeypatch.setattr("openhost_system_agent.updater.launcher.time.sleep", lambda _: None)
+    monkeypatch.setattr(launcher, "_READY_WAIT_SECONDS", 0.01)
+    launcher.launch_updater()
+    cmd = captured[0]
+    assert cmd[0] == "systemd-run"
+    # Transient service (no --scope) so systemd-run returns immediately instead of
+    # blocking on the long-lived server, with its own --unit.
+    assert "--scope" not in cmd
+    assert any(a.startswith("--unit=") for a in cmd)
+    # Runs the CLI entrypoint via `python -c` (not `-m`, which mis-dispatches
+    # under __main__), invoking `updater serve`.
+    joined = " ".join(cmd)
+    assert "-c" in cmd
+    assert "updater" in joined and "serve" in joined
+
+
+# ── launcher: stop_updater (handoff release) ────────────────────────────────────
+
+
+def test_stop_updater_calls_systemctl(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[list[str]] = []
+
+    def fake_run(cmd, **kw):  # type: ignore[no-untyped-def]
+        calls.append(cmd)
+
+        class _R:
+            returncode = 0
+
+        return _R()
+
+    monkeypatch.setattr("openhost_system_agent.updater.launcher.subprocess.run", fake_run)
+    launcher.stop_updater()
+    assert calls[0][:2] == ["systemctl", "stop"]
+    assert calls[0][2] == launcher._SCOPE_UNIT
+
+
+def test_stop_updater_never_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    def boom(*a, **k):  # type: ignore[no-untyped-def]
+        raise OSError("systemctl gone")
+
+    monkeypatch.setattr("openhost_system_agent.updater.launcher.subprocess.run", boom)
+    launcher.stop_updater()  # must not raise
