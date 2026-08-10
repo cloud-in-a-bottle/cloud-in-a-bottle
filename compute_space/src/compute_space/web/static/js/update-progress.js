@@ -1,19 +1,12 @@
-// Drives the /updating page. Polls /updates for live progress and reloads into
-// /settings once the update finishes and the dashboard is back.
-//
-// /updates is served by TWO processes over the update's lifetime and returns the
-// same {entries, terminal} shape from both:
-//   - compute_space, while it is UP during the (long) apply phase — owner-authed;
-//   - the detached updater, during the brief final restart — token-authed (the
-//     token in the URL is what lets it recognize this tab).
-// So we just keep polling /updates: transient failures are the restart window,
-// and a terminal "done"/"failed" plus a reachable dashboard means we're finished.
+// Drives the /updating page: polls /updates for live progress and reloads into
+// /settings once the update finishes and the dashboard is back. /updates is
+// served by compute_space (owner-authed) during the apply phase and by the
+// detached updater (token-authed) during the brief final restart.
 (function () {
   var params = new URLSearchParams(window.location.search);
   var token = params.get('token') || '';
-  // Persist the token for the tab so it survives reloads/navigations served by
-  // the updater (which serves the same page for every path, sometimes without
-  // the token in the URL). Restore it when the URL lacks one.
+  // Persist the token so it survives reloads served by the updater, which serves
+  // the same page for every path, sometimes without the token in the URL.
   try {
     if (token) {
       sessionStorage.setItem('openhost_update_token', token);
@@ -55,11 +48,8 @@
   }
 
   function dashboardReachable() {
-    // Probe the health endpoint (unauthenticated, cheap, and served by the new
-    // compute_space once it's up). We deliberately do NOT probe /settings with
-    // HEAD — that route only allows GET/OPTIONS and answers HEAD with 405, which
-    // would make this always report "not reachable" and the page would never
-    // redirect. /health returning any response means compute_space is back.
+    // Probe /health, not /settings: /settings answers HEAD with 405 (GET-only)
+    // and would never report reachable. Any /health response means we're back.
     return fetch('/health', { method: 'GET', cache: 'no-store' })
       .then(function (r) { return r.ok; })
       .catch(function () { return false; });
@@ -77,7 +67,6 @@
         if (d.terminal) {
           terminalSeen = true;
           if (spEl) spEl.style.display = 'none';
-          // Update is over. Wait for the (possibly restarting) dashboard, then go.
           dashboardReachable().then(function (up) {
             if (up) { finish(); return; }
             setTimeout(poll, 1000);
@@ -87,9 +76,8 @@
         setTimeout(poll, 800);
       })
       .catch(function () {
-        // Transient error = the brief restart window (compute_space handing off
-        // to/from the updater). If we already saw "terminal" and the dashboard is
-        // back, we're done; otherwise keep polling through the blip.
+        // Transient error = the brief restart window; keep polling unless we
+        // already saw terminal and the dashboard is back.
         if (terminalSeen) {
           dashboardReachable().then(function (up) {
             if (up) { finish(); return; }

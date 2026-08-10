@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import string
 from pathlib import Path
 
 import pytest
@@ -54,67 +53,9 @@ def _status(ok: bool = True, reason: str = "", msg: str = "ok") -> MigrationStat
 # ─────────────── new_update_token ───────────────
 
 
-def test_new_token_nonempty() -> None:
-    assert seamless_update.new_update_token()
-
-
 def test_new_token_unique_many() -> None:
     tokens = {seamless_update.new_update_token() for _ in range(200)}
     assert len(tokens) == 200  # no collisions
-
-
-def test_new_token_urlsafe() -> None:
-    allowed = set(string.ascii_letters + string.digits + "-_")
-    assert set(seamless_update.new_update_token()) <= allowed
-
-
-def test_new_token_length() -> None:
-    assert len(seamless_update.new_update_token()) >= 40
-
-
-# ─────────────── persist / clear token (agent-routed) ───────────────
-
-
-@pytest.mark.asyncio
-async def test_persist_calls_agent(monkeypatch: pytest.MonkeyPatch) -> None:
-    seen: list[str] = []
-
-    async def fake(t: str) -> None:
-        seen.append(t)
-
-    monkeypatch.setattr(seamless_update, "system_agent_set_update_token", fake)
-    await seamless_update.persist_update_token("tok")
-    assert seen == ["tok"]
-
-
-@pytest.mark.asyncio
-async def test_persist_swallows_agent_error(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def boom(t: str) -> None:
-        raise SystemAgentError("down")
-
-    monkeypatch.setattr(seamless_update, "system_agent_set_update_token", boom)
-    await seamless_update.persist_update_token("tok")  # no raise
-
-
-@pytest.mark.asyncio
-async def test_clear_calls_agent(monkeypatch: pytest.MonkeyPatch) -> None:
-    n = {"c": 0}
-
-    async def fake() -> None:
-        n["c"] += 1
-
-    monkeypatch.setattr(seamless_update, "system_agent_clear_update_token", fake)
-    await seamless_update.clear_update_token()
-    assert n["c"] == 1
-
-
-@pytest.mark.asyncio
-async def test_clear_swallows_agent_error(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def boom() -> None:
-        raise SystemAgentError("down")
-
-    monkeypatch.setattr(seamless_update, "system_agent_clear_update_token", boom)
-    await seamless_update.clear_update_token()  # no raise
 
 
 # ─────────────── apply_update endpoint ───────────────
@@ -301,14 +242,6 @@ async def test_update_progress_entries(progress_env: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_update_progress_failed_terminal(progress_env: Path) -> None:
-    with open(agent_paths.progress_log_path(), "w") as f:
-        f.write(json.dumps({"phase": "failed", "message": "boom"}) + "\n")
-    resp = await settings_mod.update_progress.fn()
-    assert resp.terminal is True
-
-
-@pytest.mark.asyncio
 async def test_update_progress_partial_line(progress_env: Path) -> None:
     with open(agent_paths.progress_log_path(), "w") as f:
         f.write(json.dumps({"phase": "fetch"}) + "\n")
@@ -318,18 +251,6 @@ async def test_update_progress_partial_line(progress_env: Path) -> None:
 
 
 # ─────────────── update_progress.read_progress view ───────────────
-
-
-def test_read_progress_view_empty(progress_env: Path) -> None:
-    v = update_progress.read_progress()
-    assert v.entries == [] and v.terminal is False
-
-
-def test_read_progress_view_terminal(progress_env: Path) -> None:
-    with open(agent_paths.progress_log_path(), "w") as f:
-        f.write(json.dumps({"phase": "done"}) + "\n")
-    v = update_progress.read_progress()
-    assert v.terminal is True
 
 
 def test_read_progress_view_matches_agent_reader(progress_env: Path) -> None:

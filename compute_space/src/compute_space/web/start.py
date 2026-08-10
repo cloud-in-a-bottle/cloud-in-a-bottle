@@ -65,9 +65,8 @@ def _terminate_children(children: list[subprocess.Popen[bytes]]) -> None:
 def _bootstrap(config: Config) -> None:
     """One-time process-wide initialization shared by the setup and full apps."""
     set_active_config(config)
-    # Point the shared updater-path helpers (openhost_system_agent.updater.paths)
-    # at this instance's data dir so compute_space reads the same update progress
-    # log / token file the detached updater and the root apply walk use.
+    # Point openhost_system_agent.updater.paths at this instance's data dir so
+    # compute_space reads the same progress log / token file the updater uses.
     os.environ["OPENHOST_DATA_DIR"] = str(config.openhost_data_path)
     setup_file_logging(Path(os.path.dirname(config.db_path)) / "compute_space.log")
     load_keys(config.keys_dir)
@@ -170,11 +169,8 @@ def main() -> None:
         # any additional TLS domains fall back to Caddy's internal CA (see generate_caddyfile).
         needs_caddy_for_tls = any(d.tls for d in domains)
         if config.start_caddy:
-            # If a self-update just happened, the detached updater may still be
-            # holding 80/443 to serve the "updating" page. Tell it to release NOW,
-            # before Caddy binds, so the handoff is clean and Caddy can't lose the
-            # race (which would leave the instance with no TLS terminator).
-            # Best-effort; no-op when no updater is running.
+            # Release 80/443 from the detached updater (if a self-update just
+            # happened) before Caddy binds, so Caddy can't lose the handoff race.
             system_agent_stop_updater_sync()
             caddy = start_caddy(
                 config.caddyfile_path,

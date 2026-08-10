@@ -12,10 +12,6 @@ async def settings_page() -> Template:
 
 @get("/updating", guards=[require_owner_auth])
 async def updating_page() -> Template:
-    # The dedicated update-progress page. compute_space serves it while it is up
-    # (owner-authed); during the restart the detached updater serves the same
-    # path (from its own static copy). The page polls for progress and reloads
-    # into the dashboard once the instance is back. See update-progress.js.
     return Template(template_name="updating.html")
 
 

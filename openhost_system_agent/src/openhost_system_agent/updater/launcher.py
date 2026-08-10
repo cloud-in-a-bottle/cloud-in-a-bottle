@@ -1,12 +1,7 @@
-# Launch the updater as its OWN transient systemd SERVICE (systemd-run, no
-# --scope) so it lands in a separate cgroup and — crucially — systemd-run returns
-# immediately instead of blocking on the (long-lived, blocking) server. A
-# --scope would run the command in the foreground and make systemd-run block
-# until it exits, which timed out the launcher and killed the updater.
-# openhost.service uses KillMode=control-group, so a plain child of compute_space
-# would be SIGTERM'd by the very `systemctl restart openhost` it is meant to
-# cover; a separate transient unit survives it. Runs as root (reached via `sudo
-# openhost_system_agent` from compute_space).
+# Launches the updater as its own transient systemd service (systemd-run, no
+# --scope) so it lands in a separate cgroup and survives the cgroup-wide SIGTERM
+# from `systemctl restart openhost`, and so systemd-run returns immediately
+# instead of blocking on the long-lived server.
 
 from __future__ import annotations
 
@@ -19,13 +14,8 @@ from loguru import logger
 
 from openhost_system_agent.updater.paths import ready_marker_path
 
-# A stable unit name so a second launch can't stack duplicate updaters; we reset
-# any lingering one first.
 _SCOPE_UNIT = "openhost-updater.service"
 
-# How long to wait for the launched updater to reach its bind loop (touch the
-# ready marker) before returning. Bounds the head start we give it so a failed
-# launch can't stall the restart for long.
 _READY_WAIT_SECONDS = 5.0
 _READY_POLL = 0.05
 
@@ -35,12 +25,8 @@ def _systemd_run_available() -> bool:
 
 
 def _reset_stale_scope() -> None:
-    """Best-effort: stop a leftover updater unit from a prior/aborted run.
-
-    A previous updater that exited cleanly already removed its transient unit;
-    this only matters if one is somehow still around, which would make the new
-    ``systemd-run`` fail with "unit already exists".
-    """
+    # A lingering unit from an aborted run would make the new systemd-run fail
+    # with "unit already exists".
     try:
         subprocess.run(
             ["systemctl", "stop", _SCOPE_UNIT],
@@ -52,14 +38,7 @@ def _reset_stale_scope() -> None:
 
 
 def stop_updater() -> None:
-    """Stop the detached updater unit, releasing :443/:80 immediately.
-
-    Called by the freshly-started compute_space right before it starts Caddy, so
-    the ports are free when Caddy binds — this is the authoritative handoff
-    signal, replacing the old race where the updater self-released on seeing
-    :8080 (which binds AFTER Caddy starts, so Caddy could never win the race).
-    Best-effort and idempotent; never raises.
-    """
+    """Stop the detached updater unit, releasing :443/:80. Best-effort, idempotent."""
     try:
         subprocess.run(["systemctl", "stop", _SCOPE_UNIT], capture_output=True, timeout=10)
     except (OSError, subprocess.SubprocessError):
@@ -67,19 +46,14 @@ def stop_updater() -> None:
 
 
 def launch_updater() -> bool:
-    """Start the detached updater. Returns True if it was launched.
-
-    Never raises: a failure to launch the (cosmetic) updater must never abort or
-    delay the actual update. The caller proceeds with the restart regardless.
-    """
+    """Start the detached updater. Returns True if launched; never raises."""
     if not _systemd_run_available():
         logger.warning("systemd-run not found; skipping detached updater (update will still proceed)")
         return False
 
     _reset_stale_scope()
 
-    # Clear any stale ready marker so our wait below observes THIS launch reach
-    # its bind loop, not a previous run's marker.
+    # Clear any stale ready marker so the wait below observes THIS launch.
     marker = ready_marker_path()
     try:
         marker.unlink(missing_ok=True)
@@ -89,18 +63,11 @@ def launch_updater() -> bool:
     cmd = [
         "systemd-run",
         f"--unit={_SCOPE_UNIT}",
-        # A transient service (NOT --scope) so systemd-run forks it and returns
-        # immediately rather than blocking on the long-lived server. It lives in
-        # its own cgroup, independent of openhost.service, so the restart's
-        # cgroup-wide SIGTERM doesn't tear it down.
         "--collect",
         sys.executable,
-        # Import and call the CLI entrypoint directly rather than `-m
-        # openhost_system_agent.cli`: under `-m` the module loads as __main__ and
-        # cappa's dispatch to `updater serve` exits immediately without running
-        # the server (the serve coroutine never blocks), so the updater never
-        # covered the downtime. Calling main() via -c behaves like the console
-        # script and correctly runs the blocking server.
+        # Call main() via -c rather than `-m openhost_system_agent.cli`: under -m
+        # the module loads as __main__ and cappa's dispatch to `updater serve`
+        # exits without running the blocking server.
         "-c",
         "import sys; sys.argv=['openhost_system_agent','updater','serve']; "
         "from openhost_system_agent.cli import main; main()",
@@ -115,10 +82,9 @@ def launch_updater() -> bool:
         logger.warning(f"systemd-run for updater exited {result.returncode}: {result.stderr.strip()}")
         return False
 
-    # Wait for the updater to reach its bind loop (ready marker) before returning,
-    # so the caller's restart opens the downtime window with the updater already
-    # poised to grab 80/443 rather than still importing Python. Bounded so a
-    # non-starting updater can't stall the restart.
+    # Wait for the updater to reach its bind loop before returning, so the
+    # caller's restart opens the downtime window with the updater already poised
+    # to grab 80/443. Bounded so a non-starting updater can't stall the restart.
     deadline = time.monotonic() + _READY_WAIT_SECONDS
     while time.monotonic() < deadline:
         if marker.exists():

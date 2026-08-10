@@ -101,8 +101,6 @@ class StatusCmd:
 class UpdaterCmd:
     @cappa.command(name="launch", help="Launch the detached updater mini-server (survives the compute_space restart).")
     def launch(self) -> None:
-        # Best-effort and cosmetic: report whether the detached server started,
-        # but never fail the caller — the update proceeds either way.
         print(json.dumps({"ok": True, "launched": launch_updater()}))
 
     @cappa.command(name="serve", help="Run the updater mini-server in the foreground (invoked inside the scope).")
@@ -116,10 +114,8 @@ class UpdaterCmd:
 
     @cappa.command(name="set-token", help="Persist the update token so the updater can auth the owner tab.")
     def set_token(self, token: Annotated[str, cappa.Arg(help="Opaque update token minted by compute_space")]) -> None:
-        # Minting a token always immediately precedes a fresh apply, so reset the
-        # progress log here — synchronously, before the browser can poll /updates.
-        # Otherwise the /updating page's first poll could see the PREVIOUS run's
-        # terminal "done" entry and redirect straight back to the dashboard.
+        # Reset synchronously before the browser can poll /updates, so its first
+        # poll can't see the PREVIOUS run's terminal "done" entry.
         reset_progress()
         write_token(token)
         print(json.dumps({"ok": True}))

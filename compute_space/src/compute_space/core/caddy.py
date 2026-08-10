@@ -100,34 +100,25 @@ def unix_admin_address(socket_path: Path) -> str:
     return f"unix/{socket_path}"
 
 
-# During a self-update the detached updater (openhost_system_agent.updater) holds
-# :443/:80 to serve the "updating" page while compute_space is down, and releases
-# them once this new compute_space is listening on loopback. There is a brief
-# window where the updater hasn't let go yet, so a fresh Caddy can hit
-# "address already in use". Retry the spawn for a few seconds to ride out that
-# handoff instead of leaving the instance with no front proxy.
-# Generous window: during a self-update the detached updater holds :443 until it
-# sees the NEW compute_space listening on :8080 — but Caddy is started EARLIER in
-# main() than the :8080 bind, so Caddy must keep retrying until the updater lets
-# go. Erring long here is safe (Caddy exits non-zero only on a real, persistent
-# conflict) and an instance with no TLS terminator is far worse than a slow bind.
+# During a self-update the detached updater holds :443/:80 until this new
+# compute_space is up, so a fresh Caddy can briefly hit "address already in use".
+# Retry that case to ride out the handoff rather than leave the instance with no
+# front proxy. The window is generous because Caddy starts earlier in main() than
+# the :8080 bind the updater waits for; a slow bind is far better than no TLS.
 _CADDY_BIND_RETRY_SECONDS = 90.0
 _CADDY_BIND_RETRY_INTERVAL = 0.25
 _CADDY_ADDR_IN_USE = "address already in use"
 
 
 def _spawn_caddy_once(caddyfile_path: Path) -> tuple[subprocess.Popen[bytes], list[str], threading.Thread]:
-    """Spawn Caddy and stream its logs. Returns the proc, a mutable list that
-    accumulates the most recent output lines (for post-exit diagnosis), and the
-    log-streaming thread (so callers can join it to be sure output is drained
-    before inspecting the lines)."""
+    """Spawn Caddy and stream its logs. Returns the proc, a mutable tail of recent
+    output lines, and the log thread (so callers can join it before inspecting)."""
     proc = subprocess.Popen(
         ["caddy", "run", "--config", str(caddyfile_path), "--adapter", "caddyfile"],
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
     )
-    # Bounded tail of recent Caddy output so _spawn_caddy can tell a bind conflict
-    # (retryable during the update handoff) from a real config error (fail fast).
+    # Bounded tail so _spawn_caddy can tell a bind conflict from a config error.
     recent: list[str] = []
 
     def _stream_caddy_logs(proc: subprocess.Popen[bytes]) -> None:
@@ -135,7 +126,7 @@ def _spawn_caddy_once(caddyfile_path: Path) -> tuple[subprocess.Popen[bytes], li
         for line in proc.stdout:
             text = line.decode(errors="replace").rstrip()
             recent.append(text)
-            del recent[:-20]  # keep only the last ~20 lines
+            del recent[:-20]
             logger.info(f"[caddy] {text}")
         proc.wait()
         logger.warning(f"Caddy exited with code {proc.returncode}")
@@ -157,26 +148,19 @@ def _spawn_caddy(caddyfile_path: Path) -> subprocess.Popen[bytes]:
     deadline = time.monotonic() + _CADDY_BIND_RETRY_SECONDS
     while True:
         proc, recent, log_thread = _spawn_caddy_once(caddyfile_path)
-        # Give Caddy a moment to either bind or fail on the ports. A successful
-        # Caddy stays alive; a bind conflict exits within ~this window.
         try:
             proc.wait(timeout=_CADDY_BIND_RETRY_INTERVAL)
         except subprocess.TimeoutExpired:
             # Still running after the settle window — it bound successfully.
             return proc
-        # Caddy exited. Wait for the log thread to finish draining stdout (EOF on
-        # exit makes this quick) so ``recent`` is complete before we classify the
-        # failure — otherwise a bind conflict could be misread as a config error.
+        # Join the log thread so ``recent`` is fully drained before we classify
+        # the failure, otherwise a bind conflict could look like a config error.
         log_thread.join(timeout=2.0)
-        # Retry only if it was a port conflict (the updater hasn't released
-        # 443/80 yet) and we still have time.
         addr_in_use = any(_CADDY_ADDR_IN_USE in line for line in recent)
         if addr_in_use and time.monotonic() < deadline:
             logger.info("Caddy bind conflict (ports still held by the update server); retrying")
             time.sleep(_CADDY_BIND_RETRY_INTERVAL)
             continue
-        # A non-bind failure, or out of retries: return the (dead) proc so the
-        # caller surfaces the failure rather than silently believing Caddy is up.
         if not addr_in_use:
             logger.warning("Caddy exited immediately for a non-bind reason; not retrying")
         else:

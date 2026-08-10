@@ -81,8 +81,8 @@ class CheckUpdatesResponse:
 
 @attr.s(auto_attribs=True, frozen=True)
 class ApplyUpdateResponse:
-    # Token the browser carries to the detached updater during the downtime
-    # window so it recognizes the owner's tab and streams live progress logs.
+    # Carried by the browser to the detached updater so it recognizes the owner's
+    # tab and streams live progress logs during the downtime.
     token: str
 
 
@@ -146,44 +146,39 @@ async def check_for_updates() -> CheckUpdatesResponse:
 # on failure, leaving the host free to retry.
 _apply_lock = asyncio.Lock()
 
-# Hold a reference to the fire-and-forget apply task so the event loop can't
-# garbage-collect it mid-run (asyncio only keeps weak refs to tasks). Discarded
-# on completion.
+# asyncio only keeps weak refs to tasks, so hold a strong ref to the fire-and-
+# forget apply task to keep the loop from GC-ing it mid-run.
 _apply_tasks: set[asyncio.Task[None]] = set()
 
 
 async def _run_apply_and_restart() -> None:
-    """Run the (blocking) agent apply. On success the agent restarts openhost,
-    killing this process; only failures return here, where we clear the token so
-    a later visitor doesn't see a stale, unrelated progress log.
+    """Run the blocking agent apply. On success the agent restarts openhost,
+    killing this process; only failures return here.
 
-    Invariant: this is only ever scheduled by apply_update AFTER it has acquired
-    _apply_lock and handed ownership here, so this coroutine always holds the lock
-    and must release it (directly, not via a locked() check) on the failure path."""
+    Always scheduled by apply_update AFTER it acquires _apply_lock and hands
+    ownership here, so this coroutine always holds the lock and releases it on the
+    failure path.
+    """
     try:
         await system_agent_apply()
     except SystemAgentError:
         logger.exception("system agent apply failed")
         await clear_update_token()
     finally:
-        # Release the serialization lock so the owner can retry after a failure.
-        # (On success this never runs — the process is gone.)
         _apply_lock.release()
 
 
 @post("/api/settings/update", status_code=200, guards=[require_owner_auth])
 async def apply_update() -> ApplyUpdateResponse:
-    # Acquire without releasing on the happy path: the background apply task owns
-    # the lock for the rest of this process's life and releases it only if the
-    # apply fails (see _run_apply_and_restart). A locked() check gives the owner
-    # a clear 409 instead of blocking.
+    # Acquire but don't release on the happy path: the background apply task owns
+    # the lock for the rest of this process's life. A locked() check gives a clear
+    # 409 instead of blocking.
     if _apply_lock.locked():
         raise HTTPException(detail="An update is already in progress.", status_code=409)
     await _apply_lock.acquire()
 
-    # Ownership of the lock transfers to the background apply task only once it is
-    # successfully scheduled. Until then, ANY error (expected or not) must release
-    # it, or a single failed precheck would wedge updates forever.
+    # Until the apply task is scheduled, ANY error must release the lock or a
+    # failed precheck would wedge updates forever.
     handed_off = False
     try:
         try:
@@ -194,15 +189,11 @@ async def apply_update() -> ApplyUpdateResponse:
         if not migration_status.ok and migration_status.reason != "behind":
             raise HTTPException(detail=migration_status.message, status_code=409)
 
-        # Mint + persist the token BEFORE kicking off the apply so the updater
-        # (launched by the agent at the end of the walk) can match the owner's tab
-        # the instant it comes up. Persisting runs via the root agent so it works
-        # regardless of updater-dir ownership. The apply then runs as a background
-        # task so this response — carrying the token — reaches the browser before
-        # the restart kills this process.
+        # Mint + persist the token BEFORE the apply so the updater can match the
+        # owner's tab the instant it comes up. The apply runs as a background task
+        # so this response reaches the browser before the restart kills us.
         token = new_update_token()
         await persist_update_token(token)
-        # Keep a strong reference so the loop doesn't GC the task mid-run.
         task = asyncio.create_task(_run_apply_and_restart())
         _apply_tasks.add(task)
         task.add_done_callback(_apply_tasks.discard)
@@ -221,10 +212,8 @@ class UpdateProgressResponse:
 
 @get("/updates", guards=[require_owner_auth])
 async def update_progress() -> UpdateProgressResponse:
-    # Served by compute_space while it is UP during the (long) apply phase, so the
-    # /updating page streams live progress before the brief final restart. The
-    # detached updater serves the SAME path+shape during that restart. Owner-authed
-    # here (cookie); the updater authenticates via the URL token instead.
+    # Same path+shape the detached updater serves during the final restart; this
+    # covers the long apply phase while compute_space is still up.
     view = read_progress()
     return UpdateProgressResponse(entries=view.entries, terminal=view.terminal)
 

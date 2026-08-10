@@ -188,15 +188,12 @@ def main() -> None:
         # walk stays a single process regardless of how many steps we're behind.
         os.execv(sys.executable, [sys.executable, str(Path(__file__).resolve())])
 
-    # Destination reached. Record "done" BEFORE the restart: the restart kills
-    # this process, so anything after systemctl may never run. The updater
-    # server tails the log and reloads the browser onto the fresh dashboard.
+    # Record "done" BEFORE the restart, which kills this process (anything after
+    # systemctl may never run).
     progress.record(progress.PHASE_DONE, "Update complete. Restarting\u2026")
 
-    # Launch the detached downtime server just before the restart, so it is
-    # ready to bind 80/443 the instant Caddy releases them. It runs in its own
-    # systemd scope and therefore survives the cgroup-wide SIGTERM below.
-    # Best-effort: launch_updater never raises.
+    # Launch the detached downtime server just before the restart so it is ready
+    # to bind 80/443 the instant Caddy releases them. Best-effort; never raises.
     launch_updater()
 
     # On the destination: restart openhost so the new code takes over. When the

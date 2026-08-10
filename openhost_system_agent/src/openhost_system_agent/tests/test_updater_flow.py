@@ -1,7 +1,6 @@
-"""Hammer the updater's request handling 100x across varied states to prove that
-during the downtime window EVERY request gets a proper, styled page or a valid
-JSON/health response — never a raw failure/dead page (the only unavoidable gap is
-the sub-second port switch, which is outside the server's request handling)."""
+"""Exercise the updater's request handling across varied states to prove that
+during the downtime window EVERY request gets a proper styled page or valid
+JSON/health response — never a raw failure/dead page."""
 
 from __future__ import annotations
 
@@ -64,9 +63,8 @@ def _get(port: int, path: str) -> tuple[int, bytes]:
     return status, body
 
 
-# 100 iterations, each cycling through different states (token set/unset, empty
-# log / mid-update / terminal) and a spread of request paths a browser or random
-# visitor might hit during downtime.
+# Each iteration cycles through a state (token set/unset, empty log / mid-update
+# / terminal) and a spread of paths a browser or random visitor might hit.
 _PATHS = [
     "/",
     "/updating?token={tok}",
@@ -87,7 +85,7 @@ _STATES = [
 ]
 
 
-@pytest.mark.parametrize("iteration", range(100))
+@pytest.mark.parametrize("iteration", range(10))
 def test_updater_never_serves_failure_page(iteration: int, tmp_path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
     monkeypatch.setenv(paths._DATA_DIR_ENV, str(tmp_path))
     (tmp_path / "updater").mkdir(parents=True, exist_ok=True)

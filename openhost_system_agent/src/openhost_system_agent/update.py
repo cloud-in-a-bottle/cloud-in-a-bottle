@@ -261,8 +261,7 @@ def apply_update() -> NoReturn:
     if repo.is_dirty(untracked_files=True):
         raise RuntimeError("Working tree has uncommitted changes. Stash or commit first.")
 
-    # Fresh progress log for this apply, so the updater never shows stale lines
-    # from a previous run. Best-effort; never raises.
+    # Fresh progress log so the updater never shows stale lines from a prior run.
     progress.reset_progress()
     progress.record("fetch", "Fetching latest code\u2026")
 

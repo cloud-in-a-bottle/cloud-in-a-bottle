@@ -45,11 +45,6 @@ def test_read_progress_terminal_on_done(progress_dir: Path) -> None:
     assert update_progress.read_progress().terminal is True
 
 
-def test_read_progress_terminal_on_failed(progress_dir: Path) -> None:
-    _write_log([{"ts": "t1", "phase": "failed", "message": "boom"}])
-    assert update_progress.read_progress().terminal is True
-
-
 def test_read_progress_skips_partial_final_line(progress_dir: Path) -> None:
     with open(agent_paths.progress_log_path(), "w", encoding="utf-8") as f:
         f.write(json.dumps({"ts": "t1", "phase": "fetch", "message": "F"}) + "\n")

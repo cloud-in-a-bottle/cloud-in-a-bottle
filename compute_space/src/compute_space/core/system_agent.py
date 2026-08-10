@@ -17,14 +17,11 @@ class SystemAgentError(Exception):
     pass
 
 
-# sudo prints `sudo: openhost_system_agent: command not found` when the symlink
-# at /usr/local/bin/openhost_system_agent isn't resolvable. That is usually a
-# genuinely-missing symlink (needs an ansible re-deploy), but it also shows up
-# TRANSIENTLY right after a self-update restart: the freshly-started
-# compute_space immediately runs its "check for updates", and for a brief window
-# sudo's PATH lookup can miss the (present) symlink before the environment
-# settles. So we retry this specific error a few times — it self-heals within a
-# second or two — and only surface the "re-run ansible" guidance if it persists.
+# sudo prints "command not found" when the symlink at
+# /usr/local/bin/openhost_system_agent isn't resolvable. Usually that means a
+# missing symlink (needs an ansible re-deploy), but it also appears transiently
+# right after a self-update restart before sudo's PATH lookup settles, so we
+# retry it before surfacing the "re-run ansible" guidance.
 _CMD_NOT_FOUND = "openhost_system_agent: command not found"
 _NOT_FOUND_RETRIES = 5
 _NOT_FOUND_RETRY_DELAY = 0.5
@@ -33,8 +30,8 @@ _NOT_FOUND_RETRY_DELAY = 0.5
 def _run_system_agent(*args: str, timeout: int = 300) -> str:
     """Run the agent, raising SystemAgentError on failure. Returns stdout.
 
-    Retries transient post-restart "command not found" errors a few times (see
-    _CMD_NOT_FOUND above) before giving up; all other failures raise immediately.
+    Retries transient post-restart "command not found" errors (see _CMD_NOT_FOUND);
+    all other failures raise immediately.
     """
     last_not_found: str | None = None
     for attempt in range(_NOT_FOUND_RETRIES):
@@ -60,8 +57,6 @@ def _run_system_agent(*args: str, timeout: int = 300) -> str:
             error = result.stderr or result.stdout
 
         if _CMD_NOT_FOUND in str(error):
-            # Transient startup race — wait and retry (unless this was the last
-            # attempt, in which case fall through to the persistent-failure path).
             last_not_found = str(error).strip()
             if attempt < _NOT_FOUND_RETRIES - 1:
                 time.sleep(_NOT_FOUND_RETRY_DELAY)
@@ -75,7 +70,6 @@ def _run_system_agent(*args: str, timeout: int = 300) -> str:
             )
         raise SystemAgentError(str(error))
 
-    # Unreachable: the loop either returns, retries, or raises. Guard for safety.
     raise SystemAgentError(last_not_found or "openhost_system_agent failed")
 
 
@@ -127,8 +121,6 @@ def system_agent_status() -> MigrationStatus:
 
 @async_wrap
 def system_agent_set_update_token(token: str) -> None:
-    # Written via the (root) agent so it lands in the root-managed updater dir
-    # regardless of directory ownership, and is readable by the root updater.
     _run_system_agent("updater", "set-token", token, timeout=30)
 
 
@@ -138,12 +130,7 @@ def system_agent_clear_update_token() -> None:
 
 
 def system_agent_stop_updater_sync() -> None:
-    """Stop the detached updater (releasing 80/443), synchronously.
-
-    Called from compute_space startup right before Caddy binds 80/443, so the
-    updater lets go first and Caddy can't lose the handoff race. Best-effort:
-    startup must never fail because the (cosmetic) updater couldn't be stopped.
-    """
+    """Stop the detached updater (releasing 80/443), synchronously. Best-effort."""
     try:
         _run_system_agent("updater", "stop", timeout=30)
     except SystemAgentError:
