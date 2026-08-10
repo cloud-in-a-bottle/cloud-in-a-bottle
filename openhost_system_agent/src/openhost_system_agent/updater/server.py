@@ -65,53 +65,70 @@ def _is_terminal(entries: list[dict[str, object]]) -> bool:
     return progress.is_terminal(entries)
 
 
-_LOADING_PAGE = b"""<!doctype html><html><head><meta charset="utf-8">
-<title>Updating\xe2\x80\xa6</title><meta name="viewport" content="width=device-width,initial-scale=1">
-<style>body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
-background:#0f1117;color:#e1e4e8;display:flex;min-height:100vh;align-items:center;
-justify-content:center;margin:0}.c{text-align:center}.s{width:2.5em;height:2.5em;margin:0 auto 1em;
-border:3px solid #30363d;border-top-color:#58a6ff;border-radius:50%;animation:r 1s linear infinite}
-@keyframes r{to{transform:rotate(360deg)}}</style></head>
-<body><div class="c"><div class="s"></div><p>This instance is updating. It will be back shortly\xe2\x80\xa6</p></div>
-<script>setTimeout(function(){location.reload()},3000)</script></body></html>"""
+# Shared light styling matching the platform (see web/templates/updating.html and
+# layout.html): white background, #222 text, -apple-system font, #36c accent.
+# Keeping this in one string means the updater's page is visually identical to the
+# compute_space-served /updating page, so the hand-off is seamless to the eye.
+_PAGE_STYLE = (
+    "body{font-family:-apple-system,system-ui,sans-serif;max-width:640px;margin:3em auto;"
+    "padding:0 1em;color:#222;}"
+    "h1{font-size:1.4em;display:flex;align-items:center;gap:0.5em;}"
+    ".sp{display:inline-block;width:1em;height:1em;border:2px solid #ddd;border-top-color:#36c;"
+    "border-radius:50%;animation:r 1s linear infinite;}"
+    "@keyframes r{to{transform:rotate(360deg);}}"
+    "ul{list-style:none;padding:0;}"
+    "li{padding:0.4em 0.6em;border-left:2px solid #ddd;margin:0.2em 0;}"
+    "li.done{border-color:#080;}li.failed{border-color:#c00;color:#c00;}"
+    ".ts{color:#888;font-size:0.8em;margin-right:0.6em;}"
+    ".hint{color:#666;font-size:0.9em;margin-top:1.5em;}"
+)
+
+# Client script shared by the updater's page. Polls /updates?token=..., renders
+# the phase list when the token matches (else just shows the spinner + heading),
+# and — crucially — is RESILIENT: transient errors / non-OK responses during the
+# brief port hand-off do NOT redirect away; it keeps polling. It only navigates to
+# /settings once the update is terminal AND the dashboard is actually reachable
+# again (probed via /health), so the owner never lands on a dead page.
+_PAGE_SCRIPT = (
+    "var TOKEN=%s;var terminal=false;"
+    "function esc(s){var d=document.createElement('div');d.textContent=(s==null?'':String(s));return d.innerHTML}"
+    "function render(entries){var u=document.getElementById('log');if(!entries||!entries.length)return;"
+    "u.innerHTML='';entries.forEach(function(e){var li=document.createElement('li');"
+    "if(e.phase==='done')li.className='done';if(e.phase==='failed')li.className='failed';"
+    "li.innerHTML=\"<span class='ts'>\"+esc((e.ts||'').substr(11,8))+\"</span>\"+esc(e.message||e.phase||'');"
+    "u.appendChild(li)})}"
+    "function dashUp(){return fetch('/health',{cache:'no-store'}).then(function(r){return r.ok}).catch(function(){return false})}"
+    "function finish(){var s=document.getElementById('sp');if(s)s.style.display='none';window.location.href='/settings'}"
+    "function poll(){fetch('/updates?token='+encodeURIComponent(TOKEN),{cache:'no-store'})"
+    ".then(function(r){if(!r.ok){return null}return r.json()})"
+    ".then(function(d){"
+    # No JSON (403/404/blip): if we've already seen terminal AND the dashboard is
+    # back, we're done; otherwise keep waiting — never bounce to a dead page.
+    "if(!d){if(terminal){dashUp().then(function(u){u?finish():setTimeout(poll,1000)})}else{setTimeout(poll,1000)}return}"
+    "render(d.entries||[]);"
+    "if(d.terminal){terminal=true;var s=document.getElementById('sp');if(s)s.style.display='none';"
+    "dashUp().then(function(u){u?finish():setTimeout(poll,1000)});return}"
+    "setTimeout(poll,1000)})"
+    ".catch(function(){if(terminal){dashUp().then(function(u){u?finish():setTimeout(poll,1200)})}else{setTimeout(poll,1200)}})}"
+    "poll();"
+)
 
 
-# Owner view served by the updater during downtime. Polls /updates?token=... and
-# renders the phase list. When the updater exits (compute_space back), the next
-# poll hits the new compute_space (no /updates route) and we redirect to
-# /settings. Self-contained (no external JS) so it never depends on repo layout.
-def _log_page(token: str) -> bytes:
+def _page(token: str) -> bytes:
+    """The updater's single page (light, platform-styled). Shows the spinner +
+    heading always; the token unlocks the live log list (populated by the script
+    polling /updates). Served for every non-/updates path during downtime."""
     tok = json.dumps(token)
     html = (
-        "<!doctype html><html><head><meta charset='utf-8'><title>Updating\u2026</title>"
+        "<!doctype html><html><head><meta charset='utf-8'>"
+        "<meta name='robots' content='noindex'>"
         "<meta name='viewport' content='width=device-width,initial-scale=1'>"
-        "<style>body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;"
-        "background:#0f1117;color:#e1e4e8;margin:0;padding:2em}"
-        ".w{max-width:640px;margin:0 auto}h1{font-size:1.3em}"
-        "ul{list-style:none;padding:0}li{padding:.4em .6em;border-left:2px solid #30363d;margin:.2em 0}"
-        "li.done{border-color:#2ea043}li.failed{border-color:#f85149;color:#f85149}"
-        ".ts{color:#8b949e;font-size:.8em;margin-right:.6em}.sp{display:inline-block;width:1em;height:1em;"
-        "vertical-align:-2px;border:2px solid #30363d;border-top-color:#58a6ff;border-radius:50%;"
-        "animation:r 1s linear infinite;margin-right:.5em}@keyframes r{to{transform:rotate(360deg)}}</style>"
-        "</head><body><div class='w'><h1><span class='sp' id='sp'></span>Updating this instance\u2026</h1>"
-        "<ul id='log'></ul></div><script>"
-        "var TOKEN=" + tok + ";"
-        "function esc(s){var d=document.createElement('div');d.textContent=s;return d.innerHTML}"
-        "function render(entries){var u=document.getElementById('log');u.innerHTML='';"
-        "entries.forEach(function(e){var li=document.createElement('li');"
-        "if(e.phase==='done')li.className='done';if(e.phase==='failed')li.className='failed';"
-        "li.innerHTML=\"<span class='ts'>\"+esc((e.ts||'').substr(11,8))+\"</span>\"+esc(e.message||e.phase||'');"
-        "u.appendChild(li)})}"
-        "function go(){window.location.href='/settings'}"
-        "function poll(){fetch('/updates?token='+encodeURIComponent(TOKEN),{cache:'no-store'})"
-        ".then(function(r){if(!r.ok){go();return null}return r.json()})"
-        ".then(function(d){if(!d)return;render(d.entries||[]);"
-        "if(d.terminal){document.getElementById('sp').style.display='none';setTimeout(go,1500);return}"
-        "setTimeout(poll,1000)})"
-        # A network error while polling the updater means it just exited and
-        # released the port; the new compute_space is (nearly) up — go there.
-        ".catch(function(){setTimeout(go,1500)})}"
-        "poll();</script></body></html>"
+        "<title>Updating\u2026</title><style>" + _PAGE_STYLE + "</style></head>"
+        "<body><h1><span class='sp' id='sp'></span> Updating this instance\u2026</h1>"
+        "<ul id='log'><li>Working\u2026</li></ul>"
+        "<p class='hint'>This instance is updating and will be back shortly. This page refreshes "
+        "automatically &mdash; please keep this tab open.</p>"
+        "<script>" + (_PAGE_SCRIPT % tok) + "</script></body></html>"
     )
     return html.encode("utf-8")
 
@@ -142,12 +159,18 @@ class _Handler(BaseHTTPRequestHandler):
         if path == "/updates":
             self._serve_updates()
             return
-        # Any other path: the update page (owner) or generic loading page.
-        if self._authed():
-            body = _log_page(self._expected_token or "")
-        else:
-            body = _LOADING_PAGE
-        self._respond(200, "text/html; charset=utf-8", body)
+        if path == "/health":
+            # The page probes /health to learn when the REAL dashboard is back.
+            # While the updater owns the port the dashboard is NOT up, so answer
+            # 503 — otherwise the page would think compute_space had returned and
+            # redirect to a still-down /settings.
+            self._respond(503, "text/plain; charset=utf-8", b"updating")
+            return
+        # Every other path gets the single updating page. It always renders (the
+        # spinner + heading); the token in the URL only unlocks the live log list
+        # via /updates. Pass through whatever token the request carried so the
+        # owner's tab keeps its token across the updater's own reloads.
+        self._respond(200, "text/html; charset=utf-8", _page(self._query_token() or ""))
 
     # /updates is the polling endpoint the owner page hits for live progress.
     def _serve_updates(self) -> None:

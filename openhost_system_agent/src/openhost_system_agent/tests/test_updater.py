@@ -159,16 +159,29 @@ def _get(port: int, path: str) -> tuple[int, bytes]:
     return status, body
 
 
-def test_server_authed_shows_log_page(running_server: int) -> None:
+def test_server_page_renders_with_token(running_server: int) -> None:
+    # The single updating page renders for any path; the token is embedded so the
+    # page's script can fetch the live log via /updates.
     status, body = _get(running_server, "/?token=goodtoken")
     assert status == 200
     assert b"Updating this instance" in body
+    assert b"goodtoken" in body  # token threaded into the page script
 
 
-def test_server_unauthed_shows_loading_page(running_server: int) -> None:
+def test_server_page_renders_without_token(running_server: int) -> None:
+    # Same page without a token — still a clean, styled updating page (no logs,
+    # just the spinner + message), never a raw error.
     status, body = _get(running_server, "/")
     assert status == 200
-    assert b"This instance is updating" in body
+    assert b"Updating this instance" in body
+    assert b"This instance is updating and will be back shortly" in body
+
+
+def test_server_health_returns_503_while_updating(running_server: int) -> None:
+    # /health must NOT report OK while the updater owns the port, or the page
+    # would think the real dashboard is back and redirect to a still-down route.
+    status, _ = _get(running_server, "/health")
+    assert status == 503
 
 
 def test_server_updates_authed_returns_progress(running_server: int) -> None:

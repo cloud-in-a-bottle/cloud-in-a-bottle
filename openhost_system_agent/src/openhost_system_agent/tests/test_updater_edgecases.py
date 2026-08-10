@@ -307,35 +307,37 @@ def server_factory(data_dir: Path):  # type: ignore[no-untyped-def]
             pass
 
 
-def test_server_correct_token_shows_logs(server_factory) -> None:  # type: ignore[no-untyped-def]
+def test_server_page_embeds_token(server_factory) -> None:  # type: ignore[no-untyped-def]
+    # The page threads the request's token into its script so it can fetch logs.
     port = server_factory("tok", [{"phase": "migrate", "message": "Migrating"}])
     status, body = _get(port, "/?token=tok")
+    assert status == 200 and b"Updating this instance" in body and b"tok" in body
+
+
+def test_server_page_wrong_token_still_renders(server_factory) -> None:  # type: ignore[no-untyped-def]
+    # A wrong token still gets the clean page (logs just won't load via /updates).
+    port = server_factory("tok", [])
+    status, body = _get(port, "/?token=WRONG")
     assert status == 200 and b"Updating this instance" in body
 
 
-def test_server_wrong_token_shows_loading(server_factory) -> None:  # type: ignore[no-untyped-def]
-    port = server_factory("tok", [])
-    status, body = _get(port, "/?token=WRONG")
-    assert status == 200 and b"This instance is updating" in body
-
-
-def test_server_no_token_shows_loading(server_factory) -> None:  # type: ignore[no-untyped-def]
+def test_server_page_no_token_renders(server_factory) -> None:  # type: ignore[no-untyped-def]
     port = server_factory("tok", [])
     status, body = _get(port, "/")
-    assert status == 200 and b"This instance is updating" in body
+    assert status == 200 and b"This instance is updating and will be back shortly" in body
 
 
-def test_server_empty_token_param_shows_loading(server_factory) -> None:  # type: ignore[no-untyped-def]
+def test_server_page_empty_token_renders(server_factory) -> None:  # type: ignore[no-untyped-def]
     port = server_factory("tok", [])
     status, body = _get(port, "/?token=")
-    assert b"This instance is updating" in body
+    assert status == 200 and b"Updating this instance" in body
 
 
-def test_server_no_token_file_never_authes(server_factory) -> None:  # type: ignore[no-untyped-def]
-    # No token file at all: even a matching-looking token can't auth.
-    port = server_factory(None, [])
-    status, body = _get(port, "/?token=anything")
-    assert b"This instance is updating" in body
+def test_server_health_503_while_updating(server_factory) -> None:  # type: ignore[no-untyped-def]
+    # /health is 503 while the updater owns the port (dashboard is NOT up yet).
+    port = server_factory("tok", [])
+    status, _ = _get(port, "/health")
+    assert status == 503
 
 
 def test_server_updates_forbidden_without_token(server_factory) -> None:  # type: ignore[no-untyped-def]
@@ -366,17 +368,17 @@ def test_server_updates_empty_progress(server_factory) -> None:  # type: ignore[
     assert payload["entries"] == [] and payload["terminal"] is False
 
 
-def test_server_unknown_path_authed_shows_log_page(server_factory) -> None:  # type: ignore[no-untyped-def]
-    # Any non-/updates path returns the update page (SPA-style catch-all).
+def test_server_unknown_path_renders_page(server_factory) -> None:  # type: ignore[no-untyped-def]
+    # Any non-/updates, non-/health path returns the updating page (catch-all).
     port = server_factory("tok", [])
     status, body = _get(port, "/some/deep/path?token=tok")
     assert status == 200 and b"Updating this instance" in body
 
 
-def test_server_unknown_path_unauthed_shows_loading(server_factory) -> None:  # type: ignore[no-untyped-def]
+def test_server_unknown_path_no_token_renders_page(server_factory) -> None:  # type: ignore[no-untyped-def]
     port = server_factory("tok", [])
     status, body = _get(port, "/random")
-    assert b"This instance is updating" in body
+    assert status == 200 and b"This instance is updating and will be back shortly" in body
 
 
 def test_server_updates_reflects_live_append(server_factory) -> None:  # type: ignore[no-untyped-def]
