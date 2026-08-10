@@ -146,6 +146,11 @@ async def check_for_updates() -> CheckUpdatesResponse:
 # on failure, leaving the host free to retry.
 _apply_lock = asyncio.Lock()
 
+# Hold a reference to the fire-and-forget apply task so the event loop can't
+# garbage-collect it mid-run (asyncio only keeps weak refs to tasks). Discarded
+# on completion.
+_apply_tasks: set[asyncio.Task[None]] = set()
+
 
 async def _run_apply_and_restart() -> None:
     """Run the (blocking) agent apply. On success the agent restarts openhost,
@@ -197,7 +202,10 @@ async def apply_update() -> ApplyUpdateResponse:
         # the restart kills this process.
         token = new_update_token()
         await persist_update_token(token)
-        asyncio.ensure_future(_run_apply_and_restart())
+        # Keep a strong reference so the loop doesn't GC the task mid-run.
+        task = asyncio.create_task(_run_apply_and_restart())
+        _apply_tasks.add(task)
+        task.add_done_callback(_apply_tasks.discard)
         handed_off = True
         return ApplyUpdateResponse(token=token)
     finally:

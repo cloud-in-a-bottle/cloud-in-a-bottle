@@ -760,3 +760,27 @@ def test_updater_stop_cli(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("openhost_system_agent.cli.stop_updater", lambda: called.__setitem__("n", called["n"] + 1))
     UpdaterCmd().stop()
     assert called["n"] == 1
+
+
+def test_try_bind_no_fd_leak_on_conflict() -> None:
+    # Repeated failed binds (as during the handoff retry loop) must not leak fds.
+
+    s = server._try_bind("127.0.0.1", 0)
+    assert s is not None
+    port = s.getsockname()[1]
+    before = len(_open_fds())
+    for _ in range(50):
+        assert server._try_bind("127.0.0.1", port) is None  # always conflicts
+    after = len(_open_fds())
+    s.close()
+    # Allow a tiny slack but not ~50 leaked fds.
+    assert after - before < 5
+
+
+def _open_fds() -> list[int]:
+    import os
+
+    try:
+        return os.listdir("/proc/self/fd")  # type: ignore[return-value]
+    except OSError:
+        return []

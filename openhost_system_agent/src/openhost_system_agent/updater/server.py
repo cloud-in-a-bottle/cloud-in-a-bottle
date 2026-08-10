@@ -201,13 +201,16 @@ def _make_ssl_context(cert_path: Path, key_path: Path) -> ssl.SSLContext | None:
 
 
 def _try_bind(host: str, port: int) -> socket.socket | None:
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         sock.bind((host, port))
         sock.listen(128)
         return sock
     except OSError:
+        # Close the socket so a failed bind (we retry-bind many times during the
+        # handoff) doesn't leak a file descriptor each attempt.
+        sock.close()
         return None
 
 
