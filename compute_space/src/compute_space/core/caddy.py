@@ -93,7 +93,13 @@ def generate_caddyfile(
     # for `tls internal` domains; the per-domain http blocks above provide the
     # http→https redirects we want, and only for the domains that want them.
     auto_https = "disable_redirects" if has_tls else "off"
-    parts = [f"{{\n    auto_https {auto_https}\n    admin {admin_addr or 'off'}\n}}\n"]
+    # Serve only h1/h2 (both TCP): the detached updater that stands in for Caddy
+    # during a self-update covers TCP 80/443 but not HTTP/3's UDP :443, so
+    # advertising h3 would make browsers try QUIC and hit ERR_QUIC_PROTOCOL_ERROR
+    # while the updater holds the ports.
+    parts = [
+        f"{{\n    auto_https {auto_https}\n    admin {admin_addr or 'off'}\n    servers {{\n        protocols h1 h2\n    }}\n}}\n"
+    ]
     for d in domains:
         name = d.name_no_port
         if not d.tls:

@@ -55,6 +55,13 @@ def test_reverse_proxy_retries_upstream() -> None:
     assert "lb_try_duration" in cf
 
 
+def test_http3_disabled() -> None:
+    # The update-downtime server covers only TCP 80/443, not HTTP/3's UDP :443, so
+    # Caddy must serve h1/h2 only (no h3 alt-svc) or browsers hit ERR_QUIC_PROTOCOL_ERROR.
+    cf = _gen((PUBLIC,))
+    assert "protocols h1 h2" in cf
+
+
 def test_tls_domain_redirect_is_scoped_not_global() -> None:
     cf = _gen((PUBLIC,))
     # per-domain http site, not a bare `:80 {` catch-all
