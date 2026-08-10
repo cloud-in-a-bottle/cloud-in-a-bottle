@@ -139,6 +139,37 @@ def test_ipv6_lan_peer_with_a_global_address_is_answered() -> None:
     assert mdns._is_local_source("fd00::99", None)  # ULA
 
 
+def test_narrower_prefix_rejects_peer_outside_it() -> None:
+    # A cloud VM interface often carries a bare /128 (the rest of the subnet is routed off-link, not
+    # on-link), unlike a home/corporate LAN's /64 — so the check must honor whatever prefix the
+    # caller passes rather than always assuming /64.
+    same_64 = ("2a00:1450:4001:1::99", "2a00:1450:4001:1::1")
+    assert mdns._is_local_source(*same_64, our_ip6_prefix=64)
+    assert not mdns._is_local_source(*same_64, our_ip6_prefix=128)  # only an exact match on /128
+
+
+def test_interface_prefix_len_defaults_to_64_when_unknown() -> None:
+    # No such address is configured on this machine (test or CI), so this exercises the fallback
+    # every non-Linux dev machine takes too — /proc/net/if_inet6 not existing must not crash it.
+    assert mdns._interface_prefix_len("2001:db8::dead:beef") == 64
+
+
+def test_interface_ipv4_prefix_len_defaults_to_none_when_unknown() -> None:
+    # TEST-NET-3 (RFC 5737): never a real connected route on a test or CI machine, and exercises the
+    # fallback every non-Linux dev machine takes too — /proc/net/route not existing must not crash it.
+    assert mdns._interface_ipv4_prefix_len("203.0.113.1") is None
+
+
+def test_ipv4_peer_outside_our_actual_subnet_is_rejected_when_known() -> None:
+    # Mirrors the v6 /64 case: a private v4 sender must be rejected once we know our *actual* subnet,
+    # even though `is_private` alone would have accepted it — it could be an unrelated RFC 1918 range
+    # elsewhere on a routed network, a VPN client, a Docker bridge, and so on.
+    assert mdns._is_local_source("192.168.1.9", our_ip="192.168.1.50", our_ip_prefix=24)
+    assert not mdns._is_local_source("192.168.2.9", our_ip="192.168.1.50", our_ip_prefix=24)
+    # Without a discovered subnet (the common case), keep the old broad "any private sender" behavior.
+    assert mdns._is_local_source("10.99.99.99")
+
+
 def test_ignores_foreign_domain() -> None:
     r = _responder(("openhost.local",))
     _handle(r, mdns._build_query("example.com"), ("192.168.1.9", 5353))
@@ -271,9 +302,10 @@ def test_decode_name_follows_backward_pointer() -> None:
 class _ProbeSocket:
     """Feeds _probe_conflict crafted responses, then times out (or repeats forever)."""
 
-    def __init__(self, responses: list[bytes], repeat: bool = False) -> None:
+    def __init__(self, responses: list[bytes], repeat: bool = False, addr: tuple[str, int] = ("192.168.1.9", 5353)) -> None:
         self._responses = responses
         self._repeat = repeat
+        self._addr = addr
 
     def settimeout(self, _timeout: float) -> None:
         pass
@@ -283,9 +315,9 @@ class _ProbeSocket:
 
     def recvfrom(self, _bufsize: int) -> tuple[bytes, tuple[str, int]]:
         if self._repeat:
-            return self._responses[0], ("192.168.1.9", 5353)
+            return self._responses[0], self._addr
         if self._responses:
-            return self._responses.pop(0), ("192.168.1.9", 5353)
+            return self._responses.pop(0), self._addr
         raise TimeoutError
 
 
@@ -301,6 +333,18 @@ def test_probe_ignores_unrelated_a_record() -> None:
 def test_probe_detects_matching_a_record() -> None:
     sock = _ProbeSocket([_a_response("OpenHost.local.", "192.168.1.77")])
     assert mdns._probe_conflict(sock, "openhost.local", "192.168.1.50") == "192.168.1.77"  # type: ignore[arg-type]
+
+
+def test_probe_ignores_off_link_sender() -> None:
+    # The probe answers _handle's own trust boundary: a spoofed/off-link response injected during
+    # the startup conflict window must not be able to produce a bogus "already claimed" warning.
+    sock = _ProbeSocket([_a_response("openhost.local", "192.168.1.77")], addr=("8.8.8.8", 5353))
+    assert mdns._probe_conflict(sock, "openhost.local", "192.168.1.50") is None  # type: ignore[arg-type]
+
+
+def test_probe_ignores_sender_outside_known_subnet() -> None:
+    sock = _ProbeSocket([_a_response("openhost.local", "192.168.2.77")], addr=("192.168.2.9", 5353))
+    assert mdns._probe_conflict(sock, "openhost.local", "192.168.1.50", our_ip_prefix=24) is None  # type: ignore[arg-type]
 
 
 def test_probe_skips_malformed_then_matches() -> None:

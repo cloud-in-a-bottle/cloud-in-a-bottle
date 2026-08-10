@@ -70,7 +70,7 @@ function addDomain() {
     method: 'POST',
     credentials: 'same-origin',
     headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({name: name}),
+    body: JSON.stringify(name),
   })
     .then(function(r) { return r.json(); })
     .then(function(data) {

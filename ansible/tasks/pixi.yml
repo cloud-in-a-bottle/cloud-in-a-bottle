@@ -12,8 +12,6 @@
     line: 'export PATH="$HOME/.pixi/bin:$PATH"'
     create: yes
 
-# Materialize the full env (editable package + build deps) so ExecStart can boot offline; plain
-# `install` self-heals a stale lock by re-resolving instead of aborting the deploy.
 - name: Install pixi dependencies (caddy)
   shell: /home/host/.pixi/bin/pixi install
   args:

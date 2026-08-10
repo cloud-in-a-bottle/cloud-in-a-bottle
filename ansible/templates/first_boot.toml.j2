@@ -3,7 +3,7 @@
    A `.local` domain is downgraded to plain http by the router itself (is_local_name), so only
    HTTP-only localhost mode has to say so here. #}
 domain = "{{ domain }}"
-tls = {{ 'false' if (local_http_only | default(false) | bool) else 'true' }}
+tls = {{ 'false' if (http_only | bool) else 'true' }}
 claim_token = "{{ effective_claim_token }}"
 {% if imbue_connect_base_url is defined and imbue_connect_base_url %}
 imbue_connect_base_url = "{{ imbue_connect_base_url }}"

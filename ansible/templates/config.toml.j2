@@ -1,4 +1,3 @@
-{% set http_only = (local_http_only | default(false)) | bool %}
 {# local_http_only: HTTP-only localhost mode (no TLS / CoreDNS / Caddy) for
    bringing an instance up before a public domain + DNS are ready.  The router
    serves plain HTTP directly on host:port (reach it via an SSH tunnel, or set

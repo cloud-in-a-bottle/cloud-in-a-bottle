@@ -1,17 +1,12 @@
 ---
-# Derived facts every play/template/task shares, so the `.local` rule is stated once.
-# Undefined-safe: prebake.yml runs with no `domain` at all and still imports these tasks.
-# Lazily evaluated, so `-e domain=...` (and overriding any of these directly) still works.
+# Consilidate derived variables that many tasks share. 
+
+# HTTP-only localhost mode (no TLS / CoreDNS / Caddy): normalizes the raw `-e local_http_only=...`
+# var once instead of repeating `| default(false) | bool` at every call site.
+http_only: "{{ local_http_only | default(false) | bool }}"
 
 # The domain with any `:port` stripped — same normalization as the router's `is_local_name`.
 domain_host: "{{ (domain | default('') | lower).split(':')[0] }}"
 
-# mDNS LAN mode: a `.local` primary is served over plain http.  Only the claim URL needs this here —
-# the router derives the primary's `tls` from the name itself (core/domains.py:is_local_name), which
-# test_ansible_local_rule pins this expression against.
+# Turn on mDNS mode for .local
 mdns_mode: "{{ domain_host == 'local' or domain_host.endswith('.local') }}"
-
-# Base URL the instance is reachable at, used for the claim URL.
-claim_base_url: >-
-  {{ ('http://' + domain + ':8080') if (local_http_only | default(false) | bool)
-     else (('http://' + domain) if (mdns_mode | bool) else ('https://' + domain)) }}

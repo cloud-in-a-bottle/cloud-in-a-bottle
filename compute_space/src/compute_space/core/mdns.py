@@ -30,24 +30,55 @@ _TTL = 120  # seconds; short so a moved instance is re-learned quickly
 _LEGACY_TTL = 10  # RFC 6762 §6.7: legacy unicast responses cap TTL at 10s
 _PROBE_BUDGET = 0.75  # seconds; overall deadline so ambient LAN chatter can't keep the probe alive
 
+# Precompiled layouts for every fixed-width field group on the wire — struct.Struct compiles the
+# format once, so a hot parse/build path doesn't re-parse "!HHH" et al. on every call, and
+# unpack_from reads straight out of the receive buffer instead of slicing a copy first.
+_HEADER = struct.Struct("!HHHHHH")  # id, flags, qdcount, ancount, nscount, arcount
+_TYPE_CLASS = struct.Struct("!HH")  # a question's qtype + qclass, or a query's qtype + qclass
+_RR_FIXED = struct.Struct("!HHIH")  # an RR's type, class, ttl, rdlength (name and rdata sit outside)
 
-def _is_local_source(ip: str, our_ip6: str | None = None) -> bool:
+
+def _is_local_source(
+    ip: str,
+    our_ip6: str | None = None,
+    our_ip6_prefix: int = 64,
+    our_ip: str | None = None,
+    our_ip_prefix: int | None = None,
+) -> bool:
     """True if ``ip`` is a peer on our local link — the only ones we answer.
 
     The sockets bind the wildcard address, so they also receive *unicast* datagrams sent straight to
     a routable address; answering those would make an internet-facing box an mDNS reflection vector
-    (and leak the LAN IP).  IPv4 LAN senders are always private.  IPv6 LAN senders often hold a
-    *global* SLAAC address, so those are accepted only when they share our ``/64``.
+    (and leak the LAN IP).
+
+    IPv4 LAN senders are private, but a private address alone isn't enough: two boxes can each sit on
+    an unrelated RFC 1918 range that isn't actually the same broadcast domain (a routed corporate net,
+    a VPN client, a Docker bridge, ...).  When our actual subnet is known (``our_ip``/``our_ip_prefix``,
+    read from the connected route — see ``_interface_ipv4_prefix_len``) senders are narrowed to it;
+    without it we fall back to accepting any private v4 sender, same as before that could be measured.
+
+    IPv6 LAN senders often hold a *global* SLAAC address, so those are accepted only when they share
+    our on-link prefix (``our_ip6_prefix`` — the box's actual configured prefix length, not assumed to
+    be /64: a home or corporate LAN is /64, but a cloud VM's interface is often a bare /128, which
+    correctly excludes every peer since there's no broadcast domain to trust there).  A v6 link-local
+    or ULA sender is unambiguously on-link regardless of prefix — unlike v4 private ranges, those
+    families are non-routable beyond the link by definition.
     """
     try:
         addr = ipaddress.ip_address(ip.split("%")[0])
     except ValueError:
         return False
-    if addr.is_private:  # v4 RFC 1918, or v6 link-local (fe80::/10) / ULA (fc00::/7)
-        return True
-    if not isinstance(addr, ipaddress.IPv6Address) or our_ip6 is None:
+    if isinstance(addr, ipaddress.IPv6Address):
+        if addr.is_private:  # link-local (fe80::/10) or ULA (fc00::/7)
+            return True
+        if our_ip6 is None:
+            return False
+        return addr in ipaddress.IPv6Network(f"{our_ip6}/{our_ip6_prefix}", strict=False)
+    if not addr.is_private:  # v4 RFC 1918 (and other reserved ranges) is the LAN-address heuristic
         return False
-    return addr in ipaddress.IPv6Network(f"{our_ip6}/64", strict=False)
+    if our_ip is None or our_ip_prefix is None:
+        return True  # real subnet not discovered; same broad "any private sender" behavior as before
+    return addr in ipaddress.IPv4Network(f"{our_ip}/{our_ip_prefix}", strict=False)
 
 
 # --- wire format -----------------------------------------------------------------------------
@@ -109,14 +140,14 @@ def _parse_questions(data: bytes) -> tuple[int, bool, tuple[_Question, ...]]:
     authority sections are ignored (we only respond to queries)."""
     if len(data) < 12:
         raise ValueError("short DNS packet")
-    ident, flags, qdcount = struct.unpack("!HHH", data[:6])
+    ident, flags, qdcount, _ancount, _nscount, _arcount = _HEADER.unpack_from(data)
     is_query = (flags >> 15) & 1 == 0
     offset = 12
     questions: list[_Question] = []
     for _ in range(qdcount):
         name, offset = _decode_name(data, offset)
-        qtype, qclass = struct.unpack("!HH", data[offset : offset + 4])
-        offset += 4
+        qtype, qclass = _TYPE_CLASS.unpack_from(data, offset)
+        offset += _TYPE_CLASS.size
         questions.append(_Question(name=name, qtype=qtype, qclass=qclass))
     return ident, is_query, tuple(questions)
 
@@ -126,18 +157,18 @@ def _parse_a_answers(data: bytes) -> tuple[tuple[str, str], ...] | None:
     response.  Used only by the startup conflict probe, so it decodes just what it needs."""
     if len(data) < 12:
         return None
-    _ident, flags, qdcount, ancount = struct.unpack("!HHHH", data[:8])
+    _ident, flags, qdcount, ancount, _nscount, _arcount = _HEADER.unpack_from(data)
     if (flags >> 15) & 1 == 0:
         return None
     offset = 12
     for _ in range(qdcount):
         _name, offset = _decode_name(data, offset)
-        offset += 4
+        offset += _TYPE_CLASS.size
     records: list[tuple[str, str]] = []
     for _ in range(ancount):
         name, offset = _decode_name(data, offset)
-        rtype, _rclass, _ttl, rdlen = struct.unpack("!HHIH", data[offset : offset + 10])
-        offset += 10
+        rtype, _rclass, _ttl, rdlen = _RR_FIXED.unpack_from(data, offset)
+        offset += _RR_FIXED.size
         if rtype == _TYPE_A and rdlen == 4:
             records.append((name, socket.inet_ntoa(data[offset : offset + 4])))
         offset += rdlen
@@ -147,13 +178,13 @@ def _parse_a_answers(data: bytes) -> tuple[tuple[str, str], ...] | None:
 def _a_record(name: str, ip: str, ttl: int, cache_flush: bool) -> bytes:
     rrclass = _CLASS_IN | (_CACHE_FLUSH if cache_flush else 0)
     rdata = socket.inet_aton(ip)
-    return _encode_name(name) + struct.pack("!HHIH", _TYPE_A, rrclass, ttl, len(rdata)) + rdata
+    return _encode_name(name) + _RR_FIXED.pack(_TYPE_A, rrclass, ttl, len(rdata)) + rdata
 
 
 def _aaaa_record(name: str, ip6: str, ttl: int, cache_flush: bool) -> bytes:
     rrclass = _CLASS_IN | (_CACHE_FLUSH if cache_flush else 0)
     rdata = socket.inet_pton(socket.AF_INET6, ip6)
-    return _encode_name(name) + struct.pack("!HHIH", _TYPE_AAAA, rrclass, ttl, len(rdata)) + rdata
+    return _encode_name(name) + _RR_FIXED.pack(_TYPE_AAAA, rrclass, ttl, len(rdata)) + rdata
 
 
 def _type_bitmap(types: tuple[int, ...]) -> bytes:
@@ -175,7 +206,7 @@ def _nsec_record(name: str, served: tuple[int, ...], ttl: int, cache_flush: bool
     """
     rrclass = _CLASS_IN | (_CACHE_FLUSH if cache_flush else 0)
     rdata = _encode_name(name) + _type_bitmap(served)  # mDNS: next-domain-name is the record's own name
-    return _encode_name(name) + struct.pack("!HHIH", _TYPE_NSEC, rrclass, ttl, len(rdata)) + rdata
+    return _encode_name(name) + _RR_FIXED.pack(_TYPE_NSEC, rrclass, ttl, len(rdata)) + rdata
 
 
 def _dedupe(names: tuple[str, ...]) -> tuple[str, ...]:
@@ -183,7 +214,7 @@ def _dedupe(names: tuple[str, ...]) -> tuple[str, ...]:
 
 
 def _build_query(name: str) -> bytes:
-    return struct.pack("!HHHHHH", 0, 0, 1, 0, 0, 0) + _encode_name(name) + struct.pack("!HH", _TYPE_A, _CLASS_IN)
+    return _HEADER.pack(0, 0, 1, 0, 0, 0) + _encode_name(name) + _TYPE_CLASS.pack(_TYPE_A, _CLASS_IN)
 
 
 def _build_response(questions: tuple[_Question, ...], ip: str, ip6: str | None, legacy: bool, ident: int) -> bytes:
@@ -219,8 +250,8 @@ def _build_response(questions: tuple[_Question, ...], ip: str, ip6: str | None, 
         additional.append(_nsec_record(name, served, ttl, flush))
 
     echoed = questions if legacy else ()
-    header = struct.pack("!HHHHHH", ident if legacy else 0, 0x8400, len(echoed), len(answers), 0, len(additional))
-    body = b"".join(_encode_name(q.name) + struct.pack("!HH", q.qtype, q.qclass & ~_QU_BIT) for q in echoed)
+    header = _HEADER.pack(ident if legacy else 0, 0x8400, len(echoed), len(answers), 0, len(additional))
+    body = b"".join(_encode_name(q.name) + _TYPE_CLASS.pack(q.qtype, q.qclass & ~_QU_BIT) for q in echoed)
     return header + body + b"".join(answers) + b"".join(additional)
 
 
@@ -243,7 +274,9 @@ class MdnsResponder:
 
     transports: tuple[Transport, ...]
     lan_ip: str
+    lan_ip_prefix: int | None
     lan_ip6: str | None
+    lan_ip6_prefix: int
     _bases: tuple[str, ...]
     _stop: threading.Event = attr.ib(factory=threading.Event, init=False, eq=False, repr=False)
     _lock: threading.Lock = attr.ib(factory=threading.Lock, init=False, eq=False, repr=False)
@@ -286,7 +319,7 @@ class MdnsResponder:
     def _handle(self, transport: Transport, data: bytes, addr: tuple[object, ...]) -> None:
         with self._lock:
             ip, ip6 = self.lan_ip, self.lan_ip6
-        if not _is_local_source(str(addr[0]), ip6):
+        if not _is_local_source(str(addr[0]), ip6, self.lan_ip6_prefix, our_ip=ip, our_ip_prefix=self.lan_ip_prefix):
             return  # never answer a routed unicast query from off-LAN
         ident, is_query, questions = _parse_questions(data)
         if not is_query:
@@ -350,6 +383,69 @@ def _open_socket(lan_ip: str) -> socket.socket:
     return sock
 
 
+def _connected_ipv4_routes() -> list[ipaddress.IPv4Network]:
+    """Every directly-connected (gatewayless) IPv4 route's network, read from ``/proc/net/route``.
+
+    Kernel format: whitespace-separated ``Iface Destination Gateway Flags ... Mask ...``, with
+    ``Destination``/``Gateway``/``Mask`` as 32-bit hex in the machine's native byte order (reversed
+    relative to dotted-decimal on the little-endian deploy target).  A route with an all-zero gateway
+    is on-link — the kernel's own record of the subnet actually configured on an interface, unlike a
+    forwarded route (a real gateway) or the default route.
+    """
+    networks: list[ipaddress.IPv4Network] = []
+    try:
+        with open("/proc/net/route") as f:
+            lines = f.read().splitlines()
+    except OSError:
+        return networks
+    for line in lines[1:]:  # skip the header row
+        parts = line.split()
+        if len(parts) < 8 or parts[2] != "00000000":  # has a real gateway -> not on-link
+            continue
+        try:
+            dest = socket.inet_ntoa(struct.pack("<L", int(parts[1], 16)))
+            mask = socket.inet_ntoa(struct.pack("<L", int(parts[7], 16)))
+            networks.append(ipaddress.IPv4Network(f"{dest}/{mask}", strict=False))
+        except (ValueError, struct.error):
+            continue
+    return networks
+
+
+def _interface_ipv4_prefix_len(ip: str) -> int | None:
+    """The prefix length of the connected route that contains ``ip``, or None when it can't be
+    determined (off Linux, or no matching connected route — e.g. a cloud VM with only host routes).
+
+    There's no /64-like universal default for IPv4 subnet sizes (home LANs are commonly /24, corporate
+    nets vary widely), so unlike the IPv6 prefix lookup this has no guessed fallback — callers treat
+    None as "unknown" and degrade to the pre-existing broad behavior rather than assume a specific size.
+    """
+    try:
+        addr = ipaddress.IPv4Address(ip)
+    except ValueError:
+        return None
+    for network in _connected_ipv4_routes():
+        if addr in network:
+            return network.prefixlen
+    return None
+
+
+def _if_inet6_fields(ip6: str) -> list[str] | None:
+    """The ``/proc/net/if_inet6`` line for ``ip6``, split into fields, or None off Linux / not found.
+
+    Kernel format: ``<address, 32 hex chars><devno hex><prefix length hex><scope hex><flags hex><name>``.
+    """
+    packed = socket.inet_pton(socket.AF_INET6, ip6).hex()
+    try:
+        with open("/proc/net/if_inet6") as f:
+            for line in f:
+                parts = line.split()
+                if len(parts) >= 3 and parts[0] == packed:
+                    return parts
+    except (OSError, ValueError):
+        pass
+    return None
+
+
 def _interface_index(ip6: str) -> int:
     """Kernel index of the interface holding ``ip6``; 0 lets the kernel choose.
 
@@ -357,16 +453,20 @@ def _interface_index(ip6: str) -> int:
     stdlib-free way to map one to the other on Linux (the deploy target); elsewhere we fall back to
     the default interface rather than not joining at all.
     """
-    packed = socket.inet_pton(socket.AF_INET6, ip6).hex()
-    try:
-        with open("/proc/net/if_inet6") as f:
-            for line in f:
-                parts = line.split()
-                if len(parts) >= 2 and parts[0] == packed:
-                    return int(parts[1], 16)
-    except (OSError, ValueError):
-        pass
-    return 0
+    fields = _if_inet6_fields(ip6)
+    return int(fields[1], 16) if fields else 0
+
+
+def _interface_prefix_len(ip6: str) -> int:
+    """The interface's actually-configured prefix length for ``ip6``, or 64 when it can't be read.
+
+    Home/corporate LANs are /64 (SLAAC requires it — RFC 7381 recommends the same for enterprise
+    subnets), so 64 is a safe fallback; but some cloud VMs configure a bare /128 on the interface
+    itself (routing the rest of the subnet off-link), where treating it as /64 would wrongly accept
+    other tenants' addresses as on-link peers.  Reading the real value avoids assuming either way.
+    """
+    fields = _if_inet6_fields(ip6)
+    return int(fields[2], 16) if fields else 64
 
 
 def _open_socket6(lan_ip6: str) -> socket.socket:
@@ -408,7 +508,7 @@ def _open_transports(lan_ip: str, lan_ip6: str | None) -> tuple[Transport, ...]:
     return tuple(transports)
 
 
-def _probe_conflict(sock: socket.socket, name: str, our_ip: str) -> str | None:
+def _probe_conflict(sock: socket.socket, name: str, our_ip: str, our_ip_prefix: int | None = None) -> str | None:
     """Send one query for ``name`` and briefly listen; returns another host's IP if one already
     answers for it, else None.  Best-effort — the caller warns and serves anyway (no renaming)."""
     want = _normalize(name)
@@ -420,9 +520,11 @@ def _probe_conflict(sock: socket.socket, name: str, our_ip: str) -> str | None:
         sock.sendto(_build_query(name), (_MDNS_GROUP, _MDNS_PORT))
         while time.monotonic() < deadline:
             try:
-                data, _addr = sock.recvfrom(9000)
+                data, addr = sock.recvfrom(9000)
             except (TimeoutError, OSError):
                 return None
+            if not _is_local_source(str(addr[0]), our_ip=our_ip, our_ip_prefix=our_ip_prefix):
+                continue  # off-link/spoofed sender — same boundary _handle enforces for real queries
             try:
                 records = _parse_a_answers(data)
             except (ValueError, IndexError, struct.error, OSError):
@@ -443,11 +545,20 @@ def mdns_bases(db: sqlite3.Connection) -> tuple[str, ...]:
 def start_mdns(bases: tuple[str, ...], lan_ip: str, lan_ip6: str | None = None) -> MdnsResponder:
     """Bind the mDNS sockets, warn on any pre-existing claimant, and start answering for ``bases``."""
     transports = _open_transports(lan_ip, lan_ip6)
+    lan_ip_prefix = _interface_ipv4_prefix_len(lan_ip)
     for base in bases:  # probe on IPv4 only — a name clash is a clash whatever family finds it
-        conflict = _probe_conflict(transports[0].sock, base, lan_ip)
+        conflict = _probe_conflict(transports[0].sock, base, lan_ip, lan_ip_prefix)
         if conflict is not None:
             logger.warning("mDNS: {} already claimed on the LAN by {}; serving {} anyway", base, conflict, lan_ip)
-    responder = MdnsResponder(transports=transports, lan_ip=lan_ip, lan_ip6=lan_ip6, bases=bases)
+    lan_ip6_prefix = _interface_prefix_len(lan_ip6) if lan_ip6 is not None else 64
+    responder = MdnsResponder(
+        transports=transports,
+        lan_ip=lan_ip,
+        lan_ip_prefix=lan_ip_prefix,
+        lan_ip6=lan_ip6,
+        lan_ip6_prefix=lan_ip6_prefix,
+        bases=bases,
+    )
     responder.start()
     served = lan_ip if lan_ip6 is None else f"{lan_ip}, {lan_ip6}"
     logger.info("Started mDNS responder for {} -> {}", ", ".join(bases), served)

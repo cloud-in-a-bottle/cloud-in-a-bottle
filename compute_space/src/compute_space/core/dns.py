@@ -108,11 +108,8 @@ _EDGE_HTTP_PORT = 80
 
 
 def publishable_lan_ip6() -> str | None:
-    """The box's IPv6 address, but only once the http edge actually answers on it.
-
-    Clients prefer IPv6 (RFC 6724), so an AAAA nothing listens on makes every connection a
-    timeout-then-fallback — worse than serving no AAAA at all.  Re-evaluated by the LAN-IP watcher,
-    so v6 appearing (or the edge coming up after us at boot) is picked up without a restart.
+    """The box's IPv6 address, but only once the http edge actually answers on it. Used since AAAA
+    nothing causes repeated 5-second timeouts.
     """
     ip6 = default_route_source_ip(socket.AF_INET6)
     if ip6 is None:
@@ -140,11 +137,8 @@ class DnsZone:
 def dns_zones(config: Config, db: sqlite3.Connection) -> tuple[DnsZone, ...]:
     """Every zone CoreDNS is authoritative for — every domain the instance answers on.
 
-    CoreDNS serves public *and* ``.local`` domains: public names resolve to the public IP, ``.local``
-    names to the box's LAN IP (so a client using CoreDNS as a conditional forwarder — e.g. Windows,
-    which can't do multi-label mDNS — reaches the box).  ``.local`` never gets a public cert (keyed on
-    ``tls``).  The primary keeps the legacy ``zonefile`` path; others get a per-domain file under
-    ``zones/`` (see ``Config.coredns_zonefile_path_for``)."""
+    CoreDNS serves public and ``.local`` domains: public names to the public IP and ``.local``
+    names to the box's LAN IP. Windows users require a dns for multi label subdomains."""
     primary = primary_domain_or_none(db)
     primary_no_port = primary.name_no_port if primary else None
     return tuple(
@@ -381,11 +375,7 @@ def start_lan_ip_watcher(
     config: Config, published: tuple[str | None, str | None], poll_seconds: int = _LAN_IP_POLL_SECONDS
 ) -> threading.Thread:
     """Republish whenever the addresses we publish change — a DHCP renewal, wifi→ethernet, a NIC
-    change, or IPv6 becoming reachable (or going away).
-
-    Both the ``.local`` CoreDNS zones and the mDNS responder pin the addresses they were built with,
-    and the responder re-asserts them every ``_TTL`` seconds, so without this a moved box advertises
-    a dead address until someone restarts it.  ``published`` is what the caller already put out."""
+    change, or IPv6 becoming reachable (or going away)."""
 
     def _watch() -> None:
         current = published

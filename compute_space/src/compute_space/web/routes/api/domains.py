@@ -53,14 +53,6 @@ _DOMAIN_RE = re.compile(rf"^{_LABEL}(\.{_LABEL})+$")
 
 
 @attr.s(auto_attribs=True, frozen=True)
-class AddDomainRequest:
-    """The name is the only input: ``.local`` means mDNS over http, anything else a public HTTPS
-    domain (``is_local_name`` is the one place that decides)."""
-
-    name: str
-
-
-@attr.s(auto_attribs=True, frozen=True)
 class DomainInfo:
     name: str
     tls: bool
@@ -177,9 +169,10 @@ async def list_domains(config: Config, db: sqlite3.Connection) -> DomainListResp
 
 @post("/api/domains", status_code=202, guards=[require_owner_auth])
 async def add_domain(
-    data: AddDomainRequest, config: Config, db: sqlite3.Connection
+    data: str, config: Config, db: sqlite3.Connection
 ) -> Response[DomainListResponse] | Response[ErrorResponse]:
-    name = data.name.strip().lower()
+    # `.local` means mDNS over http, anything else a public HTTPS domain (`is_local_name` decides).
+    name = data.strip().lower()
     error = _validate_new_domain(name, db)
     if error is not None:
         return Response(ErrorResponse(error=error), status_code=400, media_type=MediaType.JSON)
