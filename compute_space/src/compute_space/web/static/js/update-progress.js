@@ -40,10 +40,13 @@
   }
 
   function dashboardReachable() {
-    return fetch('/settings', { method: 'HEAD', cache: 'no-store', redirect: 'manual' })
-      .then(function (r) {
-        return r.ok || r.type === 'opaqueredirect' || (r.status >= 200 && r.status < 400);
-      })
+    // Probe the health endpoint (unauthenticated, cheap, and served by the new
+    // compute_space once it's up). We deliberately do NOT probe /settings with
+    // HEAD — that route only allows GET/OPTIONS and answers HEAD with 405, which
+    // would make this always report "not reachable" and the page would never
+    // redirect. /health returning any response means compute_space is back.
+    return fetch('/health', { method: 'GET', cache: 'no-store' })
+      .then(function (r) { return r.ok; })
       .catch(function () { return false; });
   }
 
