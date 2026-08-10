@@ -131,3 +131,23 @@ def test_timeout_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     with pytest.raises(SystemAgentError) as e:
         system_agent._run_system_agent("status", timeout=5)
     assert "timed out" in str(e.value)
+
+
+def test_stop_updater_sync_calls_agent(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[tuple] = []
+
+    def fake_run(*a, **k):  # type: ignore[no-untyped-def]
+        calls.append(a)
+        return _Result(0, stdout='{"ok": true}')
+
+    monkeypatch.setattr(system_agent.subprocess, "run", fake_run)
+    system_agent.system_agent_stop_updater_sync()
+    # Invoked the agent's `updater stop`.
+    argv = calls[0][0]
+    assert argv[:2] == ["sudo", "openhost_system_agent"]
+    assert argv[-2:] == ["updater", "stop"]
+
+
+def test_stop_updater_sync_swallows_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(system_agent.subprocess, "run", lambda *a, **k: _Result(1, stderr="boom"))
+    system_agent.system_agent_stop_updater_sync()  # must not raise

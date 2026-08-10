@@ -16,6 +16,7 @@ from openhost_system_agent.update import get_remote_info
 from openhost_system_agent.update import set_remote_url
 from openhost_system_agent.update import show_diff
 from openhost_system_agent.updater.launcher import launch_updater
+from openhost_system_agent.updater.launcher import stop_updater
 from openhost_system_agent.updater.paths import clear_token
 from openhost_system_agent.updater.paths import tls_cert_path
 from openhost_system_agent.updater.paths import tls_key_path
@@ -107,6 +108,11 @@ class UpdaterCmd:
     @cappa.command(name="serve", help="Run the updater mini-server in the foreground (invoked inside the scope).")
     def serve(self) -> None:
         run_updater_server(tls_cert_path(), tls_key_path())
+
+    @cappa.command(name="stop", help="Stop the detached updater, releasing 80/443 (called before Caddy starts).")
+    def stop(self) -> None:
+        stop_updater()
+        print(json.dumps({"ok": True}))
 
     @cappa.command(name="set-token", help="Persist the update token so the updater can auth the owner tab.")
     def set_token(self, token: Annotated[str, cappa.Arg(help="Opaque update token minted by compute_space")]) -> None:

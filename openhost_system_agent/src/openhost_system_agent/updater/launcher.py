@@ -51,6 +51,21 @@ def _reset_stale_scope() -> None:
         pass
 
 
+def stop_updater() -> None:
+    """Stop the detached updater unit, releasing :443/:80 immediately.
+
+    Called by the freshly-started compute_space right before it starts Caddy, so
+    the ports are free when Caddy binds — this is the authoritative handoff
+    signal, replacing the old race where the updater self-released on seeing
+    :8080 (which binds AFTER Caddy starts, so Caddy could never win the race).
+    Best-effort and idempotent; never raises.
+    """
+    try:
+        subprocess.run(["systemctl", "stop", _SCOPE_UNIT], capture_output=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+
 def launch_updater() -> bool:
     """Start the detached updater. Returns True if it was launched.
 

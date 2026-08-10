@@ -106,7 +106,12 @@ def unix_admin_address(socket_path: Path) -> str:
 # window where the updater hasn't let go yet, so a fresh Caddy can hit
 # "address already in use". Retry the spawn for a few seconds to ride out that
 # handoff instead of leaving the instance with no front proxy.
-_CADDY_BIND_RETRY_SECONDS = 10.0
+# Generous window: during a self-update the detached updater holds :443 until it
+# sees the NEW compute_space listening on :8080 — but Caddy is started EARLIER in
+# main() than the :8080 bind, so Caddy must keep retrying until the updater lets
+# go. Erring long here is safe (Caddy exits non-zero only on a real, persistent
+# conflict) and an instance with no TLS terminator is far worse than a slow bind.
+_CADDY_BIND_RETRY_SECONDS = 90.0
 _CADDY_BIND_RETRY_INTERVAL = 0.25
 _CADDY_ADDR_IN_USE = "address already in use"
 

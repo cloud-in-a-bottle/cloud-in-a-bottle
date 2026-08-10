@@ -135,3 +135,16 @@ def system_agent_set_update_token(token: str) -> None:
 @async_wrap
 def system_agent_clear_update_token() -> None:
     _run_system_agent("updater", "clear-token", timeout=30)
+
+
+def system_agent_stop_updater_sync() -> None:
+    """Stop the detached updater (releasing 80/443), synchronously.
+
+    Called from compute_space startup right before Caddy binds 80/443, so the
+    updater lets go first and Caddy can't lose the handoff race. Best-effort:
+    startup must never fail because the (cosmetic) updater couldn't be stopped.
+    """
+    try:
+        _run_system_agent("updater", "stop", timeout=30)
+    except SystemAgentError:
+        pass

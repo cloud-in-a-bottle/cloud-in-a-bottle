@@ -723,3 +723,38 @@ def test_set_token_resets_stale_progress(data_dir: Path) -> None:
 
     assert progress.read_entries() == []  # log cleared
     assert paths.token_path().read_text() == "freshtoken"
+
+
+# ─────────────────────────── stop_updater (handoff release) ──────────────────
+
+
+def test_stop_updater_calls_systemctl(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[list[str]] = []
+
+    def fake_run(cmd, **kw):  # type: ignore[no-untyped-def]
+        calls.append(cmd)
+
+        class _R:
+            returncode = 0
+
+        return _R()
+
+    monkeypatch.setattr("openhost_system_agent.updater.launcher.subprocess.run", fake_run)
+    launcher.stop_updater()
+    assert calls[0][:2] == ["systemctl", "stop"]
+    assert calls[0][2] == launcher._SCOPE_UNIT
+
+
+def test_stop_updater_never_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    def boom(*a, **k):  # type: ignore[no-untyped-def]
+        raise OSError("systemctl gone")
+
+    monkeypatch.setattr("openhost_system_agent.updater.launcher.subprocess.run", boom)
+    launcher.stop_updater()  # must not raise
+
+
+def test_updater_stop_cli(monkeypatch: pytest.MonkeyPatch) -> None:
+    called = {"n": 0}
+    monkeypatch.setattr("openhost_system_agent.cli.stop_updater", lambda: called.__setitem__("n", called["n"] + 1))
+    UpdaterCmd().stop()
+    assert called["n"] == 1

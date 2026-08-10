@@ -35,6 +35,7 @@ from compute_space.core.logging import logger
 from compute_space.core.logging import setup_file_logging
 from compute_space.core.pinned_binary import get_pinned_binary
 from compute_space.core.pinned_binary import install_pinned_binary
+from compute_space.core.system_agent import system_agent_stop_updater_sync
 from compute_space.core.terminal import cleanup_all as cleanup_terminal_sessions
 from compute_space.core.tls.provision import provision_cert
 from compute_space.core.tls.renewal import CertStatus
@@ -169,6 +170,12 @@ def main() -> None:
         # any additional TLS domains fall back to Caddy's internal CA (see generate_caddyfile).
         needs_caddy_for_tls = any(d.tls for d in domains)
         if config.start_caddy:
+            # If a self-update just happened, the detached updater may still be
+            # holding 80/443 to serve the "updating" page. Tell it to release NOW,
+            # before Caddy binds, so the handoff is clean and Caddy can't lose the
+            # race (which would leave the instance with no TLS terminator).
+            # Best-effort; no-op when no updater is running.
+            system_agent_stop_updater_sync()
             caddy = start_caddy(
                 config.caddyfile_path,
                 domains,
