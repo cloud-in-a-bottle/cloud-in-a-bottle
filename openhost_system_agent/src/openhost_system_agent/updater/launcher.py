@@ -75,10 +75,15 @@ def launch_updater() -> bool:
         # be independent so the restart doesn't tear it down.
         "--collect",
         sys.executable,
-        "-m",
-        "openhost_system_agent.cli",
-        "updater",
-        "serve",
+        # Import and call the CLI entrypoint directly rather than `-m
+        # openhost_system_agent.cli`: under `-m` the module loads as __main__ and
+        # cappa's dispatch to `updater serve` exits immediately without running
+        # the server (the serve coroutine never blocks), so the updater never
+        # covered the downtime. Calling main() via -c behaves like the console
+        # script and correctly runs the blocking server.
+        "-c",
+        "import sys; sys.argv=['openhost_system_agent','updater','serve']; "
+        "from openhost_system_agent.cli import main; main()",
     ]
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=15)

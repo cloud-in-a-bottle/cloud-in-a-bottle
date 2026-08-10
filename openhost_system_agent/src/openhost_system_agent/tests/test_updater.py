@@ -362,7 +362,12 @@ def test_launch_updater_success(monkeypatch: pytest.MonkeyPatch) -> None:
     assert launcher.launch_updater() is True
     assert calls[0][0] == "systemd-run"
     assert "--scope" in calls[0]
-    assert calls[0][-2:] == ["updater", "serve"]
+    # The scope runs the CLI entrypoint via `python -c` (not `-m`, which mis-
+    # dispatches under __main__), invoking `updater serve`.
+    joined = " ".join(calls[0])
+    assert "-c" in calls[0]
+    assert "updater" in joined and "serve" in joined
+    assert "from openhost_system_agent.cli import main" in joined
 
 
 def test_launch_updater_systemd_run_fails(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -684,8 +684,10 @@ def test_launcher_command_shape(monkeypatch: pytest.MonkeyPatch) -> None:
     cmd = captured[0]
     assert cmd[0] == "systemd-run"
     assert "--scope" in cmd
-    assert cmd[-2:] == ["updater", "serve"]
-    # Must run the agent CLI module, in its own unit.
+    # Runs the CLI entrypoint via `python -c` invoking `updater serve` in its own unit.
+    joined = " ".join(cmd)
+    assert "-c" in cmd
+    assert "updater" in joined and "serve" in joined
     assert any(a.startswith("--unit=") for a in cmd)
 
 
