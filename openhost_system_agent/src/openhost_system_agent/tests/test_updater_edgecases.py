@@ -704,3 +704,20 @@ def test_read_token_file_empty_is_none(data_dir: Path) -> None:
 def test_read_token_file_strips_whitespace(data_dir: Path) -> None:
     paths.token_path().write_text("  tok\n")
     assert server._read_token_file() == "tok"
+
+
+# ─────────────────────────── set-token resets progress ───────────────────────
+
+
+def test_set_token_resets_stale_progress(data_dir: Path) -> None:
+    # A prior run's terminal "done" must be cleared when a new token is set, so
+    # the /updating page's first poll doesn't see stale terminal state and bounce.
+    progress.record("done", "old run")
+    assert progress.is_terminal(progress.read_entries()) is True
+
+    from openhost_system_agent.cli import UpdaterCmd
+
+    UpdaterCmd().set_token("freshtoken")
+
+    assert progress.read_entries() == []  # log cleared
+    assert paths.token_path().read_text() == "freshtoken"

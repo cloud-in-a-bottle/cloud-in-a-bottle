@@ -20,6 +20,7 @@ from openhost_system_agent.updater.paths import clear_token
 from openhost_system_agent.updater.paths import tls_cert_path
 from openhost_system_agent.updater.paths import tls_key_path
 from openhost_system_agent.updater.paths import write_token
+from openhost_system_agent.updater.progress import reset_progress
 from openhost_system_agent.updater.server import run as run_updater_server
 
 
@@ -109,6 +110,11 @@ class UpdaterCmd:
 
     @cappa.command(name="set-token", help="Persist the update token so the updater can auth the owner tab.")
     def set_token(self, token: Annotated[str, cappa.Arg(help="Opaque update token minted by compute_space")]) -> None:
+        # Minting a token always immediately precedes a fresh apply, so reset the
+        # progress log here — synchronously, before the browser can poll /updates.
+        # Otherwise the /updating page's first poll could see the PREVIOUS run's
+        # terminal "done" entry and redirect straight back to the dashboard.
+        reset_progress()
         write_token(token)
         print(json.dumps({"ok": True}))
 
