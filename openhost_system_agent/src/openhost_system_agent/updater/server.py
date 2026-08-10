@@ -65,70 +65,59 @@ def _is_terminal(entries: list[dict[str, object]]) -> bool:
     return progress.is_terminal(entries)
 
 
-# Shared light styling matching the platform (see web/templates/updating.html and
-# layout.html): white background, #222 text, -apple-system font, #36c accent.
-# Keeping this in one string means the updater's page is visually identical to the
-# compute_space-served /updating page, so the hand-off is seamless to the eye.
-_PAGE_STYLE = (
-    "body{font-family:-apple-system,system-ui,sans-serif;max-width:640px;margin:3em auto;"
-    "padding:0 1em;color:#222;}"
-    "h1{font-size:1.4em;display:flex;align-items:center;gap:0.5em;}"
-    ".sp{display:inline-block;width:1em;height:1em;border:2px solid #ddd;border-top-color:#36c;"
-    "border-radius:50%;animation:r 1s linear infinite;}"
-    "@keyframes r{to{transform:rotate(360deg);}}"
-    "ul{list-style:none;padding:0;}"
-    "li{padding:0.4em 0.6em;border-left:2px solid #ddd;margin:0.2em 0;}"
-    "li.done{border-color:#080;}li.failed{border-color:#c00;color:#c00;}"
-    ".ts{color:#888;font-size:0.8em;margin-right:0.6em;}"
-    ".hint{color:#666;font-size:0.9em;margin-top:1.5em;}"
-)
+# The updating page is served by TWO processes: compute_space (Jinja template
+# web/templates/updating.html) and — during the restart — this stdlib updater.
+# To avoid drift, both render from the SAME source files: the shared CSS, the
+# body fragment, and the polling JS. The updater reads them from the repo checkout
+# on disk (it runs from the repo root) and inlines them into a self-contained page
+# (self-contained because the updater serves the same page for every path and
+# can't rely on separate static-asset requests being routed during downtime).
+#
+# server.py -> updater -> openhost_system_agent -> src -> openhost_system_agent
+# -> <repo root>, i.e. parents[4].
+_REPO_ROOT = Path(__file__).resolve().parents[4]
+_WEB_DIR = _REPO_ROOT / "compute_space" / "src" / "compute_space" / "web"
+_CSS_PATH = _WEB_DIR / "static" / "css" / "update-progress.css"
+_JS_PATH = _WEB_DIR / "static" / "js" / "update-progress.js"
+_BODY_PATH = _WEB_DIR / "templates" / "_update_progress_body.html"
 
-# Client script shared by the updater's page. Polls /updates?token=..., renders
-# the phase list when the token matches (else just shows the spinner + heading),
-# and — crucially — is RESILIENT: transient errors / non-OK responses during the
-# brief port hand-off do NOT redirect away; it keeps polling. It only navigates to
-# /settings once the update is terminal AND the dashboard is actually reachable
-# again (probed via /health), so the owner never lands on a dead page.
-_PAGE_SCRIPT = (
-    "var TOKEN=%s;var terminal=false;"
-    "function esc(s){var d=document.createElement('div');d.textContent=(s==null?'':String(s));return d.innerHTML}"
-    "function render(entries){var u=document.getElementById('log');if(!entries||!entries.length)return;"
-    "u.innerHTML='';entries.forEach(function(e){var li=document.createElement('li');"
-    "if(e.phase==='done')li.className='done';if(e.phase==='failed')li.className='failed';"
-    "li.innerHTML=\"<span class='ts'>\"+esc((e.ts||'').substr(11,8))+\"</span>\"+esc(e.message||e.phase||'');"
-    "u.appendChild(li)})}"
-    "function dashUp(){return fetch('/health',{cache:'no-store'}).then(function(r){return r.ok}).catch(function(){return false})}"
-    "function finish(){var s=document.getElementById('sp');if(s)s.style.display='none';window.location.href='/settings'}"
-    "function poll(){fetch('/updates?token='+encodeURIComponent(TOKEN),{cache:'no-store'})"
-    ".then(function(r){if(!r.ok){return null}return r.json()})"
-    ".then(function(d){"
-    # No JSON (403/404/blip): if we've already seen terminal AND the dashboard is
-    # back, we're done; otherwise keep waiting — never bounce to a dead page.
-    "if(!d){if(terminal){dashUp().then(function(u){u?finish():setTimeout(poll,1000)})}else{setTimeout(poll,1000)}return}"
-    "render(d.entries||[]);"
-    "if(d.terminal){terminal=true;var s=document.getElementById('sp');if(s)s.style.display='none';"
-    "dashUp().then(function(u){u?finish():setTimeout(poll,1000)});return}"
-    "setTimeout(poll,1000)})"
-    ".catch(function(){if(terminal){dashUp().then(function(u){u?finish():setTimeout(poll,1200)})}else{setTimeout(poll,1200)}})}"
-    "poll();"
+# Minimal fallbacks if the shared assets can't be read (unexpected layout): the
+# updater must still serve a usable, styled page rather than nothing.
+_FALLBACK_CSS = "body{font-family:-apple-system,system-ui,sans-serif;max-width:640px;margin:3em auto;color:#222}"
+_FALLBACK_BODY = (
+    "<h1>Updating this instance\u2026</h1><ul id='log'></ul><p>This instance is updating and will be back shortly.</p>"
+)
+_FALLBACK_JS = (
+    "function p(){fetch('/updates',{cache:'no-store'}).then(function(r){return r.ok?r.json():null})"
+    ".then(function(d){if(d&&d.terminal){fetch('/health').then(function(h){if(h.ok)location.href='/settings'})}"
+    "setTimeout(p,1500)}).catch(function(){setTimeout(p,1500)})}p();"
 )
 
 
-def _page(token: str) -> bytes:
-    """The updater's single page (light, platform-styled). Shows the spinner +
-    heading always; the token unlocks the live log list (populated by the script
-    polling /updates). Served for every non-/updates path during downtime."""
-    tok = json.dumps(token)
+def _read(path: Path, fallback: str) -> str:
+    try:
+        return path.read_text(encoding="utf-8")
+    except OSError:
+        return fallback
+
+
+def _page() -> bytes:
+    """The updater's single page, assembled from the shared CSS/body/JS so it is
+    byte-for-behaviour identical to the compute_space-served /updating page.
+
+    Served for every non-/updates, non-/health path during downtime. The polling
+    JS reads its token from the URL (same as the compute_space page), so no token
+    needs to be threaded into the markup here.
+    """
+    css = _read(_CSS_PATH, _FALLBACK_CSS)
+    body = _read(_BODY_PATH, _FALLBACK_BODY)
+    js = _read(_JS_PATH, _FALLBACK_JS)
     html = (
         "<!doctype html><html><head><meta charset='utf-8'>"
         "<meta name='robots' content='noindex'>"
         "<meta name='viewport' content='width=device-width,initial-scale=1'>"
-        "<title>Updating\u2026</title><style>" + _PAGE_STYLE + "</style></head>"
-        "<body><h1><span class='sp' id='sp'></span> Updating this instance\u2026</h1>"
-        "<ul id='log'><li>Working\u2026</li></ul>"
-        "<p class='hint'>This instance is updating and will be back shortly. This page refreshes "
-        "automatically &mdash; please keep this tab open.</p>"
-        "<script>" + (_PAGE_SCRIPT % tok) + "</script></body></html>"
+        "<title>Updating\u2026</title><style>" + css + "</style></head>"
+        "<body>" + body + "<script>" + js + "</script></body></html>"
     )
     return html.encode("utf-8")
 
@@ -167,10 +156,9 @@ class _Handler(BaseHTTPRequestHandler):
             self._respond(503, "text/plain; charset=utf-8", b"updating")
             return
         # Every other path gets the single updating page. It always renders (the
-        # spinner + heading); the token in the URL only unlocks the live log list
-        # via /updates. Pass through whatever token the request carried so the
-        # owner's tab keeps its token across the updater's own reloads.
-        self._respond(200, "text/html; charset=utf-8", _page(self._query_token() or ""))
+        # spinner + heading); the page's JS reads the token from the URL and only
+        # unlocks the live log list via /updates when it matches.
+        self._respond(200, "text/html; charset=utf-8", _page())
 
     # /updates is the polling endpoint the owner page hits for live progress.
     def _serve_updates(self) -> None:

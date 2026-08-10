@@ -307,11 +307,11 @@ def server_factory(data_dir: Path):  # type: ignore[no-untyped-def]
             pass
 
 
-def test_server_page_embeds_token(server_factory) -> None:  # type: ignore[no-untyped-def]
-    # The page threads the request's token into its script so it can fetch logs.
+def test_server_page_renders_with_token(server_factory) -> None:  # type: ignore[no-untyped-def]
+    # The page renders; its JS reads the token from the URL (not embedded markup).
     port = server_factory("tok", [{"phase": "migrate", "message": "Migrating"}])
     status, body = _get(port, "/?token=tok")
-    assert status == 200 and b"Updating this instance" in body and b"tok" in body
+    assert status == 200 and b"Updating this instance" in body
 
 
 def test_server_page_wrong_token_still_renders(server_factory) -> None:  # type: ignore[no-untyped-def]

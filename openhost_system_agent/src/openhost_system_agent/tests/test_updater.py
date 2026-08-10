@@ -160,12 +160,12 @@ def _get(port: int, path: str) -> tuple[int, bytes]:
 
 
 def test_server_page_renders_with_token(running_server: int) -> None:
-    # The single updating page renders for any path; the token is embedded so the
-    # page's script can fetch the live log via /updates.
+    # The single updating page renders for any path. The page's JS reads the token
+    # from the URL (same as the compute_space page) to fetch the live log, so the
+    # token is NOT embedded in the markup.
     status, body = _get(running_server, "/?token=goodtoken")
     assert status == 200
     assert b"Updating this instance" in body
-    assert b"goodtoken" in body  # token threaded into the page script
 
 
 def test_server_page_renders_without_token(running_server: int) -> None:
