@@ -1,8 +1,12 @@
-# Launch the updater in its OWN systemd scope (systemd-run --scope) so it lands
-# in a separate cgroup. openhost.service uses KillMode=control-group, so a plain
-# child of compute_space would be SIGTERM'd by the very `systemctl restart
-# openhost` it is meant to cover; a separate scope survives it. Runs as root
-# (reached via `sudo openhost_system_agent` from compute_space).
+# Launch the updater as its OWN transient systemd SERVICE (systemd-run, no
+# --scope) so it lands in a separate cgroup and — crucially — systemd-run returns
+# immediately instead of blocking on the (long-lived, blocking) server. A
+# --scope would run the command in the foreground and make systemd-run block
+# until it exits, which timed out the launcher and killed the updater.
+# openhost.service uses KillMode=control-group, so a plain child of compute_space
+# would be SIGTERM'd by the very `systemctl restart openhost` it is meant to
+# cover; a separate transient unit survives it. Runs as root (reached via `sudo
+# openhost_system_agent` from compute_space).
 
 from __future__ import annotations
 
@@ -16,8 +20,8 @@ from loguru import logger
 from openhost_system_agent.updater.paths import ready_marker_path
 
 # A stable unit name so a second launch can't stack duplicate updaters; we reset
-# any lingering one first. Random enough to avoid clashing with real units.
-_SCOPE_UNIT = "openhost-updater.scope"
+# any lingering one first.
+_SCOPE_UNIT = "openhost-updater.service"
 
 # How long to wait for the launched updater to reach its bind loop (touch the
 # ready marker) before returning. Bounds the head start we give it so a failed
@@ -31,10 +35,10 @@ def _systemd_run_available() -> bool:
 
 
 def _reset_stale_scope() -> None:
-    """Best-effort: stop a leftover updater scope from a prior/aborted run.
+    """Best-effort: stop a leftover updater unit from a prior/aborted run.
 
-    A previous updater that exited cleanly already removed its scope; this only
-    matters if one is somehow still around, which would make the new
+    A previous updater that exited cleanly already removed its transient unit;
+    this only matters if one is somehow still around, which would make the new
     ``systemd-run`` fail with "unit already exists".
     """
     try:
@@ -70,9 +74,10 @@ def launch_updater() -> bool:
     cmd = [
         "systemd-run",
         f"--unit={_SCOPE_UNIT}",
-        "--scope",
-        # Don't let the scope inherit openhost.service's cgroup/slice — it must
-        # be independent so the restart doesn't tear it down.
+        # A transient service (NOT --scope) so systemd-run forks it and returns
+        # immediately rather than blocking on the long-lived server. It lives in
+        # its own cgroup, independent of openhost.service, so the restart's
+        # cgroup-wide SIGTERM doesn't tear it down.
         "--collect",
         sys.executable,
         # Import and call the CLI entrypoint directly rather than `-m

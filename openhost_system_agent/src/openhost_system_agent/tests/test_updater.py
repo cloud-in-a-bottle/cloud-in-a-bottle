@@ -361,9 +361,11 @@ def test_launch_updater_success(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("openhost_system_agent.updater.launcher.time.sleep", lambda _: None)
     assert launcher.launch_updater() is True
     assert calls[0][0] == "systemd-run"
-    assert "--scope" in calls[0]
-    # The scope runs the CLI entrypoint via `python -c` (not `-m`, which mis-
-    # dispatches under __main__), invoking `updater serve`.
+    # Transient service (no --scope) so systemd-run returns immediately instead
+    # of blocking on the long-lived server.
+    assert "--scope" not in calls[0]
+    # Runs the CLI entrypoint via `python -c` (not `-m`, which mis-dispatches
+    # under __main__), invoking `updater serve`.
     joined = " ".join(calls[0])
     assert "-c" in calls[0]
     assert "updater" in joined and "serve" in joined

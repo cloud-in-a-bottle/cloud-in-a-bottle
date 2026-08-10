@@ -683,7 +683,8 @@ def test_launcher_command_shape(monkeypatch: pytest.MonkeyPatch) -> None:
     launcher.launch_updater()
     cmd = captured[0]
     assert cmd[0] == "systemd-run"
-    assert "--scope" in cmd
+    # Transient service (no --scope) so systemd-run returns immediately.
+    assert "--scope" not in cmd
     # Runs the CLI entrypoint via `python -c` invoking `updater serve` in its own unit.
     joined = " ".join(cmd)
     assert "-c" in cmd
