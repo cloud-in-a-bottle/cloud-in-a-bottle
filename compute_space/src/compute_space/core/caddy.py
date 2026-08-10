@@ -22,6 +22,18 @@ CertResolver = Callable[[str], tuple[Path, Path] | None]
 _REDIRECT_BLOCK = "    redir https://{host}{uri} permanent\n"
 
 
+# Retry the upstream for a few seconds instead of returning 502 immediately.
+# Right after a self-update restart Caddy can bind 443 a beat before the router's
+# loopback listener is up (or during the updater handoff); this bridges that gap.
+def _reverse_proxy(web_server_port: int) -> str:
+    return (
+        f"    reverse_proxy localhost:{web_server_port} {{\n"
+        "        lb_try_duration 10s\n"
+        "        lb_try_interval 250ms\n"
+        "    }\n"
+    )
+
+
 def _tls_domain_blocks(name: str, tls_directive: str, web_server_port: int) -> str:
     """https for `name` + `*.name` (proxied to the router), and an http site that
     redirects to https.  Scoping the redirect to this domain's http site — rather
@@ -31,7 +43,7 @@ def _tls_domain_blocks(name: str, tls_directive: str, web_server_port: int) -> s
         f"https://{name}, https://*.{name} {{\n"
         f"    {tls_directive}\n"
         "    encode gzip zstd\n"
-        f"    reverse_proxy localhost:{web_server_port}\n"
+        f"{_reverse_proxy(web_server_port)}"
         "}\n"
         f"http://{name}, http://*.{name} {{\n"
         f"{_REDIRECT_BLOCK}"
@@ -42,9 +54,7 @@ def _tls_domain_blocks(name: str, tls_directive: str, web_server_port: int) -> s
 def _http_domain_block(name: str, web_server_port: int) -> str:
     """Plain http for `name` + `*.name`, proxied to the router with NO redirect —
     used for mDNS `.local` domains that are served over http."""
-    return (
-        f"http://{name}, http://*.{name} {{\n    encode gzip zstd\n    reverse_proxy localhost:{web_server_port}\n}}\n"
-    )
+    return f"http://{name}, http://*.{name} {{\n    encode gzip zstd\n{_reverse_proxy(web_server_port)}}}\n"
 
 
 def config_cert_resolver(config: Config, db: sqlite3.Connection) -> CertResolver:

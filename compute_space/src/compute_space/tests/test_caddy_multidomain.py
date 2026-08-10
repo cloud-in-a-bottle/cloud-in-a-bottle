@@ -48,6 +48,13 @@ def test_primary_tls_domain_uses_file_cert() -> None:
     assert "reverse_proxy localhost:8080" in cf
 
 
+def test_reverse_proxy_retries_upstream() -> None:
+    # The upstream is retried for a few seconds so a request landing before the
+    # router's loopback listener is up (post-restart / update handoff) doesn't 502.
+    cf = _gen((PUBLIC,))
+    assert "lb_try_duration" in cf
+
+
 def test_tls_domain_redirect_is_scoped_not_global() -> None:
     cf = _gen((PUBLIC,))
     # per-domain http site, not a bare `:80 {` catch-all
