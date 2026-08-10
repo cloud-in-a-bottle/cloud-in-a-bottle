@@ -18,6 +18,8 @@ from pathlib import Path
 from urllib.parse import parse_qs
 from urllib.parse import urlparse
 
+from loguru import logger
+
 from openhost_system_agent.updater import progress
 from openhost_system_agent.updater.paths import ready_marker_path
 from openhost_system_agent.updater.paths import token_path
@@ -234,9 +236,12 @@ def run(cert_path: Path, key_path: Path) -> None:
     127.0.0.1:8080, at which point it releases 80/443 and returns so the new Caddy
     can rebind them.
     """
+    logger.info(f"updater run() starting; ssl_cert={cert_path} exists={cert_path.exists()}")
     ssl_ctx = _make_ssl_context(cert_path, key_path)
+    logger.info(f"updater ssl_ctx built: {ssl_ctx is not None}")
 
     https_sock, http_sock = _acquire_ports_during_downtime(ssl_ctx)
+    logger.info(f"updater acquire returned https={https_sock is not None} http={http_sock is not None}")
 
     servers: list[ThreadingHTTPServer] = []
     if https_sock is not None:
@@ -248,7 +253,9 @@ def run(cert_path: Path, key_path: Path) -> None:
         # Never grabbed a port within the window — the restart either never took
         # the ports down (update aborted) or compute_space came back on its own.
         # Nothing to cover.
+        logger.warning("updater got no ports; nothing to cover, exiting")
         return
+    logger.info(f"updater serving on {len(servers)} port(s); holding until compute_space is back")
 
     try:
         # Hold the ports until the new compute_space is listening on loopback,
@@ -320,6 +327,7 @@ def _acquire_ports_during_downtime(
             # within TimeoutStopSec).
             downtime_seen = True
             bind_deadline = time.monotonic() + _BIND_WAIT_SECONDS
+            logger.info("updater: compute_space went down; downtime window started, racing for 443/80")
         elif downtime_seen and ready:
             # compute_space came back (and rebound its own Caddy) before we ever
             # grabbed a port — the downtime was shorter than our bind cadence.
