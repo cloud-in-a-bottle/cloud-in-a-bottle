@@ -181,6 +181,8 @@ class SubdomainProxyMiddleware:
         #  - client IP: connection.client is always Caddy; recover the real one
         #    from the X-Forwarded-For Caddy set (see _resolve_forwarded_for).
         # X-Forwarded-Host preserves the original Host so apps that build absolute URLs don't use the proxy's internal hostname.
+        # (The Host header itself is only rewritten on the HTTP path below — not
+        # here — because the WS client appends rather than replaces it; see there.)
         # Proto follows the domain the request arrived on (https for a TLS domain,
         # http for an mDNS `.local` domain), so an app served on both sees the
         # right scheme per request rather than one global value.  ``zone`` is the
@@ -213,10 +215,19 @@ class SubdomainProxyMiddleware:
                 return
 
         if scope["type"] == ScopeType.HTTP:
+            # Rewrite Host to the public hostname (instead of the 127.0.0.1:<port>
+            # httpx would synthesize) so apps that only read Host, not
+            # X-Forwarded-Host, behave.  HTTP only: httpx lets an explicit Host
+            # replace the derived one, but the websockets client sets its own Host
+            # from the dial URI and *appends* additional_headers rather than
+            # replacing (Headers.__setitem__), so passing Host on the WS path
+            # yields two Host headers and the backend 400s the handshake.  WS
+            # backends validate Origin, not Host, so X-Forwarded-Host suffices
+            # there; a proper WS-Host rewrite needs a different proxy approach.
             proxied = await proxy_http_request(
                 Request(scope, receive, send),
                 target_port=app.local_port,
-                extra_headers=extra_headers,
+                extra_headers=[*extra_headers, ("Host", netloc)],
             )
             await proxied(scope, receive, send)
         else:
