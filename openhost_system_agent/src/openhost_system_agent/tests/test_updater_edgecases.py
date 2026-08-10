@@ -777,10 +777,8 @@ def test_try_bind_no_fd_leak_on_conflict() -> None:
     assert after - before < 5
 
 
-def _open_fds() -> list[int]:
-    import os
-
+def _open_fds() -> list[str]:
     try:
-        return os.listdir("/proc/self/fd")  # type: ignore[return-value]
+        return os.listdir("/proc/self/fd")
     except OSError:
         return []
