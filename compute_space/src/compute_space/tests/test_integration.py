@@ -1099,6 +1099,9 @@ class TestContainerE2E:
         assert "x-forwarded-for" in headers_ci
         assert "x-forwarded-host" in headers_ci
         assert headers_ci.get("x-forwarded-proto") == "http"  # tls_enabled is False in tests
+        # Host is preserved as the public hostname, not the internal 127.0.0.1:<port>,
+        # so apps that only read Host (Django ALLOWED_HOSTS, absolute-URL builders) work.
+        assert headers_ci.get("host") == f"test-app.{primary_of(config).name}:{config.port}"
 
     def test_proxy_forwarded_headers_trust_model(self, admin_session, config):
         """X-Forwarded-Proto/Host are derived by the router, never taken from the

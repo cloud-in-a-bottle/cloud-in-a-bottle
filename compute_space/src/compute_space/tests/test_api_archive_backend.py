@@ -47,7 +47,8 @@ def cookies(cfg: Any) -> dict[str, str]:
 
 
 def test_get_returns_seeded_local_state(client: TestClient[Litestar], cookies: dict[str, str]) -> None:
-    resp = client.get("/api/storage/archive_backend", cookies=cookies)
+    client.cookies.update(cookies)
+    resp = client.get("/api/storage/archive_backend")
     assert resp.status_code == 200
     body = resp.json()
     assert body["backend"] == "local"
@@ -69,7 +70,8 @@ def test_get_redacts_secret_when_s3(cfg: Any, client: TestClient[Litestar], cook
     finally:
         db.close()
 
-    resp = client.get("/api/storage/archive_backend", cookies=cookies)
+    client.cookies.update(cookies)
+    resp = client.get("/api/storage/archive_backend")
     body = resp.json()
     assert body["s3_access_key_id"] == "AKIASOMETHING"
     assert "s3_secret_access_key" not in body
@@ -78,7 +80,8 @@ def test_get_redacts_secret_when_s3(cfg: Any, client: TestClient[Litestar], cook
 def test_get_surfaces_meta_db_path(client: TestClient[Litestar], cookies: dict[str, str]) -> None:
     """meta_db_path always surfaces (under juicefs/state/) so the operator
     can pre-plan their backup story."""
-    resp = client.get("/api/storage/archive_backend", cookies=cookies)
+    client.cookies.update(cookies)
+    resp = client.get("/api/storage/archive_backend")
     body = resp.json()
     assert body["meta_db_path"].endswith("/juicefs/state/meta.db")
 
@@ -100,14 +103,16 @@ def test_get_surfaces_meta_dumps_when_s3(cfg: Any, client: TestClient[Litestar],
         latest_key="zone-a/meta/dump-2026-05-01-180000.json.gz",
     )
     with mock.patch.object(archive_backend, "list_meta_dumps", return_value=summary):
-        resp = client.get("/api/storage/archive_backend", cookies=cookies)
+        client.cookies.update(cookies)
+        resp = client.get("/api/storage/archive_backend")
     body = resp.json()
     assert body["meta_dumps"]["count"] == 42
     assert body["meta_dumps"]["latest_at"] == "2026-05-01T18:00:00Z"
 
 
 def test_get_meta_dumps_null_on_disabled(client: TestClient[Litestar], cookies: dict[str, str]) -> None:
-    resp = client.get("/api/storage/archive_backend", cookies=cookies)
+    client.cookies.update(cookies)
+    resp = client.get("/api/storage/archive_backend")
     body = resp.json()
     assert body["meta_dumps"] is None
 
@@ -126,7 +131,8 @@ def test_get_meta_dumps_null_on_s3_list_failure(
     finally:
         db.close()
     with mock.patch.object(archive_backend, "list_meta_dumps", return_value=None):
-        resp = client.get("/api/storage/archive_backend", cookies=cookies)
+        client.cookies.update(cookies)
+        resp = client.get("/api/storage/archive_backend")
     body = resp.json()
     assert body["meta_dumps"] is None
 
@@ -145,7 +151,8 @@ def test_get_meta_dumps_lists_by_volume_name(cfg: Any, client: TestClient[Litest
         db.close()
     spy = mock.MagicMock(return_value=archive_backend.MetaDumpSummary(count=0, latest_at=None, latest_key=None))
     with mock.patch.object(archive_backend, "list_meta_dumps", spy):
-        client.get("/api/storage/archive_backend", cookies=cookies)
+        client.cookies.update(cookies)
+        client.get("/api/storage/archive_backend")
     # last positional arg is the object prefix JuiceFS actually writes under
     assert spy.call_args.args[-1] == "openhost"
 
@@ -154,10 +161,10 @@ def test_get_meta_dumps_lists_by_volume_name(cfg: Any, client: TestClient[Litest
 
 
 def test_configure_requires_creds(client: TestClient[Litestar], cookies: dict[str, str]) -> None:
+    client.cookies.update(cookies)
     resp = client.post(
         "/api/storage/archive_backend/configure",
         json={"s3_bucket": "b"},
-        cookies=cookies,
     )
     assert resp.status_code == 400
 
@@ -179,6 +186,7 @@ def test_configure_rejects_invalid_s3_prefix(client: TestClient[Litestar], cooki
         "trailing-",
         "with.dot",
     ):
+        client.cookies.update(cookies)
         resp = client.post(
             "/api/storage/archive_backend/configure",
             json={
@@ -187,7 +195,6 @@ def test_configure_rejects_invalid_s3_prefix(client: TestClient[Litestar], cooki
                 "s3_secret_access_key": "s",
                 "s3_prefix": bad,
             },
-            cookies=cookies,
         )
         body = resp.json()
         assert resp.status_code == 400, (bad, body)
@@ -208,10 +215,10 @@ def test_configure_s3_requires_confirm_migrate_s3(
         db.commit()
     finally:
         db.close()
+    client.cookies.update(cookies)
     resp = client.post(
         "/api/storage/archive_backend/configure",
         json={"s3_bucket": "newbucket", "s3_access_key_id": "a", "s3_secret_access_key": "s"},
-        cookies=cookies,
     )
     assert resp.status_code == 409
     assert "confirm_migrate_s3" in resp.json()["error"]
@@ -243,6 +250,7 @@ def test_configure_s3_to_s3_happy_path(cfg: Any, client: TestClient[Litestar], c
 
         mock_configure.side_effect = side_effect
 
+        client.cookies.update(cookies)
         resp = client.post(
             "/api/storage/archive_backend/configure",
             json={
@@ -251,7 +259,6 @@ def test_configure_s3_to_s3_happy_path(cfg: Any, client: TestClient[Litestar], c
                 "s3_secret_access_key": "newsk",
                 "confirm_migrate_s3": True,
             },
-            cookies=cookies,
         )
     assert resp.status_code == 200, resp.text
     body = resp.json()
@@ -283,6 +290,7 @@ def test_configure_happy_path(client: TestClient[Litestar], cookies: dict[str, s
 
         mock_configure.side_effect = side_effect
 
+        client.cookies.update(cookies)
         resp = client.post(
             "/api/storage/archive_backend/configure",
             json={
@@ -291,7 +299,6 @@ def test_configure_happy_path(client: TestClient[Litestar], cookies: dict[str, s
                 "s3_secret_access_key": "secret",
                 "s3_prefix": "andrew-3",
             },
-            cookies=cookies,
         )
     assert resp.status_code == 200, resp.text
     body = resp.json()
@@ -304,15 +311,16 @@ def test_configure_happy_path(client: TestClient[Litestar], cookies: dict[str, s
 
 
 def test_test_connection_requires_fields(client: TestClient[Litestar], cookies: dict[str, str]) -> None:
+    client.cookies.update(cookies)
     resp = client.post(
         "/api/storage/archive_backend/test_connection",
         json={"s3_bucket": "b"},
-        cookies=cookies,
     )
     assert resp.status_code == 400
 
 
 def test_test_connection_rejects_invalid_s3_prefix(client: TestClient[Litestar], cookies: dict[str, str]) -> None:
+    client.cookies.update(cookies)
     resp = client.post(
         "/api/storage/archive_backend/test_connection",
         json={
@@ -321,17 +329,16 @@ def test_test_connection_rejects_invalid_s3_prefix(client: TestClient[Litestar],
             "s3_secret_access_key": "s",
             "s3_prefix": "UPPER",
         },
-        cookies=cookies,
     )
     assert resp.status_code == 400
 
 
 def test_test_connection_surfaces_errors(client: TestClient[Litestar], cookies: dict[str, str]) -> None:
     with mock.patch.object(archive_backend, "test_s3_credentials", return_value="bucket not found"):
+        client.cookies.update(cookies)
         resp = client.post(
             "/api/storage/archive_backend/test_connection",
             json={"s3_bucket": "b", "s3_access_key_id": "a", "s3_secret_access_key": "s"},
-            cookies=cookies,
         )
     assert resp.status_code == 400
     assert "bucket not found" in resp.json()["error"]
@@ -339,10 +346,10 @@ def test_test_connection_surfaces_errors(client: TestClient[Litestar], cookies: 
 
 def test_test_connection_succeeds(client: TestClient[Litestar], cookies: dict[str, str]) -> None:
     with mock.patch.object(archive_backend, "test_s3_credentials", return_value=None):
+        client.cookies.update(cookies)
         resp = client.post(
             "/api/storage/archive_backend/test_connection",
             json={"s3_bucket": "b", "s3_access_key_id": "a", "s3_secret_access_key": "s"},
-            cookies=cookies,
         )
     assert resp.status_code == 200
     assert resp.json()["ok"] is True
@@ -434,6 +441,7 @@ def test_add_app_allows_archive_app_on_default_local_backend(
         mock.patch.object(apps_routes, "validate_manifest", return_value=None),
         mock.patch.object(apps_routes.archive_backend, "is_archive_dir_healthy", return_value=True),
     ):
+        apps_client.cookies.update(cookies)
         resp = apps_client.post(
             "/api/add_app",
             json={
@@ -441,7 +449,6 @@ def test_add_app_allows_archive_app_on_default_local_backend(
                 "app_name": "probe",
                 "clone_dir": fake_clone_dir,
             },
-            cookies=cookies,
         )
     # The archive gate no longer produces a 400/"configure S3" error.
     if resp.status_code == 400:
@@ -468,6 +475,7 @@ def test_add_app_allows_access_all_archive_when_backend_disabled(
         mock.patch.object(apps_routes, "validate_manifest", return_value=None),
         mock.patch.object(apps_routes, "insert_and_deploy", return_value="seer"),
     ):
+        apps_client.cookies.update(cookies)
         resp = apps_client.post(
             "/api/add_app",
             json={
@@ -475,7 +483,6 @@ def test_add_app_allows_access_all_archive_when_backend_disabled(
                 "app_name": "seer",
                 "clone_dir": fake_clone_dir,
             },
-            cookies=cookies,
         )
     # Must NOT reject with archive-related 400/503.
     assert resp.status_code != 400 or "archive" not in resp.text.lower(), resp.text
@@ -504,7 +511,8 @@ def test_reload_app_refuses_when_archive_unhealthy(
         db.commit()
     finally:
         db.close()
-    resp = apps_client.post(f"/reload_app/{archived_id}", cookies=cookies)
+    apps_client.cookies.update(cookies)
+    resp = apps_client.post(f"/reload_app/{archived_id}")
     assert resp.status_code == 503
 
 
@@ -532,7 +540,8 @@ def test_reload_app_allows_access_all_archive_when_archive_unhealthy(
         mock.patch("compute_space.web.routes.api.apps.stop_app_process"),
         mock.patch("compute_space.web.routes.api.apps.reload_app_background"),
     ):
-        resp = apps_client.post(f"/reload_app/{seer_id}", cookies=cookies)
+        apps_client.cookies.update(cookies)
+        resp = apps_client.post(f"/reload_app/{seer_id}")
     assert resp.status_code != 503 or "archive" not in resp.text.lower()
 
 
@@ -549,10 +558,10 @@ def test_configure_requires_confirm_when_local_has_data(
 
     # Without confirm -> 409 (mount reported live so the data is visible).
     with mock.patch.object(archive_backend, "is_mounted", return_value=True):
+        client.cookies.update(cookies)
         resp = client.post(
             "/api/storage/archive_backend/configure",
             json={"s3_bucket": "b", "s3_access_key_id": "a", "s3_secret_access_key": "s"},
-            cookies=cookies,
         )
     assert resp.status_code == 409, resp.text
     assert "nextcloud" in resp.json()["error"]
@@ -568,6 +577,7 @@ def test_configure_requires_confirm_when_local_has_data(
             db.commit()
 
         mock_configure.side_effect = side_effect
+        client.cookies.update(cookies)
         resp = client.post(
             "/api/storage/archive_backend/configure",
             json={
@@ -576,7 +586,6 @@ def test_configure_requires_confirm_when_local_has_data(
                 "s3_secret_access_key": "s",
                 "confirm_migrate_local": True,
             },
-            cookies=cookies,
         )
     assert resp.status_code == 200, resp.text
     assert resp.json()["backend"] == "s3"
@@ -590,7 +599,8 @@ def test_get_surfaces_local_archive_apps(cfg: Any, client: TestClient[Litestar],
     with open(os.path.join(app_dir, "f.txt"), "wb") as f:
         f.write(b"x")
     with mock.patch.object(archive_backend, "is_mounted", return_value=True):
-        resp = client.get("/api/storage/archive_backend", cookies=cookies)
+        client.cookies.update(cookies)
+        resp = client.get("/api/storage/archive_backend")
     assert resp.status_code == 200
     body = resp.json()
     assert body["backend"] == "local"

@@ -2,10 +2,37 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from jinja2 import Environment
+from jinja2 import FileSystemLoader
+from jinja2 import StrictUndefined
+
 from openhost_system_agent.migrations.versions.v0002_baseline import RECLAIM_EXEC_START_PRE
 from openhost_system_agent.migrations.versions.v0002_baseline import RECLAIM_SCRIPT
 from openhost_system_agent.migrations.versions.v0002_baseline import RECLAIM_SCRIPT_PATH
 from openhost_system_agent.migrations.versions.v0002_baseline import build_openhost_service_unit
+
+
+def _effective_directives(unit_text: str) -> list[str]:
+    """Non-comment, non-blank lines — the directives systemd actually acts on."""
+    out: list[str] = []
+    for line in unit_text.splitlines():
+        stripped = line.strip()
+        if stripped and not stripped.startswith("#"):
+            out.append(stripped)
+    return out
+
+
+def test_ansible_template_and_builder_agree_on_directives() -> None:
+    """The ansible template (fresh provisioning) and build_openhost_service_unit
+    (migrations) must produce the same systemd directives so a host looks the
+    same however it was set up. Comments may differ; directives may not."""
+    repo_root = Path(__file__).resolve().parents[4]
+    env = Environment(
+        loader=FileSystemLoader(str(repo_root / "ansible" / "templates")),
+        undefined=StrictUndefined,
+    )
+    rendered_j2 = env.get_template("openhost.service.j2").render(host_uid="1001")
+    assert _effective_directives(rendered_j2) == _effective_directives(build_openhost_service_unit(1001))
 
 
 class TestOpenhostServiceUnit:
@@ -32,6 +59,25 @@ class TestOpenhostServiceUnit:
         unit = build_openhost_service_unit(4242)
         assert "XDG_RUNTIME_DIR=/run/user/4242" in unit
         assert "user@4242.service" in unit
+
+    def test_restarts_on_failure_with_a_bounded_crash_limiter(self) -> None:
+        unit = build_openhost_service_unit(1001)
+        # Auto-restart on crash so a transient compute_space failure doesn't take
+        # the instance (and its own authoritative DNS) dark until a human reboots.
+        assert "Restart=on-failure\n" in unit
+        assert "Restart=no" not in unit
+        # StartLimit* MUST live in [Unit]; systemd ignores them in [Service].
+        assert unit.index("StartLimitBurst=5") < unit.index("[Service]")
+        assert "StartLimitIntervalSec=1800\n" in unit
+        # A non-trivial backoff so a crash loop can't spin the CPU or race ACME.
+        assert "RestartSec=30\n" in unit
+
+    def test_self_update_exit_42_is_a_restarting_success(self) -> None:
+        unit = build_openhost_service_unit(1001)
+        # 42 (updates.py RESTART_EXIT_CODE) must force a restart *and* count as a
+        # success, so update restarts work and don't consume the crash burst.
+        assert "RestartForceExitStatus=42\n" in unit
+        assert "SuccessExitStatus=42\n" in unit
 
 
 class TestReclaimScript:

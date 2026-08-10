@@ -19,7 +19,7 @@ dependencies = [
     "hypercorn",
     "jinja2",
     "josepy",
-    "litestar>=2.21.1,<3",
+    "litestar>=2.23.0,<3",
     "loguru",
     "markdown-it-py",
     "mdit-py-plugins",
@@ -70,7 +70,7 @@ addopts = "-p no:randomly -v"
 filterwarnings = [
     # Litestar 2.23+ deprecates name-inferred DI in favour of `NamedDependency[...]`
     # Collapse repeated ones to not clog output
-    "once:.*Inferred dependency field:DeprecationWarning",
+    "once:.*Inferred dependency field:litestar.exceptions.LitestarDeprecationWarning",
 ]
 markers = [
     "requires_containers: needs --run-containers flag and a working rootless podman setup",
@@ -128,7 +128,7 @@ exclude-newer = "7 days"
 [tool.pixi.dependencies]
 python = "3.12.*"
 caddy = "*"
-litestar = ">=2.21.1,<3"
+litestar = ">=2.23.0,<3"
 
 # podman and crun aren't published for osx-arm64 on conda-forge.  On mac,
 # install them manually if you need to run the --run-containers tests; the

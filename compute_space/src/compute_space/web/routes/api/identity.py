@@ -9,6 +9,7 @@ from cryptography.hazmat.primitives.serialization import load_pem_public_key
 from litestar import Router
 from litestar import get
 from litestar import post
+from litestar.di import NamedDependency
 from litestar.enums import RequestEncodingType
 from litestar.exceptions import HTTPException
 from litestar.params import Body
@@ -74,7 +75,7 @@ def jwks() -> JwksResponse:
 
 
 @get("/.well-known/openhost-identity", sync_to_thread=False)
-def openhost_identity(db: sqlite3.Connection) -> ZoneIdentityResponse:
+def openhost_identity(db: NamedDependency[sqlite3.Connection]) -> ZoneIdentityResponse:
     """Public endpoint: expose this zone's identity (domain + public key)."""
     try:
         data = identity.get_zone_identity(db)
@@ -107,7 +108,7 @@ async def identity_approve(callback: str, app_name: str, requesting_domain: str)
 @post("/identity/approve", status_code=302, guards=[require_owner_auth])
 async def identity_approve_submit(
     data: Annotated[IdentityApproveForm, Body(media_type=RequestEncodingType.URL_ENCODED)],
-    db: sqlite3.Connection,
+    db: NamedDependency[sqlite3.Connection],
 ) -> Redirect:
     """Owner approved the login — sign an identity token and redirect back."""
     parsed = urllib.parse.urlparse(data.callback)

@@ -112,20 +112,23 @@ def test_status_requires_auth(client: TestClient[Litestar]) -> None:
 
 
 def test_status_unavailable_and_unconnected_when_empty(cfg: Any, client: TestClient[Litestar]) -> None:
-    resp = client.get("/api/settings/connect-imbue/status", cookies=_auth_cookie(cfg))
+    client.cookies.update(_auth_cookie(cfg))
+    resp = client.get("/api/settings/connect-imbue/status")
     assert resp.status_code == 200
     assert resp.json() == {"available": False, "connected": False}
 
 
 def test_status_available_when_connect_url_present(cfg: Any, client: TestClient[Litestar]) -> None:
     _seed_connect_url(cfg)
-    resp = client.get("/api/settings/connect-imbue/status", cookies=_auth_cookie(cfg))
+    client.cookies.update(_auth_cookie(cfg))
+    resp = client.get("/api/settings/connect-imbue/status")
     assert resp.json() == {"available": True, "connected": False}
 
 
 def test_status_connected_when_identity_present(cfg: Any, client: TestClient[Litestar]) -> None:
     _seed_identity(cfg)
-    resp = client.get("/api/settings/connect-imbue/status", cookies=_auth_cookie(cfg))
+    client.cookies.update(_auth_cookie(cfg))
+    resp = client.get("/api/settings/connect-imbue/status")
     # Connected true (identity resolves), available false (no connect URL seeded).
     assert resp.json() == {"available": False, "connected": True}
 
@@ -133,7 +136,8 @@ def test_status_connected_when_identity_present(cfg: Any, client: TestClient[Lit
 def test_status_available_and_connected(cfg: Any, client: TestClient[Litestar]) -> None:
     _seed_connect_url(cfg)
     _seed_identity(cfg)
-    resp = client.get("/api/settings/connect-imbue/status", cookies=_auth_cookie(cfg))
+    client.cookies.update(_auth_cookie(cfg))
+    resp = client.get("/api/settings/connect-imbue/status")
     assert resp.json() == {"available": True, "connected": True}
 
 
@@ -142,7 +146,8 @@ def test_status_not_connected_with_partial_identity(cfg: Any, client: TestClient
     with closing(open_db(cfg)) as db:
         set_setting(db, "imbue_identity_issuer_url", "iss")
         set_setting(db, "imbue_identity_client_id", "cid")
-    resp = client.get("/api/settings/connect-imbue/status", cookies=_auth_cookie(cfg))
+    client.cookies.update(_auth_cookie(cfg))
+    resp = client.get("/api/settings/connect-imbue/status")
     assert resp.json()["connected"] is False
 
 
@@ -154,13 +159,15 @@ def test_start_requires_auth(client: TestClient[Litestar]) -> None:
 
 
 def test_start_503_without_connect_url(cfg: Any, client: TestClient[Litestar]) -> None:
-    resp = client.post("/api/settings/connect-imbue/start", cookies=_auth_cookie(cfg))
+    client.cookies.update(_auth_cookie(cfg))
+    resp = client.post("/api/settings/connect-imbue/start")
     assert resp.status_code == 503
 
 
 def test_start_returns_redirect_url_with_zone_and_callback(cfg: Any, client: TestClient[Litestar]) -> None:
     _seed_connect_url(cfg)
-    resp = client.post("/api/settings/connect-imbue/start", cookies=_auth_cookie(cfg))
+    client.cookies.update(_auth_cookie(cfg))
+    resp = client.post("/api/settings/connect-imbue/start")
     assert resp.status_code == 200
     url = resp.json()["redirect_url"]
     assert url.startswith(f"{_IMBUE}/connect/imbue?")
@@ -171,9 +178,9 @@ def test_start_returns_redirect_url_with_zone_and_callback(cfg: Any, client: Tes
 
 def test_start_honors_forwarded_proto_and_host(cfg: Any, client: TestClient[Litestar]) -> None:
     _seed_connect_url(cfg)
+    client.cookies.update(_auth_cookie(cfg))
     resp = client.post(
         "/api/settings/connect-imbue/start",
-        cookies=_auth_cookie(cfg),
         headers={"x-forwarded-proto": "https", "x-forwarded-host": "proxy.example.com"},
     )
     url = resp.json()["redirect_url"]
@@ -186,9 +193,9 @@ def test_start_honors_forwarded_proto_and_host(cfg: Any, client: TestClient[Lite
 
 def test_start_callback_host_falls_back_to_host_header(cfg: Any, client: TestClient[Litestar]) -> None:
     _seed_connect_url(cfg)
+    client.cookies.update(_auth_cookie(cfg))
     resp = client.post(
         "/api/settings/connect-imbue/start",
-        cookies=_auth_cookie(cfg),
         headers={"host": "direct.example.com"},
     )
     qs = parse_qs(urlparse(resp.json()["redirect_url"]).query)
@@ -205,9 +212,9 @@ def test_callback_requires_auth(client: TestClient[Litestar]) -> None:
 
 
 def test_callback_503_without_connect_url(cfg: Any, client: TestClient[Litestar]) -> None:
+    client.cookies.update(_auth_cookie(cfg))
     resp = client.get(
         "/api/settings/connect-imbue/callback?code=x",
-        cookies=_auth_cookie(cfg),
         follow_redirects=False,
     )
     assert resp.status_code == 503
@@ -215,9 +222,9 @@ def test_callback_503_without_connect_url(cfg: Any, client: TestClient[Litestar]
 
 def test_callback_blank_code_redirects_error(cfg: Any, client: TestClient[Litestar]) -> None:
     _seed_connect_url(cfg)
+    client.cookies.update(_auth_cookie(cfg))
     resp = client.get(
         "/api/settings/connect-imbue/callback?code=",
-        cookies=_auth_cookie(cfg),
         follow_redirects=False,
     )
     assert resp.status_code in (302, 307)
@@ -226,9 +233,9 @@ def test_callback_blank_code_redirects_error(cfg: Any, client: TestClient[Litest
 
 def test_callback_whitespace_code_redirects_error(cfg: Any, client: TestClient[Litestar]) -> None:
     _seed_connect_url(cfg)
+    client.cookies.update(_auth_cookie(cfg))
     resp = client.get(
         "/api/settings/connect-imbue/callback?code=%20%20",
-        cookies=_auth_cookie(cfg),
         follow_redirects=False,
     )
     assert resp.status_code in (302, 307)
@@ -238,9 +245,9 @@ def test_callback_whitespace_code_redirects_error(cfg: Any, client: TestClient[L
 def test_callback_missing_code_param_redirects_error(cfg: Any, client: TestClient[Litestar]) -> None:
     # No ?code= at all defaults to "" -> the blank-code error redirect.
     _seed_connect_url(cfg)
+    client.cookies.update(_auth_cookie(cfg))
     resp = client.get(
         "/api/settings/connect-imbue/callback",
-        cookies=_auth_cookie(cfg),
         follow_redirects=False,
     )
     assert resp.status_code in (302, 307)
@@ -256,9 +263,9 @@ def test_callback_happy_path_stores_identity_and_redirects_ok(cfg: Any, client: 
         ) as exchange,
         mock.patch("compute_space.web.routes.api.settings.trigger_restart") as restart,
     ):
+        client.cookies.update(_auth_cookie(cfg))
         resp = client.get(
             "/api/settings/connect-imbue/callback?code=onetime",
-            cookies=_auth_cookie(cfg),
             follow_redirects=False,
         )
     assert resp.status_code in (302, 307)
@@ -281,9 +288,9 @@ def test_callback_strips_whitespace_around_code_before_exchange(cfg: Any, client
         ) as exchange,
         mock.patch("compute_space.web.routes.api.settings.trigger_restart"),
     ):
+        client.cookies.update(_auth_cookie(cfg))
         resp = client.get(
             "/api/settings/connect-imbue/callback?code=%20onetime%20",
-            cookies=_auth_cookie(cfg),
             follow_redirects=False,
         )
     assert resp.headers["location"] == "/settings?connect=ok"
@@ -299,9 +306,9 @@ def test_callback_connect_error_returns_502(cfg: Any, client: TestClient[Litesta
         ),
         mock.patch("compute_space.web.routes.api.settings.trigger_restart") as restart,
     ):
+        client.cookies.update(_auth_cookie(cfg))
         resp = client.get(
             "/api/settings/connect-imbue/callback?code=bad",
-            cookies=_auth_cookie(cfg),
             follow_redirects=False,
         )
     assert resp.status_code == 502
@@ -319,9 +326,9 @@ def test_callback_connect_error_does_not_overwrite_existing_identity(cfg: Any, c
         "compute_space.web.routes.api.settings.exchange_code_for_credential",
         side_effect=ConnectError("boom"),
     ):
+        client.cookies.update(_auth_cookie(cfg))
         resp = client.get(
             "/api/settings/connect-imbue/callback?code=bad",
-            cookies=_auth_cookie(cfg),
             follow_redirects=False,
         )
     assert resp.status_code == 502
@@ -341,9 +348,9 @@ def test_callback_overwrites_existing_identity_on_success(cfg: Any, client: Test
         ),
         mock.patch("compute_space.web.routes.api.settings.trigger_restart"),
     ):
+        client.cookies.update(_auth_cookie(cfg))
         resp = client.get(
             "/api/settings/connect-imbue/callback?code=onetime",
-            cookies=_auth_cookie(cfg),
             follow_redirects=False,
         )
     assert resp.headers["location"] == "/settings?connect=ok"
@@ -355,8 +362,8 @@ def test_callback_makes_status_report_connected_afterwards(cfg: Any, client: Tes
     # End-to-end: after a successful callback, /status must flip connected -> true
     # (read live from the settings table, no restart in between).
     _seed_connect_url(cfg)
-    cookies = _auth_cookie(cfg)
-    before = client.get("/api/settings/connect-imbue/status", cookies=cookies).json()
+    client.cookies.update(_auth_cookie(cfg))
+    before = client.get("/api/settings/connect-imbue/status").json()
     assert before == {"available": True, "connected": False}
     with (
         mock.patch(
@@ -367,8 +374,7 @@ def test_callback_makes_status_report_connected_afterwards(cfg: Any, client: Tes
     ):
         client.get(
             "/api/settings/connect-imbue/callback?code=onetime",
-            cookies=cookies,
             follow_redirects=False,
         )
-    after = client.get("/api/settings/connect-imbue/status", cookies=cookies).json()
+    after = client.get("/api/settings/connect-imbue/status").json()
     assert after == {"available": True, "connected": True}

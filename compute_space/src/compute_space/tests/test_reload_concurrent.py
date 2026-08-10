@@ -82,7 +82,8 @@ def test_plain_reload_claims_building_and_spawns_worker(
         patch("compute_space.web.routes.api.apps.Thread") as Thread,
         patch("compute_space.web.routes.api.apps.stop_app_process") as stop,
     ):
-        resp = client.post(f"/reload_app/{app_id}", cookies=cookies)
+        client.cookies.update(cookies)
+        resp = client.post(f"/reload_app/{app_id}")
 
     assert resp.status_code == 200
     assert resp.json() == {"ok": True}
@@ -105,7 +106,8 @@ def test_reload_refused_while_transient(
         patch("compute_space.web.routes.api.apps.Thread") as Thread,
         patch("compute_space.web.routes.api.apps.stop_app_process") as stop,
     ):
-        resp = client.post(f"/reload_app/{app_id}", cookies=cookies)
+        client.cookies.update(cookies)
+        resp = client.post(f"/reload_app/{app_id}")
 
     assert resp.status_code == 409
     assert resp.json()["error"] == "App is already reloading"
@@ -124,7 +126,8 @@ def test_reload_refused_while_removing(cfg: Any, client: TestClient[Litestar], c
         patch("compute_space.web.routes.api.apps.Thread") as Thread,
         patch("compute_space.web.routes.api.apps.stop_app_process") as stop,
     ):
-        resp = client.post(f"/reload_app/{app_id}", cookies=cookies)
+        client.cookies.update(cookies)
+        resp = client.post(f"/reload_app/{app_id}")
 
     assert resp.status_code == 409
     Thread.assert_not_called()
@@ -143,7 +146,8 @@ def test_reload_allowed_from_settled_states(
         patch("compute_space.web.routes.api.apps.Thread") as Thread,
         patch("compute_space.web.routes.api.apps.stop_app_process"),
     ):
-        resp = client.post(f"/reload_app/{app_id}", cookies=cookies)
+        client.cookies.update(cookies)
+        resp = client.post(f"/reload_app/{app_id}")
 
     assert resp.status_code == 200
     Thread.assert_called_once()

@@ -16,6 +16,9 @@ from litestar import Response
 from litestar import Router
 from litestar import get
 from litestar import post
+from litestar.di import NamedDependency
+from litestar.params import FromPath
+from litestar.params import FromQuery
 from litestar.params import Parameter
 from litestar.response import Redirect
 
@@ -275,7 +278,9 @@ async def _pin_refless_to_landed_branch(repo_url: str | None, repo_path: str) ->
 
 @post("/api/clone_and_get_app_info", status_code=200, guards=[require_owner_auth])
 async def clone_and_get_app_info(
-    data: CloneRequest, db: sqlite3.Connection, config: Config
+    data: CloneRequest,
+    db: NamedDependency[sqlite3.Connection],
+    config: NamedDependency[Config],
 ) -> Response[CloneInfoResponse] | Response[ErrorResponse] | Response[CloneAuthorizeResponse]:
     """Clone a repo and return its manifest info + temp clone dir."""
     repo_url = data.repo_url.strip()
@@ -313,7 +318,7 @@ async def clone_and_get_app_info(
 
 @get("/api/check_port", guards=[require_owner_auth])
 async def check_port(
-    port: Annotated[int, Parameter(ge=1, le=65535)], db: sqlite3.Connection
+    port: Annotated[int, Parameter(ge=1, le=65535)], db: NamedDependency[sqlite3.Connection]
 ) -> Response[CheckPortResponse]:
     """Check if a host port is available. Returns {port, available, used_by}."""
     available, used_by = check_port_available(port, db)
@@ -326,7 +331,9 @@ async def check_port(
 
 @post("/api/add_app", status_code=200, guards=[require_owner_auth])
 async def api_add_app(
-    data: AddAppRequest, db: sqlite3.Connection, config: Config
+    data: AddAppRequest,
+    db: NamedDependency[sqlite3.Connection],
+    config: NamedDependency[Config],
 ) -> Response[AddAppResponse] | Response[ErrorResponse] | Response[AuthRequiredResponse]:
     """Install an app. Optionally takes a clone_dir from a prior clone_and_get_app_info call."""
     repo_url = data.repo_url.strip()
@@ -428,7 +435,7 @@ async def api_add_app(
 
 
 @get("/api/apps", guards=[require_owner_auth])
-async def api_apps(db: sqlite3.Connection) -> list[AppSummary]:
+async def api_apps(db: NamedDependency[sqlite3.Connection]) -> list[AppSummary]:
     rows = db.execute("SELECT app_id, name, status, error_message FROM apps ORDER BY name").fetchall()
     return [
         AppSummary(
@@ -458,7 +465,9 @@ async def _read_app_git_info(repo_path: str | None) -> tuple[str | None, str | N
 
 
 @get("/api/app_status/{app_id:str}", guards=[require_owner_auth])
-async def app_status(app_id: str, db: sqlite3.Connection) -> Response[AppStatusResponse] | Response[ErrorResponse]:
+async def app_status(
+    app_id: FromPath[str], db: NamedDependency[sqlite3.Connection]
+) -> Response[AppStatusResponse] | Response[ErrorResponse]:
     if not is_valid_app_id(app_id):
         return Response(content=ErrorResponse(error="Invalid app_id"), status_code=400)
     app_row = db.execute(
@@ -499,7 +508,10 @@ def _app_diagnostics_filename(app_name: str) -> str:
 
 @get("/api/app_diagnostics/{app_id:str}", guards=[require_owner_auth])
 async def app_diagnostics(
-    app_id: str, db: sqlite3.Connection, config: Config, download: bool = False
+    app_id: FromPath[str],
+    db: NamedDependency[sqlite3.Connection],
+    config: NamedDependency[Config],
+    download: FromQuery[bool] = False,
 ) -> Response[AppDiagnostics] | Response[ErrorResponse]:
     """Return a per-app diagnostics bundle: app version + manifest git checkout,
     container status, and a slice of host/system info so the report is
@@ -520,7 +532,11 @@ async def app_diagnostics(
 
 
 @get("/app_logs/{app_id:str}", guards=[require_owner_auth], media_type=MediaType.TEXT)
-async def app_logs(app_id: str, db: sqlite3.Connection, config: Config) -> Response[str] | Response[ErrorResponse]:
+async def app_logs(
+    app_id: FromPath[str],
+    db: NamedDependency[sqlite3.Connection],
+    config: NamedDependency[Config],
+) -> Response[str] | Response[ErrorResponse]:
     app_row, err = _resolve_app_or_error(app_id, db)
     if err is not None:
         return err
@@ -530,7 +546,9 @@ async def app_logs(app_id: str, db: sqlite3.Connection, config: Config) -> Respo
 
 
 @post("/stop_app/{app_id:str}", status_code=200, guards=[require_owner_auth])
-async def stop_app(app_id: str, db: sqlite3.Connection) -> Response[OkResponse] | Response[ErrorResponse]:
+async def stop_app(
+    app_id: FromPath[str], db: NamedDependency[sqlite3.Connection]
+) -> Response[OkResponse] | Response[ErrorResponse]:
     app_row, err = _resolve_app_or_error(app_id, db)
     if err is not None:
         return err
@@ -803,9 +821,9 @@ async def _reload_app_impl(
 
 @post("/reload_app/{app_id:str}", status_code=200, guards=[require_owner_auth])
 async def reload_app(
-    app_id: str,
-    db: sqlite3.Connection,
-    config: Config,
+    app_id: FromPath[str],
+    db: NamedDependency[sqlite3.Connection],
+    config: NamedDependency[Config],
     data: ReloadAppRequest = ReloadAppRequest(),  # noqa: B008 — Litestar resolves this at dependency-injection time
 ) -> Response[OkResponse] | Response[ErrorResponse] | Response[PermissionsRequiredResponse] | Redirect:
     """User-initiated reload, optionally pulling latest code via ``update``."""
@@ -821,10 +839,10 @@ async def reload_app(
 
 @get("/reload_app/{app_id:str}", guards=[require_owner_auth])
 async def reload_app_after_oauth(
-    app_id: str,
-    db: sqlite3.Connection,
-    config: Config,
-    continue_oauth_update: Annotated[bool, Parameter(query="continue_oauth_update", required=False)] = False,
+    app_id: FromPath[str],
+    db: NamedDependency[sqlite3.Connection],
+    config: NamedDependency[Config],
+    continue_oauth_update: FromQuery[bool] = False,
 ) -> Response[OkResponse] | Response[ErrorResponse] | Response[PermissionsRequiredResponse] | Redirect:
     """OAuth callback re-entry: the secrets app redirected the user back here
     after they granted GitHub access.  Resumes the update with ``continue_oauth=True``
@@ -847,9 +865,9 @@ async def reload_app_after_oauth(
 
 @post("/remove_app/{app_id:str}", status_code=202, guards=[require_owner_auth])
 async def remove_app(
-    app_id: str,
-    db: sqlite3.Connection,
-    config: Config,
+    app_id: FromPath[str],
+    db: NamedDependency[sqlite3.Connection],
+    config: NamedDependency[Config],
     data: RemoveAppRequest = RemoveAppRequest(),  # noqa: B008 — body is optional; default = remove with keep_data=False
 ) -> Response[OkResponse] | Response[RemoveAppAlreadyRemoving] | Response[ErrorResponse]:
     """Flip the row to ``status='removing'`` and run teardown in a thread.
@@ -970,10 +988,10 @@ def _rename_app_storage_dirs(config: Config, old_name: str, new_name: str, archi
 
 @post("/rename_app/{app_id:str}", status_code=200, guards=[require_owner_auth])
 async def rename_app(
-    app_id: str,
+    app_id: FromPath[str],
     data: RenameAppRequest,
-    db: sqlite3.Connection,
-    config: Config,
+    db: NamedDependency[sqlite3.Connection],
+    config: NamedDependency[Config],
 ) -> Response[RenameAppResponse] | Response[ErrorResponse]:
     """Rename an app's label and subdomain. The app_id (cross-table identity) stays the same."""
     new_name = data.name.strip()
@@ -1100,9 +1118,9 @@ async def rename_app(
 
 @post("/set_app_remote/{app_id:str}", status_code=200, guards=[require_owner_auth])
 async def set_app_remote(
-    app_id: str,
+    app_id: FromPath[str],
     data: SetAppRemoteRequest,
-    db: sqlite3.Connection,
+    db: NamedDependency[sqlite3.Connection],
 ) -> Response[SetAppRemoteResponse] | Response[ErrorResponse]:
     """Edit an app's git upstream (repo URL and/or ``@branch`` ref).
 

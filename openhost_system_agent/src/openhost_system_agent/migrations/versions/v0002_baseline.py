@@ -61,6 +61,13 @@ def build_openhost_service_unit(host_uid: int) -> str:
         "Description=OpenHost Compute Space\n"
         f"After=network-online.target user@{host_uid}.service\n"
         f"Wants=network-online.target user@{host_uid}.service\n"
+        # Crash limiter for Restart=on-failure (see below): after StartLimitBurst
+        # failures within StartLimitIntervalSec systemd stops retrying and leaves
+        # the unit `failed`. Bounds how fast a persistent cert-acquisition crash
+        # could hit an ACME endpoint; successful exits (0 and the update-flow's
+        # SuccessExitStatus=42) don't count. StartLimit* MUST live in [Unit].
+        "StartLimitIntervalSec=1800\n"
+        "StartLimitBurst=5\n"
         "\n"
         "[Service]\n"
         "Type=simple\n"
@@ -72,11 +79,23 @@ def build_openhost_service_unit(host_uid: int) -> str:
         f"Environment=XDG_RUNTIME_DIR=/run/user/{host_uid}\n"
         f"Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/{host_uid}/bus\n"
         + RECLAIM_EXEC_START_PRE
-        + "ExecStart=/home/host/.pixi/bin/pixi run python -m compute_space\n"
-        "Restart=no\n"
+        # --locked (= --no-install --frozen) makes startup fully offline: no lock resolution,
+        # no install/build, so a reboot during a WAN/DNS outage can't fail fetching build deps.
+        + "ExecStart=/home/host/.pixi/bin/pixi run --locked python -m compute_space\n"
+        # Auto-restart on crash (bounded by StartLimit* above). compute_space is
+        # the parent of the in-process CoreDNS + Caddy children, so when it dies
+        # they die with it and the instance loses authoritative DNS *and* HTTP/S
+        # at once — including its own nameserver. The old Restart=no left that
+        # dark until a human rebooted. The historical ACME-quota reason no longer
+        # applies: a boot with a valid cached cert makes zero ACME calls, and
+        # managed instances get certs from the server-side cert-api broker, not a
+        # local account key. RestartForceExitStatus=42 keeps the self-update
+        # clean-restart working; because 42 is also SuccessExitStatus it doesn't
+        # count toward the crash burst. Kept in sync with the ansible template.
+        "Restart=on-failure\n"
         "RestartForceExitStatus=42\n"
         "SuccessExitStatus=42\n"
-        "RestartSec=3\n"
+        "RestartSec=30\n"
         "TimeoutStopSec=5\n"
         "\n"
         "[Install]\n"

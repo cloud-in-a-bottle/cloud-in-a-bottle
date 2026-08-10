@@ -5,7 +5,9 @@ from litestar import Router
 from litestar import delete
 from litestar import get
 from litestar import post
+from litestar.di import NamedDependency
 from litestar.exceptions import HTTPException
+from litestar.params import FromQuery
 
 from compute_space.web.auth.auth import require_owner_auth
 from compute_space.web.auth.auth import require_owner_or_app_auth
@@ -60,7 +62,7 @@ class RemoveDefaultRequest:
 
 
 @get("/api/services/v2", guards=[require_owner_auth])
-async def list_services_v2(db: sqlite3.Connection) -> list[ProviderV2]:
+async def list_services_v2(db: NamedDependency[sqlite3.Connection]) -> list[ProviderV2]:
     """List all registered V2 service providers."""
     rows = db.execute(
         """SELECT sp.service_url, sp.app_id, a.name AS app_name, sp.service_version, sp.endpoint, a.status
@@ -81,7 +83,9 @@ async def list_services_v2(db: sqlite3.Connection) -> list[ProviderV2]:
 
 
 @get("/api/services/v2/providers", guards=[require_owner_or_app_auth])
-async def discover_providers(db: sqlite3.Connection, service: str) -> DiscoverProvidersResponse:
+async def discover_providers(
+    db: NamedDependency[sqlite3.Connection], service: FromQuery[str]
+) -> DiscoverProvidersResponse:
     """Discover providers for a service, optionally filtered by version specifier."""
 
     rows = db.execute(
@@ -114,7 +118,7 @@ async def discover_providers(db: sqlite3.Connection, service: str) -> DiscoverPr
 
 
 @get("/api/services/v2/defaults", guards=[require_owner_auth])
-async def list_defaults(db: sqlite3.Connection) -> list[DefaultEntry]:
+async def list_defaults(db: NamedDependency[sqlite3.Connection]) -> list[DefaultEntry]:
     """List all default provider settings."""
     rows = db.execute(
         """SELECT sd.service_url, sd.app_id, a.name AS app_name
@@ -125,7 +129,7 @@ async def list_defaults(db: sqlite3.Connection) -> list[DefaultEntry]:
 
 
 @post("/api/services/v2/defaults", status_code=200, guards=[require_owner_auth])
-async def set_default(data: SetDefaultRequest, db: sqlite3.Connection) -> OkResponse:
+async def set_default(data: SetDefaultRequest, db: NamedDependency[sqlite3.Connection]) -> OkResponse:
     """Set the default provider for a service."""
     row = db.execute(
         "SELECT 1 FROM service_providers_v2 WHERE service_url = ? AND app_id = ?",
@@ -143,7 +147,7 @@ async def set_default(data: SetDefaultRequest, db: sqlite3.Connection) -> OkResp
 
 
 @delete("/api/services/v2/defaults", status_code=200, guards=[require_owner_auth])
-async def remove_default(data: RemoveDefaultRequest, db: sqlite3.Connection) -> OkResponse:
+async def remove_default(data: RemoveDefaultRequest, db: NamedDependency[sqlite3.Connection]) -> OkResponse:
     """Remove the default provider for a service (falls back to highest version)."""
     db.execute("DELETE FROM service_defaults WHERE service_url = ?", (data.service_url,))
     db.commit()

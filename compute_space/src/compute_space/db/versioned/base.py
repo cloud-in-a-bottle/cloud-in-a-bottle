@@ -80,6 +80,10 @@ class Migration:
 
     version: ClassVar[int] = 0
 
+    # Opt out of the PRAGMA foreign_keys tx-safety lint for migrations that
+    # deliberately toggle FKs across a table swap (see TestPragmaHeuristic).
+    allow_pragma_foreign_keys: ClassVar[bool] = False
+
     def up(self, db: sqlite3.Connection) -> None:
         raise NotImplementedError
 
