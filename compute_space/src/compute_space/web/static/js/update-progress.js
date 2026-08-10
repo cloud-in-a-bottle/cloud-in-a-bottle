@@ -11,9 +11,23 @@
 (function () {
   var params = new URLSearchParams(window.location.search);
   var token = params.get('token') || '';
+  // Persist the token for the tab so it survives reloads/navigations served by
+  // the updater (which serves the same page for every path, sometimes without
+  // the token in the URL). Restore it when the URL lacks one.
+  try {
+    if (token) {
+      sessionStorage.setItem('openhost_update_token', token);
+    } else {
+      token = sessionStorage.getItem('openhost_update_token') || '';
+    }
+  } catch (e) { /* sessionStorage unavailable: fall back to the URL token */ }
   var logEl = document.getElementById('log');
   var spEl = document.getElementById('sp');
   var terminalSeen = false;
+
+  function clearToken() {
+    try { sessionStorage.removeItem('openhost_update_token'); } catch (e) { /* ignore */ }
+  }
 
   function esc(s) {
     var d = document.createElement('div');
@@ -36,6 +50,7 @@
 
   function finish() {
     if (spEl) spEl.style.display = 'none';
+    clearToken();
     window.location.href = '/settings';
   }
 
