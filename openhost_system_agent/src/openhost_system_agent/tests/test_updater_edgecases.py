@@ -19,6 +19,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import NameOID
 
+from openhost_system_agent.cli import UpdaterCmd
 from openhost_system_agent.updater import launcher
 from openhost_system_agent.updater import paths
 from openhost_system_agent.updater import progress
@@ -717,8 +718,6 @@ def test_set_token_resets_stale_progress(data_dir: Path) -> None:
     # the /updating page's first poll doesn't see stale terminal state and bounce.
     progress.record("done", "old run")
     assert progress.is_terminal(progress.read_entries()) is True
-
-    from openhost_system_agent.cli import UpdaterCmd
 
     UpdaterCmd().set_token("freshtoken")
 
