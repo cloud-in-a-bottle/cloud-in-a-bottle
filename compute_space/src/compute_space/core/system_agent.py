@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import time
 
 import cattrs
 
@@ -16,33 +17,57 @@ class SystemAgentError(Exception):
     pass
 
 
-def _run_system_agent(*args: str, timeout: int = 300) -> str:
-    """Run the agent, raising SystemAgentError on failure. Returns stdout."""
-    try:
-        result = subprocess.run(
-            ["sudo", "openhost_system_agent", *args],
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-        )
-    except FileNotFoundError as e:
-        raise SystemAgentError("openhost_system_agent not found on PATH") from e
-    except subprocess.TimeoutExpired as e:
-        raise SystemAgentError(f"openhost_system_agent timed out after {timeout}s") from e
+# sudo prints `sudo: openhost_system_agent: command not found` when the symlink
+# at /usr/local/bin/openhost_system_agent isn't resolvable. That is usually a
+# genuinely-missing symlink (needs an ansible re-deploy), but it also shows up
+# TRANSIENTLY right after a self-update restart: the freshly-started
+# compute_space immediately runs its "check for updates", and for a brief window
+# sudo's PATH lookup can miss the (present) symlink before the environment
+# settles. So we retry this specific error a few times — it self-heals within a
+# second or two — and only surface the "re-run ansible" guidance if it persists.
+_CMD_NOT_FOUND = "openhost_system_agent: command not found"
+_NOT_FOUND_RETRIES = 5
+_NOT_FOUND_RETRY_DELAY = 0.5
 
-    if result.returncode != 0:
+
+def _run_system_agent(*args: str, timeout: int = 300) -> str:
+    """Run the agent, raising SystemAgentError on failure. Returns stdout.
+
+    Retries transient post-restart "command not found" errors a few times (see
+    _CMD_NOT_FOUND above) before giving up; all other failures raise immediately.
+    """
+    last_not_found: str | None = None
+    for attempt in range(_NOT_FOUND_RETRIES):
+        try:
+            result = subprocess.run(
+                ["sudo", "openhost_system_agent", *args],
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+            )
+        except FileNotFoundError as e:
+            raise SystemAgentError("openhost_system_agent not found on PATH") from e
+        except subprocess.TimeoutExpired as e:
+            raise SystemAgentError(f"openhost_system_agent timed out after {timeout}s") from e
+
+        if result.returncode == 0:
+            return result.stdout
+
         try:
             body = json.loads(result.stdout)
             error = body.get("error", result.stderr)
         except (json.JSONDecodeError, ValueError):
             error = result.stderr or result.stdout
-        # sudo prints `sudo: openhost_system_agent: command not found` when
-        # the symlink at /usr/local/bin/openhost_system_agent is missing.
-        # ansible installs it (install_openhost_units.yml); pre-symlink
-        # installs hit this and need to re-run ansible to fix it.
-        if "openhost_system_agent: command not found" in str(error):
+
+        if _CMD_NOT_FOUND in str(error):
+            # Transient startup race — wait and retry (unless this was the last
+            # attempt, in which case fall through to the persistent-failure path).
+            last_not_found = str(error).strip()
+            if attempt < _NOT_FOUND_RETRIES - 1:
+                time.sleep(_NOT_FOUND_RETRY_DELAY)
+                continue
             raise SystemAgentError(
-                f"{str(error).strip()}\n"
+                f"{last_not_found}\n"
                 "\n"
                 "The openhost_system_agent binary is not on sudo's PATH. "
                 "Re-running the ansible deploy against this host will reinstall it — "
@@ -50,7 +75,8 @@ def _run_system_agent(*args: str, timeout: int = 300) -> str:
             )
         raise SystemAgentError(str(error))
 
-    return result.stdout
+    # Unreachable: the loop either returns, retries, or raises. Guard for safety.
+    raise SystemAgentError(last_not_found or "openhost_system_agent failed")
 
 
 def _call_system_agent_sync[ResultT](result_type: type[ResultT], *args: str, timeout: int = 300) -> ResultT:
