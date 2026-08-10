@@ -302,7 +302,9 @@ def test_decode_name_follows_backward_pointer() -> None:
 class _ProbeSocket:
     """Feeds _probe_conflict crafted responses, then times out (or repeats forever)."""
 
-    def __init__(self, responses: list[bytes], repeat: bool = False, addr: tuple[str, int] = ("192.168.1.9", 5353)) -> None:
+    def __init__(
+        self, responses: list[bytes], repeat: bool = False, addr: tuple[str, int] = ("192.168.1.9", 5353)
+    ) -> None:
         self._responses = responses
         self._repeat = repeat
         self._addr = addr
