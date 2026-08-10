@@ -38,7 +38,6 @@ from compute_space.core.logging import logger
 from compute_space.core.logging import setup_file_logging
 from compute_space.core.mdns import ensure_mdns_for_domains
 from compute_space.core.mdns import get_active_mdns
-from compute_space.core.mdns import mdns_bases
 from compute_space.core.pinned_binary import get_pinned_binary
 from compute_space.core.pinned_binary import install_pinned_binary
 from compute_space.core.terminal import cleanup_all as cleanup_terminal_sessions
@@ -201,8 +200,10 @@ def main() -> None:
         # The edge is up now, so the IPv6 reachability probe can finally succeed.  Re-read before
         # arming the watcher, or its first poll reads the pre-Caddy snapshot as a move and restarts.
         published = lan_addresses()
-        if published != (lan_ip, lan_ip6) and mdns_bases(db):
-            # Republish so `.local` gets its AAAA.  Public-only instances don't use these addresses.
+        if published != (lan_ip, lan_ip6):
+            # Republish: CoreDNS binds bind_ip6 for every zone (public and `.local` alike), and
+            # `.local` zones additionally get an AAAA record, so a late-reachable IPv6 address
+            # matters even on a public-only instance, not just one with a `.local` domain.
             reconcile_lan_dns(config, db, lan_ip=published[0], lan_ip6=published[1])
         # The addresses are a snapshot: republish if they later move (DHCP renewal, v6 coming or going).
         start_lan_ip_watcher(config, published=published)

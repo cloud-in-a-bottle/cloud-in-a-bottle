@@ -46,9 +46,10 @@ Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/{{ host_uid }}/bus
 # snippet) so no $VAR reaches systemd, and it needs nothing from the (possibly
 # broken) pixi env.
 ExecStartPre=-+/usr/local/bin/openhost-reclaim-pixi
-# `--locked` (= --no-install --frozen) makes startup fully offline: no lock resolution,
-# no install/build, so a reboot during a WAN/DNS outage can't fail fetching build deps from pypi.
-ExecStart=/home/host/.pixi/bin/pixi run --locked python -m compute_space
+# `--as-is` (= --no-install --frozen) makes startup fully offline: no lock-vs-manifest check,
+# no install/build, so a reboot during a WAN/DNS outage can't fail fetching build deps from pypi
+# or abort on a merely-stale lock file (which `--locked` would).
+ExecStart=/home/host/.pixi/bin/pixi run --as-is python -m compute_space
 # Auto-restart on crash, but rate-limited. compute_space is the parent of the
 # in-process CoreDNS + Caddy children (see core/dns.py, core/caddy.py), so when
 # it dies they die with it and the instance loses authoritative DNS *and* HTTP/S
