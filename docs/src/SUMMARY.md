@@ -1,6 +1,7 @@
 # Summary
 
 [Introduction](./introduction.md)
+[Project Roadmap](./roadmap.md)
 
 # Concepts
 
@@ -15,3 +16,4 @@
 - [Creating an App](./creating_an_app.md)
 - [OAuth in Apps](./oauth.md)
 - [Cross-App Services](./cross_app_services.md)
+- [Running in a Local QEMU VM](./deploying.md)
