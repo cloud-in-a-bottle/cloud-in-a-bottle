@@ -106,22 +106,29 @@ var appSort = {key: 'name', dir: 1};
 
 function cmp(x, y) { return x < y ? -1 : (x > y ? 1 : 0); }
 
-// The value to sort a row by for the active column. Most columns are a plain
-// field; cpu/memory/git/health need a little digging.
-function appSortValue(a, key) {
-  var r = a.resources || {};
-  if (key === 'cpu') return r.cpu_percent;
-  if (key === 'memory') return r.memory_usage_bytes;
-  if (key === 'git') return gitText(a.git);
-  if (key === 'health') return !!(a.health && a.health.healthy);
-  return a[key];  // name, version, status
+// One definition per column, shared by row rendering and sorting (keyed to the
+// header's data-sort-key): `cell` is the <td> contents, `sort` is the value the
+// column sorts by — the same field it shows. `cls` (status only) sets a <td> class.
+var APP_COLUMNS = [
+  {key: 'name',    sort: function(a) { return a.name; },    cell: function(a) { return escHtml(a.name); }},
+  {key: 'version', sort: function(a) { return a.version; }, cell: function(a) { return escHtml(a.version || ''); }},
+  {key: 'status',  sort: function(a) { return a.status; },  cell: function(a) { return escHtml(a.status); },
+    cls: function(a) { return a.status === 'running' ? 'status-running' : (a.status === 'error' ? 'status-error' : 'status-stopped'); }},
+  {key: 'health',  sort: function(a) { return !!(a.health && a.health.healthy); }, cell: function(a) { return healthCell(a.health); }},
+  {key: 'cpu',     sort: function(a) { return (a.resources || {}).cpu_percent; },        cell: function(a) { return cpuCell(a.resources); }},
+  {key: 'memory',  sort: function(a) { return (a.resources || {}).memory_usage_bytes; }, cell: function(a) { return memCell(a.resources); }},
+  {key: 'git',     sort: function(a) { return gitText(a.git); }, cell: function(a) { return escHtml(gitText(a.git)); }},
+];
+
+function appColumn(key) {
+  return APP_COLUMNS.filter(function(c) { return c.key === key; })[0] || APP_COLUMNS[0];
 }
 
 function sortApps() {
+  var col = appColumn(appSort.key);
   // Sort by the active column, then break ties by name so equal rows stay stable.
   appsData.sort(function(a, b) {
-    return cmp(appSortValue(a, appSort.key), appSortValue(b, appSort.key)) * appSort.dir
-      || cmp(a.name, b.name);
+    return cmp(col.sort(a), col.sort(b)) * appSort.dir || cmp(a.name, b.name);
   });
 }
 
@@ -134,18 +141,13 @@ function renderApps(data) {
 function renderAppRows() {
   var body = document.getElementById('apps-body');
   if (!appsData.length) {
-    body.innerHTML = '<tr><td colspan="7" class="muted">No apps installed.</td></tr>';
+    body.innerHTML = '<tr><td colspan="' + APP_COLUMNS.length + '" class="muted">No apps installed.</td></tr>';
     return;
   }
   body.innerHTML = appsData.map(function(a) {
-    var statusCls = a.status === 'running' ? 'status-running' : (a.status === 'error' ? 'status-error' : 'status-stopped');
-    return '<tr><td>' + escHtml(a.name) + '</td>'
-      + '<td>' + escHtml(a.version || '') + '</td>'
-      + '<td class="' + statusCls + '">' + escHtml(a.status) + '</td>'
-      + '<td>' + healthCell(a.health) + '</td>'
-      + '<td>' + cpuCell(a.resources) + '</td>'
-      + '<td>' + memCell(a.resources) + '</td>'
-      + '<td>' + escHtml(gitText(a.git)) + '</td></tr>';
+    return '<tr>' + APP_COLUMNS.map(function(c) {
+      return '<td' + (c.cls ? ' class="' + c.cls(a) + '"' : '') + '>' + c.cell(a) + '</td>';
+    }).join('') + '</tr>';
   }).join('');
 }
 
