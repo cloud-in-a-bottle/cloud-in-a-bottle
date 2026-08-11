@@ -168,16 +168,7 @@ function wireDonut(id) {
   svg.addEventListener('mouseleave', reset);
 }
 
-// A small legend beside a donut so slices are identifiable without hovering.
-function legendHtml(segments) {
-  return '<ul class="usage-legend">' + segments.map(function(s) {
-    return '<li><span class="swatch" style="background:' + s.color + '"></span>'
-      + '<span class="legend-name">' + escHtml(s.name) + '</span>'
-      + '<span class="legend-value">' + escHtml(s.valueText) + '</span></li>';
-  }).join('') + '</ul>';
-}
-
-// Donut chart of per-app disk usage (storage section). Slices are sorted by
+// Donut chart of per-app disk usage. Slices are sorted by
 // size, largest first at 12 o'clock.
 function perAppPieHtml(perApp) {
   var names = Object.keys(perApp).sort(function(a, b) { return perApp[b] - perApp[a]; });
@@ -189,6 +180,17 @@ function perAppPieHtml(perApp) {
   });
   var defaultName = names.length + (names.length === 1 ? ' app' : ' apps');
   return donutHtml('per-app-pie', segments, defaultName, formatBytes(total));
+}
+
+function renderStorageDonut(perApp) {
+  var el = document.getElementById('storage-usage-chart');
+  if (!el) return;
+  if (!Object.keys(perApp).length) {
+    el.innerHTML = '<span class="muted">No app data yet.</span>';
+    return;
+  }
+  el.innerHTML = perAppPieHtml(perApp);
+  wireDonut('per-app-pie');
 }
 
 function updateStorageStatus() {
@@ -218,18 +220,16 @@ function renderStorageStatus(data) {
     : escHtml(formatBytes(data.build_cache_bytes));
   rows += '<tr><th>App Build Cache</th><td>' + buildCache + '</td></tr>';
 
-  var perApp = data.per_app || {};
-  if (Object.keys(perApp).length > 0) {
-    rows += '<tr><th>App data</th><td>' + perAppPieHtml(perApp) + '</td></tr>';
-  }
-
   if (hasMinFree) {
     var guardText = guardPaused ? 'Paused' : (isLow ? 'Active (low storage)' : 'Active');
     var guardCls = (guardPaused || isLow) ? ' class="status-error"' : '';
     rows += '<tr><th>Storage guard</th><td' + guardCls + '>' + escHtml(guardText) + '</td></tr>';
   }
   document.getElementById('storage-body').innerHTML = rows;
-  wireDonut('per-app-pie');
+
+  // The per-app disk donut lives up in the Resource Usage section alongside the
+  // CPU/memory donuts, not in this table.
+  renderStorageDonut(data.per_app || {});
 
   // Guard toggle button (separate row below the table for clarity)
   var guardRow = document.getElementById('storage-guard-row');
@@ -245,7 +245,7 @@ function renderStorageStatus(data) {
 }
 
 // ─── App Resource Usage (CPU + memory donuts) ───
-// Two donuts showing how CPU and memory are split across running apps, plus an
+// Donuts showing how CPU and memory are split across running apps, plus an
 // "Unused" slice for the box's remaining headroom so the overall load is
 // visible at a glance. Data comes from the combined diagnostics bundle, which
 // carries per-app live stats (apps[].resources) plus host totals
@@ -257,24 +257,28 @@ function runningWith(apps, field) {
   }).sort(function(a, b) { return b.resources[field] - a.resources[field]; });
 }
 
-// podman reports CPU as a percentage where 100% == one full core, so the box's
-// capacity is cpu_count * 100. "Unused" is whatever capacity the app containers
-// aren't accounting for (idle + any host overhead we can't attribute per-app).
+// podman reports CPU usage as a percentage where 100% == one full core, so we
+// present usage in cores (percent / 100) against the box's core count. That way
+// the slices add up to a total the viewer can see (used / N cores) instead of
+// bare percentages that look wrong without knowing how many CPUs the box has.
+// "Unused" is whatever capacity the app containers aren't accounting for (idle
+// + any host overhead we can't attribute per-app).
 function cpuUsage(apps, cpuCount) {
   var running = runningWith(apps, 'cpu_percent');
   var appSum = 0;
   running.forEach(function(a) { appSum += a.resources.cpu_percent; });
+  var cores = function(pct) { return (pct / 100).toFixed(2) + ' cores'; };
   var segments = running.map(function(a, i) {
-    return {name: a.name, value: a.resources.cpu_percent, valueText: a.resources.cpu_percent.toFixed(1) + '%', color: appColor(i)};
+    return {name: a.name, value: a.resources.cpu_percent, valueText: cores(a.resources.cpu_percent), color: appColor(i)};
   });
   var centerText;
   if (cpuCount) {
     var capacity = cpuCount * 100;
     var unused = Math.max(0, capacity - appSum);
-    segments.push({name: 'Unused', value: unused, valueText: (unused / cpuCount).toFixed(0) + '% idle', color: COLOR_UNUSED});
-    centerText = Math.min(100, appSum / capacity * 100).toFixed(0) + '% used';
+    segments.push({name: 'Unused', value: unused, valueText: cores(unused) + ' idle', color: COLOR_UNUSED});
+    centerText = (appSum / 100).toFixed(1) + ' / ' + cpuCount + ' cores';
   } else {
-    centerText = appSum.toFixed(0) + '%';
+    centerText = cores(appSum);
   }
   return {segments: segments, centerName: 'CPU', centerText: centerText, hasApps: running.length > 0};
 }
@@ -316,8 +320,7 @@ function renderUsageChart(elId, pieId, usage, emptyMsg) {
     el.innerHTML = '<span class="muted">' + emptyMsg + '</span>';
     return;
   }
-  el.innerHTML = donutHtml(pieId, usage.segments, usage.centerName, usage.centerText)
-    + legendHtml(usage.segments);
+  el.innerHTML = donutHtml(pieId, usage.segments, usage.centerName, usage.centerText);
   wireDonut(pieId);
 }
 
