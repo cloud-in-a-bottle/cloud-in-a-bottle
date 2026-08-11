@@ -85,30 +85,111 @@ function healthCell(h) {
   return '<span class="status-error">FAIL (' + escHtml(detail) + ')</span>';
 }
 
-function resourceCell(r) {
-  if (!r || !r.running) return '<span class="muted">not running</span>';
-  var cpu = (r.cpu_percent != null) ? (r.cpu_percent + '%') : '?';
+function cpuCell(r) {
+  if (!r || !r.running) return '<span class="muted">&mdash;</span>';
+  return escHtml(r.cpu_percent != null ? r.cpu_percent + '%' : '?');
+}
+
+function memCell(r) {
+  if (!r || !r.running) return '<span class="muted">&mdash;</span>';
   var mem = (r.memory_usage_bytes != null) ? formatBytes(r.memory_usage_bytes) : '?';
   if (r.memory_percent != null) mem += ' (' + r.memory_percent + '%)';
-  return escHtml(cpu + ' cpu, ' + mem);
+  return escHtml(mem);
+}
+
+// ─── Installed Apps table (sortable) ───
+// The apps arrive from the /apps section fetch; we keep the last-seen list so a
+// header click can re-sort it in place without re-fetching.
+
+var appsData = [];
+var appSort = {key: 'name', dir: 1};
+
+// Health sorts by a coarse rank so "OK" > "FAIL" > "n/a"; not-running apps sort
+// below any real CPU/memory reading (which are >= 0).
+function healthRank(h) {
+  if (!h || !h.checked) return 0;
+  return h.healthy ? 2 : 1;
+}
+
+function appSortValue(a, key) {
+  var r = a.resources || {};
+  switch (key) {
+    case 'version': return (a.version || '').toLowerCase();
+    case 'status': return (a.status || '').toLowerCase();
+    case 'health': return healthRank(a.health);
+    case 'cpu': return (r.running && r.cpu_percent != null) ? r.cpu_percent : -1;
+    case 'memory': return (r.running && r.memory_usage_bytes != null) ? r.memory_usage_bytes : -1;
+    case 'git': return gitText(a.git).toLowerCase();
+    default: return (a.name || '').toLowerCase();
+  }
+}
+
+function sortApps() {
+  appsData.sort(function(a, b) {
+    var va = appSortValue(a, appSort.key);
+    var vb = appSortValue(b, appSort.key);
+    if (va < vb) return -appSort.dir;
+    if (va > vb) return appSort.dir;
+    // Stable tie-break by name so equal rows keep a predictable order.
+    var na = (a.name || '').toLowerCase();
+    var nb = (b.name || '').toLowerCase();
+    return na < nb ? -1 : (na > nb ? 1 : 0);
+  });
 }
 
 function renderApps(data) {
-  var apps = data.apps || [];
+  appsData = (data.apps || []).slice();
+  sortApps();
+  renderAppRows();
+}
+
+function renderAppRows() {
   var body = document.getElementById('apps-body');
-  if (!apps.length) {
-    body.innerHTML = '<tr><td colspan="6" class="muted">No apps installed.</td></tr>';
+  if (!appsData.length) {
+    body.innerHTML = '<tr><td colspan="7" class="muted">No apps installed.</td></tr>';
     return;
   }
-  body.innerHTML = apps.map(function(a) {
+  body.innerHTML = appsData.map(function(a) {
     var statusCls = a.status === 'running' ? 'status-running' : (a.status === 'error' ? 'status-error' : 'status-stopped');
     return '<tr><td>' + escHtml(a.name) + '</td>'
       + '<td>' + escHtml(a.version || '') + '</td>'
       + '<td class="' + statusCls + '">' + escHtml(a.status) + '</td>'
       + '<td>' + healthCell(a.health) + '</td>'
-      + '<td>' + resourceCell(a.resources) + '</td>'
+      + '<td>' + cpuCell(a.resources) + '</td>'
+      + '<td>' + memCell(a.resources) + '</td>'
       + '<td>' + escHtml(gitText(a.git)) + '</td></tr>';
   }).join('');
+}
+
+function updateSortIndicators() {
+  var ths = document.querySelectorAll('#apps-table th.sortable');
+  Array.prototype.forEach.call(ths, function(th) {
+    var key = th.getAttribute('data-sort-key');
+    var active = appSort.key === key;
+    var arrow = active ? (appSort.dir > 0 ? ' ▲' : ' ▼') : '';
+    th.textContent = th.getAttribute('data-label') + arrow;
+    th.setAttribute('aria-sort', active ? (appSort.dir > 0 ? 'ascending' : 'descending') : 'none');
+  });
+}
+
+function wireAppSorting() {
+  var ths = document.querySelectorAll('#apps-table th.sortable');
+  Array.prototype.forEach.call(ths, function(th) {
+    th.setAttribute('data-label', th.textContent);
+    th.addEventListener('click', function() {
+      var key = th.getAttribute('data-sort-key');
+      if (appSort.key === key) {
+        appSort.dir = -appSort.dir;
+      } else {
+        appSort.key = key;
+        appSort.dir = 1;
+      }
+      sortApps();
+      renderAppRows();
+      updateSortIndicators();
+    });
+  });
+  updateSortIndicators();
 }
 
 function renderReachability(data) {
@@ -188,7 +269,7 @@ function loadDiagnostics() {
     renderApps(latest);
     updateRawJson();
   }).catch(function(e) {
-    setRegionError('apps-body', 6, 'Failed to load apps: ' + e.message);
+    setRegionError('apps-body', 7, 'Failed to load apps: ' + e.message);
   });
 }
 
@@ -215,4 +296,5 @@ document.getElementById('copy-btn').addEventListener('click', function() {
 
 document.getElementById('refresh-btn').addEventListener('click', loadDiagnostics);
 
+wireAppSorting();
 loadDiagnostics();
