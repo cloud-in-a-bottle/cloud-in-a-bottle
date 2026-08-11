@@ -129,23 +129,67 @@ function renderReachability(data) {
   }).join('');
 }
 
+function setRegionError(bodyId, colspan, msg) {
+  document.getElementById(bodyId).innerHTML =
+    '<tr><td colspan="' + colspan + '" class="status-error">' + escHtml(msg) + '</td></tr>';
+}
+
+function fetchSection(url) {
+  return fetch(url, {credentials: 'same-origin'}).then(function(r) {
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    return r.json();
+  });
+}
+
+function updateRawJson() {
+  document.getElementById('diag-json').textContent = JSON.stringify(latest, null, 2);
+}
+
+// Fetch each section independently and render it the moment it arrives, so the
+// fast host/system info paints immediately instead of waiting on the slow
+// storage / reachability / per-app probes. The section responses are merged
+// into `latest` so Copy / Raw JSON reflect the same combined shape the
+// /api/diagnostics endpoint (used by the Download button) returns.
 function loadDiagnostics() {
   document.getElementById('copy-status').textContent = '';
-  fetch(config.diagnosticsUrl, {credentials: 'same-origin'})
-    .then(function(r) {
-      if (!r.ok) throw new Error('HTTP ' + r.status);
-      return r.json();
-    })
-    .then(function(data) {
-      latest = data;
-      renderSummary(data);
-      renderReachability(data);
-      renderApps(data);
-      document.getElementById('diag-json').textContent = JSON.stringify(data, null, 2);
-    })
-    .catch(function(e) {
-      document.getElementById('diag-json').textContent = 'Failed to load diagnostics: ' + e.message;
-    });
+  var urls = config.sectionUrls;
+  latest = {};
+
+  // System (fast): host/OS/deps/runtime — also scaffolds the summary table.
+  fetchSection(urls.system).then(function(sys) {
+    Object.keys(sys).forEach(function(k) { latest[k] = sys[k]; });
+    renderSummary(latest);
+    updateRawJson();
+  }).catch(function(e) {
+    setRegionError('summary-body', 2, 'Failed to load system info: ' + e.message);
+  });
+
+  // Storage (medium): fills the Disk row into the summary once it lands.
+  fetchSection(urls.storage).then(function(storage) {
+    latest.storage = storage;
+    renderSummary(latest);
+    updateRawJson();
+  }).catch(function() {
+    // Non-fatal: the summary still renders without the disk row.
+  });
+
+  // Reachability (slow, external hosts).
+  fetchSection(urls.reachability).then(function(reach) {
+    latest.reachability = reach;
+    renderReachability(latest);
+    updateRawJson();
+  }).catch(function(e) {
+    setRegionError('reachability-body', 4, 'Failed to load reachability: ' + e.message);
+  });
+
+  // Apps (per-app git/health/stats probes).
+  fetchSection(urls.apps).then(function(apps) {
+    latest.apps = apps;
+    renderApps(latest);
+    updateRawJson();
+  }).catch(function(e) {
+    setRegionError('apps-body', 6, 'Failed to load apps: ' + e.message);
+  });
 }
 
 document.getElementById('copy-btn').addEventListener('click', function() {

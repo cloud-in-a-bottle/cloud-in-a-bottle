@@ -41,7 +41,13 @@ installed app. Copy or download it and include it in a bug report.</p>
 
 <script id="page-config" type="application/json">
 {
-  "diagnosticsUrl": "/api/diagnostics"
+  "diagnosticsUrl": "/api/diagnostics",
+  "sectionUrls": {
+    "system": "/api/diagnostics/system",
+    "storage": "/api/diagnostics/storage",
+    "reachability": "/api/diagnostics/reachability",
+    "apps": "/api/diagnostics/apps"
+  }
 }
 </script>
 <script src="{{ static_url('js/diagnostics.js') }}"></script>

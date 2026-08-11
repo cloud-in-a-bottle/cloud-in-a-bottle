@@ -25,8 +25,15 @@ from compute_space.core.auth.security_audit import external_ports
 from compute_space.core.auth.security_audit import is_sshd_active
 from compute_space.core.auth.security_audit import list_listening_ports
 from compute_space.core.containers import drop_docker_build_cache
+from compute_space.core.diagnostics import AppDiagnosticsSummary
+from compute_space.core.diagnostics import DiagnosticsSystemSection
 from compute_space.core.diagnostics import PlatformDiagnostics
+from compute_space.core.diagnostics import ReachabilityResult
+from compute_space.core.diagnostics import collect_apps_section
 from compute_space.core.diagnostics import collect_platform_diagnostics
+from compute_space.core.diagnostics import collect_reachability_section
+from compute_space.core.diagnostics import collect_storage_section
+from compute_space.core.diagnostics import collect_system_section
 from compute_space.core.git_ops import get_branch_name
 from compute_space.core.git_ops import get_head_sha
 from compute_space.core.git_ops import is_dirty
@@ -341,6 +348,37 @@ async def api_diagnostics(
     return Response(content=diagnostics, status_code=200, media_type=MediaType.JSON, headers=headers)
 
 
+# Per-section endpoints. The diagnostics page fetches these concurrently and
+# renders each section as it arrives, so the fast host/system info paints
+# immediately instead of waiting on the slow storage / reachability / per-app
+# probes. Each returns the same shape as its slice of the combined bundle, so
+# the client can merge the responses back into one object for copy/download.
+
+
+@get("/api/diagnostics/system", guards=[require_owner_auth])
+async def api_diagnostics_system(db: NamedDependency[sqlite3.Connection]) -> DiagnosticsSystemSection:
+    """Fast host/OS/Python/deps/runtime slice of the diagnostics bundle."""
+    return await collect_system_section(db)
+
+
+@get("/api/diagnostics/storage", guards=[require_owner_auth])
+async def api_diagnostics_storage(config: NamedDependency[Config]) -> dict[str, object]:
+    """Disk/storage slice of the diagnostics bundle."""
+    return await collect_storage_section(config)
+
+
+@get("/api/diagnostics/reachability", guards=[require_owner_auth])
+async def api_diagnostics_reachability(config: NamedDependency[Config]) -> list[ReachabilityResult]:
+    """Outbound reachability slice of the diagnostics bundle."""
+    return await collect_reachability_section(config)
+
+
+@get("/api/diagnostics/apps", guards=[require_owner_auth])
+async def api_diagnostics_apps(db: NamedDependency[sqlite3.Connection]) -> list[AppDiagnosticsSummary]:
+    """Per-app summary slice of the diagnostics bundle."""
+    return await collect_apps_section(db)
+
+
 @post("/restart_router", status_code=200, guards=[require_owner_auth], sync_to_thread=False)
 def restart_router() -> OkResponse:
     """Restart the router systemd service to pick up code changes."""
@@ -373,6 +411,10 @@ system_routes = Router(
         drop_docker_cache,
         api_version,
         api_diagnostics,
+        api_diagnostics_system,
+        api_diagnostics_storage,
+        api_diagnostics_reachability,
+        api_diagnostics_apps,
         restart_router,
     ],
 )

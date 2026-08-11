@@ -1081,7 +1081,7 @@ def test_apps_query_failure_propagates(cfg: Any) -> None:
     broken = MagicMock()
     broken.execute.side_effect = sqlite3.OperationalError("apps table exploded")
     with pytest.raises(sqlite3.OperationalError):
-        asyncio.run(diagnostics._collect_apps(broken))
+        asyncio.run(diagnostics.collect_apps_section(broken))
 
 
 # ─── podman stats: partial / unusual shapes ──────────────────────────────────
@@ -1411,7 +1411,7 @@ def test_apps_collected_concurrently(cfg: Any) -> None:
         return await real_summary(row, batch)
 
     with patch("compute_space.core.diagnostics._collect_app_summary", side_effect=_tracked):
-        apps = asyncio.run(diagnostics._collect_apps(_row_conn(cfg.db_path)))
+        apps = asyncio.run(diagnostics.collect_apps_section(_row_conn(cfg.db_path)))
     assert len(apps) == 3
     # If apps were collected serially, max in-flight would be 1.
     assert concurrency["max"] > 1
@@ -1445,7 +1445,7 @@ def test_apps_batch_podman_stats_into_one_call(cfg: Any) -> None:
         patch("compute_space.core.diagnostics.shutil.which", return_value="/usr/bin/podman"),
         patch("compute_space.core.diagnostics.subprocess.run", _fake_run),
     ):
-        apps = asyncio.run(diagnostics._collect_apps(_row_conn(cfg.db_path)))
+        apps = asyncio.run(diagnostics.collect_apps_section(_row_conn(cfg.db_path)))
 
     stats_calls = [c for c in calls if len(c) > 1 and c[1] == "stats"]
     ps_calls = [c for c in calls if len(c) > 1 and c[1] == "ps"]
@@ -1460,3 +1460,92 @@ def test_apps_batch_podman_stats_into_one_call(cfg: Any) -> None:
     assert by_name["app0"].resources.running is True
     assert by_name["app0"].resources.cpu_percent == 5.0
     assert by_name["app0"].resources.memory_usage_bytes == 10 * 1000**2
+
+
+# ─── per-section diagnostics endpoints ───────────────────────────────────────
+
+
+def test_diagnostics_system_section_requires_auth(system_client: TestClient[Litestar]) -> None:
+    assert system_client.get("/api/diagnostics/system").status_code in (401, 403)
+
+
+def test_diagnostics_apps_section_requires_auth(system_client: TestClient[Litestar]) -> None:
+    assert system_client.get("/api/diagnostics/apps").status_code in (401, 403)
+
+
+def test_diagnostics_system_section_endpoint(
+    cfg: Any, system_client: TestClient[Litestar], cookies: dict[str, str]
+) -> None:
+    body = system_client.get("/api/diagnostics/system", cookies=cookies).json()
+    assert body["schema_version"] == DIAGNOSTICS_SCHEMA_VERSION
+    assert body["generated_at"]
+    assert body["zone_domain"] == primary_of(cfg).name
+    assert body["system"]["python_version"]
+    assert "container_runtime" in body
+    assert body["dependencies"]["litestar"]
+    assert "resource_pressure" in body
+    assert "openhost" in body
+    # The slow slices are NOT part of the fast system section.
+    assert "storage" not in body
+    assert "reachability" not in body
+    assert "apps" not in body
+
+
+def test_diagnostics_storage_section_endpoint(
+    cfg: Any, system_client: TestClient[Litestar], cookies: dict[str, str]
+) -> None:
+    resp = system_client.get("/api/diagnostics/storage", cookies=cookies)
+    assert resp.status_code == 200
+    assert isinstance(resp.json(), dict)
+
+
+def test_diagnostics_reachability_section_endpoint(
+    cfg: Any, system_client: TestClient[Litestar], cookies: dict[str, str]
+) -> None:
+    resp = system_client.get("/api/diagnostics/reachability", cookies=cookies)
+    assert resp.status_code == 200
+    assert isinstance(resp.json(), list)
+
+
+def test_diagnostics_apps_section_endpoint(
+    cfg: Any, system_client: TestClient[Litestar], cookies: dict[str, str]
+) -> None:
+    _seed_app(cfg.db_path, "myapp", manifest_raw=_MINIMAL_MANIFEST)
+    body = system_client.get("/api/diagnostics/apps", cookies=cookies).json()
+    assert isinstance(body, list)
+    names = {a["name"]: a for a in body}
+    assert names["myapp"]["version"] == "2.3.4"
+    assert "health" in names["myapp"]
+    assert "resources" in names["myapp"]
+
+
+def test_section_endpoints_match_combined_bundle(
+    cfg: Any, system_client: TestClient[Litestar], cookies: dict[str, str]
+) -> None:
+    """The per-section endpoints must return the same data as their slice of the
+    combined bundle, so the client can reassemble one equivalent object."""
+    _seed_app(cfg.db_path, "myapp", manifest_raw=_MINIMAL_MANIFEST)
+    combined = system_client.get("/api/diagnostics", cookies=cookies).json()
+    system = system_client.get("/api/diagnostics/system", cookies=cookies).json()
+    storage = system_client.get("/api/diagnostics/storage", cookies=cookies).json()
+    apps = system_client.get("/api/diagnostics/apps", cookies=cookies).json()
+    # ``generated_at`` and ``resource_pressure`` (live memory/load-avg samples)
+    # are sampled per request, so they legitimately differ between the two calls;
+    # every other system field must match the combined bundle exactly.
+    for key in (
+        "schema_version",
+        "zone_domain",
+        "openhost",
+        "system",
+        "container_runtime",
+        "dependencies",
+    ):
+        assert system[key] == combined[key], f"system.{key} diverged from combined bundle"
+    # resource_pressure is volatile but must still be present in both.
+    assert "resource_pressure" in system
+    assert "resource_pressure" in combined
+    # storage disk usage is a live sample (free bytes fluctuate between the two
+    # requests), so assert structural parity rather than exact values.
+    assert set(storage) == set(combined["storage"])
+    assert "disk" in storage
+    assert [a["name"] for a in apps] == [a["name"] for a in combined["apps"]]
