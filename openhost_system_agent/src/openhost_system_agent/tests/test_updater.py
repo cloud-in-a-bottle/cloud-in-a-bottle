@@ -57,13 +57,13 @@ def _self_signed(cert_path: Path, key_path: Path) -> None:
     )
 
 
-def _get(port: int, path: str) -> tuple[int, bytes]:
+def _get(port: int, path: str, extra_headers: str = "") -> tuple[int, bytes]:
     ctx = ssl.create_default_context()
     ctx.check_hostname = False
     ctx.verify_mode = ssl.CERT_NONE
     raw = socket.create_connection(("127.0.0.1", port), timeout=5)
     conn = ctx.wrap_socket(raw, server_hostname="localhost")
-    conn.sendall(f"GET {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n".encode())
+    conn.sendall(f"GET {path} HTTP/1.1\r\nHost: localhost\r\n{extra_headers}Connection: close\r\n\r\n".encode())
     data = b""
     while True:
         chunk = conn.recv(4096)
@@ -241,6 +241,49 @@ def test_server_health_returns_503_while_updating(
     port = server_factory("tok", [])
     status, _ = _get(port, "/health")
     assert status == 503
+
+
+def test_server_xhr_gets_503_not_html(
+    server_factory: Callable[[str | None, list[dict[str, object]]], int],
+) -> None:
+    # Non-navigation requests (fetch/XHR, e.g. the dashboard's /api/* calls racing
+    # in after the redirect) must get a 503 JSON, never the HTML page — otherwise
+    # the caller does JSON.parse("<!doctype ...") and errors.
+    port = server_factory("tok", [])
+    status, body = _get(port, "/api/settings/update", extra_headers="Sec-Fetch-Dest: empty\r\n")
+    assert status == 503
+    assert b"<!doctype" not in body.lower()
+    assert b'"error"' in body
+
+
+def test_server_navigation_gets_page(
+    server_factory: Callable[[str | None, list[dict[str, object]]], int],
+) -> None:
+    port = server_factory("tok", [])
+    status, body = _get(port, "/settings", extra_headers="Sec-Fetch-Dest: document\r\n")
+    assert status == 200
+    assert b"Updating this instance" in body
+
+
+def test_server_sends_connection_close(
+    server_factory: Callable[[str | None, list[dict[str, object]]], int],
+) -> None:
+    # Connection: close so the browser doesn't reuse the updater's socket for
+    # requests that should reach the new compute_space after the handoff.
+    port = server_factory("tok", [])
+    _, _ = _get(port, "/")
+    # Re-fetch capturing raw headers.
+    import socket as _s
+    import ssl as _ssl
+
+    ctx = _ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = _ssl.CERT_NONE
+    conn = ctx.wrap_socket(_s.create_connection(("127.0.0.1", port), timeout=5), server_hostname="localhost")
+    conn.sendall(b"GET / HTTP/1.1\r\nHost: localhost\r\n\r\n")
+    raw = conn.recv(4096)
+    conn.close()
+    assert b"Connection: close" in raw or b"connection: close" in raw
 
 
 def test_server_updates_forbidden_without_or_wrong_token(

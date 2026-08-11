@@ -112,7 +112,17 @@ class _Handler(BaseHTTPRequestHandler):
             # know when the real dashboard is back.
             self._respond(503, "text/plain; charset=utf-8", b"updating")
             return
-        self._respond(200, "text/html; charset=utf-8", _page())
+        # Only serve the HTML page for top-level document navigations. XHR/fetch
+        # (e.g. the dashboard's /api/* JSON calls, which race in right after the
+        # redirect) must get a 503, not HTML — otherwise the caller does
+        # JSON.parse("<!doctype ...") and errors.
+        if self.headers.get("Sec-Fetch-Dest", "document") == "document":
+            self._respond(200, "text/html; charset=utf-8", _page())
+        else:
+            self._respond(503, "application/json", b'{"error":"updating"}')
+
+    def do_POST(self) -> None:
+        self._respond(503, "application/json", b'{"error":"updating"}')
 
     def _serve_updates(self) -> None:
         if not self._authed():
@@ -128,6 +138,11 @@ class _Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "no-store")
+            # Don't let the browser reuse this connection: once the updater
+            # releases the port, later requests must establish fresh connections
+            # to the new compute_space rather than reusing the updater's socket.
+            self.send_header("Connection", "close")
+            self.close_connection = True
             self.end_headers()
             self.wfile.write(body)
         except (BrokenPipeError, ConnectionResetError, ssl.SSLError):
