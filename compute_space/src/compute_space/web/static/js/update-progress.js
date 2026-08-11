@@ -54,12 +54,10 @@
       .catch(function () { return false; });
   }
 
-  // Viewers without a valid token (an anonymous visitor who landed on the
-  // updater's page mid-downtime, or a tab that lost its token) can never read
-  // /updates — but they must not be stranded on this page after the instance is
-  // back. When /updates is unreadable and /health is ok again, reload: the real
-  // server then serves the actual content for this URL. Rate-limited to avoid a
-  // reload storm if health flaps.
+  // A viewer without a valid token can never read /updates, but must not be
+  // stranded here once the instance is back. When /updates is unreadable and
+  // /health is ok, reload so the real server serves this URL. Rate-limited so a
+  // flapping health check can't cause a reload storm.
   function maybeRecoverWithoutLogs() {
     var now = Date.now();
     var last = 0;

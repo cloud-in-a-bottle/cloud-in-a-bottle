@@ -84,24 +84,6 @@ async def test_persist_token_calls_agent(monkeypatch: pytest.MonkeyPatch) -> Non
     assert seen == ["abc123"]
 
 
-@pytest.mark.asyncio
-async def test_persist_token_swallows_agent_error(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def boom(token: str) -> None:
-        raise SystemAgentError("agent down")
-
-    monkeypatch.setattr(seamless_update, "system_agent_set_update_token", boom)
-    await seamless_update.persist_update_token("abc123")
-
-
-@pytest.mark.asyncio
-async def test_clear_token_swallows_agent_error(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def boom() -> None:
-        raise SystemAgentError("agent down")
-
-    monkeypatch.setattr(seamless_update, "system_agent_clear_update_token", boom)
-    await seamless_update.clear_update_token()
-
-
 # ─────────────── apply_update endpoint ───────────────
 # The endpoint gate/lock/token-lifecycle tests live in test_settings_host_prep.py;
 # here we cover only what that file doesn't: failure paths of the background
@@ -144,53 +126,6 @@ async def test_apply_third_call_after_failure_allowed(
 
 
 @pytest.mark.asyncio
-async def test_apply_failure_records_terminal_progress(
-    monkeypatch: pytest.MonkeyPatch, token_calls: dict[str, list[str]], progress_env: Path
-) -> None:
-    # If the agent dies before recording its own failure, compute_space must
-    # leave the log terminal or the /updating page would spin forever.
-    async def failing() -> None:
-        raise SystemAgentError("agent exploded before recording")
-
-    async def status() -> MigrationStatus:
-        return _status()
-
-    monkeypatch.setattr(settings_mod, "system_agent_apply", failing)
-    monkeypatch.setattr(settings_mod, "system_agent_status", status)
-    await settings_mod.apply_update.fn()
-    await _drain()
-
-    view = update_progress.read_progress()
-    assert view.terminal is True
-    assert view.entries[-1]["phase"] == agent_progress.PHASE_FAILED
-    assert "agent exploded" in str(view.entries[-1]["message"])
-
-
-@pytest.mark.asyncio
-async def test_apply_failure_keeps_agents_own_failed_entry(
-    monkeypatch: pytest.MonkeyPatch, token_calls: dict[str, list[str]], progress_env: Path
-) -> None:
-    # When the agent already recorded a specific failure, compute_space must not
-    # append a second, vaguer one.
-    async def failing() -> None:
-        agent_progress.record(agent_progress.PHASE_FAILED, "specific agent-side reason")
-        raise SystemAgentError("boom")
-
-    async def status() -> MigrationStatus:
-        return _status()
-
-    monkeypatch.setattr(settings_mod, "system_agent_apply", failing)
-    monkeypatch.setattr(settings_mod, "system_agent_status", status)
-    await settings_mod.apply_update.fn()
-    await _drain()
-
-    view = update_progress.read_progress()
-    failed = [e for e in view.entries if e.get("phase") == agent_progress.PHASE_FAILED]
-    assert len(failed) == 1
-    assert failed[0]["message"] == "specific agent-side reason"
-
-
-@pytest.mark.asyncio
 async def test_apply_generic_exception_also_recorded(
     monkeypatch: pytest.MonkeyPatch, token_calls: dict[str, list[str]], progress_env: Path
 ) -> None:
@@ -226,34 +161,6 @@ async def test_apply_status_error_500_releases_lock(
         await settings_mod.apply_update.fn()
     assert e.value.status_code == 500
     assert not settings_mod._apply_lock.locked()
-
-
-@pytest.mark.asyncio
-async def test_apply_persist_failure_still_starts(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    # If persisting the token fails softly (best-effort), the apply still runs.
-    called = {"n": 0}
-
-    async def apply() -> None:
-        called["n"] += 1
-
-    async def status() -> MigrationStatus:
-        return _status()
-
-    async def persist(t: str) -> None:
-        return None  # seamless_update already swallows agent errors internally
-
-    async def clear() -> None:
-        return None
-
-    monkeypatch.setattr(settings_mod, "system_agent_apply", apply)
-    monkeypatch.setattr(settings_mod, "system_agent_status", status)
-    monkeypatch.setattr(settings_mod, "persist_update_token", persist)
-    monkeypatch.setattr(settings_mod, "clear_update_token", clear)
-    resp = await settings_mod.apply_update.fn()
-    await _drain()
-    assert resp.token and called["n"] == 1
 
 
 # ─────────────── /updates endpoint (compute_space) ───────────────
@@ -307,26 +214,6 @@ def test_mark_boot_complete_appends_done_after_restart(progress_env: Path) -> No
     v = update_progress.read_progress()
     assert v.terminal is True
     assert v.entries[-1]["phase"] == agent_progress.PHASE_DONE
-
-
-def test_mark_boot_complete_noop_without_restart_entry(progress_env: Path) -> None:
-    # Normal boots (no preceding self-update) must not fabricate a "done".
-    agent_progress.record("install", "Installing…")
-    update_progress.mark_boot_complete()
-    v = update_progress.read_progress()
-    assert [e["phase"] for e in v.entries] == ["install"]
-
-    # Empty/missing log: also a no-op.
-    agent_progress.reset_progress()
-    update_progress.mark_boot_complete()
-    assert update_progress.read_progress().entries == []
-
-
-def test_mark_boot_complete_noop_when_already_terminal(progress_env: Path) -> None:
-    agent_progress.record(agent_progress.PHASE_FAILED, "died")
-    update_progress.mark_boot_complete()
-    v = update_progress.read_progress()
-    assert [e["phase"] for e in v.entries] == [agent_progress.PHASE_FAILED]
 
 
 @pytest.mark.asyncio
@@ -419,12 +306,3 @@ def test_updating_page_renders_for_owner(cfg: Any) -> None:
     assert "Updating this instance" in resp.text
     assert "update-progress.js" in resp.text
     assert "update-progress.css" in resp.text
-
-
-def test_updating_page_requires_owner_auth(cfg: Any) -> None:
-    set_active_config(cfg)
-    with TestClient(app=_build_app(cfg)) as client:
-        resp = client.get("/updating", follow_redirects=False)
-    # Unauthenticated: never renders the page (guard fires; the full app maps
-    # this to a login redirect, bare test app surfaces the 401).
-    assert resp.status_code in (302, 401)

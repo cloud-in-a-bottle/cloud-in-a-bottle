@@ -67,9 +67,8 @@ def _terminate_children(children: list[subprocess.Popen[bytes]]) -> None:
 def _bootstrap(config: Config) -> None:
     """One-time process-wide initialization shared by the setup and full apps."""
     set_active_config(config)
-    # Point openhost_system_agent.updater.paths at this instance's data dir so
-    # compute_space reads the same progress log / token file the updater uses.
-    # (Forwarded to the agent and the detached updater on every invocation.)
+    # Point the shared updater paths at this instance's data dir so compute_space,
+    # the agent, and the detached updater all use the same progress log / token.
     os.environ[DATA_DIR_ENV] = str(config.openhost_data_path)
     setup_file_logging(Path(os.path.dirname(config.db_path)) / "compute_space.log")
     load_keys(config.keys_dir)
@@ -193,9 +192,8 @@ def main() -> None:
                 "A TLS domain is configured but start_caddy is False. Caddy is required for TLS termination."
             )
 
-    # CoreDNS/cert/Caddy are up and the ports are handed back; if the previous
-    # process was replaced by a self-update, finalize the progress log now so the
-    # /updating page's "back online" reflects the instance actually serving.
+    # Finalize the progress log only now that we're actually serving, so the
+    # /updating page's "back online" doesn't fire before CoreDNS/cert/Caddy are up.
     mark_boot_complete()
 
     def _all_children() -> list[subprocess.Popen[bytes]]:

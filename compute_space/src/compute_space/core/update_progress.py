@@ -27,14 +27,9 @@ def read_progress() -> ProgressView:
 def mark_boot_complete() -> None:
     """Append the terminal "done" entry if the previous run ended in a restart.
 
-    The apply walk records a non-terminal "restarting" right before
-    `systemctl restart openhost`; only the NEW process appends "done", so the
-    /updating page can't be bounced back to a dashboard that is about to die
-    (the old instance answering /health 200 after a premature terminal entry).
-
-    Writes directly when possible; a log created by an older (pre-host-ownership)
-    build is root-owned, so fall back to the root agent for that one transition.
-    Called once at boot. Best-effort: the log is cosmetic telemetry.
+    Only the NEW process appends "done", so the /updating page can't be bounced
+    back to a dashboard that is about to die. Falls back to the root agent when
+    the log is a root-owned legacy log. Best-effort.
     """
     try:
         if agent_progress.mark_boot_complete():
@@ -48,13 +43,10 @@ def mark_boot_complete() -> None:
 
 
 async def record_apply_failure(message: str) -> None:
-    """Ensure the progress log ends in a terminal "failed" entry.
+    """Ensure the progress log ends terminal so the /updating page stops polling.
 
-    The agent records its own failures, but if it dies before doing so (or the
-    failure happens on the compute_space side) the /updating page would poll a
-    non-terminal log forever. Skips writing when the log is already terminal so
-    the agent's more specific message wins. Falls back to the root agent when the
-    log is not writable directly (root-owned legacy log). Best-effort.
+    Skips writing when already terminal (the agent's own message wins) and falls
+    back to the root agent for a root-owned legacy log. Best-effort.
     """
     try:
         if agent_progress.record_failure_if_not_terminal(message):

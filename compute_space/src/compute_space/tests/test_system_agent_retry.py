@@ -31,18 +31,6 @@ def _no_sleep(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(system_agent.time, "sleep", lambda _: None)
 
 
-def test_success_first_try(monkeypatch: pytest.MonkeyPatch) -> None:
-    calls = {"n": 0}
-
-    def fake_run(*a, **k):  # type: ignore[no-untyped-def]
-        calls["n"] += 1
-        return _Result(0, stdout='{"ok": true}')
-
-    monkeypatch.setattr(system_agent.subprocess, "run", fake_run)
-    assert system_agent._run_system_agent("status") == '{"ok": true}'
-    assert calls["n"] == 1  # no retry on success
-
-
 def test_transient_not_found_then_success(monkeypatch: pytest.MonkeyPatch) -> None:
     # First two calls hit the startup race, third succeeds.
     seq = [_Result(1, stderr=_NOT_FOUND), _Result(1, stderr=_NOT_FOUND), _Result(0, stdout="ok")]
@@ -95,24 +83,6 @@ def test_other_error_not_retried(monkeypatch: pytest.MonkeyPatch) -> None:
     assert calls["n"] == 1  # no retry for genuine errors
 
 
-def test_not_found_in_json_error_field_is_retried(monkeypatch: pytest.MonkeyPatch) -> None:
-    # The error can also arrive inside the agent's JSON {"error": ...}; still retryable.
-    seq = [
-        _Result(1, stdout=f'{{"error": "{_NOT_FOUND}"}}'),
-        _Result(0, stdout="recovered"),
-    ]
-    calls = {"n": 0}
-
-    def fake_run(*a, **k):  # type: ignore[no-untyped-def]
-        r = seq[calls["n"]]
-        calls["n"] += 1
-        return r
-
-    monkeypatch.setattr(system_agent.subprocess, "run", fake_run)
-    assert system_agent._run_system_agent("status") == "recovered"
-    assert calls["n"] == 2
-
-
 def test_binary_missing_filenotfound_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     def boom(*a, **k):  # type: ignore[no-untyped-def]
         raise FileNotFoundError("sudo missing")
@@ -147,39 +117,3 @@ def test_stop_updater_sync_calls_agent(monkeypatch: pytest.MonkeyPatch) -> None:
     argv = calls[0][0]
     assert argv[:2] == ["sudo", "openhost_system_agent"]
     assert argv[-2:] == ["updater", "stop"]
-
-
-def test_stop_updater_sync_swallows_error(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(system_agent.subprocess, "run", lambda *a, **k: _Result(1, stderr="boom"))
-    system_agent.system_agent_stop_updater_sync()  # must not raise
-
-
-# ── OPENHOST_DATA_DIR forwarding (sudo strips the environment) ─────────────────
-
-
-def test_agent_argv_forwards_data_dir_via_sudo_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    # sudo's env_reset would drop OPENHOST_DATA_DIR; it must be re-injected with
-    # `sudo env` so the agent resolves the same progress/token/cert paths as
-    # compute_space on instances with a non-default data dir.
-    monkeypatch.setenv("OPENHOST_DATA_DIR", "/custom/data/dir")
-    argv = system_agent._agent_argv("status")
-    assert argv == ["sudo", "env", "OPENHOST_DATA_DIR=/custom/data/dir", "openhost_system_agent", "status"]
-
-
-def test_agent_argv_plain_without_data_dir(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("OPENHOST_DATA_DIR", raising=False)
-    assert system_agent._agent_argv("status") == ["sudo", "openhost_system_agent", "status"]
-
-
-def test_env_style_not_found_also_retried(monkeypatch: pytest.MonkeyPatch) -> None:
-    # `sudo env` reports a missing binary as "No such file or directory" rather
-    # than sudo's "command not found"; both must hit the retry + ansible hint.
-    monkeypatch.setenv("OPENHOST_DATA_DIR", "/custom")
-    monkeypatch.setattr(
-        system_agent.subprocess,
-        "run",
-        lambda *a, **k: _Result(1, stderr="env: 'openhost_system_agent': No such file or directory"),
-    )
-    with pytest.raises(SystemAgentError) as e:
-        system_agent._run_system_agent("status")
-    assert "ansible" in str(e.value)

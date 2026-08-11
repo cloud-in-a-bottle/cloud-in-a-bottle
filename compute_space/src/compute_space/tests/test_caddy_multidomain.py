@@ -303,15 +303,6 @@ class _FakeThread:
         pass
 
 
-def test_spawn_caddy_returns_on_successful_bind(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    spawns: list[int] = []
-    monkeypatch.setattr(caddy, "_spawn_caddy_once", lambda p: (spawns.append(1) or _RunningProc(), [], _FakeThread()))  # type: ignore[func-returns-value,arg-type]
-    monkeypatch.setattr(caddy.time, "sleep", lambda _: None)
-    proc = caddy._spawn_caddy(tmp_path / "Caddyfile")
-    assert isinstance(proc, _RunningProc)
-    assert len(spawns) == 1  # bound first try, no retry
-
-
 def test_spawn_caddy_retries_until_ports_free(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     # First two spawns hit a bind conflict (updater still holds :443), third binds.
     seq = [

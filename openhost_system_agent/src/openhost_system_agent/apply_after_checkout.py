@@ -184,14 +184,12 @@ def _apply(project: str) -> None:
         # walk stays a single process regardless of how many steps we're behind.
         os.execv(sys.executable, [sys.executable, str(Path(__file__).resolve())])
 
-    # NOT terminal: the freshly booted compute_space appends the terminal "done"
-    # (mark_boot_complete), so the /updating page can only leave once the NEW
-    # instance is serving. Recording "done" here raced the page's health probe
-    # against the old, about-to-die instance.
+    # NOT terminal (see PHASE_RESTARTING): only the freshly booted compute_space
+    # appends "done", so the page can't finish against the about-to-die instance.
     progress.record(progress.PHASE_RESTARTING, "Update complete. Restarting\u2026")
 
-    # Launch the detached downtime server just before the restart so it is ready
-    # to bind 80/443 the instant Caddy releases them. Best-effort; never raises.
+    # Start the downtime server now so it's poised to grab 80/443 the instant
+    # Caddy releases them. Best-effort; never raises.
     launch_updater()
 
     # On the destination: restart openhost so the new code takes over. When the

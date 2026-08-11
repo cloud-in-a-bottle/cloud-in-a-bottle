@@ -30,12 +30,10 @@ def _ensure_updater_dir() -> None:
 
 PHASE_DONE = "done"
 PHASE_FAILED = "failed"
-# Recorded by the apply walk just before `systemctl restart openhost`. NOT
-# terminal: the freshly booted compute_space appends PHASE_DONE (see
-# compute_space.core.update_progress.mark_boot_complete), so the /updating page
-# can only see "done" once the NEW instance is actually up. Recording "done"
-# before the restart raced the page's health probe against the old, about-to-die
-# instance and could bounce the owner back to a dashboard that dies seconds later.
+# Recorded just before `systemctl restart openhost`. Deliberately NOT terminal:
+# only the freshly booted compute_space appends PHASE_DONE, so the /updating page
+# can't finish against the old, about-to-die instance and bounce the owner back
+# to a dashboard that dies seconds later.
 PHASE_RESTARTING = "restarting"
 
 
@@ -73,8 +71,6 @@ def record(phase: str, message: str, ref: str | None = None) -> bool:
         path = progress_log_path()
         with open(path, "a", encoding="utf-8") as f:
             f.write(json.dumps(attr.asdict(entry)) + "\n")
-        # Heal ownership on every root write so the host user (compute_space)
-        # can append later — older builds left the file root-owned.
         _chown_to_host(path)
         return True
     except OSError:

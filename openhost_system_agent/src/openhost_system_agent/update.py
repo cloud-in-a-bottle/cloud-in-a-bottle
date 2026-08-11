@@ -256,10 +256,8 @@ _APPLY_ENTRYPOINT = _PACKAGE_DIR / "apply_after_checkout.py"
 
 
 def apply_update() -> NoReturn:
-    # Fresh progress log so the updater never shows stale lines from a prior run.
-    # Reset happens before any check so that every failure below can record a
-    # terminal "failed" entry the /updating page will actually see (the page only
-    # stops polling on done/failed).
+    # Fresh log before any check so no stale lines survive and every failure below
+    # can record a terminal "failed" the /updating page will see.
     progress.reset_progress()
     try:
         repo = _repo()

@@ -31,12 +31,10 @@ def _agent_argv(*args: str) -> list[str]:
     return ["sudo", "openhost_system_agent", *args]
 
 
-# sudo prints "openhost_system_agent: command not found" (and `sudo env` prints
-# "'openhost_system_agent': No such file or directory") when the symlink at
-# /usr/local/bin/openhost_system_agent isn't resolvable. Usually that means a
-# missing symlink (needs an ansible re-deploy), but it also appears transiently
-# right after a self-update restart before sudo's PATH lookup settles, so we
-# retry it before surfacing the "re-run ansible" guidance.
+# Missing/unresolvable agent symlink. Usually needs an ansible re-deploy, but it
+# also appears transiently right after a self-update restart before sudo's PATH
+# lookup settles, so we retry before surfacing the "re-run ansible" guidance.
+# (`sudo env` reports it as "No such file or directory" instead of sudo's form.)
 _CMD_NOT_FOUND_PATTERNS = (
     "openhost_system_agent: command not found",
     "openhost_system_agent': No such file or directory",

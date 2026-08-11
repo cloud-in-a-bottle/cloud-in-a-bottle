@@ -82,8 +82,8 @@ class CheckUpdatesResponse:
 
 @attr.s(auto_attribs=True, frozen=True)
 class ApplyUpdateResponse:
-    # Carried by the browser to the detached updater so it recognizes the owner's
-    # tab and streams live progress logs during the downtime.
+    # Carried by the browser to the detached updater so it authenticates the
+    # owner's tab and streams live progress during the downtime.
     token: str
 
 
@@ -141,10 +141,9 @@ async def check_for_updates() -> CheckUpdatesResponse:
     return CheckUpdatesResponse(state=state, error=_GIT_STATE_NOTICE.get(fetch_result.state))
 
 
-# Serializes apply_update. The background apply task holds the lock for as long
-# as this process lives: on success the restart kills the process (so the lock is
-# never explicitly released), on failure the finally releases it for a retry.
-# _apply_tasks holds a strong ref so the loop doesn't GC the task.
+# Serializes apply_update. On success the restart kills the process (lock never
+# explicitly released); on failure the finally releases it for a retry.
+# _apply_tasks keeps a strong ref so the loop doesn't GC the background task.
 _apply_lock = asyncio.Lock()
 _apply_tasks: set[asyncio.Task[None]] = set()
 

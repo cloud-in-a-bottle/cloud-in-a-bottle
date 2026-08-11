@@ -22,9 +22,8 @@ CertResolver = Callable[[str], tuple[Path, Path] | None]
 _REDIRECT_BLOCK = "    redir https://{host}{uri} permanent\n"
 
 
-# Retry the upstream for a few seconds instead of returning 502 immediately.
-# Right after a self-update restart Caddy can bind 443 a beat before the router's
-# loopback listener is up (or during the updater handoff); this bridges that gap.
+# Retry the upstream for a few seconds instead of 502ing: post-restart Caddy can
+# bind 443 a beat before the router's loopback listener is up.
 def _reverse_proxy(web_server_port: int) -> str:
     return (
         f"    reverse_proxy localhost:{web_server_port} {{\n"
@@ -93,10 +92,9 @@ def generate_caddyfile(
     # for `tls internal` domains; the per-domain http blocks above provide the
     # http→https redirects we want, and only for the domains that want them.
     auto_https = "disable_redirects" if has_tls else "off"
-    # Serve only h1/h2 (both TCP): the detached updater that stands in for Caddy
-    # during a self-update covers TCP 80/443 but not HTTP/3's UDP :443, so
-    # advertising h3 would make browsers try QUIC and hit ERR_QUIC_PROTOCOL_ERROR
-    # while the updater holds the ports.
+    # Serve only h1/h2 (both TCP): the update-downtime server covers TCP 80/443
+    # but not HTTP/3's UDP :443, so advertising h3 would make browsers try QUIC
+    # and hit ERR_QUIC_PROTOCOL_ERROR while the updater holds the ports.
     parts = [
         f"{{\n    auto_https {auto_https}\n    admin {admin_addr or 'off'}\n    servers {{\n        protocols h1 h2\n    }}\n}}\n"
     ]
@@ -116,25 +114,23 @@ def unix_admin_address(socket_path: Path) -> str:
     return f"unix/{socket_path}"
 
 
-# During a self-update the detached updater holds :443/:80 until this new
-# compute_space is up, so a fresh Caddy can briefly hit "address already in use".
-# Retry that case to ride out the handoff rather than leave the instance with no
-# front proxy. The window is generous because Caddy starts earlier in main() than
-# the :8080 bind the updater waits for; a slow bind is far better than no TLS.
+# The detached updater holds :443/:80 until this new compute_space is up, so a
+# fresh Caddy can briefly hit "address already in use". Retry to ride out the
+# handoff. The window is generous: a slow bind is far better than no TLS.
 _CADDY_BIND_RETRY_SECONDS = 90.0
 _CADDY_BIND_RETRY_INTERVAL = 0.25
 _CADDY_ADDR_IN_USE = "address already in use"
 
 
 def _spawn_caddy_once(caddyfile_path: Path) -> tuple[subprocess.Popen[bytes], list[str], threading.Thread]:
-    """Spawn Caddy and stream its logs. Returns the proc, a mutable tail of recent
-    output lines, and the log thread (so callers can join it before inspecting)."""
+    """Spawn Caddy and stream its logs. Returns the proc, a bounded tail of recent
+    output lines (so _spawn_caddy can tell a bind conflict from a config error),
+    and the log thread."""
     proc = subprocess.Popen(
         ["caddy", "run", "--config", str(caddyfile_path), "--adapter", "caddyfile"],
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
     )
-    # Bounded tail so _spawn_caddy can tell a bind conflict from a config error.
     recent: list[str] = []
 
     def _stream_caddy_logs(proc: subprocess.Popen[bytes]) -> None:
@@ -154,15 +150,9 @@ def _spawn_caddy_once(caddyfile_path: Path) -> tuple[subprocess.Popen[bytes], li
 
 
 def _spawn_caddy(caddyfile_path: Path) -> subprocess.Popen[bytes]:
-    """Start Caddy, retrying (up to _CADDY_BIND_RETRY_SECONDS) ONLY while :443/:80
-    is still held by the update-downtime server.
-
-    Caddy binds its listeners synchronously and exits non-zero on a bind conflict,
-    printing "address already in use". We retry just that case (the updater is
-    still releasing the ports); any other immediate exit (e.g. a config error) is
-    returned right away so the caller fails fast instead of spinning. Each retry
-    cycle costs up to ~2s (the settle wait plus draining the log thread), which is
-    fine — the point is to outlast the handoff, not to be fast.
+    """Start Caddy, retrying only the "address already in use" case while :443/:80
+    is still held by the update-downtime server. Any other immediate exit (e.g. a
+    config error) is returned right away so the caller fails fast.
     """
     deadline = time.monotonic() + _CADDY_BIND_RETRY_SECONDS
     while True:
@@ -170,10 +160,9 @@ def _spawn_caddy(caddyfile_path: Path) -> subprocess.Popen[bytes]:
         try:
             proc.wait(timeout=_CADDY_BIND_RETRY_INTERVAL)
         except subprocess.TimeoutExpired:
-            # Still running after the settle window — it bound successfully.
-            return proc
-        # Join the log thread so ``recent`` is fully drained before we classify
-        # the failure, otherwise a bind conflict could look like a config error.
+            return proc  # still running after the settle window — bound successfully
+        # Drain the log thread before classifying, else a bind conflict could look
+        # like a config error.
         log_thread.join(timeout=2.0)
         addr_in_use = any(_CADDY_ADDR_IN_USE in line for line in recent)
         if addr_in_use and time.monotonic() < deadline:
