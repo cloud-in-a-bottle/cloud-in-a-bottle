@@ -3,8 +3,8 @@
 # pressure.  A swap file gives the kernel somewhere to spill cold pages, trading
 # disk for resilience.  Runs with become: yes.
 #
-# Behaviorally mirrors the openhost_system_agent v7 migration
-# (v0007_swap_file.py), which provisions the same default-sized swap file on
+# Behaviorally mirrors the openhost_system_agent v9 migration
+# (v0009_swap_file.py), which provisions the same default-sized swap file on
 # hosts provisioned before swap existed.  Both create the file only when it is
 # absent, so an owner who later resizes swap from the settings page is never
 # shrunk back to the default on a re-provision.  The default size here is kept

@@ -3,7 +3,7 @@
 Small instances run out of RAM under memory pressure and get apps OOM-killed. A
 swap file gives the kernel somewhere to spill cold pages, trading disk for
 resilience. OpenHost provisions a default-sized swap file on every host (ansible
-on fresh hosts, the v7 migration on already-provisioned ones) and lets the owner
+on fresh hosts, the v9 migration on already-provisioned ones) and lets the owner
 resize it from the settings page.
 
 This module is the single source of truth for the swap file's location, its
@@ -40,6 +40,19 @@ _FSTAB_LINE = f"{SWAP_PATH} none swap sw 0 0"
 def _require_root() -> None:
     if os.geteuid() != 0:
         raise RuntimeError("swap operations must be run as root")
+
+
+def _running_in_container() -> bool:
+    """True when we're running inside a container, where swap can't be provisioned.
+
+    Swap is a host-kernel resource: a container shares the host kernel and can't
+    ``swapon`` (it's namespaced away and needs real-host CAP_SYS_ADMIN), while a
+    multi-GiB backing file would just burn the container's writable layer. Both
+    podman and Docker drop a marker file at container start; either means we are
+    inside a container and must skip swap provisioning. Real VPS/bare-metal hosts
+    — the only place swap actually applies — have neither marker.
+    """
+    return Path("/run/.containerenv").exists() or Path("/.dockerenv").exists()
 
 
 def _run(*cmd: str, check: bool = True) -> subprocess.CompletedProcess[str]:
@@ -145,13 +158,21 @@ def resize_swapfile(size_gib: int) -> SwapStatus:
 def ensure_swapfile(size_gib: int = DEFAULT_SWAP_SIZE_GIB, *, create_only: bool = True) -> SwapStatus:
     """Provision the swap file if the host has none. Root-only, idempotent.
 
-    Used by fresh-host provisioning (ansible) and the v7 migration on existing
+    Used by fresh-host provisioning (ansible) and the v9 migration on existing
     hosts. With ``create_only`` (the default) an existing swap file is left at
     its current size so a re-provision or re-run never shrinks an owner-
     customized value; it still re-enables a present-but-swapped-off file and
     re-asserts the fstab entry so the file actually gets used.
+
+    No-op inside a container: swap can't be enabled there and creating the
+    backing file would just fill the container's disk, so this reports whatever
+    swap the host already exposes without touching anything. This is why running
+    the system-agent migrations inside a (test) container doesn't try to
+    fallocate a multi-GiB file.
     """
     _require_root()
+    if _running_in_container():
+        return get_swap_status()
     if create_only and Path(SWAP_PATH).exists():
         _run("swapon", SWAP_PATH, check=False)
         _set_fstab_entry(present=True)

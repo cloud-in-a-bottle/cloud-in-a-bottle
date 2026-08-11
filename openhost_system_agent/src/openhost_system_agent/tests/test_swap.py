@@ -36,6 +36,9 @@ def fake_host(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> list[list[str]
     monkeypatch.setattr("openhost_system_agent.swap.os.geteuid", lambda: 0)
     monkeypatch.setattr("openhost_system_agent.swap.os.chmod", lambda *a, **k: None)
     monkeypatch.setattr("openhost_system_agent.swap.subprocess.run", fake_run)
+    # These tests exercise the real host path; keep them stable even when the
+    # suite itself happens to run inside a container.
+    monkeypatch.setattr(swap, "_running_in_container", lambda: False)
     return calls
 
 
@@ -141,6 +144,35 @@ def test_ensure_creates_when_absent(fake_host: list[list[str]], monkeypatch: pyt
     swap.ensure_swapfile(swap.DEFAULT_SWAP_SIZE_GIB, create_only=True)
 
     assert called["size"] == swap.DEFAULT_SWAP_SIZE_GIB
+
+
+def test_ensure_is_noop_in_container(fake_host: list[list[str]], monkeypatch: pytest.MonkeyPatch) -> None:
+    # Inside a container swap can't be enabled and a multi-GiB backing file would
+    # just fill the disk, so provisioning must do nothing but report status. This
+    # is what keeps the container migration test from fallocating a 16 GiB file.
+    monkeypatch.setattr(swap, "_running_in_container", lambda: True)
+
+    def boom(size_gib: int) -> SwapStatus:
+        raise AssertionError("resize must not run inside a container")
+
+    monkeypatch.setattr(swap, "resize_swapfile", boom)
+    monkeypatch.setattr(swap, "get_swap_status", lambda: SwapStatus(size_bytes=0, path=swap.SWAP_PATH, active=False))
+
+    status = swap.ensure_swapfile(swap.DEFAULT_SWAP_SIZE_GIB, create_only=True)
+
+    assert _cmds(fake_host) == []
+    assert status.active is False
+
+
+def test_running_in_container_detects_marker(monkeypatch: pytest.MonkeyPatch) -> None:
+    # No container markers on disk -> we're on a real host.
+    monkeypatch.setattr("pathlib.Path.exists", lambda self: False)
+    assert swap._running_in_container() is False
+
+    # podman/Docker drop a marker file; either one means we're in a container.
+    for marker in ("/run/.containerenv", "/.dockerenv"):
+        monkeypatch.setattr("pathlib.Path.exists", lambda self, m=marker: str(self) == m)
+        assert swap._running_in_container() is True
 
 
 def test_set_fstab_entry_is_idempotent(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
