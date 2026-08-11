@@ -63,12 +63,12 @@ async function applyUpdate() {
       const err = await resp.json();
       el.innerHTML = '<p class="error">' + esc(err.detail || '') + '</p>'
         + '<button onclick="checkForUpdates()" class="btn" style="margin-top:0.5em;">Retry</button>';
-      return;
+      return false;
     }
   } catch (e) {
     el.innerHTML = '<p class="error">Update failed: ' + esc(e.message) + '</p>'
       + '<button onclick="checkForUpdates()" class="btn" style="margin-top:0.5em;">Retry</button>';
-    return;
+    return false;
   }
 
   el.innerHTML = '<p>Update applied. Restarting&hellip;</p>';
@@ -78,6 +78,7 @@ async function applyUpdate() {
     // Expected — server may die before responding
   }
   showRestartOverlay();
+  return true;
 }
 
 function showRestartOverlay() {
@@ -161,14 +162,18 @@ async function setRemote() {
       const err = await resp.json();
       throw new Error(err.detail || 'failed to set remote');
     }
-    // Only records the pin — it deliberately does NOT restart. Moving to the new
-    // ref is the update walk's job (checkout+migrate+install+restart, in order),
-    // so surface it as an available update instead of rebooting onto unmigrated code.
-    msg.textContent = 'Remote saved.';
+    // Setting the remote only pins the target; it doesn't move the checkout.
+    // Drive the same checkout+migrate+install+restart walk applyUpdate() uses,
+    // so the pin actually lands instead of sitting there until a later click.
+    msg.textContent = 'Remote saved. Updating\u2026';
     msg.className = '';
     msg.style.display = '';
-    btn.disabled = false;
-    await checkForUpdates();
+    const applied = await applyUpdate();
+    if (!applied) {
+      // Failure detail is already shown in #update-status; just unstick the button.
+      msg.style.display = 'none';
+      btn.disabled = false;
+    }
   } catch (e) {
     msg.textContent = e.message;
     msg.className = 'error';
