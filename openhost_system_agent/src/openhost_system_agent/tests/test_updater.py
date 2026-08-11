@@ -176,6 +176,34 @@ def test_is_terminal(data_dir: Path) -> None:
     assert progress.is_terminal([{"phase": progress.PHASE_RESTARTING}]) is False
 
 
+def test_mark_boot_complete_appends_done_after_restarting(data_dir: Path) -> None:
+    progress.record(progress.PHASE_RESTARTING, "Update complete. Restarting…")
+    assert progress.mark_boot_complete() is True
+    entries = progress.read_entries()
+    assert entries[-1]["phase"] == progress.PHASE_DONE
+    assert entries[-1]["message"] == "Instance is back online."
+
+
+def test_mark_boot_complete_noop_without_restarting(data_dir: Path) -> None:
+    progress.record("install", "Installing…")
+    progress.mark_boot_complete()
+    assert progress.read_entries()[-1]["phase"] == "install"  # nothing appended
+
+
+def test_record_failure_skips_after_restarting(data_dir: Path) -> None:
+    # A successful apply ends the log with "restarting" right before the restart
+    # kills compute_space; the resulting exception must NOT be logged as a failure.
+    progress.record(progress.PHASE_RESTARTING, "Update complete. Restarting…")
+    assert progress.record_failure_if_not_terminal("Update failed: killed by restart") is True
+    assert progress.read_entries()[-1]["phase"] == progress.PHASE_RESTARTING
+
+
+def test_record_failure_records_when_mid_apply(data_dir: Path) -> None:
+    progress.record("install", "Installing…")
+    progress.record_failure_if_not_terminal("Update failed: pixi install error")
+    assert progress.read_entries()[-1]["phase"] == progress.PHASE_FAILED
+
+
 # ── server: token gating + page rendering over real TLS ────────────────────────
 
 

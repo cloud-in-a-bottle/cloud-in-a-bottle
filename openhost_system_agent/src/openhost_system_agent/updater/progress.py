@@ -95,13 +95,16 @@ def mark_boot_complete() -> bool:
 
 
 def record_failure_if_not_terminal(message: str) -> bool:
-    """Append a terminal "failed" unless the log already ended terminally.
+    """Append a terminal "failed" unless the log already ended terminally OR in
+    "restarting". The latter means the apply reached the final restart, i.e. it
+    succeeded and this process is just being torn down by that restart — not a
+    failure. A genuine failure leaves the log at an earlier phase.
 
     Returns False only when the append was NEEDED but could not be written.
     Shared by compute_space's apply-failure path and the agent's `updater fail`.
     """
     entries = read_entries()
-    if is_terminal(entries):
+    if is_terminal(entries) or (entries and entries[-1].get("phase") == PHASE_RESTARTING):
         return True
     return record(PHASE_FAILED, message)
 
