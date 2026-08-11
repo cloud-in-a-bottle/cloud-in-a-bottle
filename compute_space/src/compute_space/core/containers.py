@@ -174,8 +174,13 @@ def build_image(
     repo_path: str,
     dockerfile_rel_path: str,
     temp_data_dir: str | None = None,
+    memory_mb: int | None = None,
 ) -> str:
-    """Build the container image for an app.  Returns the image tag."""
+    """Build the container image for an app.  Returns the image tag.
+
+    ``memory_mb`` caps the memory available to the build via podman's
+    ``--memory`` flag; None leaves the build unconstrained.
+    """
     image_tag = f"openhost-{app_name}:latest"
     dockerfile_path = os.path.join(repo_path, dockerfile_rel_path)
     cmd = [
@@ -185,8 +190,16 @@ def build_image(
         image_tag,
         "-f",
         dockerfile_path,
-        repo_path,
     ]
+    if memory_mb is not None:
+        # Cap build RAM at the app's declared limit for isolation, but allow
+        # unlimited swap (the host has a large swap file). A build that needs
+        # more than memory_mb then spills to swap instead of OOM-killing —
+        # keeping most builds working even with a small memory_mb, without
+        # letting a "small" app hog host RAM. --memory-swap=-1 requires --memory.
+        cmd.append(f"--memory={memory_mb}m")
+        cmd.append("--memory-swap=-1")
+    cmd.append(repo_path)
     logger.info("Building container image: %s", " ".join(cmd))
 
     if temp_data_dir:

@@ -57,6 +57,7 @@ User-facing links the app advertises for paths on its own URL that aren't the ba
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
 | `memory_mb` | integer | no | 128 | Max memory in MB |
+| `build_memory_mb` | integer | no | `memory_mb` | Memory limit (MB) for the image build step (`podman build --memory`). Defaults to the app's `memory_mb` so a build can't exceed the declared footprint; a build that needs more must set this explicitly. |
 | `cpu_cores` | float | no | 0.1 | CPU allocation in cores (1.0 = 1 core) |
 | `gpu` | boolean | no | false | Whether GPU access is needed |
 
