@@ -224,6 +224,27 @@ class PlatformDiagnostics:
 
 
 @attr.s(auto_attribs=True, frozen=True)
+class DiagnosticsSystemSection:
+    """Host/OS/Python/deps/runtime slice of the platform bundle.
+
+    Served on its own (``GET /api/diagnostics/system``) so the diagnostics page
+    can paint this fast section without waiting on the slower storage,
+    reachability, and per-app probes. Its fields are a subset of
+    :class:`PlatformDiagnostics` with identical shapes, so the frontend can merge
+    the section responses back into one combined bundle.
+    """
+
+    schema_version: int
+    generated_at: str
+    zone_domain: str
+    openhost: GitInfo
+    system: SystemInfo
+    container_runtime: ContainerRuntimeInfo
+    dependencies: dict[str, str]
+    resource_pressure: HostResourcePressure
+
+
+@attr.s(auto_attribs=True, frozen=True)
 class AppDiagnostics:
     """Per-app diagnostics bundle (owner-only).
 
@@ -849,7 +870,26 @@ def _collect_host_facts() -> tuple[SystemInfo, ContainerRuntimeInfo, dict[str, s
     )
 
 
-async def _collect_storage(config: Config) -> dict[str, object]:
+async def collect_system_section(db: sqlite3.Connection) -> DiagnosticsSystemSection:
+    """Host/OS/Python/deps/runtime slice of the diagnostics bundle.
+
+    Fast (~100ms) and dependency-free, so the page can render it immediately.
+    """
+    openhost_git = await _collect_openhost_git_info()
+    system, container_runtime, dependencies, resource_pressure = await asyncio.to_thread(_collect_host_facts)
+    return DiagnosticsSystemSection(
+        schema_version=DIAGNOSTICS_SCHEMA_VERSION,
+        generated_at=datetime.now(UTC).isoformat(),
+        zone_domain=_zone_domain(db),
+        openhost=openhost_git,
+        system=system,
+        container_runtime=container_runtime,
+        dependencies=dependencies,
+        resource_pressure=resource_pressure,
+    )
+
+
+async def collect_storage_section(config: Config) -> dict[str, object]:
     """Disk/storage slice. Runs off the event loop; degrades to ``{}`` on error
     rather than sinking the whole bundle."""
     try:
@@ -859,7 +899,12 @@ async def _collect_storage(config: Config) -> dict[str, object]:
         return {}
 
 
-async def _collect_apps(db: sqlite3.Connection) -> list[AppDiagnosticsSummary]:
+async def collect_reachability_section(config: Config) -> list[ReachabilityResult]:
+    """Outbound reachability slice (probed concurrently). Never raises."""
+    return await _collect_reachability(config)
+
+
+async def collect_apps_section(db: sqlite3.Connection) -> list[AppDiagnosticsSummary]:
     """Per-app summary slice: one entry per installed app.
 
     The ``apps`` query is deliberately *not* guarded: if the control-plane DB
@@ -896,28 +941,28 @@ async def _collect_apps(db: sqlite3.Connection) -> list[AppDiagnosticsSummary]:
 async def collect_platform_diagnostics(db: sqlite3.Connection, config: Config) -> PlatformDiagnostics:
     """Assemble the full instance diagnostics bundle.
 
-    The independent parts are collected concurrently — the slowest (reachability)
+    The four sections are collected concurrently — the slowest (reachability)
     bounds the wall-clock rather than the sum — and every blocking probe runs off
-    the event loop so serving diagnostics can't stall the router.
+    the event loop so serving diagnostics can't stall the router. The same
+    section collectors back the per-section endpoints, so the page and the bundle
+    share one code path.
     """
-    openhost_git, host_facts, storage, reachability, apps = await asyncio.gather(
-        _collect_openhost_git_info(),
-        asyncio.to_thread(_collect_host_facts),
-        _collect_storage(config),
-        _collect_reachability(config),
-        _collect_apps(db),
+    system_section, storage, reachability, apps = await asyncio.gather(
+        collect_system_section(db),
+        collect_storage_section(config),
+        collect_reachability_section(config),
+        collect_apps_section(db),
     )
-    system, container_runtime, dependencies, resource_pressure = host_facts
     return PlatformDiagnostics(
-        schema_version=DIAGNOSTICS_SCHEMA_VERSION,
-        generated_at=datetime.now(UTC).isoformat(),
-        zone_domain=_zone_domain(db),
-        openhost=openhost_git,
-        system=system,
-        container_runtime=container_runtime,
-        dependencies=dependencies,
+        schema_version=system_section.schema_version,
+        generated_at=system_section.generated_at,
+        zone_domain=system_section.zone_domain,
+        openhost=system_section.openhost,
+        system=system_section.system,
+        container_runtime=system_section.container_runtime,
+        dependencies=system_section.dependencies,
         storage=storage,
-        resource_pressure=resource_pressure,
+        resource_pressure=system_section.resource_pressure,
         reachability=reachability,
         apps=apps,
     )
