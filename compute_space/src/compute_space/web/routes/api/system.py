@@ -6,15 +6,18 @@ import subprocess
 from datetime import UTC
 from datetime import datetime
 from datetime import timedelta
+from typing import Any
 
 import attr
 from litestar import MediaType
+from litestar import Request
 from litestar import Response
 from litestar import Router
 from litestar import delete
 from litestar import get
 from litestar import post
 from litestar.di import NamedDependency
+from litestar.exceptions import HTTPException
 from litestar.params import FromPath
 from litestar.params import FromQuery
 
@@ -70,13 +73,18 @@ class CreatedToken:
 
 
 @attr.s(auto_attribs=True, frozen=True)
-class ErrorResponse:
-    error: str
-
-
-@attr.s(auto_attribs=True, frozen=True)
 class OkResponse:
     ok: bool
+
+
+class SystemApiError(HTTPException):
+    """Raised directly with ``status_code=``/``detail=`` at each call site; the router
+    renders it as ``{"error": detail}`` so the frontend JS's ``data.error`` handling keeps working."""
+
+
+def _system_api_error_response(request: Request[Any, Any, Any], exc: SystemApiError) -> Response[Any]:
+    """Render this router's errors as ``{"error": ...}``, matching the frontend JS's ``data.error`` handling."""
+    return Response(content={"error": exc.detail}, status_code=exc.status_code)
 
 
 @attr.s(auto_attribs=True, frozen=True)
@@ -152,10 +160,10 @@ async def api_tokens_list(db: NamedDependency[sqlite3.Connection]) -> list[ApiTo
     return tokens
 
 
-@post("/api/tokens", status_code=200, guards=[require_owner_auth])
+@post("/api/tokens", status_code=200, guards=[require_owner_auth], raises=[SystemApiError])
 async def api_tokens_create(
     data: CreateTokenRequest, db: NamedDependency[sqlite3.Connection]
-) -> Response[CreatedToken] | Response[ErrorResponse]:
+) -> Response[CreatedToken]:
     name = data.name.strip() or "Untitled"
     expiry_hours_raw = data.expiry_hours.strip() if data.expiry_hours else ""
     expires_at: datetime | None
@@ -167,7 +175,7 @@ async def api_tokens_create(
         except ValueError:
             expiry_hours = DEFAULT_TOKEN_EXPIRY_HOURS
         if expiry_hours <= 0:
-            return Response(content=ErrorResponse(error="Expiry must be positive"), status_code=400)
+            raise SystemApiError(status_code=400, detail="Expiry must be positive")
         expires_at = datetime.now(UTC) + timedelta(hours=expiry_hours)
 
     raw_token = secrets.token_urlsafe(32)
@@ -284,13 +292,19 @@ def toggle_ssh() -> SshStatusResponse:
 # ─── Router restart ────────────────────────────────────────────────────────
 
 
-@post("/api/drop-docker-cache", status_code=200, guards=[require_owner_auth], sync_to_thread=False)
-def drop_docker_cache() -> Response[DropCacheOk] | Response[ErrorResponse]:
+@post(
+    "/api/drop-docker-cache",
+    status_code=200,
+    guards=[require_owner_auth],
+    sync_to_thread=False,
+    raises=[SystemApiError],
+)
+def drop_docker_cache() -> Response[DropCacheOk]:
     """Drop the container build cache to free disk space."""
     try:
         output = drop_docker_build_cache()
     except RuntimeError as e:
-        return Response(content=ErrorResponse(error=str(e)), status_code=500)
+        raise SystemApiError(status_code=500, detail=str(e)) from e
     return Response(content=DropCacheOk(ok=True, output=output), status_code=200, media_type=MediaType.JSON)
 
 
@@ -359,6 +373,7 @@ def restart_router() -> OkResponse:
 
 system_routes = Router(
     path="/",
+    exception_handlers={SystemApiError: _system_api_error_response},
     route_handlers=[
         api_tokens_list,
         api_tokens_create,
