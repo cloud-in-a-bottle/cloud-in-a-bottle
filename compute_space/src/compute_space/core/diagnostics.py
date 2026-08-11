@@ -11,10 +11,6 @@ Two public entry points:
   - :func:`collect_app_diagnostics` — a per-app snapshot: the app's declared
     version + manifest git checkout, container status, plus a slim slice of the
     same host/system info so an app report is self-contained.
-
-Every collector is defensive: a failure gathering one field degrades that field
-to ``None``/an error string rather than failing the whole report, because a
-diagnostics bundle is most valuable precisely when the instance is unhealthy.
 """
 
 from __future__ import annotations
@@ -555,9 +551,12 @@ class _ContainerStatsBatch:
 
     Both collections are keyed by 12-char short id because ``podman stats``
     reports short ids while the DB stores full ids; callers truncate before
-    lookup. ``error`` is set when the podman probe itself failed — so every app
-    in the bundle surfaces the same reason instead of silently reading as
-    stopped.
+    lookup. ``error`` is set only when podman is *present but its probe failed*
+    (a real, unexpected fault) — so every app surfaces that reason instead of
+    silently reading as stopped. Podman merely being absent is not an error
+    here: it's reported once in ``container_runtime`` (see
+    :func:`_collect_container_runtime`), and every app then reads as having no
+    live stats, exactly like a stopped container.
     """
 
     running_short_ids: frozenset[str]
@@ -596,11 +595,17 @@ def _stats_by_short_id() -> dict[str, _PodmanStats]:
 def _collect_container_stats_batch() -> _ContainerStatsBatch:
     """Running-state + live usage for ALL containers in two podman calls (one
     ``podman ps`` + one ``podman stats``) — instead of an inspect + stats per
-    app. Any podman failure is surfaced in ``error`` rather than sinking the
-    bundle or masquerading as an empty fleet.
+    app.
+
+    Podman being absent is not surfaced here: ``container_runtime`` already
+    reports it authoritatively (see :func:`_collect_container_runtime`), so we
+    return an empty batch and let every app read as "no live stats" rather than
+    stamping the same message onto all of them. A podman that *is* present but
+    whose probe fails is an unexpected fault, and that we do surface in
+    ``error`` so apps don't masquerade as stopped.
     """
     if shutil.which("podman") is None:
-        return _ContainerStatsBatch(frozenset(), {}, error="podman not found on PATH")
+        return _ContainerStatsBatch(frozenset(), {})
     try:
         return _ContainerStatsBatch(_running_short_ids(), _stats_by_short_id())
     except Exception as e:
@@ -805,12 +810,14 @@ async def _collect_app_summary(row: sqlite3.Row, batch: _ContainerStatsBatch) ->
 
 
 def _zone_domain(db: sqlite3.Connection) -> str:
-    """The primary domain name for the bundle, or "" — diagnostics must survive a broken DB."""
-    try:
-        primary = primary_domain_or_none(db)
-    except Exception:
-        logger.opt(exception=True).warning("Failed to read primary domain for diagnostics")
-        return ""
+    """The primary domain name for the bundle, or "" when none is configured.
+
+    Not guarded: a read failure here means the control-plane DB is broken, which
+    a diagnostics bundle can't meaningfully paper over, so it propagates (→ 500,
+    see the module docstring). "" therefore unambiguously means "no primary
+    domain configured", never "couldn't read it".
+    """
+    primary = primary_domain_or_none(db)
     return primary.name if primary else ""
 
 
@@ -853,16 +860,19 @@ async def _collect_storage(config: Config) -> dict[str, object]:
 
 
 async def _collect_apps(db: sqlite3.Connection) -> list[AppDiagnosticsSummary]:
-    """Per-app summary slice: one entry per installed app."""
-    try:
-        rows = db.execute(
-            "SELECT app_id, name, status, version, runtime_type, error_message, repo_path, "
-            "manifest_raw, local_port, health_check, container_id, cpu_cores, memory_mb "
-            "FROM apps ORDER BY name"
-        ).fetchall()
-    except Exception:
-        logger.opt(exception=True).warning("Failed to query apps for diagnostics summary")
-        return []
+    """Per-app summary slice: one entry per installed app.
+
+    The ``apps`` query is deliberately *not* guarded: if the control-plane DB
+    can't be read the whole instance is broken and there's nothing to report, so
+    the error propagates and the endpoint returns 500 rather than a hollow
+    "0 apps" bundle. A fault collecting a *single* app, by contrast, only drops
+    that app — see ``_safe_summary`` below.
+    """
+    rows = db.execute(
+        "SELECT app_id, name, status, version, runtime_type, error_message, repo_path, "
+        "manifest_raw, local_port, health_check, container_id, cpu_cores, memory_mb "
+        "FROM apps ORDER BY name"
+    ).fetchall()
 
     # One podman ps + one podman stats for the whole fleet, off the event loop —
     # instead of an inspect + stats per app.

@@ -456,15 +456,18 @@ def test_platform_diagnostics_survives_storage_failure(
     assert resp.json()["storage"] == {}
 
 
-def test_platform_diagnostics_survives_db_failure(cfg: Any) -> None:
+def test_platform_diagnostics_propagates_db_failure(cfg: Any) -> None:
+    # An unreadable control-plane DB is a foundational fault: the instance is
+    # broken and a bundle can't meaningfully describe it, so the error
+    # propagates (→ 500) rather than degrading to a hollow "0 apps" report.
     broken = MagicMock()
     broken.execute.side_effect = sqlite3.OperationalError("no such table")
     real_config = Config(**{f.name: getattr(cfg, f.name) for f in attr.fields(Config)})
-    with patch("compute_space.core.diagnostics.storage_status", return_value={}):
-        diag = asyncio.run(diagnostics.collect_platform_diagnostics(broken, real_config))
-    # A failing apps query leaves apps empty but still returns a bundle.
-    assert diag.apps == []
-    assert diag.system.python_version
+    with (
+        patch("compute_space.core.diagnostics.storage_status", return_value={}),
+        pytest.raises(sqlite3.OperationalError),
+    ):
+        asyncio.run(diagnostics.collect_platform_diagnostics(broken, real_config))
 
 
 def test_platform_diagnostics_no_apps(cfg: Any, system_client: TestClient[Litestar], cookies: dict[str, str]) -> None:
@@ -1071,25 +1074,14 @@ def test_one_bad_app_does_not_drop_the_others(
     assert "good-a" not in names
 
 
-def test_apps_query_failure_yields_empty_apps_not_500(cfg: Any) -> None:
-    """A failure querying the apps table degrades to empty apps + a valid bundle
-    (rather than raising), so the rest of the diagnostics still reach the owner."""
+def test_apps_query_failure_propagates(cfg: Any) -> None:
+    """A failure querying the apps table propagates (→ 500) rather than degrading
+    to empty apps: an unreadable DB means the instance is broken, and a bundle
+    that renders that as "0 apps" would masquerade as a healthy empty instance."""
     broken = MagicMock()
     broken.execute.side_effect = sqlite3.OperationalError("apps table exploded")
-    real_config = Config(**{f.name: getattr(cfg, f.name) for f in attr.fields(Config)})
-    with (
-        patch("compute_space.core.diagnostics.storage_status", return_value={}),
-        patch("compute_space.core.diagnostics._collect_reachability", side_effect=_stub_reach),
-    ):
-        diag = asyncio.run(diagnostics.collect_platform_diagnostics(broken, real_config))
-    assert diag.apps == []
-    # The rest of the bundle is still populated.
-    assert diag.system.python_version
-    assert diag.resource_pressure is not None
-
-
-async def _stub_reach(_config: Any) -> list[Any]:
-    return []
+    with pytest.raises(sqlite3.OperationalError):
+        asyncio.run(diagnostics._collect_apps(broken))
 
 
 # ─── podman stats: partial / unusual shapes ──────────────────────────────────
@@ -1316,6 +1308,22 @@ def test_reachability_collection_never_raises(tmp_path: Path) -> None:
     with patch("compute_space.core.diagnostics.httpx.AsyncClient", _boom):
         results = asyncio.run(diagnostics._collect_reachability(real))
     assert results == []
+
+
+def test_stats_batch_podman_missing_is_not_an_error() -> None:
+    """Podman being absent is reported once in ``container_runtime``, so the
+    batch is simply empty with no error — every app then reads as having no live
+    stats (like a stopped container) rather than carrying a duplicated message."""
+    with patch("compute_space.core.diagnostics.shutil.which", return_value=None):
+        batch = diagnostics._collect_container_stats_batch()
+    assert batch.error is None
+    assert batch.running_short_ids == frozenset()
+    assert batch.stats_by_short_id == {}
+    # An app reads as not-running with no error — just data, not a failure.
+    r = diagnostics._app_resources_from_batch(batch, "a" * 64, 0.5, 128)
+    assert r.running is False
+    assert r.error is None
+    assert r.cpu_cores_limit == 0.5
 
 
 def test_stats_batch_unreadable_output_surfaces_error() -> None:
