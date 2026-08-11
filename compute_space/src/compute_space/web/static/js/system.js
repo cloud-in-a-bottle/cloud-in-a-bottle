@@ -314,6 +314,22 @@ function memUsage(apps, pressure) {
   return {segments: segments, centerName: 'Memory', centerText: centerText, hasApps: running.length > 0};
 }
 
+// Swap is separate from RAM (a slower, disk-backed overflow), so it gets its own
+// donut rather than a slice of the memory ring. "Used" is drawn in the mid-grey
+// "System" tone so a busy swap reads as notable-but-not-app; free swap uses the
+// same light "Unused" grey as the other charts.
+function swapUsage(pressure) {
+  var total = pressure && pressure.swap_total_bytes;
+  if (!total) return null;
+  var free = pressure.swap_free_bytes != null ? pressure.swap_free_bytes : 0;
+  var used = Math.max(0, total - free);
+  var segments = [
+    {name: 'Used', value: used, valueText: formatBytes(used), color: COLOR_OTHER},
+    {name: 'Unused', value: free, valueText: formatBytes(free), color: COLOR_UNUSED},
+  ];
+  return {segments: segments, centerName: 'Swap', centerText: formatBytes(used) + ' / ' + formatBytes(total)};
+}
+
 function renderUsageChart(elId, pieId, usage, emptyMsg) {
   var el = document.getElementById(elId);
   if (!usage.hasApps && usage.segments.length === 0) {
@@ -324,10 +340,23 @@ function renderUsageChart(elId, pieId, usage, emptyMsg) {
   wireDonut(pieId);
 }
 
+function renderSwapChart(pressure) {
+  var el = document.getElementById('swap-usage-chart');
+  if (!el) return;
+  var usage = swapUsage(pressure);
+  if (!usage) {
+    el.innerHTML = '<span class="muted">No swap configured.</span>';
+    return;
+  }
+  el.innerHTML = donutHtml('swap-usage-pie', usage.segments, usage.centerName, usage.centerText);
+  wireDonut('swap-usage-pie');
+}
+
 function renderResourceUsage(apps, pressure) {
   var cpuCount = pressure ? pressure.cpu_count : null;
   renderUsageChart('cpu-usage-chart', 'cpu-usage-pie', cpuUsage(apps, cpuCount), 'No running apps.');
   renderUsageChart('mem-usage-chart', 'mem-usage-pie', memUsage(apps, pressure), 'No running apps.');
+  renderSwapChart(pressure);
 }
 
 function updateResourceUsage() {
@@ -337,8 +366,9 @@ function updateResourceUsage() {
       renderResourceUsage(data.apps || [], data.resource_pressure || null);
     })
     .catch(function() {
-      document.getElementById('cpu-usage-chart').innerHTML = '<span class="muted">Unavailable.</span>';
-      document.getElementById('mem-usage-chart').innerHTML = '<span class="muted">Unavailable.</span>';
+      ['cpu-usage-chart', 'mem-usage-chart', 'swap-usage-chart'].forEach(function(id) {
+        document.getElementById(id).innerHTML = '<span class="muted">Unavailable.</span>';
+      });
     });
 }
 

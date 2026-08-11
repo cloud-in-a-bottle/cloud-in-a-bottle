@@ -151,6 +151,8 @@ class HostResourcePressure:
     load_avg_5m: float | None
     load_avg_15m: float | None
     cpu_count: int | None
+    swap_total_bytes: int | None
+    swap_free_bytes: int | None
     error: str | None = None
 
 
@@ -403,31 +405,47 @@ def _manifest_fields(manifest_raw: str | None) -> tuple[str | None, str | None]:
 # ─── resource pressure ───────────────────────────────────────────────────────
 
 
-def _read_meminfo() -> tuple[int | None, int | None]:
-    """Return (MemTotal, MemAvailable) in bytes from /proc/meminfo, or (None, None).
+@attr.s(auto_attribs=True, frozen=True)
+class _MemInfo:
+    """The /proc/meminfo fields we surface, in bytes (None when a line is absent)."""
+
+    mem_total: int | None
+    mem_available: int | None
+    swap_total: int | None
+    swap_free: int | None
+
+
+def _read_meminfo() -> _MemInfo:
+    """Read memory + swap totals/free from /proc/meminfo, in bytes.
 
     /proc/meminfo reports values in kibibytes; we convert to bytes. Best-effort,
-    never raises (Linux-only path).
+    never raises (Linux-only path); any missing line stays None.
     """
-    total: int | None = None
-    available: int | None = None
+    mem_total: int | None = None
+    mem_available: int | None = None
+    swap_total: int | None = None
+    swap_free: int | None = None
     try:
         with open("/proc/meminfo") as f:
             for line in f:
                 if line.startswith("MemTotal:"):
-                    total = int(line.split()[1]) * 1024
+                    mem_total = int(line.split()[1]) * 1024
                 elif line.startswith("MemAvailable:"):
-                    available = int(line.split()[1]) * 1024
-                if total is not None and available is not None:
-                    break
+                    mem_available = int(line.split()[1]) * 1024
+                elif line.startswith("SwapTotal:"):
+                    swap_total = int(line.split()[1]) * 1024
+                elif line.startswith("SwapFree:"):
+                    swap_free = int(line.split()[1]) * 1024
     except Exception:
-        return None, None
-    return total, available
+        return _MemInfo(mem_total=None, mem_available=None, swap_total=None, swap_free=None)
+    return _MemInfo(mem_total=mem_total, mem_available=mem_available, swap_total=swap_total, swap_free=swap_free)
 
 
 def _collect_resource_pressure() -> HostResourcePressure:
     """Gather host memory + load average. Defensive: fields degrade to None."""
-    total, available = _read_meminfo()
+    mem = _read_meminfo()
+    total = mem.mem_total
+    available = mem.mem_available
     used_percent: float | None = None
     if total and available is not None and total > 0:
         used_percent = round((total - available) / total * 100, 1)
@@ -453,6 +471,8 @@ def _collect_resource_pressure() -> HostResourcePressure:
         load_avg_5m=load_5m,
         load_avg_15m=load_15m,
         cpu_count=cpu_count,
+        swap_total_bytes=mem.swap_total,
+        swap_free_bytes=mem.swap_free,
     )
 
 
