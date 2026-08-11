@@ -111,29 +111,30 @@ function healthRank(h) {
   return h.healthy ? 2 : 1;
 }
 
-function appSortValue(a, key) {
+function runningStat(a, field) {
   var r = a.resources || {};
-  switch (key) {
-    case 'version': return (a.version || '').toLowerCase();
-    case 'status': return (a.status || '').toLowerCase();
-    case 'health': return healthRank(a.health);
-    case 'cpu': return (r.running && r.cpu_percent != null) ? r.cpu_percent : -1;
-    case 'memory': return (r.running && r.memory_usage_bytes != null) ? r.memory_usage_bytes : -1;
-    case 'git': return gitText(a.git).toLowerCase();
-    default: return (a.name || '').toLowerCase();
-  }
+  return (r.running && r[field] != null) ? r[field] : -1;
 }
 
+// One key-extractor per sortable column (JS sort has no `key=`, so we supply the
+// key function and a generic comparator ourselves).
+var appSortKeys = {
+  name: function(a) { return (a.name || '').toLowerCase(); },
+  version: function(a) { return (a.version || '').toLowerCase(); },
+  status: function(a) { return (a.status || '').toLowerCase(); },
+  health: function(a) { return healthRank(a.health); },
+  cpu: function(a) { return runningStat(a, 'cpu_percent'); },
+  memory: function(a) { return runningStat(a, 'memory_usage_bytes'); },
+  git: function(a) { return gitText(a.git).toLowerCase(); },
+};
+
+function cmp(x, y) { return x < y ? -1 : (x > y ? 1 : 0); }
+
 function sortApps() {
+  var keyFn = appSortKeys[appSort.key] || appSortKeys.name;
+  // Sort by the active column, then break ties by name so equal rows stay stable.
   appsData.sort(function(a, b) {
-    var va = appSortValue(a, appSort.key);
-    var vb = appSortValue(b, appSort.key);
-    if (va < vb) return -appSort.dir;
-    if (va > vb) return appSort.dir;
-    // Stable tie-break by name so equal rows keep a predictable order.
-    var na = (a.name || '').toLowerCase();
-    var nb = (b.name || '').toLowerCase();
-    return na < nb ? -1 : (na > nb ? 1 : 0);
+    return cmp(keyFn(a), keyFn(b)) * appSort.dir || cmp(appSortKeys.name(a), appSortKeys.name(b));
   });
 }
 
