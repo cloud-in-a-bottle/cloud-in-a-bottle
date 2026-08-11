@@ -132,7 +132,8 @@ def test_is_container_running_false_for_unknown() -> None:
 @requires_containers
 def test_app_resources_running_reports_live_usage(http_container: tuple[str, int]) -> None:
     container_id, _ = http_container
-    r = diagnostics._collect_app_resources(container_id, cpu_cores_limit=1.0, memory_mb_limit=128)
+    batch = diagnostics._collect_container_stats_batch()
+    r = diagnostics._app_resources_from_batch(batch, container_id, cpu_cores_limit=1.0, memory_mb_limit=128)
     assert r.running is True
     assert r.error is None
     # Manifest limits are echoed back.
@@ -147,14 +148,15 @@ def test_app_resources_running_reports_live_usage(http_container: tuple[str, int
 @requires_containers
 def test_app_resources_stopped_container_not_running(http_container: tuple[str, int]) -> None:
     """A stopped container reports running=False with no misleading zero stats,
-    while still echoing the manifest limits (regression: podman stats emits a
-    zero-valued entry for exited containers)."""
+    while still echoing the manifest limits (the batch's running set comes from
+    ``podman ps``, which drops exited containers)."""
     container_id, _ = http_container
     _podman("stop", "-t", "1", container_id, check=False)
     deadline = time.monotonic() + 30
     while time.monotonic() < deadline and is_container_running(container_id):
         time.sleep(0.5)
-    r = diagnostics._collect_app_resources(container_id, cpu_cores_limit=0.5, memory_mb_limit=64)
+    batch = diagnostics._collect_container_stats_batch()
+    r = diagnostics._app_resources_from_batch(batch, container_id, cpu_cores_limit=0.5, memory_mb_limit=64)
     assert r.running is False
     assert r.cpu_percent is None
     assert r.memory_usage_bytes is None

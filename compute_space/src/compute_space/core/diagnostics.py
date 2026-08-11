@@ -37,7 +37,6 @@ import httpx
 
 from compute_space import OPENHOST_PROJECT_DIR
 from compute_space.config import Config
-from compute_space.core.containers import is_container_running
 from compute_space.core.domains import primary_domain_or_none
 from compute_space.core.git_ops import get_branch_name
 from compute_space.core.git_ops import get_head_sha
@@ -502,13 +501,124 @@ def _parse_stats_percent(value: object) -> float | None:
         return None
 
 
-def _collect_app_resources(
-    container_id: str | None, cpu_cores_limit: float | None, memory_mb_limit: int | None
-) -> AppResourceUsage:
-    """Read live container resource usage via ``podman stats`` for one app.
+def _run_podman_json(args: list[str]) -> list[dict[str, Any]]:
+    """Run a podman ``--format json`` subcommand and return its list of objects.
 
-    Never raises: a missing container / stats failure degrades to a not-running
-    or error result while still reporting the manifest limits.
+    This is the single place podman's untyped output is validated: it raises on
+    any failure — a timeout, a non-zero exit, or output that isn't a JSON array
+    of objects — rather than masking it. An empty list means podman genuinely
+    reported nothing, never "we couldn't read it"; the caller decides how to
+    surface a real failure.
+    """
+    proc = subprocess.run(["podman", *args], capture_output=True, text=True, timeout=_SUBPROCESS_TIMEOUT_S)
+    if proc.returncode != 0:
+        raise RuntimeError(f"podman {' '.join(args)} exited {proc.returncode}: {proc.stderr.strip()}")
+    data = json.loads(proc.stdout)
+    if not isinstance(data, list) or not all(isinstance(item, dict) for item in data):
+        raise ValueError(f"podman {' '.join(args)} did not return a JSON array of objects")
+    return data
+
+
+def _short_id(entry: dict[str, Any], *keys: str) -> str | None:
+    """The 12-char short container id from the first present string key, or None
+    (podman spells it ``Id`` in ``ps`` and ``id`` in ``stats``)."""
+    for key in keys:
+        value = entry.get(key)
+        if isinstance(value, str) and value:
+            return value[:12]
+    return None
+
+
+def _split_mem_usage(raw: object) -> tuple[int | None, int | None]:
+    """Split a podman ``mem_usage`` token like '12.3MB / 128MB' into
+    (usage, limit) bytes; (None, None) when absent or malformed."""
+    if not isinstance(raw, str) or "/" not in raw:
+        return None, None
+    usage, _, limit = raw.partition("/")
+    return _parse_stats_bytes(usage), _parse_stats_bytes(limit)
+
+
+@attr.s(auto_attribs=True, frozen=True)
+class _PodmanStats:
+    """Live resource usage for one container, already parsed out of podman's
+    ``stats`` JSON — no raw tokens or podman-shape quirks past this point."""
+
+    cpu_percent: float | None
+    memory_usage_bytes: int | None
+    memory_limit_bytes: int | None
+    memory_percent: float | None
+
+
+@attr.s(auto_attribs=True, frozen=True)
+class _ContainerStatsBatch:
+    """Fleet-wide container state fetched with a fixed number of podman calls.
+
+    Both collections are keyed by 12-char short id because ``podman stats``
+    reports short ids while the DB stores full ids; callers truncate before
+    lookup. ``error`` is set when the podman probe itself failed — so every app
+    in the bundle surfaces the same reason instead of silently reading as
+    stopped.
+    """
+
+    running_short_ids: frozenset[str]
+    stats_by_short_id: dict[str, _PodmanStats]
+    error: str | None = None
+
+
+def _running_short_ids() -> frozenset[str]:
+    """Short ids of the running containers, from one ``podman ps``."""
+    return frozenset(
+        sid
+        for entry in _run_podman_json(["ps", "--format", "json"])
+        if entry.get("State") == "running" and (sid := _short_id(entry, "Id"))
+    )
+
+
+def _stats_by_short_id() -> dict[str, _PodmanStats]:
+    """Parsed live usage per container, keyed by short id, from one
+    ``podman stats``. All podman-shape parsing happens here, so callers work
+    only with typed :class:`_PodmanStats`."""
+    parsed: dict[str, _PodmanStats] = {}
+    for entry in _run_podman_json(["stats", "--no-stream", "--format", "json"]):
+        sid = _short_id(entry, "id", "ID", "ContainerID")
+        if sid is None:
+            continue
+        usage_bytes, limit_bytes = _split_mem_usage(entry.get("mem_usage"))
+        parsed[sid] = _PodmanStats(
+            cpu_percent=_parse_stats_percent(entry.get("cpu_percent")),
+            memory_usage_bytes=usage_bytes,
+            memory_limit_bytes=limit_bytes,
+            memory_percent=_parse_stats_percent(entry.get("mem_percent")),
+        )
+    return parsed
+
+
+def _collect_container_stats_batch() -> _ContainerStatsBatch:
+    """Running-state + live usage for ALL containers in two podman calls (one
+    ``podman ps`` + one ``podman stats``) — instead of an inspect + stats per
+    app. Any podman failure is surfaced in ``error`` rather than sinking the
+    bundle or masquerading as an empty fleet.
+    """
+    if shutil.which("podman") is None:
+        return _ContainerStatsBatch(frozenset(), {}, error="podman not found on PATH")
+    try:
+        return _ContainerStatsBatch(_running_short_ids(), _stats_by_short_id())
+    except Exception as e:
+        logger.opt(exception=True).warning("Failed to collect container stats batch")
+        return _ContainerStatsBatch(frozenset(), {}, error=f"podman stats unavailable: {e}")
+
+
+def _app_resources_from_batch(
+    batch: _ContainerStatsBatch,
+    container_id: str | None,
+    cpu_cores_limit: float | None,
+    memory_mb_limit: int | None,
+) -> AppResourceUsage:
+    """Build one app's :class:`AppResourceUsage` from a pre-fetched fleet batch.
+
+    Running state is authoritative (a container appears in ``podman ps`` only
+    while running), and the manifest limits are always echoed even when the
+    container is down.
     """
     base = AppResourceUsage(
         running=False,
@@ -521,67 +631,22 @@ def _collect_app_resources(
     )
     if not container_id:
         return base
-    if shutil.which("podman") is None:
-        return attr.evolve(base, error="podman not found on PATH")
-    # Determine "running" authoritatively from the container's actual state
-    # rather than from whether ``podman stats`` returned data: on current podman
-    # ``stats --no-stream`` exits 0 and emits a zero-valued entry even for an
-    # *exited* container, which would otherwise be reported as running=True with
-    # 0% CPU / 0 B memory — misleading in a report whose job is to debug a down
-    # app (e.g. a container that crashed while the DB row still says "running").
-    if not is_container_running(container_id):
+    if batch.error is not None:
+        return attr.evolve(base, error=batch.error)
+    short_id = container_id[:12]
+    if short_id not in batch.running_short_ids:
         return base
-    try:
-        proc = subprocess.run(
-            ["podman", "stats", "--no-stream", "--format", "json", container_id],
-            capture_output=True,
-            text=True,
-            timeout=_SUBPROCESS_TIMEOUT_S,
-        )
-    except subprocess.TimeoutExpired:
-        return attr.evolve(base, error="podman stats timed out")
-    except Exception as e:
-        return attr.evolve(base, error=str(e))
-
-    if proc.returncode != 0:
-        # Non-zero is expected when the container isn't running.
-        return base
-
-    try:
-        data = json.loads(proc.stdout)
-    except (json.JSONDecodeError, ValueError):
-        return attr.evolve(base, error="podman stats returned non-JSON output")
-
-    # podman stats --format json returns a list of per-container objects.
-    if isinstance(data, list):
-        if not data:
-            return base
-        entry = data[0]
-    elif isinstance(data, dict):
-        entry = data
-    else:
-        return attr.evolve(base, error="unexpected podman stats shape")
-
-    if not isinstance(entry, dict):
-        return attr.evolve(base, error="unexpected podman stats entry")
-
-    cpu_percent = _parse_stats_percent(entry.get("CPU") or entry.get("cpu_percent"))
-    mem_percent = _parse_stats_percent(entry.get("MemPerc") or entry.get("mem_percent"))
-    # MemUsage looks like "12.3MB / 128MB"; split usage/limit.
-    mem_usage_bytes: int | None = None
-    mem_limit_bytes: int | None = None
-    mem_usage_raw = entry.get("MemUsage") or entry.get("mem_usage")
-    if isinstance(mem_usage_raw, str) and "/" in mem_usage_raw:
-        usage_part, _, limit_part = mem_usage_raw.partition("/")
-        mem_usage_bytes = _parse_stats_bytes(usage_part)
-        mem_limit_bytes = _parse_stats_bytes(limit_part)
-
+    stats = batch.stats_by_short_id.get(short_id)
+    if stats is None:
+        # Running per ``podman ps`` but no stats row (a stats gap / race): report
+        # running with unknown usage rather than dropping the app.
+        return attr.evolve(base, running=True)
     return AppResourceUsage(
         running=True,
-        cpu_percent=cpu_percent,
-        memory_usage_bytes=mem_usage_bytes,
-        memory_limit_bytes=mem_limit_bytes,
-        memory_percent=mem_percent,
+        cpu_percent=stats.cpu_percent,
+        memory_usage_bytes=stats.memory_usage_bytes,
+        memory_limit_bytes=stats.memory_limit_bytes,
+        memory_percent=stats.memory_percent,
         cpu_cores_limit=cpu_cores_limit,
         memory_mb_limit=memory_mb_limit,
     )
@@ -694,18 +759,23 @@ def _row_get(row: sqlite3.Row, key: str) -> Any:
         return None
 
 
-async def _collect_app_health_and_resources(row: sqlite3.Row) -> tuple[AppHealth, AppResourceUsage]:
+async def _collect_app_health_and_resources(
+    row: sqlite3.Row, batch: _ContainerStatsBatch
+) -> tuple[AppHealth, AppResourceUsage]:
     """Collect the (health, resource-usage) pair for one app row.
 
     Shared by the platform summary and the per-app bundle so both surface the
-    same live data with the same defensive semantics.
+    same live data with the same defensive semantics. Resource usage is read
+    from the pre-fetched fleet-wide ``batch`` rather than shelling out to podman
+    per app.
     """
     local_port = _row_get(row, "local_port")
     health = await _collect_app_health(
         local_port if isinstance(local_port, int) else None,
         _row_get(row, "health_check"),
     )
-    resources = _collect_app_resources(
+    resources = _app_resources_from_batch(
+        batch,
         _row_get(row, "container_id"),
         _row_get(row, "cpu_cores"),
         _row_get(row, "memory_mb"),
@@ -713,14 +783,14 @@ async def _collect_app_health_and_resources(row: sqlite3.Row) -> tuple[AppHealth
     return health, resources
 
 
-async def _collect_app_summary(row: sqlite3.Row) -> AppDiagnosticsSummary:
+async def _collect_app_summary(row: sqlite3.Row, batch: _ContainerStatsBatch) -> AppDiagnosticsSummary:
     version, runtime_type = _manifest_fields(row["manifest_raw"])
     # Fall back to the stored column when the manifest can't be re-parsed.
     if version is None:
         version = _row_get(row, "version")
     repo_path = row["repo_path"]
     git = await _collect_git_info(Path(repo_path) if repo_path else None)
-    health, resources = await _collect_app_health_and_resources(row)
+    health, resources = await _collect_app_health_and_resources(row, batch)
     return AppDiagnosticsSummary(
         app_id=row["app_id"],
         name=row["name"],
@@ -744,21 +814,46 @@ def _zone_domain(db: sqlite3.Connection) -> str:
     return primary.name if primary else ""
 
 
-async def collect_platform_diagnostics(db: sqlite3.Connection, config: Config) -> PlatformDiagnostics:
-    """Assemble the full instance diagnostics bundle."""
+async def _collect_openhost_git_info() -> GitInfo:
+    """Git checkout state for the running OpenHost install.
+
+    Falls back to an empty-but-stable :class:`GitInfo` when OPENHOST_PROJECT_DIR
+    isn't a git checkout (e.g. a tarball deploy) so the field shape is stable for
+    consumers.
+    """
     openhost_git = await _collect_git_info(OPENHOST_PROJECT_DIR)
     if openhost_git is None:
-        # OPENHOST_PROJECT_DIR isn't a git checkout (tarball deploy): still
-        # emit a GitInfo so the field shape is stable for consumers.
-        openhost_git = GitInfo(branch=None, sha="", short_sha="", dirty=False, remote_url=None)
+        return GitInfo(branch=None, sha="", short_sha="", dirty=False, remote_url=None)
+    return openhost_git
 
+
+def _collect_host_facts() -> tuple[SystemInfo, ContainerRuntimeInfo, dict[str, str], HostResourcePressure]:
+    """Gather the purely-synchronous host facts in one shot.
+
+    Bundled so the whole group (which includes the blocking ``podman info``
+    probe) can be offloaded to a single worker thread rather than blocking the
+    event loop.
+    """
+    return (
+        _collect_system_info(),
+        _collect_container_runtime(),
+        _collect_dependencies(),
+        _collect_resource_pressure(),
+    )
+
+
+async def _collect_storage(config: Config) -> dict[str, object]:
+    """Disk/storage slice. Runs off the event loop; degrades to ``{}`` on error
+    rather than sinking the whole bundle."""
     try:
-        storage = storage_status(config)
+        return await asyncio.to_thread(storage_status, config)
     except Exception:
         logger.opt(exception=True).warning("Failed to collect storage status for diagnostics")
-        storage = {}
+        return {}
 
-    apps: list[AppDiagnosticsSummary] = []
+
+async def _collect_apps(db: sqlite3.Connection) -> list[AppDiagnosticsSummary]:
+    """Per-app summary slice: one entry per installed app."""
     try:
         rows = db.execute(
             "SELECT app_id, name, status, version, runtime_type, error_message, repo_path, "
@@ -767,27 +862,52 @@ async def collect_platform_diagnostics(db: sqlite3.Connection, config: Config) -
         ).fetchall()
     except Exception:
         logger.opt(exception=True).warning("Failed to query apps for diagnostics summary")
-        rows = []
-    for row in rows:
+        return []
+
+    # One podman ps + one podman stats for the whole fleet, off the event loop —
+    # instead of an inspect + stats per app.
+    batch = await asyncio.to_thread(_collect_container_stats_batch)
+
+    async def _safe_summary(row: sqlite3.Row) -> AppDiagnosticsSummary | None:
         # Collect each app independently so one malformed row can't drop the
         # rest of the fleet from the bundle.
         try:
-            apps.append(await _collect_app_summary(row))
+            return await _collect_app_summary(row, batch)
         except Exception:
             logger.opt(exception=True).warning("Failed to collect diagnostics for one app; skipping it")
+            return None
 
-    reachability = await _collect_reachability(config)
+    # Collect all apps concurrently (git + health); resource usage comes from the
+    # shared batch. gather preserves input order, so apps stay sorted by name.
+    results = await asyncio.gather(*(_safe_summary(row) for row in rows))
+    return [summary for summary in results if summary is not None]
 
+
+async def collect_platform_diagnostics(db: sqlite3.Connection, config: Config) -> PlatformDiagnostics:
+    """Assemble the full instance diagnostics bundle.
+
+    The independent parts are collected concurrently — the slowest (reachability)
+    bounds the wall-clock rather than the sum — and every blocking probe runs off
+    the event loop so serving diagnostics can't stall the router.
+    """
+    openhost_git, host_facts, storage, reachability, apps = await asyncio.gather(
+        _collect_openhost_git_info(),
+        asyncio.to_thread(_collect_host_facts),
+        _collect_storage(config),
+        _collect_reachability(config),
+        _collect_apps(db),
+    )
+    system, container_runtime, dependencies, resource_pressure = host_facts
     return PlatformDiagnostics(
         schema_version=DIAGNOSTICS_SCHEMA_VERSION,
         generated_at=datetime.now(UTC).isoformat(),
         zone_domain=_zone_domain(db),
         openhost=openhost_git,
-        system=_collect_system_info(),
-        container_runtime=_collect_container_runtime(),
-        dependencies=_collect_dependencies(),
+        system=system,
+        container_runtime=container_runtime,
+        dependencies=dependencies,
         storage=storage,
-        resource_pressure=_collect_resource_pressure(),
+        resource_pressure=resource_pressure,
         reachability=reachability,
         apps=apps,
     )
@@ -805,11 +925,13 @@ async def collect_app_diagnostics(row: sqlite3.Row, config: Config, db: sqlite3.
     repo_path = row["repo_path"]
     git = await _collect_git_info(Path(repo_path) if repo_path else None)
 
-    openhost_git = await _collect_git_info(OPENHOST_PROJECT_DIR)
-    if openhost_git is None:
-        openhost_git = GitInfo(branch=None, sha="", short_sha="", dirty=False, remote_url=None)
+    openhost_git = await _collect_openhost_git_info()
 
-    health, resources = await _collect_app_health_and_resources(row)
+    # One fleet-wide podman ps + stats (shared with the platform bundle's path),
+    # off the event loop; ``_collect_host_facts`` likewise wraps blocking probes.
+    batch = await asyncio.to_thread(_collect_container_stats_batch)
+    health, resources = await _collect_app_health_and_resources(row, batch)
+    system, container_runtime, _dependencies, resource_pressure = await asyncio.to_thread(_collect_host_facts)
 
     return AppDiagnostics(
         schema_version=DIAGNOSTICS_SCHEMA_VERSION,
@@ -825,8 +947,8 @@ async def collect_app_diagnostics(row: sqlite3.Row, config: Config, db: sqlite3.
         git=git,
         health=health,
         resources=resources,
-        system=_collect_system_info(),
-        container_runtime=_collect_container_runtime(),
-        resource_pressure=_collect_resource_pressure(),
+        system=system,
+        container_runtime=container_runtime,
+        resource_pressure=resource_pressure,
         openhost=openhost_git,
     )
