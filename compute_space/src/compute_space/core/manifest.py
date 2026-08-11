@@ -164,9 +164,10 @@ class AppManifest:
     # [resources]
     memory_mb: int = 128
     # Memory limit for the image *build* step (podman build --memory).
-    # None means the build is unconstrained. Builds (pip installs, native
-    # compilation) routinely need far more memory than the running app, so
-    # we do NOT default this to the runtime memory_mb — an app must opt in.
+    # None falls back to the app's runtime memory_mb: an app that declares a
+    # small memory footprint must not be able to consume far more during its
+    # build and trigger the OOM killer against other apps. A build that
+    # genuinely needs more memory must declare it here up front.
     build_memory_mb: int | None = None
     cpu_cores: float = 0.1
     gpu: bool = False
@@ -195,14 +196,16 @@ class AppManifest:
     raw_toml: str = ""
 
     @property
-    def effective_build_memory_mb(self) -> int | None:
-        """Memory limit to apply to the image build, or None to leave it unconstrained.
+    def effective_build_memory_mb(self) -> int:
+        """Memory limit to apply to the image build.
 
-        The build is only capped when the app explicitly sets
-        ``build_memory_mb``; it deliberately does not fall back to the runtime
-        ``memory_mb``, which is typically far too small for the build step.
+        Falls back to the runtime ``memory_mb`` when ``build_memory_mb`` is
+        unset, so a build can never exceed the app's declared memory footprint
+        — otherwise a "small" app could grab far more at build time and trip
+        the OOM killer against other apps. A build that genuinely needs more
+        must raise it explicitly via ``build_memory_mb``.
         """
-        return self.build_memory_mb
+        return self.build_memory_mb if self.build_memory_mb is not None else self.memory_mb
 
 
 def _validate_devices(devices: list[Any]) -> list[str]:
