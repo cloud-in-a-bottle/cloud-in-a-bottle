@@ -8,7 +8,6 @@ import tempfile
 import threading
 import time
 from collections.abc import Callable
-from typing import Any
 
 import attr
 import httpx
@@ -20,8 +19,6 @@ from compute_space.core.app_id import is_valid_app_name
 from compute_space.core.app_id import new_app_id
 from compute_space.core.auth.auth import DEFAULT_OWNER_USERNAME
 from compute_space.core.auth.auth import read_owner_username
-from compute_space.core.auth.permissions_v2 import Grant
-from compute_space.core.auth.permissions_v2 import PermissionRecord
 from compute_space.core.auth.permissions_v2 import grant_permission_v2
 from compute_space.core.containers import BUILD_CACHE_CORRUPT_MARKER
 from compute_space.core.containers import build_image
@@ -46,9 +43,9 @@ from compute_space.core.git_ops import parse_repo_url
 from compute_space.core.logging import logger
 from compute_space.core.manifest import AppLink
 from compute_space.core.manifest import AppManifest
+from compute_space.core.manifest import PermissionGrant
 from compute_space.core.manifest import PortMapping
 from compute_space.core.manifest import parse_manifest
-from compute_space.core.manifest import parse_manifest_from_string
 from compute_space.core.oauth import OAuthAuthorizationRequired
 from compute_space.core.oauth import get_oauth_token
 from compute_space.core.ports import allocate_port
@@ -56,15 +53,6 @@ from compute_space.core.ports import resolve_port_mappings
 from compute_space.core.services_v2 import ServiceNotAvailable
 from compute_space.core.services_v2 import register_v2_service_providers
 from compute_space.db import get_db
-
-
-@attr.s(auto_attribs=True, frozen=True)
-class PermissionGrant:
-    """A single permission grant: which service and what payload."""
-
-    service_url: str
-    grant: Grant
-
 
 RESERVED_PATHS = {
     "/",
@@ -302,169 +290,6 @@ def _mint_unique_app_id(db: sqlite3.Connection) -> str:
         candidate = new_app_id()
         if not db.execute("SELECT 1 FROM apps WHERE app_id = ?", (candidate,)).fetchone():
             return candidate
-
-
-def all_manifest_permissions_v2(manifest: AppManifest) -> list[PermissionGrant]:
-    """Build a permissions_v2_grants list that approves every permission declared in the manifest."""
-    grants: list[PermissionGrant] = []
-    for perm in manifest.consumes_services_v2:
-        for grant_payload in perm.grants:
-            grants.append(PermissionGrant(service_url=perm.service, grant=grant_payload))
-    return grants
-
-
-def _permission_key(service_url: str, grant_payload: Grant) -> tuple[str, str]:
-    """Normalized identity for a (service, grant) pair.
-
-    Uses the same ``json.dumps(..., sort_keys=True)`` serialization that
-    :func:`grant_permission_v2` stores, so a declared grant and a stored grant
-    compare equal regardless of dict key order.
-    """
-    return (service_url, json.dumps(grant_payload, sort_keys=True))
-
-
-def manifest_ungranted_permissions_v2(
-    manifest: AppManifest,
-    granted: list[PermissionRecord],
-) -> list[PermissionGrant]:
-    """The permissions a manifest declares that are NOT already granted.
-
-    Single source of truth for the "which manifest permissions still need owner
-    approval" diff, shared by the app-detail page (post-install display) and the
-    update/reload gate (so an app update can't silently pick up newly declared
-    permissions). ``granted`` is the app's current ``permissions_v2`` rows
-    (e.g. from :func:`get_all_permissions_v2`).
-
-    Duplicate manifest declarations collapse to a single entry, and each new
-    permission is returned only once even if declared multiple times.
-    """
-    granted_keys = {_permission_key(rec.service_url, rec.grant) for rec in granted}
-    ungranted: list[PermissionGrant] = []
-    seen: set[tuple[str, str]] = set(granted_keys)
-    for perm in manifest.consumes_services_v2:
-        for grant_payload in perm.grants:
-            key = _permission_key(perm.service, grant_payload)
-            if key in seen:
-                continue
-            seen.add(key)
-            ungranted.append(PermissionGrant(service_url=perm.service, grant=grant_payload))
-    return ungranted
-
-
-def manifest_newly_declared_permissions_v2(
-    manifest: AppManifest,
-    granted: list[PermissionRecord],
-    previous_manifest_raw: str | None,
-) -> list[PermissionGrant]:
-    """The permissions an update *newly* declares: in the new manifest, not already
-    granted, and not declared by the previously-deployed manifest.
-
-    This is the update gate's delta. Gating on it — rather than on grant state
-    (see :func:`manifest_ungranted_permissions_v2`) — means a permission the owner
-    deliberately revoked is NOT re-surfaced for approval on an unrelated update:
-    it was declared by the previous manifest too, so it isn't part of the delta.
-    Only grants the app *author* actually added are gated.
-
-    Scope is permissions only; other manifest changes (ports, resources, image,
-    …) always apply on update regardless of this diff.
-
-    ``previous_manifest_raw`` is the currently-deployed manifest text (``apps.manifest_raw``).
-    When it is absent or unparseable, this falls back to the full grant-state diff
-    (equivalent to :func:`manifest_ungranted_permissions_v2`) — the safe default,
-    since it never silently grants something the owner hasn't seen.
-    """
-    ungranted = manifest_ungranted_permissions_v2(manifest, granted)
-    if not previous_manifest_raw:
-        return ungranted
-    try:
-        previous_manifest = parse_manifest_from_string(previous_manifest_raw)
-    except ValueError:
-        return ungranted
-    previously_declared = {
-        _permission_key(pg.service_url, pg.grant) for pg in all_manifest_permissions_v2(previous_manifest)
-    }
-    return [pg for pg in ungranted if _permission_key(pg.service_url, pg.grant) not in previously_declared]
-
-
-@attr.s(auto_attribs=True, frozen=True)
-class SettingChange:
-    """A single manifest setting whose value changed between two deployments."""
-
-    group: str
-    label: str
-    old: str
-    new: str
-
-
-# Manifest fields surfaced in the update review, as (attr_name, group, label).
-# Excludes name (app identity, renamed separately), raw_toml, and
-# consumes_services_v2 (diffed by manifest_newly_declared_permissions_v2).
-_REVIEWED_SETTINGS: list[tuple[str, str, str]] = [
-    ("version", "App", "Version"),
-    ("description", "App", "Description"),
-    ("authors", "App", "Authors"),
-    ("hidden", "App", "Hidden"),
-    ("runtime_type", "App", "Runtime type"),
-    ("container_image", "Container", "Image"),
-    ("container_port", "Container", "Container port"),
-    ("container_command", "Container", "Command"),
-    ("capabilities", "Container", "Linux capabilities"),
-    ("devices", "Container", "Devices"),
-    ("shm_mb", "Container", "Shared memory (MB)"),
-    ("network_host", "Container", "Host networking"),
-    ("port_mappings", "Ports", "Port mappings"),
-    ("memory_mb", "Resources", "Memory (MB)"),
-    ("cpu_cores", "Resources", "CPU cores"),
-    ("gpu", "Resources", "GPU"),
-    ("health_check", "Routing", "Health check"),
-    ("public_paths", "Routing", "Public paths"),
-    ("links", "Routing", "Links"),
-    ("sqlite_dbs", "Data", "SQLite databases"),
-    ("app_data", "Data", "Permanent data"),
-    ("app_temp_data", "Data", "Temporary data"),
-    ("app_archive", "Data", "Archive data"),
-    ("access_vm_data", "Data", "Access VM data"),
-    ("access_all_app_data", "Data", "Access all app data"),
-    ("access_all_archive", "Data", "Access all archive"),
-    ("access_all_data", "Data", "Access all data"),
-    ("provides_services_v2", "Services", "Services provided"),
-]
-
-
-def _render_setting_value(value: Any) -> str:
-    """One-line human rendering of a manifest field value for the update diff."""
-    if isinstance(value, bool):
-        return "yes" if value else "no"
-    if isinstance(value, list):
-        return ", ".join(_render_setting_value(v) for v in value) if value else "(none)"
-    if attr.has(type(value)):
-        return json.dumps(attr.asdict(value), sort_keys=True)
-    return str(value)
-
-
-def manifest_settings_changes(manifest: AppManifest, previous_manifest_raw: str | None) -> list[SettingChange]:
-    """Grouped diff of reviewed manifest settings changed vs the previously-deployed
-    manifest. Empty when there's no parseable previous manifest; permissions excluded."""
-    if not previous_manifest_raw:
-        return []
-    try:
-        previous = parse_manifest_from_string(previous_manifest_raw)
-    except ValueError:
-        return []
-    changes: list[SettingChange] = []
-    for field, group, label in _REVIEWED_SETTINGS:
-        old_val = getattr(previous, field)
-        new_val = getattr(manifest, field)
-        if old_val != new_val:
-            changes.append(
-                SettingChange(
-                    group=group,
-                    label=label,
-                    old=_render_setting_value(old_val),
-                    new=_render_setting_value(new_val),
-                )
-            )
-    return changes
 
 
 def insert_and_deploy(

@@ -23,12 +23,12 @@ from litestar import Litestar
 from litestar.testing import TestClient
 
 from compute_space.core.app_id import new_app_id
-from compute_space.core.apps import manifest_newly_declared_permissions_v2
-from compute_space.core.apps import manifest_settings_changes
-from compute_space.core.apps import manifest_ungranted_permissions_v2
 from compute_space.core.auth.permissions_v2 import PermissionRecord
 from compute_space.core.auth.permissions_v2 import get_all_permissions_v2
 from compute_space.core.auth.permissions_v2 import grant_permission_v2
+from compute_space.core.manifest import manifest_newly_declared_permissions_v2
+from compute_space.core.manifest import manifest_settings_changes
+from compute_space.core.manifest import manifest_ungranted_permissions_v2
 from compute_space.core.manifest import parse_manifest
 from compute_space.core.manifest import parse_manifest_from_string
 from compute_space.db.connection import init_db

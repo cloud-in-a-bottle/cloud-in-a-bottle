@@ -26,15 +26,11 @@ from compute_space.config import Config
 from compute_space.core import archive_backend
 from compute_space.core.app_id import is_valid_app_id
 from compute_space.core.apps import RESERVED_PATHS
-from compute_space.core.apps import PermissionGrant
-from compute_space.core.apps import all_manifest_permissions_v2
 from compute_space.core.apps import app_container_log_path
 from compute_space.core.apps import app_log_path
 from compute_space.core.apps import clone_with_github_fallback
 from compute_space.core.apps import git_pull
 from compute_space.core.apps import insert_and_deploy
-from compute_space.core.apps import manifest_newly_declared_permissions_v2
-from compute_space.core.apps import manifest_settings_changes
 from compute_space.core.apps import move_clone_to_app_temp_dir
 from compute_space.core.apps import reload_app_background
 from compute_space.core.apps import remove_app_background
@@ -59,6 +55,10 @@ from compute_space.core.git_ops import is_github_repo_url
 from compute_space.core.git_ops import parse_repo_url
 from compute_space.core.git_ops import reset_hard
 from compute_space.core.logging import logger
+from compute_space.core.manifest import PermissionGrant
+from compute_space.core.manifest import all_manifest_permissions_v2
+from compute_space.core.manifest import manifest_newly_declared_permissions_v2
+from compute_space.core.manifest import manifest_settings_changes
 from compute_space.core.manifest import parse_manifest
 from compute_space.core.oauth import OAuthAuthorizationRequired
 from compute_space.core.oauth import get_oauth_token
