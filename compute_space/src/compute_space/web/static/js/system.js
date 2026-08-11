@@ -169,7 +169,7 @@ function wireDonut(id) {
 }
 
 // Donut of disk usage: per-app data as coloured slices (largest first), then the
-// rest of the used disk — OS / OpenHost / build cache — as "Other (non-app)" and
+// rest of the used disk — OS / OpenHost / build cache — as "OS + OpenHost" and
 // the free space as "Unused", so the ring sums to the whole disk and shows how
 // full the box is. Falls back to app-only proportions if disk totals are absent.
 function renderStorageDonut(data) {
@@ -192,7 +192,7 @@ function renderStorageDonut(data) {
   if (total && disk.free_bytes != null) {
     var free = disk.free_bytes;
     var other = Math.max(0, total - free - appSum);
-    if (other > 0) segments.push({name: 'Other (non-app)', value: other, valueText: formatBytes(other), color: COLOR_OTHER});
+    if (other > 0) segments.push({name: 'OS + OpenHost', value: other, valueText: formatBytes(other), color: COLOR_OTHER});
     segments.push({name: 'Unused', value: free, valueText: formatBytes(free), color: COLOR_UNUSED});
     centerText = formatBytes(total - free) + ' / ' + formatBytes(total);
   } else {
