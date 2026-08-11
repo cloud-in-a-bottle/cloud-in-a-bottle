@@ -65,6 +65,42 @@ def test_build_image_uses_podman_build(monkeypatch: pytest.MonkeyPatch) -> None:
     ]
 
 
+def test_build_image_applies_memory_limit(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[list[str]] = []
+
+    def fake_run(cmd, capture_output, text, timeout):  # type: ignore[no-untyped-def]
+        calls.append(cmd)
+        return _FakeCompleted(0, stdout="")
+
+    _patch_subprocess_run(monkeypatch, fake_run)
+
+    build_image("myapp", "/tmp/repo", "Dockerfile", temp_data_dir=None, memory_mb=512)
+    # --memory is passed to `podman build`, before the build context path.
+    assert calls[0] == [
+        "podman",
+        "build",
+        "-t",
+        "openhost-myapp:latest",
+        "-f",
+        "/tmp/repo/Dockerfile",
+        "--memory=512m",
+        "/tmp/repo",
+    ]
+
+
+def test_build_image_omits_memory_flag_when_unset(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[list[str]] = []
+
+    def fake_run(cmd, capture_output, text, timeout):  # type: ignore[no-untyped-def]
+        calls.append(cmd)
+        return _FakeCompleted(0, stdout="")
+
+    _patch_subprocess_run(monkeypatch, fake_run)
+
+    build_image("myapp", "/tmp/repo", "Dockerfile", temp_data_dir=None)
+    assert not any(arg.startswith("--memory") for arg in calls[0])
+
+
 @pytest.mark.parametrize(
     "fragment",
     [
