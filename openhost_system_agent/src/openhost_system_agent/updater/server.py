@@ -112,11 +112,9 @@ class _Handler(BaseHTTPRequestHandler):
             # know when the real dashboard is back.
             self._respond(503, "text/plain; charset=utf-8", b"updating")
             return
-        # Serve the HTML page only for browser document navigations. Everything
-        # else — XHR/fetch (the dashboard's /api/* JSON calls that race in after
-        # the redirect) and non-browser clients — gets 503, so no caller does
-        # JSON.parse("<!doctype ...") on it. All modern browsers send
-        # Sec-Fetch-Dest; when it's absent we default to a non-navigation (503).
+        # HTML page only for browser document navigations; XHR/fetch (e.g. the
+        # dashboard's /api/* calls racing in after the redirect) gets 503 JSON so
+        # no caller does JSON.parse("<!doctype ..."). Headerless -> non-navigation.
         if self.headers.get("Sec-Fetch-Dest", "empty") == "document":
             self._respond(200, "text/html; charset=utf-8", _page())
         else:
@@ -253,12 +251,9 @@ def run(cert_path: Path, key_path: Path) -> None:
 def _acquire_ports_during_downtime(
     ssl_ctx: ssl.SSLContext | None,
 ) -> tuple[socket.socket | None, socket.socket | None]:
-    # Wait for the restart to free 80/443, then grab them. Binds are only
-    # attempted after compute_space is first seen offline: the ports belong to
-    # the live Caddy until then, and grabbing one that happens to be free early
-    # (e.g. mid Caddy cold-reload, or a no-Caddy setup) would steal traffic from
-    # a healthy instance. The bind-wait window also starts at that first offline
-    # observation, so a still-up compute_space isn't mistaken for "recovered".
+    # Grab 80/443 once the restart frees them. The bind-wait window only starts
+    # after compute_space is first seen offline, so a still-up instance isn't
+    # mistaken for "recovered".
     https_sock: socket.socket | None = None
     http_sock: socket.socket | None = None
 
