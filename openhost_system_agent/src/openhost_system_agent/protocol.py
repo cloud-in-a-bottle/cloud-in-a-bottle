@@ -34,6 +34,16 @@ class RemoteInfo:
 
 
 @attr.s(auto_attribs=True, frozen=True)
+class SwapStatus:
+    # On-disk size of the managed swap file (the configured size, which survives
+    # a swapoff). 0 when no swap file is present.
+    size_bytes: int
+    path: str
+    # Whether the swap file is currently swapped on and available to the kernel.
+    active: bool
+
+
+@attr.s(auto_attribs=True, frozen=True)
 class MigrationStatus:
     ok: bool
     reason: str

@@ -1,0 +1,49 @@
+---
+# Provision a swap file so small instances don't OOM-kill apps under memory
+# pressure.  A swap file gives the kernel somewhere to spill cold pages, trading
+# disk for resilience.  Runs with become: yes.
+#
+# Behaviorally mirrors the openhost_system_agent v9 migration
+# (v0009_swap_file.py), which provisions the same default-sized swap file on
+# hosts provisioned before swap existed.  Both create the file only when it is
+# absent, so an owner who later resizes swap from the settings page is never
+# shrunk back to the default on a re-provision.  The default size here is kept
+# in sync with DEFAULT_SWAP_SIZE_GIB in openhost_system_agent/swap.py; a test
+# enforces this.
+
+- name: Check for existing swap file
+  stat:
+    path: /swapfile
+  register: swapfile_stat
+
+- name: Create swap file
+  command: fallocate -l {{ swap_size_gb | default(16) }}G /swapfile
+  when: not swapfile_stat.stat.exists
+
+- name: Secure swap file permissions
+  file:
+    path: /swapfile
+    mode: "0600"
+    owner: root
+    group: root
+  when: not swapfile_stat.stat.exists
+
+- name: Format swap file
+  command: mkswap /swapfile
+  when: not swapfile_stat.stat.exists
+
+# Persist across reboots.  lineinfile keeps this dependency-free and idempotent,
+# and the line is byte-identical to the fstab entry the swap module writes.
+- name: Persist swap in fstab
+  lineinfile:
+    path: /etc/fstab
+    regexp: '^/swapfile\s'
+    line: "/swapfile none swap sw 0 0"
+    state: present
+
+- name: Enable swap
+  command: swapon /swapfile
+  when: not swapfile_stat.stat.exists
+  register: swapon_result
+  changed_when: swapon_result.rc == 0
+  failed_when: swapon_result.rc != 0 and 'already active' not in swapon_result.stderr
