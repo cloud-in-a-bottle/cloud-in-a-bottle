@@ -168,29 +168,38 @@ function wireDonut(id) {
   svg.addEventListener('mouseleave', reset);
 }
 
-// Donut chart of per-app disk usage. Slices are sorted by
-// size, largest first at 12 o'clock.
-function perAppPieHtml(perApp) {
-  var names = Object.keys(perApp).sort(function(a, b) { return perApp[b] - perApp[a]; });
-  var total = 0;
-  names.forEach(function(n) { total += perApp[n]; });
-  if (!total) return '<span class="muted">No app data yet.</span>';
-  var segments = names.map(function(name, i) {
-    return {name: name, value: perApp[name], valueText: formatBytes(perApp[name]), color: appColor(i)};
-  });
-  var defaultName = names.length + (names.length === 1 ? ' app' : ' apps');
-  return donutHtml('per-app-pie', segments, defaultName, formatBytes(total));
-}
-
-function renderStorageDonut(perApp) {
+// Donut of disk usage: per-app data as coloured slices (largest first), then the
+// rest of the used disk — OS / OpenHost / build cache — as "Other (non-app)" and
+// the free space as "Unused", so the ring sums to the whole disk and shows how
+// full the box is. Falls back to app-only proportions if disk totals are absent.
+function renderStorageDonut(data) {
   var el = document.getElementById('storage-usage-chart');
   if (!el) return;
-  if (!Object.keys(perApp).length) {
+  var perApp = data.per_app || {};
+  var disk = data.disk || {};
+  var names = Object.keys(perApp).sort(function(a, b) { return perApp[b] - perApp[a]; });
+  if (!names.length && !disk.total_bytes) {
     el.innerHTML = '<span class="muted">No app data yet.</span>';
     return;
   }
-  el.innerHTML = perAppPieHtml(perApp);
-  wireDonut('per-app-pie');
+  var appSum = 0;
+  names.forEach(function(n) { appSum += perApp[n]; });
+  var segments = names.map(function(name, i) {
+    return {name: name, value: perApp[name], valueText: formatBytes(perApp[name]), color: appColor(i)};
+  });
+  var total = disk.total_bytes;
+  var centerText;
+  if (total && disk.free_bytes != null) {
+    var free = disk.free_bytes;
+    var other = Math.max(0, total - free - appSum);
+    if (other > 0) segments.push({name: 'Other (non-app)', value: other, valueText: formatBytes(other), color: COLOR_OTHER});
+    segments.push({name: 'Unused', value: free, valueText: formatBytes(free), color: COLOR_UNUSED});
+    centerText = formatBytes(total - free) + ' / ' + formatBytes(total);
+  } else {
+    centerText = formatBytes(appSum);
+  }
+  el.innerHTML = donutHtml('storage-usage-pie', segments, 'Disk', centerText);
+  wireDonut('storage-usage-pie');
 }
 
 function updateStorageStatus() {
@@ -227,9 +236,9 @@ function renderStorageStatus(data) {
   }
   document.getElementById('storage-body').innerHTML = rows;
 
-  // The per-app disk donut lives up in the Resource Usage section alongside the
+  // The disk donut lives up in the Resource Usage section alongside the
   // CPU/memory donuts, not in this table.
-  renderStorageDonut(data.per_app || {});
+  renderStorageDonut(data);
 
   // Guard toggle button (separate row below the table for clarity)
   var guardRow = document.getElementById('storage-guard-row');
