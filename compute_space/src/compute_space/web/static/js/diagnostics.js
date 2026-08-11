@@ -106,12 +106,11 @@ var appSort = {key: 'name', dir: 1};
 
 function cmp(x, y) { return x < y ? -1 : (x > y ? 1 : 0); }
 
-// The header's data-sort-key IS the field to sort by, read straight off the app
-// (falling back to its live resources for cpu_percent / memory_usage_bytes). The
-// git/health columns are objects, so they just fall through to the name tie-break.
-function appSortValue(a, key) {
-  var v = a[key];
-  return v != null ? v : (a.resources || {})[key];
+// The header's data-sort-key is a path into the app (e.g. "resources.cpu_percent"),
+// resolved generically. The git/health columns are objects, so they just fall
+// through to the name tie-break.
+function appSortValue(a, path) {
+  return path.split('.').reduce(function(o, k) { return o == null ? null : o[k]; }, a);
 }
 
 function sortApps() {
