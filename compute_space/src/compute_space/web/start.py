@@ -48,6 +48,7 @@ from compute_space.db import get_db
 from compute_space.db import init_db
 from compute_space.web.app import create_app
 from compute_space.web.setup_app import create_setup_app
+from openhost_system_agent.updater.paths import DATA_DIR_ENV
 
 
 def _terminate_children(children: list[subprocess.Popen[bytes]]) -> None:
@@ -69,7 +70,7 @@ def _bootstrap(config: Config) -> None:
     # Point openhost_system_agent.updater.paths at this instance's data dir so
     # compute_space reads the same progress log / token file the updater uses.
     # (Forwarded to the agent and the detached updater on every invocation.)
-    os.environ["OPENHOST_DATA_DIR"] = str(config.openhost_data_path)
+    os.environ[DATA_DIR_ENV] = str(config.openhost_data_path)
     setup_file_logging(Path(os.path.dirname(config.db_path)) / "compute_space.log")
     # If the previous process was replaced by a self-update, append the terminal
     # "done" progress entry: it must come from the NEW process (see

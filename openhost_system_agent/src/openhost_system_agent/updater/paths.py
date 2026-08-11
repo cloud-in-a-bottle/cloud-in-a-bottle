@@ -9,8 +9,6 @@ from pathlib import Path
 # (`sudo env`) and into the detached updater (`systemd-run --setenv`).
 _DEFAULT_DATA_DIR = "/home/host/.openhost/local_compute_space/persistent_data/openhost"
 DATA_DIR_ENV = "OPENHOST_DATA_DIR"
-# Backwards-compatible alias (older callers/tests referenced the private name).
-_DATA_DIR_ENV = DATA_DIR_ENV
 
 
 def data_dir() -> Path:
