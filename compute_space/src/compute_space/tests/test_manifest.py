@@ -33,6 +33,12 @@ class TestDefaults:
         manifest = parse_manifest_from_string(MINIMAL)
         assert manifest.memory_mb == 128
 
+    def test_build_memory_defaults_to_memory_mb(self):
+        """Unset build_memory_mb falls back to the runtime memory limit."""
+        manifest = parse_manifest_from_string(MINIMAL + "\n[resources]\nmemory_mb = 256\n")
+        assert manifest.build_memory_mb is None
+        assert manifest.effective_build_memory_mb == 256
+
     def test_gpu_default_is_false(self):
         manifest = parse_manifest_from_string(MINIMAL)
         assert manifest.gpu is False
@@ -101,6 +107,12 @@ class TestExplicitValues:
         toml = MINIMAL + "\n[resources]\nmemory_mb = 256\n"
         manifest = parse_manifest_from_string(toml)
         assert manifest.memory_mb == 256
+
+    def test_build_memory_mb_explicit_overrides_memory_mb(self):
+        toml = MINIMAL + "\n[resources]\nmemory_mb = 256\nbuild_memory_mb = 1024\n"
+        manifest = parse_manifest_from_string(toml)
+        assert manifest.build_memory_mb == 1024
+        assert manifest.effective_build_memory_mb == 1024
 
     def test_public_paths_explicit(self):
         toml = MINIMAL + '\n[routing]\npublic_paths = ["/api"]\n'
