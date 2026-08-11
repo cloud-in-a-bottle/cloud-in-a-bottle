@@ -27,10 +27,10 @@ installed app. Copy or download it and include it in a bug report.</p>
     <th class="sortable" data-sort-key="name">App</th>
     <th class="sortable" data-sort-key="version">Version</th>
     <th class="sortable" data-sort-key="status">Status</th>
-    <th class="sortable" data-sort-key="health">Health</th>
+    <th class="sortable" data-sort-key="health.healthy">Health</th>
     <th class="sortable" data-sort-key="resources.cpu_percent">CPU</th>
     <th class="sortable" data-sort-key="resources.memory_usage_bytes">Memory</th>
-    <th class="sortable" data-sort-key="git">Git</th>
+    <th>Git</th>
   </tr></thead>
   <tbody id="apps-body">
     <tr><td colspan="7" class="muted">Loading&hellip;</td></tr>
@@ -53,5 +53,6 @@ installed app. Copy or download it and include it in a bug report.</p>
   "diagnosticsUrl": "/api/diagnostics"
 }
 </script>
+<script src="{{ static_url('js/chart.js') }}"></script>
 <script src="{{ static_url('js/diagnostics.js') }}"></script>
 {% endblock %}

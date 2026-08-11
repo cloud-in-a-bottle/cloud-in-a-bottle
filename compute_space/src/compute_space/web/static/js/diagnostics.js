@@ -2,11 +2,7 @@ var config = JSON.parse(document.getElementById('page-config').textContent);
 
 var latest = null;
 
-function escHtml(s) {
-  var d = document.createElement('div');
-  d.textContent = (s == null) ? '' : String(s);
-  return d.innerHTML;
-}
+// escHtml comes from chart.js, loaded before this file.
 
 function formatBytes(bytes) {
   if (bytes == null) return '';
@@ -106,9 +102,9 @@ var appSort = {key: 'name', dir: 1};
 
 function cmp(x, y) { return x < y ? -1 : (x > y ? 1 : 0); }
 
-// The header's data-sort-key is a path into the app (e.g. "resources.cpu_percent"),
-// resolved generically. The git/health columns are objects, so they just fall
-// through to the name tie-break.
+// The header's data-sort-key is a dotted path into the app (e.g. "resources.cpu_percent"
+// or "health.healthy"), resolved generically to a scalar. Only columns with a scalar
+// value are marked sortable; Git (an object with no natural order) is left non-sortable.
 function appSortValue(a, path) {
   return path.split('.').reduce(function(o, k) { return o == null ? null : o[k]; }, a);
 }
