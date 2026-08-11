@@ -319,6 +319,98 @@ async function setOwnerUsername() {
   }
 }
 
+// ─── Swap ───
+
+let savedSwapGib = null;
+
+function _renderSwapCurrent(data) {
+  const current = document.getElementById('swap-current');
+  if (data.size_bytes > 0) {
+    current.className = 'hint';
+    current.textContent = 'Current: ' + formatBytes(data.size_bytes)
+      + (data.active ? ' (active).' : ' (present but not enabled).');
+  } else {
+    current.className = 'hint';
+    current.textContent = 'No swap file configured.';
+  }
+}
+
+async function loadSwap() {
+  const input = document.getElementById('swap-size');
+  const btn = document.getElementById('set-swap-btn');
+  const current = document.getElementById('swap-current');
+  try {
+    const resp = await fetch('/api/settings/swap');
+    if (!resp.ok) throw new Error('failed to load swap');
+    const data = await resp.json();
+    savedSwapGib = Math.round(data.size_bytes / 1073741824);
+    input.value = savedSwapGib;
+    input.placeholder = '16';
+    input.disabled = false;
+    btn.disabled = true;
+    _renderSwapCurrent(data);
+    input.addEventListener('input', () => {
+      const v = input.value.trim();
+      btn.disabled = v === '' || Number(v) === savedSwapGib;
+    });
+  } catch (e) {
+    input.placeholder = '';
+    current.className = 'error';
+    current.textContent = 'Failed to load swap status. Reload the page to retry.';
+  }
+}
+
+async function setSwap() {
+  clearError();
+  const input = document.getElementById('swap-size');
+  const btn = document.getElementById('set-swap-btn');
+  const msg = document.getElementById('swap-msg');
+  const current = document.getElementById('swap-current');
+  const v = input.value.trim();
+  if (v === '') return;
+
+  const sizeGib = Number(v);
+  if (!Number.isInteger(sizeGib) || sizeGib < 0) {
+    msg.textContent = 'Enter a whole number of GiB (0 or more).';
+    msg.className = 'error';
+    msg.style.color = '';
+    msg.style.display = '';
+    return;
+  }
+
+  btn.disabled = true;
+  msg.style.display = 'none';
+  current.className = 'hint';
+  current.textContent = 'Applying (this can take a moment for large sizes)…';
+
+  try {
+    const resp = await fetch('/api/settings/swap', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({size_gib: sizeGib}),
+    });
+    if (!resp.ok) {
+      const err = await resp.json();
+      throw new Error(err.detail || 'failed to set swap size');
+    }
+    const data = await resp.json();
+    savedSwapGib = Math.round(data.size_bytes / 1073741824);
+    input.value = savedSwapGib;
+    _renderSwapCurrent(data);
+    msg.textContent = 'Saved.';
+    msg.className = '';
+    msg.style.color = '#080';
+    msg.style.display = '';
+    setTimeout(() => { msg.style.display = 'none'; }, 4000);
+  } catch (e) {
+    msg.textContent = e.message;
+    msg.className = 'error';
+    msg.style.color = '';
+    msg.style.display = '';
+    btn.disabled = false;
+  }
+}
+
 function escSettingsHtml(s) {
   var d = document.createElement('div');
   d.textContent = (s == null) ? '' : String(s);
@@ -653,3 +745,4 @@ checkForUpdates();
 updateSshStatus();
 setInterval(updateSshStatus, 5000);
 loadArchiveBackend();
+loadSwap();

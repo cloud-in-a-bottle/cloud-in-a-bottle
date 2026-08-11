@@ -10,6 +10,7 @@ from openhost_system_agent.protocol import DiffResult
 from openhost_system_agent.protocol import FetchResult
 from openhost_system_agent.protocol import MigrationStatus
 from openhost_system_agent.protocol import RemoteInfo
+from openhost_system_agent.protocol import SwapStatus
 
 
 class SystemAgentError(Exception):
@@ -97,3 +98,16 @@ def system_agent_get_remote() -> RemoteInfo:
 @async_wrap
 def system_agent_status() -> MigrationStatus:
     return _call_system_agent_sync(MigrationStatus, "status")
+
+
+@async_wrap
+def system_agent_get_swap() -> SwapStatus:
+    return _call_system_agent_sync(SwapStatus, "swap", "get")
+
+
+@async_wrap
+def system_agent_set_swap(size_gib: int) -> SwapStatus:
+    # Resizing recreates the swap file (fallocate/mkswap/swapon), which for a
+    # large size can take a little while, so allow more headroom than a plain
+    # status call.
+    return _call_system_agent_sync(SwapStatus, "swap", "set", str(size_gib), timeout=600)

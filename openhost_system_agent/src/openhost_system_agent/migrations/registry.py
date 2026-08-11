@@ -10,6 +10,7 @@ from openhost_system_agent.migrations.versions.v0003_remove_obsolete_hairpin_nat
 from openhost_system_agent.migrations.versions.v0004_pixi_version import Migration0004PixiVersion
 from openhost_system_agent.migrations.versions.v0005_pixi_ownership_failsafe import Migration0005PixiOwnershipFailsafe
 from openhost_system_agent.migrations.versions.v0006_journald_size_cap import Migration0006JournaldSizeCap
+from openhost_system_agent.migrations.versions.v0007_swap_file import Migration0007SwapFile
 
 # Numbered migrations in apply order. Versions MUST start at 2 and be
 # contiguous. v1 is the baseline produced by ansible setup.yml.
@@ -19,6 +20,7 @@ REGISTRY: list[SystemMigration] = [
     Migration0004PixiVersion(),
     Migration0005PixiOwnershipFailsafe(),
     Migration0006JournaldSizeCap(),
+    Migration0007SwapFile(),
 ]
 
 

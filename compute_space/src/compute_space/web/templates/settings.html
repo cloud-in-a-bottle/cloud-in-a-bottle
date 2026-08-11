@@ -96,6 +96,20 @@
   <div class="muted">Loading&hellip;</div>
 </div>
 
+<h2 class="section-title">Swap</h2>
+<p class="hint">Swap gives the kernel disk-backed memory to spill cold pages to, so apps are less likely to be killed when the instance runs low on RAM. Larger swap uses more disk. Set to <code>0</code> to disable swap.</p>
+<table class="form-table">
+  <tr>
+    <th><label for="swap-size">Swap size (GiB)</label></th>
+    <td>
+      <input type="number" id="swap-size" min="0" max="256" step="1" style="width:6em;" placeholder="Loading…" disabled>
+      <button onclick="setSwap()" class="btn btn-primary" id="set-swap-btn" disabled>Save</button>
+      <p class="hint" id="swap-current">Loading&hellip;</p>
+      <p id="swap-msg" style="display:none;"></p>
+    </td>
+  </tr>
+</table>
+
 <h2 class="section-title">Maintenance</h2>
 <table class="form-table">
   <tr>

@@ -18,12 +18,17 @@ from compute_space.core.system_agent import SystemAgentError
 from compute_space.core.system_agent import system_agent_apply
 from compute_space.core.system_agent import system_agent_fetch
 from compute_space.core.system_agent import system_agent_get_remote
+from compute_space.core.system_agent import system_agent_get_swap
 from compute_space.core.system_agent import system_agent_set_remote
+from compute_space.core.system_agent import system_agent_set_swap
 from compute_space.core.system_agent import system_agent_status
 from compute_space.core.updates import trigger_restart
 from compute_space.core.util import not_blank
 from compute_space.web.auth.auth import require_owner_auth
 from openhost_system_agent.protocol import RemoteInfo
+from openhost_system_agent.protocol import SwapStatus
+from openhost_system_agent.swap import MAX_SWAP_SIZE_GIB
+from openhost_system_agent.swap import MIN_SWAP_SIZE_GIB
 
 # --- request / response types -----------------------------------------------
 
@@ -189,6 +194,32 @@ async def change_password(data: ChangePasswordRequest, db: sqlite3.Connection) -
     return ChangePasswordResponse(ok=True)
 
 
+@attr.s(auto_attribs=True, frozen=True)
+class SetSwapRequest:
+    size_gib: int
+
+
+@get("/api/settings/swap", guards=[require_owner_auth])
+async def get_swap() -> SwapStatus:
+    try:
+        return await system_agent_get_swap()
+    except SystemAgentError as e:
+        raise HTTPException(detail=str(e), status_code=500) from e
+
+
+@post("/api/settings/swap", status_code=200, guards=[require_owner_auth])
+async def set_swap(data: SetSwapRequest) -> SwapStatus:
+    if not MIN_SWAP_SIZE_GIB <= data.size_gib <= MAX_SWAP_SIZE_GIB:
+        raise HTTPException(
+            detail=f"Swap size must be between {MIN_SWAP_SIZE_GIB} and {MAX_SWAP_SIZE_GIB} GiB.",
+            status_code=400,
+        )
+    try:
+        return await system_agent_set_swap(data.size_gib)
+    except SystemAgentError as e:
+        raise HTTPException(detail=str(e), status_code=500) from e
+
+
 @get("/api/settings/owner_username", guards=[require_owner_auth])
 async def get_owner_username(db: sqlite3.Connection) -> OwnerUsernameResponse:
     return OwnerUsernameResponse(username=read_owner_username(db))
@@ -220,6 +251,8 @@ api_settings_routes = Router(
         apply_update,
         restart_compute_space,
         change_password,
+        get_swap,
+        set_swap,
         get_owner_username,
         set_owner_username,
     ],

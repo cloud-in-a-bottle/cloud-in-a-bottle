@@ -9,6 +9,8 @@ import attrs
 import cappa
 
 from openhost_system_agent.status import get_migration_status
+from openhost_system_agent.swap import get_swap_status
+from openhost_system_agent.swap import resize_swapfile
 from openhost_system_agent.update import apply_update
 from openhost_system_agent.update import fetch_updates
 from openhost_system_agent.update import get_remote_info
@@ -76,13 +78,34 @@ class StatusCmd:
         _output(get_migration_status())
 
 
+@cappa.command(name="swap", help="Manage the host swap file.")
+@attrs.define
+class SwapCmd:
+    @cappa.command(name="get", help="Report the swap file's size and whether it is active.")
+    def get(self) -> None:
+        try:
+            _output(get_swap_status())
+        except Exception as e:
+            _error(str(e))
+
+    @cappa.command(name="set", help="Resize the swap file (GiB; 0 disables swap).")
+    def set(
+        self,
+        size_gib: Annotated[int, cappa.Arg(help="Swap size in GiB (0 disables swap)")],
+    ) -> None:
+        try:
+            _output(resize_swapfile(size_gib))
+        except Exception as e:
+            _error(str(e))
+
+
 @cappa.command(
     name="openhost_system_agent",
     help="OpenHost system agent — host-level updates and migrations.",
 )
 @attrs.define
 class SystemAgent:
-    subcommand: cappa.Subcommands[UpdateCmd | StatusCmd]
+    subcommand: cappa.Subcommands[UpdateCmd | StatusCmd | SwapCmd]
 
 
 def main() -> None:
