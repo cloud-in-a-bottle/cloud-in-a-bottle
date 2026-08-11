@@ -154,7 +154,7 @@ def _full_app_bootstrap(config: Config) -> None:
 def setup_already_done_get() -> Response[None]:
     """The claim link (``/setup?claim=...``) printed by ``openhost up`` should keep working
     after setup — send it to /login rather than a dead-end 403."""
-    return Redirect(path="/login")
+    return Redirect(path="/")
 
 
 @post("/setup", status_code=403, sync_to_thread=False)

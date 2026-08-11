@@ -265,7 +265,7 @@ class TestRouterCore:
         base_url = _zone_url(config)
         r = requests.get(f"{base_url}/setup?claim=whatever", allow_redirects=False)
         assert r.status_code == 302
-        assert r.headers["Location"] == "/login"
+        assert r.headers["Location"] == "/"
 
     def test_setup_post_returns_403_if_already_set_up(self, admin_session, config):
         """POST /setup returns 403 when owner already exists."""
