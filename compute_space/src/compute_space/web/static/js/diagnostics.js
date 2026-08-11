@@ -104,37 +104,24 @@ function memCell(r) {
 var appsData = [];
 var appSort = {key: 'name', dir: 1};
 
-// Health sorts by a coarse rank so "OK" > "FAIL" > "n/a"; not-running apps sort
-// below any real CPU/memory reading (which are >= 0).
-function healthRank(h) {
-  if (!h || !h.checked) return 0;
-  return h.healthy ? 2 : 1;
-}
-
-function runningStat(a, field) {
-  var r = a.resources || {};
-  return (r.running && r[field] != null) ? r[field] : -1;
-}
-
-// One key-extractor per sortable column (JS sort has no `key=`, so we supply the
-// key function and a generic comparator ourselves).
-var appSortKeys = {
-  name: function(a) { return (a.name || '').toLowerCase(); },
-  version: function(a) { return (a.version || '').toLowerCase(); },
-  status: function(a) { return (a.status || '').toLowerCase(); },
-  health: function(a) { return healthRank(a.health); },
-  cpu: function(a) { return runningStat(a, 'cpu_percent'); },
-  memory: function(a) { return runningStat(a, 'memory_usage_bytes'); },
-  git: function(a) { return gitText(a.git).toLowerCase(); },
-};
-
 function cmp(x, y) { return x < y ? -1 : (x > y ? 1 : 0); }
 
+// The value to sort a row by for the active column. Most columns are a plain
+// field; cpu/memory/git/health need a little digging.
+function appSortValue(a, key) {
+  var r = a.resources || {};
+  if (key === 'cpu') return r.cpu_percent;
+  if (key === 'memory') return r.memory_usage_bytes;
+  if (key === 'git') return gitText(a.git);
+  if (key === 'health') return !!(a.health && a.health.healthy);
+  return a[key];  // name, version, status
+}
+
 function sortApps() {
-  var keyFn = appSortKeys[appSort.key] || appSortKeys.name;
   // Sort by the active column, then break ties by name so equal rows stay stable.
   appsData.sort(function(a, b) {
-    return cmp(keyFn(a), keyFn(b)) * appSort.dir || cmp(appSortKeys.name(a), appSortKeys.name(b));
+    return cmp(appSortValue(a, appSort.key), appSortValue(b, appSort.key)) * appSort.dir
+      || cmp(a.name, b.name);
   });
 }
 
