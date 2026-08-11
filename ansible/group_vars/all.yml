@@ -1,5 +1,5 @@
 ---
-# Consilidate derived variables that many tasks share. 
+# Consolidate derived variables that many tasks share. 
 
 # HTTP-only localhost mode (no TLS / CoreDNS / Caddy): normalizes the raw `-e local_http_only=...`
 # var once instead of repeating `| default(false) | bool` at every call site.

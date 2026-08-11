@@ -21,10 +21,6 @@ def _handle(r: mdns.MdnsResponder, data: bytes, addr: tuple[object, ...]) -> Non
     r._handle(r.transports[0], data, addr)
 
 
-def _question(name: str, qtype: int = mdns._TYPE_A, qclass: int = mdns._CLASS_IN) -> mdns._Question:
-    return mdns._Question(name=name, qtype=qtype, qclass=qclass)
-
-
 def _query(name: str, qtype: int = mdns._TYPE_A, ident: int = 0) -> bytes:
     header = struct.pack("!HHHHHH", ident, 0, 1, 0, 0, 0)
     return header + mdns._encode_name(name) + struct.pack("!HH", qtype, mdns._CLASS_IN)
@@ -324,7 +320,8 @@ class _ProbeSocket:
 
 
 def _a_response(name: str, ip: str) -> bytes:
-    return mdns._build_response((_question(name),), ip, None, legacy=False, ident=0)
+    question = mdns._Question(name=name, qtype=mdns._TYPE_A, qclass=mdns._CLASS_IN)
+    return mdns._build_response((question,), ip, None, legacy=False, ident=0)
 
 
 def test_probe_ignores_unrelated_a_record() -> None:

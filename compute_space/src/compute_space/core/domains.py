@@ -14,7 +14,7 @@ def _lowercase(s: str) -> str:
 
 
 def is_local_name(name: str) -> bool:
-    """true for .local domain"""
+    """Returns True for .local domains."""
     n = name.split(":")[0].lower()
     return n == "local" or n.endswith(".local")
 
@@ -41,7 +41,7 @@ class Domain:
 
     @property
     def is_local(self) -> bool:
-        """true for .local domain. these do not get a cert."""
+        """Returns true for .local domain, which do not get a cert."""
         return is_local_name(self.name)
 
     def owns(self, host: str) -> bool:

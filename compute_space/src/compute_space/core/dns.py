@@ -108,9 +108,7 @@ _EDGE_HTTP_PORT = 80
 
 
 def publishable_lan_ip6() -> str | None:
-    """The box's IPv6 address, but only once the http edge actually answers on it. Used since AAAA
-    nothing causes repeated 5-second timeouts.
-    """
+    """The box's IPv6 address, but only once the http edge actually answers on it."""
     ip6 = default_route_source_ip(socket.AF_INET6)
     if ip6 is None:
         return None
@@ -138,7 +136,8 @@ def dns_zones(config: Config, db: sqlite3.Connection) -> tuple[DnsZone, ...]:
     """Every zone CoreDNS is authoritative for — every domain the instance answers on.
 
     CoreDNS serves public and ``.local`` domains: public names to the public IP and ``.local``
-    names to the box's LAN IP. Windows users require a dns for multi label subdomains."""
+    names to the box's LAN IP. ``.local`` served to allow Windows user to use multi-label
+    domains."""
     primary = primary_domain_or_none(db)
     primary_no_port = primary.name_no_port if primary else None
     return tuple(
@@ -167,7 +166,7 @@ def _existing_txt_lines(zonefile_path: Path) -> list[str]:
     try:
         with open(zonefile_path) as f:
             return [line for line in f.read().splitlines() if "IN TXT" in line]
-    except OSError:
+    except FileNotFoundError:
         return []
 
 

@@ -11,23 +11,26 @@ def _no_default_route(*args: object, **kwargs: object) -> object:
     raise OSError("network is unreachable")
 
 
+class _Sock:
+    def __init__(self, sockname: str) -> None:
+        self._sockname = sockname
+
+    def __enter__(self) -> _Sock:
+        return self
+
+    def __exit__(self, *a: object) -> None:
+        return None
+
+    def connect(self, addr: tuple[str, int]) -> None:
+        return None
+
+    def getsockname(self) -> tuple[str, int]:
+        return (self._sockname, 0)
+
+
 def test_primary_probe_preferred(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(util, "_lan_ip_from_host", lambda family: "192.168.1.99")
-
-    class _Sock:
-        def __enter__(self) -> _Sock:
-            return self
-
-        def __exit__(self, *a: object) -> None:
-            return None
-
-        def connect(self, addr: tuple[str, int]) -> None:
-            return None
-
-        def getsockname(self) -> tuple[str, int]:
-            return ("10.0.0.5", 0)
-
-    monkeypatch.setattr(socket, "socket", lambda *a, **k: _Sock())
+    monkeypatch.setattr(socket, "socket", lambda *a, **k: _Sock("10.0.0.5"))
     assert util.default_route_source_ip() == "10.0.0.5"
 
 
@@ -75,19 +78,6 @@ def test_none_when_only_loopback(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_primary_loopback_falls_through_to_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
-    class _Sock:
-        def __enter__(self) -> _Sock:
-            return self
-
-        def __exit__(self, *a: object) -> None:
-            return None
-
-        def connect(self, addr: tuple[str, int]) -> None:
-            return None
-
-        def getsockname(self) -> tuple[str, int]:
-            return ("127.0.0.1", 0)
-
-    monkeypatch.setattr(socket, "socket", lambda *a, **k: _Sock())
+    monkeypatch.setattr(socket, "socket", lambda *a, **k: _Sock("127.0.0.1"))
     monkeypatch.setattr(util, "_lan_ip_from_host", lambda family: "10.1.2.3")
     assert util.default_route_source_ip() == "10.1.2.3"
