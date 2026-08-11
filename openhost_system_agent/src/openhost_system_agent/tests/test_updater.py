@@ -271,15 +271,10 @@ def test_server_sends_connection_close(
     # Connection: close so the browser doesn't reuse the updater's socket for
     # requests that should reach the new compute_space after the handoff.
     port = server_factory("tok", [])
-    _, _ = _get(port, "/")
-    # Re-fetch capturing raw headers.
-    import socket as _s
-    import ssl as _ssl
-
-    ctx = _ssl.create_default_context()
+    ctx = ssl.create_default_context()
     ctx.check_hostname = False
-    ctx.verify_mode = _ssl.CERT_NONE
-    conn = ctx.wrap_socket(_s.create_connection(("127.0.0.1", port), timeout=5), server_hostname="localhost")
+    ctx.verify_mode = ssl.CERT_NONE
+    conn = ctx.wrap_socket(socket.create_connection(("127.0.0.1", port), timeout=5), server_hostname="localhost")
     conn.sendall(b"GET / HTTP/1.1\r\nHost: localhost\r\n\r\n")
     raw = conn.recv(4096)
     conn.close()
