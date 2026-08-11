@@ -33,11 +33,11 @@ class TestDefaults:
         manifest = parse_manifest_from_string(MINIMAL)
         assert manifest.memory_mb == 128
 
-    def test_build_memory_defaults_to_memory_mb(self):
-        """Unset build_memory_mb falls back to the runtime memory limit."""
+    def test_build_memory_unset_leaves_build_unconstrained(self):
+        """Unset build_memory_mb does NOT fall back to memory_mb; the build is uncapped."""
         manifest = parse_manifest_from_string(MINIMAL + "\n[resources]\nmemory_mb = 256\n")
         assert manifest.build_memory_mb is None
-        assert manifest.effective_build_memory_mb == 256
+        assert manifest.effective_build_memory_mb is None
 
     def test_gpu_default_is_false(self):
         manifest = parse_manifest_from_string(MINIMAL)
