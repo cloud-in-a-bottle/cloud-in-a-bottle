@@ -39,6 +39,11 @@ _PODMAN_EVENTS_READ_BYTES = 65536
 # Reading /dev/kmsg needs CAP_SYSLOG (granted to the openhost unit) on a default
 # dmesg_restrict=1 host.
 _KMSG_PATH = "/dev/kmsg"
+# /dev/kmsg is record-oriented: each read() returns exactly one whole log record
+# (never split across reads, never two coalesced). The buffer only has to be big
+# enough to hold one record, or the read fails with EINVAL — 8192 is the kernel's
+# max record size (the same size journald reads with).
+_KMSG_RECORD_MAX_BYTES = 8192
 # A global kill logs "Out of memory: Killed process N (comm)"; a memcg (cgroup-
 # limit) kill logs "Memory cgroup out of memory: ...". We skip the latter — that's
 # an app hitting its own limit, already reported per-app via ``podman events``.
@@ -118,23 +123,31 @@ def _parse_kmsg_oom(record: str) -> _HostOomKill | None:
     return _HostOomKill(pid=int(match.group(1)), comm=match.group(2))
 
 
+def _read_next_kmsg_record(fd: int) -> bytes | None:
+    """Return the next available ``/dev/kmsg`` record, or None when none remain right now.
+
+    Each read returns one whole record — a single kernel log line, never split or
+    coalesced. The only looping here skips records overwritten while we lagged
+    behind: the kernel signals that with EPIPE and advances the read position to the
+    next still-available record, so we retry. Every exit is a ``return``.
+    """
+    while True:
+        try:
+            return os.read(fd, _KMSG_RECORD_MAX_BYTES) or None  # empty read == EOF
+        except BlockingIOError:
+            return None  # No more records available right now.
+        except OSError as e:
+            if e.errno != errno.EPIPE:
+                raise
+            # Overwritten while we lagged; the read position advanced to the next
+            # record — loop around and read it.
+
+
 def _drain_kmsg_oom_kills(fd: int) -> list[_HostOomKill]:
     """Read all currently-available ``/dev/kmsg`` records and return global OOM kills."""
     kills: list[_HostOomKill] = []
-    while True:
-        try:
-            raw = os.read(fd, 8192)
-        except BlockingIOError:
-            break  # No more records available right now.
-        except OSError as e:
-            if e.errno == errno.EPIPE:
-                # We fell behind and records were overwritten; the read position
-                # has advanced to the oldest still-available record. Keep going.
-                continue
-            raise
-        if not raw:
-            break
-        event = _parse_kmsg_oom(raw.decode("utf-8", "replace"))
+    while (record := _read_next_kmsg_record(fd)) is not None:
+        event = _parse_kmsg_oom(record.decode("utf-8", "replace"))
         if event is not None:
             kills.append(event)
     return kills
@@ -189,6 +202,20 @@ def _parse_podman_event(line: bytes) -> _ContainerOomKill | None:
     if not container_id:
         return None
     return _ContainerOomKill(container_id=str(container_id), container_name=str(name))
+
+
+def _read_events_chunk(fd: int) -> bytes | None:
+    """Return the next chunk of ``podman events`` output, or None if the pipe would block.
+
+    Unlike /dev/kmsg this is a raw byte stream, so a chunk may hold part of a line,
+    several lines, or a line split across reads — the caller reassembles them. An
+    empty ``bytes`` means EOF (the events process exited); None means nothing is
+    available right now.
+    """
+    try:
+        return os.read(fd, _PODMAN_EVENTS_READ_BYTES)  # b"" at EOF
+    except BlockingIOError:
+        return None
 
 
 class _PodmanOomReader:
@@ -260,16 +287,11 @@ class _PodmanOomReader:
         assert self._proc.stdout is not None
         fd = self._proc.stdout.fileno()
 
-        stream_ended = False
-        while True:
-            try:
-                chunk = os.read(fd, _PODMAN_EVENTS_READ_BYTES)
-            except BlockingIOError:
-                break  # No more output available right now.
-            if not chunk:
-                stream_ended = True  # EOF: the events process exited.
-                break
+        while chunk := _read_events_chunk(fd):
             self._buf += chunk
+        # The loop stops on the first falsy read: b"" is EOF (the events process
+        # exited), None is "nothing available right now" but the stream's still open.
+        stream_ended = chunk == b""
 
         lines = self._buf.split(b"\n")
         # The last element is a trailing partial line (or b"" if we stopped on a
