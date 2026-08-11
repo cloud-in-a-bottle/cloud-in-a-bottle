@@ -72,10 +72,6 @@ def _bootstrap(config: Config) -> None:
     # (Forwarded to the agent and the detached updater on every invocation.)
     os.environ[DATA_DIR_ENV] = str(config.openhost_data_path)
     setup_file_logging(Path(os.path.dirname(config.db_path)) / "compute_space.log")
-    # If the previous process was replaced by a self-update, append the terminal
-    # "done" progress entry: it must come from the NEW process (see
-    # mark_boot_complete) so the /updating page only leaves once we're truly back.
-    mark_boot_complete()
     load_keys(config.keys_dir)
     init_db(config.db_path)
 
@@ -196,6 +192,11 @@ def main() -> None:
             raise RuntimeError(
                 "A TLS domain is configured but start_caddy is False. Caddy is required for TLS termination."
             )
+
+    # CoreDNS/cert/Caddy are up and the ports are handed back; if the previous
+    # process was replaced by a self-update, finalize the progress log now so the
+    # /updating page's "back online" reflects the instance actually serving.
+    mark_boot_complete()
 
     def _all_children() -> list[subprocess.Popen[bytes]]:
         # Read caddy.proc / coredns.proc at shutdown time: restart() may have replaced them.
