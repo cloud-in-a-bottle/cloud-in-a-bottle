@@ -38,6 +38,7 @@ from compute_space.core.system_agent import system_agent_get_remote
 from compute_space.core.system_agent import system_agent_set_remote
 from compute_space.core.system_agent import system_agent_status
 from compute_space.core.update_progress import read_progress
+from compute_space.core.update_progress import record_apply_failure
 from compute_space.core.updates import trigger_restart
 from compute_space.core.util import not_blank
 from compute_space.web.auth.auth import require_owner_auth
@@ -140,9 +141,10 @@ async def check_for_updates() -> CheckUpdatesResponse:
     return CheckUpdatesResponse(state=state, error=_GIT_STATE_NOTICE.get(fetch_result.state))
 
 
-# Serializes apply_update. The background apply task owns the lock for the rest of
-# the process's life and releases it only on failure (on success the restart kills
-# the process). _apply_tasks holds a strong ref so the loop doesn't GC the task.
+# Serializes apply_update. The background apply task holds the lock for as long
+# as this process lives: on success the restart kills the process (so the lock is
+# never explicitly released), on failure the finally releases it for a retry.
+# _apply_tasks holds a strong ref so the loop doesn't GC the task.
 _apply_lock = asyncio.Lock()
 _apply_tasks: set[asyncio.Task[None]] = set()
 
@@ -150,8 +152,12 @@ _apply_tasks: set[asyncio.Task[None]] = set()
 async def _run_apply_and_restart() -> None:
     try:
         await system_agent_apply()
-    except SystemAgentError:
+    except Exception as e:
+        # Not just SystemAgentError: ANY failure here must leave the progress log
+        # terminal, or the /updating page (which only stops on done/failed) would
+        # spin forever with no explanation.
         logger.exception("system agent apply failed")
+        await record_apply_failure(f"Update failed: {e}")
         await clear_update_token()
     finally:
         _apply_lock.release()

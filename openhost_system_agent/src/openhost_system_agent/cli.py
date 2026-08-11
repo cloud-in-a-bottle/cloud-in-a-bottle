@@ -21,6 +21,8 @@ from openhost_system_agent.updater.paths import clear_token
 from openhost_system_agent.updater.paths import tls_cert_path
 from openhost_system_agent.updater.paths import tls_key_path
 from openhost_system_agent.updater.paths import write_token
+from openhost_system_agent.updater.progress import mark_boot_complete
+from openhost_system_agent.updater.progress import record_failure_if_not_terminal
 from openhost_system_agent.updater.progress import reset_progress
 from openhost_system_agent.updater.server import run as run_updater_server
 
@@ -103,7 +105,9 @@ class UpdaterCmd:
     def launch(self) -> None:
         print(json.dumps({"ok": True, "launched": launch_updater()}))
 
-    @cappa.command(name="serve", help="Run the updater mini-server in the foreground (invoked inside the scope).")
+    @cappa.command(
+        name="serve", help="Run the updater mini-server in the foreground (invoked inside the transient unit)."
+    )
     def serve(self) -> None:
         run_updater_server(tls_cert_path(), tls_key_path())
 
@@ -124,6 +128,20 @@ class UpdaterCmd:
     def clear_token(self) -> None:
         clear_token()
         print(json.dumps({"ok": True}))
+
+    @cappa.command(
+        name="mark-booted",
+        help="Finalize the progress log after a restart (root fallback when the log predates host ownership).",
+    )
+    def mark_booted(self) -> None:
+        print(json.dumps({"ok": mark_boot_complete()}))
+
+    @cappa.command(
+        name="fail",
+        help="Record a terminal 'failed' progress entry unless the log already ended (root fallback).",
+    )
+    def fail(self, message: Annotated[str, cappa.Arg(help="Human-readable failure message")]) -> None:
+        print(json.dumps({"ok": record_failure_if_not_terminal(message)}))
 
 
 @cappa.command(

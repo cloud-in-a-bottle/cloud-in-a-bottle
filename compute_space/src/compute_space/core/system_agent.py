@@ -1,43 +1,65 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import time
 
 import cattrs
 
+from compute_space.core.logging import logger
 from compute_space.core.util import async_wrap
 from openhost_system_agent.protocol import DiffResult
 from openhost_system_agent.protocol import FetchResult
 from openhost_system_agent.protocol import MigrationStatus
 from openhost_system_agent.protocol import RemoteInfo
+from openhost_system_agent.updater.paths import DATA_DIR_ENV
 
 
 class SystemAgentError(Exception):
     pass
 
 
-# sudo prints "command not found" when the symlink at
+# The agent resolves the shared updater paths (progress log, token, certs) from
+# OPENHOST_DATA_DIR, but sudo's env_reset strips it. Forward it explicitly (via
+# `sudo env`) so a non-default data_root_dir keeps compute_space and the agent
+# pointed at the same files instead of silently diverging to the agent's default.
+def _agent_argv(*args: str) -> list[str]:
+    data_dir = os.environ.get(DATA_DIR_ENV)
+    if data_dir:
+        return ["sudo", "env", f"{DATA_DIR_ENV}={data_dir}", "openhost_system_agent", *args]
+    return ["sudo", "openhost_system_agent", *args]
+
+
+# sudo prints "openhost_system_agent: command not found" (and `sudo env` prints
+# "'openhost_system_agent': No such file or directory") when the symlink at
 # /usr/local/bin/openhost_system_agent isn't resolvable. Usually that means a
 # missing symlink (needs an ansible re-deploy), but it also appears transiently
 # right after a self-update restart before sudo's PATH lookup settles, so we
 # retry it before surfacing the "re-run ansible" guidance.
-_CMD_NOT_FOUND = "openhost_system_agent: command not found"
+_CMD_NOT_FOUND_PATTERNS = (
+    "openhost_system_agent: command not found",
+    "openhost_system_agent': No such file or directory",
+)
 _NOT_FOUND_RETRIES = 5
 _NOT_FOUND_RETRY_DELAY = 0.5
+
+
+def _is_cmd_not_found(error: str) -> bool:
+    return any(p in error for p in _CMD_NOT_FOUND_PATTERNS)
 
 
 def _run_system_agent(*args: str, timeout: int = 300) -> str:
     """Run the agent, raising SystemAgentError on failure. Returns stdout.
 
-    Retries transient post-restart "command not found" errors (see _CMD_NOT_FOUND);
-    all other failures raise immediately.
+    Retries transient post-restart "command not found" errors (see
+    _CMD_NOT_FOUND_PATTERNS); all other failures raise immediately.
     """
     last_not_found: str | None = None
     for attempt in range(_NOT_FOUND_RETRIES):
         try:
             result = subprocess.run(
-                ["sudo", "openhost_system_agent", *args],
+                _agent_argv(*args),
                 capture_output=True,
                 text=True,
                 timeout=timeout,
@@ -56,7 +78,7 @@ def _run_system_agent(*args: str, timeout: int = 300) -> str:
         except (json.JSONDecodeError, ValueError):
             error = result.stderr or result.stdout
 
-        if _CMD_NOT_FOUND in str(error):
+        if _is_cmd_not_found(str(error)):
             last_not_found = str(error).strip()
             if attempt < _NOT_FOUND_RETRIES - 1:
                 time.sleep(_NOT_FOUND_RETRY_DELAY)
@@ -129,9 +151,25 @@ def system_agent_clear_update_token() -> None:
     _run_system_agent("updater", "clear-token", timeout=30)
 
 
+def system_agent_mark_boot_complete_sync() -> None:
+    """Finalize the update progress log via the root agent (see mark_boot_complete)."""
+    _run_system_agent("updater", "mark-booted", timeout=30)
+
+
+@async_wrap
+def system_agent_record_update_failure(message: str) -> None:
+    """Record a terminal 'failed' progress entry via the root agent."""
+    _run_system_agent("updater", "fail", message, timeout=30)
+
+
 def system_agent_stop_updater_sync() -> None:
-    """Stop the detached updater (releasing 80/443), synchronously. Best-effort."""
+    """Stop the detached updater (releasing 80/443), synchronously. Best-effort.
+
+    Failure is logged, not raised: Caddy still has its own bind-retry window, but
+    if that also loses the race the instance has no TLS terminator — leave a trace
+    of why the ports were never released.
+    """
     try:
         _run_system_agent("updater", "stop", timeout=30)
     except SystemAgentError:
-        pass
+        logger.exception("failed to stop the detached updater; Caddy must win 80/443 via bind-retry")

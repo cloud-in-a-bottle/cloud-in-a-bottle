@@ -256,27 +256,34 @@ _APPLY_ENTRYPOINT = _PACKAGE_DIR / "apply_after_checkout.py"
 
 
 def apply_update() -> NoReturn:
-    repo = _repo()
-
-    if repo.is_dirty(untracked_files=True):
-        raise RuntimeError("Working tree has uncommitted changes. Stash or commit first.")
-
     # Fresh progress log so the updater never shows stale lines from a prior run.
+    # Reset happens before any check so that every failure below can record a
+    # terminal "failed" entry the /updating page will actually see (the page only
+    # stops polling on done/failed).
     progress.reset_progress()
-    progress.record("fetch", "Fetching latest code\u2026")
+    try:
+        repo = _repo()
 
-    repo.git.fetch("origin", "--tags")
-    if not _get_sorted_tags(repo) and _get_target_ref(repo) is None:
-        raise RuntimeError("No tags found on remote. Tag a release first.")
+        if repo.is_dirty(untracked_files=True):
+            raise RuntimeError("Working tree has uncommitted changes. Stash or commit first.")
 
-    # Take the first step (next tag, or the pinned target once tags are done);
-    # apply_after_checkout tail-calls forward through the rest itself.
-    step = _next_step(repo)
-    if step is not None:
-        logger.info(f"Checking out {step}...")
-        progress.record("checkout", f"Checking out {step}\u2026", ref=step)
-        repo.git.checkout(_resolve_ref_sha(repo, step) or step)
-        repo.git.clean("-fd")
+        progress.record("fetch", "Fetching latest code\u2026")
+
+        repo.git.fetch("origin", "--tags")
+        if not _get_sorted_tags(repo) and _get_target_ref(repo) is None:
+            raise RuntimeError("No tags found on remote. Tag a release first.")
+
+        # Take the first step (next tag, or the pinned target once tags are done);
+        # apply_after_checkout tail-calls forward through the rest itself.
+        step = _next_step(repo)
+        if step is not None:
+            logger.info(f"Checking out {step}...")
+            progress.record("checkout", f"Checking out {step}\u2026", ref=step)
+            repo.git.checkout(_resolve_ref_sha(repo, step) or step)
+            repo.git.clean("-fd")
+    except BaseException as e:
+        progress.record(progress.PHASE_FAILED, f"Update failed: {e}")
+        raise
 
     # Hand off to the checked-out ref's apply code, replacing this process.
     # It walks any remaining steps and restarts openhost when done, so this

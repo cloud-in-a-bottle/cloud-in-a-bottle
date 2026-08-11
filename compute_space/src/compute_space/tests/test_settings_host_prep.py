@@ -10,6 +10,7 @@ On the error path the handler raises ``HTTPException``; we inspect its
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 
 import pytest
 from litestar.exceptions import HTTPException
@@ -23,7 +24,7 @@ from openhost_system_agent.protocol import MigrationStatus
 async def _drain_apply_task() -> None:
     """Let the fire-and-forget apply task scheduled by apply_update run to completion.
 
-    apply_update kicks the (mocked) agent apply off via asyncio.ensure_future and
+    apply_update kicks the (mocked) agent apply off via asyncio.create_task and
     returns immediately; yield control so that task finishes before assertions.
     """
     # A couple of event-loop turns is enough for the small mocked coroutines.
@@ -261,8 +262,11 @@ async def test_apply_update_releases_lock_on_unexpected_precheck_error(
 
 @pytest.mark.asyncio
 async def test_apply_update_releases_lock_and_clears_token_on_failure(
-    monkeypatch: pytest.MonkeyPatch, token_calls: dict[str, list[str]]
+    monkeypatch: pytest.MonkeyPatch, token_calls: dict[str, list[str]], tmp_path: Path
 ) -> None:
+    # Isolate the failure-path progress write from the real data dir.
+    monkeypatch.setenv("OPENHOST_DATA_DIR", str(tmp_path))
+
     async def failing_apply() -> None:
         raise SystemAgentError("apply blew up")
 

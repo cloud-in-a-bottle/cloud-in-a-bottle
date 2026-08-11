@@ -4,13 +4,17 @@ import os
 from pathlib import Path
 
 # Matches compute_space's Config.openhost_data_path in production. The env var
-# lets tests and non-standard installs point both sides at the same directory.
+# points both sides at the same directory when the data dir is non-default:
+# compute_space sets it for itself at boot and forwards it on every agent call
+# (`sudo env`) and into the detached updater (`systemd-run --setenv`).
 _DEFAULT_DATA_DIR = "/home/host/.openhost/local_compute_space/persistent_data/openhost"
-_DATA_DIR_ENV = "OPENHOST_DATA_DIR"
+DATA_DIR_ENV = "OPENHOST_DATA_DIR"
+# Backwards-compatible alias (older callers/tests referenced the private name).
+_DATA_DIR_ENV = DATA_DIR_ENV
 
 
 def data_dir() -> Path:
-    return Path(os.environ.get(_DATA_DIR_ENV, _DEFAULT_DATA_DIR))
+    return Path(os.environ.get(DATA_DIR_ENV, _DEFAULT_DATA_DIR))
 
 
 def updater_dir() -> Path:

@@ -11,20 +11,32 @@ from openhost_system_agent.updater.paths import progress_log_path
 from openhost_system_agent.updater.paths import updater_dir
 
 
-def _ensure_updater_dir() -> None:
+def _chown_to_host(path: str | os.PathLike[str]) -> None:
     # Chown back to host when run as root so compute_space (which runs as host)
-    # can also write into this dir.
-    d = updater_dir()
-    d.mkdir(parents=True, exist_ok=True)
+    # can also write here: it appends the terminal "done" entry on boot and a
+    # "failed" entry when the agent dies before recording one itself.
     if os.geteuid() == 0:
         try:
-            shutil.chown(d, user="host", group="host")
+            shutil.chown(path, user="host", group="host")
         except (OSError, LookupError):
             pass
 
 
+def _ensure_updater_dir() -> None:
+    d = updater_dir()
+    d.mkdir(parents=True, exist_ok=True)
+    _chown_to_host(d)
+
+
 PHASE_DONE = "done"
 PHASE_FAILED = "failed"
+# Recorded by the apply walk just before `systemctl restart openhost`. NOT
+# terminal: the freshly booted compute_space appends PHASE_DONE (see
+# compute_space.core.update_progress.mark_boot_complete), so the /updating page
+# can only see "done" once the NEW instance is actually up. Recording "done"
+# before the restart raced the page's health probe against the old, about-to-die
+# instance and could bounce the owner back to a dashboard that dies seconds later.
+PHASE_RESTARTING = "restarting"
 
 
 @attr.s(auto_attribs=True, frozen=True)
@@ -46,18 +58,52 @@ def reset_progress() -> None:
         path = progress_log_path()
         path.write_text("")
         path.chmod(0o644)
+        _chown_to_host(path)
     except OSError:
         pass
 
 
-def record(phase: str, message: str, ref: str | None = None) -> None:
+def record(phase: str, message: str, ref: str | None = None) -> bool:
+    """Append an entry. Returns False when the log could not be written (e.g. a
+    root-owned log from an older build and we're not root) so callers can route
+    through the root agent instead."""
     entry = ProgressEntry(ts=_now(), phase=phase, message=message, ref=ref)
     try:
         _ensure_updater_dir()
-        with open(progress_log_path(), "a", encoding="utf-8") as f:
+        path = progress_log_path()
+        with open(path, "a", encoding="utf-8") as f:
             f.write(json.dumps(attr.asdict(entry)) + "\n")
+        # Heal ownership on every root write so the host user (compute_space)
+        # can append later — older builds left the file root-owned.
+        _chown_to_host(path)
+        return True
     except OSError:
-        pass
+        return False
+
+
+def mark_boot_complete() -> bool:
+    """Append the terminal "done" if the log ends with "restarting".
+
+    Returns False only when the append was NEEDED but could not be written.
+    Shared by compute_space's boot hook (direct write) and the agent's
+    `updater mark-booted` (root fallback for legacy root-owned logs).
+    """
+    entries = read_entries()
+    if not entries or entries[-1].get("phase") != PHASE_RESTARTING:
+        return True
+    return record(PHASE_DONE, "Instance is back online.")
+
+
+def record_failure_if_not_terminal(message: str) -> bool:
+    """Append a terminal "failed" unless the log already ended terminally.
+
+    Returns False only when the append was NEEDED but could not be written.
+    Shared by compute_space's apply-failure path and the agent's `updater fail`.
+    """
+    entries = read_entries()
+    if is_terminal(entries):
+        return True
+    return record(PHASE_FAILED, message)
 
 
 def read_entries() -> list[dict[str, object]]:

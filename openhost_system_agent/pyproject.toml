@@ -13,6 +13,11 @@ dependencies = [
 [project.scripts]
 openhost_system_agent = "openhost_system_agent.cli:main"
 
+[dependency-groups]
+# Test-only: the updater tests mint self-signed certs to exercise the downtime
+# server over real TLS. The monorepo dev environment already provides these.
+dev = ["pytest", "cryptography"]
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"

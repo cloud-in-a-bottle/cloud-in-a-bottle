@@ -154,12 +154,15 @@ def _spawn_caddy_once(caddyfile_path: Path) -> tuple[subprocess.Popen[bytes], li
 
 
 def _spawn_caddy(caddyfile_path: Path) -> subprocess.Popen[bytes]:
-    """Start Caddy, retrying briefly ONLY if :443/:80 is still held (update handoff).
+    """Start Caddy, retrying (up to _CADDY_BIND_RETRY_SECONDS) ONLY while :443/:80
+    is still held by the update-downtime server.
 
     Caddy binds its listeners synchronously and exits non-zero on a bind conflict,
     printing "address already in use". We retry just that case (the updater is
     still releasing the ports); any other immediate exit (e.g. a config error) is
-    returned right away so the caller fails fast instead of spinning.
+    returned right away so the caller fails fast instead of spinning. Each retry
+    cycle costs up to ~2s (the settle wait plus draining the log thread), which is
+    fine — the point is to outlast the handoff, not to be fast.
     """
     deadline = time.monotonic() + _CADDY_BIND_RETRY_SECONDS
     while True:

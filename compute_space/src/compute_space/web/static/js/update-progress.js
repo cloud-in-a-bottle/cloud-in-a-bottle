@@ -14,6 +14,7 @@
   var logEl = document.getElementById('log');
   var spEl = document.getElementById('sp');
   var terminalSeen = false;
+  var failedShownAt = null;
 
   function clearToken() {
     try { sessionStorage.removeItem('openhost_update_token'); } catch (e) { /* ignore */ }
@@ -46,41 +47,72 @@
 
   function dashboardReachable() {
     // Probe /health, not /settings: /settings answers HEAD with 405 (GET-only)
-    // and would never report reachable. Any /health response means we're back.
+    // and would never report reachable. The detached updater answers 503, so
+    // "ok" can only come from a live compute_space.
     return fetch('/health', { method: 'GET', cache: 'no-store' })
       .then(function (r) { return r.ok; })
       .catch(function () { return false; });
   }
 
+  // Viewers without a valid token (an anonymous visitor who landed on the
+  // updater's page mid-downtime, or a tab that lost its token) can never read
+  // /updates — but they must not be stranded on this page after the instance is
+  // back. When /updates is unreadable and /health is ok again, reload: the real
+  // server then serves the actual content for this URL. Rate-limited to avoid a
+  // reload storm if health flaps.
+  function maybeRecoverWithoutLogs() {
+    var now = Date.now();
+    var last = 0;
+    try { last = Number(sessionStorage.getItem('openhost_update_reload_ts') || 0); } catch (e) { /* ignore */ }
+    if (now - last < 10000) return;
+    dashboardReachable().then(function (up) {
+      if (!up) return;
+      try { sessionStorage.setItem('openhost_update_reload_ts', String(Date.now())); } catch (e) { /* ignore */ }
+      window.location.reload();
+    });
+  }
+
+  function handleTerminal(d) {
+    terminalSeen = true;
+    if (spEl) spEl.style.display = 'none';
+    var last = d.entries && d.entries.length ? d.entries[d.entries.length - 1] : null;
+    var failed = last && last.phase === 'failed';
+    if (failed && failedShownAt === null) {
+      // Leave the failure on screen long enough to read before returning.
+      failedShownAt = Date.now();
+    }
+    dashboardReachable().then(function (up) {
+      if (up && (!failed || Date.now() - failedShownAt > 5000)) { finish(); return; }
+      setTimeout(poll, 1000);
+    });
+  }
+
   function poll() {
-    fetch('/updates?token=' + encodeURIComponent(token), { cache: 'no-store' })
+    fetch('/updates?token=' + encodeURIComponent(token), { cache: 'no-store', headers: { 'Accept': 'application/json' } })
       .then(function (r) {
-        if (!r.ok) { setTimeout(poll, 800); return null; }
+        if (!r.ok) {
+          if (!terminalSeen) maybeRecoverWithoutLogs();
+          setTimeout(poll, 800);
+          return null;
+        }
         return r.json();
       })
       .then(function (d) {
         if (!d) return;
         render(d.entries || []);
-        if (d.terminal) {
-          terminalSeen = true;
-          if (spEl) spEl.style.display = 'none';
-          dashboardReachable().then(function (up) {
-            if (up) { finish(); return; }
-            setTimeout(poll, 1000);
-          });
-          return;
-        }
+        if (d.terminal) { handleTerminal(d); return; }
         setTimeout(poll, 800);
       })
       .catch(function () {
-        // Transient error = the brief restart window; keep polling unless we
-        // already saw terminal and the dashboard is back.
+        // Transient error = the brief restart window; keep polling. If we already
+        // saw terminal, we may just be waiting for the dashboard to come back.
         if (terminalSeen) {
           dashboardReachable().then(function (up) {
             if (up) { finish(); return; }
             setTimeout(poll, 1000);
           });
         } else {
+          maybeRecoverWithoutLogs();
           setTimeout(poll, 800);
         }
       });

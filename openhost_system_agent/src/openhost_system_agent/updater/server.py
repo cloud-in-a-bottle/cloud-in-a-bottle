@@ -35,14 +35,6 @@ def _read_token_file() -> str | None:
         return None
 
 
-def _tail_progress() -> list[dict[str, object]]:
-    return progress.read_entries()
-
-
-def _is_terminal(entries: list[dict[str, object]]) -> bool:
-    return progress.is_terminal(entries)
-
-
 # Render the update page from the same source files as compute_space's /updating
 # template so the two never drift.
 _REPO_ROOT = Path(__file__).resolve().parents[4]
@@ -55,10 +47,17 @@ _FALLBACK_CSS = "body{font-family:-apple-system,system-ui,sans-serif;max-width:6
 _FALLBACK_BODY = (
     "<h1>Updating this instance\u2026</h1><ul id='log'></ul><p>This instance is updating and will be back shortly.</p>"
 )
+# Keep behavior-parity with update-progress.js: authenticate /updates with the
+# URL token, and when /updates is not readable (no token / instance back) probe
+# /health and reload so no viewer is ever stranded on this page.
 _FALLBACK_JS = (
-    "function p(){fetch('/updates',{cache:'no-store'}).then(function(r){return r.ok?r.json():null})"
+    "var t=new URLSearchParams(location.search).get('token')||'';"
+    "function r(){fetch('/health',{cache:'no-store'}).then(function(h){if(h.ok)location.reload()})"
+    ".catch(function(){})}"
+    "function p(){fetch('/updates?token='+encodeURIComponent(t),{cache:'no-store'})"
+    ".then(function(x){return x.ok?x.json():(r(),null)})"
     ".then(function(d){if(d&&d.terminal){fetch('/health').then(function(h){if(h.ok)location.href='/settings'})}"
-    "setTimeout(p,1500)}).catch(function(){setTimeout(p,1500)})}p();"
+    "setTimeout(p,1500)}).catch(function(){r();setTimeout(p,1500)})}p();"
 )
 
 
@@ -119,8 +118,8 @@ class _Handler(BaseHTTPRequestHandler):
         if not self._authed():
             self._respond(403, "application/json", b'{"error":"forbidden"}')
             return
-        entries = _tail_progress()
-        payload = json.dumps({"entries": entries, "terminal": _is_terminal(entries)}).encode("utf-8")
+        entries = progress.read_entries()
+        payload = json.dumps({"entries": entries, "terminal": progress.is_terminal(entries)}).encode("utf-8")
         self._respond(200, "application/json", payload)
 
     def _respond(self, status: int, content_type: str, body: bytes) -> None:
@@ -171,13 +170,25 @@ class _BoundServer(ThreadingHTTPServer):
 
     def __init__(self, sock: socket.socket, handler: type[BaseHTTPRequestHandler]) -> None:
         super().__init__(sock.getsockname(), handler, bind_and_activate=False)
+        # Adopt the pre-bound socket; close the unbound one the base class made
+        # so it isn't leaked, and fill in what server_bind would have set.
+        self.socket.close()
         self.socket = sock
+        host, port = sock.getsockname()[:2]
+        self.server_name = host
+        self.server_port = port
 
 
-def _serve_on(sock: socket.socket, ssl_ctx: ssl.SSLContext | None) -> ThreadingHTTPServer:
-    httpd = _BoundServer(sock, _Handler)
-    if ssl_ctx is not None:
-        httpd.socket = ssl_ctx.wrap_socket(httpd.socket, server_side=True)
+def _serve_on(sock: socket.socket, ssl_ctx: ssl.SSLContext | None) -> ThreadingHTTPServer | None:
+    """Serve on an already-bound socket; returns None (socket closed) on failure."""
+    try:
+        httpd = _BoundServer(sock, _Handler)
+        if ssl_ctx is not None:
+            httpd.socket = ssl_ctx.wrap_socket(httpd.socket, server_side=True)
+    except (OSError, ssl.SSLError) as e:
+        logger.warning(f"updater failed to start serving on {sock.getsockname()}: {e}")
+        _close(sock)
+        return None
     thread = threading.Thread(target=httpd.serve_forever, daemon=True)
     thread.start()
     return httpd
@@ -189,9 +200,13 @@ def run(cert_path: Path, key_path: Path) -> None:
 
     servers: list[ThreadingHTTPServer] = []
     if https_sock is not None:
-        servers.append(_serve_on(https_sock, ssl_ctx))
+        https_server = _serve_on(https_sock, ssl_ctx)
+        if https_server is not None:
+            servers.append(https_server)
     if http_sock is not None:
-        servers.append(_serve_on(http_sock, None))
+        http_server = _serve_on(http_sock, None)
+        if http_server is not None:
+            servers.append(http_server)
 
     if not servers:
         return
@@ -222,9 +237,12 @@ def run(cert_path: Path, key_path: Path) -> None:
 def _acquire_ports_during_downtime(
     ssl_ctx: ssl.SSLContext | None,
 ) -> tuple[socket.socket | None, socket.socket | None]:
-    # Wait for the restart to free 80/443, then grab them. The bind-wait window
-    # only starts once compute_space first goes offline, so a still-up
-    # compute_space at launch isn't mistaken for "already recovered".
+    # Wait for the restart to free 80/443, then grab them. Binds are only
+    # attempted after compute_space is first seen offline: the ports belong to
+    # the live Caddy until then, and grabbing one that happens to be free early
+    # (e.g. mid Caddy cold-reload, or a no-Caddy setup) would steal traffic from
+    # a healthy instance. The bind-wait window also starts at that first offline
+    # observation, so a still-up compute_space isn't mistaken for "recovered".
     https_sock: socket.socket | None = None
     http_sock: socket.socket | None = None
 
@@ -235,13 +253,14 @@ def _acquire_ports_during_downtime(
     bind_deadline: float | None = None
 
     while time.monotonic() < absolute_deadline:
-        if https_sock is None and ssl_ctx is not None:
-            https_sock = _try_bind("0.0.0.0", 443)
-        if http_sock is None:
-            http_sock = _try_bind("0.0.0.0", 80)
+        if downtime_seen:
+            if https_sock is None and ssl_ctx is not None:
+                https_sock = _try_bind("0.0.0.0", 443)
+            if http_sock is None:
+                http_sock = _try_bind("0.0.0.0", 80)
 
-        if https_sock is not None or (ssl_ctx is None and http_sock is not None):
-            return https_sock, http_sock
+            if https_sock is not None or (ssl_ctx is None and http_sock is not None):
+                return https_sock, http_sock
 
         ready = _compute_space_ready()
         if not ready and not downtime_seen:

@@ -2,18 +2,34 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 
 import pytest
+from litestar import Litestar
+from litestar.di import Provide
 from litestar.exceptions import HTTPException
+from litestar.plugins.jinja import JinjaTemplateEngine
+from litestar.template.config import TemplateConfig
+from litestar.testing import TestClient
 
 import compute_space.web.routes.api.settings as settings_mod
+from compute_space.config import provide_config
+from compute_space.config import set_active_config
 from compute_space.core import seamless_update
 from compute_space.core import update_progress
 from compute_space.core.system_agent import SystemAgentError
+from compute_space.db import provide_db
+from compute_space.db.connection import init_db
+from compute_space.web.app import _template_globals
+from compute_space.web.routes.pages.settings import updating_page
 from openhost_system_agent.protocol import MigrationStatus
 from openhost_system_agent.updater import paths as agent_paths
 from openhost_system_agent.updater import progress as agent_progress
+
+from ._litestar_helpers import auth_cookie
+from .conftest import _make_test_config
 
 
 async def _drain() -> None:
@@ -87,47 +103,21 @@ async def test_clear_token_swallows_agent_error(monkeypatch: pytest.MonkeyPatch)
 
 
 # ─────────────── apply_update endpoint ───────────────
+# The endpoint gate/lock/token-lifecycle tests live in test_settings_host_prep.py;
+# here we cover only what that file doesn't: failure paths of the background
+# apply task and their progress-log side effects.
 
 
-@pytest.mark.asyncio
-async def test_apply_returns_token(monkeypatch: pytest.MonkeyPatch, token_calls: dict[str, list[str]]) -> None:
-    async def apply() -> None:
-        return None
-
-    async def status() -> MigrationStatus:
-        return _status()
-
-    monkeypatch.setattr(settings_mod, "system_agent_apply", apply)
-    monkeypatch.setattr(settings_mod, "system_agent_status", status)
-    resp = await settings_mod.apply_update.fn()
-    await _drain()
-    assert resp.token and token_calls["persist"] == [resp.token]
-
-
-@pytest.mark.asyncio
-async def test_apply_second_call_409(monkeypatch: pytest.MonkeyPatch, token_calls: dict[str, list[str]]) -> None:
-    release = asyncio.Event()
-
-    async def apply() -> None:
-        await release.wait()
-
-    async def status() -> MigrationStatus:
-        return _status()
-
-    monkeypatch.setattr(settings_mod, "system_agent_apply", apply)
-    monkeypatch.setattr(settings_mod, "system_agent_status", status)
-    await settings_mod.apply_update.fn()
-    await _drain()
-    with pytest.raises(HTTPException) as e:
-        await settings_mod.apply_update.fn()
-    assert e.value.status_code == 409
-    release.set()
-    await _drain()
+@pytest.fixture
+def progress_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    monkeypatch.setenv(agent_paths.DATA_DIR_ENV, str(tmp_path))
+    (tmp_path / "updater").mkdir(parents=True, exist_ok=True)
+    return tmp_path
 
 
 @pytest.mark.asyncio
 async def test_apply_third_call_after_failure_allowed(
-    monkeypatch: pytest.MonkeyPatch, token_calls: dict[str, list[str]]
+    monkeypatch: pytest.MonkeyPatch, token_calls: dict[str, list[str]], progress_env: Path
 ) -> None:
     # After a failed apply the lock frees, so a retry is accepted (not 409).
     async def failing() -> None:
@@ -154,38 +144,74 @@ async def test_apply_third_call_after_failure_allowed(
 
 
 @pytest.mark.asyncio
-async def test_apply_gate_missing_migration_409(
-    monkeypatch: pytest.MonkeyPatch, token_calls: dict[str, list[str]]
+async def test_apply_failure_records_terminal_progress(
+    monkeypatch: pytest.MonkeyPatch, token_calls: dict[str, list[str]], progress_env: Path
 ) -> None:
-    async def status() -> MigrationStatus:
-        return _status(ok=False, reason="missing", msg="log missing")
+    # If the agent dies before recording its own failure, compute_space must
+    # leave the log terminal or the /updating page would spin forever.
+    async def failing() -> None:
+        raise SystemAgentError("agent exploded before recording")
 
+    async def status() -> MigrationStatus:
+        return _status()
+
+    monkeypatch.setattr(settings_mod, "system_agent_apply", failing)
     monkeypatch.setattr(settings_mod, "system_agent_status", status)
-    monkeypatch.setattr(settings_mod, "system_agent_apply", lambda: None)
-    with pytest.raises(HTTPException) as e:
-        await settings_mod.apply_update.fn()
-    assert e.value.status_code == 409
-    assert not settings_mod._apply_lock.locked()
-    assert token_calls["persist"] == []  # never minted
+    await settings_mod.apply_update.fn()
+    await _drain()
+
+    view = update_progress.read_progress()
+    assert view.terminal is True
+    assert view.entries[-1]["phase"] == agent_progress.PHASE_FAILED
+    assert "agent exploded" in str(view.entries[-1]["message"])
 
 
 @pytest.mark.asyncio
-async def test_apply_gate_behind_is_allowed(
-    monkeypatch: pytest.MonkeyPatch, token_calls: dict[str, list[str]]
+async def test_apply_failure_keeps_agents_own_failed_entry(
+    monkeypatch: pytest.MonkeyPatch, token_calls: dict[str, list[str]], progress_env: Path
 ) -> None:
-    called = {"n": 0}
-
-    async def apply() -> None:
-        called["n"] += 1
+    # When the agent already recorded a specific failure, compute_space must not
+    # append a second, vaguer one.
+    async def failing() -> None:
+        agent_progress.record(agent_progress.PHASE_FAILED, "specific agent-side reason")
+        raise SystemAgentError("boom")
 
     async def status() -> MigrationStatus:
-        return _status(ok=False, reason="behind", msg="migrations pending")
+        return _status()
 
-    monkeypatch.setattr(settings_mod, "system_agent_apply", apply)
+    monkeypatch.setattr(settings_mod, "system_agent_apply", failing)
     monkeypatch.setattr(settings_mod, "system_agent_status", status)
-    resp = await settings_mod.apply_update.fn()
+    await settings_mod.apply_update.fn()
     await _drain()
-    assert resp.token and called["n"] == 1
+
+    view = update_progress.read_progress()
+    failed = [e for e in view.entries if e.get("phase") == agent_progress.PHASE_FAILED]
+    assert len(failed) == 1
+    assert failed[0]["message"] == "specific agent-side reason"
+
+
+@pytest.mark.asyncio
+async def test_apply_generic_exception_also_recorded(
+    monkeypatch: pytest.MonkeyPatch, token_calls: dict[str, list[str]], progress_env: Path
+) -> None:
+    # Not just SystemAgentError: any failure must clear the token and terminate
+    # the progress log.
+    async def failing() -> None:
+        raise RuntimeError("totally unexpected")
+
+    async def status() -> MigrationStatus:
+        return _status()
+
+    monkeypatch.setattr(settings_mod, "system_agent_apply", failing)
+    monkeypatch.setattr(settings_mod, "system_agent_status", status)
+    await settings_mod.apply_update.fn()
+    await _drain()
+
+    assert not settings_mod._apply_lock.locked()
+    assert token_calls["clear"] == ["x"]
+    view = update_progress.read_progress()
+    assert view.terminal is True
+    assert "totally unexpected" in str(view.entries[-1]["message"])
 
 
 @pytest.mark.asyncio
@@ -199,19 +225,6 @@ async def test_apply_status_error_500_releases_lock(
     with pytest.raises(HTTPException) as e:
         await settings_mod.apply_update.fn()
     assert e.value.status_code == 500
-    assert not settings_mod._apply_lock.locked()
-
-
-@pytest.mark.asyncio
-async def test_apply_unexpected_status_error_releases_lock(
-    monkeypatch: pytest.MonkeyPatch, token_calls: dict[str, list[str]]
-) -> None:
-    async def status() -> MigrationStatus:
-        raise RuntimeError("unexpected")
-
-    monkeypatch.setattr(settings_mod, "system_agent_status", status)
-    with pytest.raises(RuntimeError):
-        await settings_mod.apply_update.fn()
     assert not settings_mod._apply_lock.locked()
 
 
@@ -246,13 +259,6 @@ async def test_apply_persist_failure_still_starts(
 # ─────────────── /updates endpoint (compute_space) ───────────────
 
 
-@pytest.fixture
-def progress_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    monkeypatch.setenv(agent_paths._DATA_DIR_ENV, str(tmp_path))
-    (tmp_path / "updater").mkdir(parents=True, exist_ok=True)
-    return tmp_path
-
-
 @pytest.mark.asyncio
 async def test_update_progress_empty(progress_env: Path) -> None:
     resp = await settings_mod.update_progress.fn()
@@ -278,7 +284,7 @@ async def test_update_progress_partial_line(progress_env: Path) -> None:
     assert len(resp.entries) == 1
 
 
-# ─────────────── update_progress.read_progress view ───────────────
+# ─────────────── update_progress helpers ───────────────
 
 
 def test_read_progress_view_matches_agent_reader(progress_env: Path) -> None:
@@ -289,3 +295,136 @@ def test_read_progress_view_matches_agent_reader(progress_env: Path) -> None:
     v = update_progress.read_progress()
     assert v.entries == agent_progress.read_entries()
     assert v.terminal == agent_progress.is_terminal(v.entries)
+
+
+def test_mark_boot_complete_appends_done_after_restart(progress_env: Path) -> None:
+    # The apply walk ends with a non-terminal "restarting"; the NEW process turns
+    # it terminal at boot so the page can only leave once we're really back.
+    agent_progress.record("install", "Installing…")
+    agent_progress.record(agent_progress.PHASE_RESTARTING, "Update complete. Restarting…")
+    update_progress.mark_boot_complete()
+
+    v = update_progress.read_progress()
+    assert v.terminal is True
+    assert v.entries[-1]["phase"] == agent_progress.PHASE_DONE
+
+
+def test_mark_boot_complete_noop_without_restart_entry(progress_env: Path) -> None:
+    # Normal boots (no preceding self-update) must not fabricate a "done".
+    agent_progress.record("install", "Installing…")
+    update_progress.mark_boot_complete()
+    v = update_progress.read_progress()
+    assert [e["phase"] for e in v.entries] == ["install"]
+
+    # Empty/missing log: also a no-op.
+    agent_progress.reset_progress()
+    update_progress.mark_boot_complete()
+    assert update_progress.read_progress().entries == []
+
+
+def test_mark_boot_complete_noop_when_already_terminal(progress_env: Path) -> None:
+    agent_progress.record(agent_progress.PHASE_FAILED, "died")
+    update_progress.mark_boot_complete()
+    v = update_progress.read_progress()
+    assert [e["phase"] for e in v.entries] == [agent_progress.PHASE_FAILED]
+
+
+@pytest.mark.asyncio
+async def test_record_apply_failure_terminates_nonterminal_log(progress_env: Path) -> None:
+    agent_progress.record("fetch", "Fetching…")
+    await update_progress.record_apply_failure("it broke")
+    v = update_progress.read_progress()
+    assert v.terminal is True and "it broke" in str(v.entries[-1]["message"])
+
+
+@pytest.mark.asyncio
+async def test_record_apply_failure_keeps_existing_terminal(progress_env: Path) -> None:
+    agent_progress.record(agent_progress.PHASE_FAILED, "agent-side detail")
+    await update_progress.record_apply_failure("vaguer compute_space message")
+    v = update_progress.read_progress()
+    assert [e["phase"] for e in v.entries] == [agent_progress.PHASE_FAILED]
+    assert v.entries[-1]["message"] == "agent-side detail"
+
+
+def test_mark_boot_complete_falls_back_to_agent(progress_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # A log created by an older build is root-owned; the direct append fails and
+    # the boot hook must route through the root agent instead of giving up.
+    calls = {"agent": 0}
+    monkeypatch.setattr(update_progress.agent_progress, "mark_boot_complete", lambda: False)
+    monkeypatch.setattr(
+        update_progress, "system_agent_mark_boot_complete_sync", lambda: calls.__setitem__("agent", calls["agent"] + 1)
+    )
+    update_progress.mark_boot_complete()
+    assert calls["agent"] == 1
+
+
+@pytest.mark.asyncio
+async def test_record_apply_failure_falls_back_to_agent(progress_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[str] = []
+
+    async def fake_agent_fail(message: str) -> None:
+        calls.append(message)
+
+    monkeypatch.setattr(update_progress.agent_progress, "record_failure_if_not_terminal", lambda m: False)
+    monkeypatch.setattr(update_progress, "system_agent_record_update_failure", fake_agent_fail)
+    await update_progress.record_apply_failure("it broke")
+    assert calls == ["it broke"]
+
+
+# ─────────────── /updating page render ───────────────
+
+
+@pytest.fixture
+def cfg(tmp_path: Path) -> Iterator[Any]:
+    config = _make_test_config(tmp_path, zone_domain="update-zone.example.com")
+    init_db(config.db_path)
+    yield config
+
+
+def _build_app(cfg: Any) -> Litestar:
+    """A minimal app with the real /updating route and Jinja globals installed."""
+    web_dir = Path(__file__).resolve().parents[1] / "web"
+    template_config: TemplateConfig[JinjaTemplateEngine] = TemplateConfig(
+        directory=web_dir / "templates",
+        engine=JinjaTemplateEngine,
+    )
+
+    def _install_globals(app: Litestar) -> None:
+        engine = app.template_engine
+        if isinstance(engine, JinjaTemplateEngine):
+            engine.engine.globals.update(_template_globals(cfg, web_dir / "static"))
+
+    return Litestar(
+        route_handlers=[updating_page],
+        template_config=template_config,
+        dependencies={
+            "config": Provide(provide_config, sync_to_thread=False),
+            "db": Provide(provide_db),
+        },
+        on_startup=[_install_globals],
+        openapi_config=None,
+    )
+
+
+def test_updating_page_renders_for_owner(cfg: Any) -> None:
+    # The page is the user-visible centrepiece of the update flow; make sure the
+    # template (include + static_url calls) actually renders.
+    set_active_config(cfg)
+    cookie = auth_cookie(cfg, username="owner")
+
+    with TestClient(app=_build_app(cfg)) as client:
+        client.cookies.update(cookie)
+        resp = client.get("/updating")
+    assert resp.status_code == 200
+    assert "Updating this instance" in resp.text
+    assert "update-progress.js" in resp.text
+    assert "update-progress.css" in resp.text
+
+
+def test_updating_page_requires_owner_auth(cfg: Any) -> None:
+    set_active_config(cfg)
+    with TestClient(app=_build_app(cfg)) as client:
+        resp = client.get("/updating", follow_redirects=False)
+    # Unauthenticated: never renders the page (guard fires; the full app maps
+    # this to a login redirect, bare test app surfaces the 401).
+    assert resp.status_code in (302, 401)

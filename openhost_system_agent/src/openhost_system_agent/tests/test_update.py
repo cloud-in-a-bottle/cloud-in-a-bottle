@@ -9,6 +9,7 @@ rather than mocking gitpython, while staying fast and offline.
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -16,6 +17,8 @@ import git
 import pytest
 
 import openhost_system_agent.update as update_mod
+from openhost_system_agent.updater import paths as updater_paths
+from openhost_system_agent.updater import progress as updater_progress
 
 # Fully isolate from the developer's global/system git config (signing, hooks,
 # user identity) so tests are deterministic on any machine.
@@ -198,6 +201,44 @@ def test_apply_update_dirty_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     with pytest.raises(RuntimeError, match="uncommitted"):
         update_mod.apply_update()
     assert calls == []  # never handed off
+
+
+def test_apply_update_dirty_records_failed_progress(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Every apply failure must leave the progress log terminal ("failed"), or
+    # the /updating page — which only stops polling on done/failed — would show
+    # a spinner forever with no explanation.
+    monkeypatch.setenv(updater_paths.DATA_DIR_ENV, str(tmp_path / "data"))
+    remote = _make_repo(tmp_path / "remote", ["v1.0.0"])
+    local = _clone_at(remote, tmp_path / "local", checkout="v1.0.0")
+    (tmp_path / "local" / "untracked").write_text("x")
+    _stub_execv(monkeypatch)
+    monkeypatch.setattr(update_mod, "_repo", lambda: local)
+
+    with pytest.raises(RuntimeError, match="uncommitted"):
+        update_mod.apply_update()
+
+    entries = updater_progress.read_entries()
+    assert updater_progress.is_terminal(entries) is True
+    assert entries[-1]["phase"] == updater_progress.PHASE_FAILED
+    assert "uncommitted" in str(entries[-1]["message"])
+
+
+def test_apply_update_fetch_failure_records_failed_progress(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # A fetch failure (network blip, deleted remote) happens after the "fetch"
+    # entry is recorded; it must still end terminal.
+    monkeypatch.setenv(updater_paths.DATA_DIR_ENV, str(tmp_path / "data"))
+    remote = _make_repo(tmp_path / "remote", ["v1.0.0"])
+    local = _clone_at(remote, tmp_path / "local", checkout="v1.0.0")
+    _stub_execv(monkeypatch)
+    monkeypatch.setattr(update_mod, "_repo", lambda: local)
+    shutil.rmtree(remote)  # origin vanishes -> fetch raises
+
+    with pytest.raises(git.GitCommandError):
+        update_mod.apply_update()
+
+    entries = updater_progress.read_entries()
+    assert [e["phase"] for e in entries][:1] == ["fetch"]
+    assert entries[-1]["phase"] == updater_progress.PHASE_FAILED
 
 
 def test_apply_update_without_tags_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

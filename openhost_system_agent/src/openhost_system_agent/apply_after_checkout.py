@@ -147,11 +147,7 @@ def _next_step(project: str) -> str | None:
     return None
 
 
-def main() -> None:
-    # src/openhost_system_agent/apply_after_checkout.py → repo root is four up.
-    project = str(Path(__file__).resolve().parents[3])
-    _ensure_repo_trusted(project)
-
+def _apply(project: str) -> None:
     # Failsafe: hand the pixi trees back to the host user FIRST, before anything
     # else touches them. This must precede migrations because a migration can
     # run a pixi operation as the host user (e.g. v0004's `pixi self-update`);
@@ -188,9 +184,11 @@ def main() -> None:
         # walk stays a single process regardless of how many steps we're behind.
         os.execv(sys.executable, [sys.executable, str(Path(__file__).resolve())])
 
-    # Record "done" BEFORE the restart, which kills this process (anything after
-    # systemctl may never run).
-    progress.record(progress.PHASE_DONE, "Update complete. Restarting\u2026")
+    # NOT terminal: the freshly booted compute_space appends the terminal "done"
+    # (mark_boot_complete), so the /updating page can only leave once the NEW
+    # instance is serving. Recording "done" here raced the page's health probe
+    # against the old, about-to-die instance.
+    progress.record(progress.PHASE_RESTARTING, "Update complete. Restarting\u2026")
 
     # Launch the detached downtime server just before the restart so it is ready
     # to bind 80/443 the instant Caddy releases them. Best-effort; never raises.
@@ -204,6 +202,23 @@ def main() -> None:
     if result.returncode != 0:
         print(f"failed to restart openhost (exit {result.returncode})", file=sys.stderr)
         sys.exit(1)
+
+
+def main() -> None:
+    # src/openhost_system_agent/apply_after_checkout.py → repo root is four up.
+    project = str(Path(__file__).resolve().parents[3])
+    _ensure_repo_trusted(project)
+
+    # Any unhandled failure must leave a terminal "failed" entry, or the
+    # /updating page (which only stops on done/failed) would spin forever with
+    # no explanation. SystemExit(1) paths above record their own message.
+    try:
+        _apply(project)
+    except SystemExit:
+        raise
+    except BaseException as e:
+        progress.record(progress.PHASE_FAILED, f"Update failed: {e}")
+        raise
 
 
 if __name__ == "__main__":

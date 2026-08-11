@@ -26,7 +26,7 @@ from openhost_system_agent.updater import server
 
 @pytest.fixture
 def data_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    monkeypatch.setenv(paths._DATA_DIR_ENV, str(tmp_path))
+    monkeypatch.setenv(paths.DATA_DIR_ENV, str(tmp_path))
     (tmp_path / "updater").mkdir(parents=True, exist_ok=True)
     return tmp_path
 
@@ -122,7 +122,7 @@ def test_progress_reset_truncates_stale(data_dir: Path) -> None:
 
 def test_record_never_raises_on_bad_dir(monkeypatch: pytest.MonkeyPatch) -> None:
     # Point at an unwritable path; record must swallow the error, not raise.
-    monkeypatch.setenv(paths._DATA_DIR_ENV, "/proc/nonexistent/cannot/create")
+    monkeypatch.setenv(paths.DATA_DIR_ENV, "/proc/nonexistent/cannot/create")
     progress.record("fetch", "should not raise")  # no exception = pass
 
 
@@ -170,6 +170,10 @@ def test_is_terminal(data_dir: Path) -> None:
     assert progress.is_terminal([{"phase": "failed"}]) is True
     # Only the LAST entry matters: a "done" mid-log followed by work is not terminal.
     assert progress.is_terminal([{"phase": "done"}, {"phase": "install"}]) is False
+    # "restarting" is deliberately NOT terminal: only the freshly booted
+    # compute_space appends "done", so the page can't leave for a dashboard that
+    # is about to die.
+    assert progress.is_terminal([{"phase": progress.PHASE_RESTARTING}]) is False
 
 
 # ── server: token gating + page rendering over real TLS ────────────────────────
@@ -365,6 +369,34 @@ def test_compute_space_not_ready_when_nothing_listening(monkeypatch: pytest.Monk
 # ── server: _acquire_ports_during_downtime lifecycle ────────────────────────────
 
 
+def test_acquire_never_binds_before_downtime(monkeypatch: pytest.MonkeyPatch) -> None:
+    # While compute_space is up the ports belong to the live Caddy — the updater
+    # must not even attempt a bind (a port that happens to be free mid-reload
+    # would be stolen from a healthy instance). Binds only start after the first
+    # offline observation.
+    bind_attempts_at_poll: list[int] = []
+    polls = {"n": 0}
+
+    def ready() -> bool:
+        # Up for polls 1-4, down for polls 5-7, back up from poll 8 (so the
+        # loop exits via the "recovered before bind" branch).
+        polls["n"] += 1
+        return polls["n"] < 5 or polls["n"] >= 8
+
+    def try_bind(host: str, port: int):  # type: ignore[no-untyped-def]
+        bind_attempts_at_poll.append(polls["n"])
+        return None
+
+    monkeypatch.setattr(server, "_compute_space_ready", ready)
+    monkeypatch.setattr(server, "_try_bind", try_bind)
+    monkeypatch.setattr(server, "_BIND_WAIT_SECONDS", 60.0)
+    monkeypatch.setattr("openhost_system_agent.updater.server.time.sleep", lambda _: None)
+    server._acquire_ports_during_downtime(ssl_ctx=object())  # type: ignore[arg-type]
+    assert bind_attempts_at_poll, "expected bind attempts once downtime was seen"
+    # Every bind attempt happened only after the up->down transition (poll >= 5).
+    assert all(n >= 5 for n in bind_attempts_at_poll), bind_attempts_at_poll
+
+
 def test_acquire_waits_until_downtime_then_binds(monkeypatch: pytest.MonkeyPatch) -> None:
     # At launch compute_space is UP and the ports are held by Caddy (bind fails).
     # The updater must keep waiting, NOT exit. Once compute_space goes down and a
@@ -440,11 +472,16 @@ def test_run_serves_then_releases_when_ready(data_dir: Path, monkeypatch: pytest
     _self_signed(cert, key)
     real = server._try_bind("127.0.0.1", 0)
     assert real is not None
+    port = int(real.getsockname()[1])
     monkeypatch.setattr(server, "_acquire_ports_during_downtime", lambda ctx: (real, None))
     monkeypatch.setattr(server, "_compute_space_ready", lambda: True)  # already back
     monkeypatch.setattr("openhost_system_agent.updater.server.time.sleep", lambda _: None)
     server.run(cert, key)
-    assert real.fileno() == -1  # released / closed
+    # The port must actually be free again (the wrapped listener was closed);
+    # checking fileno() on `real` would be vacuous — wrap_socket detaches it.
+    rebound = server._try_bind("127.0.0.1", port)
+    assert rebound is not None
+    rebound.close()
 
 
 def test_run_returns_when_no_ports_acquired(data_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -453,6 +490,32 @@ def test_run_returns_when_no_ports_acquired(data_dir: Path, monkeypatch: pytest.
     start = time.monotonic()
     server.run(data_dir / "c.pem", data_dir / "c.key")
     assert time.monotonic() - start < 2
+
+
+def test_serve_on_closes_socket_when_tls_wrap_fails(data_dir: Path) -> None:
+    # A broken SSL context must not leak the bound port: _serve_on closes the
+    # socket and returns None so run() can carry on with whatever else it holds.
+    sock = server._try_bind("127.0.0.1", 0)
+    assert sock is not None
+    port = int(sock.getsockname()[1])
+
+    class _BadCtx:
+        def wrap_socket(self, *a, **k):  # type: ignore[no-untyped-def]
+            raise ssl.SSLError("bad cert chain")
+
+    assert server._serve_on(sock, _BadCtx()) is None  # type: ignore[arg-type]
+    rebound = server._try_bind("127.0.0.1", port)
+    assert rebound is not None  # port actually freed
+    rebound.close()
+
+
+def test_fallback_js_authenticates_and_recovers() -> None:
+    # The inline fallback page must behave like the real update-progress.js:
+    # pass the URL token to /updates and reload via /health when logs are
+    # unreadable — otherwise a fallback viewer is stranded forever.
+    assert "token" in server._FALLBACK_JS
+    assert "/updates?token=" in server._FALLBACK_JS
+    assert "location.reload" in server._FALLBACK_JS
 
 
 # ── token persistence ───────────────────────────────────────────────────────────
@@ -491,7 +554,7 @@ def test_launch_updater_no_systemd_run(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_launch_updater_success(data_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("openhost_system_agent.updater.launcher.shutil.which", lambda _: "/usr/bin/systemd-run")
-    monkeypatch.setattr(launcher, "_reset_stale_scope", lambda: None)
+    monkeypatch.setattr(launcher, "stop_updater", lambda: None)
 
     class _Ok:
         returncode = 0
@@ -509,7 +572,7 @@ def test_launch_updater_success(data_dir: Path, monkeypatch: pytest.MonkeyPatch)
 
 def test_launch_updater_systemd_run_nonzero(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("openhost_system_agent.updater.launcher.shutil.which", lambda _: "/usr/bin/systemd-run")
-    monkeypatch.setattr(launcher, "_reset_stale_scope", lambda: None)
+    monkeypatch.setattr(launcher, "stop_updater", lambda: None)
 
     class _Fail:
         returncode = 1
@@ -521,7 +584,7 @@ def test_launch_updater_systemd_run_nonzero(monkeypatch: pytest.MonkeyPatch) -> 
 
 def test_launch_updater_never_raises_on_oserror(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("openhost_system_agent.updater.launcher.shutil.which", lambda _: "/usr/bin/systemd-run")
-    monkeypatch.setattr(launcher, "_reset_stale_scope", lambda: None)
+    monkeypatch.setattr(launcher, "stop_updater", lambda: None)
 
     def _boom(*a, **k):  # type: ignore[no-untyped-def]
         raise OSError("nope")
@@ -532,7 +595,7 @@ def test_launch_updater_never_raises_on_oserror(monkeypatch: pytest.MonkeyPatch)
 
 def test_launch_updater_command_shape(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("openhost_system_agent.updater.launcher.shutil.which", lambda _: "/usr/bin/systemd-run")
-    monkeypatch.setattr(launcher, "_reset_stale_scope", lambda: None)
+    monkeypatch.setattr(launcher, "stop_updater", lambda: None)
     captured: list[list[str]] = []
 
     class _Ok:
@@ -577,7 +640,7 @@ def test_stop_updater_calls_systemctl(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("openhost_system_agent.updater.launcher.subprocess.run", fake_run)
     launcher.stop_updater()
     assert calls[0][:2] == ["systemctl", "stop"]
-    assert calls[0][2] == launcher._SCOPE_UNIT
+    assert calls[0][2] == launcher._UPDATER_UNIT
 
 
 def test_stop_updater_never_raises(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -586,3 +649,42 @@ def test_stop_updater_never_raises(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr("openhost_system_agent.updater.launcher.subprocess.run", boom)
     launcher.stop_updater()  # must not raise
+
+
+def test_stop_updater_clears_ready_marker(data_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # The stop SIGTERMs the updater before its own cleanup can run, so stop_updater
+    # removes the ready marker itself rather than leaving it to linger.
+    paths.ready_marker_path().write_text("")
+
+    def fake_run(cmd, **kw):  # type: ignore[no-untyped-def]
+        class _R:
+            returncode = 0
+            stderr = ""
+
+        return _R()
+
+    monkeypatch.setattr("openhost_system_agent.updater.launcher.subprocess.run", fake_run)
+    launcher.stop_updater()
+    assert not paths.ready_marker_path().exists()
+
+
+def test_launch_updater_forwards_data_dir_env(data_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # The detached unit must resolve the same on-disk paths as the launcher;
+    # OPENHOST_DATA_DIR is forwarded via systemd-run --setenv.
+    monkeypatch.setattr("openhost_system_agent.updater.launcher.shutil.which", lambda _: "/usr/bin/systemd-run")
+    monkeypatch.setattr(launcher, "stop_updater", lambda: None)
+    captured: list[list[str]] = []
+
+    class _Ok:
+        returncode = 0
+        stderr = ""
+
+    def _run(cmd, **kw):  # type: ignore[no-untyped-def]
+        captured.append(cmd)
+        return _Ok()
+
+    monkeypatch.setattr("openhost_system_agent.updater.launcher.subprocess.run", _run)
+    monkeypatch.setattr("openhost_system_agent.updater.launcher.time.sleep", lambda _: None)
+    monkeypatch.setattr(launcher, "_READY_WAIT_SECONDS", 0.01)
+    launcher.launch_updater()
+    assert f"--setenv={paths.DATA_DIR_ENV}={data_dir}" in captured[0]

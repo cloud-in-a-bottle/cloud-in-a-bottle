@@ -41,6 +41,7 @@ from compute_space.core.tls.provision import provision_cert
 from compute_space.core.tls.renewal import CertStatus
 from compute_space.core.tls.renewal import get_cert_status
 from compute_space.core.tls.renewal import start_renewal_thread
+from compute_space.core.update_progress import mark_boot_complete
 from compute_space.core.updates import RESTART_EXIT_CODE
 from compute_space.core.updates import initialize_shutdown_event
 from compute_space.db import get_db
@@ -67,8 +68,13 @@ def _bootstrap(config: Config) -> None:
     set_active_config(config)
     # Point openhost_system_agent.updater.paths at this instance's data dir so
     # compute_space reads the same progress log / token file the updater uses.
+    # (Forwarded to the agent and the detached updater on every invocation.)
     os.environ["OPENHOST_DATA_DIR"] = str(config.openhost_data_path)
     setup_file_logging(Path(os.path.dirname(config.db_path)) / "compute_space.log")
+    # If the previous process was replaced by a self-update, append the terminal
+    # "done" progress entry: it must come from the NEW process (see
+    # mark_boot_complete) so the /updating page only leaves once we're truly back.
+    mark_boot_complete()
     load_keys(config.keys_dir)
     init_db(config.db_path)
 

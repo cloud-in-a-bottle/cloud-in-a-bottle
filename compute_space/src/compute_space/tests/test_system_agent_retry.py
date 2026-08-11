@@ -141,6 +141,7 @@ def test_stop_updater_sync_calls_agent(monkeypatch: pytest.MonkeyPatch) -> None:
         return _Result(0, stdout='{"ok": true}')
 
     monkeypatch.setattr(system_agent.subprocess, "run", fake_run)
+    monkeypatch.delenv("OPENHOST_DATA_DIR", raising=False)
     system_agent.system_agent_stop_updater_sync()
     # Invoked the agent's `updater stop`.
     argv = calls[0][0]
@@ -151,3 +152,34 @@ def test_stop_updater_sync_calls_agent(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_stop_updater_sync_swallows_error(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(system_agent.subprocess, "run", lambda *a, **k: _Result(1, stderr="boom"))
     system_agent.system_agent_stop_updater_sync()  # must not raise
+
+
+# ── OPENHOST_DATA_DIR forwarding (sudo strips the environment) ─────────────────
+
+
+def test_agent_argv_forwards_data_dir_via_sudo_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    # sudo's env_reset would drop OPENHOST_DATA_DIR; it must be re-injected with
+    # `sudo env` so the agent resolves the same progress/token/cert paths as
+    # compute_space on instances with a non-default data dir.
+    monkeypatch.setenv("OPENHOST_DATA_DIR", "/custom/data/dir")
+    argv = system_agent._agent_argv("status")
+    assert argv == ["sudo", "env", "OPENHOST_DATA_DIR=/custom/data/dir", "openhost_system_agent", "status"]
+
+
+def test_agent_argv_plain_without_data_dir(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("OPENHOST_DATA_DIR", raising=False)
+    assert system_agent._agent_argv("status") == ["sudo", "openhost_system_agent", "status"]
+
+
+def test_env_style_not_found_also_retried(monkeypatch: pytest.MonkeyPatch) -> None:
+    # `sudo env` reports a missing binary as "No such file or directory" rather
+    # than sudo's "command not found"; both must hit the retry + ansible hint.
+    monkeypatch.setenv("OPENHOST_DATA_DIR", "/custom")
+    monkeypatch.setattr(
+        system_agent.subprocess,
+        "run",
+        lambda *a, **k: _Result(1, stderr="env: 'openhost_system_agent': No such file or directory"),
+    )
+    with pytest.raises(SystemAgentError) as e:
+        system_agent._run_system_agent("status")
+    assert "ansible" in str(e.value)
