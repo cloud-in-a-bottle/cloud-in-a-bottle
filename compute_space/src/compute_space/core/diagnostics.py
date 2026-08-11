@@ -11,6 +11,15 @@ Two public entry points:
   - :func:`collect_app_diagnostics` — a per-app snapshot: the app's declared
     version + manifest git checkout, container status, plus a slim slice of the
     same host/system info so an app report is self-contained.
+
+Error handling matches fault severity rather than degrading every failure the
+same way. A foundational fault — an unreadable control-plane DB (the ``apps``
+query, the primary-domain read) — propagates, so the endpoint returns 500 rather
+than a hollow bundle that would masquerade as a healthy empty instance. A
+field-level fault — one bad app row, an unreachable host, a podman probe that
+fails — degrades that field to ``None``/an error string so the rest of the
+bundle still renders, which is precisely when a diagnostics bundle is most
+valuable.
 """
 
 from __future__ import annotations
@@ -933,15 +942,22 @@ async def collect_app_diagnostics(row: sqlite3.Row, config: Config, db: sqlite3.
             version = None
 
     repo_path = row["repo_path"]
-    git = await _collect_git_info(Path(repo_path) if repo_path else None)
-
-    openhost_git = await _collect_openhost_git_info()
 
     # One fleet-wide podman ps + stats (shared with the platform bundle's path),
     # off the event loop; ``_collect_host_facts`` likewise wraps blocking probes.
-    batch = await asyncio.to_thread(_collect_container_stats_batch)
-    health, resources = await _collect_app_health_and_resources(row, batch)
-    system, container_runtime, _dependencies, resource_pressure = await asyncio.to_thread(_collect_host_facts)
+    async def _health_and_resources() -> tuple[AppHealth, AppResourceUsage]:
+        batch = await asyncio.to_thread(_collect_container_stats_batch)
+        return await _collect_app_health_and_resources(row, batch)
+
+    # Mirror the platform path: gather the independent slices so the slowest
+    # bounds the wall-clock instead of the sum.
+    git, openhost_git, host_facts, (health, resources) = await asyncio.gather(
+        _collect_git_info(Path(repo_path) if repo_path else None),
+        _collect_openhost_git_info(),
+        asyncio.to_thread(_collect_host_facts),
+        _health_and_resources(),
+    )
+    system, container_runtime, _dependencies, resource_pressure = host_facts
 
     return AppDiagnostics(
         schema_version=DIAGNOSTICS_SCHEMA_VERSION,
