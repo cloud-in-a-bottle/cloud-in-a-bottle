@@ -72,6 +72,15 @@ def build_openhost_service_unit(host_uid: int) -> str:
         "[Service]\n"
         "Type=simple\n"
         "User=host\n"
+        # Grant CAP_SYSLOG so the (non-root) host user can read /dev/kmsg. The
+        # memory guard tails the kernel log to detect host-level (global) OOM
+        # kills — machine ran out of RAM and reaped some process — which aren't
+        # scoped to any single app's cgroup and so aren't visible via podman. On
+        # a default dmesg_restrict=1 system reading the kernel log otherwise
+        # needs root; this ambient capability lets User=host read it without
+        # giving up the rest of the sandbox. Kept in sync with the ansible
+        # template.
+        "AmbientCapabilities=CAP_SYSLOG\n"
         "WorkingDirectory=/home/host/openhost\n"
         "Environment=PATH=/home/host/.pixi/bin:/home/host/openhost/.pixi/envs/default/bin:"
         "/usr/local/bin:/usr/bin:/bin\n"
