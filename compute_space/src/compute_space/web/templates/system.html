@@ -7,6 +7,20 @@
 </table>
 <div id="storage-guard-row"></div>
 
+<h2 class="section-title">Resource Usage</h2>
+<p class="hint">Live CPU and memory used across running apps, with the remaining
+headroom on this box shown as <em>Unused</em>. Hover a slice for details.</p>
+<div class="usage-charts">
+  <div class="usage-chart">
+    <h3>CPU</h3>
+    <div id="cpu-usage-chart"><span class="muted">Loading&hellip;</span></div>
+  </div>
+  <div class="usage-chart">
+    <h3>Memory</h3>
+    <div id="mem-usage-chart"><span class="muted">Loading&hellip;</span></div>
+  </div>
+</div>
+
 <h2 class="section-title">Externally Open Ports</h2>
 <table id="ports-table">
   <thead><tr><th>Port</th><th>Address</th><th>Detail</th></tr></thead>
@@ -20,7 +34,8 @@
 {
   "listeningPortsUrl": "/api/listening-ports",
   "storageStatusUrl": "/api/storage-status",
-  "toggleStorageGuardUrl": "/api/storage-guard"
+  "toggleStorageGuardUrl": "/api/storage-guard",
+  "diagnosticsUrl": "/api/diagnostics"
 }
 </script>
 <script src="{{ static_url('js/system.js') }}"></script>

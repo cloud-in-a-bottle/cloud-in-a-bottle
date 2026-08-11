@@ -54,6 +54,15 @@
     .pie-slice:hover { filter: brightness(0.88); }
     .pie-center-name { font-size: 14px; font-weight: 600; fill: #222; text-anchor: middle; }
     .pie-center-size { font-size: 12px; fill: #666; text-anchor: middle; }
+    th.sortable { cursor: pointer; user-select: none; white-space: nowrap; }
+    th.sortable:hover { background: #f0f0f0; }
+    .usage-charts { display: flex; gap: 2.5em; flex-wrap: wrap; align-items: flex-start; margin: 0.5em 0; }
+    .usage-chart { text-align: center; }
+    .usage-chart h3 { margin: 0 0 0.2em; font-size: 1em; font-weight: 600; }
+    .usage-legend { list-style: none; padding: 0; margin: 0.4em auto 0; text-align: left; font-size: 0.85em; max-width: 16em; }
+    .usage-legend li { display: flex; align-items: center; gap: 0.5em; padding: 1px 0; }
+    .usage-legend .swatch { width: 0.8em; height: 0.8em; border-radius: 2px; flex: none; }
+    .usage-legend .legend-value { color: #666; margin-left: auto; }
   </style>
 </head>
 <body>

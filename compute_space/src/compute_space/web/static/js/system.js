@@ -95,13 +95,25 @@ function escAttr(s) {
   return escHtml(s).replace(/"/g, '&quot;');
 }
 
-// Donut chart of per-app usage. Hovering a slice shows the app name and size
-// in the center; slices are sorted by size, largest first at 12 o'clock.
-function perAppPieHtml(perApp) {
-  var names = Object.keys(perApp).sort(function(a, b) { return perApp[b] - perApp[a]; });
+// Golden-angle hue steps keep adjacent app slices distinct at any app count;
+// fixed low saturation keeps the palette muted. Shared by every app-colored
+// donut so the same app gets a consistent hue slot across charts.
+function appColor(i) {
+  return 'hsl(' + ((215 + i * 137.5) % 360).toFixed(1) + ', 45%, 62%)';
+}
+
+// Neutral greys for the non-app slices of a usage donut.
+var COLOR_UNUSED = '#e3e6ea';   // free headroom on the box
+var COLOR_OTHER = '#b9c0c9';    // used by the host but not attributed to an app
+
+// Generic donut chart. `segments` is [{name, value, valueText, color}] drawn in
+// order from 12 o'clock; hovering a slice shows its name + valueText in the
+// center, which otherwise shows defaultName / defaultText. Give each donut a
+// unique `id` so multiple can coexist on one page.
+function donutHtml(id, segments, defaultName, defaultText) {
   var total = 0;
-  names.forEach(function(n) { total += perApp[n]; });
-  if (!total) return '<span class="muted">No app data yet.</span>';
+  segments.forEach(function(s) { total += s.value; });
+  if (total <= 0) return '<span class="muted">No data yet.</span>';
 
   var cx = 100, cy = 100, rOuter = 92, rInner = 58;
   var TAU = 2 * Math.PI;
@@ -111,37 +123,33 @@ function perAppPieHtml(perApp) {
     return (cx + r * Math.cos(a)).toFixed(2) + ' ' + (cy + r * Math.sin(a)).toFixed(2);
   }
 
-  var slices = names.map(function(name, i) {
-    var frac = perApp[name] / total;
-    // Clamp just under a full turn so a single-app "circle" still renders as one arc.
+  var slices = segments.map(function(s) {
+    var frac = s.value / total;
+    // Clamp just under a full turn so a single-slice "circle" still renders as one arc.
     var sweep = Math.min(frac * TAU, TAU - 0.0004);
     var a0 = angle;
     var a1 = a0 + sweep;
     angle += frac * TAU;
     var large = sweep > Math.PI ? 1 : 0;
-    // Golden-angle hue steps keep adjacent slices distinct at any app count;
-    // fixed low saturation keeps the palette muted.
-    var hue = (215 + i * 137.5) % 360;
     var d = 'M ' + pt(rOuter, a0) + ' A ' + rOuter + ' ' + rOuter + ' 0 ' + large + ' 1 ' + pt(rOuter, a1)
       + ' L ' + pt(rInner, a1) + ' A ' + rInner + ' ' + rInner + ' 0 ' + large + ' 0 ' + pt(rInner, a0) + ' Z';
-    return '<path class="pie-slice" d="' + d + '" fill="hsl(' + hue.toFixed(1) + ', 45%, 62%)"'
-      + ' data-name="' + escAttr(name) + '" data-size="' + escAttr(formatBytes(perApp[name])) + '"></path>';
+    return '<path class="pie-slice" d="' + d + '" fill="' + s.color + '"'
+      + ' data-name="' + escAttr(s.name) + '" data-size="' + escAttr(s.valueText) + '"></path>';
   }).join('');
 
-  var defaultName = names.length + (names.length === 1 ? ' app' : ' apps');
-  return '<svg id="per-app-pie" viewBox="0 0 200 200" width="220" height="220" role="img"'
-    + ' data-default-name="' + escAttr(defaultName) + '" data-default-size="' + escAttr(formatBytes(total)) + '">'
+  return '<svg class="usage-pie" id="' + id + '" viewBox="0 0 200 200" width="200" height="200" role="img"'
+    + ' data-default-name="' + escAttr(defaultName) + '" data-default-size="' + escAttr(defaultText) + '">'
     + slices
-    + '<text id="pie-label-name" class="pie-center-name" x="100" y="96">' + escHtml(defaultName) + '</text>'
-    + '<text id="pie-label-size" class="pie-center-size" x="100" y="114">' + escHtml(formatBytes(total)) + '</text>'
+    + '<text class="pie-center-name" data-role="name" x="100" y="96">' + escHtml(defaultName) + '</text>'
+    + '<text class="pie-center-size" data-role="size" x="100" y="114">' + escHtml(defaultText) + '</text>'
     + '</svg>';
 }
 
-function wirePerAppPie() {
-  var svg = document.getElementById('per-app-pie');
+function wireDonut(id) {
+  var svg = document.getElementById(id);
   if (!svg) return;
-  var nameEl = document.getElementById('pie-label-name');
-  var sizeEl = document.getElementById('pie-label-size');
+  var nameEl = svg.querySelector('[data-role="name"]');
+  var sizeEl = svg.querySelector('[data-role="size"]');
   function setLabel(name, size) {
     nameEl.textContent = name.length > 18 ? name.slice(0, 17) + '…' : name;
     sizeEl.textContent = size;
@@ -158,6 +166,29 @@ function wirePerAppPie() {
     }
   });
   svg.addEventListener('mouseleave', reset);
+}
+
+// A small legend beside a donut so slices are identifiable without hovering.
+function legendHtml(segments) {
+  return '<ul class="usage-legend">' + segments.map(function(s) {
+    return '<li><span class="swatch" style="background:' + s.color + '"></span>'
+      + '<span class="legend-name">' + escHtml(s.name) + '</span>'
+      + '<span class="legend-value">' + escHtml(s.valueText) + '</span></li>';
+  }).join('') + '</ul>';
+}
+
+// Donut chart of per-app disk usage (storage section). Slices are sorted by
+// size, largest first at 12 o'clock.
+function perAppPieHtml(perApp) {
+  var names = Object.keys(perApp).sort(function(a, b) { return perApp[b] - perApp[a]; });
+  var total = 0;
+  names.forEach(function(n) { total += perApp[n]; });
+  if (!total) return '<span class="muted">No app data yet.</span>';
+  var segments = names.map(function(name, i) {
+    return {name: name, value: perApp[name], valueText: formatBytes(perApp[name]), color: appColor(i)};
+  });
+  var defaultName = names.length + (names.length === 1 ? ' app' : ' apps');
+  return donutHtml('per-app-pie', segments, defaultName, formatBytes(total));
 }
 
 function updateStorageStatus() {
@@ -198,7 +229,7 @@ function renderStorageStatus(data) {
     rows += '<tr><th>Storage guard</th><td' + guardCls + '>' + escHtml(guardText) + '</td></tr>';
   }
   document.getElementById('storage-body').innerHTML = rows;
-  wirePerAppPie();
+  wireDonut('per-app-pie');
 
   // Guard toggle button (separate row below the table for clarity)
   var guardRow = document.getElementById('storage-guard-row');
@@ -211,6 +242,101 @@ function renderStorageStatus(data) {
   } else {
     guardRow.innerHTML = '';
   }
+}
+
+// ─── App Resource Usage (CPU + memory donuts) ───
+// Two donuts showing how CPU and memory are split across running apps, plus an
+// "Unused" slice for the box's remaining headroom so the overall load is
+// visible at a glance. Data comes from the combined diagnostics bundle, which
+// carries per-app live stats (apps[].resources) plus host totals
+// (resource_pressure).
+
+function runningWith(apps, field) {
+  return apps.filter(function(a) {
+    return a.resources && a.resources.running && a.resources[field] != null;
+  }).sort(function(a, b) { return b.resources[field] - a.resources[field]; });
+}
+
+// podman reports CPU as a percentage where 100% == one full core, so the box's
+// capacity is cpu_count * 100. "Unused" is whatever capacity the app containers
+// aren't accounting for (idle + any host overhead we can't attribute per-app).
+function cpuUsage(apps, cpuCount) {
+  var running = runningWith(apps, 'cpu_percent');
+  var appSum = 0;
+  running.forEach(function(a) { appSum += a.resources.cpu_percent; });
+  var segments = running.map(function(a, i) {
+    return {name: a.name, value: a.resources.cpu_percent, valueText: a.resources.cpu_percent.toFixed(1) + '%', color: appColor(i)};
+  });
+  var centerText;
+  if (cpuCount) {
+    var capacity = cpuCount * 100;
+    var unused = Math.max(0, capacity - appSum);
+    segments.push({name: 'Unused', value: unused, valueText: (unused / cpuCount).toFixed(0) + '% idle', color: COLOR_UNUSED});
+    centerText = Math.min(100, appSum / capacity * 100).toFixed(0) + '% used';
+  } else {
+    centerText = appSum.toFixed(0) + '%';
+  }
+  return {segments: segments, centerName: 'CPU', centerText: centerText, hasApps: running.length > 0};
+}
+
+// Memory splits into per-app usage, host-but-not-app usage ("System"), and the
+// actual free memory ("Unused"), so the donut sums to the box's total RAM and
+// honestly shows how loaded it is.
+function memUsage(apps, pressure) {
+  var running = runningWith(apps, 'memory_usage_bytes');
+  var appSum = 0;
+  running.forEach(function(a) { appSum += a.resources.memory_usage_bytes; });
+  var segments = running.map(function(a, i) {
+    var b = a.resources.memory_usage_bytes;
+    return {name: a.name, value: b, valueText: formatBytes(b), color: appColor(i)};
+  });
+  var centerText;
+  var total = pressure && pressure.memory_total_bytes;
+  if (total) {
+    var free = pressure.memory_available_bytes;
+    if (free != null) {
+      var other = Math.max(0, total - free - appSum);
+      if (other > 0) segments.push({name: 'System (non-app)', value: other, valueText: formatBytes(other), color: COLOR_OTHER});
+      segments.push({name: 'Unused', value: free, valueText: formatBytes(free), color: COLOR_UNUSED});
+      centerText = formatBytes(total - free) + ' / ' + formatBytes(total);
+    } else {
+      var unused = Math.max(0, total - appSum);
+      segments.push({name: 'Unused', value: unused, valueText: formatBytes(unused), color: COLOR_UNUSED});
+      centerText = formatBytes(total);
+    }
+  } else {
+    centerText = formatBytes(appSum);
+  }
+  return {segments: segments, centerName: 'Memory', centerText: centerText, hasApps: running.length > 0};
+}
+
+function renderUsageChart(elId, pieId, usage, emptyMsg) {
+  var el = document.getElementById(elId);
+  if (!usage.hasApps && usage.segments.length === 0) {
+    el.innerHTML = '<span class="muted">' + emptyMsg + '</span>';
+    return;
+  }
+  el.innerHTML = donutHtml(pieId, usage.segments, usage.centerName, usage.centerText)
+    + legendHtml(usage.segments);
+  wireDonut(pieId);
+}
+
+function renderResourceUsage(apps, pressure) {
+  var cpuCount = pressure ? pressure.cpu_count : null;
+  renderUsageChart('cpu-usage-chart', 'cpu-usage-pie', cpuUsage(apps, cpuCount), 'No running apps.');
+  renderUsageChart('mem-usage-chart', 'mem-usage-pie', memUsage(apps, pressure), 'No running apps.');
+}
+
+function updateResourceUsage() {
+  fetch(config.diagnosticsUrl, {credentials: 'same-origin'})
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      renderResourceUsage(data.apps || [], data.resource_pressure || null);
+    })
+    .catch(function() {
+      document.getElementById('cpu-usage-chart').innerHTML = '<span class="muted">Unavailable.</span>';
+      document.getElementById('mem-usage-chart').innerHTML = '<span class="muted">Unavailable.</span>';
+    });
 }
 
 // ─── Logs ───
@@ -236,6 +362,7 @@ function fetchLogs() {
 
 updateListeningPorts();
 updateStorageStatus();
+updateResourceUsage();
 
 fetchLogs();
 setInterval(fetchLogs, 3000);
