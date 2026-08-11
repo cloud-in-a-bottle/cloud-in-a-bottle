@@ -375,10 +375,14 @@ def _share_port(sock: socket.socket) -> None:
 
 def _open_socket(lan_ip: str) -> socket.socket:
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    _share_port(sock)
-    sock.bind(("", _MDNS_PORT))
-    _join_group(sock, lan_ip)
-    sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 255)  # RFC 6762 §11: mDNS uses TTL 255
+    try:
+        _share_port(sock)
+        sock.bind(("", _MDNS_PORT))
+        _join_group(sock, lan_ip)
+        sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 255)  # RFC 6762 §11: mDNS uses TTL 255
+    except OSError:
+        sock.close()
+        raise
     sock.settimeout(1.0)  # so _serve_loop wakes to observe _stop
     return sock
 
@@ -521,7 +525,9 @@ def _probe_conflict(sock: socket.socket, name: str, our_ip: str, our_ip_prefix: 
         while time.monotonic() < deadline:
             try:
                 data, addr = sock.recvfrom(9000)
-            except (TimeoutError, OSError):
+            except TimeoutError:
+                continue
+            except OSError:
                 return None
             if not _is_local_source(str(addr[0]), our_ip=our_ip, our_ip_prefix=our_ip_prefix):
                 continue  # off-link/spoofed sender — same boundary _handle enforces for real queries
