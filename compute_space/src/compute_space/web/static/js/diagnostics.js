@@ -106,29 +106,19 @@ var appSort = {key: 'name', dir: 1};
 
 function cmp(x, y) { return x < y ? -1 : (x > y ? 1 : 0); }
 
-// One definition per column, shared by row rendering and sorting (keyed to the
-// header's data-sort-key): `cell` is the <td> contents, `sort` is the value the
-// column sorts by — the same field it shows. `cls` (status only) sets a <td> class.
-var APP_COLUMNS = [
-  {key: 'name',    sort: function(a) { return a.name; },    cell: function(a) { return escHtml(a.name); }},
-  {key: 'version', sort: function(a) { return a.version; }, cell: function(a) { return escHtml(a.version || ''); }},
-  {key: 'status',  sort: function(a) { return a.status; },  cell: function(a) { return escHtml(a.status); },
-    cls: function(a) { return a.status === 'running' ? 'status-running' : (a.status === 'error' ? 'status-error' : 'status-stopped'); }},
-  {key: 'health',  sort: function(a) { return !!(a.health && a.health.healthy); }, cell: function(a) { return healthCell(a.health); }},
-  {key: 'cpu',     sort: function(a) { return (a.resources || {}).cpu_percent; },        cell: function(a) { return cpuCell(a.resources); }},
-  {key: 'memory',  sort: function(a) { return (a.resources || {}).memory_usage_bytes; }, cell: function(a) { return memCell(a.resources); }},
-  {key: 'git',     sort: function(a) { return gitText(a.git); }, cell: function(a) { return escHtml(gitText(a.git)); }},
-];
-
-function appColumn(key) {
-  return APP_COLUMNS.filter(function(c) { return c.key === key; })[0] || APP_COLUMNS[0];
+// The header's data-sort-key IS the field to sort by, read straight off the app
+// (falling back to its live resources for cpu_percent / memory_usage_bytes). The
+// git/health columns are objects, so they just fall through to the name tie-break.
+function appSortValue(a, key) {
+  var v = a[key];
+  return v != null ? v : (a.resources || {})[key];
 }
 
 function sortApps() {
-  var col = appColumn(appSort.key);
   // Sort by the active column, then break ties by name so equal rows stay stable.
   appsData.sort(function(a, b) {
-    return cmp(col.sort(a), col.sort(b)) * appSort.dir || cmp(a.name, b.name);
+    return cmp(appSortValue(a, appSort.key), appSortValue(b, appSort.key)) * appSort.dir
+      || cmp(a.name, b.name);
   });
 }
 
@@ -141,13 +131,18 @@ function renderApps(data) {
 function renderAppRows() {
   var body = document.getElementById('apps-body');
   if (!appsData.length) {
-    body.innerHTML = '<tr><td colspan="' + APP_COLUMNS.length + '" class="muted">No apps installed.</td></tr>';
+    body.innerHTML = '<tr><td colspan="7" class="muted">No apps installed.</td></tr>';
     return;
   }
   body.innerHTML = appsData.map(function(a) {
-    return '<tr>' + APP_COLUMNS.map(function(c) {
-      return '<td' + (c.cls ? ' class="' + c.cls(a) + '"' : '') + '>' + c.cell(a) + '</td>';
-    }).join('') + '</tr>';
+    var statusCls = a.status === 'running' ? 'status-running' : (a.status === 'error' ? 'status-error' : 'status-stopped');
+    return '<tr><td>' + escHtml(a.name) + '</td>'
+      + '<td>' + escHtml(a.version || '') + '</td>'
+      + '<td class="' + statusCls + '">' + escHtml(a.status) + '</td>'
+      + '<td>' + healthCell(a.health) + '</td>'
+      + '<td>' + cpuCell(a.resources) + '</td>'
+      + '<td>' + memCell(a.resources) + '</td>'
+      + '<td>' + escHtml(gitText(a.git)) + '</td></tr>';
   }).join('');
 }
 
