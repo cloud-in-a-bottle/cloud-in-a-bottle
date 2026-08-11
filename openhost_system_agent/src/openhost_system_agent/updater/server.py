@@ -112,11 +112,12 @@ class _Handler(BaseHTTPRequestHandler):
             # know when the real dashboard is back.
             self._respond(503, "text/plain; charset=utf-8", b"updating")
             return
-        # Only serve the HTML page for top-level document navigations. XHR/fetch
-        # (e.g. the dashboard's /api/* JSON calls, which race in right after the
-        # redirect) must get a 503, not HTML — otherwise the caller does
-        # JSON.parse("<!doctype ...") and errors.
-        if self.headers.get("Sec-Fetch-Dest", "document") == "document":
+        # Serve the HTML page only for browser document navigations. Everything
+        # else — XHR/fetch (the dashboard's /api/* JSON calls that race in after
+        # the redirect) and non-browser clients — gets 503, so no caller does
+        # JSON.parse("<!doctype ...") on it. All modern browsers send
+        # Sec-Fetch-Dest; when it's absent we default to a non-navigation (503).
+        if self.headers.get("Sec-Fetch-Dest", "empty") == "document":
             self._respond(200, "text/html; charset=utf-8", _page())
         else:
             self._respond(503, "application/json", b'{"error":"updating"}')

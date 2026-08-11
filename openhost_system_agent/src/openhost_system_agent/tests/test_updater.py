@@ -216,7 +216,7 @@ def test_server_page_renders_with_token(
     # from the URL (same as the compute_space page) to fetch the live log, so the
     # token is NOT embedded in the markup.
     port = server_factory("tok", [{"phase": "migrate", "message": "Migrating"}])
-    status, body = _get(port, "/?token=tok")
+    status, body = _get(port, "/?token=tok", extra_headers="Sec-Fetch-Dest: document\r\n")
     assert status == 200
     assert b"Updating this instance" in body
 
@@ -227,7 +227,7 @@ def test_server_page_renders_without_token(
     # Same page without a token — still a clean, styled updating page (no logs,
     # just the spinner + message), never a raw error, served for an arbitrary path.
     port = server_factory("tok", [])
-    status, body = _get(port, "/random/deep/path")
+    status, body = _get(port, "/random/deep/path", extra_headers="Sec-Fetch-Dest: document\r\n")
     assert status == 200
     assert b"Updating this instance" in body
     assert b"This instance is updating and will be back shortly" in body
@@ -263,6 +263,17 @@ def test_server_navigation_gets_page(
     status, body = _get(port, "/settings", extra_headers="Sec-Fetch-Dest: document\r\n")
     assert status == 200
     assert b"Updating this instance" in body
+
+
+def test_server_headerless_request_gets_503(
+    server_factory: Callable[[str | None, list[dict[str, object]]], int],
+) -> None:
+    # No Sec-Fetch-Dest (non-browser client) is treated as non-navigation -> 503,
+    # not HTML, so a monitor/script never parses the page as data.
+    port = server_factory("tok", [])
+    status, body = _get(port, "/")
+    assert status == 503
+    assert b"<!doctype" not in body.lower()
 
 
 def test_server_sends_connection_close(
