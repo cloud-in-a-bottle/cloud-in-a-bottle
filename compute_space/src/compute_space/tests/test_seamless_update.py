@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+import shutil
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -11,7 +13,6 @@ from litestar import Litestar
 from litestar.di import Provide
 from litestar.exceptions import HTTPException
 from litestar.plugins.jinja import JinjaTemplateEngine
-from litestar.template.config import TemplateConfig
 from litestar.testing import TestClient
 
 import compute_space.web.routes.api.settings as settings_mod
@@ -24,6 +25,7 @@ from compute_space.db import provide_db
 from compute_space.db.connection import init_db
 from compute_space.web.app import _template_globals
 from compute_space.web.routes.pages.settings import updating_page
+from compute_space.web.templating import build_template_config
 from openhost_system_agent.protocol import MigrationStatus
 from openhost_system_agent.updater import paths as agent_paths
 from openhost_system_agent.updater import progress as agent_progress
@@ -268,13 +270,14 @@ def cfg(tmp_path: Path) -> Iterator[Any]:
     yield config
 
 
-def _build_app(cfg: Any) -> Litestar:
-    """A minimal app with the real /updating route and Jinja globals installed."""
+def _build_app(cfg: Any, template_dir: Path | None = None) -> Litestar:
+    """A minimal app with the real /updating route and Jinja globals installed.
+
+    Uses the production template config so the test exercises the same frozen
+    environment the router boots with.
+    """
     web_dir = Path(__file__).resolve().parents[1] / "web"
-    template_config: TemplateConfig[JinjaTemplateEngine] = TemplateConfig(
-        directory=web_dir / "templates",
-        engine=JinjaTemplateEngine,
-    )
+    template_config = build_template_config(template_dir or web_dir / "templates")
 
     def _install_globals(app: Litestar) -> None:
         engine = app.template_engine
@@ -306,3 +309,31 @@ def test_updating_page_renders_for_owner(cfg: Any) -> None:
     assert "Updating this instance" in resp.text
     assert "update-progress.js" in resp.text
     assert "update-progress.css" in resp.text
+
+
+def test_updating_page_survives_the_checkout_it_is_reporting_on(cfg: Any, tmp_path: Path) -> None:
+    # The end this all exists for: the apply walk rewrites the template tree
+    # while this process keeps serving. The page must keep rendering the markup
+    # it booted with, not half of the next release's.
+    template_dir = tmp_path / "templates"
+    shutil.copytree(Path(__file__).resolve().parents[1] / "web" / "templates", template_dir)
+    set_active_config(cfg)
+    cookie = auth_cookie(cfg, username="owner")
+
+    with TestClient(app=_build_app(cfg, template_dir=template_dir)) as client:
+        client.cookies.update(cookie)
+        assert "Updating this instance" in client.get("/updating").text
+
+        # A checkout mid-update: the partial is rewritten to reference a global
+        # this process never defined, and the page itself is dropped. The mtime
+        # is pushed forward because Jinja detects staleness by mtime equality.
+        partial = template_dir / "_update_progress_body.html"
+        partial.write_text("{{ a_global_from_the_next_release() }}")
+        stamp = partial.stat().st_mtime + 10
+        os.utime(partial, (stamp, stamp))
+        (template_dir / "updating.html").unlink()
+
+        resp = client.get("/updating")
+
+    assert resp.status_code == 200
+    assert "Updating this instance" in resp.text

@@ -68,7 +68,7 @@ def _read(path: Path, fallback: str) -> str:
         return fallback
 
 
-def _page() -> bytes:
+def _build_page() -> bytes:
     css = _read(_CSS_PATH, _FALLBACK_CSS)
     body = _read(_BODY_PATH, _FALLBACK_BODY)
     js = _read(_JS_PATH, _FALLBACK_JS)
@@ -80,6 +80,24 @@ def _page() -> bytes:
         "<body>" + body + "<script>" + js + "</script></body></html>"
     )
     return html.encode("utf-8")
+
+
+# Rendered once (see snapshot_page) instead of per request. These files live in
+# the source tree that the update walk rewrites, so a per-request read can catch
+# a file mid-write — git writes non-atomically — and serve truncated CSS/JS, or
+# drift if the tree moves again while this server is still up.
+_page_snapshot: bytes | None = None
+
+
+def snapshot_page() -> bytes:
+    """Read the page files and cache the rendered HTML for this process's life."""
+    global _page_snapshot
+    _page_snapshot = _build_page()
+    return _page_snapshot
+
+
+def _page() -> bytes:
+    return _page_snapshot if _page_snapshot is not None else snapshot_page()
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -209,6 +227,9 @@ def _serve_on(sock: socket.socket, ssl_ctx: ssl.SSLContext | None) -> ThreadingH
 
 
 def run(cert_path: Path, key_path: Path) -> None:
+    # Snapshot the page before touching the ports: the tree is quiet now, and it
+    # must not be read once the restart is in flight.
+    snapshot_page()
     ssl_ctx = _make_ssl_context(cert_path, key_path)
     https_sock, http_sock = _acquire_ports_during_downtime(ssl_ctx)
 

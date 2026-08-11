@@ -420,6 +420,24 @@ def test_run_returns_when_no_ports_acquired(data_dir: Path, monkeypatch: pytest.
     assert time.monotonic() - start < 2
 
 
+def test_page_is_snapshotted_not_reread_per_request(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    # The page files live in the source tree the update walk rewrites. Reading
+    # them per request could serve a file caught mid-write (git writes
+    # non-atomically) or drift if the tree moves again while we're still up.
+    body = tmp_path / "_update_progress_body.html"
+    body.write_text("<h1>Updating this instance</h1>", encoding="utf-8")
+    monkeypatch.setattr(server, "_BODY_PATH", body)
+    monkeypatch.setattr(server, "_page_snapshot", None)
+
+    assert b"Updating this instance" in server.snapshot_page()
+
+    body.write_text("<h1>truncated mid-checkou", encoding="utf-8")
+    assert b"Updating this instance" in server._page()
+
+    body.unlink()
+    assert b"Updating this instance" in server._page()
+
+
 # ── token persistence ───────────────────────────────────────────────────────────
 
 

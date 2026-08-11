@@ -20,10 +20,8 @@ from litestar import post
 from litestar.background_tasks import BackgroundTask
 from litestar.di import NamedDependency
 from litestar.di import Provide
-from litestar.plugins.jinja import JinjaTemplateEngine
 from litestar.response import Template
 from litestar.static_files import create_static_files_router
-from litestar.template.config import TemplateConfig
 
 from compute_space.config import Config
 from compute_space.config import provide_config
@@ -40,6 +38,7 @@ from compute_space.core.updates import is_shutdown_pending
 from compute_space.core.updates import trigger_restart
 from compute_space.db import get_db
 from compute_space.web.auth.cookies import build_session_cookie
+from compute_space.web.templating import build_template_config
 
 # Set when setup_post succeeds. /health flips to 503 immediately so clients
 # polling for the post-restart main app don't see a stale 200 from the setup
@@ -189,10 +188,7 @@ def create_setup_app(config: Config) -> Litestar:
     template_dir = web_dir / "templates"
     static_dir = web_dir / "static"
 
-    template_config: TemplateConfig[JinjaTemplateEngine] = TemplateConfig(
-        directory=template_dir,
-        engine=JinjaTemplateEngine,
-    )
+    template_config = build_template_config(template_dir)
     static_router = create_static_files_router(path="/static", directories=[static_dir])
 
     return Litestar(
