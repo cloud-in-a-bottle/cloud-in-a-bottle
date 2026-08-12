@@ -5,17 +5,18 @@ from typing import Any
 
 from jinja2 import pass_context
 from jinja2.runtime import Context
-from litestar import HttpMethod
 from litestar import Litestar
 from litestar import MediaType
 from litestar import Request
 from litestar import Response
-from litestar import route
+from litestar import get
+from litestar import post
 from litestar.di import Provide
 from litestar.exceptions import HTTPException
 from litestar.exceptions import NotAuthorizedException
 from litestar.exceptions.responses import create_exception_response
 from litestar.plugins.jinja import JinjaTemplateEngine
+from litestar.response import Redirect
 from litestar.static_files import create_static_files_router
 from litestar.types import ASGIApp
 
@@ -149,8 +150,15 @@ def _full_app_bootstrap(config: Config) -> None:
     seed_first_boot(config)
 
 
-@route("/setup", http_method=[HttpMethod.GET, HttpMethod.POST], status_code=403, sync_to_thread=False)
-def setup_already_done() -> Response[str]:
+@get("/setup", sync_to_thread=False)
+def setup_already_done_get() -> Response[None]:
+    """The claim link (``/setup?claim=...``) printed by ``openhost up`` should keep working
+    after setup — send it to /login rather than a dead-end 403."""
+    return Redirect(path="/")
+
+
+@post("/setup", status_code=403, sync_to_thread=False)
+def setup_already_done_post() -> Response[str]:
     return Response(
         content="This instance has already been set up.",
         status_code=403,
@@ -246,7 +254,8 @@ def create_app(config: Config) -> ASGIApp:
             pages_settings_routes,
             pages_system_routes,
             services_v2_routes,
-            setup_already_done,
+            setup_already_done_get,
+            setup_already_done_post,
         ],
         template_config=template_config,
         before_request=_reject_app_subdomain_requests,

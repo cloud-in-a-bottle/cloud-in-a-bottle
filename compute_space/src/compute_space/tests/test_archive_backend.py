@@ -745,7 +745,7 @@ def test_configure_backend_s3_to_s3_preserves_legacy_openhost_volume(cfg, db):
 
 
 def test_configure_backend_s3_to_s3_same_location_skips_reclaim(cfg, db):
-    """A no-op 'migration' to the SAME bucket/endpoint/region must NOT reclaim
+    """A no-op 'migration' to the SAME (bucket, volume) must NOT reclaim
     the prefix (that would delete the data we kept in place)."""
     db.execute(
         "UPDATE archive_backend SET backend='s3', s3_bucket='b', s3_region='us-east-1', "

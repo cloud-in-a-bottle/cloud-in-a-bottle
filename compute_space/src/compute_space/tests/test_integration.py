@@ -259,12 +259,13 @@ class TestRouterCore:
             host = entry["address"].rsplit(":", 1)[0].strip("[]")
             assert host != "::1" and not host.startswith("127."), entry
 
-    def test_setup_returns_403_if_already_set_up(self, admin_session, config):
-        """GET /setup returns 403 when owner already exists."""
+    def test_setup_get_redirects_to_login_if_already_set_up(self, admin_session, config):
+        """GET /setup (e.g. the claim link) redirects to /login when owner already exists,
+        so the claim link keeps working instead of dead-ending."""
         base_url = _zone_url(config)
-        r = requests.get(f"{base_url}/setup", allow_redirects=False)
-        assert r.status_code == 403
-        assert "already been set up" in r.text
+        r = requests.get(f"{base_url}/setup?claim=whatever", allow_redirects=False)
+        assert r.status_code == 302
+        assert r.headers["Location"] == "/"
 
     def test_setup_post_returns_403_if_already_set_up(self, admin_session, config):
         """POST /setup returns 403 when owner already exists."""
@@ -1099,6 +1100,9 @@ class TestContainerE2E:
         assert "x-forwarded-for" in headers_ci
         assert "x-forwarded-host" in headers_ci
         assert headers_ci.get("x-forwarded-proto") == "http"  # tls_enabled is False in tests
+        # Host is preserved as the public hostname, not the internal 127.0.0.1:<port>,
+        # so apps that only read Host (Django ALLOWED_HOSTS, absolute-URL builders) work.
+        assert headers_ci.get("host") == f"test-app.{primary_of(config).name}:{config.port}"
 
     def test_proxy_forwarded_headers_trust_model(self, admin_session, config):
         """X-Forwarded-Proto/Host are derived by the router, never taken from the

@@ -564,6 +564,7 @@ def deploy_app_background(
                     repo_path,
                     manifest.container_image,
                     temp_data_dir=config.temporary_data_dir,
+                    memory_mb=manifest.effective_build_memory_mb,
                 )
                 break
             except RuntimeError as e:
@@ -811,6 +812,7 @@ def start_app_process(app_id: str, db: sqlite3.Connection, config: Config) -> No
         app_row["repo_path"],
         manifest.container_image,
         temp_data_dir=config.temporary_data_dir,
+        memory_mb=manifest.effective_build_memory_mb,
     )
     container_id = run_container(
         app_name,
