@@ -29,7 +29,7 @@ class TestCheckInstallAllowed:
                 GRANT_KEY_REPO_URL_PREFIX: "https://github.com/imbue-openhost/",
             },
         ]
-        assert check_install_allowed("https://github.com/imbue-openhost/openhost-catalog", grants) is None
+        assert check_install_allowed("https://github.com/imbue-openhost/bottled-catalog", grants) is None
 
     def test_non_matching_prefix_denied(self) -> None:
         grants = [
@@ -71,7 +71,7 @@ class TestCheckInstallAllowed:
                 GRANT_KEY_REPO_URL_PREFIX: "https://github.com/imbue-openhost/",
             },
         ]
-        assert check_install_allowed("https://github.com/imbue-openhost/openhost-catalog", grants) is None
+        assert check_install_allowed("https://github.com/imbue-openhost/bottled-catalog", grants) is None
         assert check_install_allowed("https://github.com/other/", grants) is not None
 
     def test_service_url_constant_is_stable(self) -> None:
