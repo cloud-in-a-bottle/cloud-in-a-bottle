@@ -331,3 +331,120 @@ def test_start_openhost_restarts_and_clears_the_limiter(monkeypatch: pytest.Monk
 
     verbs = [c[1] for c in calls]
     assert verbs == ["reset-failed", "restart"]
+
+
+# ── --wait: keeping an exit code for scripts ──────────────────────────
+
+
+def test_wait_for_apply_returns_when_the_unit_goes_away(monkeypatch: pytest.MonkeyPatch) -> None:
+    states = iter([True, True, False])
+    monkeypatch.setattr(detach_mod, "apply_is_running", lambda: next(states, False))
+    monkeypatch.setattr("openhost_system_agent.detach.time.sleep", lambda _s: None)
+
+    assert detach_mod.wait_for_apply(timeout=10, poll=0) is True
+
+
+def test_wait_for_apply_times_out(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(detach_mod, "apply_is_running", lambda: True)
+    monkeypatch.setattr("openhost_system_agent.detach.time.sleep", lambda _s: None)
+
+    assert detach_mod.wait_for_apply(timeout=0.01, poll=0) is False
+
+
+def test_start_apply_wait_raises_on_a_failed_walk(monkeypatch: pytest.MonkeyPatch, progress_dir: Path) -> None:
+    # Scripts and the container tests need the walk's outcome as an exit code; the
+    # progress log is the only place the detached walk records it.
+    monkeypatch.setattr(update_mod, "is_detached", lambda: False)
+    monkeypatch.setattr(update_mod, "apply_is_running", lambda: False)
+
+    def _walk_fails() -> None:
+        updater_progress.record(updater_progress.PHASE_FAILED, "Dependency install failed (exit 7).")
+
+    monkeypatch.setattr(update_mod, "detach_apply", _walk_fails)
+    monkeypatch.setattr(update_mod, "wait_for_apply", lambda: True)
+
+    with pytest.raises(RuntimeError, match="Dependency install failed"):
+        update_mod.start_apply(wait=True)
+
+
+def test_start_apply_wait_accepts_a_walk_that_reached_restarting(
+    monkeypatch: pytest.MonkeyPatch, progress_dir: Path
+) -> None:
+    # A successful walk ends on the NON-terminal "restarting" (only the freshly
+    # started compute_space appends "done"), so that must not read as a failure.
+    monkeypatch.setattr(update_mod, "is_detached", lambda: False)
+    monkeypatch.setattr(update_mod, "apply_is_running", lambda: False)
+
+    def _walk_succeeds() -> None:
+        updater_progress.record(updater_progress.PHASE_RESTARTING, "Update complete. Starting…")
+
+    monkeypatch.setattr(update_mod, "detach_apply", _walk_succeeds)
+    monkeypatch.setattr(update_mod, "wait_for_apply", lambda: True)
+
+    update_mod.start_apply(wait=True)
+
+
+def test_start_apply_wait_raises_when_the_unit_never_finishes(
+    monkeypatch: pytest.MonkeyPatch, progress_dir: Path
+) -> None:
+    monkeypatch.setattr(update_mod, "is_detached", lambda: False)
+    monkeypatch.setattr(update_mod, "apply_is_running", lambda: False)
+    monkeypatch.setattr(update_mod, "detach_apply", lambda: None)
+    monkeypatch.setattr(update_mod, "wait_for_apply", lambda: False)
+
+    with pytest.raises(RuntimeError, match="did not finish"):
+        update_mod.start_apply(wait=True)
+
+
+def test_start_apply_does_not_wait_by_default(monkeypatch: pytest.MonkeyPatch, progress_dir: Path) -> None:
+    # The dashboard path must never block: the walk stops the process that would
+    # be doing the waiting.
+    monkeypatch.setattr(update_mod, "is_detached", lambda: False)
+    monkeypatch.setattr(update_mod, "apply_is_running", lambda: False)
+    monkeypatch.setattr(update_mod, "detach_apply", lambda: None)
+    monkeypatch.setattr(update_mod, "wait_for_apply", lambda: pytest.fail("must not wait"))
+
+    update_mod.start_apply()
+
+
+def test_failed_stop_cleans_up_the_updater(monkeypatch: pytest.MonkeyPatch, progress_dir: Path) -> None:
+    # If the service never went down there is no downtime to cover. The updater
+    # only binds after it has seen :8080 go offline, so left running it would poll
+    # for its whole lifetime and then grab 80/443 during some later, unrelated
+    # restart -- serving an update page for an update that is not happening.
+    events: list[str] = []
+
+    def _launch() -> bool:
+        events.append("launch")
+        return True
+
+    def _stop() -> None:
+        raise RuntimeError("Interactive authentication required.")
+
+    monkeypatch.setattr(update_mod, "launch_updater", _launch)
+    monkeypatch.setattr(update_mod, "stop_openhost", _stop)
+    monkeypatch.setattr(update_mod, "stop_updater", lambda: events.append("stop_updater"))
+    monkeypatch.setattr(update_mod, "_repo", lambda: pytest.fail("must not touch the tree"))
+
+    with pytest.raises(RuntimeError, match="Interactive authentication"):
+        update_mod.apply_update()
+
+    assert events == ["launch", "stop_updater"]
+    # And the page still learns the update is over.
+    assert updater_progress.read_entries()[-1]["phase"] == updater_progress.PHASE_FAILED
+
+
+def test_successful_stop_leaves_the_updater_serving(monkeypatch: pytest.MonkeyPatch, progress_dir: Path) -> None:
+    # The mirror case: once the service IS down, the updater must keep serving
+    # until the new compute_space takes the ports back, even if the walk fails.
+    monkeypatch.setattr(update_mod, "launch_updater", lambda: True)
+    monkeypatch.setattr(update_mod, "stop_openhost", lambda: None)
+    monkeypatch.setattr(update_mod, "stop_updater", lambda: pytest.fail("the downtime still needs covering"))
+
+    def _boom() -> object:
+        raise RuntimeError("git exploded")
+
+    monkeypatch.setattr(update_mod, "_repo", _boom)
+
+    with pytest.raises(RuntimeError, match="git exploded"):
+        update_mod.apply_update()

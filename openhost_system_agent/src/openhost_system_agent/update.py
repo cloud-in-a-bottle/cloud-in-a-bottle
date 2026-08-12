@@ -10,17 +10,20 @@ from typing import NoReturn
 import git
 from loguru import logger
 
+from openhost_system_agent.detach import APPLY_UNIT
 from openhost_system_agent.detach import ApplyAlreadyRunningError
 from openhost_system_agent.detach import apply_is_running
 from openhost_system_agent.detach import detach_apply
 from openhost_system_agent.detach import is_detached
 from openhost_system_agent.detach import stop_openhost
+from openhost_system_agent.detach import wait_for_apply
 from openhost_system_agent.protocol import DiffCommit
 from openhost_system_agent.protocol import DiffResult
 from openhost_system_agent.protocol import FetchResult
 from openhost_system_agent.protocol import RemoteInfo
 from openhost_system_agent.updater import progress
 from openhost_system_agent.updater.launcher import launch_updater
+from openhost_system_agent.updater.launcher import stop_updater
 
 _PACKAGE_DIR = Path(__file__).resolve().parent
 _PROJECT_DIR = _PACKAGE_DIR.parent.parent.parent
@@ -261,8 +264,12 @@ def show_diff() -> DiffResult:
 _APPLY_ENTRYPOINT = _PACKAGE_DIR / "apply_after_checkout.py"
 
 
-def start_apply() -> None:
+def start_apply(wait: bool = False) -> None:
     """Entry point for `update apply`: hand the walk to systemd, then return.
+
+    With ``wait`` the handoff is followed by blocking until the walk finishes and
+    raising if it failed, so scripts and tests keep an exit code to check. The
+    dashboard never waits -- the walk stops the process that would be waiting.
 
     When already running as the detached unit this is the walk itself and never
     returns (see apply_update).
@@ -286,6 +293,25 @@ def start_apply() -> None:
             progress.record(progress.PHASE_FAILED, f"Update failed: {e}")
             raise
 
+        if wait:
+            _wait_for_result()
+
+
+def _wait_for_result() -> None:
+    """Block until the detached walk finishes, then raise if it failed.
+
+    The walk's own outcome lives in the progress log, not in an exit code: a
+    successful walk ends on the non-terminal "restarting" (only the freshly
+    started compute_space appends "done"), so anything that is not "failed"
+    counts as success here.
+    """
+    if not wait_for_apply():
+        raise RuntimeError(f"{APPLY_UNIT} did not finish in time; see `journalctl -u {APPLY_UNIT}`")
+    entries = progress.read_entries()
+    last = entries[-1] if entries else {}
+    if last.get("phase") == progress.PHASE_FAILED:
+        raise RuntimeError(str(last.get("message") or "the update failed"))
+
 
 def apply_update() -> NoReturn:
     """The walk, running as openhost-apply.service outside openhost's cgroup.
@@ -308,7 +334,16 @@ def apply_update() -> NoReturn:
         # Cover the downtime before taking the service down, not after, so the
         # page is already poised to answer 80/443 when Caddy lets go of them.
         launch_updater()
-        stop_openhost()
+        try:
+            stop_openhost()
+        except BaseException:
+            # The service is still up, so there is no downtime to cover. Left
+            # alone the updater would poll for its full lifetime (it only binds
+            # once it has seen :8080 go offline), which means it would grab 80/443
+            # during some later, unrelated restart and serve an update page for an
+            # update that is not happening.
+            stop_updater()
+            raise
 
         repo = _repo()
 

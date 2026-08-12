@@ -217,10 +217,13 @@ class TestApplyUpdateWalk:
         # test image, so resolve the console script from the pixi env).
         which = _host_sh(c, f"cd {_REPO} && {_PIXI} run -e default which openhost_system_agent")
         agent = which.stdout.strip().splitlines()[-1]
-        apply = _exec(c, "sudo", agent, "update", "apply", timeout=120, check=False)
+        # --wait: the walk runs detached as openhost-apply.service, so without it
+        # this returns before any work has happened. With it we still get an exit
+        # code for the walk itself.
+        apply = _exec(c, "sudo", agent, "update", "apply", "--wait", timeout=900, check=False)
         assert apply.returncode == 0, f"update apply failed (exit {apply.returncode}):\n{apply.stdout}\n{apply.stderr}"
         assert '"detached": true' in apply.stdout, f"expected a detached handoff: {apply.stdout!r}"
-        # The launcher returned; the walk itself runs as openhost-apply.service.
+        # Belt and braces: the unit really is gone before we assert on host state.
         _wait_for_apply_unit(c)
 
         # The pixi-version migration upgraded pixi to the pinned version.

@@ -18,6 +18,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 
 from loguru import logger
 
@@ -38,6 +39,9 @@ _ALREADY_EXISTS = "already exists"
 # A never-provisioned host has no openhost.service to stop; the migrations in
 # this walk install it. Mirrors the same tolerance in the updater's launcher.
 _NOT_LOADED_PATTERNS = ("not loaded", "not found")
+
+# Ceiling for --wait. Generous: a multi-hop walk runs one pixi install per hop.
+_WAIT_TIMEOUT_SECONDS = 3600.0
 
 # `-c` rather than `-m`: under -m the module loads as __main__ and cappa's
 # dispatch exits without running the command (same reason as the updater).
@@ -76,6 +80,21 @@ def apply_is_running() -> bool:
         # Can't tell; let systemd-run's own name collision be the guard.
         return False
     return result.returncode == 0
+
+
+def wait_for_apply(timeout: float = _WAIT_TIMEOUT_SECONDS, poll: float = 2.0) -> bool:
+    """Block until the apply unit is gone. False if it outlived ``timeout``.
+
+    For callers that want the old synchronous contract back -- scripts and tests
+    that need an exit code rather than a progress log. The dashboard never waits:
+    the walk stops the router that would be doing the waiting.
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if not apply_is_running():
+            return True
+        time.sleep(poll)
+    return False
 
 
 def _systemctl_path() -> str:

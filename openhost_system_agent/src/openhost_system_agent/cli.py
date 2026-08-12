@@ -56,14 +56,21 @@ class UpdateCmd:
             _error(str(e))
 
     @cappa.command(name="apply", help="Apply pending update: stop openhost, checkout, migrate, install, start again.")
-    def apply(self) -> None:
-        # start_apply hands the walk to openhost-apply.service and returns, so
-        # this exits while the update runs; the caller follows the progress log.
+    def apply(
+        self,
+        wait: Annotated[
+            bool,
+            cappa.Arg(long=True, help="Block until the detached walk finishes and fail if it did."),
+        ] = False,
+    ) -> None:
+        # start_apply hands the walk to openhost-apply.service and returns, so by
+        # default this exits while the update runs and the caller follows the
+        # progress log. --wait restores an exit code for scripts and tests.
         try:
-            start_apply()
+            start_apply(wait=wait)
         except Exception as e:
             _error(str(e))
-        print(json.dumps({"ok": True, "detached": True}))
+        print(json.dumps({"ok": True, "detached": True, "waited": wait}))
 
     @cappa.command(
         name="migrate", help="Apply pending system migrations for the current checkout (no fetch/checkout/restart)."
