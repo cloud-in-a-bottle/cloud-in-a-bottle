@@ -22,10 +22,12 @@ repos:
         language: system
         pass_filenames: false
         types: [python]
+      # Pinned pixi so `pixi install/run --locked` (CI + deploy) stays reproducible; a different
+      # local pixi resolves a lock CI's pinned pixi then rejects.
       - id: pixi-lock
         name: "pixi lock (pinned)"
-        entry: scripts/regen_pixi_lock.sh
-        language: script
+        entry: pixi exec --spec pixi=0.70.2 -- pixi lock
+        language: system
         files: ^(pyproject\.toml|pixi\.lock)$
         pass_filenames: false
   - repo: https://github.com/gitleaks/gitleaks
