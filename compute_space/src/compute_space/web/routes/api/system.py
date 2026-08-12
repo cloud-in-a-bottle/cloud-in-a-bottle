@@ -300,7 +300,7 @@ def drop_docker_cache() -> Response[DropCacheOk]:
     try:
         output = drop_docker_build_cache()
     except RuntimeError as e:
-        raise InternalServerException(detail=str(e)) from e
+        raise InternalServerException(detail="Failed to drop build cache", extra={"output": str(e)}) from e
     return Response(content=DropCacheOk(ok=True, output=output), status_code=200, media_type=MediaType.JSON)
 
 

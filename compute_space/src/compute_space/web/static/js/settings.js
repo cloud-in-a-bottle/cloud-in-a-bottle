@@ -354,7 +354,8 @@ function dropBuildCache() {
     .then(function(res) {
       if (!res.ok) {
         msg.className = 'error';
-        msg.textContent = 'Drop failed: ' + res.data.detail;
+        var output = res.data.extra && res.data.extra.output;
+        msg.textContent = 'Drop failed: ' + (output || res.data.detail);
         return;
       }
       var data = res.data;
