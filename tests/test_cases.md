@@ -96,10 +96,10 @@ Legend: [x] = automated, [ ] = manual/not yet automated
 - [x] Stop app — `test_e2e.py::test_08`, `test_full_stack.py::TestAppLifecycle`
 - [x] Reload app (rebuild + restart) — `test_e2e.py::test_08b`, `test_full_stack.py::TestAppLifecycle`
 - [x] Rename app, routing updates — `test_full_stack.py::TestAppRename`
-- [x] Container engine restart recovery — `test_integration.py::TestContainerRestart`
-- [x] Container gone recovery — `test_integration.py::TestContainerGone`
+- [x] Container engine restart / gone recovery — `test_integration.py::TestContainerRestart`, `test_check_app_status.py`
 - [x] Remove with keep_data preserves persistent data — `test_integration.py::TestRemoveKeepData`
-- [x] Git-deployed app: reload does git pull — `test_integration.py::TestGitUrlDeployE2E`
+- [x] Git-deployed app: clones (not copies) via git — `test_integration.py::TestGitUrlDeployE2E`
+- [x] Git-deployed app: reload does git pull — `test_set_app_remote.py::test_git_pull_switches_branch_via_ref`
 
 ### App Routing (path-based)
 - [x] Requests to /base_path/ are proxied to the app — `test_e2e.py::test_06b`, `test_full_stack.py::TestTestAppPathRouting`
