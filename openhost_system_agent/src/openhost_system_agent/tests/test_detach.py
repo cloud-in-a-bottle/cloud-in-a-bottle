@@ -202,7 +202,7 @@ def test_walk_stops_openhost_before_touching_the_working_tree(
         def is_dirty(self, **_kwargs: object) -> bool:
             return False
 
-        def fetch(self, *_args: str) -> None:
+        def fetch(self, *_args: str, **_kwargs: object) -> None:
             order.append("fetch")
 
         def checkout(self, *_args: str) -> None:
@@ -225,9 +225,9 @@ def test_walk_stops_openhost_before_touching_the_working_tree(
 
     update_mod.apply_update()
 
-    # Downtime is covered first, then the service goes away, and only then does
-    # anything touch the tree.
-    assert order[:2] == ["launch_updater", "stop_openhost"]
+    # Downtime is covered before the service goes away, and nothing touches the
+    # tree until it has.
+    assert order.index("launch_updater") < order.index("stop_openhost")
     assert order.index("stop_openhost") < order.index("checkout")
     assert order[-1] == "execv"
 
@@ -265,11 +265,19 @@ def test_start_openhost_raises_when_systemd_refuses(monkeypatch: pytest.MonkeyPa
 
 
 def test_apply_is_running_reads_unit_state(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("openhost_system_agent.detach.subprocess.run", lambda *a, **k: _ok())
-    assert detach_mod.apply_is_running() is True
+    def _state(value: str) -> object:
+        def _run(cmd: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+            return subprocess.CompletedProcess(args=cmd, returncode=0, stdout=value + "\n", stderr="")
 
-    monkeypatch.setattr("openhost_system_agent.detach.subprocess.run", lambda *a, **k: _fail("inactive"))
-    assert detach_mod.apply_is_running() is False
+        return _run
+
+    for state in ("active", "activating", "deactivating"):
+        monkeypatch.setattr("openhost_system_agent.detach.subprocess.run", _state(state))
+        assert detach_mod.apply_is_running() is True, state
+
+    for state in ("inactive", "failed", ""):
+        monkeypatch.setattr("openhost_system_agent.detach.subprocess.run", _state(state))
+        assert detach_mod.apply_is_running() is False, state
 
 
 def test_apply_is_running_false_when_systemctl_is_unusable(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -421,10 +429,25 @@ def test_failed_stop_cleans_up_the_updater(monkeypatch: pytest.MonkeyPatch, prog
     def _stop() -> None:
         raise RuntimeError("Interactive authentication required.")
 
+    class _CleanRepo:
+        def __init__(self) -> None:
+            self.git = self
+
+        def is_dirty(self, **_kwargs: object) -> bool:
+            return False
+
+        def fetch(self, *_args: str, **_kwargs: object) -> None:
+            return None
+
+        def checkout(self, *_args: str) -> None:
+            pytest.fail("must not touch the tree after a failed stop")
+
     monkeypatch.setattr(update_mod, "launch_updater", _launch)
     monkeypatch.setattr(update_mod, "stop_openhost", _stop)
     monkeypatch.setattr(update_mod, "stop_updater", lambda: events.append("stop_updater"))
-    monkeypatch.setattr(update_mod, "_repo", lambda: pytest.fail("must not touch the tree"))
+    monkeypatch.setattr(update_mod, "_repo", lambda: _CleanRepo())
+    monkeypatch.setattr(update_mod, "_get_sorted_tags", lambda _r: ["v1"])
+    monkeypatch.setattr(update_mod, "_next_step", lambda _r: "v1")
 
     with pytest.raises(RuntimeError, match="Interactive authentication"):
         update_mod.apply_update()
@@ -437,14 +460,120 @@ def test_failed_stop_cleans_up_the_updater(monkeypatch: pytest.MonkeyPatch, prog
 def test_successful_stop_leaves_the_updater_serving(monkeypatch: pytest.MonkeyPatch, progress_dir: Path) -> None:
     # The mirror case: once the service IS down, the updater must keep serving
     # until the new compute_space takes the ports back, even if the walk fails.
+    class _Repo:
+        def __init__(self) -> None:
+            self.git = self
+
+        def is_dirty(self, **_kwargs: object) -> bool:
+            return False
+
+        def fetch(self, *_args: str, **_kwargs: object) -> None:
+            return None
+
+        def checkout(self, *_args: str) -> None:
+            raise RuntimeError("git exploded")
+
     monkeypatch.setattr(update_mod, "launch_updater", lambda: True)
     monkeypatch.setattr(update_mod, "stop_openhost", lambda: None)
     monkeypatch.setattr(update_mod, "stop_updater", lambda: pytest.fail("the downtime still needs covering"))
-
-    def _boom() -> object:
-        raise RuntimeError("git exploded")
-
-    monkeypatch.setattr(update_mod, "_repo", _boom)
+    monkeypatch.setattr(update_mod, "_repo", lambda: _Repo())
+    monkeypatch.setattr(update_mod, "_get_sorted_tags", lambda _r: ["v1"])
+    monkeypatch.setattr(update_mod, "_next_step", lambda _r: "v1")
+    monkeypatch.setattr(update_mod, "_resolve_ref_sha", lambda _r, ref: ref)
 
     with pytest.raises(RuntimeError, match="git exploded"):
         update_mod.apply_update()
+
+
+def test_apply_unit_has_a_runtime_ceiling(monkeypatch: pytest.MonkeyPatch) -> None:
+    # openhost is down for the whole walk, so an unbounded step (a stalled network
+    # call, a hung subprocess) would keep the instance down indefinitely. On expiry
+    # systemd kills the walk and ExecStopPost brings it back.
+    calls: list[list[str]] = []
+    monkeypatch.setattr(detach_mod, "systemd_run_available", lambda: True)
+    monkeypatch.setattr("openhost_system_agent.detach.subprocess.run", _recorder(calls))
+
+    detach_mod.detach_apply()
+
+    assert f"--property=RuntimeMaxSec={detach_mod._RUNTIME_MAX_SECONDS}" in calls[0]
+
+
+def test_apply_is_running_avoids_the_journal_spam_probe(monkeypatch: pytest.MonkeyPatch) -> None:
+    # `is-active` on a --collect-ed unit makes PID 1 log a failed transient-file
+    # open on every call, and this runs on the request path and at every boot.
+    calls: list[list[str]] = []
+
+    def _run(cmd: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        calls.append(cmd)
+        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="inactive\n", stderr="")
+
+    monkeypatch.setattr("openhost_system_agent.detach.subprocess.run", _run)
+
+    assert detach_mod.apply_is_running() is False
+    assert "is-active" not in calls[0]
+    assert "show" in calls[0]
+
+
+def test_preflight_runs_before_the_service_goes_down(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, progress_dir: Path
+) -> None:
+    # The fetch and the dirty check only read the repo, so they must happen while
+    # the router is still up: a dirty tree used to cost real downtime for an update
+    # that could never proceed, and a stalled fetch held the instance down with no
+    # ceiling at all.
+    order: list[str] = []
+
+    class _Repo:
+        def __init__(self) -> None:
+            self.git = self
+
+        def is_dirty(self, **_kwargs: object) -> bool:
+            order.append("is_dirty")
+            return False
+
+        def fetch(self, *_args: str, **_kwargs: object) -> None:
+            order.append("fetch")
+
+        def checkout(self, *_args: str) -> None:
+            order.append("checkout")
+
+        def clean(self, *_args: str) -> None:
+            order.append("clean")
+
+    def _launch() -> bool:
+        order.append("launch_updater")
+        return True
+
+    monkeypatch.setattr(update_mod, "launch_updater", _launch)
+    monkeypatch.setattr(update_mod, "stop_openhost", lambda: order.append("stop_openhost"))
+    monkeypatch.setattr(update_mod, "_repo", lambda: _Repo())
+    monkeypatch.setattr(update_mod, "_get_sorted_tags", lambda _r: ["v1"])
+    monkeypatch.setattr(update_mod, "_next_step", lambda _r: "v1")
+    monkeypatch.setattr(update_mod, "_resolve_ref_sha", lambda _r, ref: ref)
+    monkeypatch.setattr("openhost_system_agent.update.os.execv", lambda *_a: order.append("execv"))
+
+    update_mod.apply_update()
+
+    assert order.index("fetch") < order.index("stop_openhost")
+    assert order.index("is_dirty") < order.index("stop_openhost")
+    assert order.index("stop_openhost") < order.index("checkout")
+
+
+def test_dirty_tree_never_takes_the_service_down(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, progress_dir: Path
+) -> None:
+    class _DirtyRepo:
+        def __init__(self) -> None:
+            self.git = self
+
+        def is_dirty(self, **_kwargs: object) -> bool:
+            return True
+
+    monkeypatch.setattr(update_mod, "_repo", lambda: _DirtyRepo())
+    monkeypatch.setattr(update_mod, "launch_updater", lambda: pytest.fail("no downtime is needed to fail this"))
+    monkeypatch.setattr(update_mod, "stop_openhost", lambda: pytest.fail("must not stop the service"))
+
+    with pytest.raises(RuntimeError, match="uncommitted"):
+        update_mod.apply_update()
+
+    assert updater_progress.read_entries()[-1]["phase"] == updater_progress.PHASE_FAILED

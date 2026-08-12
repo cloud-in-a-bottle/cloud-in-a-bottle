@@ -108,6 +108,11 @@ def _latest_ancestor_tag(repo: git.Repo) -> str | None:
 # the latest tag is the destination. Kept in sync with apply_after_checkout.py.
 _TARGET_REF_CONFIG = "openhost.target-ref"
 
+# Ceiling on the pre-flight fetch. It runs with the router still up, so a stall
+# only delays the update -- but without a ceiling a hung connection would sit
+# there forever and no update could ever be attempted again.
+_FETCH_TIMEOUT_SECONDS = 300
+
 
 def _get_target_ref(repo: git.Repo) -> str | None:
     try:
@@ -331,34 +336,41 @@ def apply_update() -> NoReturn:
     `apply_after_checkout` starts the service again at the end.
     """
     try:
-        # Cover the downtime before taking the service down, not after, so the
-        # page is already poised to answer 80/443 when Caddy lets go of them.
-        launch_updater()
-        try:
-            stop_openhost()
-        except BaseException:
-            # The service is still up, so there is no downtime to cover. Left
-            # alone the updater would poll for its full lifetime (it only binds
-            # once it has seen :8080 go offline), which means it would grab 80/443
-            # during some later, unrelated restart and serve an update page for an
-            # update that is not happening.
-            stop_updater()
-            raise
-
+        # Everything that can be done with the router UP is done first: fetching
+        # and the preflight checks read the repo but never touch the working tree,
+        # so they do not need the downtime -- and they are the steps most likely to
+        # fail or hang. A dirty tree used to cost several seconds of downtime for an
+        # update that could never proceed, and a stalled fetch (a MITM proxy, a
+        # captive portal, a stateful firewall) held the instance down with no
+        # ceiling at all.
         repo = _repo()
 
         if repo.is_dirty(untracked_files=True):
             raise RuntimeError("Working tree has uncommitted changes. Stash or commit first.")
 
         progress.record("fetch", "Fetching latest code\u2026")
-
-        repo.git.fetch("origin", "--tags")
+        repo.git.fetch("origin", "--tags", kill_after_timeout=_FETCH_TIMEOUT_SECONDS)
         if not _get_sorted_tags(repo) and _get_target_ref(repo) is None:
             raise RuntimeError("No tags found on remote. Tag a release first.")
 
         # Take the first step (next tag, or the pinned target once tags are done);
         # apply_after_checkout tail-calls forward through the rest itself.
         step = _next_step(repo)
+
+        # From here the working tree changes, so the router has to be down. Cover
+        # the downtime before taking it down, not after, so the page is already
+        # poised to answer 80/443 when Caddy lets go of them.
+        launch_updater()
+        try:
+            stop_openhost()
+        except BaseException:
+            # The service is still up, so there is no downtime to cover. Left
+            # alone the updater would poll until its own downtime deadline and
+            # could then grab 80/443 during a later, unrelated restart, serving an
+            # update page for an update that is not happening.
+            stop_updater()
+            raise
+
         if step is not None:
             logger.info(f"Checking out {step}...")
             progress.record("checkout", f"Checking out {step}\u2026", ref=step)

@@ -27,6 +27,11 @@ _COMPUTE_SPACE_PORT = 8080
 # restart, so this has to outlast a multi-hop walk.
 _MAX_LIFETIME_SECONDS = 60 * 60
 _BIND_WAIT_SECONDS = 60
+# If the apply never takes compute_space down, it is not coming down: the walk
+# died before its stop, or the stop failed. Exit rather than idle for the whole
+# lifetime, because an idle updater will grab 80/443 during the NEXT unrelated
+# restart and serve an update page for an update that is not happening.
+_DOWNTIME_WAIT_SECONDS = 120
 _BIND_RETRY_INTERVAL = 0.02
 # Hint for clients that get a 503 while the instance is down. Deliberately on the
 # short side: most walks are tens of seconds.
@@ -57,12 +62,13 @@ _FALLBACK_BODY = (
 # URL token, and when /updates is not readable (no token / instance back) probe
 # /health and reload so no viewer is ever stranded on this page.
 _FALLBACK_JS = (
-    "var t=new URLSearchParams(location.search).get('token')||'';"
+    "var t=new URLSearchParams(location.search).get('token')||'';var e=0;"
     "function r(){fetch('/health',{cache:'no-store'}).then(function(h){if(h.ok)location.reload()})"
     ".catch(function(){})}"
     "function p(){fetch('/updates?token='+encodeURIComponent(t),{cache:'no-store'})"
     ".then(function(x){return x.ok?x.json():(r(),null)})"
-    ".then(function(d){if(d&&d.terminal){fetch('/health').then(function(h){if(h.ok)location.href='/settings'})}"
+    ".then(function(d){if(d){var n=(d.entries||[]).length;e=n?0:e+1;if(e>3)r();"
+    "if(d.terminal){fetch('/health').then(function(h){if(h.ok)location.href='/settings'})}}"
     "setTimeout(p,1500)}).catch(function(){r();setTimeout(p,1500)})}p();"
 )
 
@@ -256,6 +262,7 @@ def run(cert_path: Path, key_path: Path) -> None:
             servers.append(http_server)
 
     if not servers:
+        _clear_ready_marker()
         return
     logger.info(f"updater serving on {len(servers)} port(s) until compute_space is back")
 
@@ -292,7 +299,8 @@ def _acquire_ports_during_downtime(
 
     _touch_ready_marker()
 
-    absolute_deadline = time.monotonic() + _MAX_LIFETIME_SECONDS
+    start = time.monotonic()
+    absolute_deadline = start + _MAX_LIFETIME_SECONDS
     downtime_seen = False
     bind_deadline: float | None = None
 
@@ -314,11 +322,20 @@ def _acquire_ports_during_downtime(
             _close(https_sock, http_sock)
             return None, None
         elif bind_deadline is not None and time.monotonic() > bind_deadline:
+            logger.warning(f"updater never got 80/443 within {_BIND_WAIT_SECONDS}s of the downtime; giving up")
             _close(https_sock, http_sock)
+            return None, None
+        elif not downtime_seen and time.monotonic() - start > _DOWNTIME_WAIT_SECONDS:
+            # The apply that launched us never took the service down -- it died
+            # first, or its stop failed. Exit instead of polling for our whole
+            # lifetime: a lingering updater would grab 80/443 during the next
+            # unrelated restart and serve an update page for nothing.
+            logger.warning(f"compute_space never went down within {_DOWNTIME_WAIT_SECONDS}s; the apply must be gone")
             return None, None
 
         time.sleep(_BIND_RETRY_INTERVAL)
 
+    logger.warning(f"updater hit its {_MAX_LIFETIME_SECONDS}s lifetime while waiting for the ports")
     return https_sock, http_sock
 
 

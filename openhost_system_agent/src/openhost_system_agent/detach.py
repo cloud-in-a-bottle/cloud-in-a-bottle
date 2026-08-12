@@ -43,6 +43,11 @@ _NOT_LOADED_PATTERNS = ("not loaded", "not found")
 # Ceiling for --wait. Generous: a multi-hop walk runs one pixi install per hop.
 _WAIT_TIMEOUT_SECONDS = 3600.0
 
+# Hard ceiling on the walk itself, enforced by systemd. Matches the updater's own
+# lifetime cap so the page and the walk expire together rather than leaving one
+# serving with nothing behind it.
+_RUNTIME_MAX_SECONDS = 3600
+
 # `-c` rather than `-m`: under -m the module loads as __main__ and cappa's
 # dispatch exits without running the command (same reason as the updater).
 _ENTRYPOINT = (
@@ -69,9 +74,12 @@ def apply_is_running() -> bool:
     Checked before the progress log is reset so a second attempt cannot blank the
     log belonging to the update that is actually running.
     """
+    # `show` rather than `is-active`: once --collect has reaped the unit, asking
+    # for it by name makes PID 1 log "Failed to open /run/systemd/transient/..."
+    # on every call, and this runs on the update request path and at every boot.
     try:
         result = subprocess.run(
-            ["systemctl", "is-active", "--quiet", APPLY_UNIT],
+            ["systemctl", "show", "--property=ActiveState", "--value", APPLY_UNIT],
             capture_output=True,
             text=True,
             timeout=15,
@@ -79,7 +87,7 @@ def apply_is_running() -> bool:
     except (OSError, subprocess.SubprocessError):
         # Can't tell; let systemd-run's own name collision be the guard.
         return False
-    return result.returncode == 0
+    return result.stdout.strip() in ("active", "activating", "deactivating", "reloading")
 
 
 def wait_for_apply(timeout: float = _WAIT_TIMEOUT_SECONDS, poll: float = 2.0) -> bool:
@@ -143,6 +151,11 @@ def detach_apply() -> None:
         # Collect the unit when it exits so a later apply can reuse the name;
         # the journal and the progress log keep the forensics.
         "--collect",
+        # Backstop for a wedged walk. openhost is down for the duration, so an
+        # unbounded step (a stalled network call, a hung subprocess) would keep it
+        # down indefinitely. On expiry systemd kills the walk and ExecStopPost
+        # brings the instance back.
+        f"--property=RuntimeMaxSec={_RUNTIME_MAX_SECONDS}",
         f"--property=ExecStopPost={_stop_post_command()}",
         f"--setenv={DETACHED_ENV}=1",
         # Transient units inherit only the manager environment, which has no

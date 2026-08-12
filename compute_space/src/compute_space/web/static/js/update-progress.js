@@ -15,6 +15,10 @@
   var spEl = document.getElementById('sp');
   var terminalSeen = false;
   var failedShownAt = null;
+  var emptyPolls = 0;
+  // ~5s at the 800ms poll interval: long enough to ride out the blank log at the
+  // start of a real update, short enough that a stranded page escapes quickly.
+  var EMPTY_POLLS_BEFORE_RECOVERY = 6;
 
   function clearToken() {
     try { sessionStorage.removeItem('openhost_update_token'); } catch (e) { /* ignore */ }
@@ -97,7 +101,19 @@
       })
       .then(function (d) {
         if (!d) return;
-        render(d.entries || []);
+        var entries = d.entries || [];
+        // A readable but EMPTY log means there is nothing to watch: either no
+        // update ever started, or one died in the moment between resetting the log
+        // and writing its first line. Neither will ever produce a terminal entry,
+        // so without this the page polls a healthy instance forever. Require a few
+        // consecutive empties first, because the log is legitimately blank for a
+        // second or two at the very start of a real update.
+        if (!entries.length) {
+          if (++emptyPolls >= EMPTY_POLLS_BEFORE_RECOVERY) maybeRecoverWithoutLogs();
+        } else {
+          emptyPolls = 0;
+        }
+        render(entries);
         if (d.terminal) { handleTerminal(d); return; }
         setTimeout(poll, 800);
       })

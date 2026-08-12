@@ -665,3 +665,33 @@ def test_updater_503s_carry_retry_after(
         assert status in (403, 503), f"{path} -> {status}"
         if status == 503:
             assert headers.get("retry-after") == str(server._RETRY_AFTER_SECONDS), path
+
+
+def test_updater_gives_up_when_the_service_never_goes_down(data_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # If the apply died before its stop (or the stop failed), compute_space stays
+    # up and there is no downtime to cover. The updater must exit rather than idle:
+    # a lingering one would grab 80/443 during the NEXT unrelated restart and serve
+    # an update page for an update that is not happening.
+    monkeypatch.setattr(server, "_compute_space_ready", lambda: True)
+    monkeypatch.setattr(server, "_DOWNTIME_WAIT_SECONDS", 0.05)
+    monkeypatch.setattr("openhost_system_agent.updater.server.time.sleep", lambda _s: None)
+    monkeypatch.setattr(server, "_try_bind", lambda *_a: pytest.fail("must not bind while the router is up"))
+
+    https_sock, http_sock = server._acquire_ports_during_downtime(None)
+
+    assert https_sock is None and http_sock is None
+
+
+def test_updater_clears_its_ready_marker_when_it_acquires_nothing(
+    data_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The marker means "poised to bind"; leaving it behind after giving up misleads
+    # the next launcher, which waits on it.
+    monkeypatch.setattr(server, "_make_ssl_context", lambda *_a: None)
+    monkeypatch.setattr(server, "_acquire_ports_during_downtime", lambda _ctx: (None, None))
+    paths.ready_marker_path().parent.mkdir(parents=True, exist_ok=True)
+    paths.ready_marker_path().write_text("")
+
+    server.run(data_dir / "c.pem", data_dir / "c.key")
+
+    assert not paths.ready_marker_path().exists()

@@ -65,7 +65,15 @@ _GIT_STATE_TO_UPDATE_STATE = {
 
 # Explanatory text shown to the owner for git states that need a heads-up
 # beyond the generic "Updates available." message.
-_GIT_STATE_NOTICE: dict[str, str] = {}
+_GIT_STATE_NOTICE: dict[str, str] = {
+    # A dirty tree still reports UPDATE_AVAILABLE (there may well be a newer
+    # release), but the apply refuses to run until it is clean, so say so rather
+    # than letting the owner click into a guaranteed failure with no explanation.
+    "DIRTY": (
+        "This instance has uncommitted local changes. Updating will refuse to run until they are "
+        "committed or discarded."
+    ),
+}
 
 
 @attr.s(auto_attribs=True, frozen=True)

@@ -22,9 +22,12 @@ def apply_is_running() -> bool:
     and restarts us, the lock is gone but the walk may still be running, and a
     second attempt would overwrite the token the first owner's tab is using.
     """
+    # `show` rather than `is-active`: once the transient unit has been collected,
+    # asking for it by name makes PID 1 log a failed open on every call, and this
+    # is on the request path.
     try:
         result = subprocess.run(
-            ["systemctl", "is-active", "--quiet", _APPLY_UNIT],
+            ["systemctl", "show", "--property=ActiveState", "--value", _APPLY_UNIT],
             capture_output=True,
             text=True,
             timeout=10,
@@ -32,7 +35,7 @@ def apply_is_running() -> bool:
     except (OSError, subprocess.SubprocessError):
         # Can't tell; the agent's own name-collision check is still the backstop.
         return False
-    return result.returncode == 0
+    return result.stdout.strip() in ("active", "activating", "deactivating", "reloading")
 
 
 def new_update_token() -> str:
