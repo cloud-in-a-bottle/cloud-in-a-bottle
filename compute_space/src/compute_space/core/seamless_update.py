@@ -1,11 +1,38 @@
 from __future__ import annotations
 
 import secrets
+import subprocess
 
 from compute_space.core.logging import logger
 from compute_space.core.system_agent import SystemAgentError
 from compute_space.core.system_agent import system_agent_clear_update_token
 from compute_space.core.system_agent import system_agent_set_update_token
+
+# The transient unit the agent runs the apply walk in. Its liveness is the mutex
+# that outlives this process, since the walk stops us partway through.
+_APPLY_UNIT = "openhost-apply.service"
+
+
+def apply_is_running() -> bool:
+    """True when an apply walk is already in flight on this host.
+
+    Read directly rather than through the root agent: `systemctl is-active` needs
+    no privileges, and this sits on the request path. It matters because the
+    in-process lock only covers this process's lifetime -- after the walk stops
+    and restarts us, the lock is gone but the walk may still be running, and a
+    second attempt would overwrite the token the first owner's tab is using.
+    """
+    try:
+        result = subprocess.run(
+            ["systemctl", "is-active", "--quiet", _APPLY_UNIT],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        # Can't tell; the agent's own name-collision check is still the backstop.
+        return False
+    return result.returncode == 0
 
 
 def new_update_token() -> str:

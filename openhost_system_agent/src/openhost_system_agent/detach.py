@@ -83,6 +83,22 @@ def _systemctl_path() -> str:
     return shutil.which("systemctl") or "/usr/bin/systemctl"
 
 
+def _stop_post_command() -> str:
+    """The failsafe that runs however the walk ends.
+
+    `reset-failed` first, because openhost.service is rate-limited
+    (StartLimitBurst=5 / StartLimitIntervalSec=1800) and every update now spends
+    a start. Without the reset, the sixth update in half an hour is refused with
+    "Start request repeated too quickly" and nothing retries -- the instance
+    stays down until someone SSHes in.
+
+    `--no-block` so this cannot wait on a job from inside the unit's own
+    teardown; the request lives in PID 1 either way.
+    """
+    systemctl = _systemctl_path()
+    return f'/bin/sh -c "{systemctl} reset-failed {OPENHOST_UNIT}; {systemctl} start --no-block {OPENHOST_UNIT}"'
+
+
 def detach_apply() -> None:
     """Start the walk as APPLY_UNIT. Returns once systemd has accepted the job.
 
@@ -104,10 +120,13 @@ def detach_apply() -> None:
         # Collect the unit when it exits so a later apply can reuse the name;
         # the journal and the progress log keep the forensics.
         "--collect",
-        # The failsafe. --no-block so this can't wait on a job from inside the
-        # unit's own teardown; the request lives in PID 1 either way.
-        f"--property=ExecStopPost={_systemctl_path()} start --no-block {OPENHOST_UNIT}",
+        f"--property=ExecStopPost={_stop_post_command()}",
         f"--setenv={DETACHED_ENV}=1",
+        # Transient units inherit only the manager environment, which has no
+        # HOME. git needs one for `git config --global` (and root's
+        # safe.directory lives in $HOME/.gitconfig), so without this the walk
+        # dies on its first git call with "fatal: $HOME not set".
+        f"--setenv=HOME={os.environ.get('HOME') or '/root'}",
     ]
     # compute_space forwards the data-dir override to us; carry it across so the
     # detached walk resolves the same progress log, token and certs.
@@ -150,10 +169,20 @@ def stop_openhost() -> None:
 
 
 def start_openhost() -> None:
-    """Start openhost after the walk. Raises if systemd refuses the job."""
+    """Bring openhost back after the walk. Raises if systemd refuses the job.
+
+    `restart`, not `start`: if anything started the service while the walk was
+    running (an operator, or the ExecStopPost of an earlier attempt), a `start`
+    would be a silent no-op and the freshly installed code would never boot.
+
+    `reset-failed` first because openhost.service is start-rate-limited and each
+    update spends one start; without it the sixth update within
+    StartLimitIntervalSec is refused and the instance stays down.
+    """
     logger.info(f"starting {OPENHOST_UNIT} after the apply")
-    result = subprocess.run(["systemctl", "start", OPENHOST_UNIT], capture_output=True, text=True, timeout=120)
+    subprocess.run(["systemctl", "reset-failed", OPENHOST_UNIT], capture_output=True, text=True, timeout=30)
+    result = subprocess.run(["systemctl", "restart", OPENHOST_UNIT], capture_output=True, text=True, timeout=120)
     if result.returncode != 0:
         raise RuntimeError(
-            f"systemctl start {OPENHOST_UNIT} exited {result.returncode}: {(result.stderr or '').strip()}"
+            f"systemctl restart {OPENHOST_UNIT} exited {result.returncode}: {(result.stderr or '').strip()}"
         )

@@ -153,10 +153,17 @@ def test_mark_boot_complete_appends_done_after_restarting(data_dir: Path) -> Non
     assert entries[-1]["message"] == "Instance is back online."
 
 
-def test_mark_boot_complete_noop_without_restarting(data_dir: Path) -> None:
-    progress.record("install", "Installing…")
+def test_mark_boot_complete_noop_when_already_terminal(data_dir: Path) -> None:
+    # A finished run must not gain a second terminal entry on the next boot.
+    progress.record(progress.PHASE_DONE, "Instance is back online.")
     progress.mark_boot_complete()
-    assert progress.read_entries()[-1]["phase"] == "install"  # nothing appended
+    assert [e["phase"] for e in progress.read_entries()] == [progress.PHASE_DONE]
+
+
+def test_mark_boot_complete_noop_on_an_empty_log(data_dir: Path) -> None:
+    progress.reset_progress()
+    assert progress.mark_boot_complete() is True
+    assert progress.read_entries() == []
 
 
 def test_record_failure_skips_after_restarting(data_dir: Path) -> None:
@@ -590,3 +597,52 @@ def test_updater_unit_gets_a_restart_policy(monkeypatch: pytest.MonkeyPatch, dat
 
     systemd_run = next(c for c in calls if c and c[0] == "systemd-run")
     assert "--property=Restart=on-failure" in systemd_run
+
+
+def test_mark_boot_complete_finalizes_an_interrupted_walk(
+    data_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # REGRESSION: a walk killed mid-flight (OOM, SIGKILL, reboot) leaves the log
+    # on a non-terminal phase. Nothing else ever finalizes it, and the page only
+    # stops polling on a terminal entry -- so the owner's tab spun forever against
+    # an instance that was already healthy.
+    progress.reset_progress()
+    progress.record("migrate", "Applying system migrations…")
+    monkeypatch.setattr("openhost_system_agent.updater.progress.apply_is_running", lambda: False)
+
+    assert progress.mark_boot_complete() is True
+
+    entries = progress.read_entries()
+    assert progress.is_terminal(entries) is True
+    assert entries[-1]["phase"] == progress.PHASE_FAILED
+    assert "interrupted" in str(entries[-1]["message"]).lower()
+
+
+def test_mark_boot_complete_leaves_a_live_walks_log_alone(
+    data_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # An operator starting openhost mid-walk boots us while the apply is still
+    # running; its log must not be terminated under it.
+    progress.reset_progress()
+    progress.record("migrate", "Applying system migrations…")
+    monkeypatch.setattr("openhost_system_agent.updater.progress.apply_is_running", lambda: True)
+
+    assert progress.mark_boot_complete() is True
+
+    entries = progress.read_entries()
+    assert [e["phase"] for e in entries] == ["migrate"]
+    assert progress.is_terminal(entries) is False
+
+
+def test_mark_boot_complete_still_completes_a_normal_restart(
+    data_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    progress.reset_progress()
+    progress.record(progress.PHASE_RESTARTING, "Update complete. Starting…")
+    monkeypatch.setattr(
+        "openhost_system_agent.updater.progress.apply_is_running",
+        lambda: pytest.fail("a restarting log needs no unit check"),
+    )
+
+    assert progress.mark_boot_complete() is True
+    assert progress.read_entries()[-1]["phase"] == progress.PHASE_DONE

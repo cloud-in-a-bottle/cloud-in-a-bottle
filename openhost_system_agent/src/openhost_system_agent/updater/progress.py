@@ -7,6 +7,7 @@ import shutil
 
 import attr
 
+from openhost_system_agent.detach import apply_is_running
 from openhost_system_agent.updater.paths import progress_log_path
 from openhost_system_agent.updater.paths import updater_dir
 
@@ -78,16 +79,29 @@ def record(phase: str, message: str, ref: str | None = None) -> bool:
 
 
 def mark_boot_complete() -> bool:
-    """Append the terminal "done" if the log ends with "restarting".
+    """Finalize the log on boot so the /updating page can never hang.
+
+    Two cases:
+
+    * ends with "restarting" -- the walk finished and we are the new instance, so
+      append the terminal "done".
+    * ends mid-walk ("fetch", "migrate", ...) -- the apply died without recording
+      anything: OOM, SIGKILL, a reboot. Nothing else will ever finalize that log,
+      and the page only stops polling on a terminal entry, so it would spin
+      forever against a healthy instance. Record the interruption instead.
 
     Returns False only when the append was NEEDED but could not be written.
     Shared by compute_space's boot hook (direct write) and the agent's
     `updater mark-booted` (root fallback for legacy root-owned logs).
     """
     entries = read_entries()
-    if not entries or entries[-1].get("phase") != PHASE_RESTARTING:
+    if not entries or is_terminal(entries):
         return True
-    return record(PHASE_DONE, "Instance is back online.")
+    if entries[-1].get("phase") == PHASE_RESTARTING:
+        return record(PHASE_DONE, "Instance is back online.")
+    if apply_is_running():
+        return True  # a walk really is in flight (it started us); leave its log alone
+    return record(PHASE_FAILED, "Update was interrupted before it finished. The instance restarted; try again.")
 
 
 def record_failure_if_not_terminal(message: str) -> bool:

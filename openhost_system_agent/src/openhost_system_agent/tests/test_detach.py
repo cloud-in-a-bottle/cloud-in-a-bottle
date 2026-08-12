@@ -79,10 +79,10 @@ def test_detach_sets_the_execstoppost_failsafe(monkeypatch: pytest.MonkeyPatch) 
 
     stop_post = [c for c in calls[0] if c.startswith("--property=ExecStopPost=")]
     assert len(stop_post) == 1
-    # Absolute path (systemd requires one) and a non-blocking start (so it cannot
-    # wait on a job from inside the unit's own teardown).
-    assert stop_post[0].endswith(f"systemctl start --no-block {detach_mod.OPENHOST_UNIT}")
-    assert "--property=ExecStopPost=/" in stop_post[0]
+    # Absolute paths (systemd requires them) and a non-blocking start, so it
+    # cannot wait on a job from inside the unit's own teardown.
+    assert f"start --no-block {detach_mod.OPENHOST_UNIT}" in stop_post[0]
+    assert "--property=ExecStopPost=/bin/sh" in stop_post[0]
 
 
 def test_detach_forwards_the_data_dir_override(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -255,8 +255,12 @@ def test_stop_openhost_raises_on_a_real_failure(monkeypatch: pytest.MonkeyPatch)
 
 
 def test_start_openhost_raises_when_systemd_refuses(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("openhost_system_agent.detach.subprocess.run", lambda *a, **k: _fail("Job failed"))
-    with pytest.raises(RuntimeError, match="systemctl start"):
+    def _run(cmd: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        # The reset is best-effort; only a failed restart is fatal.
+        return _ok() if cmd[1] == "reset-failed" else _fail("Job failed")
+
+    monkeypatch.setattr("openhost_system_agent.detach.subprocess.run", _run)
+    with pytest.raises(RuntimeError, match="systemctl restart"):
         detach_mod.start_openhost()
 
 
@@ -276,3 +280,54 @@ def test_apply_is_running_false_when_systemctl_is_unusable(monkeypatch: pytest.M
 
     monkeypatch.setattr("openhost_system_agent.detach.subprocess.run", _boom)
     assert detach_mod.apply_is_running() is False
+
+
+# ── regressions found by live-instance testing ───────────────────────
+
+
+def test_detach_gives_the_unit_a_home(monkeypatch: pytest.MonkeyPatch) -> None:
+    # REGRESSION: transient units inherit only the manager environment, which has
+    # no HOME. Without one, the walk's first git call dies with "fatal: $HOME not
+    # set" (root's safe.directory lives in $HOME/.gitconfig), so no update could
+    # ever complete on a real host.
+    calls: list[list[str]] = []
+    monkeypatch.setenv("HOME", "/root")
+    monkeypatch.setattr(detach_mod, "systemd_run_available", lambda: True)
+    monkeypatch.setattr("openhost_system_agent.detach.subprocess.run", _recorder(calls))
+
+    detach_mod.detach_apply()
+
+    assert "--setenv=HOME=/root" in calls[0]
+
+
+def test_detach_falls_back_to_root_home(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[list[str]] = []
+    monkeypatch.delenv("HOME", raising=False)
+    monkeypatch.setattr(detach_mod, "systemd_run_available", lambda: True)
+    monkeypatch.setattr("openhost_system_agent.detach.subprocess.run", _recorder(calls))
+
+    detach_mod.detach_apply()
+
+    assert "--setenv=HOME=/root" in calls[0]
+
+
+def test_failsafe_resets_the_start_limiter_first() -> None:
+    # REGRESSION: openhost.service is start-rate-limited (StartLimitBurst=5 in
+    # 30 min) and every update now spends a start, so the sixth update in the
+    # window was refused with "Start request repeated too quickly" and nothing
+    # retried -- the instance stayed down until a human intervened.
+    command = detach_mod._stop_post_command()
+    assert "reset-failed" in command
+    assert command.index("reset-failed") < command.index("start --no-block")
+
+
+def test_start_openhost_restarts_and_clears_the_limiter(monkeypatch: pytest.MonkeyPatch) -> None:
+    # `restart`, not `start`: if anything started the service mid-walk, a `start`
+    # is a silent no-op and the freshly installed code never boots.
+    calls: list[list[str]] = []
+    monkeypatch.setattr("openhost_system_agent.detach.subprocess.run", _recorder(calls))
+
+    detach_mod.start_openhost()
+
+    verbs = [c[1] for c in calls]
+    assert verbs == ["reset-failed", "restart"]

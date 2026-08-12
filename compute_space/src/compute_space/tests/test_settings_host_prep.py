@@ -28,6 +28,12 @@ def _fresh_apply_lock() -> None:
     settings_mod._apply_lock = asyncio.Lock()
 
 
+@pytest.fixture(autouse=True)
+def _no_walk_on_the_host(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No apply unit is running unless a test says otherwise (it shells systemctl)."""
+    monkeypatch.setattr(settings_mod, "apply_is_running", lambda: False)
+
+
 async def _run_launch(response: object) -> None:
     """Run the launch the way Litestar does: after the response has been written.
 

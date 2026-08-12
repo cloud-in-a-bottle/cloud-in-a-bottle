@@ -5,6 +5,7 @@ import sqlite3
 from enum import StrEnum
 from typing import Any
 
+import anyio
 import attr
 import bcrypt
 from litestar import Request
@@ -30,6 +31,7 @@ from compute_space.core.identity_store import get_connect_base_url
 from compute_space.core.identity_store import get_instance_identity
 from compute_space.core.identity_store import set_instance_identity
 from compute_space.core.logging import logger
+from compute_space.core.seamless_update import apply_is_running
 from compute_space.core.seamless_update import clear_update_token
 from compute_space.core.seamless_update import new_update_token
 from compute_space.core.seamless_update import persist_update_token
@@ -191,6 +193,13 @@ async def apply_update() -> Response[ApplyUpdateResponse]:
 
         if not migration_status.ok and migration_status.reason != "behind":
             raise HTTPException(detail=migration_status.message, status_code=409)
+
+        # Check the host, not just this process: the walk stops and restarts us,
+        # so a fresh process can hold a free lock while an apply is still running.
+        # Minting a token then would overwrite the one the owner's tab is polling
+        # with, stranding it on 403 for the rest of the update.
+        if await anyio.to_thread.run_sync(apply_is_running):
+            raise HTTPException(detail="An update is already in progress.", status_code=409)
 
         token = new_update_token()
         await persist_update_token(token)

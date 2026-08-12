@@ -46,6 +46,12 @@ def _fresh_apply_lock() -> None:
     settings_mod._apply_lock = asyncio.Lock()
 
 
+@pytest.fixture(autouse=True)
+def _no_walk_on_the_host(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No apply unit is running unless a test says otherwise (it shells systemctl)."""
+    monkeypatch.setattr(settings_mod, "apply_is_running", lambda: False)
+
+
 @pytest.fixture
 def token_calls(monkeypatch: pytest.MonkeyPatch) -> dict[str, list[str]]:
     calls: dict[str, list[str]] = {"persist": [], "clear": []}
@@ -351,3 +357,29 @@ def test_updating_page_survives_the_checkout_it_is_reporting_on(cfg: Any, tmp_pa
 
     assert resp.status_code == 200
     assert "Updating this instance" in resp.text
+
+
+@pytest.mark.asyncio
+async def test_apply_refuses_when_a_walk_is_already_running_on_the_host(
+    monkeypatch: pytest.MonkeyPatch, token_calls: dict[str, list[str]], progress_env: Path
+) -> None:
+    # REGRESSION: the in-process lock only covers this process's lifetime, and the
+    # walk stops and restarts us. A fresh process would hold a free lock while an
+    # apply was still running, mint a new token, and strand the first owner's tab
+    # on 403 for the rest of the update.
+    async def status() -> MigrationStatus:
+        return _status()
+
+    async def apply_must_not_run() -> None:
+        pytest.fail("must not launch a second walk")
+
+    monkeypatch.setattr(settings_mod, "system_agent_status", status)
+    monkeypatch.setattr(settings_mod, "system_agent_apply", apply_must_not_run)
+    monkeypatch.setattr(settings_mod, "apply_is_running", lambda: True)
+
+    with pytest.raises(HTTPException) as e:
+        await settings_mod.apply_update.fn()
+
+    assert e.value.status_code == 409
+    assert token_calls["persist"] == []  # the in-flight update's token is untouched
+    assert not settings_mod._apply_lock.locked()
