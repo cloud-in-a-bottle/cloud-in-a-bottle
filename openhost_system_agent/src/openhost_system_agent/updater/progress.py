@@ -4,6 +4,7 @@ import datetime
 import json
 import os
 import shutil
+from enum import StrEnum
 
 import attr
 
@@ -29,13 +30,16 @@ def _ensure_updater_dir() -> None:
     _chown_to_host(d)
 
 
-PHASE_DONE = "done"
-PHASE_FAILED = "failed"
-# Recorded just before `systemctl restart openhost`. Deliberately NOT terminal:
-# only the freshly booted compute_space appends PHASE_DONE, so the /updating page
-# can't finish against the old, about-to-die instance and bounce the owner back
-# to a dashboard that dies seconds later.
-PHASE_RESTARTING = "restarting"
+class Phase(StrEnum):
+    """The phases the page reacts to. Other labels ("fetch", "migrate", ...) are
+    free-form progress text and stay plain strings."""
+
+    DONE = "done"
+    FAILED = "failed"
+    # Recorded just before openhost is started again. Deliberately NOT terminal:
+    # only the freshly booted compute_space appends DONE, so the page cannot finish
+    # against an instance that is about to go away.
+    RESTARTING = "restarting"
 
 
 @attr.s(auto_attribs=True, frozen=True)
@@ -91,11 +95,11 @@ def mark_boot_complete() -> bool:
     entries = read_entries()
     if not entries or is_terminal(entries):
         return True
-    if entries[-1].get("phase") == PHASE_RESTARTING:
-        return record(PHASE_DONE, "Instance is back online.")
+    if entries[-1].get("phase") == Phase.RESTARTING:
+        return record(Phase.DONE, "Instance is back online.")
     if apply_is_running():
         return True  # a walk really is in flight; leave its log alone
-    return record(PHASE_FAILED, "Update was interrupted before it finished. The instance restarted; try again.")
+    return record(Phase.FAILED, "Update was interrupted before it finished. The instance restarted; try again.")
 
 
 def record_failure_if_not_terminal(message: str) -> bool:
@@ -108,9 +112,9 @@ def record_failure_if_not_terminal(message: str) -> bool:
     Shared by compute_space's apply-failure path and the agent's `updater fail`.
     """
     entries = read_entries()
-    if is_terminal(entries) or (entries and entries[-1].get("phase") == PHASE_RESTARTING):
+    if is_terminal(entries) or (entries and entries[-1].get("phase") == Phase.RESTARTING):
         return True
-    return record(PHASE_FAILED, message)
+    return record(Phase.FAILED, message)
 
 
 def read_entries() -> list[dict[str, object]]:
@@ -133,4 +137,4 @@ def read_entries() -> list[dict[str, object]]:
 
 
 def is_terminal(entries: list[dict[str, object]]) -> bool:
-    return bool(entries) and entries[-1].get("phase") in (PHASE_DONE, PHASE_FAILED)
+    return bool(entries) and entries[-1].get("phase") in (Phase.DONE, Phase.FAILED)

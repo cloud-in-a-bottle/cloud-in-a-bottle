@@ -290,7 +290,7 @@ def test_main_records_restarting_not_done(progress_dir: Path) -> None:
 
     entries = updater_progress.read_entries()
     assert entries, "expected progress entries"
-    assert entries[-1]["phase"] == updater_progress.PHASE_RESTARTING
+    assert entries[-1]["phase"] == updater_progress.Phase.RESTARTING
     assert updater_progress.is_terminal(entries) is False
     # The record must land BEFORE the start, so the page shows it while the
     # instance is still coming up rather than after it is already back.
@@ -309,5 +309,5 @@ def test_main_records_failed_on_unhandled_error(progress_dir: Path) -> None:
             aac.main()
 
     entries = updater_progress.read_entries()
-    assert entries[-1]["phase"] == updater_progress.PHASE_FAILED
+    assert entries[-1]["phase"] == updater_progress.Phase.FAILED
     assert "migration blew up" in str(entries[-1]["message"])

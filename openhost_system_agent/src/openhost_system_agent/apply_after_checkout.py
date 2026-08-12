@@ -174,7 +174,7 @@ def _apply(project: str) -> None:
     progress.record("install", "Installing dependencies\u2026")
     result = subprocess.run(["sudo", "-u", "host", "-H", PIXI_BIN, "install"], cwd=project, timeout=300)
     if result.returncode != 0:
-        progress.record(progress.PHASE_FAILED, f"Dependency install failed (exit {result.returncode}).")
+        progress.record(progress.Phase.FAILED, f"Dependency install failed (exit {result.returncode}).")
         print(f"pixi install failed (exit {result.returncode})", file=sys.stderr)
         sys.exit(1)
 
@@ -188,9 +188,9 @@ def _apply(project: str) -> None:
         # walk stays a single process regardless of how many steps we're behind.
         os.execv(sys.executable, [sys.executable, str(Path(__file__).resolve())])
 
-    # NOT terminal (see PHASE_RESTARTING): only the freshly booted compute_space
+    # NOT terminal (see Phase.RESTARTING): only the freshly booted compute_space
     # appends "done", so the page can't finish against the about-to-die instance.
-    progress.record(progress.PHASE_RESTARTING, "Update complete. Starting\u2026")
+    progress.record(progress.Phase.RESTARTING, "Update complete. Starting\u2026")
 
     start_openhost()
 
@@ -208,7 +208,7 @@ def main() -> None:
     except SystemExit:
         raise
     except BaseException as e:
-        progress.record(progress.PHASE_FAILED, f"Update failed: {e}")
+        progress.record(progress.Phase.FAILED, f"Update failed: {e}")
         raise
 
 

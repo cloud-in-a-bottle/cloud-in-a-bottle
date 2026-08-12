@@ -112,7 +112,7 @@ def test_progress_reset_and_record(data_dir: Path) -> None:
     progress.reset_progress()
     progress.record("fetch", "Fetching")
     progress.record("migrate", "Migrating", ref="v1.2.3")
-    progress.record(progress.PHASE_DONE, "Done")
+    progress.record(progress.Phase.DONE, "Done")
 
     lines = paths.progress_log_path().read_text().strip().splitlines()
     assert len(lines) == 3
@@ -150,36 +150,36 @@ def test_is_terminal(data_dir: Path) -> None:
     # "restarting" is deliberately NOT terminal: only the freshly booted
     # compute_space appends "done", so the page can't leave for a dashboard that
     # is about to die.
-    assert progress.is_terminal([{"phase": progress.PHASE_RESTARTING}]) is False
+    assert progress.is_terminal([{"phase": progress.Phase.RESTARTING}]) is False
 
 
 def test_mark_boot_complete_appends_done_after_restarting(data_dir: Path) -> None:
-    progress.record(progress.PHASE_RESTARTING, "Update complete. Restarting…")
+    progress.record(progress.Phase.RESTARTING, "Update complete. Restarting…")
     assert progress.mark_boot_complete() is True
     entries = progress.read_entries()
-    assert entries[-1]["phase"] == progress.PHASE_DONE
+    assert entries[-1]["phase"] == progress.Phase.DONE
     assert entries[-1]["message"] == "Instance is back online."
 
 
 def test_mark_boot_complete_noop_when_already_terminal(data_dir: Path) -> None:
     # A finished run must not gain a second terminal entry on the next boot.
-    progress.record(progress.PHASE_DONE, "Instance is back online.")
+    progress.record(progress.Phase.DONE, "Instance is back online.")
     progress.mark_boot_complete()
-    assert [e["phase"] for e in progress.read_entries()] == [progress.PHASE_DONE]
+    assert [e["phase"] for e in progress.read_entries()] == [progress.Phase.DONE]
 
 
 def test_record_failure_skips_after_restarting(data_dir: Path) -> None:
     # A successful apply ends the log with "restarting" right before the restart
     # kills compute_space; the resulting exception must NOT be logged as a failure.
-    progress.record(progress.PHASE_RESTARTING, "Update complete. Restarting…")
+    progress.record(progress.Phase.RESTARTING, "Update complete. Restarting…")
     assert progress.record_failure_if_not_terminal("Update failed: killed by restart") is True
-    assert progress.read_entries()[-1]["phase"] == progress.PHASE_RESTARTING
+    assert progress.read_entries()[-1]["phase"] == progress.Phase.RESTARTING
 
 
 def test_record_failure_records_when_mid_apply(data_dir: Path) -> None:
     progress.record("install", "Installing…")
     progress.record_failure_if_not_terminal("Update failed: pixi install error")
-    assert progress.read_entries()[-1]["phase"] == progress.PHASE_FAILED
+    assert progress.read_entries()[-1]["phase"] == progress.Phase.FAILED
 
 
 # ── server: token gating + page rendering over real TLS ────────────────────────
@@ -556,7 +556,7 @@ def test_mark_boot_complete_finalizes_an_interrupted_walk(data_dir: Path, monkey
 
     entries = progress.read_entries()
     assert progress.is_terminal(entries) is True
-    assert entries[-1]["phase"] == progress.PHASE_FAILED
+    assert entries[-1]["phase"] == progress.Phase.FAILED
     assert "interrupted" in str(entries[-1]["message"]).lower()
 
 

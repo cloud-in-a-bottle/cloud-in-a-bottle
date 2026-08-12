@@ -240,7 +240,7 @@ def test_apply_update_dirty_records_failed_progress(tmp_path: Path, monkeypatch:
 
     entries = updater_progress.read_entries()
     assert updater_progress.is_terminal(entries) is True
-    assert entries[-1]["phase"] == updater_progress.PHASE_FAILED
+    assert entries[-1]["phase"] == updater_progress.Phase.FAILED
     assert "uncommitted" in str(entries[-1]["message"])
 
 
@@ -259,7 +259,7 @@ def test_apply_update_fetch_failure_records_failed_progress(tmp_path: Path, monk
 
     entries = updater_progress.read_entries()
     assert [e["phase"] for e in entries][:1] == ["fetch"]
-    assert entries[-1]["phase"] == updater_progress.PHASE_FAILED
+    assert entries[-1]["phase"] == updater_progress.Phase.FAILED
 
 
 def test_apply_update_without_tags_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

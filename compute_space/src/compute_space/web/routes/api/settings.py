@@ -223,8 +223,11 @@ class UpdateProgressResponse:
 
 @get("/updates", guards=[require_owner_auth])
 async def update_progress() -> UpdateProgressResponse:
-    # Same path+shape the detached updater serves during the final restart; this
-    # covers the long apply phase while compute_space is still up.
+    # Same path and shape the detached updater serves while openhost is stopped, so
+    # the page polls one endpoint throughout. This one answers at the ends of the
+    # update -- before the stop, and once we are back -- and it is what the page
+    # sees the terminal "done" on, which is what sends it to the dashboard. It
+    # returns the whole log, so the finished update stays readable afterwards.
     view = read_progress()
     return UpdateProgressResponse(entries=view.entries, terminal=view.terminal)
 

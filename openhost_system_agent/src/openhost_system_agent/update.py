@@ -292,7 +292,7 @@ def start_apply(wait: bool = False) -> None:
     except ApplyAlreadyRunningError:
         raise  # lost the race; the winner's log is the live one now
     except BaseException as e:
-        progress.record(progress.PHASE_FAILED, f"Update failed: {e}")
+        progress.record(progress.Phase.FAILED, f"Update failed: {e}")
         raise
 
     if not wait:
@@ -303,7 +303,7 @@ def start_apply(wait: bool = False) -> None:
     # started compute_space appends "done"), so only "failed" is a failure.
     entries = progress.read_entries()
     last = entries[-1] if entries else {}
-    if last.get("phase") == progress.PHASE_FAILED:
+    if last.get("phase") == progress.Phase.FAILED:
         raise RuntimeError(str(last.get("message") or "the update failed"))
 
 
@@ -350,7 +350,7 @@ def apply_update() -> NoReturn:
             repo.git.checkout(_resolve_ref_sha(repo, step) or step)
             repo.git.clean("-fd")
     except BaseException as e:
-        progress.record(progress.PHASE_FAILED, f"Update failed: {e}")
+        progress.record(progress.Phase.FAILED, f"Update failed: {e}")
         raise  # ExecStopPost still starts openhost, so a failure here still serves
 
     # Hand off to the checked-out ref's own apply code, replacing this process.

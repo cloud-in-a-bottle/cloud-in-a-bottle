@@ -67,8 +67,12 @@ def _terminate_children(children: list[subprocess.Popen[bytes]]) -> None:
 def _bootstrap(config: Config) -> None:
     """One-time process-wide initialization shared by the setup and full apps."""
     set_active_config(config)
-    # Point the shared updater paths at this instance's data dir so compute_space,
-    # the agent, and the detached updater all use the same progress log / token.
+    # Process-wide rather than an argument to the agent calls, because we resolve
+    # these paths in-process too: compute_space reads the progress log and appends
+    # to it (read_progress, mark_boot_complete, record_apply_failure) through the
+    # same shared module the agent, the apply unit and the updater use, and that
+    # module resolves the directory from this variable so all four agree on one
+    # path. Agent invocations forward it explicitly on top (see _agent_argv).
     os.environ[DATA_DIR_ENV] = str(config.openhost_data_path)
     setup_file_logging(Path(os.path.dirname(config.db_path)) / "compute_space.log")
     load_keys(config.keys_dir)

@@ -241,7 +241,7 @@ def test_dirty_tree_never_takes_the_service_down(monkeypatch: pytest.MonkeyPatch
     with pytest.raises(RuntimeError, match="uncommitted"):
         update_mod.apply_update()
 
-    assert updater_progress.read_entries()[-1]["phase"] == updater_progress.PHASE_FAILED
+    assert updater_progress.read_entries()[-1]["phase"] == updater_progress.Phase.FAILED
 
 
 def test_failed_stop_cleans_up_the_updater(monkeypatch: pytest.MonkeyPatch, progress_dir: Path) -> None:
@@ -264,7 +264,7 @@ def test_failed_stop_cleans_up_the_updater(monkeypatch: pytest.MonkeyPatch, prog
         update_mod.apply_update()
 
     assert events == ["launch", "stop_updater"]
-    assert updater_progress.read_entries()[-1]["phase"] == updater_progress.PHASE_FAILED
+    assert updater_progress.read_entries()[-1]["phase"] == updater_progress.Phase.FAILED
 
 
 def test_successful_stop_leaves_the_updater_serving(monkeypatch: pytest.MonkeyPatch, progress_dir: Path) -> None:
@@ -365,8 +365,8 @@ def test_wait_for_apply_times_out(monkeypatch: pytest.MonkeyPatch) -> None:
     [
         # A successful walk ends on the NON-terminal "restarting" (only the freshly
         # started compute_space appends "done"), so that must not read as failure.
-        (updater_progress.PHASE_RESTARTING, None),
-        (updater_progress.PHASE_FAILED, "Dependency install failed"),
+        (updater_progress.Phase.RESTARTING, None),
+        (updater_progress.Phase.FAILED, "Dependency install failed"),
     ],
 )
 def test_start_apply_wait_surfaces_the_walks_outcome(

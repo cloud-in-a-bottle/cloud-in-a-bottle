@@ -18,6 +18,7 @@ from litestar.exceptions.responses import create_exception_response
 from litestar.plugins.jinja import JinjaTemplateEngine
 from litestar.response import Redirect
 from litestar.static_files import create_static_files_router
+from litestar.template.config import TemplateConfig
 from litestar.types import ASGIApp
 
 from compute_space.config import Config
@@ -55,7 +56,6 @@ from compute_space.web.routes.pages.permissions_v2 import pages_permissions_v2_r
 from compute_space.web.routes.pages.settings import pages_settings_routes
 from compute_space.web.routes.pages.system import pages_system_routes
 from compute_space.web.routes.services_v2 import services_v2_routes
-from compute_space.web.templating import build_template_config
 
 
 def _make_static_url(static_dir: Path) -> Any:
@@ -223,9 +223,10 @@ def create_app(config: Config) -> ASGIApp:
     static_dir = web_dir / "static"
     template_dir = web_dir / "templates"
 
-    # Compiled now and never re-read: the update walk rewrites this tree while
-    # this process is still serving.  See compute_space.web.templating.
-    template_config = build_template_config(template_dir)
+    template_config: TemplateConfig[JinjaTemplateEngine] = TemplateConfig(
+        directory=template_dir,
+        engine=JinjaTemplateEngine,
+    )
 
     def _install_template_globals(app: Litestar) -> None:
         engine = app.template_engine

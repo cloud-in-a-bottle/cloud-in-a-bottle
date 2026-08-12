@@ -63,6 +63,8 @@ from contextlib import closing
 from dataclasses import dataclass
 from pathlib import Path
 
+from jinja2 import Environment
+from jinja2 import FileSystemLoader
 from litestar import MediaType
 from litestar import Response
 from litestar import Router
@@ -85,7 +87,6 @@ from compute_space.core.domains import primary_domain_or_none
 from compute_space.core.git_ops import SOURCE_URL
 from compute_space.core.logging import logger
 from compute_space.db import get_db
-from compute_space.web.templating import build_environment
 
 # ─── Filesystem layout ──────────────────────────────────────────────
 
@@ -627,12 +628,8 @@ _TEMPLATE = """<!DOCTYPE html>
 # duplicating the tab list + highlighter here).  The docs page's HTML body
 # itself is still an inline string — only the shared partial is loaded from
 # disk — keeping the route's serving surface self-contained.
-#
-# The partial is compiled at import and never re-read, so a self-update
-# rewriting the tree under the running process can't change what this route
-# renders (see compute_space.web.templating).
 _TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "templates"
-_JINJA_ENV = build_environment(_TEMPLATES_DIR)
+_JINJA_ENV = Environment(loader=FileSystemLoader(str(_TEMPLATES_DIR)), autoescape=True)
 _COMPILED_TEMPLATE = _JINJA_ENV.from_string(_TEMPLATE)
 
 
