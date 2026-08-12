@@ -350,13 +350,14 @@ function dropBuildCache() {
   msg.textContent = 'Dropping cache...';
 
   fetch('/api/drop-docker-cache', {method: 'POST', credentials: 'same-origin'})
-    .then(function(r) { return r.json(); })
-    .then(function(data) {
-      if (data.error) {
+    .then(function(r) { return r.json().then(function(d) { return {ok: r.ok, data: d}; }); })
+    .then(function(res) {
+      if (!res.ok) {
         msg.className = 'error';
-        msg.textContent = 'Drop failed: ' + data.error;
+        msg.textContent = 'Drop failed: ' + res.data.detail;
         return;
       }
+      var data = res.data;
       var reclaimed = '';
       if (data.output) {
         var match = data.output.match(/Total reclaimed space:\s*(.+)/i);

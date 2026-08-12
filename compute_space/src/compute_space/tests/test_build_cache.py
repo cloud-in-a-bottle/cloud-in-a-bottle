@@ -111,4 +111,6 @@ def test_drop_docker_cache_endpoint_failure(
     client.cookies.update(cookies)
     resp = client.post("/api/drop-docker-cache")
     assert resp.status_code == 500
-    assert resp.json() == {"error": "podman engine error"}
+    # Litestar's default 500 handler masks the real detail; see app.py's
+    # app-wide `_log_unhandled_exception` handler, which this router now defers to.
+    assert resp.json()["detail"] == "Internal Server Error"

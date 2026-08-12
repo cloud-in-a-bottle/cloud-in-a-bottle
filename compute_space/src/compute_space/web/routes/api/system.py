@@ -6,18 +6,15 @@ import subprocess
 from datetime import UTC
 from datetime import datetime
 from datetime import timedelta
-from typing import Any
 
 import attr
 from litestar import MediaType
-from litestar import Request
 from litestar import Response
 from litestar import Router
 from litestar import delete
 from litestar import get
 from litestar import post
 from litestar.di import NamedDependency
-from litestar.exceptions import HTTPException
 from litestar.exceptions import ImproperlyConfiguredException
 from litestar.exceptions import InternalServerException
 from litestar.exceptions import ValidationException
@@ -78,11 +75,6 @@ class CreatedToken:
 @attr.s(auto_attribs=True, frozen=True)
 class OkResponse:
     ok: bool
-
-
-def _system_api_error_response(request: Request[Any, Any, Any], exc: HTTPException) -> Response[Any]:
-    """Render this router's errors as ``{"error": ...}``, matching the frontend JS's ``data.error`` handling."""
-    return Response(content={"error": exc.detail}, status_code=exc.status_code)
 
 
 @attr.s(auto_attribs=True, frozen=True)
@@ -377,11 +369,6 @@ def restart_router() -> OkResponse:
 
 system_routes = Router(
     path="/",
-    exception_handlers={
-        ValidationException: _system_api_error_response,
-        ImproperlyConfiguredException: _system_api_error_response,
-        InternalServerException: _system_api_error_response,
-    },
     route_handlers=[
         api_tokens_list,
         api_tokens_create,
