@@ -69,7 +69,7 @@ def _seed_domains(db: sqlite3.Connection, openhost: dict[str, object]) -> None:
         return  # nothing to capture (e.g. already-scrubbed config)
     tls_enabled = bool(openhost.get("tls_enabled", False))
     seen = {zone_domain.split(":")[0]}
-    rows: list[tuple[str, int, int, str, None]] = [(zone_domain, int(tls_enabled), 1, "none", None)]
+    rows: list[tuple[str, int, int, int, str, None]] = [(zone_domain, int(tls_enabled), 0, 1, "none", None)]
     extras = openhost.get("domains", [])
     for entry in extras if isinstance(extras, list) else []:
         if not isinstance(entry, dict):
@@ -79,11 +79,9 @@ def _seed_domains(db: sqlite3.Connection, openhost: dict[str, object]) -> None:
         if not name or host in seen:
             continue
         seen.add(host)
-        rows.append((name, int(bool(entry.get("tls", False))), 0, "none", None))
-    # Only columns that exist in *every* schema this can meet: the frozen v13 above (where the
-    # dropped `mdns` defaults to 0) and the router's head schema, which no longer has it at all.
+        rows.append((name, int(bool(entry.get("tls", False))), int(bool(entry.get("mdns", False))), 0, "none", None))
     db.executemany(
-        "INSERT INTO domains (name, tls, is_primary, cert_status, error_message) VALUES (?, ?, ?, ?, ?)",
+        "INSERT INTO domains (name, tls, mdns, is_primary, cert_status, error_message) VALUES (?, ?, ?, ?, ?, ?)",
         rows,
     )
 
