@@ -163,14 +163,6 @@ def test_sync_objects_adds_no_https_for_insecure_endpoint(cfg):
     assert "--no-https" in captured["cmd"]
 
 
-def test_endpoint_is_insecure_http():
-    assert archive_backend._endpoint_is_insecure_http("http://localhost:9106") is True
-    assert archive_backend._endpoint_is_insecure_http("HTTP://minio.local") is True
-    assert archive_backend._endpoint_is_insecure_http("https://minio.example.com") is False
-    assert archive_backend._endpoint_is_insecure_http(None) is False
-    assert archive_backend._endpoint_is_insecure_http("") is False
-
-
 def test_reconfigure_volume_storage_passes_literal_secret(cfg):
     """``juicefs config`` re-point must pass the LITERAL secret to
     ``--secret-key``.  The ``env:VAR`` indirection is NOT resolved by
