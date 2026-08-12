@@ -282,7 +282,7 @@ def test_remote_install_works_from_running_event_loop(cfg_with_apps, monkeypatch
 
 
 def test_backup_in_default_factory():
-    """openhost-backup must be in the shipped DefaultConfig.default_apps
+    """bottled-backup must be in the shipped DefaultConfig.default_apps
     so every new instance auto-installs it at /setup completion.
 
     Regression guard against accidental removal during config refactors.
@@ -292,12 +292,12 @@ def test_backup_in_default_factory():
         data_root_dir="/tmp/fake",
         start_caddy=False,
     )
-    backup_entries = [s for s in cfg.default_apps if "openhost-backup" in s.lower()]
-    assert backup_entries, f"openhost-backup not in default_apps: {cfg.default_apps}"
+    backup_entries = [s for s in cfg.default_apps if "bottled-backup" in s.lower()]
+    assert backup_entries, f"bottled-backup not in default_apps: {cfg.default_apps}"
 
 
 def test_catalog_in_default_factory():
-    """openhost-catalog must be in the shipped DefaultConfig.default_apps
+    """bottled-catalog must be in the shipped DefaultConfig.default_apps
     so every new instance auto-installs it at /setup completion.
 
     Regression guard against accidental removal during config refactors.
@@ -307,19 +307,19 @@ def test_catalog_in_default_factory():
         data_root_dir="/tmp/fake",
         start_caddy=False,
     )
-    catalog_entries = [s for s in cfg.default_apps if "openhost-catalog" in s.lower()]
-    assert catalog_entries, f"openhost-catalog not in default_apps: {cfg.default_apps}"
+    catalog_entries = [s for s in cfg.default_apps if "bottled-catalog" in s.lower()]
+    assert catalog_entries, f"bottled-catalog not in default_apps: {cfg.default_apps}"
 
 
 def test_filestash_in_default_factory():
-    """openhost-filestash must be in the shipped DefaultConfig.default_apps."""
+    """bottled-filestash must be in the shipped DefaultConfig.default_apps."""
     cfg = DefaultConfig(
         host="127.0.0.1",
         data_root_dir="/tmp/fake",
         start_caddy=False,
     )
-    filestash_entries = [s for s in cfg.default_apps if "openhost-filestash" in s.lower()]
-    assert filestash_entries, f"openhost-filestash not in default_apps: {cfg.default_apps}"
+    filestash_entries = [s for s in cfg.default_apps if "bottled-filestash" in s.lower()]
+    assert filestash_entries, f"bottled-filestash not in default_apps: {cfg.default_apps}"
 
 
 def test_oauth_provider_in_default_factory():
