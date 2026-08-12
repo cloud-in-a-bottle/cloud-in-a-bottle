@@ -12,11 +12,11 @@ from openhost_system_agent.migrations.runner import apply_system_migrations
 from openhost_system_agent.status import get_migration_status
 from openhost_system_agent.swap import get_swap_status
 from openhost_system_agent.swap import resize_swapfile
-from openhost_system_agent.update import apply_update
 from openhost_system_agent.update import fetch_updates
 from openhost_system_agent.update import get_remote_info
 from openhost_system_agent.update import set_remote_url
 from openhost_system_agent.update import show_diff
+from openhost_system_agent.update import start_apply
 from openhost_system_agent.updater.launcher import launch_updater
 from openhost_system_agent.updater.launcher import stop_updater
 from openhost_system_agent.updater.paths import clear_token
@@ -55,14 +55,15 @@ class UpdateCmd:
         except Exception as e:
             _error(str(e))
 
-    @cappa.command(name="apply", help="Apply pending update: checkout, migrate, install deps, restart openhost.")
+    @cappa.command(name="apply", help="Apply pending update: stop openhost, checkout, migrate, install, start again.")
     def apply(self) -> None:
-        # apply_update execs into the apply walk and restarts openhost on
-        # success, so it never returns; only failures surface here.
+        # start_apply hands the walk to openhost-apply.service and returns, so
+        # this exits while the update runs; the caller follows the progress log.
         try:
-            apply_update()
+            start_apply()
         except Exception as e:
             _error(str(e))
+        print(json.dumps({"ok": True, "detached": True}))
 
     @cappa.command(
         name="migrate", help="Apply pending system migrations for the current checkout (no fetch/checkout/restart)."

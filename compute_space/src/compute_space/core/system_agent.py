@@ -118,10 +118,12 @@ def system_agent_show_diff() -> DiffResult:
 
 @async_wrap
 def system_agent_apply() -> None:
-    # On success the agent restarts openhost, which kills this process before
-    # it returns, so there is nothing to parse. Only failures return here (and
-    # raise); the restarted compute_space reads the migration log for results.
-    _run_system_agent("update", "apply", timeout=600)
+    # The agent hands the walk to openhost-apply.service and returns immediately,
+    # so this call is just the handoff — no output worth parsing. The walk then
+    # stops openhost (killing this process), and the freshly started
+    # compute_space reads the progress log for results. A failure here means the
+    # walk never started, which the caller turns into a terminal log entry.
+    _run_system_agent("update", "apply", timeout=60)
 
 
 @async_wrap

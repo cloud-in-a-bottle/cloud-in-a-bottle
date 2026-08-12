@@ -250,19 +250,15 @@ def test_main_reclaims_host_ownership_before_migrations_and_install() -> None:
         patch.object(aac, "_ensure_repo_trusted"),
         patch.object(aac, "apply_system_migrations", side_effect=lambda: order.append("migrations")),
         patch.object(aac, "reclaim_host_ownership", side_effect=lambda: order.append("reclaim")),
-        # The detached updater launch is a best-effort cosmetic side effect just
-        # before the restart; stub it so the test neither spawns a real systemd
-        # scope nor pollutes the subprocess-call ordering asserted below.
-        patch.object(aac, "launch_updater", return_value=True),
+        # openhost is stopped for the whole walk; the start at the end talks to
+        # systemd, so stub it rather than touching the host.
+        patch.object(aac, "start_openhost", side_effect=lambda: order.append("start")),
         patch("openhost_system_agent.apply_after_checkout.subprocess.run", side_effect=_install) as mock_run,
         patch.object(aac, "_next_step", return_value=None),
     ):
-        # No next step -> falls through to the systemctl restart, which our
-        # mocked subprocess.run also records as an "install" entry; assert the
-        # relative order of reclaim -> migrations -> first subprocess call.
         aac.main()
 
-    assert order[:3] == ["reclaim", "migrations", "install"]
+    assert order == ["reclaim", "migrations", "install", "start"]
     # The first subprocess call is the host-user pixi install.
     first_call = mock_run.call_args_list[0]
     assert first_call.args[0] == ["sudo", "-u", "host", "-H", aac.PIXI_BIN, "install"]
@@ -276,7 +272,7 @@ def progress_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 
 def test_main_records_restarting_not_done(progress_dir: Path) -> None:
-    # The pre-restart record must be the NON-terminal "restarting": the terminal
+    # The pre-start record must be the NON-terminal "restarting": the terminal
     # "done" is appended by the freshly booted compute_space, so the /updating
     # page can't finish against the old instance right before it dies.
     def _ok(*_args: object, **_kwargs: object) -> subprocess.CompletedProcess[str]:
@@ -286,7 +282,7 @@ def test_main_records_restarting_not_done(progress_dir: Path) -> None:
         patch.object(aac, "_ensure_repo_trusted"),
         patch.object(aac, "apply_system_migrations"),
         patch.object(aac, "reclaim_host_ownership"),
-        patch.object(aac, "launch_updater", return_value=True),
+        patch.object(aac, "start_openhost") as mock_start,
         patch("openhost_system_agent.apply_after_checkout.subprocess.run", side_effect=_ok),
         patch.object(aac, "_next_step", return_value=None),
     ):
@@ -296,6 +292,9 @@ def test_main_records_restarting_not_done(progress_dir: Path) -> None:
     assert entries, "expected progress entries"
     assert entries[-1]["phase"] == updater_progress.PHASE_RESTARTING
     assert updater_progress.is_terminal(entries) is False
+    # The record must land BEFORE the start, so the page shows it while the
+    # instance is still coming up rather than after it is already back.
+    assert mock_start.called
 
 
 def test_main_records_failed_on_unhandled_error(progress_dir: Path) -> None:

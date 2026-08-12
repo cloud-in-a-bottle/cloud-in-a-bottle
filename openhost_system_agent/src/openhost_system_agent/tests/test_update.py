@@ -73,6 +73,27 @@ def _stub_execv(monkeypatch: pytest.MonkeyPatch) -> list[tuple[object, ...]]:
     return calls
 
 
+@pytest.fixture(autouse=True)
+def downtime(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """Record (instead of perform) the two side effects that need a real host.
+
+    ``apply_update`` runs as its own systemd unit and takes openhost down before
+    it touches the tree; unit tests want the ordering, not the service calls.
+    """
+    events: list[str] = []
+
+    def _launch() -> bool:
+        events.append("launch_updater")
+        return True
+
+    def _stop() -> None:
+        events.append("stop_openhost")
+
+    monkeypatch.setattr(update_mod, "launch_updater", _launch)
+    monkeypatch.setattr(update_mod, "stop_openhost", _stop)
+    return events
+
+
 # ── Pure tag helpers ─────────────────────────────────────────────────
 
 
@@ -676,7 +697,7 @@ def test_apply_update_pinned_off_old_tag_takes_bounded_first_step(
     assert local.head.commit.hexsha == update_mod._resolve_ref_sha(local, "feature")
 
 
-def test_apply_update_on_pinned_tip_is_noop_walk_then_restart(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_apply_update_on_pinned_tip_is_noop_walk_then_start(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # Already on the pinned tip (with a newer un-contained tag present): the
     # first hop is terminal, so apply_update execs apply_after_checkout directly
     # (which will restart) without stepping onto any tag.

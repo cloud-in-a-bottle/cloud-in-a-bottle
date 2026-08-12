@@ -8,9 +8,11 @@ from typing import Any
 import attr
 import bcrypt
 from litestar import Request
+from litestar import Response
 from litestar import Router
 from litestar import get
 from litestar import post
+from litestar.background_tasks import BackgroundTask
 from litestar.di import NamedDependency
 from litestar.exceptions import HTTPException
 from litestar.params import FromQuery
@@ -141,29 +143,40 @@ async def check_for_updates() -> CheckUpdatesResponse:
     return CheckUpdatesResponse(state=state, error=_GIT_STATE_NOTICE.get(fetch_result.state))
 
 
-# Serializes apply_update. On success the restart kills the process (lock never
-# explicitly released); on failure the finally releases it for a retry.
-# _apply_tasks keeps a strong ref so the loop doesn't GC the background task.
+# Serializes apply_update. Held for the rest of this process's life once the walk
+# is launched: the apply stops openhost moments later, so there is no "after" to
+# release in, and releasing early would let a second click race the walk. Only a
+# launch failure releases it, so the owner can retry.
 _apply_lock = asyncio.Lock()
-_apply_tasks: set[asyncio.Task[None]] = set()
+
+# The agent refuses a second apply while openhost-apply.service is running. That
+# unit name is the real mutex once this process has been stopped, so treat the
+# refusal as "already in progress" rather than as a failure of the update that is
+# actually running — recording a terminal entry would blank its log.
+_ALREADY_RUNNING = "already in progress"
 
 
-async def _run_apply_and_restart() -> None:
+async def _launch_apply() -> None:
+    """Hand the update to the detached apply unit, which stops openhost next."""
     try:
         await system_agent_apply()
     except Exception as e:
+        if _ALREADY_RUNNING in str(e):
+            # Keep the lock: an apply really is in flight (this process probably
+            # restarted underneath one), so further attempts should keep failing.
+            logger.warning("apply already in progress; leaving its progress log alone")
+            return
         # Not just SystemAgentError: ANY failure here must leave the progress log
         # terminal, or the /updating page (which only stops on done/failed) would
         # spin forever with no explanation.
         logger.exception("system agent apply failed")
         await record_apply_failure(f"Update failed: {e}")
         await clear_update_token()
-    finally:
         _apply_lock.release()
 
 
 @post("/api/settings/update", status_code=200, guards=[require_owner_auth])
-async def apply_update() -> ApplyUpdateResponse:
+async def apply_update() -> Response[ApplyUpdateResponse]:
     if _apply_lock.locked():
         raise HTTPException(detail="An update is already in progress.", status_code=409)
     await _apply_lock.acquire()
@@ -179,15 +192,16 @@ async def apply_update() -> ApplyUpdateResponse:
         if not migration_status.ok and migration_status.reason != "behind":
             raise HTTPException(detail=migration_status.message, status_code=409)
 
-        # Persist the token, then run the apply in the background so this response
-        # (carrying the token) reaches the browser before the restart kills us.
         token = new_update_token()
         await persist_update_token(token)
-        task = asyncio.create_task(_run_apply_and_restart())
-        _apply_tasks.add(task)
-        task.add_done_callback(_apply_tasks.discard)
+
+        # Launch as a background task on the response, not with create_task: the
+        # apply stops openhost within moments of being launched, and the browser
+        # must already have this response (and the token in it) by then.
+        response = Response(content=ApplyUpdateResponse(token=token), status_code=200)
+        response.background = BackgroundTask(_launch_apply)
         handed_off = True
-        return ApplyUpdateResponse(token=token)
+        return response
     finally:
         if not handed_off and _apply_lock.locked():
             _apply_lock.release()

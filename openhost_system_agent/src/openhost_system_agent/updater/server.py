@@ -22,7 +22,10 @@ from openhost_system_agent.updater.paths import token_path
 from openhost_system_agent.updater.paths import updater_dir
 
 _COMPUTE_SPACE_PORT = 8080
-_MAX_LIFETIME_SECONDS = 30 * 60
+# Backstop against a stuck updater holding 80/443 forever. It now covers the
+# whole apply (checkout, migrations, one pixi install per tag hop), not just a
+# restart, so this has to outlast a multi-hop walk.
+_MAX_LIFETIME_SECONDS = 60 * 60
 _BIND_WAIT_SECONDS = 60
 _BIND_RETRY_INTERVAL = 0.02
 _READY_POLL_INTERVAL = 0.1

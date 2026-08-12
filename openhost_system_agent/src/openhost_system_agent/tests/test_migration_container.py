@@ -87,6 +87,27 @@ def _wait_for_health(container: str, timeout: int = 60) -> str:
     raise RuntimeError(f"/health did not respond within {timeout}s (last stderr: {last_stderr!r})")
 
 
+def _wait_for_apply_unit(container: str, timeout: int = 900) -> None:
+    """Block until openhost-apply.service is gone.
+
+    `update apply` hands the walk to that transient unit and returns immediately,
+    so the assertions below have to wait for the real work rather than the exit
+    code of the launcher.
+    """
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        result = _podman(
+            "exec", container, "systemctl", "is-active", "openhost-apply.service", timeout=10, check=False
+        )
+        state = result.stdout.strip()
+        # --collect removes the unit once it exits, so "inactive"/"failed"/absent
+        # (an empty or unknown state) all mean the walk is over.
+        if state not in ("active", "activating", "deactivating", "reloading"):
+            return
+        time.sleep(2)
+    raise RuntimeError(f"openhost-apply.service still running after {timeout}s")
+
+
 def _dump_openhost_journal(container: str) -> str:
     journal = _podman(
         "exec", container, "journalctl", "-u", "openhost", "--no-pager", "-n", "50", timeout=10, check=False
@@ -142,7 +163,8 @@ class TestMigrationContainer:
 
 @requires_containers
 class TestApplyUpdateWalk:
-    """End-to-end: `update apply` walks onto a new tag, upgrades pixi, restarts."""
+    """End-to-end: `update apply` detaches, stops openhost, walks onto a new tag,
+    upgrades pixi, and starts openhost again."""
 
     container = "openhost-apply-walk-test"
 
@@ -195,8 +217,11 @@ class TestApplyUpdateWalk:
         # test image, so resolve the console script from the pixi env).
         which = _host_sh(c, f"cd {_REPO} && {_PIXI} run -e default which openhost_system_agent")
         agent = which.stdout.strip().splitlines()[-1]
-        apply = _exec(c, "sudo", agent, "update", "apply", timeout=600, check=False)
+        apply = _exec(c, "sudo", agent, "update", "apply", timeout=120, check=False)
         assert apply.returncode == 0, f"update apply failed (exit {apply.returncode}):\n{apply.stdout}\n{apply.stderr}"
+        assert '"detached": true' in apply.stdout, f"expected a detached handoff: {apply.stdout!r}"
+        # The launcher returned; the walk itself runs as openhost-apply.service.
+        _wait_for_apply_unit(c)
 
         # The pixi-version migration upgraded pixi to the pinned version.
         after = _host_sh(c, f"{_PIXI} --version")
@@ -212,7 +237,8 @@ class TestApplyUpdateWalk:
         log = _exec(c, "cat", "/etc/openhost/migrations.jsonl")
         assert f'"version":{latest}' in log.stdout.replace(" ", ""), f"log did not reach v{latest}:\n{log.stdout}"
 
-        # openhost was restarted by the walk and serves /health.
+        # openhost was stopped for the walk and started again at the end; the
+        # unit's ExecStopPost guarantees that even on a failure path.
         try:
             body = _wait_for_health(c, timeout=120)
         except RuntimeError:

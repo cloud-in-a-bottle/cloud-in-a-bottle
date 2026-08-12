@@ -40,10 +40,10 @@ async def _drain() -> None:
 
 
 @pytest.fixture(autouse=True)
-def _reset_lock() -> None:
-    # Ensure a clean lock between tests (a prior failure could leave it held).
-    if settings_mod._apply_lock.locked():
-        settings_mod._apply_lock.release()
+def _fresh_apply_lock() -> None:
+    """A successful handoff deliberately never releases the lock -- in production
+    the process is stopped moments later. Tests need a fresh one each time."""
+    settings_mod._apply_lock = asyncio.Lock()
 
 
 @pytest.fixture
@@ -99,6 +99,19 @@ def progress_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return tmp_path
 
 
+async def _apply_and_launch() -> object:
+    """Call the handler, then run the launch the way Litestar does after sending.
+
+    The launch is deliberately a response background task, not a create_task:
+    the walk stops openhost within moments, so the browser must already have the
+    token-carrying response by then.
+    """
+    response = await settings_mod.apply_update.fn()
+    assert response.background is not None
+    await response.background()
+    return response
+
+
 @pytest.mark.asyncio
 async def test_apply_third_call_after_failure_allowed(
     monkeypatch: pytest.MonkeyPatch, token_calls: dict[str, list[str]], progress_env: Path
@@ -112,8 +125,7 @@ async def test_apply_third_call_after_failure_allowed(
 
     monkeypatch.setattr(settings_mod, "system_agent_apply", failing)
     monkeypatch.setattr(settings_mod, "system_agent_status", status)
-    await settings_mod.apply_update.fn()
-    await _drain()
+    await _apply_and_launch()
     assert not settings_mod._apply_lock.locked()
     assert token_calls["clear"] == ["x"]
     # Retry: a fresh apply is accepted.
@@ -123,8 +135,11 @@ async def test_apply_third_call_after_failure_allowed(
 
     monkeypatch.setattr(settings_mod, "system_agent_apply", ok)
     resp2 = await settings_mod.apply_update.fn()
-    await _drain()
-    assert resp2.token
+    assert resp2.content.token
+    # Launched successfully: the lock stays held, because the walk is now about
+    # to stop this process and a second click must not race it.
+    await resp2.background()
+    assert settings_mod._apply_lock.locked()
 
 
 @pytest.mark.asyncio
@@ -141,8 +156,7 @@ async def test_apply_generic_exception_also_recorded(
 
     monkeypatch.setattr(settings_mod, "system_agent_apply", failing)
     monkeypatch.setattr(settings_mod, "system_agent_status", status)
-    await settings_mod.apply_update.fn()
-    await _drain()
+    await _apply_and_launch()
 
     assert not settings_mod._apply_lock.locked()
     assert token_calls["clear"] == ["x"]

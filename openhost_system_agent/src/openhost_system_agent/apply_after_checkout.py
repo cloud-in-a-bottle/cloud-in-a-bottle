@@ -1,5 +1,9 @@
 """Apply entrypoint: run this checkout's migrations, install deps, then
-tail-call into the next ref; restart openhost once on the destination.
+tail-call into the next ref; start openhost once on the destination.
+
+openhost is already stopped when this runs (update.apply_update takes it down
+before the first checkout) and this process runs as its own systemd unit, so
+nothing of ours holds the router DB or the data dir while migrations run.
 
 At each step: migrations → pixi install → checkout next ref → os.execv self.
 Using execv (not a child subprocess) keeps the walk a single process no
@@ -13,10 +17,11 @@ still walked as stepping stones and the pinned ref is the final hop.
 Migrations run before `pixi install`, so a migration that upgrades the
 toolchain (e.g. pixi) takes effect before deps are installed.
 
-There is no structured output contract: success restarts openhost (which
-may kill this process — see main()), and the migration log records what
-happened for the freshly-started compute_space to read. Failure is a
-non-zero exit with the error on stderr.
+There is no structured output contract: success starts openhost and the
+migration log records what happened for the freshly-started compute_space to
+read. Failure is a non-zero exit with the error on stderr — and the apply
+unit's ExecStopPost starts openhost either way, so no exit path leaves the
+instance stopped.
 
 STABILITY CONTRACT: the prior tag's update.py execs this file by path and
 depends only on its exit code. Keep the path and that contract stable. Once
@@ -31,10 +36,10 @@ import subprocess
 import sys
 from pathlib import Path
 
+from openhost_system_agent.detach import start_openhost
 from openhost_system_agent.migrations.runner import apply_system_migrations
 from openhost_system_agent.reclaim import reclaim_host_ownership
 from openhost_system_agent.updater import progress
-from openhost_system_agent.updater.launcher import launch_updater
 
 PIXI_BIN = "/home/host/.pixi/bin/pixi"
 
@@ -186,20 +191,12 @@ def _apply(project: str) -> None:
 
     # NOT terminal (see PHASE_RESTARTING): only the freshly booted compute_space
     # appends "done", so the page can't finish against the about-to-die instance.
-    progress.record(progress.PHASE_RESTARTING, "Update complete. Restarting\u2026")
+    progress.record(progress.PHASE_RESTARTING, "Update complete. Starting\u2026")
 
-    # Start the downtime server now so it's poised to grab 80/443 the instant
-    # Caddy releases them. Best-effort; never raises.
-    launch_updater()
-
-    # On the destination: restart openhost so the new code takes over. When the
-    # update was triggered from the dashboard this process shares openhost's
-    # cgroup, so the restart's SIGTERM kills us mid-call — that's fine, systemd
-    # still completes the restart and the new compute_space reads the log.
-    result = subprocess.run(["systemctl", "restart", "openhost"], timeout=120)
-    if result.returncode != 0:
-        print(f"failed to restart openhost (exit {result.returncode})", file=sys.stderr)
-        sys.exit(1)
+    # openhost was stopped at the top of the walk (update.apply_update), so this
+    # is a start, not a restart. The unit's ExecStopPost runs the same start
+    # however this process ends, so a crash here still brings the instance back.
+    start_openhost()
 
 
 def main() -> None:

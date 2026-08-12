@@ -5,6 +5,7 @@ import json
 import os
 import socket
 import ssl
+import subprocess
 import time
 from collections.abc import Callable
 from collections.abc import Iterator
@@ -569,3 +570,23 @@ def test_stop_updater_never_raises(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr("openhost_system_agent.updater.launcher.subprocess.run", boom)
     launcher.stop_updater()  # must not raise
+
+
+def test_updater_unit_gets_a_restart_policy(monkeypatch: pytest.MonkeyPatch, data_dir: Path) -> None:
+    # The updater is the only thing serving 80/443 for the length of the apply
+    # now, and systemd-run units default to Restart=no. Without a policy a crash
+    # would leave the instance unreachable until the walk finished.
+    calls: list[list[str]] = []
+
+    def _run(cmd: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        calls.append(cmd)
+        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(launcher, "_systemd_run_available", lambda: True)
+    monkeypatch.setattr("openhost_system_agent.updater.launcher.subprocess.run", _run)
+    monkeypatch.setattr(launcher, "_READY_WAIT_SECONDS", 0.01)
+
+    launcher.launch_updater()
+
+    systemd_run = next(c for c in calls if c and c[0] == "systemd-run")
+    assert "--property=Restart=on-failure" in systemd_run

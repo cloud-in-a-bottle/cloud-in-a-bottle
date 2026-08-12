@@ -10,11 +10,17 @@ from typing import NoReturn
 import git
 from loguru import logger
 
+from openhost_system_agent.detach import ApplyAlreadyRunningError
+from openhost_system_agent.detach import apply_is_running
+from openhost_system_agent.detach import detach_apply
+from openhost_system_agent.detach import is_detached
+from openhost_system_agent.detach import stop_openhost
 from openhost_system_agent.protocol import DiffCommit
 from openhost_system_agent.protocol import DiffResult
 from openhost_system_agent.protocol import FetchResult
 from openhost_system_agent.protocol import RemoteInfo
 from openhost_system_agent.updater import progress
+from openhost_system_agent.updater.launcher import launch_updater
 
 _PACKAGE_DIR = Path(__file__).resolve().parent
 _PROJECT_DIR = _PACKAGE_DIR.parent.parent.parent
@@ -255,11 +261,45 @@ def show_diff() -> DiffResult:
 _APPLY_ENTRYPOINT = _PACKAGE_DIR / "apply_after_checkout.py"
 
 
+def start_apply() -> None:
+    """Entry point for `update apply`: hand the walk to systemd, then return.
+
+    When already running as the detached unit this is the walk itself and never
+    returns (see apply_update).
+    """
+    if is_detached():
+        apply_update()
+    else:
+        # Check before resetting: an apply already in flight owns the progress
+        # log, and blanking it would strip the page watching that update.
+        if apply_is_running():
+            raise ApplyAlreadyRunningError("An update is already in progress.")
+
+        # Reset here rather than in the detached copy: the browser may already be
+        # polling /updates, and a second reset would blank the log under it.
+        progress.reset_progress()
+        try:
+            detach_apply()
+        except ApplyAlreadyRunningError:
+            raise  # lost the race; the winner's log is now the live one
+        except BaseException as e:
+            progress.record(progress.PHASE_FAILED, f"Update failed: {e}")
+            raise
+
+
 def apply_update() -> NoReturn:
-    # Fresh log before any check so no stale lines survive and every failure below
-    # can record a terminal "failed" the /updating page will see.
-    progress.reset_progress()
+    """The walk, running as openhost-apply.service outside openhost's cgroup.
+
+    Takes the service down before touching the working tree, so migrations and
+    `pixi install` run with nothing of ours holding the router DB, the data dir,
+    or the pixi environment. `apply_after_checkout` starts it again at the end.
+    """
     try:
+        # Cover the downtime before taking the service down, not after, so the
+        # page is already poised to answer 80/443 when Caddy lets go of them.
+        launch_updater()
+        stop_openhost()
+
         repo = _repo()
 
         if repo.is_dirty(untracked_files=True):
@@ -281,11 +321,13 @@ def apply_update() -> NoReturn:
             repo.git.clean("-fd")
     except BaseException as e:
         progress.record(progress.PHASE_FAILED, f"Update failed: {e}")
+        # openhost is down by now; the unit's ExecStopPost starts it again however
+        # this process dies, so even a failure here leaves the instance serving.
         raise
 
     # Hand off to the checked-out ref's apply code, replacing this process.
-    # It walks any remaining steps and restarts openhost when done, so this
-    # never returns; the migration log records what happened for the next boot.
+    # It walks any remaining steps and starts openhost when done, so this never
+    # returns; the migration log records what happened for the next boot.
     os.execv(sys.executable, [sys.executable, str(_APPLY_ENTRYPOINT)])
 
 

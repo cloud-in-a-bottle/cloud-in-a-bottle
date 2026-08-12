@@ -21,13 +21,23 @@ from openhost_system_agent.protocol import FetchResult
 from openhost_system_agent.protocol import MigrationStatus
 
 
-async def _drain_apply_task() -> None:
-    """Let the fire-and-forget apply task scheduled by apply_update run to completion.
+@pytest.fixture(autouse=True)
+def _fresh_apply_lock() -> None:
+    """A successful handoff deliberately never releases the lock -- in production
+    the process is stopped moments later. Tests need a fresh one each time."""
+    settings_mod._apply_lock = asyncio.Lock()
 
-    apply_update kicks the (mocked) agent apply off via asyncio.create_task and
-    returns immediately; yield control so that task finishes before assertions.
+
+async def _run_launch(response: object) -> None:
+    """Run the launch the way Litestar does: after the response has been written.
+
+    apply_update attaches it as a response background task rather than a
+    create_task, because the walk stops openhost within moments of being launched
+    and the browser must already hold the token-carrying response by then.
     """
-    # A couple of event-loop turns is enough for the small mocked coroutines.
+    background = response.background  # type: ignore[attr-defined]
+    assert background is not None, "apply_update must attach the launch to the response"
+    await background()
     for _ in range(5):
         await asyncio.sleep(0)
 
@@ -182,8 +192,8 @@ async def test_apply_update_proceeds_when_migration_behind(
     monkeypatch.setattr(settings_mod, "system_agent_status", fake_status)
 
     resp = await settings_mod.apply_update.fn()
-    assert resp.token  # a token is minted for the browser
-    await _drain_apply_task()
+    assert resp.content.token  # a token is minted for the browser
+    await _run_launch(resp)
     assert called["n"] == 1
 
 
@@ -201,10 +211,10 @@ async def test_apply_update_persists_minted_token(
     monkeypatch.setattr(settings_mod, "system_agent_status", fake_status)
 
     resp = await settings_mod.apply_update.fn()
-    await _drain_apply_task()
+    await _run_launch(resp)
 
     # The token returned to the browser is the same one persisted for the updater.
-    assert token_calls["persist"] == [resp.token]
+    assert token_calls["persist"] == [resp.content.token]
 
 
 @pytest.mark.asyncio
@@ -224,10 +234,9 @@ async def test_apply_update_rejects_concurrent_call(
     monkeypatch.setattr(settings_mod, "system_agent_apply", fake_apply)
     monkeypatch.setattr(settings_mod, "system_agent_status", fake_status)
 
-    # First call starts the (background) apply, which holds the lock until release.
+    # First call hands off; the lock is held from the moment it is taken.
     resp = await settings_mod.apply_update.fn()
-    assert resp.token
-    await _drain_apply_task()  # let the background apply start and grab the lock
+    assert resp.content.token
     assert settings_mod._apply_lock.locked()
 
     # Second call is rejected while the first apply holds the lock.
@@ -235,11 +244,13 @@ async def test_apply_update_rejects_concurrent_call(
         await settings_mod.apply_update.fn()
     assert excinfo.value.status_code == 409
 
+    launch = asyncio.create_task(_run_launch(resp))
     release.set()
-    await _drain_apply_task()
+    await launch
     assert called["n"] == 1
-    # After the (successful, here) apply the lock is released again.
-    assert not settings_mod._apply_lock.locked()
+    # A successful handoff keeps the lock: the walk is about to stop this
+    # process, and a second click must not race it.
+    assert settings_mod._apply_lock.locked()
 
 
 @pytest.mark.asyncio
@@ -276,10 +287,10 @@ async def test_apply_update_releases_lock_and_clears_token_on_failure(
     monkeypatch.setattr(settings_mod, "system_agent_apply", failing_apply)
     monkeypatch.setattr(settings_mod, "system_agent_status", fake_status)
 
-    await settings_mod.apply_update.fn()
-    await _drain_apply_task()
+    resp = await settings_mod.apply_update.fn()
+    await _run_launch(resp)
 
-    # A failed apply must free the lock (so the owner can retry) and clear the
+    # A failed launch must free the lock (so the owner can retry) and clear the
     # token (so a later visitor doesn't see a stale progress log).
     assert not settings_mod._apply_lock.locked()
     assert token_calls["clear"] == ["cleared"]

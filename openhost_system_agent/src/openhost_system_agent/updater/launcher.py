@@ -66,6 +66,14 @@ def launch_updater() -> bool:
         "systemd-run",
         f"--unit={_UPDATER_UNIT}",
         "--collect",
+        # The updater is the only thing serving 80/443 for the length of the
+        # apply, and systemd-run units default to Restart=no. Give it one
+        # supervised retry: a crash would otherwise leave the instance
+        # unreachable until the apply finishes. Restarting after openhost is
+        # back is harmless — the server waits to see :8080 offline before it
+        # binds anything, so it just polls and exits.
+        "--property=Restart=on-failure",
+        "--property=RestartSec=1",
     ]
     # The updater must resolve the same on-disk paths (token, progress, certs) as
     # this process; forward the data-dir override when one is in effect.
