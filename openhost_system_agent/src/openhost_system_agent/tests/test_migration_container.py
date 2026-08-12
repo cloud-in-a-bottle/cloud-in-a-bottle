@@ -34,7 +34,15 @@ _ENV_PYTHON = "/home/host/openhost/.pixi/envs/default/bin/python"
 
 
 def _podman(*args: str, timeout: int = 30, check: bool = True) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(["podman", *args], capture_output=True, text=True, timeout=timeout, check=check)
+    # Check by hand rather than with check=True: CalledProcessError does not include
+    # captured output, which leaves a CI failure in here undiagnosable.
+    result = subprocess.run(["podman", *args], capture_output=True, text=True, timeout=timeout)
+    if check and result.returncode != 0:
+        raise AssertionError(
+            f"podman {' '.join(args)} exited {result.returncode}\n"
+            f"--- stdout ---\n{result.stdout}\n--- stderr ---\n{result.stderr}"
+        )
+    return result
 
 
 def _exec(container: str, *args: str, timeout: int = 60, check: bool = True) -> subprocess.CompletedProcess[str]:
