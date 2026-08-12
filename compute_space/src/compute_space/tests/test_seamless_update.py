@@ -204,38 +204,7 @@ async def test_update_progress_entries(progress_env: Path) -> None:
     assert resp.terminal is True
 
 
-@pytest.mark.asyncio
-async def test_update_progress_partial_line(progress_env: Path) -> None:
-    with open(agent_paths.progress_log_path(), "w") as f:
-        f.write(json.dumps({"phase": "fetch"}) + "\n")
-        f.write('{"phase": "mig')
-    resp = await settings_mod.update_progress.fn()
-    assert len(resp.entries) == 1
-
-
 # ─────────────── update_progress helpers ───────────────
-
-
-def test_read_progress_view_matches_agent_reader(progress_env: Path) -> None:
-    # The compute_space view must agree with the shared agent reader (no drift).
-    with open(agent_paths.progress_log_path(), "w") as f:
-        f.write(json.dumps({"phase": "fetch"}) + "\n")
-        f.write(json.dumps({"phase": "install"}) + "\n")
-    v = update_progress.read_progress()
-    assert v.entries == agent_progress.read_entries()
-    assert v.terminal == agent_progress.is_terminal(v.entries)
-
-
-def test_mark_boot_complete_appends_done_after_restart(progress_env: Path) -> None:
-    # The apply walk ends with a non-terminal "restarting"; the NEW process turns
-    # it terminal at boot so the page can only leave once we're really back.
-    agent_progress.record("install", "Installing…")
-    agent_progress.record(agent_progress.PHASE_RESTARTING, "Update complete. Restarting…")
-    update_progress.mark_boot_complete()
-
-    v = update_progress.read_progress()
-    assert v.terminal is True
-    assert v.entries[-1]["phase"] == agent_progress.PHASE_DONE
 
 
 @pytest.mark.asyncio

@@ -2,9 +2,7 @@ from __future__ import annotations
 
 import attr
 
-# Reuse the agent's shared reader/writer so compute_space and the detached
-# updater parse and produce the same JSONL log identically. It resolves the log
-# path from OPENHOST_DATA_DIR (set by web/start.py).
+# The agent's reader/writer, so compute_space and the updater parse the same log.
 from compute_space.core.logging import logger
 from compute_space.core.system_agent import SystemAgentError
 from compute_space.core.system_agent import system_agent_mark_boot_complete_sync
@@ -25,12 +23,8 @@ def read_progress() -> ProgressView:
 
 
 def mark_boot_complete() -> None:
-    """Append the terminal "done" entry if the previous run ended in a restart.
-
-    Only the NEW process appends "done", so the /updating page can't be bounced
-    back to a dashboard that is about to die. Falls back to the root agent when
-    the log is a root-owned legacy log. Best-effort.
-    """
+    """Finalize the log at boot so the /updating page can leave (see the agent's
+    mark_boot_complete). Falls back to the root agent for a root-owned log."""
     try:
         if agent_progress.mark_boot_complete():
             return
@@ -43,11 +37,8 @@ def mark_boot_complete() -> None:
 
 
 async def record_apply_failure(message: str) -> None:
-    """Ensure the progress log ends terminal so the /updating page stops polling.
-
-    Skips writing when already terminal (the agent's own message wins) and falls
-    back to the root agent for a root-owned legacy log. Best-effort.
-    """
+    """Ensure the log ends terminal so the /updating page stops polling. Falls back
+    to the root agent for a root-owned log."""
     try:
         if agent_progress.record_failure_if_not_terminal(message):
             return

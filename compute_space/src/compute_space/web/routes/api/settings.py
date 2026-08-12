@@ -31,7 +31,6 @@ from compute_space.core.identity_store import get_connect_base_url
 from compute_space.core.identity_store import get_instance_identity
 from compute_space.core.identity_store import set_instance_identity
 from compute_space.core.logging import logger
-from compute_space.core.seamless_update import apply_is_running
 from compute_space.core.seamless_update import clear_update_token
 from compute_space.core.seamless_update import new_update_token
 from compute_space.core.seamless_update import persist_update_token
@@ -46,6 +45,7 @@ from compute_space.core.update_progress import record_apply_failure
 from compute_space.core.updates import trigger_restart
 from compute_space.core.util import not_blank
 from compute_space.web.auth.auth import require_owner_auth
+from openhost_system_agent.detach import apply_is_running
 from openhost_system_agent.protocol import RemoteInfo
 
 # --- request / response types -----------------------------------------------
@@ -66,9 +66,8 @@ _GIT_STATE_TO_UPDATE_STATE = {
 # Explanatory text shown to the owner for git states that need a heads-up
 # beyond the generic "Updates available." message.
 _GIT_STATE_NOTICE: dict[str, str] = {
-    # A dirty tree still reports UPDATE_AVAILABLE (there may well be a newer
-    # release), but the apply refuses to run until it is clean, so say so rather
-    # than letting the owner click into a guaranteed failure with no explanation.
+    # The apply refuses to run on a dirty tree, so say so instead of letting the
+    # owner click into a guaranteed failure.
     "DIRTY": (
         "This instance has uncommitted local changes. Updating will refuse to run until they are "
         "committed or discarded."
@@ -154,15 +153,12 @@ async def check_for_updates() -> CheckUpdatesResponse:
 
 
 # Serializes apply_update. Held for the rest of this process's life once the walk
-# is launched: the apply stops openhost moments later, so there is no "after" to
-# release in, and releasing early would let a second click race the walk. Only a
-# launch failure releases it, so the owner can retry.
+# is launched: the apply stops openhost moments later, so releasing early would
+# only let a second click race the walk. A launch failure releases it for a retry.
 _apply_lock = asyncio.Lock()
 
-# The agent refuses a second apply while openhost-apply.service is running. That
-# unit name is the real mutex once this process has been stopped, so treat the
-# refusal as "already in progress" rather than as a failure of the update that is
-# actually running — recording a terminal entry would blank its log.
+# The agent's refusal when a walk is already running. Its log belongs to that walk,
+# so don't terminate it here.
 _ALREADY_RUNNING = "already in progress"
 
 
@@ -172,13 +168,10 @@ async def _launch_apply() -> None:
         await system_agent_apply()
     except Exception as e:
         if _ALREADY_RUNNING in str(e):
-            # Keep the lock: an apply really is in flight (this process probably
-            # restarted underneath one), so further attempts should keep failing.
             logger.warning("apply already in progress; leaving its progress log alone")
             return
-        # Not just SystemAgentError: ANY failure here must leave the progress log
-        # terminal, or the /updating page (which only stops on done/failed) would
-        # spin forever with no explanation.
+        # Not just SystemAgentError: ANY failure must leave the log terminal, or
+        # the /updating page would poll forever with no explanation.
         logger.exception("system agent apply failed")
         await record_apply_failure(f"Update failed: {e}")
         await clear_update_token()
@@ -202,19 +195,17 @@ async def apply_update() -> Response[ApplyUpdateResponse]:
         if not migration_status.ok and migration_status.reason != "behind":
             raise HTTPException(detail=migration_status.message, status_code=409)
 
-        # Check the host, not just this process: the walk stops and restarts us,
-        # so a fresh process can hold a free lock while an apply is still running.
-        # Minting a token then would overwrite the one the owner's tab is polling
-        # with, stranding it on 403 for the rest of the update.
+        # Check the host too: the walk restarts us, so a fresh process can hold a
+        # free lock while an apply is still running, and minting a token then would
+        # overwrite the one the owner's tab is polling with.
         if await anyio.to_thread.run_sync(apply_is_running):
             raise HTTPException(detail="An update is already in progress.", status_code=409)
 
         token = new_update_token()
         await persist_update_token(token)
 
-        # Launch as a background task on the response, not with create_task: the
-        # apply stops openhost within moments of being launched, and the browser
-        # must already have this response (and the token in it) by then.
+        # A response background task, not create_task: the apply stops openhost
+        # moments after launch, so the browser must already hold this response.
         response = Response(content=ApplyUpdateResponse(token=token), status_code=200)
         response.background = BackgroundTask(_launch_apply)
         handed_off = True

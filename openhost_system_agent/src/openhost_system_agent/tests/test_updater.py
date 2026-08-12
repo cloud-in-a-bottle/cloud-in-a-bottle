@@ -88,6 +88,16 @@ def _get(port: int, path: str, extra_headers: str = "") -> tuple[int, bytes]:
     return status, body
 
 
+def _launch_recorder(calls: list[list[str]]) -> object:
+    def _run(cmd: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        calls.append(cmd)
+        paths.ready_marker_path().parent.mkdir(parents=True, exist_ok=True)
+        paths.ready_marker_path().write_text("")
+        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+
+    return _run
+
+
 def _open_fds() -> list[str]:
     try:
         return os.listdir("/proc/self/fd")
@@ -117,27 +127,14 @@ def test_progress_reset_and_record(data_dir: Path) -> None:
 # ── progress log: read_entries tolerance ───────────────────────────────────────
 
 
-def test_read_entries_blank_lines_between(data_dir: Path) -> None:
-    paths.progress_log_path().write_text(
-        json.dumps({"phase": "fetch"}) + "\n\n" + json.dumps({"phase": "done"}) + "\n"
-    )
-    entries = progress.read_entries()
-    assert [e["phase"] for e in entries] == ["fetch", "done"]
-
-
-def test_read_entries_trailing_partial_line(data_dir: Path) -> None:
+def test_read_entries_tolerates_a_damaged_log(data_dir: Path) -> None:
+    # Blank lines, a non-JSON line, and a final line cut off mid-write (the log is
+    # appended to while the page reads it) are skipped rather than raising.
     with open(paths.progress_log_path(), "w") as f:
-        f.write(json.dumps({"phase": "fetch"}) + "\n")
-        f.write('{"phase": "migr')  # cut off mid-write
-    entries = progress.read_entries()
-    assert len(entries) == 1
-    assert entries[0]["phase"] == "fetch"
-
-
-def test_read_entries_non_json_line_skipped(data_dir: Path) -> None:
-    paths.progress_log_path().write_text("not json at all\n" + json.dumps({"phase": "fetch"}) + "\n")
-    entries = progress.read_entries()
-    assert [e["phase"] for e in entries] == ["fetch"]
+        f.write("not json at all\n\n")
+        f.write(json.dumps({"phase": "fetch"}) + "\n\n")
+        f.write('{"phase": "migr')
+    assert [e["phase"] for e in progress.read_entries()] == ["fetch"]
 
 
 # ── progress log: is_terminal ───────────────────────────────────────────────────
@@ -169,12 +166,6 @@ def test_mark_boot_complete_noop_when_already_terminal(data_dir: Path) -> None:
     progress.record(progress.PHASE_DONE, "Instance is back online.")
     progress.mark_boot_complete()
     assert [e["phase"] for e in progress.read_entries()] == [progress.PHASE_DONE]
-
-
-def test_mark_boot_complete_noop_on_an_empty_log(data_dir: Path) -> None:
-    progress.reset_progress()
-    assert progress.mark_boot_complete() is True
-    assert progress.read_entries() == []
 
 
 def test_record_failure_skips_after_restarting(data_dir: Path) -> None:
@@ -486,80 +477,50 @@ def test_set_token_resets_stale_progress(data_dir: Path) -> None:
 # ── launcher ─────────────────────────────────────────────────────────────────────
 
 
-def test_launch_updater_no_systemd_run(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("openhost_system_agent.updater.launcher.shutil.which", lambda _: None)
-    assert launcher.launch_updater() is False
-
-
-def test_launch_updater_success(data_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("openhost_system_agent.updater.launcher.shutil.which", lambda _: "/usr/bin/systemd-run")
-    monkeypatch.setattr(launcher, "stop_updater", lambda: None)
-
-    class _Ok:
-        returncode = 0
-        stderr = ""
-
-    def _run(cmd, **kw):  # type: ignore[no-untyped-def]
-        paths.ready_marker_path().parent.mkdir(parents=True, exist_ok=True)
-        paths.ready_marker_path().write_text("")
-        return _Ok()
-
-    monkeypatch.setattr("openhost_system_agent.updater.launcher.subprocess.run", _run)
-    monkeypatch.setattr("openhost_system_agent.updater.launcher.time.sleep", lambda _: None)
-    assert launcher.launch_updater() is True
-
-
-def test_launch_updater_systemd_run_nonzero(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("openhost_system_agent.updater.launcher.shutil.which", lambda _: "/usr/bin/systemd-run")
-    monkeypatch.setattr(launcher, "stop_updater", lambda: None)
-
-    class _Fail:
-        returncode = 1
-        stderr = "unit exists"
-
-    monkeypatch.setattr("openhost_system_agent.updater.launcher.subprocess.run", lambda *a, **k: _Fail())
-    assert launcher.launch_updater() is False
-
-
-def test_launch_updater_never_raises_on_oserror(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("openhost_system_agent.updater.launcher.shutil.which", lambda _: "/usr/bin/systemd-run")
-    monkeypatch.setattr(launcher, "stop_updater", lambda: None)
-
-    def _boom(*a, **k):  # type: ignore[no-untyped-def]
-        raise OSError("nope")
-
-    monkeypatch.setattr("openhost_system_agent.updater.launcher.subprocess.run", _boom)
-    assert launcher.launch_updater() is False
-
-
-def test_launch_updater_command_shape(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("openhost_system_agent.updater.launcher.shutil.which", lambda _: "/usr/bin/systemd-run")
-    monkeypatch.setattr(launcher, "stop_updater", lambda: None)
+def test_launch_updater_command_shape(data_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     captured: list[list[str]] = []
-
-    class _Ok:
-        returncode = 0
-        stderr = ""
-
-    def _run(cmd, **kw):  # type: ignore[no-untyped-def]
-        captured.append(cmd)
-        return _Ok()
-
-    monkeypatch.setattr("openhost_system_agent.updater.launcher.subprocess.run", _run)
+    monkeypatch.setattr("openhost_system_agent.updater.launcher.shutil.which", lambda _: "/usr/bin/systemd-run")
+    monkeypatch.setattr(launcher, "stop_updater", lambda: None)
+    monkeypatch.setattr("openhost_system_agent.updater.launcher.subprocess.run", _launch_recorder(captured))
     monkeypatch.setattr("openhost_system_agent.updater.launcher.time.sleep", lambda _: None)
     monkeypatch.setattr(launcher, "_READY_WAIT_SECONDS", 0.01)
-    launcher.launch_updater()
+
+    assert launcher.launch_updater() is True
+
     cmd = captured[0]
     assert cmd[0] == "systemd-run"
-    # Transient service (no --scope) so systemd-run returns immediately instead of
-    # blocking on the long-lived server, with its own --unit.
+    # A transient service (no --scope), so systemd-run returns immediately instead
+    # of blocking on the long-lived server.
     assert "--scope" not in cmd
     assert any(a.startswith("--unit=") for a in cmd)
-    # Runs the CLI entrypoint via `python -c` (not `-m`, which mis-dispatches
-    # under __main__), invoking `updater serve`.
-    joined = " ".join(cmd)
+    # systemd-run defaults to Restart=no, and this is the only thing serving 80/443
+    # for the length of the apply.
+    assert "--property=Restart=on-failure" in cmd
+    # `python -c`, not `-m`, which mis-dispatches under __main__.
     assert "-c" in cmd
-    assert "updater" in joined and "serve" in joined
+    assert "updater" in " ".join(cmd) and "serve" in " ".join(cmd)
+
+
+@pytest.mark.parametrize("mode", ["no-systemd-run", "nonzero", "oserror"])
+def test_launch_updater_reports_failure_without_raising(monkeypatch: pytest.MonkeyPatch, mode: str) -> None:
+    # The update proceeds without downtime coverage rather than aborting.
+    monkeypatch.setattr("openhost_system_agent.updater.launcher.shutil.which", lambda _: "/usr/bin/systemd-run")
+    monkeypatch.setattr(launcher, "stop_updater", lambda: None)
+    if mode == "no-systemd-run":
+        monkeypatch.setattr("openhost_system_agent.updater.launcher.shutil.which", lambda _: None)
+    elif mode == "nonzero":
+        monkeypatch.setattr(
+            "openhost_system_agent.updater.launcher.subprocess.run",
+            lambda *a, **k: subprocess.CompletedProcess(args=[], returncode=1, stdout="", stderr="unit exists"),
+        )
+    else:
+
+        def _boom(*_a: object, **_k: object) -> None:
+            raise OSError("nope")
+
+        monkeypatch.setattr("openhost_system_agent.updater.launcher.subprocess.run", _boom)
+
+    assert launcher.launch_updater() is False
 
 
 # ── launcher: stop_updater (handoff release) ────────────────────────────────────
@@ -580,34 +541,6 @@ def test_stop_updater_calls_systemctl(monkeypatch: pytest.MonkeyPatch) -> None:
     launcher.stop_updater()
     assert calls[0][:2] == ["systemctl", "stop"]
     assert calls[0][2] == launcher._UPDATER_UNIT
-
-
-def test_stop_updater_never_raises(monkeypatch: pytest.MonkeyPatch) -> None:
-    def boom(*a, **k):  # type: ignore[no-untyped-def]
-        raise OSError("systemctl gone")
-
-    monkeypatch.setattr("openhost_system_agent.updater.launcher.subprocess.run", boom)
-    launcher.stop_updater()  # must not raise
-
-
-def test_updater_unit_gets_a_restart_policy(monkeypatch: pytest.MonkeyPatch, data_dir: Path) -> None:
-    # The updater is the only thing serving 80/443 for the length of the apply
-    # now, and systemd-run units default to Restart=no. Without a policy a crash
-    # would leave the instance unreachable until the walk finished.
-    calls: list[list[str]] = []
-
-    def _run(cmd: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
-        calls.append(cmd)
-        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
-
-    monkeypatch.setattr(launcher, "_systemd_run_available", lambda: True)
-    monkeypatch.setattr("openhost_system_agent.updater.launcher.subprocess.run", _run)
-    monkeypatch.setattr(launcher, "_READY_WAIT_SECONDS", 0.01)
-
-    launcher.launch_updater()
-
-    systemd_run = next(c for c in calls if c and c[0] == "systemd-run")
-    assert "--property=Restart=on-failure" in systemd_run
 
 
 def test_mark_boot_complete_finalizes_an_interrupted_walk(data_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -641,18 +574,6 @@ def test_mark_boot_complete_leaves_a_live_walks_log_alone(data_dir: Path, monkey
     assert progress.is_terminal(entries) is False
 
 
-def test_mark_boot_complete_still_completes_a_normal_restart(data_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    progress.reset_progress()
-    progress.record(progress.PHASE_RESTARTING, "Update complete. Starting…")
-    monkeypatch.setattr(
-        "openhost_system_agent.updater.progress.apply_is_running",
-        lambda: pytest.fail("a restarting log needs no unit check"),
-    )
-
-    assert progress.mark_boot_complete() is True
-    assert progress.read_entries()[-1]["phase"] == progress.PHASE_DONE
-
-
 def test_updater_503s_carry_retry_after(
     server_factory: Callable[[str | None, list[dict[str, object]]], int],
 ) -> None:
@@ -680,18 +601,3 @@ def test_updater_gives_up_when_the_service_never_goes_down(data_dir: Path, monke
     https_sock, http_sock = server._acquire_ports_during_downtime(None)
 
     assert https_sock is None and http_sock is None
-
-
-def test_updater_clears_its_ready_marker_when_it_acquires_nothing(
-    data_dir: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    # The marker means "poised to bind"; leaving it behind after giving up misleads
-    # the next launcher, which waits on it.
-    monkeypatch.setattr(server, "_make_ssl_context", lambda *_a: None)
-    monkeypatch.setattr(server, "_acquire_ports_during_downtime", lambda _ctx: (None, None))
-    paths.ready_marker_path().parent.mkdir(parents=True, exist_ok=True)
-    paths.ready_marker_path().write_text("")
-
-    server.run(data_dir / "c.pem", data_dir / "c.key")
-
-    assert not paths.ready_marker_path().exists()

@@ -63,9 +63,8 @@ class UpdateCmd:
             cappa.Arg(long=True, help="Block until the detached walk finishes and fail if it did."),
         ] = False,
     ) -> None:
-        # start_apply hands the walk to openhost-apply.service and returns, so by
-        # default this exits while the update runs and the caller follows the
-        # progress log. --wait restores an exit code for scripts and tests.
+        # Returns as soon as systemd accepts the job, so by default this exits
+        # while the update runs and the caller follows the progress log.
         try:
             start_apply(wait=wait)
         except Exception as e:

@@ -1,16 +1,12 @@
-# Hands the apply walk to systemd as its own transient unit.
-#
-# compute_space starts the apply, so the apply lives inside openhost.service's
-# cgroup (the unit sets no KillMode, so systemd's control-group default applies).
-# That makes it impossible for the apply itself to stop openhost: the stop's
-# SIGTERM would kill the walk mid-flight, leaving migrations half-applied and
-# nobody left to start the service again. So `update apply` re-launches itself
-# out of that cgroup before touching anything.
-#
-# ExecStopPost is the failsafe. However the walk ends -- cleanly, with an
-# exception, OOM-killed, SIGKILLed, or killed by RuntimeMaxSec -- systemd still
-# resets the start-rate-limit and starts openhost, so no exit path can leave the
-# instance stopped. It is a no-op when the walk already started the service.
+"""Runs the apply walk as its own transient systemd unit.
+
+compute_space starts the apply, so it inherits openhost.service's cgroup and
+`systemctl stop openhost` would kill the walk mid-flight. Re-launching out of that
+cgroup is what makes stopping the service possible at all.
+
+ExecStopPost is the failsafe: however the walk ends, systemd still starts openhost,
+so no exit path can leave the instance stopped.
+"""
 
 from __future__ import annotations
 
@@ -26,30 +22,14 @@ from openhost_system_agent.updater.paths import DATA_DIR_ENV
 
 OPENHOST_UNIT = "openhost.service"
 APPLY_UNIT = "openhost-apply.service"
-
-# Set on the transient unit so the re-entered `update apply` knows it is already
-# detached and proceeds with the walk instead of handing itself off forever.
 DETACHED_ENV = "OPENHOST_APPLY_DETACHED"
 
-# systemd-run reports a name collision when a previous apply is still running.
-# That is the concurrency guard: the unit name is the mutex, which matters
-# because compute_space's in-process lock dies with the service we stop.
-_ALREADY_EXISTS = "already exists"
-
-# A never-provisioned host has no openhost.service to stop; the migrations in
-# this walk install it. Mirrors the same tolerance in the updater's launcher.
-_NOT_LOADED_PATTERNS = ("not loaded", "not found")
-
-# Ceiling for --wait. Generous: a multi-hop walk runs one pixi install per hop.
 _WAIT_TIMEOUT_SECONDS = 3600.0
-
-# Hard ceiling on the walk itself, enforced by systemd. Matches the updater's own
-# lifetime cap so the page and the walk expire together rather than leaving one
-# serving with nothing behind it.
 _RUNTIME_MAX_SECONDS = 3600
+_ACTIVE_STATES = ("active", "activating", "deactivating", "reloading")
 
-# `-c` rather than `-m`: under -m the module loads as __main__ and cappa's
-# dispatch exits without running the command (same reason as the updater).
+# `-c` rather than `-m`: under -m the module loads as __main__ and cappa's dispatch
+# exits without running the command.
 _ENTRYPOINT = (
     "import sys; sys.argv=['openhost_system_agent','update','apply']; "
     "from openhost_system_agent.cli import main; main()"
@@ -60,43 +40,26 @@ class ApplyAlreadyRunningError(RuntimeError):
     """A previous apply is still running as APPLY_UNIT."""
 
 
+def _systemctl(*args: str, timeout: int = 120) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(["systemctl", *args], capture_output=True, text=True, timeout=timeout)
+
+
 def is_detached() -> bool:
     return os.environ.get(DETACHED_ENV) == "1"
 
 
-def systemd_run_available() -> bool:
-    return shutil.which("systemd-run") is not None
-
-
 def apply_is_running() -> bool:
-    """True when an apply unit is already active.
-
-    Checked before the progress log is reset so a second attempt cannot blank the
-    log belonging to the update that is actually running.
-    """
-    # `show` rather than `is-active`: once --collect has reaped the unit, asking
-    # for it by name makes PID 1 log "Failed to open /run/systemd/transient/..."
-    # on every call, and this runs on the update request path and at every boot.
+    # `show`, not `is-active`: once --collect has reaped the unit, asking for it by
+    # name makes PID 1 log a failed transient-file open on every call.
     try:
-        result = subprocess.run(
-            ["systemctl", "show", "--property=ActiveState", "--value", APPLY_UNIT],
-            capture_output=True,
-            text=True,
-            timeout=15,
-        )
+        state = _systemctl("show", "--property=ActiveState", "--value", APPLY_UNIT, timeout=15).stdout
     except (OSError, subprocess.SubprocessError):
-        # Can't tell; let systemd-run's own name collision be the guard.
-        return False
-    return result.stdout.strip() in ("active", "activating", "deactivating", "reloading")
+        return False  # can't tell; systemd-run's own name collision is the backstop
+    return state.strip() in _ACTIVE_STATES
 
 
 def wait_for_apply(timeout: float = _WAIT_TIMEOUT_SECONDS, poll: float = 2.0) -> bool:
-    """Block until the apply unit is gone. False if it outlived ``timeout``.
-
-    For callers that want the old synchronous contract back -- scripts and tests
-    that need an exit code rather than a progress log. The dashboard never waits:
-    the walk stops the router that would be doing the waiting.
-    """
+    """Block until the apply unit is gone. False if it outlived ``timeout``."""
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if not apply_is_running():
@@ -105,67 +68,35 @@ def wait_for_apply(timeout: float = _WAIT_TIMEOUT_SECONDS, poll: float = 2.0) ->
     return False
 
 
-def _systemctl_path() -> str:
-    """Absolute path for the unit property; systemd requires one in Exec* lines."""
-    return shutil.which("systemctl") or "/usr/bin/systemctl"
-
-
-def _stop_post_command() -> str:
-    """The failsafe that runs however the walk ends.
-
-    `reset-failed` first. openhost.service is start-rate-limited
-    (StartLimitBurst=5 / StartLimitIntervalSec=1800), and once that budget is
-    exhausted -- by a crash loop burning automatic restarts, or by restarts of an
-    already-active unit -- every subsequent start is refused with "Start request
-    repeated too quickly", including this one. That was observed on a live box:
-    the instance stayed down until someone SSHed in and ran reset-failed, which
-    makes the failsafe's promise worthless exactly when it is needed. A stop
-    followed by a start does not itself consume the budget, so this is insurance
-    rather than routine, and it is a no-op when the unit is not failed.
-
-    `--no-block` so this cannot wait on a job from inside the unit's own
-    teardown; the request lives in PID 1 either way.
-    """
-    systemctl = _systemctl_path()
-    return f'/bin/sh -c "{systemctl} reset-failed {OPENHOST_UNIT}; {systemctl} start --no-block {OPENHOST_UNIT}"'
-
-
 def detach_apply() -> None:
-    """Start the walk as APPLY_UNIT. Returns once systemd has accepted the job.
+    """Start the walk as APPLY_UNIT, raising if one is already in flight.
 
-    Raises ApplyAlreadyRunningError if an apply is already in flight, and
-    RuntimeError if systemd refuses or systemd-run is missing. There is
-    deliberately no inline fallback: without a unit outside openhost's cgroup
-    nothing would survive the stop, and stopping a service nothing can start is
-    worse than refusing to update.
+    No inline fallback when systemd-run is missing: stopping a service that
+    nothing can start again is worse than refusing to update.
     """
-    if not systemd_run_available():
+    if shutil.which("systemd-run") is None:
         raise RuntimeError(
             "systemd-run is not available, so the apply cannot be detached from openhost.service. "
             "Re-running the ansible deploy will reinstall the expected host tooling."
         )
+    systemctl = shutil.which("systemctl") or "/usr/bin/systemctl"
     cmd = [
         "systemd-run",
         f"--unit={APPLY_UNIT}",
         "--description=OpenHost update apply",
-        # Collect the unit when it exits so a later apply can reuse the name;
-        # the journal and the progress log keep the forensics.
         "--collect",
-        # Backstop for a wedged walk. openhost is down for the duration, so an
-        # unbounded step (a stalled network call, a hung subprocess) would keep it
-        # down indefinitely. On expiry systemd kills the walk and ExecStopPost
-        # brings the instance back.
+        # openhost is down for the whole walk, so bound it: on expiry systemd kills
+        # the walk and ExecStopPost brings the instance back.
         f"--property=RuntimeMaxSec={_RUNTIME_MAX_SECONDS}",
-        f"--property=ExecStopPost={_stop_post_command()}",
+        # reset-failed first: an exhausted start-rate-limit budget refuses every
+        # start, including this failsafe, which is when it matters most.
+        f'--property=ExecStopPost=/bin/sh -c "{systemctl} reset-failed {OPENHOST_UNIT}; '
+        f'{systemctl} start --no-block {OPENHOST_UNIT}"',
         f"--setenv={DETACHED_ENV}=1",
-        # Transient units inherit only the manager environment, which has no
-        # HOME. git needs one for `git config --global` (and root's
-        # safe.directory lives in $HOME/.gitconfig), so without this the walk
-        # dies on its first git call with "fatal: $HOME not set".
+        # Transient units get no HOME, and git needs one (root's safe.directory
+        # lives in $HOME/.gitconfig), or the walk dies on its first git call.
         f"--setenv=HOME={os.environ.get('HOME') or '/root'}",
     ]
-    # compute_space forwards the data-dir override to us; carry it across so the
-    # detached walk resolves the same progress log, token and certs.
     data_dir = os.environ.get(DATA_DIR_ENV)
     if data_dir:
         cmd.append(f"--setenv={DATA_DIR_ENV}={data_dir}")
@@ -178,7 +109,9 @@ def detach_apply() -> None:
 
     if result.returncode != 0:
         stderr = (result.stderr or "").strip()
-        if _ALREADY_EXISTS in stderr:
+        # The unit name is the real mutex: compute_space's in-process lock dies
+        # with the service this walk stops.
+        if "already exists" in stderr:
             raise ApplyAlreadyRunningError("An update is already in progress.")
         raise RuntimeError(f"systemd-run for {APPLY_UNIT} exited {result.returncode}: {stderr}")
 
@@ -186,39 +119,32 @@ def detach_apply() -> None:
 
 
 def stop_openhost() -> None:
-    """Stop openhost for the length of the walk.
+    """Stop openhost for the walk.
 
-    A unit that is not loaded is nothing to stop, so that counts as success: a
-    baseline host has no openhost.service until the migrations in this very walk
-    install it. Every other failure raises, because carrying on would run
-    migrations against a live router -- the thing the stop exists to prevent.
+    A unit that is not loaded is nothing to stop: a baseline host has no
+    openhost.service until this walk's migrations install it. Anything else raises,
+    because carrying on would run migrations against a live router.
     """
     logger.info(f"stopping {OPENHOST_UNIT} for the apply")
-    result = subprocess.run(["systemctl", "stop", OPENHOST_UNIT], capture_output=True, text=True, timeout=120)
+    result = _systemctl("stop", OPENHOST_UNIT)
     if result.returncode == 0:
         return
     stderr = (result.stderr or "").strip()
-    if any(pattern in stderr for pattern in _NOT_LOADED_PATTERNS):
-        logger.info(f"{OPENHOST_UNIT} is not loaded; nothing to stop")
+    if "not loaded" in stderr or "not found" in stderr:
         return
     raise RuntimeError(f"systemctl stop {OPENHOST_UNIT} exited {result.returncode}: {stderr}")
 
 
 def start_openhost() -> None:
-    """Bring openhost back after the walk. Raises if systemd refuses the job.
+    """Bring openhost back after the walk.
 
-    `restart`, not `start`: if anything started the service while the walk was
-    running (an operator, or the ExecStopPost of an earlier attempt), a `start`
-    would be a silent no-op and the freshly installed code would never boot.
-
-    `reset-failed` first so a previously exhausted start-rate-limit budget cannot
-    refuse this restart -- see _stop_post_command. Restarting an already-active
-    unit does count against that budget, which is exactly the case `restart`
-    exists to handle here.
+    `restart`, not `start`, so freshly installed code still boots if something
+    started the service mid-walk; reset-failed first so an exhausted
+    start-rate-limit cannot refuse it.
     """
     logger.info(f"starting {OPENHOST_UNIT} after the apply")
-    subprocess.run(["systemctl", "reset-failed", OPENHOST_UNIT], capture_output=True, text=True, timeout=30)
-    result = subprocess.run(["systemctl", "restart", OPENHOST_UNIT], capture_output=True, text=True, timeout=120)
+    _systemctl("reset-failed", OPENHOST_UNIT, timeout=30)
+    result = _systemctl("restart", OPENHOST_UNIT)
     if result.returncode != 0:
         raise RuntimeError(
             f"systemctl restart {OPENHOST_UNIT} exited {result.returncode}: {(result.stderr or '').strip()}"

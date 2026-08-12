@@ -2,11 +2,9 @@
 tail-call into the next ref; start openhost once on the destination.
 
 openhost is already stopped when this runs (update.apply_update takes it down
-before the first checkout) and this process runs as its own systemd unit, so
-migrations no longer race a live router: the router DB has no holders and no
-compute_space process exists. Note that this is not the same as a quiesced
-system -- juicefs, app containers and this process itself still live in the data
-dir and the pixi env (see update.apply_update).
+before the first checkout) and this runs as its own systemd unit, so migrations
+do not race a live router -- though the system is not fully quiesced, see
+update.apply_update.
 
 At each step: migrations → pixi install → checkout next ref → os.execv self.
 Using execv (not a child subprocess) keeps the walk a single process no
@@ -21,10 +19,8 @@ Migrations run before `pixi install`, so a migration that upgrades the
 toolchain (e.g. pixi) takes effect before deps are installed.
 
 There is no structured output contract: success starts openhost and the
-migration log records what happened for the freshly-started compute_space to
-read. Failure is a non-zero exit with the error on stderr — and the apply
-unit's ExecStopPost starts openhost either way, so no exit path leaves the
-instance stopped.
+migration log records what happened. Failure is a non-zero exit with the error on
+stderr — and the apply unit's ExecStopPost starts openhost either way.
 
 STABILITY CONTRACT: the prior tag's update.py execs this file by path and
 depends only on its exit code. Keep the path and that contract stable. Once
@@ -196,9 +192,6 @@ def _apply(project: str) -> None:
     # appends "done", so the page can't finish against the about-to-die instance.
     progress.record(progress.PHASE_RESTARTING, "Update complete. Starting\u2026")
 
-    # openhost was stopped at the top of the walk (update.apply_update), so this
-    # is a start, not a restart. The unit's ExecStopPost runs the same start
-    # however this process ends, so a crash here still brings the instance back.
     start_openhost()
 
 

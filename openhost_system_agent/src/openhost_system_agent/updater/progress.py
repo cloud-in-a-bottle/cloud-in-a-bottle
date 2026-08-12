@@ -81,18 +81,12 @@ def record(phase: str, message: str, ref: str | None = None) -> bool:
 def mark_boot_complete() -> bool:
     """Finalize the log on boot so the /updating page can never hang.
 
-    Two cases:
-
-    * ends with "restarting" -- the walk finished and we are the new instance, so
-      append the terminal "done".
-    * ends mid-walk ("fetch", "migrate", ...) -- the apply died without recording
-      anything: OOM, SIGKILL, a reboot. Nothing else will ever finalize that log,
-      and the page only stops polling on a terminal entry, so it would spin
-      forever against a healthy instance. Record the interruption instead.
+    A log ending in "restarting" means the walk finished and we are the new
+    instance, so append "done". A log ending mid-walk means the apply died without
+    recording anything (OOM, SIGKILL, a reboot); nothing else would ever finalize
+    it, and the page only stops polling on a terminal entry.
 
     Returns False only when the append was NEEDED but could not be written.
-    Shared by compute_space's boot hook (direct write) and the agent's
-    `updater mark-booted` (root fallback for legacy root-owned logs).
     """
     entries = read_entries()
     if not entries or is_terminal(entries):
@@ -100,7 +94,7 @@ def mark_boot_complete() -> bool:
     if entries[-1].get("phase") == PHASE_RESTARTING:
         return record(PHASE_DONE, "Instance is back online.")
     if apply_is_running():
-        return True  # a walk really is in flight (it started us); leave its log alone
+        return True  # a walk really is in flight; leave its log alone
     return record(PHASE_FAILED, "Update was interrupted before it finished. The instance restarted; try again.")
 
 

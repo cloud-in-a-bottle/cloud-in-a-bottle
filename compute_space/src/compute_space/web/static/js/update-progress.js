@@ -16,8 +16,8 @@
   var terminalSeen = false;
   var failedShownAt = null;
   var emptyPolls = 0;
-  // ~5s at the 800ms poll interval: long enough to ride out the blank log at the
-  // start of a real update, short enough that a stranded page escapes quickly.
+  // ~5s: rides out the instant the log is legitimately blank at the start of an
+  // update, without leaving a stranded page there for long.
   var EMPTY_POLLS_BEFORE_RECOVERY = 6;
 
   function clearToken() {
@@ -74,9 +74,8 @@
     });
   }
 
-  // Leave, rather than reload: /updating always renders this page, so reloading it
-  // would spin here forever. If the instance is serving there is nothing left to
-  // report; if it is still down, keep covering the update.
+  // Leave rather than reload: /updating always renders this page, so a reload
+  // would spin here forever.
   function recoverFromEmptyLog() {
     dashboardReachable().then(function (up) {
       if (up) { finish(); return; }
@@ -113,12 +112,9 @@
       .then(function (d) {
         if (!d) return;
         var entries = d.entries || [];
-        // A readable but EMPTY log means there is nothing to watch and nothing
-        // that will ever arrive: either no update ran, or one died in the moment
-        // between the log being reset and its first line being written. Neither
-        // produces a terminal entry, so without this the page polls a healthy
-        // instance forever. A few consecutive empties first, because the log is
-        // legitimately blank for an instant at the start of a real update.
+        // An empty log will never become terminal: either no update ran, or one
+        // died before writing its first line. Without this the page polls a
+        // healthy instance forever.
         if (!entries.length) {
           if (++emptyPolls >= EMPTY_POLLS_BEFORE_RECOVERY) { recoverFromEmptyLog(); return; }
         } else {

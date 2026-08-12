@@ -22,19 +22,13 @@ from openhost_system_agent.updater.paths import token_path
 from openhost_system_agent.updater.paths import updater_dir
 
 _COMPUTE_SPACE_PORT = 8080
-# Backstop against a stuck updater holding 80/443 forever. It now covers the
-# whole apply (checkout, migrations, one pixi install per tag hop), not just a
-# restart, so this has to outlast a multi-hop walk.
+# Must outlast a multi-hop walk: this now covers the whole apply, not a restart.
 _MAX_LIFETIME_SECONDS = 60 * 60
 _BIND_WAIT_SECONDS = 60
-# If the apply never takes compute_space down, it is not coming down: the walk
-# died before its stop, or the stop failed. Exit rather than idle for the whole
-# lifetime, because an idle updater will grab 80/443 during the NEXT unrelated
-# restart and serve an update page for an update that is not happening.
+# If the service never goes down the apply that launched us is gone. Exiting keeps
+# an idle updater from taking 80/443 during the next unrelated restart.
 _DOWNTIME_WAIT_SECONDS = 120
 _BIND_RETRY_INTERVAL = 0.02
-# Hint for clients that get a 503 while the instance is down. Deliberately on the
-# short side: most walks are tens of seconds.
 _RETRY_AFTER_SECONDS = 30
 _READY_POLL_INTERVAL = 0.1
 
@@ -94,10 +88,8 @@ def _build_page() -> bytes:
     return html.encode("utf-8")
 
 
-# Rendered once (see snapshot_page) instead of per request. These files live in
-# the source tree that the update walk rewrites, so a per-request read can catch
-# a file mid-write — git writes non-atomically — and serve truncated CSS/JS, or
-# drift if the tree moves again while this server is still up.
+# Rendered once, not per request: these files live in the tree the walk rewrites,
+# so a per-request read could serve a file caught mid-write.
 _page_snapshot: bytes | None = None
 
 
@@ -168,10 +160,9 @@ class _Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "no-store")
             if status == 503:
-                # Every app on the box answers 503 for the length of the apply, so
-                # API clients, webhooks and uptime monitors all see one. Tell them
-                # when to come back instead of letting them hammer a stopped
-                # instance or treat it as a hard failure.
+                # Every app on the instance answers 503 for the length of the
+                # apply, so tell clients when to come back rather than letting
+                # them treat it as a hard failure.
                 self.send_header("Retry-After", str(_RETRY_AFTER_SECONDS))
             # Don't let the browser reuse this connection: once the updater
             # releases the port, later requests must establish fresh connections
@@ -326,10 +317,6 @@ def _acquire_ports_during_downtime(
             _close(https_sock, http_sock)
             return None, None
         elif not downtime_seen and time.monotonic() - start > _DOWNTIME_WAIT_SECONDS:
-            # The apply that launched us never took the service down -- it died
-            # first, or its stop failed. Exit instead of polling for our whole
-            # lifetime: a lingering updater would grab 80/443 during the next
-            # unrelated restart and serve an update page for nothing.
             logger.warning(f"compute_space never went down within {_DOWNTIME_WAIT_SECONDS}s; the apply must be gone")
             return None, None
 

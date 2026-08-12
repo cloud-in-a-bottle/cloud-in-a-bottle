@@ -108,9 +108,7 @@ def _latest_ancestor_tag(repo: git.Repo) -> str | None:
 # the latest tag is the destination. Kept in sync with apply_after_checkout.py.
 _TARGET_REF_CONFIG = "openhost.target-ref"
 
-# Ceiling on the pre-flight fetch. It runs with the router still up, so a stall
-# only delays the update -- but without a ceiling a hung connection would sit
-# there forever and no update could ever be attempted again.
+# Without a ceiling a hung connection blocks every future update attempt.
 _FETCH_TIMEOUT_SECONDS = 300
 
 
@@ -272,46 +270,37 @@ _APPLY_ENTRYPOINT = _PACKAGE_DIR / "apply_after_checkout.py"
 def start_apply(wait: bool = False) -> None:
     """Entry point for `update apply`: hand the walk to systemd, then return.
 
-    With ``wait`` the handoff is followed by blocking until the walk finishes and
-    raising if it failed, so scripts and tests keep an exit code to check. The
-    dashboard never waits -- the walk stops the process that would be waiting.
-
-    When already running as the detached unit this is the walk itself and never
-    returns (see apply_update).
+    ``wait`` blocks until the walk finishes and raises if it failed, so scripts
+    keep an exit code. The dashboard never waits -- the walk stops the process
+    that would be doing the waiting. When already running as the detached unit
+    this is the walk itself and never returns.
     """
     if is_detached():
-        apply_update()
-    else:
-        # Check before resetting: an apply already in flight owns the progress
-        # log, and blanking it would strip the page watching that update.
-        if apply_is_running():
-            raise ApplyAlreadyRunningError("An update is already in progress.")
+        apply_update()  # NoReturn
+        return
 
-        # Reset here rather than in the detached copy: the browser may already be
-        # polling /updates, and a second reset would blank the log under it.
-        progress.reset_progress()
-        try:
-            detach_apply()
-        except ApplyAlreadyRunningError:
-            raise  # lost the race; the winner's log is now the live one
-        except BaseException as e:
-            progress.record(progress.PHASE_FAILED, f"Update failed: {e}")
-            raise
+    # Check before resetting: an apply already in flight owns the progress log,
+    # and blanking it would strand the page watching that update.
+    if apply_is_running():
+        raise ApplyAlreadyRunningError("An update is already in progress.")
 
-        if wait:
-            _wait_for_result()
+    # Reset here rather than in the detached copy, which would blank the log under
+    # a browser that is already polling it.
+    progress.reset_progress()
+    try:
+        detach_apply()
+    except ApplyAlreadyRunningError:
+        raise  # lost the race; the winner's log is the live one now
+    except BaseException as e:
+        progress.record(progress.PHASE_FAILED, f"Update failed: {e}")
+        raise
 
-
-def _wait_for_result() -> None:
-    """Block until the detached walk finishes, then raise if it failed.
-
-    The walk's own outcome lives in the progress log, not in an exit code: a
-    successful walk ends on the non-terminal "restarting" (only the freshly
-    started compute_space appends "done"), so anything that is not "failed"
-    counts as success here.
-    """
+    if not wait:
+        return
     if not wait_for_apply():
         raise RuntimeError(f"{APPLY_UNIT} did not finish in time; see `journalctl -u {APPLY_UNIT}`")
+    # A successful walk ends on the non-terminal "restarting" (only the freshly
+    # started compute_space appends "done"), so only "failed" is a failure.
     entries = progress.read_entries()
     last = entries[-1] if entries else {}
     if last.get("phase") == progress.PHASE_FAILED:
@@ -321,28 +310,16 @@ def _wait_for_result() -> None:
 def apply_update() -> NoReturn:
     """The walk, running as openhost-apply.service outside openhost's cgroup.
 
-    Takes the service down before touching the working tree, so migrations no
-    longer race a live router: measured on a live host, the router DB has zero
-    holders and no compute_space process exists for the whole migrate + install
-    window.
-
-    It is not a fully quiescent system, and a migration must not assume one.
-    openhost-juicefs.service keeps the archive tier's meta DB and FUSE mount open
-    inside the data dir, app containers keep their conmon supervisors and log
-    files there, and both they and this process run from the pixi environment
-    that `pixi install` rewrites. Anything wanting to move or restructure the data
-    directory has to quiesce those itself.
-
-    `apply_after_checkout` starts the service again at the end.
+    Stops the service before touching the working tree, so migrations no longer
+    race a live router. That is not the same as a quiesced system, and a migration
+    must not assume one: juicefs keeps the archive meta DB and its mount open in
+    the data dir, app containers keep conmon and their logs there, and both they
+    and this process run from the pixi env that `pixi install` rewrites.
     """
     try:
-        # Everything that can be done with the router UP is done first: fetching
-        # and the preflight checks read the repo but never touch the working tree,
-        # so they do not need the downtime -- and they are the steps most likely to
-        # fail or hang. A dirty tree used to cost several seconds of downtime for an
-        # update that could never proceed, and a stalled fetch (a MITM proxy, a
-        # captive portal, a stateful firewall) held the instance down with no
-        # ceiling at all.
+        # Fetch and preflight first, with the router still up: they only read the
+        # repo, and they are the steps most likely to fail or hang. A dirty tree or
+        # an unreachable remote therefore costs no downtime at all.
         repo = _repo()
 
         if repo.is_dirty(untracked_files=True):
@@ -353,21 +330,17 @@ def apply_update() -> NoReturn:
         if not _get_sorted_tags(repo) and _get_target_ref(repo) is None:
             raise RuntimeError("No tags found on remote. Tag a release first.")
 
-        # Take the first step (next tag, or the pinned target once tags are done);
-        # apply_after_checkout tail-calls forward through the rest itself.
+        # The first step; apply_after_checkout tail-calls through the rest.
         step = _next_step(repo)
 
-        # From here the working tree changes, so the router has to be down. Cover
-        # the downtime before taking it down, not after, so the page is already
-        # poised to answer 80/443 when Caddy lets go of them.
+        # From here the tree changes, so the router has to be down. Cover the
+        # downtime first, so the page is poised to take 80/443 as Caddy frees them.
         launch_updater()
         try:
             stop_openhost()
         except BaseException:
-            # The service is still up, so there is no downtime to cover. Left
-            # alone the updater would poll until its own downtime deadline and
-            # could then grab 80/443 during a later, unrelated restart, serving an
-            # update page for an update that is not happening.
+            # Nothing to cover: the updater would idle and could then take 80/443
+            # during a later, unrelated restart.
             stop_updater()
             raise
 
@@ -378,13 +351,9 @@ def apply_update() -> NoReturn:
             repo.git.clean("-fd")
     except BaseException as e:
         progress.record(progress.PHASE_FAILED, f"Update failed: {e}")
-        # openhost is down by now; the unit's ExecStopPost starts it again however
-        # this process dies, so even a failure here leaves the instance serving.
-        raise
+        raise  # ExecStopPost still starts openhost, so a failure here still serves
 
-    # Hand off to the checked-out ref's apply code, replacing this process.
-    # It walks any remaining steps and starts openhost when done, so this never
-    # returns; the migration log records what happened for the next boot.
+    # Hand off to the checked-out ref's own apply code, replacing this process.
     os.execv(sys.executable, [sys.executable, str(_APPLY_ENTRYPOINT)])
 
 
