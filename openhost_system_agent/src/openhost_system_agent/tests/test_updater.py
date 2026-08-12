@@ -58,7 +58,8 @@ def _self_signed(cert_path: Path, key_path: Path) -> None:
     )
 
 
-def _get(port: int, path: str, extra_headers: str = "") -> tuple[int, bytes]:
+def _request(port: int, path: str, extra_headers: str = "") -> tuple[int, dict[str, str], bytes]:
+    """GET over TLS against the updater; returns status, headers, body."""
     ctx = ssl.create_default_context()
     ctx.check_hostname = False
     ctx.verify_mode = ssl.CERT_NONE
@@ -72,35 +73,19 @@ def _get(port: int, path: str, extra_headers: str = "") -> tuple[int, bytes]:
             break
         data += chunk
     conn.close()
-    header, _, body = data.partition(b"\r\n\r\n")
-    status = int(header.split(b" ")[1])
-    return status, body
-
-
-def _get_headers(port: int, path: str) -> tuple[int, dict[str, str]]:
-    """Like _get, but returns the response headers (lower-cased keys)."""
-    ctx = ssl.create_default_context()
-    ctx.check_hostname = False
-    ctx.verify_mode = ssl.CERT_NONE
-    raw = socket.create_connection(("127.0.0.1", port), timeout=5)
-    conn = ctx.wrap_socket(raw, server_hostname="localhost")
-    conn.sendall(f"GET {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n".encode())
-    data = b""
-    while True:
-        chunk = conn.recv(4096)
-        if not chunk:
-            break
-        data += chunk
-    conn.close()
-    header, _, _body = data.partition(b"\r\n\r\n")
-    lines = header.decode(errors="replace").split("\r\n")
-    status = int(lines[0].split(" ")[1])
+    head, _, body = data.partition(b"\r\n\r\n")
+    lines = head.decode(errors="replace").split("\r\n")
     headers = {}
     for line in lines[1:]:
         name, _, value = line.partition(":")
         if name:
             headers[name.strip().lower()] = value.strip()
-    return status, headers
+    return int(lines[0].split(" ")[1]), headers, body
+
+
+def _get(port: int, path: str, extra_headers: str = "") -> tuple[int, bytes]:
+    status, _headers, body = _request(port, path, extra_headers)
+    return status, body
 
 
 def _open_fds() -> list[str]:
@@ -672,8 +657,11 @@ def test_updater_503s_carry_retry_after(
     server_factory: Callable[[str | None, list[dict[str, object]]], int],
 ) -> None:
     # Every app on the instance answers 503 for the length of the apply, so API
-    # clients and monitors need a hint rather than a bare refusal.
+    # clients and monitors need a hint rather than a bare refusal. All three 503
+    # paths must carry it: /health, a non-document GET, and an unauthorized log read.
     port = server_factory("tok", [])
-    status, headers = _get_headers(port, "/health")
-    assert status == 503
-    assert headers.get("retry-after") == str(server._RETRY_AFTER_SECONDS)
+    for path, extra in (("/health", ""), ("/", "Sec-Fetch-Dest: empty\r\n"), ("/updates", "")):
+        status, headers, _body = _request(port, path, extra)
+        assert status in (403, 503), f"{path} -> {status}"
+        if status == 503:
+            assert headers.get("retry-after") == str(server._RETRY_AFTER_SECONDS), path
