@@ -18,6 +18,9 @@ from litestar import get
 from litestar import post
 from litestar.di import NamedDependency
 from litestar.exceptions import HTTPException
+from litestar.exceptions import ImproperlyConfiguredException
+from litestar.exceptions import InternalServerException
+from litestar.exceptions import ValidationException
 from litestar.params import FromPath
 from litestar.params import FromQuery
 
@@ -77,12 +80,7 @@ class OkResponse:
     ok: bool
 
 
-class SystemApiError(HTTPException):
-    """Raised directly with ``status_code=``/``detail=`` at each call site; the router
-    renders it as ``{"error": detail}`` so the frontend JS's ``data.error`` handling keeps working."""
-
-
-def _system_api_error_response(request: Request[Any, Any, Any], exc: SystemApiError) -> Response[Any]:
+def _system_api_error_response(request: Request[Any, Any, Any], exc: HTTPException) -> Response[Any]:
     """Render this router's errors as ``{"error": ...}``, matching the frontend JS's ``data.error`` handling."""
     return Response(content={"error": exc.detail}, status_code=exc.status_code)
 
@@ -160,7 +158,7 @@ async def api_tokens_list(db: NamedDependency[sqlite3.Connection]) -> list[ApiTo
     return tokens
 
 
-@post("/api/tokens", status_code=200, guards=[require_owner_auth], raises=[SystemApiError])
+@post("/api/tokens", status_code=200, guards=[require_owner_auth], raises=[ValidationException])
 async def api_tokens_create(
     data: CreateTokenRequest, db: NamedDependency[sqlite3.Connection]
 ) -> Response[CreatedToken]:
@@ -175,7 +173,7 @@ async def api_tokens_create(
         except ValueError:
             expiry_hours = DEFAULT_TOKEN_EXPIRY_HOURS
         if expiry_hours <= 0:
-            raise SystemApiError(status_code=400, detail="Expiry must be positive")
+            raise ValidationException(detail="Expiry must be positive")
         expires_at = datetime.now(UTC) + timedelta(hours=expiry_hours)
 
     raw_token = secrets.token_urlsafe(32)
@@ -212,12 +210,18 @@ async def api_tokens_delete(token_id: FromPath[int], db: NamedDependency[sqlite3
 _LOG_TAIL_BYTES = 256 * 1024
 
 
-@get("/api/compute_space_logs", guards=[require_owner_auth], media_type=MediaType.TEXT, sync_to_thread=False)
+@get(
+    "/api/compute_space_logs",
+    guards=[require_owner_auth],
+    media_type=MediaType.TEXT,
+    sync_to_thread=False,
+    raises=[ImproperlyConfiguredException],
+)
 def compute_space_logs() -> Response[str]:
     """Return the tail (last 256 KiB) of the compute space log file."""
     log_path = get_log_path()
     if log_path is None:
-        return Response(content="Log file not configured", status_code=503, media_type=MediaType.TEXT)
+        raise ImproperlyConfiguredException(status_code=503, detail="Log file not configured")
     with open(log_path, "rb") as f:
         size = f.seek(0, os.SEEK_END)
         f.seek(max(0, size - _LOG_TAIL_BYTES))
@@ -297,14 +301,14 @@ def toggle_ssh() -> SshStatusResponse:
     status_code=200,
     guards=[require_owner_auth],
     sync_to_thread=False,
-    raises=[SystemApiError],
+    raises=[InternalServerException],
 )
 def drop_docker_cache() -> Response[DropCacheOk]:
     """Drop the container build cache to free disk space."""
     try:
         output = drop_docker_build_cache()
     except RuntimeError as e:
-        raise SystemApiError(status_code=500, detail=str(e)) from e
+        raise InternalServerException(detail=str(e)) from e
     return Response(content=DropCacheOk(ok=True, output=output), status_code=200, media_type=MediaType.JSON)
 
 
@@ -373,7 +377,11 @@ def restart_router() -> OkResponse:
 
 system_routes = Router(
     path="/",
-    exception_handlers={SystemApiError: _system_api_error_response},
+    exception_handlers={
+        ValidationException: _system_api_error_response,
+        ImproperlyConfiguredException: _system_api_error_response,
+        InternalServerException: _system_api_error_response,
+    },
     route_handlers=[
         api_tokens_list,
         api_tokens_create,
