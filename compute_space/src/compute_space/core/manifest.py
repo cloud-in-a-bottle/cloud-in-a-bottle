@@ -163,6 +163,12 @@ class AppManifest:
 
     # [resources]
     memory_mb: int = 128
+    # Memory limit for the image *build* step (podman build --memory).
+    # None falls back to the app's runtime memory_mb: an app that declares a
+    # small memory footprint must not be able to consume far more during its
+    # build and trigger the OOM killer against other apps. A build that
+    # genuinely needs more memory must declare it here up front.
+    build_memory_mb: int | None = None
     cpu_cores: float = 0.1
     gpu: bool = False
 
@@ -188,6 +194,18 @@ class AppManifest:
     hidden: bool = False
 
     raw_toml: str = ""
+
+    @property
+    def effective_build_memory_mb(self) -> int:
+        """Memory limit to apply to the image build.
+
+        Falls back to the runtime ``memory_mb`` when ``build_memory_mb`` is
+        unset, so a build can never exceed the app's declared memory footprint
+        — otherwise a "small" app could grab far more at build time and trip
+        the OOM killer against other apps. A build that genuinely needs more
+        must raise it explicitly via ``build_memory_mb``.
+        """
+        return self.build_memory_mb if self.build_memory_mb is not None else self.memory_mb
 
 
 def _validate_devices(devices: list[Any]) -> list[str]:
@@ -429,6 +447,7 @@ def parse_manifest_from_string(raw_text: str) -> AppManifest:
         public_paths=routing.get("public_paths", []),
         links=_parse_links(data.get("links", [])),
         memory_mb=resources.get("memory_mb", 128),
+        build_memory_mb=resources.get("build_memory_mb"),
         cpu_cores=_parse_cpu_cores(resources, app_name),
         gpu=resources.get("gpu", False),
         sqlite_dbs=data_section.get("sqlite", []),

@@ -41,6 +41,21 @@ the manual on your own zone at
 that match the OpenHost version you have running — never out of
 sync.
 
+## Feeding the manual to an AI agent
+
+Any page is served as its own Markdown source by adding `.md` to its
+URL, and the whole manual — every page, concatenated — is served at
+[`/docs/all.md`](/docs/all.md):
+
+```bash
+curl https://your-zone.example.com/docs/routing.md
+curl https://your-zone.example.com/docs/all.md
+```
+
+The copy icons put the same text on your clipboard: the one beside
+each page's heading copies that page, and the one beside **OpenHost
+Manual** in the sidebar copies the whole thing.
+
 ## Improving the docs
 
 PRs against `docs/src/*.md` in the
