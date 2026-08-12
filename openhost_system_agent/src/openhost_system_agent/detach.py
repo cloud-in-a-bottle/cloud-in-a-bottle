@@ -86,11 +86,15 @@ def _systemctl_path() -> str:
 def _stop_post_command() -> str:
     """The failsafe that runs however the walk ends.
 
-    `reset-failed` first, because openhost.service is rate-limited
-    (StartLimitBurst=5 / StartLimitIntervalSec=1800) and every update now spends
-    a start. Without the reset, the sixth update in half an hour is refused with
-    "Start request repeated too quickly" and nothing retries -- the instance
-    stays down until someone SSHes in.
+    `reset-failed` first. openhost.service is start-rate-limited
+    (StartLimitBurst=5 / StartLimitIntervalSec=1800), and once that budget is
+    exhausted -- by a crash loop burning automatic restarts, or by restarts of an
+    already-active unit -- every subsequent start is refused with "Start request
+    repeated too quickly", including this one. That was observed on a live box:
+    the instance stayed down until someone SSHed in and ran reset-failed, which
+    makes the failsafe's promise worthless exactly when it is needed. A stop
+    followed by a start does not itself consume the budget, so this is insurance
+    rather than routine, and it is a no-op when the unit is not failed.
 
     `--no-block` so this cannot wait on a job from inside the unit's own
     teardown; the request lives in PID 1 either way.
@@ -175,9 +179,10 @@ def start_openhost() -> None:
     running (an operator, or the ExecStopPost of an earlier attempt), a `start`
     would be a silent no-op and the freshly installed code would never boot.
 
-    `reset-failed` first because openhost.service is start-rate-limited and each
-    update spends one start; without it the sixth update within
-    StartLimitIntervalSec is refused and the instance stays down.
+    `reset-failed` first so a previously exhausted start-rate-limit budget cannot
+    refuse this restart -- see _stop_post_command. Restarting an already-active
+    unit does count against that budget, which is exactly the case `restart`
+    exists to handle here.
     """
     logger.info(f"starting {OPENHOST_UNIT} after the apply")
     subprocess.run(["systemctl", "reset-failed", OPENHOST_UNIT], capture_output=True, text=True, timeout=30)

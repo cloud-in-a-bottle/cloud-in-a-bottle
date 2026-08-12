@@ -28,6 +28,9 @@ _COMPUTE_SPACE_PORT = 8080
 _MAX_LIFETIME_SECONDS = 60 * 60
 _BIND_WAIT_SECONDS = 60
 _BIND_RETRY_INTERVAL = 0.02
+# Hint for clients that get a 503 while the instance is down. Deliberately on the
+# short side: most walks are tens of seconds.
+_RETRY_AFTER_SECONDS = 30
 _READY_POLL_INTERVAL = 0.1
 
 
@@ -158,6 +161,12 @@ class _Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "no-store")
+            if status == 503:
+                # Every app on the box answers 503 for the length of the apply, so
+                # API clients, webhooks and uptime monitors all see one. Tell them
+                # when to come back instead of letting them hammer a stopped
+                # instance or treat it as a hard failure.
+                self.send_header("Retry-After", str(_RETRY_AFTER_SECONDS))
             # Don't let the browser reuse this connection: once the updater
             # releases the port, later requests must establish fresh connections
             # to the new compute_space rather than reusing the updater's socket.

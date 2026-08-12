@@ -3,7 +3,10 @@ tail-call into the next ref; start openhost once on the destination.
 
 openhost is already stopped when this runs (update.apply_update takes it down
 before the first checkout) and this process runs as its own systemd unit, so
-nothing of ours holds the router DB or the data dir while migrations run.
+migrations no longer race a live router: the router DB has no holders and no
+compute_space process exists. Note that this is not the same as a quiesced
+system -- juicefs, app containers and this process itself still live in the data
+dir and the pixi env (see update.apply_update).
 
 At each step: migrations → pixi install → checkout next ref → os.execv self.
 Using execv (not a child subprocess) keeps the walk a single process no

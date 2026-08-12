@@ -290,9 +290,19 @@ def start_apply() -> None:
 def apply_update() -> NoReturn:
     """The walk, running as openhost-apply.service outside openhost's cgroup.
 
-    Takes the service down before touching the working tree, so migrations and
-    `pixi install` run with nothing of ours holding the router DB, the data dir,
-    or the pixi environment. `apply_after_checkout` starts it again at the end.
+    Takes the service down before touching the working tree, so migrations no
+    longer race a live router: measured on a live host, the router DB has zero
+    holders and no compute_space process exists for the whole migrate + install
+    window.
+
+    It is not a fully quiescent system, and a migration must not assume one.
+    openhost-juicefs.service keeps the archive tier's meta DB and FUSE mount open
+    inside the data dir, app containers keep their conmon supervisors and log
+    files there, and both they and this process run from the pixi environment
+    that `pixi install` rewrites. Anything wanting to move or restructure the data
+    directory has to quiesce those itself.
+
+    `apply_after_checkout` starts the service again at the end.
     """
     try:
         # Cover the downtime before taking the service down, not after, so the
