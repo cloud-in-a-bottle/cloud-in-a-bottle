@@ -14,6 +14,7 @@ from openhost_system_agent.protocol import DiffCommit
 from openhost_system_agent.protocol import DiffResult
 from openhost_system_agent.protocol import FetchResult
 from openhost_system_agent.protocol import RemoteInfo
+from openhost_system_agent.reclaim import reclaim_host_ownership
 
 _PACKAGE_DIR = Path(__file__).resolve().parent
 _PROJECT_DIR = _PACKAGE_DIR.parent.parent.parent
@@ -42,6 +43,15 @@ def _get_remote(repo: git.Repo) -> git.Remote:
         return repo.remote("origin")
     except (AttributeError, ValueError) as e:
         raise RuntimeError("remote 'origin' is not set") from e
+
+
+def _fetch_chown_host(repo: git.Repo, *args: str) -> None:
+    """The openhost service needs the repo to be host owned."""
+    try:
+        repo.git.fetch(*args)
+    finally:
+        if os.geteuid() == 0:
+            reclaim_host_ownership()
 
 
 _KNOWN_SCHEMES = {"http", "https", "ssh", "git", "file"}
@@ -187,7 +197,7 @@ def _next_step(repo: git.Repo) -> str | None:
 def fetch_updates() -> FetchResult:
     repo = _repo()
     _get_remote(repo)
-    repo.git.fetch("origin", "--tags")
+    _fetch_chown_host(repo, "origin", "--tags")
 
     if repo.is_dirty(untracked_files=True):
         return FetchResult(state="DIRTY")
@@ -260,7 +270,7 @@ def apply_update() -> NoReturn:
     if repo.is_dirty(untracked_files=True):
         raise RuntimeError("Working tree has uncommitted changes. Stash or commit first.")
 
-    repo.git.fetch("origin", "--tags")
+    _fetch_chown_host(repo, "origin", "--tags")
     if not _get_sorted_tags(repo) and _get_target_ref(repo) is None:
         raise RuntimeError("No tags found on remote. Tag a release first.")
 
@@ -305,7 +315,7 @@ def set_remote_url(url: str) -> RemoteInfo:
     # would report as UP_TO_DATE forever — but do NOT check out or restart, which
     # would boot new code before its migrations run.
     if ref:
-        _get_remote(repo).fetch()
+        _fetch_chown_host(repo, "origin")
         if _resolve_ref_sha(repo, ref) is None:
             raise RuntimeError(f"Ref '{ref}' could not be resolved on the remote. Check the branch or commit name.")
 
