@@ -29,11 +29,9 @@ from compute_space.core.storage import format_bytes
 
 _MEMORY_GUARD_INTERVAL_SECONDS = 60
 
-# The two thresholds debounce the pressure warning; see ``_check_memory_pressure``.
 _MEMORY_WARN_PERCENT = 90.0
 _MEMORY_CLEAR_PERCENT = 80.0
 
-# One kernel-pipe read; sized to the 64K pipe buffer so a tick drains it in one go.
 _PODMAN_EVENTS_READ_BYTES = 65536
 
 # Reading /dev/kmsg needs CAP_SYSLOG (granted to the openhost unit) on a default
@@ -44,15 +42,13 @@ _KMSG_PATH = "/dev/kmsg"
 # enough to hold one record, or the read fails with EINVAL — 8192 is the kernel's
 # max record size (the same size journald reads with).
 _KMSG_RECORD_MAX_BYTES = 8192
-# A global kill logs "Out of memory: Killed process N (comm)"; a memcg (cgroup-
-# limit) kill logs "Memory cgroup out of memory: ...". We skip the latter — that's
-# an app hitting its own limit, already reported per-app via ``podman events``.
+# A global kill logs "Out of memory: Killed process N (comm)"
+# a memcg (cgroup-limit) kill logs "Memory cgroup out of memory: ...".
+# We skip the latter — that's an app hitting its own limit, already reported
+# per-app via ``podman events``.
 _OOM_KILLED_RE = re.compile(r"Killed process (\d+) \(([^)]+)\)")
 _MEMCG_OOM_MARKER = "Memory cgroup out of memory"
 
-# At most one guard thread runs per process; the lock makes ensure_memory_guard's
-# check-and-start atomic. It's the only cross-thread state here — a guard run's own
-# state lives on the _MemoryGuard its loop thread owns, so that needs no locking.
 _guard_thread_lock = threading.Lock()
 _guard_thread: threading.Thread | None = None
 
@@ -118,29 +114,27 @@ def _parse_kmsg_oom(record: str) -> _HostOomKill | None:
     if _MEMCG_OOM_MARKER in message:
         return None
     match = _OOM_KILLED_RE.search(message)
-    if match is None:
-        return None
-    return _HostOomKill(pid=int(match.group(1)), comm=match.group(2))
+    if match is not None:
+        return _HostOomKill(pid=int(match.group(1)), comm=match.group(2))
+    return None
 
 
 def _read_next_kmsg_record(fd: int) -> bytes | None:
     """Return the next available ``/dev/kmsg`` record, or None when none remain right now.
 
     Each read returns one whole record — a single kernel log line, never split or
-    coalesced. The only looping here skips records overwritten while we lagged
-    behind: the kernel signals that with EPIPE and advances the read position to the
-    next still-available record, so we retry. Every exit is a ``return``.
+    coalesced. We do have to loop here, because it can raise EPIPE if we read too slowly
+    and missed a line. It'll still move our cursor forward so we can catch up.
     """
     while True:
         try:
-            return os.read(fd, _KMSG_RECORD_MAX_BYTES) or None  # empty read == EOF
+            return os.read(fd, _KMSG_RECORD_MAX_BYTES) or None
         except BlockingIOError:
             return None  # No more records available right now.
         except OSError as e:
-            if e.errno != errno.EPIPE:
-                raise
-            # Overwritten while we lagged; the read position advanced to the next
-            # record — loop around and read it.
+            if e.errno == errno.EPIPE:
+                continue  # missed one, try again.
+            raise
 
 
 def _drain_kmsg_oom_kills(fd: int) -> list[_HostOomKill]:
@@ -179,29 +173,22 @@ class _HostOomReader:
             )
 
 
-def _parse_podman_event(line: bytes) -> _ContainerOomKill | None:
-    """Return a container OOM kill parsed from one ``podman events`` JSON line, or None.
+def _parse_podman_event(line: bytes) -> _ContainerOomKill:
+    """Parse one ``podman events --format json`` line into a container OOM kill.
 
-    ``podman events --format json`` emits one JSON object per line. We only ask
-    for ``event=oom`` container events, so every well-formed line is a kill; we
-    just pull the container's id and name out of it (tolerating the field-name
-    casing differences seen across podman versions).
+    Every line the stream delivers is an OOM event (that's what ``--filter`` selects),
+    so a line we can't parse is a kill we'd fail to report. Rather than quietly skip
+    it, we commit to the shape podman emits — a JSON object with top-level ``ID`` and
+    ``Name`` keys (verified against podman 5.8, and the version is pinned so it won't
+    move underneath us) — and raise, with the offending line, on anything else. A
+    format change then surfaces loudly at the guard loop's handler instead of
+    silently dropping every OOM kill.
     """
-    text = line.strip()
-    if not text:
-        return None
     try:
-        obj = json.loads(text)
-    except json.JSONDecodeError:
-        logger.warning("Ignoring unparseable `podman events` line: %r", text[:200])
-        return None
-    if not isinstance(obj, dict):
-        return None
-    container_id = obj.get("ID") or obj.get("Id") or obj.get("id") or ""
-    name = obj.get("Name") or obj.get("name") or ""
-    if not container_id:
-        return None
-    return _ContainerOomKill(container_id=str(container_id), container_name=str(name))
+        obj = json.loads(line)
+        return _ContainerOomKill(container_id=str(obj["ID"]), container_name=str(obj["Name"]))
+    except (json.JSONDecodeError, KeyError, TypeError) as e:
+        raise ValueError(f"unrecognized `podman events` line {line[:300]!r}") from e
 
 
 def _read_events_chunk(fd: int) -> bytes | None:
@@ -289,23 +276,14 @@ class _PodmanOomReader:
 
         while chunk := _read_events_chunk(fd):
             self._buf += chunk
-        # The loop stops on the first falsy read: b"" is EOF (the events process
-        # exited), None is "nothing available right now" but the stream's still open.
-        stream_ended = chunk == b""
 
-        lines = self._buf.split(b"\n")
-        # The last element is a trailing partial line (or b"" if we stopped on a
-        # newline); hold it for the next drain. On stream end there's nothing more
-        # coming on this fd, so parse everything and drop the buffer.
-        self._buf = b"" if stream_ended else lines.pop()
+        # Last line may be partial. Leave it in the buffer until we see a trailing newline
+        *complete_lines, self._buf = self._buf.split(b"\n")
 
-        kills: list[_ContainerOomKill] = []
-        for line in lines:
-            kill = _parse_podman_event(line)
-            if kill is not None:
-                kills.append(kill)
+        kills = [_parse_podman_event(line) for line in complete_lines if line.strip()]
 
-        if stream_ended:
+        # On falsy chunk reads, b"" is EOF so we have to reconnect; None is just "nothing right now"
+        if chunk == b"":
             self._reconnect()
         return kills
 
@@ -372,20 +350,15 @@ class _MemoryGuard:
         """
         resources = collect_app_resources(row["container_id"], row["cpu_cores"], row["memory_mb"])
         percent = resources.memory_percent
+        # If we know nothing, do nothing.
         if percent is None:
-            # Not running / stats unavailable — nothing to compare against. Leave
-            # the debounce state untouched; an OOM crash is handled via podman events.
             return
 
         app_id = row["app_id"]
         if percent < _MEMORY_CLEAR_PERCENT:
-            # Recovered well below the line: re-arm so a future spike (or a
-            # dismissed notification) can notify again.
             self._pressure_notified.discard(app_id)
             return
 
-        # Notify only on the first crossing into the pressure zone; the debounce
-        # set keeps us quiet while it stays high (and a dismissed one dismissed).
         if percent >= _MEMORY_WARN_PERCENT and app_id not in self._pressure_notified:
             self._pressure_notified.add(app_id)
             usage = format_bytes(resources.memory_usage_bytes) if resources.memory_usage_bytes is not None else "?"
@@ -400,10 +373,7 @@ class _MemoryGuard:
 
 
 def _memory_guard_loop(config: Config) -> None:
-    # Built here so all its state is owned by this thread (see _MemoryGuard).
     guard = _MemoryGuard()
-    # The one place errors are swallowed: a bad tick is logged and the loop keeps
-    # going, so everything downstream is free to raise rather than degrade.
     while True:
         try:
             guard.check_once(config)

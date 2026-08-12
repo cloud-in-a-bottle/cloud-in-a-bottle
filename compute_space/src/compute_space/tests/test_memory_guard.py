@@ -174,21 +174,29 @@ def test_parse_podman_event_extracts_container() -> None:
     assert kill == memory_guard._ContainerOomKill(container_id="abc123", container_name="myapp")
 
 
-def test_parse_podman_event_tolerates_lowercase_keys() -> None:
-    line = (json.dumps({"id": "abc", "name": "myapp", "status": "oom"}) + "\n").encode()
-    kill = memory_guard._parse_podman_event(line)
-    assert kill is not None
-    assert kill.container_id == "abc"
-    assert kill.container_name == "myapp"
+def test_parse_podman_event_raises_on_unrecognized_shape() -> None:
+    # We commit to podman's documented top-level ID/Name keys and fail loudly on
+    # anything else — every line is an OOM event, so a shape change we didn't parse
+    # is a dropped kill, and we'd rather see it than silently lose it. The raised
+    # error carries the offending line so a format change is debuggable.
+    with pytest.raises(ValueError, match="not json"):
+        memory_guard._parse_podman_event(b"not json")
+    with pytest.raises(ValueError):  # valid JSON, but a list rather than an object
+        memory_guard._parse_podman_event(b'[{"ID": "abc", "Name": "x"}]')
+    with pytest.raises(ValueError):  # object missing the ID key
+        memory_guard._parse_podman_event((json.dumps({"Name": "x", "Status": "oom"}) + "\n").encode())
+    with pytest.raises(ValueError):  # lowercase keys are no longer tolerated
+        memory_guard._parse_podman_event((json.dumps({"id": "abc", "name": "x"}) + "\n").encode())
 
 
-def test_parse_podman_event_ignores_blank_and_bad_json() -> None:
-    assert memory_guard._parse_podman_event(b"   ") is None
-    with patch("compute_space.core.memory_guard.logger.warning") as warn:
-        assert memory_guard._parse_podman_event(b"not json") is None
-    warn.assert_called_once()
-    # An event with no container id is not actionable.
-    assert memory_guard._parse_podman_event((json.dumps({"Status": "oom"}) + "\n").encode()) is None
+def test_podman_oom_drain_skips_blank_lines() -> None:
+    # Blank lines carry no event, so drain filters them rather than parsing (which
+    # would raise). A real event on either side is still reported.
+    reader, _ = _make_events_reader()
+    reads = [_oom_event_line("cid1", "app1") + b"\n" + _oom_event_line("cid2", "app2"), BlockingIOError()]
+    with patch("compute_space.core.memory_guard.os.read", side_effect=reads):
+        kills = reader.drain()
+    assert [k.container_id for k in kills] == ["cid1", "cid2"]
 
 
 def _fake_events_proc(fileno: int = 7) -> MagicMock:
