@@ -74,6 +74,17 @@
     });
   }
 
+  // Leave, rather than reload: /updating always renders this page, so reloading it
+  // would spin here forever. If the instance is serving there is nothing left to
+  // report; if it is still down, keep covering the update.
+  function recoverFromEmptyLog() {
+    dashboardReachable().then(function (up) {
+      if (up) { finish(); return; }
+      emptyPolls = 0;
+      setTimeout(poll, 800);
+    });
+  }
+
   function handleTerminal(d) {
     terminalSeen = true;
     if (spEl) spEl.style.display = 'none';
@@ -102,14 +113,14 @@
       .then(function (d) {
         if (!d) return;
         var entries = d.entries || [];
-        // A readable but EMPTY log means there is nothing to watch: either no
-        // update ever started, or one died in the moment between resetting the log
-        // and writing its first line. Neither will ever produce a terminal entry,
-        // so without this the page polls a healthy instance forever. Require a few
-        // consecutive empties first, because the log is legitimately blank for a
-        // second or two at the very start of a real update.
+        // A readable but EMPTY log means there is nothing to watch and nothing
+        // that will ever arrive: either no update ran, or one died in the moment
+        // between the log being reset and its first line being written. Neither
+        // produces a terminal entry, so without this the page polls a healthy
+        // instance forever. A few consecutive empties first, because the log is
+        // legitimately blank for an instant at the start of a real update.
         if (!entries.length) {
-          if (++emptyPolls >= EMPTY_POLLS_BEFORE_RECOVERY) maybeRecoverWithoutLogs();
+          if (++emptyPolls >= EMPTY_POLLS_BEFORE_RECOVERY) { recoverFromEmptyLog(); return; }
         } else {
           emptyPolls = 0;
         }
