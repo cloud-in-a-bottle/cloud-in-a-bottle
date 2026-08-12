@@ -94,15 +94,6 @@ def _dump_openhost_journal(container: str) -> str:
     return f"{journal.stdout}\n{journal.stderr}"
 
 
-@pytest.fixture(scope="module", autouse=True)
-def _migration_image() -> object:
-    """Build the test image once for the module; reuse it across containers."""
-    if _podman("image", "exists", _IMAGE_NAME, check=False).returncode != 0:
-        _podman("build", "-t", _IMAGE_NAME, "-f", str(_DOCKERFILE), str(_REPO_ROOT), timeout=600)
-    yield
-    _podman("rmi", "-f", _IMAGE_NAME, check=False, timeout=30)
-
-
 @requires_containers
 class TestMigrationContainer:
     container = "openhost-migration-test"

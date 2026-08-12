@@ -52,18 +52,16 @@ import pytest
 from openhost_system_agent.migrations.registry import REGISTRY as _REGISTRY
 from openhost_system_agent.migrations.registry import latest_registry_version as _latest_registry_version
 
-# Reuse the container-test helper toolkit and the shared, module-scoped image
-# fixture from the sibling container test module. Importing keeps a single
-# source of truth for _start_container / _exec / _host_sh / health-wait / the
-# image build+teardown, and the @requires_containers marker.
+# Reuse the container-test helper toolkit from the sibling container test module.
+# Importing keeps a single source of truth for _start_container / _exec / _host_sh /
+# health-wait, and the @requires_containers marker. The shared image-build fixture
+# itself lives in conftest.py (not here) -- it's autouse and session-scoped there, so
+# pytest genuinely builds it once for both files; no import of it is needed.
 from openhost_system_agent.tests.test_migration_container import _ENV_PYTHON
 from openhost_system_agent.tests.test_migration_container import _PIXI
 from openhost_system_agent.tests.test_migration_container import _REPO
 from openhost_system_agent.tests.test_migration_container import _exec
 from openhost_system_agent.tests.test_migration_container import _host_sh
-from openhost_system_agent.tests.test_migration_container import (  # noqa: F401 — re-exported so the module-scoped image fixture is active here too
-    _migration_image,
-)
 from openhost_system_agent.tests.test_migration_container import _podman
 from openhost_system_agent.tests.test_migration_container import _start_container
 from openhost_system_agent.tests.test_migration_container import _wait_for_health
