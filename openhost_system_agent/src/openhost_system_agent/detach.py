@@ -8,9 +8,9 @@
 # out of that cgroup before touching anything.
 #
 # ExecStopPost is the failsafe. However the walk ends -- cleanly, with an
-# exception, OOM-killed, SIGKILLed, timed out -- systemd still runs
-# `systemctl start openhost`, so no exit path can leave the instance stopped.
-# It is a no-op when the walk already started the service itself.
+# exception, OOM-killed, SIGKILLed, or killed by RuntimeMaxSec -- systemd still
+# resets the start-rate-limit and starts openhost, so no exit path can leave the
+# instance stopped. It is a no-op when the walk already started the service.
 
 from __future__ import annotations
 
