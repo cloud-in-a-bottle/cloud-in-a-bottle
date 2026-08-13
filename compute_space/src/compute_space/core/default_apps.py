@@ -6,7 +6,7 @@ Each entry in ``config.default_apps`` is either:
   ``"file_browser"``) — copied from disk, same as the original
   default-apps behavior.
 - A remote git URL (e.g.
-  ``"https://github.com/imbue-openhost/bottle-catalog"``) — cloned
+  ``"https://github.com/imbue-openhost/app-catalog"``) — cloned
   on demand via the same path used by ``/api/add_app``.  The repo
   does not need to be present on disk ahead of time.
 """

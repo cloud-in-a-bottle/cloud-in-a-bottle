@@ -92,5 +92,5 @@ def test_callout_offers_install_when_catalog_missing(cfg: Any) -> None:
     assert resp.status_code == 200
     assert "Explore the App Catalog" in resp.text
     assert "Install the catalog" in resp.text
-    assert "https://github.com/imbue-openhost/bottle-catalog" in resp.text
+    assert "https://github.com/imbue-openhost/app-catalog" in resp.text
     assert f"http://catalog.{primary_of(cfg).name}/" not in resp.text
