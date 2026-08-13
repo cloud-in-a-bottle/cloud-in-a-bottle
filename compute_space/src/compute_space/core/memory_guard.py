@@ -3,7 +3,7 @@
 A daemon thread (mirroring the storage guard) that each tick warns when an app
 nears its memory limit, when an app's container is OOM-killed (per-app, from
 ``podman events``), or when the host runs out of memory and the kernel OOM killer
-reaps any process (from ``/dev/kmsg``).
+reaps any process (from the system journal via ``journalctl``).
 
 The "notification" is only a log line today; the ``TODO:`` markers are where the
 real notification system will hook in once it exists.
@@ -11,7 +11,6 @@ real notification system will hook in once it exists.
 
 from __future__ import annotations
 
-import errno
 import json
 import os
 import re
@@ -32,20 +31,18 @@ _MEMORY_GUARD_INTERVAL_SECONDS = 60
 _MEMORY_WARN_PERCENT = 90.0
 _MEMORY_CLEAR_PERCENT = 80.0
 
-_PODMAN_EVENTS_READ_BYTES = 65536
+_STREAM_READ_BYTES = 65536
 
-# Reading /dev/kmsg needs CAP_SYSLOG (granted to the openhost unit) on a default
-# dmesg_restrict=1 host.
-_KMSG_PATH = "/dev/kmsg"
-# /dev/kmsg is record-oriented: each read() returns exactly one whole log record
-# (never split across reads, never two coalesced). The buffer only has to be big
-# enough to hold one record, or the read fails with EINVAL — 8192 is the kernel's
-# max record size (the same size journald reads with).
-_KMSG_RECORD_MAX_BYTES = 8192
-# A global kill logs "Out of memory: Killed process N (comm)"
-# a memcg (cgroup-limit) kill logs "Memory cgroup out of memory: ...".
-# We skip the latter — that's an app hitting its own limit, already reported
-# per-app via ``podman events``.
+# The two OOM detectors each stream a subprocess that emits newline-delimited JSON.
+# journalctl reads the kernel log from the system journal (needs the systemd-journal
+# group, granted via the unit's SupplementaryGroups=, not CAP_SYSLOG); --lines=0 so
+# --follow reports only kills that happen while we run, not stale ones from the boot.
+_JOURNALCTL_KERNEL_FOLLOW = ["journalctl", "--dmesg", "--follow", "--lines=0", "--output=json"]
+_PODMAN_OOM_EVENTS = ["podman", "events", "--filter", "event=oom", "--filter", "type=container", "--format", "json"]
+
+# A global kill logs "Out of memory: Killed process N (comm)"; a memcg (cgroup-limit)
+# kill logs "Memory cgroup out of memory: ...". We skip the latter — that's an app
+# hitting its own limit, already reported per-app via ``podman events``.
 _OOM_KILLED_RE = re.compile(r"Killed process (\d+) \(([^)]+)\)")
 _MEMCG_OOM_MARKER = "Memory cgroup out of memory"
 
@@ -69,108 +66,135 @@ class _ContainerOomKill:
     container_name: str
 
 
-def _open_kmsg() -> int | None:
-    """Open ``/dev/kmsg`` positioned at its end, or return None if it can't be read.
+def _read_stream_chunk(fd: int) -> bytes | None:
+    """Return the next chunk of a streaming subprocess's stdout, or None if it would block.
 
-    Seeking to the end (rather than replaying the ring buffer) is what limits us to
-    kills that happen while we're running, not stale ones from earlier in the boot.
+    The stdout is a raw byte stream, so a chunk may hold part of a line, several
+    lines, or a line split across reads — the caller reassembles on newlines. Empty
+    bytes means EOF (the process exited); None means nothing is available right now.
     """
     try:
-        fd = os.open(_KMSG_PATH, os.O_RDONLY | os.O_NONBLOCK)
-    except FileNotFoundError:
-        # No /dev/kmsg (e.g. macOS dev host): host OOM detection is simply off.
+        return os.read(fd, _STREAM_READ_BYTES)  # b"" at EOF
+    except BlockingIOError:
         return None
-    except PermissionError:
-        logger.warning(
-            "Cannot read %s for host OOM detection (needs CAP_SYSLOG); host-level OOM kills will not be reported",
-            _KMSG_PATH,
-        )
-        return None
-    except OSError as e:
-        logger.warning("Failed to open %s for host OOM detection: %s", _KMSG_PATH, e)
-        return None
-    try:
-        os.lseek(fd, 0, os.SEEK_END)
-    except OSError as e:
-        # Without SEEK_END we'd replay the whole ring buffer and warn about
-        # ancient kills; refuse rather than emit stale false positives.
-        logger.warning("Cannot seek %s to end (%s); host OOM detection disabled", _KMSG_PATH, e)
-        os.close(fd)
-        return None
-    return fd
 
 
-def _parse_kmsg_oom(record: str) -> _HostOomKill | None:
-    """Return a global OOM kill parsed from one ``/dev/kmsg`` record, or None.
+class _JsonEventStream:
+    """A long-lived command whose stdout is drained as complete lines each tick.
 
-    A record is ``<prio>,<seq>,<ts>,<flags>[,...];<message>\\n<continuations>``.
-    We look at the message line only, skip memcg (cgroup) kills, and match the
-    victim's pid + comm from the kernel's "Killed process N (comm)" text.
+    Both OOM detectors read newline-delimited JSON from a streaming subprocess —
+    ``journalctl`` for the host, ``podman events`` per app — so this owns the shared
+    plumbing: a non-blocking read, partial-line buffering across ticks, and
+    reconnect-on-EOF. Owned by the one guard-loop thread, so it needs no locking. If
+    the command can't start (binary missing) it stays off and ``drain_lines`` retries
+    the start on a later tick; if the stream ends it reconnects on the next drain
+    (lines during that brief gap are missed — acceptable for a rare outage).
     """
-    _, sep, body = record.partition(";")
-    if not sep:
+
+    def __init__(self, argv: list[str], detector: str) -> None:
+        self._argv = argv
+        self._detector = detector  # human label for log lines, e.g. "Host OOM detection"
+        self._proc: subprocess.Popen[bytes] | None = None
+        self._buf = b""
+        # Suppress repeated "cannot start" warnings while the binary stays absent.
+        self._start_warned = False
+        self._start()
+
+    def _start(self) -> None:
+        """(Re)start the stream; leaves ``_proc`` None on failure."""
+        try:
+            proc = subprocess.Popen(self._argv, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        except OSError as e:
+            if not self._start_warned:
+                logger.warning("Cannot start `%s` for %s: %s", self._argv[0], self._detector, e)
+                self._start_warned = True
+            self._proc = None
+            return
+        assert proc.stdout is not None
+        # Non-blocking so ``drain_lines`` reads whatever is available and returns
+        # rather than blocking the guard loop until the next line arrives.
+        os.set_blocking(proc.stdout.fileno(), False)
+        self._proc = proc
+        self._buf = b""
+        self._start_warned = False
+        logger.info("%s active (streaming `%s`)", self._detector, " ".join(self._argv[:2]))
+
+    def _reconnect(self) -> None:
+        """Reap the ended stream and start a fresh one."""
+        if self._proc is not None:
+            if self._proc.stdout is not None:
+                self._proc.stdout.close()
+            self._proc.wait()  # Already exited (we hit EOF); reap the zombie.
+            self._proc = None
+        logger.warning("`%s` stream ended; reconnecting for %s", self._argv[0], self._detector)
+        self._start()
+
+    def drain_lines(self) -> list[bytes]:
+        """Return the complete lines seen since the last drain; reconnect if the stream ended."""
+        if self._proc is None:
+            self._start()
+            if self._proc is None:
+                return []
+        assert self._proc.stdout is not None
+        fd = self._proc.stdout.fileno()
+
+        while chunk := _read_stream_chunk(fd):
+            self._buf += chunk
+
+        # Last line may be partial. Leave it in the buffer until we see a trailing newline.
+        *complete_lines, self._buf = self._buf.split(b"\n")
+
+        # On a falsy read, b"" is EOF so we have to reconnect; None is just "nothing right now".
+        if chunk == b"":
+            self._reconnect()
+        return [line for line in complete_lines if line.strip()]
+
+
+def _parse_journal_oom(line: bytes) -> _HostOomKill | None:
+    """Return a global OOM kill parsed from one ``journalctl --output=json`` line, or None.
+
+    journalctl streams every kernel message as a JSON object; we read the ``MESSAGE``
+    text, skip memcg (per-app) kills, and pull pid+comm from the kernel's "Killed
+    process N (comm)". Most kernel lines aren't OOM kills, so None is the normal case
+    — this is a filter over the whole kernel log, unlike the podman event stream where
+    every line is a kill.
+    """
+    try:
+        obj = json.loads(line)
+    except json.JSONDecodeError:
         return None
-    message = body.split("\n", 1)[0]
-    if _MEMCG_OOM_MARKER in message:
+    message = obj.get("MESSAGE") if isinstance(obj, dict) else None
+    if not isinstance(message, str) or _MEMCG_OOM_MARKER in message:
         return None
     match = _OOM_KILLED_RE.search(message)
-    if match is not None:
-        return _HostOomKill(pid=int(match.group(1)), comm=match.group(2))
-    return None
-
-
-def _read_next_kmsg_record(fd: int) -> bytes | None:
-    """Return the next available ``/dev/kmsg`` record, or None when none remain right now.
-
-    Each read returns one whole record — a single kernel log line, never split or
-    coalesced. We do have to loop here, because it can raise EPIPE if we read too slowly
-    and missed a line. It'll still move our cursor forward so we can catch up.
-    """
-    while True:
-        try:
-            return os.read(fd, _KMSG_RECORD_MAX_BYTES) or None
-        except BlockingIOError:
-            return None  # No more records available right now.
-        except OSError as e:
-            if e.errno == errno.EPIPE:
-                continue  # missed one, try again.
-            raise
-
-
-def _drain_kmsg_oom_kills(fd: int) -> list[_HostOomKill]:
-    """Read all currently-available ``/dev/kmsg`` records and return global OOM kills."""
-    kills: list[_HostOomKill] = []
-    while (record := _read_next_kmsg_record(fd)) is not None:
-        event = _parse_kmsg_oom(record.decode("utf-8", "replace"))
-        if event is not None:
-            kills.append(event)
-    return kills
+    if match is None:
+        return None
+    return _HostOomKill(pid=int(match.group(1)), comm=match.group(2))
 
 
 class _HostOomReader:
-    """Reports host-level (global) OOM kills from ``/dev/kmsg``.
+    """Reports host-level (global) OOM kills from the kernel log, via ``journalctl``.
 
-    The open (and so the CAP_SYSLOG check) happens once at construction: it can't
-    change while we run, so if it fails host OOM detection stays off and ``check``
-    is a no-op for the life of the thread.
+    Reads kernel messages from the system journal rather than /dev/kmsg, so the unit
+    needs only membership in the ``systemd-journal`` group (``SupplementaryGroups=``),
+    not CAP_SYSLOG. Most kernel lines aren't OOM kills, so it filters for the ones
+    that are.
     """
 
     def __init__(self) -> None:
-        self._fd = _open_kmsg()
-        if self._fd is not None:
-            logger.info("Host OOM detection active (reading %s)", _KMSG_PATH)
+        self._stream = _JsonEventStream(_JOURNALCTL_KERNEL_FOLLOW, "Host OOM detection")
 
     def check(self) -> None:
-        """Report any host OOM kills seen since the last check; no-op if unavailable."""
-        if self._fd is None:
-            return
-        for kill in _drain_kmsg_oom_kills(self._fd):
-            logger.warning(
-                "TODO: make this a notification — the host OOM killer killed process %d (%s); "
-                "the machine is out of memory",
-                kill.pid,
-                kill.comm,
-            )
+        """Report any host OOM kills seen since the last check."""
+        for line in self._stream.drain_lines():
+            kill = _parse_journal_oom(line)
+            if kill is not None:
+                logger.warning(
+                    "TODO: make this a notification — the host OOM killer killed process %d (%s); "
+                    "the machine is out of memory",
+                    kill.pid,
+                    kill.comm,
+                )
 
 
 def _parse_podman_event(line: bytes) -> _ContainerOomKill:
@@ -191,101 +215,25 @@ def _parse_podman_event(line: bytes) -> _ContainerOomKill:
         raise ValueError(f"unrecognized `podman events` line {line[:300]!r}") from e
 
 
-def _read_events_chunk(fd: int) -> bytes | None:
-    """Return the next chunk of ``podman events`` output, or None if the pipe would block.
-
-    Unlike /dev/kmsg this is a raw byte stream, so a chunk may hold part of a line,
-    several lines, or a line split across reads — the caller reassembles them. An
-    empty ``bytes`` means EOF (the events process exited); None means nothing is
-    available right now.
-    """
-    try:
-        return os.read(fd, _PODMAN_EVENTS_READ_BYTES)  # b"" at EOF
-    except BlockingIOError:
-        return None
-
-
 class _PodmanOomReader:
     """Streams per-app (cgroup-limit) OOM kills from a long-lived ``podman events``.
 
-    We stream events rather than poll ``podman inspect`` because ``--restart``
-    resets ``OOMKilled`` to false on the restarted run, so a poll races the restart
-    and can miss the kill; the event is emitted the instant the kill happens and
-    delivered exactly once. If podman is missing, ``drain`` retries the start on a
-    later tick. If the stream ends (podman restarted), ``drain`` reconnects — kills
-    during that brief gap are missed, acceptable for a rare podman outage.
+    We stream events rather than poll ``podman inspect`` because ``--restart`` resets
+    ``OOMKilled`` to false on the restarted run, so a poll races the restart and can
+    miss the kill; the event is emitted the instant the kill happens and delivered
+    exactly once.
     """
 
     def __init__(self) -> None:
-        self._proc: subprocess.Popen[bytes] | None = None
-        self._buf = b""
-        # Suppress repeated "cannot start" warnings while podman stays absent.
-        self._start_warned = False
-        self._start()
-
-    def _start(self) -> None:
-        """(Re)start the ``podman events`` stream; leaves ``_proc`` None on failure."""
-        try:
-            proc = subprocess.Popen(
-                [
-                    "podman",
-                    "events",
-                    "--filter",
-                    "event=oom",
-                    "--filter",
-                    "type=container",
-                    "--format",
-                    "json",
-                ],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
-            )
-        except OSError as e:
-            if not self._start_warned:
-                logger.warning("Cannot start `podman events` for per-app OOM detection: %s", e)
-                self._start_warned = True
-            self._proc = None
-            return
-        assert proc.stdout is not None
-        # Non-blocking so ``drain`` reads whatever is available and returns rather
-        # than blocking the guard loop until the next event arrives.
-        os.set_blocking(proc.stdout.fileno(), False)
-        self._proc = proc
-        self._buf = b""
-        self._start_warned = False
-        logger.info("Per-app OOM detection active (streaming `podman events`)")
-
-    def _reconnect(self) -> None:
-        """Reap the ended stream and start a fresh one."""
-        if self._proc is not None:
-            if self._proc.stdout is not None:
-                self._proc.stdout.close()
-            self._proc.wait()  # Already exited (we hit EOF); reap the zombie.
-            self._proc = None
-        logger.warning("`podman events` stream ended; reconnecting for per-app OOM detection")
-        self._start()
+        self._stream = _JsonEventStream(_PODMAN_OOM_EVENTS, "Per-app OOM detection")
 
     def drain(self) -> list[_ContainerOomKill]:
-        """Return per-app OOM kills seen since the last drain; reconnect if the stream ended."""
-        if self._proc is None:
-            self._start()
-            if self._proc is None:
-                return []
-        assert self._proc.stdout is not None
-        fd = self._proc.stdout.fileno()
+        """Return per-app OOM kills seen since the last drain.
 
-        while chunk := _read_events_chunk(fd):
-            self._buf += chunk
-
-        # Last line may be partial. Leave it in the buffer until we see a trailing newline
-        *complete_lines, self._buf = self._buf.split(b"\n")
-
-        kills = [_parse_podman_event(line) for line in complete_lines if line.strip()]
-
-        # On falsy chunk reads, b"" is EOF so we have to reconnect; None is just "nothing right now"
-        if chunk == b"":
-            self._reconnect()
-        return kills
+        Every line is (by our ``--filter``) an OOM event, and ``_parse_podman_event``
+        raises on an unrecognized shape rather than silently dropping the kill.
+        """
+        return [_parse_podman_event(line) for line in self._stream.drain_lines()]
 
 
 class _MemoryGuard:

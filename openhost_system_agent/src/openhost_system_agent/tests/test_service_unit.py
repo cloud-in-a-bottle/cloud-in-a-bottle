@@ -79,6 +79,14 @@ class TestOpenhostServiceUnit:
         assert "RestartForceExitStatus=42\n" in unit
         assert "SuccessExitStatus=42\n" in unit
 
+    def test_grants_journal_read_for_host_oom_detection(self) -> None:
+        unit = build_openhost_service_unit(1001)
+        # The memory guard reads the kernel log from the system journal to detect
+        # host-level OOM kills; the unit grants that with group membership, not the
+        # CAP_SYSLOG kernel capability it used to carry.
+        assert "SupplementaryGroups=systemd-journal\n" in unit
+        assert "CAP_SYSLOG" not in unit
+
 
 class TestReclaimScript:
     def test_script_chowns_host_trees_to_host(self) -> None:

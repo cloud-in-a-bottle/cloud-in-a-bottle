@@ -1,4 +1,3 @@
-import errno
 import json
 import sqlite3
 from pathlib import Path
@@ -48,17 +47,20 @@ def _reset_state() -> None:
 
 
 def _make_guard() -> memory_guard._MemoryGuard:
-    """A _MemoryGuard with both OOM readers stubbed inert (no /dev/kmsg, no podman in tests)."""
-    with (
-        patch("compute_space.core.memory_guard._open_kmsg", return_value=None),
-        patch.object(memory_guard._PodmanOomReader, "_start", lambda self: setattr(self, "_proc", None)),
-    ):
+    """A _MemoryGuard with both OOM streams stubbed inert (no journalctl, no podman in tests)."""
+    with patch.object(memory_guard._JsonEventStream, "_start", lambda self: setattr(self, "_proc", None)):
         return memory_guard._MemoryGuard()
 
 
-def _kmsg_record(message: str, seq: int = 1) -> bytes:
-    """Build a raw /dev/kmsg record: '<prio>,<seq>,<ts>,<flags>;<message>'."""
-    return f"6,{seq},123456,-;{message}".encode()
+def _make_host_reader() -> memory_guard._HostOomReader:
+    """A _HostOomReader whose journalctl stream is inert; patch its ``drain_lines`` per test."""
+    with patch.object(memory_guard._JsonEventStream, "_start", lambda self: setattr(self, "_proc", None)):
+        return memory_guard._HostOomReader()
+
+
+def _journal_line(message: str) -> bytes:
+    """Build one `journalctl --output=json` line carrying a kernel MESSAGE."""
+    return json.dumps({"MESSAGE": message, "_TRANSPORT": "kernel"}).encode()
 
 
 def _oom_event_line(container_id: str, name: str) -> bytes:
@@ -252,7 +254,7 @@ def test_podman_oom_drain_reconnects_on_stream_end() -> None:
     # The dead stream was reaped and a fresh one started.
     first.wait.assert_called_once()
     popen.assert_called_once()
-    assert reader._proc is not None
+    assert reader._stream._proc is not None
 
 
 def test_podman_oom_drain_disabled_when_podman_missing() -> None:
@@ -268,82 +270,67 @@ def test_podman_oom_drain_disabled_when_podman_missing() -> None:
     assert warn.call_count == 1
 
 
-# ─── host OOM (kmsg) ──────────────────────────────────────────────────────────
+# ─── host OOM (journalctl) ────────────────────────────────────────────────────
 
 
-def test_parse_kmsg_oom_global_kill() -> None:
-    record = _kmsg_record("Out of memory: Killed process 4242 (python3) total-vm:1024kB, anon-rss:512kB")
-    event = memory_guard._parse_kmsg_oom(record.decode())
+def test_parse_journal_oom_global_kill() -> None:
+    line = _journal_line("Out of memory: Killed process 4242 (python3) total-vm:1024kB, anon-rss:512kB")
+    event = memory_guard._parse_journal_oom(line)
     assert event is not None
     assert event.pid == 4242
     assert event.comm == "python3"
 
 
-def test_parse_kmsg_oom_skips_memcg_kill() -> None:
+def test_parse_journal_oom_skips_memcg_kill() -> None:
     # A cgroup-limit kill (an app hitting its --memory) is handled per-app, not here.
-    record = _kmsg_record("Memory cgroup out of memory: Killed process 99 (node)")
-    assert memory_guard._parse_kmsg_oom(record.decode()) is None
+    line = _journal_line("Memory cgroup out of memory: Killed process 99 (node)")
+    assert memory_guard._parse_journal_oom(line) is None
 
 
-def test_parse_kmsg_oom_ignores_non_oom_lines() -> None:
-    assert memory_guard._parse_kmsg_oom(_kmsg_record("usb 1-1: new high-speed USB device").decode()) is None
-    assert memory_guard._parse_kmsg_oom("malformed record with no semicolon") is None
+def test_parse_journal_oom_ignores_non_oom_and_malformed_lines() -> None:
+    # The kernel log is a firehose, so a non-OOM line is the normal case, not an
+    # error — unlike the podman stream, this parser filters rather than raises.
+    assert memory_guard._parse_journal_oom(_journal_line("usb 1-1: new high-speed USB device")) is None
+    # Non-JSON, or a JSON object without a string MESSAGE, is skipped (not raised).
+    assert memory_guard._parse_journal_oom(b"not json") is None
+    assert memory_guard._parse_journal_oom(json.dumps({"_TRANSPORT": "kernel"}).encode()) is None
 
 
-def test_drain_kmsg_reads_until_blocking() -> None:
-    records = [
-        _kmsg_record("Out of memory: Killed process 1 (aaa)", seq=10),
-        _kmsg_record("some unrelated kernel message", seq=11),
-        _kmsg_record("Out of memory: Killed process 2 (bbb)", seq=12),
+def test_host_oom_reader_warns_only_for_oom_lines() -> None:
+    reader = _make_host_reader()
+    lines = [
+        _journal_line("usb 1-1: new high-speed USB device"),  # unrelated kernel line
+        _journal_line("Out of memory: Killed process 4242 (python3)"),  # a global OOM kill
     ]
-    with patch("compute_space.core.memory_guard.os.read", side_effect=[*records, BlockingIOError()]):
-        kills = memory_guard._drain_kmsg_oom_kills(fd=7)
-    assert [(k.pid, k.comm) for k in kills] == [(1, "aaa"), (2, "bbb")]
-
-
-def test_drain_kmsg_reraises_unexpected_errors() -> None:
-    # A non-EPIPE read error is not swallowed — it reaches the top-level handler.
-    with patch("compute_space.core.memory_guard.os.read", side_effect=OSError(errno.EIO, "I/O error")):
-        with pytest.raises(OSError):
-            memory_guard._drain_kmsg_oom_kills(fd=7)
-
-
-def test_host_oom_reader_warns_per_kill_once() -> None:
-    record = _kmsg_record("Out of memory: Killed process 4242 (python3)")
-    with patch("compute_space.core.memory_guard._open_kmsg", return_value=7):
-        reader = memory_guard._HostOomReader()
     with (
-        patch("compute_space.core.memory_guard.os.read", side_effect=[record, BlockingIOError()]),
+        patch.object(reader._stream, "drain_lines", return_value=lines),
         patch("compute_space.core.memory_guard.logger.warning") as warn,
     ):
         reader.check()
-    assert warn.call_count == 1
+    assert warn.call_count == 1  # only the OOM line, not the unrelated one
     assert warn.call_args.args[1] == 4242
     assert warn.call_args.args[2] == "python3"
 
-    # A subsequent tick with no new records emits nothing (read once, report once).
+    # A tick with no new journal lines reports nothing (each kill surfaces once).
     with (
-        patch("compute_space.core.memory_guard.os.read", side_effect=[BlockingIOError()]),
+        patch.object(reader._stream, "drain_lines", return_value=[]),
         patch("compute_space.core.memory_guard.logger.warning") as warn,
     ):
         reader.check()
     assert warn.call_count == 0
 
 
-def test_host_oom_reader_checks_capability_once_at_construction() -> None:
-    # No /dev/kmsg (or no CAP_SYSLOG): the reader opens once at construction and
-    # then every check() is a no-op — it never retries the open or reads.
-    with patch("compute_space.core.memory_guard._open_kmsg", return_value=None) as open_kmsg:
-        reader = memory_guard._HostOomReader()
+def test_host_oom_reader_disabled_when_journalctl_missing() -> None:
+    # No journalctl (e.g. macOS dev host): the stream can't start, so check() drains
+    # nothing and never raises — the missing binary is warned once, not per tick.
     with (
-        patch("compute_space.core.memory_guard.os.read") as read,
+        patch("compute_space.core.memory_guard.subprocess.Popen", side_effect=FileNotFoundError()),
         patch("compute_space.core.memory_guard.logger.warning") as warn,
     ):
+        reader = memory_guard._HostOomReader()
         reader.check()
         reader.check()
-    open_kmsg.assert_called_once()
-    read.assert_not_called()
-    warn.assert_not_called()
+    assert warn.call_count == 1
 
 
 # ─── check_once fan-out ───────────────────────────────────────────────────────
