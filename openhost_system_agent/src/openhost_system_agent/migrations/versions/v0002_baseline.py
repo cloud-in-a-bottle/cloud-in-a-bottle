@@ -72,14 +72,6 @@ def build_openhost_service_unit(host_uid: int) -> str:
         "[Service]\n"
         "Type=simple\n"
         "User=host\n"
-        # Add the host user to the systemd-journal group so it can read the
-        # system journal. The memory guard tails the kernel log (via `journalctl
-        # --dmesg`) to detect host-level (global) OOM kills — machine ran out of
-        # RAM and reaped some process — which aren't scoped to any single app's
-        # cgroup and so aren't visible via podman. Reading kernel messages
-        # otherwise needs root or CAP_SYSLOG; this read-only group grants it
-        # without a kernel capability. Kept in sync with the ansible template.
-        "SupplementaryGroups=systemd-journal\n"
         "WorkingDirectory=/home/host/openhost\n"
         "Environment=PATH=/home/host/.pixi/bin:/home/host/openhost/.pixi/envs/default/bin:"
         "/usr/local/bin:/usr/bin:/bin\n"
