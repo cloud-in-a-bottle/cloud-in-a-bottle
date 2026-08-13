@@ -208,7 +208,7 @@ def test_remote_url_entry_dispatches_to_clone_path(cfg_with_apps, monkeypatch):
     monkeypatch.setattr(da, "clone_and_read_manifest", fake_clone)
 
     # Replace the config's default_apps with a single remote URL entry.
-    cfg = cfg_with_apps.evolve(default_apps=["https://github.com/imbue-openhost/bottled-catalog"])
+    cfg = cfg_with_apps.evolve(default_apps=["https://github.com/imbue-openhost/bottle-catalog"])
 
     db = sqlite3.connect(cfg.db_path)
     try:
@@ -216,15 +216,15 @@ def test_remote_url_entry_dispatches_to_clone_path(cfg_with_apps, monkeypatch):
     finally:
         db.close()
 
-    assert calls == ["https://github.com/imbue-openhost/bottled-catalog"]
+    assert calls == ["https://github.com/imbue-openhost/bottle-catalog"]
     assert len(result) == 1
     assert result[0].status == "ok"
-    assert result[0].name == "https://github.com/imbue-openhost/bottled-catalog"
+    assert result[0].name == "https://github.com/imbue-openhost/bottle-catalog"
 
     # The sentinel keys on the spec string (the URL), not the manifest name.
     with open(cfg.default_apps_sentinel_path) as f:
         sentinel = json.load(f)
-    assert "https://github.com/imbue-openhost/bottled-catalog" in sentinel
+    assert "https://github.com/imbue-openhost/bottle-catalog" in sentinel
 
 
 def test_remote_url_clone_failure_is_retried(cfg_with_apps, monkeypatch):
@@ -282,7 +282,7 @@ def test_remote_install_works_from_running_event_loop(cfg_with_apps, monkeypatch
 
 
 def test_backup_in_default_factory():
-    """bottled-backup must be in the shipped DefaultConfig.default_apps
+    """backup must be in the shipped DefaultConfig.default_apps
     so every new instance auto-installs it at /setup completion.
 
     Regression guard against accidental removal during config refactors.
@@ -292,12 +292,12 @@ def test_backup_in_default_factory():
         data_root_dir="/tmp/fake",
         start_caddy=False,
     )
-    backup_entries = [s for s in cfg.default_apps if "bottled-backup" in s.lower()]
-    assert backup_entries, f"bottled-backup not in default_apps: {cfg.default_apps}"
+    backup_entries = [s for s in cfg.default_apps if "backup" in s.lower()]
+    assert backup_entries, f"backup not in default_apps: {cfg.default_apps}"
 
 
 def test_catalog_in_default_factory():
-    """bottled-catalog must be in the shipped DefaultConfig.default_apps
+    """bottle-catalog must be in the shipped DefaultConfig.default_apps
     so every new instance auto-installs it at /setup completion.
 
     Regression guard against accidental removal during config refactors.
@@ -307,8 +307,8 @@ def test_catalog_in_default_factory():
         data_root_dir="/tmp/fake",
         start_caddy=False,
     )
-    catalog_entries = [s for s in cfg.default_apps if "bottled-catalog" in s.lower()]
-    assert catalog_entries, f"bottled-catalog not in default_apps: {cfg.default_apps}"
+    catalog_entries = [s for s in cfg.default_apps if "bottle-catalog" in s.lower()]
+    assert catalog_entries, f"bottle-catalog not in default_apps: {cfg.default_apps}"
 
 
 def test_filestash_in_default_factory():

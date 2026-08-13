@@ -146,7 +146,7 @@ def test_install_without_grant_returns_permission_required(client: TestClient[Li
     resp = client.post(
         _url("install"),
         headers=_headers(),
-        content=json.dumps({"repo_url": "https://github.com/imbue-openhost/bottled-catalog"}),
+        content=json.dumps({"repo_url": "https://github.com/imbue-openhost/bottle-catalog"}),
     )
     assert resp.status_code == 403
     body = resp.json()

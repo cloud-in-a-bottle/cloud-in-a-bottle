@@ -36,7 +36,7 @@ EDIT_APP_VERSION_SPEC = "<1.0"
 # The app catalog ships as a default app (see Config.default_apps); the Deploy
 # page links to it when installed and offers to install it otherwise.
 CATALOG_APP_NAME = "catalog"
-CATALOG_REPO_URL = "https://github.com/imbue-openhost/bottled-catalog"
+CATALOG_REPO_URL = "https://github.com/imbue-openhost/bottle-catalog"
 
 
 @get(["/", "/dashboard"], guards=[require_owner_auth])
