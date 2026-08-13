@@ -36,8 +36,9 @@ from compute_space.core.domains import primary_domain_or_none
 from compute_space.core.logging import logger
 from compute_space.core.mdns import ensure_mdns_for_domains
 from compute_space.core.mdns import get_active_mdns
-from compute_space.core.util import default_route_source_ip
 from compute_space.core.util import is_reachable
+from compute_space.core.util import lan_ip
+from compute_space.core.util import lan_ip6
 from compute_space.db import get_db
 
 _TEMPLATES_DIR = Path(__file__).parent / "templates"
@@ -91,16 +92,16 @@ def _host_upstream_resolvers() -> list[str]:
     return resolvers or list(_FALLBACK_UPSTREAM_DNS)
 
 
-def _coredns_bind_ip(public_ip: str) -> str:
-    """Return the local address CoreDNS should bind for authoritative DNS.
+def _coredns_bind_ip(lan_ip: str | None, public_ip: str) -> str:
+    """Return the address CoreDNS binds for authoritative DNS.
 
-    Binding wildcard :53 conflicts with Podman's aardvark-dns on 10.89.0.1:53.
-    Binding the configured public IP works on hosts where that IP is assigned to
-    an interface (for example Hetzner), but fails on AWS/GCP where public IPs are
-    NATed to a private VM address. The default-route source address is the local
-    interface address that receives that NATed traffic.
+    The bind target must be a local interface address. ``.local`` zones resolve to ``lan_ip``, and
+    that same local interface is what receives both LAN queries and NATed public traffic, so it is
+    the preferred bind target; bind the configured ``public_ip`` only when no LAN address is
+    discoverable.  (Binding wildcard :53 conflicts with Podman's aardvark-dns on 10.89.0.1:53, so
+    CoreDNS needs an explicit bind address rather than a wildcard.)
     """
-    return default_route_source_ip() or public_ip
+    return lan_ip or public_ip
 
 
 # The http edge (Caddy) serves `.local` on plain http; an address it doesn't answer on is one we
@@ -110,7 +111,7 @@ _EDGE_HTTP_PORT = 80
 
 def publishable_lan_ip6() -> str | None:
     """The box's IPv6 address, but only once the http edge actually answers on it."""
-    ip6 = default_route_source_ip(socket.AF_INET6)
+    ip6 = lan_ip6()
     if ip6 is None:
         return None
     if not is_reachable(ip6, _EDGE_HTTP_PORT):
@@ -201,7 +202,7 @@ def _write_coredns_config(
     # container-facing views + catch-all forward when the gateway is bindable).
     corefile = _jinja_env.get_template("Corefile").render(
         zones=zones,
-        bind_ip=_coredns_bind_ip(public_ip),
+        bind_ip=_coredns_bind_ip(lan_ip, public_ip),
         # Binding the v6 address too lets a v6-only client use us as a conditional forwarder.
         bind_ip6=lan_ip6,
         container_gateway_ip=container_gateway_ip,
@@ -339,7 +340,7 @@ def reload_coredns_for_domains(
         config.public_ip,
         coredns.corefile_path,
         CONTAINER_GATEWAY_IP,
-        lan_ip if lan_ip is not None else default_route_source_ip(),
+        lan_ip,
         lan_ip6,
     )
     coredns.restart()
@@ -353,7 +354,7 @@ _reconcile_lock = threading.Lock()
 
 def lan_addresses() -> tuple[str | None, str | None]:
     """The IPv4 and (reachability-gated) IPv6 addresses we publish for ``.local`` names."""
-    return default_route_source_ip(), publishable_lan_ip6()
+    return lan_ip(), publishable_lan_ip6()
 
 
 def reconcile_lan_dns(

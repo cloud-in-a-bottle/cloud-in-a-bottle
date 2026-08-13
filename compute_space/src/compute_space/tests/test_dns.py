@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import socket
 from contextlib import closing
 from pathlib import Path
 from typing import Any
@@ -51,37 +50,12 @@ def _write_zonefile(path: Path, serial: int = 100) -> None:
     )
 
 
-class _FakeSocket:
-    def __enter__(self) -> _FakeSocket:
-        return self
-
-    def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
-        return None
-
-    def connect(self, addr: tuple[str, int]) -> None:
-        self.addr = addr
-
-    def getsockname(self) -> tuple[str, int]:
-        return ("10.0.0.5", 12345)
+def test_coredns_bind_ip_prefers_lan_ip() -> None:
+    assert dns_mod._coredns_bind_ip("10.0.0.5", "203.0.113.10") == "10.0.0.5"
 
 
-def test_coredns_bind_ip_uses_default_route_source(monkeypatch: pytest.MonkeyPatch) -> None:
-    fake_socket = _FakeSocket()
-    monkeypatch.setattr(dns_mod.socket, "socket", lambda *args: fake_socket)
-
-    assert dns_mod._coredns_bind_ip("203.0.113.10") == "10.0.0.5"
-    assert fake_socket.addr == ("8.8.8.8", 80)
-
-
-def test_coredns_bind_ip_falls_back_to_public_ip(monkeypatch: pytest.MonkeyPatch) -> None:
-    def raise_os_error(*args: object, **kwargs: object) -> object:
-        raise OSError("no route")
-
-    # Defeat both the default-route probe and the host-address fallback so no LAN IP is found.
-    monkeypatch.setattr(socket, "socket", raise_os_error)
-    monkeypatch.setattr(socket, "getaddrinfo", raise_os_error)
-
-    assert dns_mod._coredns_bind_ip("203.0.113.10") == "203.0.113.10"
+def test_coredns_bind_ip_falls_back_to_public_ip() -> None:
+    assert dns_mod._coredns_bind_ip(None, "203.0.113.10") == "203.0.113.10"
 
 
 def test_append_txt_records_writes_relative_names_verbatim(tmp_path: Path) -> None:
@@ -150,7 +124,7 @@ def _stub_popen(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_container_dns_view_rendered_when_gateway_bindable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(dns_mod, "_coredns_bind_ip", lambda ip: "10.0.0.5")
+    monkeypatch.setattr(dns_mod, "_coredns_bind_ip", lambda *args: "10.0.0.5")
     monkeypatch.setattr(dns_mod, "_gateway_ip_is_bindable", lambda ip: True)
     monkeypatch.setattr(dns_mod, "_host_upstream_resolvers", lambda: ["9.9.9.9"])
     _stub_popen(monkeypatch)
@@ -180,7 +154,7 @@ def test_container_dns_view_rendered_when_gateway_bindable(tmp_path: Path, monke
 
 
 def test_container_dns_view_skipped_when_gateway_not_bindable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(dns_mod, "_coredns_bind_ip", lambda ip: "10.0.0.5")
+    monkeypatch.setattr(dns_mod, "_coredns_bind_ip", lambda *args: "10.0.0.5")
     monkeypatch.setattr(dns_mod, "_gateway_ip_is_bindable", lambda ip: False)
     _stub_popen(monkeypatch)
 
@@ -247,7 +221,7 @@ def test_container_view_forward_uses_discovered_resolvers_and_distinct_bind(
     # The public view and the container view must bind different addresses (the
     # default-route source vs the gateway), and the container catch-all must
     # forward to the discovered upstreams.
-    monkeypatch.setattr(dns_mod, "_coredns_bind_ip", lambda ip: "10.0.0.5")
+    monkeypatch.setattr(dns_mod, "_coredns_bind_ip", lambda *args: "10.0.0.5")
     monkeypatch.setattr(dns_mod, "_gateway_ip_is_bindable", lambda ip: True)
     monkeypatch.setattr(dns_mod, "_host_upstream_resolvers", lambda: ["185.12.64.1", "1.1.1.1"])
     _stub_popen(monkeypatch)
@@ -283,7 +257,7 @@ def test_dns_zones_covers_every_domain_including_local(tmp_path: Path) -> None:
 
 
 def test_local_zone_uses_lan_ip_public_zone_uses_public_ip(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(dns_mod, "_coredns_bind_ip", lambda ip: "10.0.0.5")
+    monkeypatch.setattr(dns_mod, "_coredns_bind_ip", lambda *args: "10.0.0.5")
     monkeypatch.setattr(dns_mod, "_gateway_ip_is_bindable", lambda ip: False)
     _stub_popen(monkeypatch)
 
@@ -304,7 +278,7 @@ def test_local_zone_uses_lan_ip_public_zone_uses_public_ip(tmp_path: Path, monke
 
 
 def test_local_zone_gets_aaaa_and_v6_bind(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(dns_mod, "_coredns_bind_ip", lambda ip: "10.0.0.5")
+    monkeypatch.setattr(dns_mod, "_coredns_bind_ip", lambda *args: "10.0.0.5")
     monkeypatch.setattr(dns_mod, "_gateway_ip_is_bindable", lambda ip: False)
     _stub_popen(monkeypatch)
 
@@ -328,7 +302,7 @@ def test_local_zone_gets_aaaa_and_v6_bind(tmp_path: Path, monkeypatch: pytest.Mo
 def test_publishable_lan_ip6_requires_a_listening_edge(monkeypatch: pytest.MonkeyPatch) -> None:
     # Publishing an AAAA nothing answers on makes clients (which prefer v6) hang on connect and
     # fall back — the exact stall this whole change set removes.
-    monkeypatch.setattr(dns_mod, "default_route_source_ip", lambda family: "fd00::5")
+    monkeypatch.setattr(dns_mod, "lan_ip6", lambda: "fd00::5")
     monkeypatch.setattr(dns_mod, "is_reachable", lambda ip, port: False)
     assert dns_mod.publishable_lan_ip6() is None
 
@@ -339,7 +313,7 @@ def test_publishable_lan_ip6_requires_a_listening_edge(monkeypatch: pytest.Monke
 def test_local_zone_dropped_when_no_lan_ip(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # With no LAN IP there is no honest answer for a `.local` name, and handing LAN clients the
     # public IP sends their traffic off-box — so the zone is not published at all.
-    monkeypatch.setattr(dns_mod, "_coredns_bind_ip", lambda ip: "10.0.0.5")
+    monkeypatch.setattr(dns_mod, "_coredns_bind_ip", lambda *args: "10.0.0.5")
     monkeypatch.setattr(dns_mod, "_gateway_ip_is_bindable", lambda ip: False)
     _stub_popen(monkeypatch)
 
@@ -359,7 +333,7 @@ def test_local_zone_dropped_when_no_lan_ip(tmp_path: Path, monkeypatch: pytest.M
 def test_start_coredns_writes_a_zone_block_and_file_per_public_domain(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(dns_mod, "_coredns_bind_ip", lambda ip: "10.0.0.5")
+    monkeypatch.setattr(dns_mod, "_coredns_bind_ip", lambda *args: "10.0.0.5")
     monkeypatch.setattr(dns_mod, "_gateway_ip_is_bindable", lambda ip: False)
     _stub_popen(monkeypatch)
 
@@ -389,7 +363,7 @@ def test_start_coredns_writes_a_zone_block_and_file_per_public_domain(
 def test_reload_coredns_for_domains_regenerates_zones_and_restarts(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(dns_mod, "_coredns_bind_ip", lambda ip: "10.0.0.5")
+    monkeypatch.setattr(dns_mod, "_coredns_bind_ip", lambda *args: "10.0.0.5")
     monkeypatch.setattr(dns_mod, "_gateway_ip_is_bindable", lambda ip: False)
     _stub_popen(monkeypatch)
 
@@ -414,7 +388,7 @@ def test_reload_coredns_for_domains_regenerates_zones_and_restarts(
 
 
 def test_reload_preserves_in_flight_challenge_txt_records(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(dns_mod, "_coredns_bind_ip", lambda ip: "10.0.0.5")
+    monkeypatch.setattr(dns_mod, "_coredns_bind_ip", lambda *args: "10.0.0.5")
     monkeypatch.setattr(dns_mod, "_gateway_ip_is_bindable", lambda ip: False)
     _stub_popen(monkeypatch)
 

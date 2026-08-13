@@ -238,12 +238,11 @@ def test_answers_query_from_private_source() -> None:
 
 def test_ensure_starts_then_stops_responder(monkeypatch: pytest.MonkeyPatch) -> None:
     fake = _responder(("openhost.local",))
-    monkeypatch.setattr(mdns, "default_route_source_ip", lambda: "192.168.1.50")
     monkeypatch.setattr(mdns, "start_mdns", lambda bases, lan_ip, lan_ip6=None: fake)
     mdns.set_active_mdns(None)
 
     # First `.local` domain appears → responder starts.
-    mdns.ensure_mdns_for_domains(_LOCAL_DOMAINS)
+    mdns.ensure_mdns_for_domains(_LOCAL_DOMAINS, lan_ip="192.168.1.50")
     assert mdns.get_active_mdns() is fake
 
     # Last `.local` domain removed → responder stops and deregisters.
@@ -262,14 +261,12 @@ def test_ensure_rebinds_when_lan_ip_moves(monkeypatch: pytest.MonkeyPatch) -> No
         return second if started[1:] else first
 
     monkeypatch.setattr(mdns, "start_mdns", _start)
-    monkeypatch.setattr(mdns, "default_route_source_ip", lambda: "192.168.1.50")
     mdns.set_active_mdns(None)
-    mdns.ensure_mdns_for_domains(_LOCAL_DOMAINS)
+    mdns.ensure_mdns_for_domains(_LOCAL_DOMAINS, lan_ip="192.168.1.50")
 
     # A DHCP renewal moves the address; the socket's group membership is pinned to the interface it
     # was opened on, so the responder must be rebound rather than just re-pointed.
-    monkeypatch.setattr(mdns, "default_route_source_ip", lambda: "192.168.1.60")
-    mdns.ensure_mdns_for_domains(_LOCAL_DOMAINS)
+    mdns.ensure_mdns_for_domains(_LOCAL_DOMAINS, lan_ip="192.168.1.60")
 
     assert started == ["192.168.1.50", "192.168.1.60"]
     assert first.transports[0].sock.closed  # type: ignore[attr-defined]

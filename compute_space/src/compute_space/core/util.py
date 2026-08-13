@@ -12,25 +12,6 @@ from typing import Any
 
 import attr
 
-_PROBE_TARGET = {
-    socket.AF_INET: ("8.8.8.8", 80),
-    socket.AF_INET6: ("2001:4860:4860::8888", 80),
-}
-
-
-def default_route_source_ip(family: socket.AddressFamily = socket.AF_INET) -> str | None:
-    """The address a peer reaches us at over ``family``, or None. Prefers the default-route egress
-    interface, then falls back to a LAN address when there is no default route."""
-    try:
-        with socket.socket(family, socket.SOCK_DGRAM) as sock:
-            sock.connect(_PROBE_TARGET[family])
-            ip = _strip_scope(str(sock.getsockname()[0]))
-        if _is_publishable(ip, family):
-            return ip
-    except OSError:
-        pass
-    return _lan_ip_from_host(family)
-
 
 def _strip_scope(ip: str) -> str:
     """Drop an IPv6 ``%interface`` suffix — it is meaningful only to the local host."""
@@ -49,26 +30,38 @@ def _is_publishable(ip: str, family: socket.AddressFamily) -> bool:
     return not (family == socket.AF_INET6 and addr.is_link_local)
 
 
-def _lan_ip_from_host(family: socket.AddressFamily) -> str | None:
-    """Best LAN address among the host's own resolved addresses, or None.  IPv4 prefers a private
-    address and falls back to link-local; IPv6 takes any publishable one (global or ULA)."""
+def lan_ip() -> str | None:
+    """Best private IPv4 LAN address, or None.  Prefers a private address, then link-local."""
     try:
-        infos = socket.getaddrinfo(socket.gethostname(), None, family=family)
+        infos = socket.getaddrinfo(socket.gethostname(), None, family=socket.AF_INET)
     except OSError:
         return None
     link_local: str | None = None
     for info in infos:
         ip = _strip_scope(str(info[4][0]))
-        if not _is_publishable(ip, family):
+        if not _is_publishable(ip, socket.AF_INET):
             continue
-        if family == socket.AF_INET6:
-            return ip  # link-local already excluded by _is_publishable
         addr = ipaddress.ip_address(ip)
         if addr.is_private and not addr.is_link_local:
             return ip
         if addr.is_link_local and link_local is None:
             link_local = ip
     return link_local
+
+
+def lan_ip6() -> str | None:
+    """A publishable IPv6 LAN address (global or ULA), or None.  Link-local is excluded: it needs a
+    ``%interface`` scope no URL or DNS record can carry."""
+    try:
+        infos = socket.getaddrinfo(socket.gethostname(), None, family=socket.AF_INET6)
+    except OSError:
+        return None
+    for info in infos:
+        ip = _strip_scope(str(info[4][0]))
+        if not _is_publishable(ip, socket.AF_INET6):
+            continue
+        return ip
+    return None
 
 
 def is_reachable(ip: str, port: int, timeout: float = 0.5) -> bool:

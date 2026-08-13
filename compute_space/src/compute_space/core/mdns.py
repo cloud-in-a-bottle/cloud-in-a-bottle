@@ -14,7 +14,6 @@ import attr
 
 from compute_space.core.domains import Domain
 from compute_space.core.logging import logger
-from compute_space.core.util import default_route_source_ip
 
 _MDNS_GROUP = "224.0.0.251"
 _MDNS_GROUP6 = "ff02::fb"
@@ -607,8 +606,6 @@ def ensure_mdns_for_domains(domains: Sequence[Domain], lan_ip: str | None = None
             set_active_mdns(None)
             logger.info("Stopped mDNS responder (no .local domains)")
         return
-    if lan_ip is None:
-        lan_ip = default_route_source_ip()
     if responder is None:
         if lan_ip is None:
             logger.warning("mDNS domain configured but no LAN IP found; responder not started")
