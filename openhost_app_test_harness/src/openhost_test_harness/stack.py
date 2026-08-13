@@ -1,4 +1,4 @@
-"""Run an app under test on a real local OpenHost stack.
+"""Run an app under test on a real local Cloud in a Bottle stack.
 
 Typical use in an app repo's ``conftest.py``::
 
@@ -12,7 +12,7 @@ Typical use in an app repo's ``conftest.py``::
         with OpenhostStack() as s:
             yield s
 
-This starts the real OpenHost router (HTTP-only, on a ``*.localhost`` zone) and deploys the
+This starts the real Cloud in a Bottle router (HTTP-only, on a ``*.localhost`` zone) and deploys the
 app through the real install path, so routing, auth, identity env vars, and the v2 service
 interface all behave exactly as in production.
 
@@ -184,7 +184,7 @@ class ServiceConsumer:
 
 @attr.define
 class OpenhostStack:
-    """Build, deploy, and front an OpenHost app on a real local router for tests.
+    """Build, deploy, and front a Cloud in a Bottle app on a real local router for tests.
 
     Use as a context manager.  ``app_dir`` defaults to the nearest directory containing an
     ``openhost.toml``, found by walking up from the current working directory.

@@ -41,7 +41,7 @@ export DISK_SIZE=40G
 export RAM_MB=8192
 export CPUS=4
 
-# --- OpenHost ---
+# --- Cloud in a Bottle ---
 export DOMAIN=lvh.me:8080              # zone domain for app routing (see note in Part 2)
 export OPENHOST_REPO=~/openhost        # path to your checkout of this repo
 

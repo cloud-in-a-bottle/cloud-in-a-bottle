@@ -102,7 +102,7 @@ def test_container_runtime_reports_real_podman() -> None:
     assert rt.error is None
     # A real version string like "5.8.3".
     assert rt.version and rt.version[0].isdigit()
-    # OpenHost's test/CI podman is rootless.
+    # Cloud in a Bottle's test/CI podman is rootless.
     assert rt.rootless is True
 
 

@@ -1,6 +1,6 @@
 openapi: 3.0.3
 info:
-  title: OpenHost OAuth Service
+  title: Cloud in a Bottle OAuth Service
   description: |
     OAuth token management — acquire, refresh, and store tokens for
     third-party APIs (Google, GitHub, etc.).

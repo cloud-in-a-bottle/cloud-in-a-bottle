@@ -328,7 +328,7 @@ async def api_diagnostics(
 ) -> Response[PlatformDiagnostics]:
     """Return a full instance diagnostics bundle for debugging.
 
-    Includes the OpenHost git checkout, host OS/Python/dependency versions,
+    Includes the Cloud in a Bottle git checkout, host OS/Python/dependency versions,
     container runtime info, disk usage, and a summary of every installed app.
 
     ``?download=1`` adds a Content-Disposition header so browsers save the JSON

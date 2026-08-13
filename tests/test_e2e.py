@@ -1,4 +1,4 @@
-"""Cloud E2E tests for OpenHost self-host deployment.
+"""Cloud E2E tests for Cloud in a Bottle self-host deployment.
 
 Requires ``OPENHOST_DOMAIN`` env var pointing at a running instance.
 See ``tests/gcp/`` or ``tests/ec2/`` for infrastructure setup scripts.
@@ -536,7 +536,7 @@ class TestSelfHost:
         rt = d["container_runtime"]
         assert rt["available"] is True, f"podman should be available: {rt}"
         assert rt["version"], "podman version should be populated"
-        # OpenHost runs rootless podman.
+        # Cloud in a Bottle runs rootless podman.
         assert rt["rootless"] is True
 
     def test_12h_platform_storage_and_deps(self, session, router_url):

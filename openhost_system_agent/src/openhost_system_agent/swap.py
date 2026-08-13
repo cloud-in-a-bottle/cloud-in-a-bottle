@@ -2,7 +2,7 @@
 
 Small instances run out of RAM under memory pressure and get apps OOM-killed. A
 swap file gives the kernel somewhere to spill cold pages, trading disk for
-resilience. OpenHost provisions a default-sized swap file on every host (ansible
+resilience. Cloud in a Bottle provisions a default-sized swap file on every host (ansible
 on fresh hosts, the v9 migration on already-provisioned ones) and lets the owner
 resize it from the settings page.
 

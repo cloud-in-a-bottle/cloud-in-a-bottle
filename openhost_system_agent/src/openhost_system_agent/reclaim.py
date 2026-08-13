@@ -1,4 +1,4 @@
-"""Reclaim ownership of the host's OpenHost trees.
+"""Reclaim ownership of the host's Cloud in a Bottle trees.
 
 The openhost service runs as the unprivileged ``host`` user: it invokes ``git``
 and ``pixi run`` against ``/home/host/openhost`` (the repo, including its
@@ -35,7 +35,7 @@ _HOST_PATHS = (
 
 
 def reclaim_host_ownership() -> None:
-    """chown the host's OpenHost trees back to the host user. Root-only, idempotent.
+    """chown the host's Cloud in a Bottle trees back to the host user. Root-only, idempotent.
 
     Safe to call repeatedly and cheap when nothing is misowned. Missing paths
     are skipped (a fresh host may not have every tree yet). Raises if not run as

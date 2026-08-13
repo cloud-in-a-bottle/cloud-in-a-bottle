@@ -83,7 +83,7 @@ def detach_apply() -> None:
     cmd = [
         "systemd-run",
         f"--unit={APPLY_UNIT}",
-        "--description=OpenHost update apply",
+        "--description=Cloud in a Bottle update apply",
         "--collect",
         # openhost is down for the whole walk, so bound it: on expiry systemd kills
         # the walk and ExecStopPost brings the instance back.

@@ -95,7 +95,7 @@ class AppLink:
     Apps use this to advertise interesting paths on their own URL that
     aren't the bare root — e.g. an admin console at ``/_openhost/admin``.
     The dashboard renders these as clickable links under the app. The
-    ``path`` is taken at face value: OpenHost does not validate that it
+    ``path`` is taken at face value: Cloud in a Bottle does not validate that it
     exists, that it is reachable, or that it is (or isn't) gated by auth.
     It is simply advertised to the user.
     """
@@ -297,7 +297,7 @@ def _parse_links(links_list: Any) -> list[AppLink]:
     """Parse [[links]] entries from manifest data.
 
     Each entry needs a non-empty ``name`` and ``path``. The path is not
-    validated beyond being a non-empty string — OpenHost trusts the app
+    validated beyond being a non-empty string — Cloud in a Bottle trusts the app
     to advertise its own paths and only displays them to the user.
     """
     if not isinstance(links_list, list):

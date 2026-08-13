@@ -1,6 +1,6 @@
 # openhost_system_agent
 
-A privileged agent that manages host-level system state for OpenHost instances.
+A privileged agent that manages host-level system state for Cloud in a Bottle instances.
 It runs as root (via `sudo`) and handles three concerns:
 
 1. **System migrations** — idempotent, versioned steps that bring the host into
@@ -8,7 +8,7 @@ It runs as root (via `sudo`) and handles three concerns:
    etc.). Migrations pick up where `ansible/setup.yml` leaves off and let us ship
    host-side changes without re-running the full Ansible playbook.
 
-2. **Code updates** — fetching and applying new versions of the OpenHost software
+2. **Code updates** — fetching and applying new versions of the Cloud in a Bottle software
    from the configured git remote.
 
 3. **Seamless-update support** — while an update applies, the agent appends a

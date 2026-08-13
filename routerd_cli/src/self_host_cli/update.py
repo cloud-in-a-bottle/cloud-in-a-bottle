@@ -1,4 +1,4 @@
-"""``openhost update`` -- update OpenHost code.
+"""``openhost update`` -- update Cloud in a Bottle code.
 
 Pulls latest code via git fetch + reset, then runs ``pixi install`` to
 sync the env to the new lockfile.
