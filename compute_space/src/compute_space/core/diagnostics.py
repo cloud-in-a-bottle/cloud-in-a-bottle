@@ -560,9 +560,12 @@ class _ContainerStatsBatch:
 
     Both collections are keyed by 12-char short id because ``podman stats``
     reports short ids while the DB stores full ids; callers truncate before
-    lookup. ``error`` is set only when podman is *present but its probe failed*
+    lookup. ``error`` is set only when podman is *present but a probe failed*
     (a real, unexpected fault) — so every app surfaces that reason instead of
-    silently reading as stopped. Podman merely being absent is not an error
+    silently reading as stopped. The two probes are independent, so ``error``
+    may describe one having failed while the other's collection survives (a
+    ``ps`` failure with ``stats`` intact, or vice-versa). Podman merely being
+    absent is not an error
     here: it's reported once in ``container_runtime`` (see
     :func:`_collect_container_runtime`), and every app then reads as having no
     live stats, exactly like a stopped container.
@@ -612,14 +615,30 @@ def _collect_container_stats_batch() -> _ContainerStatsBatch:
     stamping the same message onto all of them. A podman that *is* present but
     whose probe fails is an unexpected fault, and that we do surface in
     ``error`` so apps don't masquerade as stopped.
+
+    The two probes are guarded independently so one failing doesn't discard the
+    other's answer: ``podman stats`` is the more failure-prone call (it samples
+    every container's cgroup, so it's slower and likelier to time out), and when
+    it fails on its own the ``podman ps`` running set is still worth keeping.
     """
     if shutil.which("podman") is None:
         return _ContainerStatsBatch(frozenset(), {})
+
+    running: frozenset[str] = frozenset()
+    stats: dict[str, _PodmanStats] = {}
+    errors: list[str] = []
     try:
-        return _ContainerStatsBatch(_running_short_ids(), _stats_by_short_id())
+        running = _running_short_ids()
     except Exception as e:
-        logger.opt(exception=True).warning("Failed to collect container stats batch")
-        return _ContainerStatsBatch(frozenset(), {}, error=f"podman stats unavailable: {e}")
+        logger.opt(exception=True).warning("Failed to collect running container ids")
+        errors.append(f"podman ps unavailable: {e}")
+    try:
+        stats = _stats_by_short_id()
+    except Exception as e:
+        logger.opt(exception=True).warning("Failed to collect container stats")
+        errors.append(f"podman stats unavailable: {e}")
+
+    return _ContainerStatsBatch(running, stats, error="; ".join(errors) or None)
 
 
 def _app_resources_from_batch(
@@ -645,16 +664,21 @@ def _app_resources_from_batch(
     )
     if not container_id:
         return base
-    if batch.error is not None:
-        return attr.evolve(base, error=batch.error)
+    # A batch error (one or both probes failed) is carried through so the fault
+    # stays visible, but whatever the *surviving* probe reported is still
+    # honored: a ``podman stats`` failure must not hide a container that
+    # ``podman ps`` saw running (nor vice-versa). Running state stays sourced
+    # from ``ps`` — when it's the probe that failed the running set is empty and
+    # the app reads as not-running with the error explaining why.
     short_id = container_id[:12]
     if short_id not in batch.running_short_ids:
-        return base
+        return attr.evolve(base, error=batch.error)
     stats = batch.stats_by_short_id.get(short_id)
     if stats is None:
-        # Running per ``podman ps`` but no stats row (a stats gap / race): report
-        # running with unknown usage rather than dropping the app.
-        return attr.evolve(base, running=True)
+        # Running per ``podman ps`` but no stats row (a stats gap / race, or a
+        # stats probe that failed outright): report running with unknown usage
+        # rather than dropping the app.
+        return attr.evolve(base, running=True, error=batch.error)
     return AppResourceUsage(
         running=True,
         cpu_percent=stats.cpu_percent,
@@ -663,6 +687,7 @@ def _app_resources_from_batch(
         memory_percent=stats.memory_percent,
         cpu_cores_limit=cpu_cores_limit,
         memory_mb_limit=memory_mb_limit,
+        error=batch.error,
     )
 
 

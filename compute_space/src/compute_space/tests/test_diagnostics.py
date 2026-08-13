@@ -1367,6 +1367,58 @@ def test_stats_batch_nonzero_exit_surfaces_error() -> None:
     assert "125" in batch.error
 
 
+def test_stats_batch_stats_failure_keeps_running_set() -> None:
+    """``podman stats`` failing on its own must not throw away the ``podman ps``
+    running set: the app still reads as running, just without live usage, and the
+    error is surfaced."""
+    cid = "f" * 64
+
+    def _fake_run(cmd: Any, **_: Any) -> subprocess.CompletedProcess[str]:
+        sub = cmd[1] if len(cmd) > 1 else ""
+        if sub == "ps":
+            return subprocess.CompletedProcess(cmd, 0, json.dumps([{"Id": cid, "State": "running"}]), "")
+        # stats fails on its own.
+        return subprocess.CompletedProcess(cmd, 125, "", "stats boom")
+
+    with (
+        patch("compute_space.core.diagnostics.shutil.which", return_value="/usr/bin/podman"),
+        patch("compute_space.core.diagnostics.subprocess.run", _fake_run),
+    ):
+        batch = diagnostics._collect_container_stats_batch()
+    assert cid[:12] in batch.running_short_ids
+    assert batch.stats_by_short_id == {}
+    assert batch.error is not None
+    assert "stats" in batch.error
+    r = diagnostics._app_resources_from_batch(batch, cid, 1.0, 100)
+    assert r.running is True
+    assert r.cpu_percent is None
+    assert r.error == batch.error
+
+
+def test_stats_batch_ps_failure_keeps_stats() -> None:
+    """Symmetrically, ``podman ps`` failing must not throw away the ``podman
+    stats`` usage that already succeeded."""
+    cid = "f" * 64
+
+    def _fake_run(cmd: Any, **_: Any) -> subprocess.CompletedProcess[str]:
+        sub = cmd[1] if len(cmd) > 1 else ""
+        if sub == "stats":
+            entry = {"id": cid[:12], "cpu_percent": "5.0%", "mem_usage": "10MB / 100MB"}
+            return subprocess.CompletedProcess(cmd, 0, json.dumps([entry]), "")
+        # ps fails on its own.
+        return subprocess.CompletedProcess(cmd, 125, "", "ps boom")
+
+    with (
+        patch("compute_space.core.diagnostics.shutil.which", return_value="/usr/bin/podman"),
+        patch("compute_space.core.diagnostics.subprocess.run", _fake_run),
+    ):
+        batch = diagnostics._collect_container_stats_batch()
+    assert batch.running_short_ids == frozenset()
+    assert cid[:12] in batch.stats_by_short_id
+    assert batch.error is not None
+    assert "ps" in batch.error
+
+
 # ─── batched podman stats + per-app concurrency ──────────────────────────────
 
 
