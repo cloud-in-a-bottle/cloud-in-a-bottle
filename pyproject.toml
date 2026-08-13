@@ -121,6 +121,9 @@ exclude = ["compute_space/src/compute_space/tests/"]
 [tool.pixi.workspace]
 channels = ["conda-forge"]
 platforms = ["linux-64", "linux-aarch64", "osx-arm64"]
+# Any other pixi resolves a pixi.lock that CI/deploy's pinned pixi then rejects under `--locked`, so
+# refuse up front. Keep in sync with PIXI_VERSION (a test enforces it); `pixi self-update --version`.
+requires-pixi = "==0.70.2"
 # Dependency cooldown: ignore conda/pypi releases from the last week (matches the uv
 # `exclude-newer` above). Rolling window — resolved relative to lock time.
 exclude-newer = "7 days"
