@@ -6,7 +6,10 @@ import struct
 import pytest
 
 from compute_space.core import mdns
+from compute_space.core.domains import Domain
 from compute_space.tests.conftest import fake_mdns_responder
+
+_LOCAL_DOMAINS = (Domain(name="openhost.local"),)
 
 
 def _responder(bases: tuple[str, ...], ip: str = "192.168.1.50", ip6: str | None = None) -> mdns.MdnsResponder:
@@ -240,13 +243,11 @@ def test_ensure_starts_then_stops_responder(monkeypatch: pytest.MonkeyPatch) -> 
     mdns.set_active_mdns(None)
 
     # First `.local` domain appears → responder starts.
-    monkeypatch.setattr(mdns, "mdns_bases", lambda db: ("openhost.local",))
-    mdns.ensure_mdns_for_domains(db=None)  # type: ignore[arg-type]
+    mdns.ensure_mdns_for_domains(_LOCAL_DOMAINS)
     assert mdns.get_active_mdns() is fake
 
     # Last `.local` domain removed → responder stops and deregisters.
-    monkeypatch.setattr(mdns, "mdns_bases", lambda db: ())
-    mdns.ensure_mdns_for_domains(db=None)  # type: ignore[arg-type]
+    mdns.ensure_mdns_for_domains(())
     assert mdns.get_active_mdns() is None
     assert fake.transports[0].sock.closed  # type: ignore[attr-defined]
 
@@ -261,15 +262,14 @@ def test_ensure_rebinds_when_lan_ip_moves(monkeypatch: pytest.MonkeyPatch) -> No
         return second if started[1:] else first
 
     monkeypatch.setattr(mdns, "start_mdns", _start)
-    monkeypatch.setattr(mdns, "mdns_bases", lambda db: ("openhost.local",))
     monkeypatch.setattr(mdns, "default_route_source_ip", lambda: "192.168.1.50")
     mdns.set_active_mdns(None)
-    mdns.ensure_mdns_for_domains(db=None)  # type: ignore[arg-type]
+    mdns.ensure_mdns_for_domains(_LOCAL_DOMAINS)
 
     # A DHCP renewal moves the address; the socket's group membership is pinned to the interface it
     # was opened on, so the responder must be rebound rather than just re-pointed.
     monkeypatch.setattr(mdns, "default_route_source_ip", lambda: "192.168.1.60")
-    mdns.ensure_mdns_for_domains(db=None)  # type: ignore[arg-type]
+    mdns.ensure_mdns_for_domains(_LOCAL_DOMAINS)
 
     assert started == ["192.168.1.50", "192.168.1.60"]
     assert first.transports[0].sock.closed  # type: ignore[attr-defined]

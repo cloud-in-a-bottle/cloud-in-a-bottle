@@ -35,6 +35,7 @@ from compute_space.core.domains import is_local_name
 from compute_space.core.domains import primary_domain_or_none
 from compute_space.core.logging import logger
 from compute_space.core.mdns import ensure_mdns_for_domains
+from compute_space.core.mdns import get_active_mdns
 from compute_space.core.util import default_route_source_ip
 from compute_space.core.util import is_reachable
 from compute_space.db import get_db
@@ -364,7 +365,11 @@ def reconcile_lan_dns(
         lan_ip, lan_ip6 = lan_addresses()
     with _reconcile_lock:
         reload_coredns_for_domains(config, db, lan_ip=lan_ip, lan_ip6=lan_ip6)
-        ensure_mdns_for_domains(db, lan_ip=lan_ip, lan_ip6=lan_ip6)
+        domains = effective_domains(db)
+        # Stay out of the mDNS code entirely unless there's a `.local` name — or a responder still
+        # running, which the empty call is what tears down when the last one is deleted.
+        if any(d.is_local for d in domains) or get_active_mdns() is not None:
+            ensure_mdns_for_domains(domains, lan_ip=lan_ip, lan_ip6=lan_ip6)
 
 
 _LAN_IP_POLL_SECONDS = 60

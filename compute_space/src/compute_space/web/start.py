@@ -169,7 +169,9 @@ def main() -> None:
 
         # Start the wildcard mDNS responder if any `.local` domain is configured (zero-config LAN
         # discovery alongside CoreDNS); reconciled here and by /api/domains, so it toggles at runtime.
-        ensure_mdns_for_domains(db, lan_ip=lan_ip, lan_ip6=lan_ip6)
+        # Guarded so a public-domain-only instance never enters the mDNS code at all.
+        if any(d.is_local for d in domains):
+            ensure_mdns_for_domains(domains, lan_ip=lan_ip, lan_ip6=lan_ip6)
 
         if domains[0].tls:  # primary is a TLS domain
             _ensure_tls_cert(config, db)

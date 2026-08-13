@@ -79,10 +79,7 @@ def build_openhost_service_unit(host_uid: int) -> str:
         f"Environment=XDG_RUNTIME_DIR=/run/user/{host_uid}\n"
         f"Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/{host_uid}/bus\n"
         + RECLAIM_EXEC_START_PRE
-        # --as-is (= --no-install --frozen) makes startup fully offline: no lock-vs-manifest check,
-        # no install/build, so a reboot during a WAN/DNS outage can't fail fetching build deps or
-        # abort on a merely-stale lock file (which --locked would).
-        + "ExecStart=/home/host/.pixi/bin/pixi run --as-is python -m compute_space\n"
+        + "ExecStart=/home/host/.pixi/bin/pixi run python -m compute_space\n"
         # Auto-restart on crash (bounded by StartLimit* above). compute_space is
         # the parent of the in-process CoreDNS + Caddy children, so when it dies
         # they die with it and the instance loses authoritative DNS *and* HTTP/S

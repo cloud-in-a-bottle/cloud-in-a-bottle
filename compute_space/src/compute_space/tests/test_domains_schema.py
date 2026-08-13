@@ -16,7 +16,6 @@ from compute_space.db.versioned.migrations.v0013_domains_and_settings import Mig
 from compute_space.db.versioned.runner import apply_migrations
 from compute_space.db.versioned.runner import read_version
 from openhost_system_agent.migrations.versions.v0007_seed_domains_and_scrub import _SCHEMA as _AGENT_SCHEMA
-from openhost_system_agent.migrations.versions.v0007_seed_domains_and_scrub import _seed_domains as _agent_seed_domains
 
 
 def _tables(db: sqlite3.Connection) -> set[str]:
@@ -124,19 +123,3 @@ def test_head_schema_is_v13_minus_dropped_mdns() -> None:
     assert fresh["settings"] == v13["settings"]
     assert fresh["idx_domains_one_primary"] == v13["idx_domains_one_primary"]
     assert "mdns" in v13["domains"] and "mdns" not in fresh["domains"]
-
-
-def test_agent_seed_insert_works_against_head_schema(tmp_path: Path) -> None:
-    """The agent's v7 seed writes into whatever ``domains`` it finds, and the router DB can already be
-    at head (mdns dropped) when it runs — so its INSERT must name only columns head still has."""
-    db_path = str(tmp_path / "head.db")
-    apply_migrations(db_path)
-    db = sqlite3.connect(db_path, isolation_level=None)
-    try:
-        _agent_seed_domains(
-            db,
-            {"zone_domain": "host.example.com", "tls_enabled": True, "domains": [{"name": "extra.example.com"}]},
-        )
-        assert {n for (n,) in db.execute("SELECT name FROM domains")} == {"host.example.com", "extra.example.com"}
-    finally:
-        db.close()

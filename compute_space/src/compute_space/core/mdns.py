@@ -5,14 +5,14 @@ from __future__ import annotations
 
 import ipaddress
 import socket
-import sqlite3
 import struct
 import threading
 import time
+from collections.abc import Sequence
 
 import attr
 
-from compute_space.core.domains import effective_domains
+from compute_space.core.domains import Domain
 from compute_space.core.logging import logger
 from compute_space.core.util import default_route_source_ip
 
@@ -543,9 +543,9 @@ def _probe_conflict(sock: socket.socket, name: str, our_ip: str, our_ip_prefix: 
         sock.settimeout(1.0)
 
 
-def mdns_bases(db: sqlite3.Connection) -> tuple[str, ...]:
+def mdns_bases(domains: Sequence[Domain]) -> tuple[str, ...]:
     """The port-stripped names of every mDNS (``.local``) domain the instance answers on."""
-    return tuple(d.name_no_port for d in effective_domains(db) if d.is_local)
+    return tuple(d.name_no_port for d in domains if d.is_local)
 
 
 def start_mdns(bases: tuple[str, ...], lan_ip: str, lan_ip6: str | None = None) -> MdnsResponder:
@@ -595,11 +595,11 @@ def _start_and_register(bases: tuple[str, ...], lan_ip: str, lan_ip6: str | None
         logger.warning("mDNS responder failed to start ({}); continuing without it", exc)
 
 
-def ensure_mdns_for_domains(db: sqlite3.Connection, lan_ip: str | None = None, lan_ip6: str | None = None) -> None:
-    """Reconcile the responder with the DB's ``.local`` (mDNS) domains: start it when the first one
-    appears, refresh its served set, or stop it when the last one is removed.  In-process, no
+def ensure_mdns_for_domains(domains: Sequence[Domain], lan_ip: str | None = None, lan_ip6: str | None = None) -> None:
+    """Reconcile the responder with ``domains``' ``.local`` (mDNS) entries: start it when the first
+    one appears, refresh its served set, or stop it when the last one is removed.  In-process, no
     restart.  Called at boot and by /api/domains, so mDNS turns on/off at runtime."""
-    bases = mdns_bases(db)
+    bases = mdns_bases(domains)
     responder = get_active_mdns()
     if not bases:
         if responder is not None:
