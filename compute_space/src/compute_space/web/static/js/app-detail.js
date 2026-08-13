@@ -264,15 +264,26 @@ function clearCacheAndReload() {
         var proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
         var ws = new WebSocket(proto + '//' + window.location.host + config.appLogsStreamUrl);
         ws.onmessage = function(e) {
-            if (!logPrimed) { logEl.textContent = ''; logLen = 0; logPrimed = true; }
+            // Priming clears the placeholder (first connect) or the previous
+            // stream's contents (a reconnect, see onclose) so the replayed tail
+            // replaces the old log instead of appending a duplicate copy. Drop any
+            // buffered-but-unflushed lines too, so they can't land on the cleared
+            // <pre> on the next flush.
+            if (!logPrimed) {
+                logEl.textContent = ''; logLen = 0;
+                pending = []; pendingLen = 0;
+                logPrimed = true;
+            }
             appendLog(e.data + '\n');
         };
         ws.onclose = function() {
             // Unlike EventSource, a WebSocket doesn't auto-reconnect. The server
             // holds the socket open even after the log stream ends, so a close
             // here means a real drop (network blip or server restart) — retry
-            // after a short delay. The server replays the recent tail on
-            // reconnect, which the front-trim above keeps bounded.
+            // after a short delay. The reconnected stream replays the recent tail
+            // from the start, so re-prime to replace the old contents rather than
+            // appending a second copy below them.
+            logPrimed = false;
             setTimeout(startLogStream, 2000);
         };
         ws.onerror = function() { ws.close(); };
