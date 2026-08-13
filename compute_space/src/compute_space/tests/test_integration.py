@@ -558,10 +558,14 @@ def _app_url(config, app_name):
 class TestContainerE2E:
     """
     End-to-end test of the container deployment path: deploy, interact via
-    the proxy, then stop/reload. One shared build+deploy of ``test-app`` on
-    the module's shared router covers every scenario below; tests run in
-    definition order and each builds on state left by the previous one.
-    TestContainerRecovery continues from the app this class leaves running.
+    the proxy, stop/reload, remove-with-keep-data + redeploy, container-
+    engine-restart recovery, and a final full removal. One shared
+    build+deploy of ``test-app`` on the module's shared router covers every
+    scenario.
+
+    DEFINITION ORDER IS LOAD-BEARING: each test builds on state left by the
+    previous one. Do not reorder methods, and expect ``-k`` subsets / ``--ff``
+    to break this.
     """
 
     APP_PATH = os.path.join(_FIXTURES_DIR, "test_app")
@@ -758,17 +762,6 @@ class TestContainerE2E:
         except Exception:
             status_info = {}
         pytest.fail(f"App did not come back after reload. Status: {status_info}")
-
-
-@requires_containers
-class TestContainerRecovery:
-    """
-    Remove-with-keep-data, then container-engine-restart recovery, then a
-    final full removal -- continuing from the ``test-app`` deploy
-    TestContainerE2E leaves running on the module's shared router.
-    """
-
-    APP_PATH = os.path.join(_FIXTURES_DIR, "test_app")
 
     # -- remove with keep_data, then redeploy and verify data survived --
 

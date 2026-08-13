@@ -6,14 +6,14 @@ upgrade pixi), reinstall deps, and restart openhost — which is the path the
 phased-update framework exists to make safe. It needs its own pristine,
 never-migrated container: it asserts pixi starts at the image's baseline
 version and the walk's migrations upgrade it, which conflicts with
-test_apply_walk_e2e.py's classes, which deliberately pre-migrate in
-``setup_class`` so their own walks run as fast no-ops.
+test_apply_walk_e2e.py's test class, which deliberately pre-migrates in
+``setup_class`` so its own walks run as fast no-ops.
 
 The rest of this module (``_podman``/``_exec``/``_host_sh``/``_start_container``/
 health-wait helpers, and ``_ensure_migration_image``) is also imported by
 test_apply_walk_e2e.py, which covers migrations-alone-enable-the-service and
-the tag-walk / fetch / apply / show_diff / target-ref control flow, each in
-containers that pre-migrate up front so their walks run as fast no-ops.
+the tag-walk / fetch / apply / show_diff / target-ref control flow in one
+shared container that pre-migrates up front so its walks run as fast no-ops.
 
 Requires podman and the --run-containers flag.
 """

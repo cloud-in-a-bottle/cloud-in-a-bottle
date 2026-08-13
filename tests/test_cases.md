@@ -90,14 +90,14 @@ Legend: [x] = automated, [ ] = manual/not yet automated
 - [ ] Serverless app (Spin WASM) builds and starts
 - [x] Container app builds and starts — `test_e2e.py::test_05`, `test_full_stack.py::TestTestAppPathRouting`
 - [x] App reaches "running" status — `test_e2e.py::test_05`, `test_full_stack.py`
-- [x] App removal stops process and cleans up — `test_e2e.py::test_14`, `test_integration.py::TestContainerRecovery`
+- [x] App removal stops process and cleans up — `test_e2e.py::test_14`, `test_integration.py::TestContainerE2E`
 
 ### App Lifecycle
 - [x] Stop app — `test_e2e.py::test_08`, `test_full_stack.py::TestAppLifecycle`
 - [x] Reload app (rebuild + restart) — `test_e2e.py::test_08b`, `test_full_stack.py::TestAppLifecycle`
 - [x] Rename app, routing updates — `test_full_stack.py::TestAppRename`
-- [x] Container engine restart / gone recovery — `test_integration.py::TestContainerRecovery`, `test_check_app_status.py`
-- [x] Remove with keep_data preserves persistent data — `test_integration.py::TestContainerRecovery`
+- [x] Container engine restart / gone recovery — `test_integration.py::TestContainerE2E`, `test_check_app_status.py`
+- [x] Remove with keep_data preserves persistent data — `test_integration.py::TestContainerE2E`
 - [x] Git-deployed app: clones (not copies) via git — `test_services_e2e.py::test_add_app_reuses_existing_clone_dir`
 - [x] Git-deployed app: reload does git pull — `test_set_app_remote.py::test_git_pull_switches_branch_via_ref`
 
@@ -135,8 +135,8 @@ Legend: [x] = automated, [ ] = manual/not yet automated
 - [x] POST /toggle-ssh toggles SSH — `test_full_stack.py::TestSSHToggle`
 
 ### App Data
-- [x] App data persists across remove+redeploy (keep_data) — `test_integration.py::TestContainerRecovery`
-- [x] App data cleaned up on full remove — `test_integration.py::TestContainerRecovery`
+- [x] App data persists across remove+redeploy (keep_data) — `test_integration.py::TestContainerE2E`
+- [x] App data cleaned up on full remove — `test_integration.py::TestContainerE2E`
 - [x] SQLite databases are provisioned and accessible — `test_integration.py::test_sqlite_provisioning`
 
 ## DNS

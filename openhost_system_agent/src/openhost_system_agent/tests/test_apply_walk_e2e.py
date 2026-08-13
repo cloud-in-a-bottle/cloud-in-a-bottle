@@ -29,11 +29,11 @@ test_migration_container.py, so these tests focus on the tag-walk / fetch /
 apply / show_diff / target-ref control flow.
 
 Because migrations are skipped, the walk does not depend on apt/iptables state
-and can safely step through several tags in one invocation. Each test CLASS
-gets its own uniquely-named container so classes never collide (and tears it
-down in ``teardown_class``); independent scenarios that don't build on each
-other's state are grouped as separate methods on the same class instead of
-giving each its own container, to save container-lifecycle overhead.
+and can safely step through several tags in one invocation. Every scenario
+shares ONE container (built + migrated once) to save container-lifecycle
+overhead: the edge cases each rebuild the host git repo from scratch
+(``rm -rf .git``), so they are order-independent among themselves and can run
+after the walk scenarios in the same container.
 
 Requires podman and the --run-containers flag (see root conftest.py); without
 it every class here is skipped by the ``requires_containers`` marker.
@@ -183,10 +183,17 @@ def _assert_healthy(container: str) -> None:
     assert '"ok"' in body or '"status"' in body
 
 
-class _WalkContainer:
-    """Mixin: each subclass gets its own uniquely-named container + teardown."""
+@requires_containers
+class TestApplyWalkE2E:
+    """One container covers every apply/fetch/show_diff scenario.
 
-    container: str
+    DEFINITION ORDER IS LOAD-BEARING: the migrations-only service check must
+    run first (it observes the pristine post-migration state, before any walk
+    or ``rm -rf .git``), and the walk tests must precede the edge cases. Do
+    not reorder methods, and expect ``-k`` subsets / ``--ff`` to break this.
+    """
+
+    container = "openhost-e2e-applywalk"
 
     @classmethod
     def setup_class(cls) -> None:
@@ -210,15 +217,22 @@ class _WalkContainer:
     def teardown_class(cls) -> None:
         _podman("rm", "-f", "-t", "0", cls.container, check=False, timeout=15)
 
+    # ── Migrations alone enable the service ──────────────────────────
 
-# ── 1. Multi-tag walk in a single invocation ─────────────────────────
+    def test_migrations_enable_openhost_service(self) -> None:
+        """setup_class's migration run (independent of any walk) correctly installs
+        and enables the openhost.service unit: a manual start works and the app
+        serves /health. Must run first: the walked_to_latest fixture below is
+        lazily instantiated, so no walk has happened yet at this point.
+        """
+        c = self.container
+        _exec(c, "systemctl", "start", "openhost", timeout=30)
+        time.sleep(2)
+        result = _exec(c, "systemctl", "is-active", "openhost", timeout=10)
+        assert result.stdout.strip() == "active", f"Service not active: {result.stdout}\n{result.stderr}"
+        _assert_healthy(c)
 
-
-@requires_containers
-class TestMultiTagWalk(_WalkContainer):
-    """`update apply` walks v1 → v2 → v3 in ONE execv chain, ending on v3."""
-
-    container = "openhost-e2e-multitag"
+    # ── Multi-tag walk in a single invocation, then idempotent re-apply ──
 
     @pytest.fixture(scope="class")
     def walked_to_latest(self) -> str:
@@ -282,31 +296,7 @@ class TestMultiTagWalk(_WalkContainer):
             f"{_exec(c, 'journalctl', '-u', 'openhost', '--no-pager', '-n', '40', check=False).stdout}"
         )
 
-
-# ── 2. Dirty tree / no tags / target-ref pin / show_diff (independent, one container) ──
-
-
-@requires_containers
-class TestApplyEdgeCases(_WalkContainer):
-    """Independent apply/show_diff scenarios that don't build on each other's
-    state -- each rebuilds its own git repo from scratch -- so they share one
-    container purely to save container-lifecycle overhead.
-    """
-
-    container = "openhost-e2e-edgecases"
-
-    def test_migrations_enable_openhost_service(self) -> None:
-        """setup_class's migration run (independent of any walk) correctly installs
-        and enables the openhost.service unit: a manual start works and the app
-        serves /health. Runs first, before the edge-case scenarios below mutate
-        the git repo.
-        """
-        c = self.container
-        _exec(c, "systemctl", "start", "openhost", timeout=30)
-        time.sleep(2)
-        result = _exec(c, "systemctl", "is-active", "openhost", timeout=10)
-        assert result.stdout.strip() == "active", f"Service not active: {result.stdout}\n{result.stderr}"
-        _assert_healthy(c)
+    # ── Dirty tree / no tags / target-ref pin / show_diff (independent) ──
 
     def test_apply_rejects_dirty_tree(self) -> None:
         """An uncommitted change makes `update apply` fail without moving HEAD."""
