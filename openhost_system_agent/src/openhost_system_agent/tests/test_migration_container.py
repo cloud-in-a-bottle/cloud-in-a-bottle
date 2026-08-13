@@ -1,16 +1,26 @@
 """Container-based tests against a real Ubuntu+systemd host.
 
-``TestMigrationContainer`` runs the migrations directly and checks openhost
-comes up. ``TestApplyUpdateWalk`` drives the *real* ``update apply`` entrypoint
-end to end — fetch tags, step onto the next release tag, run migrations (which
+``TestApplyUpdateWalk`` drives the *real* ``update apply`` entrypoint end to
+end — fetch tags, step onto the next release tag, run migrations (which
 upgrade pixi), reinstall deps, and restart openhost — which is the path the
-phased-update framework exists to make safe.
+phased-update framework exists to make safe. It needs its own pristine,
+never-migrated container: it asserts pixi starts at the image's baseline
+version and the walk's migrations upgrade it, which conflicts with
+test_apply_walk_e2e.py's classes, which deliberately pre-migrate in
+``setup_class`` so their own walks run as fast no-ops.
+
+The rest of this module (``_podman``/``_exec``/``_host_sh``/``_start_container``/
+health-wait helpers, and ``_ensure_migration_image``) is also imported by
+test_apply_walk_e2e.py, which covers migrations-alone-enable-the-service and
+the tag-walk / fetch / apply / show_diff / target-ref control flow, each in
+containers that pre-migrate up front so their walks run as fast no-ops.
 
 Requires podman and the --run-containers flag.
 """
 
 from __future__ import annotations
 
+import atexit
 import subprocess
 import time
 from pathlib import Path
@@ -94,41 +104,27 @@ def _dump_openhost_journal(container: str) -> str:
     return f"{journal.stdout}\n{journal.stderr}"
 
 
-@requires_containers
-class TestMigrationContainer:
-    container = "openhost-migration-test"
+_migration_image_built = False
 
-    @classmethod
-    def setup_class(cls) -> None:
-        _start_container(cls.container)
 
-    @classmethod
-    def teardown_class(cls) -> None:
-        _podman("rm", "-f", "-t", "0", cls.container, check=False, timeout=15)
+def _ensure_migration_image() -> None:
+    """Build the test image once per process; safe to call from every setup_class that needs it.
 
-    def test_migrations_apply(self) -> None:
-        result = _exec(
-            self.container,
-            _ENV_PYTHON,
-            "-c",
-            "from openhost_system_agent.migrations.runner import apply_system_migrations; "
-            "print(apply_system_migrations())",
-            timeout=300,
-        )
-        assert result.returncode == 0, f"Migration failed:\n{result.stderr}"
-
-    def test_openhost_service_starts(self) -> None:
-        _exec(self.container, "systemctl", "start", "openhost", timeout=30)
-        time.sleep(2)
-        result = _exec(self.container, "systemctl", "is-active", "openhost", timeout=10)
-        assert result.stdout.strip() == "active", f"Service not active: {result.stdout}\n{result.stderr}"
-
-    def test_health_endpoint(self) -> None:
-        try:
-            body = _wait_for_health(self.container, timeout=120)
-        except RuntimeError:
-            raise RuntimeError(f"Health check failed. Journal:\n{_dump_openhost_journal(self.container)}") from None
-        assert '"ok"' in body or '"status"' in body
+    A plain function, not a pytest fixture: a pytest.fixture imported into a
+    sibling test module gets re-registered (and its setup re-run) once per
+    importing module even at session scope, and an autouse fixture placed in
+    conftest.py instead applies to every test collected under this whole
+    directory -- including fast non-container unit tests that never touch
+    podman. A plain function call from each setup_class that actually needs
+    the image has neither problem.
+    """
+    global _migration_image_built
+    if _migration_image_built:
+        return
+    if _podman("image", "exists", _IMAGE_NAME, check=False).returncode != 0:
+        _podman("build", "-t", _IMAGE_NAME, "-f", str(_DOCKERFILE), str(_REPO_ROOT), timeout=600)
+    _migration_image_built = True
+    atexit.register(lambda: _podman("rmi", "-f", _IMAGE_NAME, check=False, timeout=30))
 
 
 @requires_containers
@@ -139,6 +135,7 @@ class TestApplyUpdateWalk:
 
     @classmethod
     def setup_class(cls) -> None:
+        _ensure_migration_image()
         _start_container(cls.container)
 
     @classmethod

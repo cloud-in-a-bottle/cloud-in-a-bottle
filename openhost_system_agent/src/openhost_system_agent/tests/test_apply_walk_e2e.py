@@ -11,7 +11,9 @@ inside an Ubuntu+systemd container, exercising the phased-update control flow:
   * a pinned target ref (``git config openhost.target-ref``) as the final hop
     after the tags are walked,
   * ``show_diff`` pending-commit listing,
-  * idempotent re-apply (folded into ``TestMultiTagWalk``, reusing its container).
+  * idempotent re-apply on an already-latest host,
+  * migrations alone installing and enabling the openhost.service unit,
+    independent of any tag walk.
 
 DESIGN DECISION — migrations run once up front, then re-run as no-ops.
 ``setup_class`` runs the real migrations once so the baseline (v2) installs and
@@ -54,12 +56,11 @@ from openhost_system_agent.migrations.registry import latest_registry_version as
 
 # Reuse the container-test helper toolkit from the sibling container test module.
 # Importing keeps a single source of truth for _start_container / _exec / _host_sh /
-# health-wait, and the @requires_containers marker. The shared image-build fixture
-# itself lives in conftest.py (not here) -- it's autouse and session-scoped there, so
-# pytest genuinely builds it once for both files; no import of it is needed.
+# health-wait / _ensure_migration_image, and the @requires_containers marker.
 from openhost_system_agent.tests.test_migration_container import _ENV_PYTHON
 from openhost_system_agent.tests.test_migration_container import _PIXI
 from openhost_system_agent.tests.test_migration_container import _REPO
+from openhost_system_agent.tests.test_migration_container import _ensure_migration_image
 from openhost_system_agent.tests.test_migration_container import _exec
 from openhost_system_agent.tests.test_migration_container import _host_sh
 from openhost_system_agent.tests.test_migration_container import _podman
@@ -189,6 +190,7 @@ class _WalkContainer:
 
     @classmethod
     def setup_class(cls) -> None:
+        _ensure_migration_image()
         _start_container(cls.container)
         # Run the real migrations once so the baseline (v2) installs+enables the
         # openhost.service systemd unit. The apply-walk's final step does
@@ -292,6 +294,19 @@ class TestApplyEdgeCases(_WalkContainer):
     """
 
     container = "openhost-e2e-edgecases"
+
+    def test_migrations_enable_openhost_service(self) -> None:
+        """setup_class's migration run (independent of any walk) correctly installs
+        and enables the openhost.service unit: a manual start works and the app
+        serves /health. Runs first, before the edge-case scenarios below mutate
+        the git repo.
+        """
+        c = self.container
+        _exec(c, "systemctl", "start", "openhost", timeout=30)
+        time.sleep(2)
+        result = _exec(c, "systemctl", "is-active", "openhost", timeout=10)
+        assert result.stdout.strip() == "active", f"Service not active: {result.stdout}\n{result.stderr}"
+        _assert_healthy(c)
 
     def test_apply_rejects_dirty_tree(self) -> None:
         """An uncommitted change makes `update apply` fail without moving HEAD."""
