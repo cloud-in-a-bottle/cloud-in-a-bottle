@@ -193,22 +193,89 @@ function clearCacheAndReload() {
     var nextUrl = config.nextUrl;
     var toastKey = 'cache-toast-shown-' + config.appStatusUrl;
 
+    // Keep the <pre> bounded so a long-lived stream can't grow the DOM without
+    // limit. Trimming is a full rewrite, so it only runs when we exceed the cap.
+    var MAX_LOG_CHARS = 2 * 1024 * 1024;
+    var logPrimed = false;
+
+    // Incoming lines are buffered and flushed to the DOM once per animation
+    // frame, not appended one-at-a-time. The container backlog replays as one
+    // WebSocket message *per line* (podman `--tail 2000`), so on connect a
+    // per-line append — each reading isNearBottom/textContent.length and writing
+    // scrollTop, all of which force a synchronous reflow of a growing <pre> —
+    // would be O(N^2). Coalescing a whole burst into a single append + one layout
+    // read + one layout write keeps the initial render linear. logLen is tracked
+    // in JS so we never serialize logEl.textContent just to measure it.
+    var pending = [];
+    var pendingLen = 0;
+    var flushQueued = false;
+    var logLen = 0;
+
     function isNearBottom(el) {
         return el.scrollHeight - el.scrollTop - el.clientHeight < 50;
     }
 
-    function updateLog(el, text) {
+    function hasSelectionIn(el) {
         var sel = window.getSelection();
-        if (sel && !sel.isCollapsed && el.contains(sel.anchorNode)) return;
-        var wasAtBottom = isNearBottom(el);
-        el.textContent = text || 'No log output available.';
-        if (wasAtBottom) el.scrollTop = el.scrollHeight;
+        return !!(sel && !sel.isCollapsed && el.contains(sel.anchorNode));
     }
 
-    function fetchLogs() {
-        fetch(config.appLogsUrl)
-            .then(function(r) { return r.text(); })
-            .then(function(text) { updateLog(logEl, text); });
+    function flushLog() {
+        flushQueued = false;
+        if (!pending.length) return;
+        // One layout read for the whole batch, before we touch the DOM.
+        var wasAtBottom = isNearBottom(logEl);
+        var text = pending.join('');
+        pending = [];
+        pendingLen = 0;
+        // Append a single text node for the batch: the browser lays out only the
+        // new lines and leaves existing content (and any active text selection)
+        // untouched.
+        logEl.appendChild(document.createTextNode(text));
+        logLen += text.length;
+        if (logLen > MAX_LOG_CHARS && !hasSelectionIn(logEl)) {
+            var trimmed = logEl.textContent.slice(-MAX_LOG_CHARS);
+            logEl.textContent = trimmed;
+            logLen = trimmed.length;
+        }
+        if (wasAtBottom) logEl.scrollTop = logEl.scrollHeight;
+    }
+
+    function appendLog(text) {
+        if (!text) return;
+        pending.push(text);
+        pendingLen += text.length;
+        // If frames are paused (e.g. a backgrounded tab) the buffer could grow
+        // unbounded, so keep only the most recent MAX_LOG_CHARS worth.
+        while (pending.length > 1 && pendingLen - pending[0].length > MAX_LOG_CHARS) {
+            pendingLen -= pending.shift().length;
+        }
+        if (!flushQueued) {
+            flushQueued = true;
+            requestAnimationFrame(flushLog);
+        }
+    }
+
+    function startLogStream() {
+        // Same-origin WebSocket; the session cookie authenticates the handshake.
+        // The server pushes the build-log tail, then follows the live container
+        // log, so the browser only appends new lines instead of re-fetching the
+        // whole log on a timer.
+        var proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        var ws = new WebSocket(proto + '//' + window.location.host + config.appLogsStreamUrl);
+        ws.onmessage = function(e) {
+            if (!logPrimed) { logEl.textContent = ''; logLen = 0; logPrimed = true; }
+            appendLog(e.data + '\n');
+        };
+        ws.onclose = function() {
+            // Unlike EventSource, a WebSocket doesn't auto-reconnect. The server
+            // holds the socket open even after the log stream ends, so a close
+            // here means a real drop (network blip or server restart) — retry
+            // after a short delay. The server replays the recent tail on
+            // reconnect, which the front-trim above keeps bounded.
+            setTimeout(startLogStream, 2000);
+        };
+        ws.onerror = function() { ws.close(); };
     }
 
     function showCacheCorruptToast() {
@@ -287,6 +354,11 @@ function clearCacheAndReload() {
 
     logEl.scrollTop = logEl.scrollHeight;
 
+    // Logs stream continuously over a WebSocket regardless of status (a
+    // stopped/errored app still streams its build log, then the stream ends and
+    // the server holds the socket open at the final state).
+    startLogStream();
+
     // 'removing' polls so the page learns when the row vanishes (404).
     if (
         appStatus === 'running' ||
@@ -295,7 +367,6 @@ function clearCacheAndReload() {
         appStatus === 'removing'
     ) {
         var interval = (appStatus === 'building') ? 1000 : 3000;
-        setInterval(fetchLogs, interval);
         setInterval(pollStatus, interval);
     }
 })();

@@ -17,7 +17,6 @@ from compute_space.core.app_id import is_valid_app_name
 from compute_space.core.apps import deserialize_links
 from compute_space.core.apps import manifest_ungranted_permissions_v2
 from compute_space.core.auth.permissions_v2 import get_all_permissions_v2
-from compute_space.core.containers import get_docker_logs
 from compute_space.core.domains import Domain
 from compute_space.core.git_ops import UnsupportedRepoUrlError
 from compute_space.core.git_ops import get_head_sha
@@ -68,7 +67,8 @@ async def app_detail(
         "SELECT service_url, service_version FROM service_providers_v2 WHERE app_id = ? ORDER BY service_url",
         (app_id,),
     ).fetchall()
-    logs = get_docker_logs(app_name, config.temporary_data_dir, app_row["container_id"])
+    # Logs are streamed to the page over a WebSocket (see /app_logs_stream), so
+    # the initial render no longer reads the whole (possibly huge) log up front.
 
     # User-facing links the app advertised in its manifest's [[links]].
     links = deserialize_links(app_row["links"])
@@ -108,7 +108,6 @@ async def app_detail(
             "databases": databases,
             "port_mappings": port_mappings,
             "services_provided": services_provided,
-            "logs": logs,
             "next_url": next,
             "granted_permissions": granted_perms,
             "ungranted_permissions": ungranted_perms,

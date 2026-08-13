@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import os
 import re
 import shutil
@@ -14,9 +15,13 @@ import attr
 from litestar import MediaType
 from litestar import Response
 from litestar import Router
+from litestar import WebSocket
 from litestar import get
 from litestar import post
+from litestar import websocket
 from litestar.di import NamedDependency
+from litestar.exceptions import NotAuthorizedException
+from litestar.exceptions import WebSocketDisconnect
 from litestar.params import FromPath
 from litestar.params import FromQuery
 from litestar.params import Parameter
@@ -57,13 +62,17 @@ from compute_space.core.git_ops import is_dirty
 from compute_space.core.git_ops import is_github_repo_url
 from compute_space.core.git_ops import parse_repo_url
 from compute_space.core.git_ops import reset_hard
+from compute_space.core.log_stream import stream_app_logs
 from compute_space.core.logging import logger
 from compute_space.core.manifest import parse_manifest
 from compute_space.core.oauth import OAuthAuthorizationRequired
 from compute_space.core.oauth import get_oauth_token
 from compute_space.core.ports import check_port_available
 from compute_space.core.services_v2 import ServiceNotAvailable
+from compute_space.core.updates import wait_for_shutdown
+from compute_space.db.connection import get_db
 from compute_space.web.auth.auth import require_owner_auth
+from compute_space.web.auth.auth import verify_owner_auth
 
 # ─── attrs request / response models ──────────────────────────────────────
 
@@ -543,6 +552,84 @@ async def app_logs(
     assert app_row is not None
     logs = get_docker_logs(app_row["name"], config.temporary_data_dir, app_row["container_id"])
     return Response(content=logs, status_code=200, media_type=MediaType.TEXT)
+
+
+@websocket("/app_logs_stream/{app_id:str}")
+async def app_logs_stream(
+    socket: WebSocket[Any, Any, Any],
+    app_id: FromPath[str],
+    config: NamedDependency[Config],
+) -> None:
+    """Stream an app's logs to the detail page over a WebSocket.
+
+    Sends the build-log tail, then follows the live container log (``podman logs
+    --follow``) for the life of the connection, so the browser appends new lines
+    instead of re-fetching the whole (possibly huge) log on a timer.
+    """
+    # Guards on websocket handlers only raise HTTPException, which a WS client
+    # can't read; do the owner check inline and close cleanly on failure. Accept
+    # first so the browser sees a close frame rather than a bare handshake reset
+    # (mirrors ``terminal_ws`` / ``service_call_ws``).
+    try:
+        verify_owner_auth(socket)
+    except NotAuthorizedException:
+        await socket.accept()
+        await socket.close(code=4401, reason="Missing or invalid authorization")
+        return
+
+    if not is_valid_app_id(app_id):
+        await socket.accept()
+        await socket.close(code=4404, reason="App not found")
+        return
+
+    # The request-scoped ``db`` dependency is closed once a handler returns, but
+    # this stream outlives that, so use fresh short-lived connections throughout.
+    with contextlib.closing(get_db()) as conn:
+        row = conn.execute("SELECT name FROM apps WHERE app_id = ?", (app_id,)).fetchone()
+    if row is None:
+        await socket.accept()
+        await socket.close(code=4404, reason="App not found")
+        return
+    app_name = row["name"]
+    build_log_path = app_log_path(app_name, config)
+
+    def get_state() -> tuple[str, str | None]:
+        with contextlib.closing(get_db()) as state_conn:
+            state_row = state_conn.execute(
+                "SELECT status, container_id FROM apps WHERE app_id = ?", (app_id,)
+            ).fetchone()
+        if state_row is None:
+            return "removed", None
+        return state_row["status"], state_row["container_id"]
+
+    await socket.accept()
+
+    async def pump() -> None:
+        async for chunk in stream_app_logs(app_name, build_log_path, get_state):
+            await socket.send_text(chunk)
+        # The stream ends when the container stops (or a build finished without
+        # producing a container). Hold the socket open so the client shows the
+        # final log without reconnecting; the race below tears everything down on
+        # client disconnect or server shutdown.
+        await asyncio.Event().wait()
+
+    async def watch_close() -> None:
+        # This is a send-only stream, so any inbound frame — or, more usually, a
+        # disconnect — means the client is gone. Awaiting a receive lets us notice
+        # promptly and reap the podman follow instead of leaking it until shutdown.
+        with contextlib.suppress(WebSocketDisconnect):
+            while True:
+                await socket.receive()
+
+    tasks = [asyncio.create_task(t) for t in (pump(), watch_close(), wait_for_shutdown())]
+    try:
+        await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+    finally:
+        for t in tasks:
+            t.cancel()
+        # Let the cancellations propagate into stream_app_logs' finally blocks so
+        # the podman follow subprocess is terminated before we return.
+        await asyncio.gather(*tasks, return_exceptions=True)
 
 
 @post("/stop_app/{app_id:str}", status_code=200, guards=[require_owner_auth])
@@ -1174,6 +1261,7 @@ api_apps_routes = Router(
         app_status,
         app_diagnostics,
         app_logs,
+        app_logs_stream,
         stop_app,
         reload_app,
         reload_app_after_oauth,
