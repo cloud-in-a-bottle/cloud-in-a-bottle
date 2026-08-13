@@ -423,7 +423,7 @@ _TEMPLATE = """<!DOCTYPE html>
   <meta charset="utf-8">
   <meta name="robots" content="noindex">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{{ page_title }} - OpenHost Manual</title>
+  <title>{{ page_title }} - Cloud in a Bottle Manual</title>
   <style>
     /* The docs page deliberately reuses layout.html's exact palette and
        typography (hardcoded light colours, #222 text on #fff, #ddd
@@ -634,7 +634,7 @@ _TEMPLATE = """<!DOCTYPE html>
 </head>
 <body>
   <header class="space-header">
-    <h1 class="space-title">{% if display_name %}{{ display_name }}'s personal compute space{% else %}OpenHost{% endif %}</h1>
+    <h1 class="space-title">{% if display_name %}{{ display_name }}'s personal compute space{% else %}Cloud in a Bottle{% endif %}</h1>
     {% include "_nav_header.html" %}
   </header>
   <svg width="0" height="0" style="position: absolute" aria-hidden="true" focusable="false">

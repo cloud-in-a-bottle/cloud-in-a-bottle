@@ -58,7 +58,7 @@ def build_openhost_service_unit(host_uid: int) -> str:
     stay consistent with the baseline (and with ansible's template)."""
     return (
         "[Unit]\n"
-        "Description=OpenHost Compute Space\n"
+        "Description=Cloud in a Bottle Compute Space\n"
         f"After=network-online.target user@{host_uid}.service\n"
         f"Wants=network-online.target user@{host_uid}.service\n"
         # Crash limiter for Restart=on-failure (see below): after StartLimitBurst
