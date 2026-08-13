@@ -18,11 +18,12 @@ versioned migration so that it lands inert (see ``NEW_ORG``) and activates for
 the whole fleet on the release that accompanies the rename.  It is idempotent,
 and it never raises: a boot must not fail because a rewrite did not apply.
 
-Sequencing matters and is the reason ``NEW_ORG`` ships empty.  Rewriting before
-the org is actually renamed would point instances at an owner that does not
-exist yet, which is strictly worse than the redirect dependency it is meant to
-remove.  Set ``NEW_ORG`` only in the release that ships with (or after) the
-rename.
+Sequencing matters, and is why the owner name and the decision to act on it are
+separate constants.  ``NEW_ORG`` is settled data; ``ORG_RENAME_COMPLETE`` is the
+switch.  Rewriting before the org is actually renamed would point instances at
+an owner that does not exist yet, which is strictly worse than the redirect
+dependency it is meant to remove.  Flip ``ORG_RENAME_COMPLETE`` only in the
+release that ships with (or after) the rename.
 """
 
 import sqlite3
@@ -37,10 +38,24 @@ from compute_space.core.logging import logger
 # The owner every currently-deployed instance has persisted.
 OLD_ORG = "imbue-openhost"
 
-# The owner to move to.  Empty disables the reconcile entirely, which is the
-# correct state until the org has actually been renamed -- see the module
-# docstring.  The name itself is still pending sign-off.
-NEW_ORG = ""
+# The owner to move to.  Decided; the GitHub org has not been renamed yet.
+NEW_ORG = "cloud-in-a-bottle"
+
+# The activation switch, deliberately separate from the name above.  While this
+# is False the reconcile is a total no-op, which is the correct state until the
+# org has actually been renamed: rewriting early would point instances at an
+# owner that does not resolve.  Flip this in the release that ships with (or
+# after) the rename.
+ORG_RENAME_COMPLETE = False
+
+
+def enabled() -> bool:
+    """True when persisted owners should be rewritten.
+
+    Read at call time so flipping ``ORG_RENAME_COMPLETE`` (and patching it in
+    tests) takes effect.
+    """
+    return bool(ORG_RENAME_COMPLETE and NEW_ORG and NEW_ORG != OLD_ORG)
 
 
 def rewrite_owner(repo_url: str, old_org: str | None = None, new_org: str | None = None) -> str | None:
@@ -123,10 +138,10 @@ def _reconcile_checkout(repo_path: str, expected_url: str) -> str | None:
 def reconcile_app_repo_urls(db: sqlite3.Connection) -> int:
     """Rewrite persisted app repo URLs (and their checkouts' origin) to NEW_ORG.
 
-    Idempotent, and a no-op while NEW_ORG is empty.  Returns the number of app
-    rows changed.  Never raises.
+    Idempotent, and a no-op until ``ORG_RENAME_COMPLETE``.  Returns the number
+    of app rows changed.  Never raises.
     """
-    if not NEW_ORG:
+    if not enabled():
         return 0
 
     changed = 0

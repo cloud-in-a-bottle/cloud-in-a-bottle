@@ -15,6 +15,7 @@ import pytest
 
 from compute_space.core import org_rename
 from compute_space.core.org_rename import OLD_ORG
+from compute_space.core.org_rename import enabled
 from compute_space.core.org_rename import reconcile_app_repo_urls
 from compute_space.core.org_rename import rewrite_owner
 
@@ -28,13 +29,27 @@ def _rw(url: str, new_org: str = NEW) -> str | None:
 # --- the sequencing guard ------------------------------------------------
 
 
-def test_disabled_until_new_org_is_set() -> None:
-    """Shipping with NEW_ORG empty must be a total no-op.
+def test_ships_inert_until_the_rename_is_done() -> None:
+    """The owner name is settled data; acting on it is a separate switch.
 
     Rewriting before the org is actually renamed would point instances at an
-    owner that does not exist, which is worse than the redirect dependency.
+    owner that does not resolve, which is worse than the redirect dependency
+    this removes. So ORG_RENAME_COMPLETE must ship False.
     """
-    assert org_rename.NEW_ORG == "", "NEW_ORG must ship empty; set it only with the rename"
+    assert org_rename.ORG_RENAME_COMPLETE is False, "flip this only in the release that ships with the rename"
+    assert enabled() is False
+
+
+def test_reconcile_is_inert_with_the_real_shipped_constants(db: sqlite3.Connection) -> None:
+    """The regression that matters: NEW_ORG is now a real name, so nothing but
+    the switch stands between a released build and a fleet-wide rewrite."""
+    url = f"https://github.com/{OLD_ORG}/bottled-navidrome@master"
+    _insert(db, "a1", "navidrome", url)
+    assert reconcile_app_repo_urls(db) == 0
+    assert _urls(db)["navidrome"] == url
+
+
+def test_rewrite_is_a_no_op_without_a_target() -> None:
     assert _rw(f"https://github.com/{OLD_ORG}/bottled-navidrome", new_org="") is None
 
 
@@ -131,7 +146,7 @@ def _urls(conn: sqlite3.Connection) -> dict[str, str | None]:
     return {r["name"]: r["repo_url"] for r in conn.execute("SELECT name, repo_url FROM apps")}
 
 
-def test_reconcile_is_a_no_op_while_disabled(db: sqlite3.Connection) -> None:
+def test_reconcile_is_a_no_op_while_the_switch_is_off(db: sqlite3.Connection) -> None:
     _insert(db, "a1", "navidrome", f"https://github.com/{OLD_ORG}/bottled-navidrome@master")
     assert reconcile_app_repo_urls(db) == 0
     assert _urls(db)["navidrome"] == f"https://github.com/{OLD_ORG}/bottled-navidrome@master"
@@ -143,7 +158,7 @@ def test_reconcile_rewrites_only_matching_rows(db: sqlite3.Connection) -> None:
     _insert(db, "a3", "oauth-provider", "file:///home/host/openhost/apps/oauth_provider")
     _insert(db, "a4", "nourl", None)
 
-    with mock.patch.object(org_rename, "NEW_ORG", NEW):
+    with mock.patch.object(org_rename, "ORG_RENAME_COMPLETE", True):
         assert reconcile_app_repo_urls(db) == 1
 
     urls = _urls(db)
@@ -155,7 +170,7 @@ def test_reconcile_rewrites_only_matching_rows(db: sqlite3.Connection) -> None:
 
 def test_reconcile_is_idempotent(db: sqlite3.Connection) -> None:
     _insert(db, "a1", "navidrome", f"https://github.com/{OLD_ORG}/bottled-navidrome")
-    with mock.patch.object(org_rename, "NEW_ORG", NEW):
+    with mock.patch.object(org_rename, "ORG_RENAME_COMPLETE", True):
         assert reconcile_app_repo_urls(db) == 1
         assert reconcile_app_repo_urls(db) == 0
     assert _urls(db)["navidrome"] == f"https://github.com/{NEW}/bottled-navidrome"
@@ -170,7 +185,7 @@ def test_reconcile_updates_the_checkout_origin(db: sqlite3.Connection, tmp_path:
     repo.create_remote("origin", f"https://github.com/{OLD_ORG}/bottled-navidrome")
 
     _insert(db, "a1", "navidrome", f"https://github.com/{OLD_ORG}/bottled-navidrome", str(checkout))
-    with mock.patch.object(org_rename, "NEW_ORG", NEW):
+    with mock.patch.object(org_rename, "ORG_RENAME_COMPLETE", True):
         assert reconcile_app_repo_urls(db) == 1
 
     assert repo.remotes.origin.url == f"https://github.com/{NEW}/bottled-navidrome"
@@ -180,7 +195,7 @@ def test_reconcile_survives_a_missing_checkout(db: sqlite3.Connection, tmp_path:
     """A broken checkout must not stop the DB rewrite, and must not raise: this
     runs during boot."""
     _insert(db, "a1", "navidrome", f"https://github.com/{OLD_ORG}/bottled-navidrome", str(tmp_path / "gone"))
-    with mock.patch.object(org_rename, "NEW_ORG", NEW):
+    with mock.patch.object(org_rename, "ORG_RENAME_COMPLETE", True):
         assert reconcile_app_repo_urls(db) == 1
     assert _urls(db)["navidrome"] == f"https://github.com/{NEW}/bottled-navidrome"
 
@@ -188,5 +203,5 @@ def test_reconcile_survives_a_missing_checkout(db: sqlite3.Connection, tmp_path:
 def test_reconcile_never_raises_on_a_broken_db() -> None:
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row  # no apps table at all
-    with mock.patch.object(org_rename, "NEW_ORG", NEW):
+    with mock.patch.object(org_rename, "ORG_RENAME_COMPLETE", True):
         assert reconcile_app_repo_urls(conn) == 0
