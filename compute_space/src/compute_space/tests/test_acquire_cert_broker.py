@@ -146,8 +146,8 @@ def test_full_flow_installs_cert_and_key(tmp_path: Path) -> None:
 
     # TXT records were published (absolute FQDN, verbatim values) before polling.
     assert state.txt_when_first_polled is not None
-    assert f'_acme-challenge.{DOMAIN}.   IN TXT  "base-value"' in state.txt_when_first_polled
-    assert f'_acme-challenge.{DOMAIN}.   IN TXT  "wildcard-value"' in state.txt_when_first_polled
+    assert f'_acme-challenge.{DOMAIN}.   60  IN TXT  "base-value"' in state.txt_when_first_polled
+    assert f'_acme-challenge.{DOMAIN}.   60  IN TXT  "wildcard-value"' in state.txt_when_first_polled
 
     # ...and cleaned up afterward.
     assert "IN TXT" not in zonefile.read_text()

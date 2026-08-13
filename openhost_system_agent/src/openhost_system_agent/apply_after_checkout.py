@@ -1,5 +1,10 @@
 """Apply entrypoint: run this checkout's migrations, install deps, then
-tail-call into the next ref; restart openhost once on the destination.
+tail-call into the next ref; start openhost once on the destination.
+
+openhost is already stopped when this runs (update.apply_update takes it down
+before the first checkout) and this runs as its own systemd unit, so migrations
+do not race a live router -- though the system is not fully quiesced, see
+update.apply_update.
 
 At each step: migrations → pixi install → checkout next ref → os.execv self.
 Using execv (not a child subprocess) keeps the walk a single process no
@@ -13,10 +18,9 @@ still walked as stepping stones and the pinned ref is the final hop.
 Migrations run before `pixi install`, so a migration that upgrades the
 toolchain (e.g. pixi) takes effect before deps are installed.
 
-There is no structured output contract: success restarts openhost (which
-may kill this process — see main()), and the migration log records what
-happened for the freshly-started compute_space to read. Failure is a
-non-zero exit with the error on stderr.
+There is no structured output contract: success starts openhost and the
+migration log records what happened. Failure is a non-zero exit with the error on
+stderr — and the apply unit's ExecStopPost starts openhost either way.
 
 STABILITY CONTRACT: the prior tag's update.py execs this file by path and
 depends only on its exit code. Keep the path and that contract stable. Once
@@ -31,8 +35,10 @@ import subprocess
 import sys
 from pathlib import Path
 
+from openhost_system_agent.detach import start_openhost
 from openhost_system_agent.migrations.runner import apply_system_migrations
 from openhost_system_agent.reclaim import reclaim_host_ownership
+from openhost_system_agent.updater import progress
 
 PIXI_BIN = "/home/host/.pixi/bin/pixi"
 
@@ -145,11 +151,7 @@ def _next_step(project: str) -> str | None:
     return None
 
 
-def main() -> None:
-    # src/openhost_system_agent/apply_after_checkout.py → repo root is four up.
-    project = str(Path(__file__).resolve().parents[3])
-    _ensure_repo_trusted(project)
-
+def _apply(project: str) -> None:
     # Failsafe: hand the pixi trees back to the host user FIRST, before anything
     # else touches them. This must precede migrations because a migration can
     # run a pixi operation as the host user (e.g. v0004's `pixi self-update`);
@@ -162,34 +164,52 @@ def main() -> None:
 
     # Migrations run before install so a toolchain upgrade (e.g. pixi) takes
     # effect before deps are installed for this checkout.
+    progress.record("migrate", "Applying system migrations\u2026")
     apply_system_migrations()
 
     # Install as the unprivileged 'host' user, not root. The openhost service
     # runs as host via `pixi run`, and pixi tracks its PyPI sync per-user; a
     # root install leaves root-owned files in the env that the host service
     # then can't update, so its `pixi run` fails with EACCES.
+    progress.record("install", "Installing dependencies\u2026")
     result = subprocess.run(["sudo", "-u", "host", "-H", PIXI_BIN, "install"], cwd=project, timeout=300)
     if result.returncode != 0:
+        progress.record(progress.Phase.FAILED, f"Dependency install failed (exit {result.returncode}).")
         print(f"pixi install failed (exit {result.returncode})", file=sys.stderr)
         sys.exit(1)
 
     nxt = _next_step(project)
     if nxt:
         # Check out the resolved commit (a branch tip becomes detached HEAD).
+        progress.record("checkout", f"Checking out {nxt}\u2026", ref=nxt)
         subprocess.run(["git", "checkout", _resolve_ref_sha(project, nxt) or nxt], cwd=project, check=True, timeout=60)
         subprocess.run(["git", "clean", "-fd"], cwd=project, check=True, timeout=60)
         # Tail-call into the next ref's code, replacing this process so the
         # walk stays a single process regardless of how many steps we're behind.
         os.execv(sys.executable, [sys.executable, str(Path(__file__).resolve())])
 
-    # On the destination: restart openhost so the new code takes over. When the
-    # update was triggered from the dashboard this process shares openhost's
-    # cgroup, so the restart's SIGTERM kills us mid-call — that's fine, systemd
-    # still completes the restart and the new compute_space reads the log.
-    result = subprocess.run(["systemctl", "restart", "openhost"], timeout=120)
-    if result.returncode != 0:
-        print(f"failed to restart openhost (exit {result.returncode})", file=sys.stderr)
-        sys.exit(1)
+    # NOT terminal (see Phase.RESTARTING): only the freshly booted compute_space
+    # appends "done", so the page can't finish against the about-to-die instance.
+    progress.record(progress.Phase.RESTARTING, "Update complete. Starting\u2026")
+
+    start_openhost()
+
+
+def main() -> None:
+    # src/openhost_system_agent/apply_after_checkout.py → repo root is four up.
+    project = str(Path(__file__).resolve().parents[3])
+    _ensure_repo_trusted(project)
+
+    # Any unhandled failure must leave a terminal "failed" entry, or the
+    # /updating page (which only stops on done/failed) would spin forever with
+    # no explanation. SystemExit(1) paths above record their own message.
+    try:
+        _apply(project)
+    except SystemExit:
+        raise
+    except BaseException as e:
+        progress.record(progress.Phase.FAILED, f"Update failed: {e}")
+        raise
 
 
 if __name__ == "__main__":

@@ -1,7 +1,7 @@
 # openhost_system_agent
 
 A privileged agent that manages host-level system state for OpenHost instances.
-It runs as root (via `sudo`) and handles two concerns:
+It runs as root (via `sudo`) and handles three concerns:
 
 1. **System migrations** — idempotent, versioned steps that bring the host into
    the expected configuration (kernel settings, container runtime, systemd units,
@@ -10,6 +10,13 @@ It runs as root (via `sudo`) and handles two concerns:
 
 2. **Code updates** — fetching and applying new versions of the OpenHost software
    from the configured git remote.
+
+3. **Seamless-update support** — while an update applies, the agent appends a
+   JSONL progress log (`<data dir>/updater/progress.jsonl`) that the dashboard's
+   `/updating` page streams, and just before the final restart it launches a
+   detached downtime mini-server (a transient systemd unit,
+   `openhost-updater.service`) that holds 80/443 with the on-disk TLS certs and
+   serves the update page until the new compute_space is back.
 
 ## Running
 
@@ -22,8 +29,13 @@ sudo openhost_system_agent <command>
 Key subcommands:
 
 - `update fetch` — fetch latest tags/code from remote and report whether a newer release is available
-- `update apply` — apply the pending update: walk the release tags as stepping stones (running each tag's migrations → `pixi install` → checkout next), then restart openhost
+- `update apply` — apply the pending update: walk the release tags as stepping stones (running each tag's migrations → `pixi install` → checkout next), record progress to the updater log, launch the downtime server, then restart openhost. The freshly booted compute_space appends the terminal "done" entry
 - `status` — show current system version and whether migrations are pending
+- `updater launch|serve|stop|set-token|clear-token` — internals of the seamless-update downtime server (normally driven by compute_space, not by hand): `set-token` persists the browser token that gates the live-progress endpoint (resetting the progress log), `launch` starts the detached server, `stop` releases 80/443, `clear-token` removes the token after a failed apply
+
+The updater paths (progress log, token, certs) resolve from `OPENHOST_DATA_DIR`
+when set (compute_space forwards it on every call via `sudo env` and into the
+detached unit via `systemd-run --setenv`), defaulting to the production data dir.
 
 Updates track **release tags**, not a branch. The host checkout normally sits on
 a release tag (a detached HEAD by git's definition, which is expected here). To

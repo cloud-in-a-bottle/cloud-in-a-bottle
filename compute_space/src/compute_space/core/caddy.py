@@ -1,6 +1,7 @@
 import sqlite3
 import subprocess
 import threading
+import time
 from collections.abc import Callable
 from pathlib import Path
 
@@ -21,6 +22,17 @@ CertResolver = Callable[[str], tuple[Path, Path] | None]
 _REDIRECT_BLOCK = "    redir https://{host}{uri} permanent\n"
 
 
+# Retry the upstream for a few seconds instead of 502ing: post-restart Caddy can
+# bind 443 a beat before the router's loopback listener is up.
+def _reverse_proxy(web_server_port: int) -> str:
+    return (
+        f"    reverse_proxy localhost:{web_server_port} {{\n"
+        "        lb_try_duration 10s\n"
+        "        lb_try_interval 250ms\n"
+        "    }\n"
+    )
+
+
 def _tls_domain_blocks(name: str, tls_directive: str, web_server_port: int) -> str:
     """https for `name` + `*.name` (proxied to the router), and an http site that
     redirects to https.  Scoping the redirect to this domain's http site — rather
@@ -30,7 +42,7 @@ def _tls_domain_blocks(name: str, tls_directive: str, web_server_port: int) -> s
         f"https://{name}, https://*.{name} {{\n"
         f"    {tls_directive}\n"
         "    encode gzip zstd\n"
-        f"    reverse_proxy localhost:{web_server_port}\n"
+        f"{_reverse_proxy(web_server_port)}"
         "}\n"
         f"http://{name}, http://*.{name} {{\n"
         f"{_REDIRECT_BLOCK}"
@@ -41,9 +53,7 @@ def _tls_domain_blocks(name: str, tls_directive: str, web_server_port: int) -> s
 def _http_domain_block(name: str, web_server_port: int) -> str:
     """Plain http for `name` + `*.name`, proxied to the router with NO redirect —
     used for mDNS `.local` domains that are served over http."""
-    return (
-        f"http://{name}, http://*.{name} {{\n    encode gzip zstd\n    reverse_proxy localhost:{web_server_port}\n}}\n"
-    )
+    return f"http://{name}, http://*.{name} {{\n    encode gzip zstd\n{_reverse_proxy(web_server_port)}}}\n"
 
 
 def config_cert_resolver(config: Config, db: sqlite3.Connection) -> CertResolver:
@@ -82,7 +92,12 @@ def generate_caddyfile(
     # for `tls internal` domains; the per-domain http blocks above provide the
     # http→https redirects we want, and only for the domains that want them.
     auto_https = "disable_redirects" if has_tls else "off"
-    parts = [f"{{\n    auto_https {auto_https}\n    admin {admin_addr or 'off'}\n}}\n"]
+    # Serve only h1/h2 (both TCP): the update-downtime server covers TCP 80/443
+    # but not HTTP/3's UDP :443, so advertising h3 would make browsers try QUIC
+    # and hit ERR_QUIC_PROTOCOL_ERROR while the updater holds the ports.
+    parts = [
+        f"{{\n    auto_https {auto_https}\n    admin {admin_addr or 'off'}\n    servers {{\n        protocols h1 h2\n    }}\n}}\n"
+    ]
     for d in domains:
         name = d.name_no_port
         if not d.tls:
@@ -99,23 +114,66 @@ def unix_admin_address(socket_path: Path) -> str:
     return f"unix/{socket_path}"
 
 
-def _spawn_caddy(caddyfile_path: Path) -> subprocess.Popen[bytes]:
+# The detached updater holds :443/:80 until this new compute_space is up, so a
+# fresh Caddy can briefly hit "address already in use". Retry to ride out the
+# handoff. The window is generous: a slow bind is far better than no TLS.
+_CADDY_BIND_RETRY_SECONDS = 90.0
+_CADDY_BIND_RETRY_INTERVAL = 0.25
+_CADDY_ADDR_IN_USE = "address already in use"
+
+
+def _spawn_caddy_once(caddyfile_path: Path) -> tuple[subprocess.Popen[bytes], list[str], threading.Thread]:
+    """Spawn Caddy and stream its logs. Returns the proc, a bounded tail of recent
+    output lines (so _spawn_caddy can tell a bind conflict from a config error),
+    and the log thread."""
     proc = subprocess.Popen(
         ["caddy", "run", "--config", str(caddyfile_path), "--adapter", "caddyfile"],
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
     )
+    recent: list[str] = []
 
     def _stream_caddy_logs(proc: subprocess.Popen[bytes]) -> None:
         assert proc.stdout is not None
         for line in proc.stdout:
-            logger.info(f"[caddy] {line.decode(errors='replace').rstrip()}")
+            text = line.decode(errors="replace").rstrip()
+            recent.append(text)
+            del recent[:-20]
+            logger.info(f"[caddy] {text}")
         proc.wait()
         logger.warning(f"Caddy exited with code {proc.returncode}")
 
-    threading.Thread(target=_stream_caddy_logs, args=(proc,), daemon=True).start()
+    log_thread = threading.Thread(target=_stream_caddy_logs, args=(proc,), daemon=True)
+    log_thread.start()
     logger.info(f"Started Caddy (pid {proc.pid})")
-    return proc
+    return proc, recent, log_thread
+
+
+def _spawn_caddy(caddyfile_path: Path) -> subprocess.Popen[bytes]:
+    """Start Caddy, retrying only the "address already in use" case while :443/:80
+    is still held by the update-downtime server. Any other immediate exit (e.g. a
+    config error) is returned right away so the caller fails fast.
+    """
+    deadline = time.monotonic() + _CADDY_BIND_RETRY_SECONDS
+    while True:
+        proc, recent, log_thread = _spawn_caddy_once(caddyfile_path)
+        try:
+            proc.wait(timeout=_CADDY_BIND_RETRY_INTERVAL)
+        except subprocess.TimeoutExpired:
+            return proc  # still running after the settle window — bound successfully
+        # Drain the log thread before classifying, else a bind conflict could look
+        # like a config error.
+        log_thread.join(timeout=2.0)
+        addr_in_use = any(_CADDY_ADDR_IN_USE in line for line in recent)
+        if addr_in_use and time.monotonic() < deadline:
+            logger.info("Caddy bind conflict (ports still held by the update server); retrying")
+            time.sleep(_CADDY_BIND_RETRY_INTERVAL)
+            continue
+        if not addr_in_use:
+            logger.warning("Caddy exited immediately for a non-bind reason; not retrying")
+        else:
+            logger.warning("Caddy failed to bind within the update-handoff retry window")
+        return proc
 
 
 @attr.s(auto_attribs=True)
