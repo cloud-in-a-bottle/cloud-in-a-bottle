@@ -1,4 +1,4 @@
-"""Cloud in a Bottle federated identity provider.
+"""OpenHost federated identity provider.
 
 Each zone acts as an identity provider for its owner. This module handles:
 - Exposing the zone's public identity (domain + public key)
