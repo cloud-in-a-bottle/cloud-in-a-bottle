@@ -219,7 +219,11 @@ function fetchLogs() {
   var logEl = document.getElementById('cs-logs');
   fetch('/api/compute_space_logs', {credentials: 'same-origin'})
     .then(function(r) {
-      if (!r.ok) { return r.json().then(function(d) { return d.detail || 'Failed to load logs.'; }); }
+      if (!r.ok) {
+        return r.json().then(function(d) {
+          return (d.extra && d.extra.reason) || d.detail || 'Failed to load logs.';
+        });
+      }
       return r.text();
     })
     .then(function(text) {
