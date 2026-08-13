@@ -577,35 +577,23 @@ async def app_logs_stream(
         await socket.close(code=4401, reason="Missing or invalid authorization")
         return
 
-    if not is_valid_app_id(app_id):
-        await socket.accept()
-        await socket.close(code=4404, reason="App not found")
-        return
-
-    # The request-scoped ``db`` dependency is closed once a handler returns, but
-    # this stream outlives that, so use fresh short-lived connections throughout.
+    # Resolve the app to a build-log path (and a clean close before we accept). The
+    # request-scoped ``db`` dependency is closed once a handler returns, but the
+    # stream outlives that; stream_app_logs re-queries the app's state itself via
+    # its own short-lived connections.
     with contextlib.closing(get_db()) as conn:
-        row = conn.execute("SELECT name FROM apps WHERE app_id = ?", (app_id,)).fetchone()
-    if row is None:
+        app_row, err = _resolve_app_or_error(app_id, conn)
+    if err is not None:
         await socket.accept()
         await socket.close(code=4404, reason="App not found")
         return
-    app_name = row["name"]
-    build_log_path = app_log_path(app_name, config)
-
-    def get_state() -> tuple[str, str | None]:
-        with contextlib.closing(get_db()) as state_conn:
-            state_row = state_conn.execute(
-                "SELECT status, container_id FROM apps WHERE app_id = ?", (app_id,)
-            ).fetchone()
-        if state_row is None:
-            return "removed", None
-        return state_row["status"], state_row["container_id"]
+    assert app_row is not None
+    build_log_path = app_log_path(app_row["name"], config)
 
     await socket.accept()
 
     async def pump() -> None:
-        async for chunk in stream_app_logs(app_name, build_log_path, get_state):
+        async for chunk in stream_app_logs(app_id, build_log_path):
             await socket.send_text(chunk)
         # The stream ends when the container stops (or a build finished without
         # producing a container). Hold the socket open so the client shows the

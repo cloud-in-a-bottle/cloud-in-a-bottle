@@ -68,7 +68,7 @@ def _seed_running_app(cfg: Any, name: str, container_id: str | None, port: int) 
 
 
 def _fake_stream_app_logs(chunks: list[str], monkeypatch: pytest.MonkeyPatch) -> None:
-    async def fake(app_name: str, build_log_path: str, get_state: Any) -> AsyncIterator[str]:
+    async def fake(app_id: str, build_log_path: str) -> AsyncIterator[str]:
         for chunk in chunks:
             yield chunk
 
