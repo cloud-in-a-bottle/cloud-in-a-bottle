@@ -18,7 +18,7 @@ interface all behave exactly as in production.
 
 Requirements: rootless podman (a running ``podman machine`` on macOS), python >= 3.12.
 On Linux, container→router traffic additionally needs the ``openhost0`` dummy interface +
-``host_containers_internal_ip`` containers.conf setting that openhost servers get from
+``host_containers_internal_ip`` containers.conf setting that Cloud in a Bottle servers get from
 ansible/tasks/containers.yml (see the openhost repo's CI workflow for a minimal version);
 without it, service calls from apps hang.
 """

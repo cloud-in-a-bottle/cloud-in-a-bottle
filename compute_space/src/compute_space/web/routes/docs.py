@@ -874,7 +874,7 @@ def _missing_src_response() -> Response[str] | None:
         content=(
             "The Cloud in a Bottle docs source directory is missing on this installation. "
             f"Expected: {src}.  This usually means the Cloud in a Bottle code checkout is "
-            "incomplete; reinstalling the openhost service should fix it."
+            "incomplete; reinstalling the Cloud in a Bottle service should fix it."
         ),
         status_code=503,
         media_type=MediaType.TEXT,

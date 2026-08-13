@@ -1,6 +1,6 @@
 """Reclaim ownership of the host's Cloud in a Bottle trees.
 
-The openhost service runs as the unprivileged ``host`` user: it invokes ``git``
+The Cloud in a Bottle service runs as the unprivileged ``host`` user: it invokes ``git``
 and ``pixi run`` against ``/home/host/openhost`` (the repo, including its
 ``.pixi`` env) and against ``/home/host/.pixi`` (the pixi binary + per-user
 caches). All of it must stay ``host``-owned.

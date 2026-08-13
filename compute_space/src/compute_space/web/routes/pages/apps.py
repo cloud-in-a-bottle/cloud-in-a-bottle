@@ -177,7 +177,7 @@ async def _resolve_edit_app(
         logger.warning("resolve_provider returned unknown app_id %s", provider_app_id)
         return repo_link_fallback
 
-    # Pass repo+ref in the query string too: the openhost router 302's
+    # Pass repo+ref in the query string too: the Cloud in a Bottle router 302's
     # unauthenticated POSTs to /login, and the post-login redirect comes back
     # as a GET (only 307/308 preserve method), dropping the form body. Query
     # params survive the bounce, and the provider falls back to them.

@@ -193,7 +193,7 @@ Each service URL has at most one default provider (set automatically to the firs
 
 ### Retrofitting existing apps
 
-Many existing apps provide or consume APIs in a non-openhost-native way, and can be adapted readily to consume or expose these through the service interface.
+Many existing apps provide or consume APIs in a way that is not native to Cloud in a Bottle, and can be adapted readily to consume or expose these through the service interface.
 
 #### Consumer apps
 

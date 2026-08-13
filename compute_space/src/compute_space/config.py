@@ -173,7 +173,7 @@ class Config:
 
     @property
     def openhost_data_path(self) -> Path:
-        # openhost-specific data, including the sqlite db and TLS certs.
+        # Cloud in a Bottle-specific data, including the sqlite db and TLS certs.
         return Path(self.persistent_data_dir) / "openhost"
 
     @property

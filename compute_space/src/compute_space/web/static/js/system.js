@@ -181,7 +181,7 @@ function renderStorageStatus(data) {
   }
   var freeCls = (hasMinFree && isLow) ? ' class="status-error"' : '';
   rows += '<tr><th>Disk free</th><td' + freeCls + '>' + escHtml(freeText) + '</td></tr>';
-  rows += '<tr><th>OpenHost data</th><td>' + escHtml(formatBytes(data.openhost_data_used_bytes || 0)) + '</td></tr>';
+  rows += '<tr><th>Cloud in a Bottle data</th><td>' + escHtml(formatBytes(data.openhost_data_used_bytes || 0)) + '</td></tr>';
   var buildCache = (data.build_cache_bytes == null)
     ? '<span class="muted">unavailable</span>'
     : escHtml(formatBytes(data.build_cache_bytes));

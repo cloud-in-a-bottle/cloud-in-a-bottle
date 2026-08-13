@@ -1,6 +1,6 @@
 ---
 name: openhost-context
-description: Deploy and debug apps on Cloud in a Bottle, a platform for self-hosting apps. Use when working with the `oh` CLI, deploying or reloading an app on a Cloud in a Bottle zone, or building an openhost app.
+description: Deploy and debug apps on Cloud in a Bottle, a platform for self-hosting apps. Use when working with the `oh` CLI, deploying or reloading an app on a Cloud in a Bottle zone, or building a Cloud in a Bottle app.
 ---
 
 # Cloud in a Bottle

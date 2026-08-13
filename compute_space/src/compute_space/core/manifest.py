@@ -283,7 +283,7 @@ def _parse_ports(ports_list: list[Any]) -> list[PortMapping]:
             raise ValueError(
                 f"[[ports]] '{label}' host_port {hport} is below the unprivileged port floor "
                 f"({UNPRIVILEGED_PORT_FLOOR}); rootless podman cannot bind to it. "
-                f"Use a port >= {UNPRIVILEGED_PORT_FLOOR} or route through the openhost proxy."
+                f"Use a port >= {UNPRIVILEGED_PORT_FLOOR} or route through the Cloud in a Bottle proxy."
             )
         if hport != 0 and hport in seen_host_ports:
             raise ValueError(f"Duplicate host_port {hport} in [[ports]]")

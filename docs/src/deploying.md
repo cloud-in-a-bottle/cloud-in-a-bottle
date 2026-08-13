@@ -14,7 +14,7 @@ Two parts:
 
 1. **[Build the VM](#part-1--build-an-ubuntu-vm-in-qemu)** — install QEMU and
    stand up an Ubuntu VM.
-2. **[Deploy Cloud in a Bottle](#part-2--deploy-openhost-onto-the-vm)** — run the Ansible
+2. **[Deploy Cloud in a Bottle](#part-2--deploy-cloud-in-a-bottle-onto-the-vm)** — run the Ansible
    playbook against that VM (HTTP-only mode; no domain needed).
 
 For a dedicated instance instead, see
