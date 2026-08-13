@@ -1,4 +1,4 @@
-# Running OpenHost in a local QEMU VM
+# Running Cloud in a Bottle in a local QEMU VM
 
 > The authoritative deployment reference is
 > **[`ansible/readme.md`](https://github.com/imbue-openhost/openhost/blob/main/ansible/readme.md)**
@@ -8,13 +8,13 @@
 > [QEMU](https://www.qemu.org/download/) ·
 > [Ubuntu Server](https://ubuntu.com/download/server)
 
-This gets OpenHost running on an **Ubuntu 24.04 VM under QEMU** on your
+This gets Cloud in a Bottle running on an **Ubuntu 24.04 VM under QEMU** on your
 desktop — good for trying it out before you buy a dedicated domain or machine.
 Two parts:
 
 1. **[Build the VM](#part-1--build-an-ubuntu-vm-in-qemu)** — install QEMU and
    stand up an Ubuntu VM.
-2. **[Deploy OpenHost](#part-2--deploy-openhost-onto-the-vm)** — run the Ansible
+2. **[Deploy Cloud in a Bottle](#part-2--deploy-openhost-onto-the-vm)** — run the Ansible
    playbook against that VM (HTTP-only mode; no domain needed).
 
 For a dedicated instance instead, see
@@ -176,7 +176,7 @@ On arm64 Linux, keep `-machine virt` but use
 
 ---
 
-## Part 2 — Deploy OpenHost onto the VM
+## Part 2 — Deploy Cloud in a Bottle onto the VM
 
 Run these from your **desktop** (not inside the VM), with the VM from Part 1
 still running.
@@ -218,10 +218,10 @@ ansible-playbook ansible/setup.yml \
   --ask-become-pass          # the VM user's sudo password (set in the cloud-init seed)
 ```
 
-This installs rootless Podman, pixi, the systemd units, and deploys OpenHost's
+This installs rootless Podman, pixi, the systemd units, and deploys Cloud in a Bottle's
 default apps. It takes several minutes the first time.
 
-> **Why `DOMAIN=lvh.me:8080`?** OpenHost routes apps by subdomain
+> **Why `DOMAIN=lvh.me:8080`?** Cloud in a Bottle routes apps by subdomain
 > (`<app>.<domain>`), and `localhost` can't have working wildcard subdomains.
 > `lvh.me` and `*.lvh.me` resolve to `127.0.0.1` in public DNS with no setup, so
 > `http://myapp.lvh.me:8080` just works. Include the **`:8080`** so the router's

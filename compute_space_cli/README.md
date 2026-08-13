@@ -1,6 +1,6 @@
-# oh — OpenHost CLI
+# oh — Cloud in a Bottle CLI
 
-Command-line tool for managing apps on your OpenHost compute space.
+Command-line tool for managing apps on your Cloud in a Bottle compute space.
 
 ## Install
 

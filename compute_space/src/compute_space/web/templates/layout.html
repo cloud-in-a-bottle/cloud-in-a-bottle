@@ -5,7 +5,7 @@
 <html>
 <head>
   <meta name="robots" content="noindex">
-  <title>{% if display_name %}{{ display_name }}'s personal compute space{% else %}OpenHost{% endif %}{% block title_suffix %}{% endblock %}</title>
+  <title>{% if display_name %}{{ display_name }}'s personal compute space{% else %}Cloud in a Bottle{% endif %}{% block title_suffix %}{% endblock %}</title>
   <style>
     /* Always reserve the vertical scrollbar gutter so the centred body doesn't
        shift sideways when navigating between pages that scroll and pages that
@@ -57,7 +57,7 @@
   </style>
 </head>
 <body>
-  <h1>{% if display_name %}{{ display_name }}'s personal compute space{% else %}OpenHost{% endif %}</h1>
+  <h1>{% if display_name %}{{ display_name }}'s personal compute space{% else %}Cloud in a Bottle{% endif %}</h1>
   {% include "_nav_header.html" %}
   {% block content %}{% endblock %}
 </body>
