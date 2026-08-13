@@ -32,6 +32,7 @@ from compute_space.core.first_boot import seed_first_boot
 from compute_space.core.git_ops import SOURCE_URL
 from compute_space.core.image_pruner import start_image_pruner
 from compute_space.core.logging import logger
+from compute_space.core.org_rename import reconcile_app_repo_urls
 from compute_space.core.startup import check_app_status
 from compute_space.core.startup import retry_pending_default_apps
 from compute_space.core.storage import start_storage_guard
@@ -138,6 +139,11 @@ def _full_app_bootstrap(config: Config) -> None:
     db = get_db()  # row_factory=Row; the archive derives its per-zone volume from the domains store
     try:
         archive_backend.attach_on_startup(config, db)
+        # Move any app repo URLs still pointing at the pre-rename GitHub owner.
+        # Idempotent, and inert until org_rename.ORG_RENAME_COMPLETE is flipped;
+        # see that module for why this is a per-boot reconcile rather than a
+        # versioned migration.
+        reconcile_app_repo_urls(db)
     finally:
         db.close()
     check_app_status(config)
