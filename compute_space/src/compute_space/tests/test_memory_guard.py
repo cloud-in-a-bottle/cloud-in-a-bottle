@@ -278,7 +278,7 @@ def test_follow_lines_skips_blanks_and_reconnects_on_eof(monkeypatch: pytest.Mon
     # and the second connection supplies the next line.
     streams = iter([_agen([b"a", b""]), _agen([b"b"])])
 
-    def fake_stream(argv: list[str], *, merge_stderr: bool) -> AsyncIterator[bytes]:
+    def fake_stream(argv: list[str], *, merge_stderr: bool, stderr_sink: object = None) -> AsyncIterator[bytes]:
         return next(streams)
 
     async def no_sleep(_seconds: float) -> None:
@@ -298,11 +298,44 @@ def test_follow_lines_skips_blanks_and_reconnects_on_eof(monkeypatch: pytest.Mon
     assert asyncio.run(run()) == [b"a", b"b"]
 
 
+def test_follow_lines_surfaces_stderr_reason_when_stream_ends(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A follow that ends after writing to stderr (e.g. journalctl "permission denied"
+    # because the journal grant didn't take) names that reason in the reconnect
+    # warning instead of a bare "stream ended".
+    class _Stop(Exception):
+        pass
+
+    def fake_stream(argv: list[str], *, merge_stderr: bool, stderr_sink: object = None) -> AsyncIterator[bytes]:
+        async def g() -> AsyncIterator[bytes]:
+            assert callable(stderr_sink)
+            stderr_sink(b"Failed to open journal: Permission denied")
+            return
+            yield b""  # pragma: no cover - marks g as an async generator
+
+        return g()
+
+    async def breaking_sleep(_seconds: float) -> None:
+        raise _Stop  # bail out after the first reconnect pause
+
+    monkeypatch.setattr(memory_guard, "stream_process_lines", fake_stream)
+    monkeypatch.setattr("asyncio.sleep", breaking_sleep)
+
+    async def run() -> None:
+        async for _ in memory_guard._follow_lines(["journalctl"], "Host OOM detection"):
+            pass
+
+    with patch("compute_space.core.memory_guard.logger.warning") as warn:
+        with pytest.raises(_Stop):
+            asyncio.run(run())
+    joined = " ".join(str(c.args) for c in warn.call_args_list)
+    assert "Permission denied" in joined
+
+
 def test_follow_lines_missing_binary_warns_once_and_retries(monkeypatch: pytest.MonkeyPatch) -> None:
     class _Stop(Exception):
         pass
 
-    def fake_stream(argv: list[str], *, merge_stderr: bool) -> AsyncIterator[bytes]:
+    def fake_stream(argv: list[str], *, merge_stderr: bool, stderr_sink: object = None) -> AsyncIterator[bytes]:
         async def g() -> AsyncIterator[bytes]:
             raise FileNotFoundError
             yield b""  # pragma: no cover - marks g as an async generator

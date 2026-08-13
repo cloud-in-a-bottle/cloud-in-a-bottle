@@ -593,8 +593,18 @@ async def app_logs_stream(
     await socket.accept()
 
     async def pump() -> None:
-        async for chunk in stream_app_logs(app_id, build_log_path):
-            await socket.send_text(chunk)
+        try:
+            async for chunk in stream_app_logs(app_id, build_log_path):
+                await socket.send_text(chunk)
+        except WebSocketDisconnect:
+            return  # client vanished mid-send; watch_close tears the rest down
+        except Exception:
+            # An unexpected failure in the follow (e.g. tail hitting an unreadable
+            # build log) would otherwise be swallowed by the teardown gather below,
+            # closing the socket with no trace. Log it, then let pump finish so the
+            # connection closes and the client reconnects.
+            logger.exception("Streaming logs for app %s failed", app_id)
+            return
         # The stream ends when the container stops (or a build finished without
         # producing a container). Hold the socket open so the client shows the
         # final log without reconnecting; the race below tears everything down on

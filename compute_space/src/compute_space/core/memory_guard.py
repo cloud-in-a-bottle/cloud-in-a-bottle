@@ -32,6 +32,7 @@ import re
 import sqlite3
 import threading
 import time
+from collections import deque
 from collections.abc import AsyncIterator
 
 import attr
@@ -50,6 +51,9 @@ _MEMORY_CLEAR_PERCENT = 80.0
 # After a follow stream ends (or its binary is missing) wait this long before
 # (re)connecting, so a persistent failure retries steadily instead of spinning.
 _STREAM_RECONNECT_SECONDS = 5
+
+# How many trailing stderr lines to keep from a follow, to name the reason it ended.
+_STDERR_TAIL_LINES = 5
 
 # The two OOM detectors each follow a subprocess that emits newline-delimited JSON.
 # journalctl reads the kernel log from the system journal (needs the systemd-journal
@@ -96,8 +100,12 @@ async def _follow_lines(argv: list[str], detector: str) -> AsyncIterator[bytes]:
     """
     warned_missing = False
     while True:
+        # Divert stderr (not into the parsed JSON) so an abnormal end — e.g. the
+        # journal grant not taking effect, so journalctl exits "permission denied" —
+        # surfaces its real reason below instead of a bare "stream ended".
+        recent_stderr: deque[bytes] = deque(maxlen=_STDERR_TAIL_LINES)
         try:
-            async for line in stream_process_lines(argv, merge_stderr=False):
+            async for line in stream_process_lines(argv, merge_stderr=False, stderr_sink=recent_stderr.append):
                 if line.strip():
                     yield line
         except FileNotFoundError:
@@ -107,9 +115,13 @@ async def _follow_lines(argv: list[str], detector: str) -> AsyncIterator[bytes]:
             await asyncio.sleep(_STREAM_RECONNECT_SECONDS)
             continue
         # Clean EOF: the stream ended. It had connected, so re-arm the missing
-        # warning and reconnect after a pause.
+        # warning and reconnect after a pause, naming any stderr it left behind.
         warned_missing = False
-        logger.warning("`%s` stream ended; reconnecting for %s", argv[0], detector)
+        reason = b" / ".join(recent_stderr).decode("utf-8", "replace").strip()
+        if reason:
+            logger.warning("`%s` stream ended for %s (%s); reconnecting", argv[0], detector, reason)
+        else:
+            logger.warning("`%s` stream ended; reconnecting for %s", argv[0], detector)
         await asyncio.sleep(_STREAM_RECONNECT_SECONDS)
 
 

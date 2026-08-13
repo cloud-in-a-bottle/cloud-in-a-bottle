@@ -193,19 +193,15 @@ function clearCacheAndReload() {
     var nextUrl = config.nextUrl;
     var toastKey = 'cache-toast-shown-' + config.appStatusUrl;
 
-    // Keep the <pre> bounded so a long-lived stream can't grow the DOM without
-    // limit. Trimming is a full rewrite, so it only runs when we exceed the cap.
+    // Cap the <pre> so a long-lived stream can't grow the DOM unbounded.
     var MAX_LOG_CHARS = 2 * 1024 * 1024;
     var logPrimed = false;
 
-    // Incoming lines are buffered and flushed to the DOM once per animation
-    // frame, not appended one-at-a-time. The container backlog replays as one
-    // WebSocket message *per line* (podman `--tail 2000`), so on connect a
-    // per-line append — each reading isNearBottom/textContent.length and writing
-    // scrollTop, all of which force a synchronous reflow of a growing <pre> —
-    // would be O(N^2). Coalescing a whole burst into a single append + one layout
-    // read + one layout write keeps the initial render linear. logLen is tracked
-    // in JS so we never serialize logEl.textContent just to measure it.
+    // Buffer incoming lines and flush once per animation frame. The backlog
+    // arrives as one WebSocket message per line (podman `--tail 2000`), and
+    // appending each one individually would reflow the <pre> per line; batching a
+    // burst into one append keeps the initial render cheap. logLen is tracked in
+    // JS so measuring the length never serializes logEl.textContent.
     var pending = [];
     var pendingLen = 0;
     var flushQueued = false;
@@ -228,9 +224,8 @@ function clearCacheAndReload() {
         var text = pending.join('');
         pending = [];
         pendingLen = 0;
-        // Append a single text node for the batch: the browser lays out only the
-        // new lines and leaves existing content (and any active text selection)
-        // untouched.
+        // One text node per batch leaves existing content — and any active text
+        // selection — untouched.
         logEl.appendChild(document.createTextNode(text));
         logLen += text.length;
         if (logLen > MAX_LOG_CHARS && !hasSelectionIn(logEl)) {
@@ -258,17 +253,14 @@ function clearCacheAndReload() {
 
     function startLogStream() {
         // Same-origin WebSocket; the session cookie authenticates the handshake.
-        // The server pushes the build-log tail, then follows the live container
-        // log, so the browser only appends new lines instead of re-fetching the
-        // whole log on a timer.
+        // The server replays the log tail then follows live output, so we append
+        // new lines instead of re-fetching the whole log on a timer.
         var proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
         var ws = new WebSocket(proto + '//' + window.location.host + config.appLogsStreamUrl);
         ws.onmessage = function(e) {
-            // Priming clears the placeholder (first connect) or the previous
-            // stream's contents (a reconnect, see onclose) so the replayed tail
-            // replaces the old log instead of appending a duplicate copy. Drop any
-            // buffered-but-unflushed lines too, so they can't land on the cleared
-            // <pre> on the next flush.
+            // Clear on the first message so the replayed tail replaces the
+            // placeholder (or, on reconnect, the old contents) instead of
+            // duplicating it; drop buffered lines too so none land post-clear.
             if (!logPrimed) {
                 logEl.textContent = ''; logLen = 0;
                 pending = []; pendingLen = 0;
@@ -277,12 +269,10 @@ function clearCacheAndReload() {
             appendLog(e.data + '\n');
         };
         ws.onclose = function() {
-            // Unlike EventSource, a WebSocket doesn't auto-reconnect. The server
-            // holds the socket open even after the log stream ends, so a close
-            // here means a real drop (network blip or server restart) — retry
-            // after a short delay. The reconnected stream replays the recent tail
-            // from the start, so re-prime to replace the old contents rather than
-            // appending a second copy below them.
+            // A WebSocket won't auto-reconnect, and the server holds the socket
+            // open past end-of-log, so a close means a real drop (network blip or
+            // server restart) — retry. Re-prime because the reconnected stream
+            // replays the tail from the start.
             logPrimed = false;
             setTimeout(startLogStream, 2000);
         };
@@ -365,9 +355,8 @@ function clearCacheAndReload() {
 
     logEl.scrollTop = logEl.scrollHeight;
 
-    // Logs stream continuously over a WebSocket regardless of status (a
-    // stopped/errored app still streams its build log, then the stream ends and
-    // the server holds the socket open at the final state).
+    // Stream regardless of status: a stopped/errored app still has a build log to
+    // replay, after which the server holds the socket open at the final state.
     startLogStream();
 
     // 'removing' polls so the page learns when the row vanishes (404).

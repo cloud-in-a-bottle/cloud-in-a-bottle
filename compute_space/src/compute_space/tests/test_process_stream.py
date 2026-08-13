@@ -48,6 +48,23 @@ def test_merge_stderr_false_discards_stderr() -> None:
     assert lines == [b"from-stdout"]
 
 
+def test_stderr_sink_diverts_stderr_and_keeps_stdout_clean() -> None:
+    # stderr goes to the sink (not folded into the yielded stdout), and a
+    # normally-exiting child's buffered stderr is fully delivered before teardown.
+    argv = [sys.executable, "-c", "import sys; print('out'); sys.stderr.write('err1\\nerr2\\n')"]
+    captured: list[bytes] = []
+    lines = asyncio.run(_collect(stream_process_lines(argv, merge_stderr=False, stderr_sink=captured.append)))
+    assert lines == [b"out"]
+    assert captured == [b"err1", b"err2"]
+
+
+def test_stderr_sink_conflicts_with_merge_stderr() -> None:
+    # merge_stderr folds stderr into stdout, so a sink couldn't also observe it —
+    # the combination is a programming error, caught loudly.
+    with pytest.raises(AssertionError):
+        asyncio.run(_collect(stream_process_lines(["printf", "x\n"], merge_stderr=True, stderr_sink=lambda _b: None)))
+
+
 def test_missing_binary_raises_loudly() -> None:
     # A missing binary is exactly the "weird" case we refuse to paper over: it
     # propagates instead of yielding an empty stream.

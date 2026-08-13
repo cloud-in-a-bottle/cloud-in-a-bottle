@@ -27,6 +27,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 from collections.abc import AsyncGenerator
+from collections.abc import Callable
 
 # Generous per-line cap so a long (but legitimate) log line doesn't trip asyncio's
 # default 64 KiB StreamReader limit and raise mid-stream. A line beyond this is
@@ -44,14 +45,34 @@ def _terminate(proc: asyncio.subprocess.Process) -> None:
             proc.terminate()
 
 
+async def _drain_stderr(reader: asyncio.StreamReader, sink: Callable[[bytes], None]) -> None:
+    """Forward the child's stderr to ``sink`` line by line (newline stripped) until it closes.
+
+    Drained concurrently with stdout so a child that chatters on stderr can't fill its
+    stderr pipe buffer and block — which would then stall the stdout we actually read.
+    """
+    while line := await reader.readline():
+        sink(line.rstrip(b"\n"))
+
+
 async def stream_process_lines(
-    argv: list[str], *, merge_stderr: bool, raise_on_error: bool = False
+    argv: list[str],
+    *,
+    merge_stderr: bool,
+    raise_on_error: bool = False,
+    stderr_sink: Callable[[bytes], None] | None = None,
 ) -> AsyncGenerator[bytes, None]:
     """Spawn ``argv`` and yield its stdout line by line (newline stripped) until EOF.
 
     ``merge_stderr`` folds the child's stderr into the yielded stream (True — right
     for ``podman logs``, where container stderr is part of the log) or discards it
     (False — right for the OOM streams, where stderr is diagnostic noise).
+
+    ``stderr_sink`` (only valid with ``merge_stderr=False``) instead diverts each
+    stderr line to the callback — for callers that want to keep stderr *out* of the
+    parsed stdout stream (e.g. the OOM followers' JSON) yet still surface it, say to
+    log the real reason a follow ended instead of a bare EOF. It's drained on its own
+    task so it can't stall stdout.
 
     ``raise_on_error`` turns a non-zero *self*-exit into a raised ``RuntimeError``
     instead of a silent EOF — for callers (like the build-log tail) where the child
@@ -62,13 +83,23 @@ async def stream_process_lines(
     Only EOF ends the generator cleanly otherwise. A spawn or read failure propagates;
     see the module docstring. The child is terminated and reaped in all exit paths.
     """
+    assert not (merge_stderr and stderr_sink is not None), "stderr_sink can't observe stderr that's merged into stdout"
+    if merge_stderr:
+        stderr = asyncio.subprocess.STDOUT
+    elif stderr_sink is not None:
+        stderr = asyncio.subprocess.PIPE
+    else:
+        stderr = asyncio.subprocess.DEVNULL
     proc = await asyncio.create_subprocess_exec(
         *argv,
         stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.STDOUT if merge_stderr else asyncio.subprocess.DEVNULL,
+        stderr=stderr,
         limit=_LINE_LIMIT_BYTES,
     )
     _active.add(proc)
+    drain: asyncio.Task[None] | None = None
+    if stderr_sink is not None and proc.stderr is not None:
+        drain = asyncio.ensure_future(_drain_stderr(proc.stderr, stderr_sink))
     try:
         assert proc.stdout is not None
         # readline() returns b"" only at EOF; a blank line still carries its newline,
@@ -84,6 +115,13 @@ async def stream_process_lines(
         _terminate(proc)
         with contextlib.suppress(Exception):
             await proc.wait()
+        if drain is not None:
+            # The child is reaped above, so its stderr is now closed; the drain task
+            # reads the last buffered lines, sees EOF, and ends on its own. Await it
+            # (rather than cancel) so a normally-exiting child's buffered stderr is
+            # fully delivered to the sink instead of being cut off mid-drain.
+            with contextlib.suppress(Exception):
+                await drain
 
 
 def cleanup_all() -> None:
