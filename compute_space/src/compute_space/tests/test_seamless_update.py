@@ -17,9 +17,9 @@ from litestar.testing import TestClient
 import compute_space.web.routes.api.settings as settings_mod
 from compute_space.config import provide_config
 from compute_space.config import set_active_config
-from compute_space.core import seamless_update
-from compute_space.core import update_progress
-from compute_space.core.system_agent import SystemAgentError
+from compute_space.core.system_agent import progress as update_progress
+from compute_space.core.system_agent import update_token as seamless_update
+from compute_space.core.system_agent.client import SystemAgentError
 from compute_space.db import provide_db
 from compute_space.db.connection import init_db
 from compute_space.web.app import _template_globals

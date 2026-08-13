@@ -4,9 +4,9 @@ import attr
 
 # The agent's reader/writer, so compute_space and the updater parse the same log.
 from compute_space.core.logging import logger
-from compute_space.core.system_agent import SystemAgentError
-from compute_space.core.system_agent import system_agent_mark_boot_complete_sync
-from compute_space.core.system_agent import system_agent_record_update_failure
+from compute_space.core.system_agent.client import SystemAgentError
+from compute_space.core.system_agent.client import system_agent_mark_boot_complete_sync
+from compute_space.core.system_agent.client import system_agent_record_update_failure
 from openhost_system_agent.updater import progress as agent_progress
 
 

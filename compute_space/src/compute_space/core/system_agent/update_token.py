@@ -3,9 +3,9 @@ from __future__ import annotations
 import secrets
 
 from compute_space.core.logging import logger
-from compute_space.core.system_agent import SystemAgentError
-from compute_space.core.system_agent import system_agent_clear_update_token
-from compute_space.core.system_agent import system_agent_set_update_token
+from compute_space.core.system_agent.client import SystemAgentError
+from compute_space.core.system_agent.client import system_agent_clear_update_token
+from compute_space.core.system_agent.client import system_agent_set_update_token
 
 
 def new_update_token() -> str:

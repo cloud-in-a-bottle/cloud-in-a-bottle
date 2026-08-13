@@ -35,13 +35,13 @@ from compute_space.core.logging import logger
 from compute_space.core.logging import setup_file_logging
 from compute_space.core.pinned_binary import get_pinned_binary
 from compute_space.core.pinned_binary import install_pinned_binary
-from compute_space.core.system_agent import system_agent_stop_updater_sync
+from compute_space.core.system_agent.client import system_agent_stop_updater_sync
+from compute_space.core.system_agent.progress import mark_boot_complete
 from compute_space.core.terminal import cleanup_all as cleanup_terminal_sessions
 from compute_space.core.tls.provision import provision_cert
 from compute_space.core.tls.renewal import CertStatus
 from compute_space.core.tls.renewal import get_cert_status
 from compute_space.core.tls.renewal import start_renewal_thread
-from compute_space.core.update_progress import mark_boot_complete
 from compute_space.core.updates import RESTART_EXIT_CODE
 from compute_space.core.updates import initialize_shutdown_event
 from compute_space.db import get_db

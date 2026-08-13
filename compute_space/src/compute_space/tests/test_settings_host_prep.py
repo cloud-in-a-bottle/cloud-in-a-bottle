@@ -16,7 +16,7 @@ import pytest
 from litestar.exceptions import HTTPException
 
 import compute_space.web.routes.api.settings as settings_mod
-from compute_space.core.system_agent import SystemAgentError
+from compute_space.core.system_agent.client import SystemAgentError
 from openhost_system_agent.protocol import FetchResult
 from openhost_system_agent.protocol import MigrationStatus
 

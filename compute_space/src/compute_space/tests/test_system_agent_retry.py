@@ -11,8 +11,8 @@ import subprocess
 
 import pytest
 
-from compute_space.core import system_agent
-from compute_space.core.system_agent import SystemAgentError
+from compute_space.core.system_agent import client as system_agent
+from compute_space.core.system_agent.client import SystemAgentError
 
 
 class _Result:
