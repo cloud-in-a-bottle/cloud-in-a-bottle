@@ -62,6 +62,18 @@
 # Additive — it layers onto openhost.service without touching the main unit; kept
 # byte-identical with the JOURNAL_READ_DROPIN constant in the system agent's v0010
 # migration, which installs the same file on existing hosts during self-update.
+#
+# Create the drop-in directory first: the `copy` module (unlike the migration's
+# write_file, which mkdir -p's) does not create parent dirs, so without this the
+# copy fails on a fresh host with "Destination directory ... does not exist".
+- name: Ensure openhost drop-in directory exists
+  become: yes
+  become_user: root
+  file:
+    path: /etc/systemd/system/openhost.service.d
+    state: directory
+    mode: "0755"
+
 - name: Install openhost journal-read drop-in
   become: yes
   become_user: root
