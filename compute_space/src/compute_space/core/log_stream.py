@@ -59,44 +59,45 @@ async def _podman_follow(container_id: str, tail_lines: int) -> AsyncIterator[st
         yield _ANSI_RE.sub("", raw.decode("utf-8", "replace").rstrip("\r"))
 
 
+def _still_building(get_state: Callable[[], tuple[str, str | None]]) -> bool:
+    """True while a build is in flight and no container has appeared yet."""
+    status, container_id = get_state()
+    return container_id is None and status in _BUILDING_STATES
+
+
 async def _follow_build_until_container(
     build_log_path: str, get_state: Callable[[], tuple[str, str | None]]
 ) -> AsyncIterator[str]:
     """Follow the build log live, stopping once the container appears or the build ends.
 
-    First waits for docker.log to appear (briefly absent at build start / across a
-    reload's log rotation), giving up if the build ends first. Then ``asyncio.wait``'s
-    timeout polls ``get_state`` between lines *without* cancelling the in-flight read —
-    cancelling it would tear down the ``tail`` process — so the pending read carries over.
+    docker.log is briefly absent at build start and across a reload's log rotation, so
+    we first wait for it to appear (giving up if the build ends first). Then we stream
+    its lines, re-checking the app state between them: ``wait_for`` bounds how long we
+    block waiting for the next line, and ``shield`` keeps that in-flight read alive
+    across a timeout (cancelling it would kill ``tail``) so it resumes next iteration.
     """
     while not os.path.exists(build_log_path):
-        status, container_id = get_state()
-        if container_id is not None or status not in _BUILDING_STATES:
+        if not _still_building(get_state):
             return
         await asyncio.sleep(_BUILD_POLL_SECONDS)
 
     gen = stream_process_lines(_tail_argv(build_log_path, follow=True), merge_stderr=True, raise_on_error=True)
-    pending: asyncio.Task[object] | None = None
+    pending = asyncio.ensure_future(anext(gen, _EOF))
     try:
-        while True:
-            if pending is None:
-                pending = asyncio.ensure_future(anext(gen, _EOF))
-            done, _ = await asyncio.wait({pending}, timeout=_BUILD_POLL_SECONDS)
-            if pending in done:
-                line = pending.result()
-                pending = None
-                if line is _EOF:
-                    return
-                assert isinstance(line, bytes)
-                yield line.decode("utf-8", "replace").rstrip("\r")
-            status, container_id = get_state()
-            if container_id is not None or status not in _BUILDING_STATES:
+        while _still_building(get_state):
+            try:
+                line = await asyncio.wait_for(asyncio.shield(pending), _BUILD_POLL_SECONDS)
+            except TimeoutError:
+                continue  # no line this interval; re-check state and keep the read going
+            if line is _EOF:
                 return
+            assert isinstance(line, bytes)
+            yield line.decode("utf-8", "replace").rstrip("\r")
+            pending = asyncio.ensure_future(anext(gen, _EOF))
     finally:
-        if pending is not None:
-            pending.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await pending
+        pending.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await pending
         await gen.aclose()
 
 
@@ -111,13 +112,10 @@ async def stream_app_logs(
     in flight so we can hand off from tailing ``docker.log`` to following the container
     as soon as it comes up.
     """
-    status, container_id = get_state()
-
-    if container_id is None and status in _BUILDING_STATES:
+    if _still_building(get_state):
         # Build in flight: follow docker.log live until the container comes up.
         async for line in _follow_build_until_container(build_log_path, get_state):
             yield line
-        _, container_id = get_state()
     elif os.path.exists(build_log_path):
         # Already built: replay the build log's tail once, then show container logs.
         async for raw in stream_process_lines(
@@ -125,6 +123,7 @@ async def stream_app_logs(
         ):
             yield raw.decode("utf-8", "replace").rstrip("\r")
 
+    _, container_id = get_state()
     if container_id:
         yield "=== Container logs ==="
         async for line in _podman_follow(container_id, _CONTAINER_TAIL_LINES):

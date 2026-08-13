@@ -144,22 +144,56 @@ def test_stream_app_logs_building_then_container_appears(monkeypatch: pytest.Mon
     assert chunks == ["building...", "more build output", "=== Container logs ===", "container up"]
 
 
-def test_follow_build_stops_when_container_appears(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    # The follow yields build lines and returns as soon as get_state reports a
-    # container, without draining the rest of the (still-live) build stream.
+def test_follow_build_streams_until_eof(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # While the build keeps going, every build line is yielded until the stream ends.
     build = tmp_path / "docker.log"
     build.write_text("present")  # exists, so the follow skips the wait-for-appear
-    _fake_build_stream(monkeypatch, [b"a", b"b", b"c"])
-    states = iter([("building", None), ("running", "cid")])
+    _fake_build_stream(monkeypatch, [b"a", b"b"])
 
     def get_state() -> tuple[str, str | None]:
-        try:
-            return next(states)
-        except StopIteration:
-            return "running", "cid"
+        return "building", None
 
     lines = asyncio.run(_collect(log_stream._follow_build_until_container(str(build), get_state)))
     assert lines == ["a", "b"]
+
+
+def test_follow_build_stops_when_container_appears(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # The follow returns as soon as get_state reports a container, without draining
+    # the rest of the (still-live) build stream.
+    build = tmp_path / "docker.log"
+    build.write_text("present")  # exists, so the follow skips the wait-for-appear
+    _fake_build_stream(monkeypatch, [b"a", b"b", b"c"])
+    calls = {"n": 0}
+
+    def get_state() -> tuple[str, str | None]:
+        # building for the first check, a container by the next — so exactly one line.
+        calls["n"] += 1
+        return ("running", "cid") if calls["n"] > 1 else ("building", None)
+
+    lines = asyncio.run(_collect(log_stream._follow_build_until_container(str(build), get_state)))
+    assert lines == ["a"]
+
+
+def test_follow_build_read_survives_a_timeout(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # A line that takes longer than the poll interval to arrive is still delivered:
+    # the timed-out read is shielded (kept alive), not cancelled/lost.
+    monkeypatch.setattr(log_stream, "_BUILD_POLL_SECONDS", 0.01)
+    build = tmp_path / "docker.log"
+    build.write_text("present")
+
+    async def slow_stream(
+        argv: list[str], *, merge_stderr: bool, raise_on_error: bool = False
+    ) -> AsyncIterator[bytes]:
+        await asyncio.sleep(0.05)  # several poll intervals with no line
+        yield b"late line"
+
+    monkeypatch.setattr(log_stream, "stream_process_lines", slow_stream)
+
+    def get_state() -> tuple[str, str | None]:
+        return "building", None
+
+    lines = asyncio.run(_collect(log_stream._follow_build_until_container(str(build), get_state)))
+    assert lines == ["late line"]
 
 
 def test_follow_build_gives_up_when_build_ends_before_log_appears(monkeypatch: pytest.MonkeyPatch) -> None:
