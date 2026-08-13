@@ -1,7 +1,7 @@
 [project]
 name = "oh"
 version = "0.1.0"
-description = "OpenHost CLI — manage apps on your compute space"
+description = "Cloud in a Bottle CLI — manage apps on your compute space"
 requires-python = ">=3.12"
 dependencies = [
     "attrs",

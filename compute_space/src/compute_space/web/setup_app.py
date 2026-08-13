@@ -148,7 +148,7 @@ async def setup_post(request: Request[Any, Any, Any], config: NamedDependency[Co
     body = (
         "<!doctype html><html><head><meta http-equiv=refresh content='2; url=/'>"
         "<meta name=robots content=noindex>"
-        "<title>OpenHost — restarting</title></head>"
+        "<title>Cloud in a Bottle — restarting</title></head>"
         "<body style='font-family:system-ui;text-align:center;margin-top:4em;'>"
         "<p>Setup complete. Restarting…</p></body></html>"
     )

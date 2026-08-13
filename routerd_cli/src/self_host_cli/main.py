@@ -20,7 +20,7 @@ from self_host_cli.update import run_update
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="openhost",
-        description="OpenHost -- run open-source apps on your own compute.",
+        description="Cloud in a Bottle -- run open-source apps on your own compute.",
     )
     sub = parser.add_subparsers(dest="command")
 
@@ -28,7 +28,7 @@ def _build_parser() -> argparse.ArgumentParser:
     up_parser = sub.add_parser(
         "up",
         help="Start OpenHost.",
-        description="Launches the OpenHost router directly on this machine.",
+        description="Launches the Cloud in a Bottle router directly on this machine.",
     )
     up_parser.add_argument(
         "--domain",

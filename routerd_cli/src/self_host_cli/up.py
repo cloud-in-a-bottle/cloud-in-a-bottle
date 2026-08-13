@@ -1,4 +1,4 @@
-"""``openhost up`` -- start the OpenHost router.
+"""``openhost up`` -- start the Cloud in a Bottle router.
 
 --domain: enables TLS via ACME.
 --zone-domain: enables host-based app subdomain routing without TLS.
@@ -161,7 +161,7 @@ def _resolve_zone_domain(args: argparse.Namespace) -> str:
 
 def run_up(args: argparse.Namespace) -> None:
     """Run the router directly on the host."""
-    print("Starting OpenHost...")
+    print("Starting Cloud in a Bottle...")
     print()
 
     zone_domain = _resolve_zone_domain(args)

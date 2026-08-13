@@ -146,7 +146,7 @@ def test_install_without_grant_returns_permission_required(client: TestClient[Li
     resp = client.post(
         _url("install"),
         headers=_headers(),
-        content=json.dumps({"repo_url": "https://github.com/imbue-openhost/openhost-catalog"}),
+        content=json.dumps({"repo_url": "https://github.com/imbue-openhost/app-catalog"}),
     )
     assert resp.status_code == 403
     body = resp.json()
@@ -207,7 +207,7 @@ def test_proposed_grant_uses_manifest_declared_prefix(cfg: Any) -> None:
         resp = client.post(
             _url("install"),
             headers={"Authorization": f"Bearer {NARROW_CALLER_TOKEN}", "Content-Type": "application/json"},
-            content=json.dumps({"repo_url": "https://github.com/imbue-openhost/openhost-gemini"}),
+            content=json.dumps({"repo_url": "https://github.com/imbue-openhost/bottled-gemini"}),
         )
     assert resp.status_code == 403
     body = resp.json()

@@ -69,7 +69,7 @@ If permission is needed to access the service, a 403 is returned - see the Permi
 
 ### Provider selection
 
-Each service URL has a configured default provider - by default it's first app installed providing that service, but can be configured in openhost's settings.
+Each service URL has a configured default provider - by default it's first app installed providing that service, but can be configured in Cloud in a Bottle's settings.
 
 If the resolved default's version doesn't satisfy the consumer's version specifier, the router returns 503 `service_not_available`.
 
@@ -123,7 +123,7 @@ For `scope: "global"`, the router rewrites the response to add a `grant_url` poi
 
 The consumer redirects the owner to `grant_url`; after approval, the call can be retried.
 
-**Granting at deploy time.** Global-scoped permissions specified in the consumer app manifest (`grants`) can be granted as part of the app install, either in the openhost web UI or via the compute_space CLI's `--grant-permissions-v2` flag.
+**Granting at deploy time.** Global-scoped permissions specified in the consumer app manifest (`grants`) can be granted as part of the app install, either in the Cloud in a Bottle web UI or via the compute_space CLI's `--grant-permissions-v2` flag.
 
 #### Provider-app-scoped permissions
 

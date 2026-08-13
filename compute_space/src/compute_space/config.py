@@ -90,7 +90,7 @@ class Config:
     # Each entry is either:
     #   - a bare dirname under apps_dir (vendored builtin, e.g. "secrets_v2"), or
     #   - a remote git URL the router will clone on first boot
-    #     (e.g. "https://github.com/imbue-openhost/openhost-catalog").
+    #     (e.g. "https://github.com/imbue-openhost/app-catalog").
     # Remote URLs are dispatched through the same clone path as
     # /api/add_app and do not need to be present on disk ahead of time.
     default_apps: list[str]
@@ -349,11 +349,11 @@ class DefaultConfig(Config):
     default_apps: list[str] = attr.Factory(
         lambda: [
             "https://github.com/imbue-openhost/secrets",
-            "https://github.com/imbue-openhost/openhost-filestash",
+            "https://github.com/imbue-openhost/bottled-filestash",
             "oauth_provider",
-            "https://github.com/imbue-openhost/openhost-catalog",
-            "https://github.com/imbue-openhost/openhost-backup",
-            "https://github.com/imbue-openhost/openhost-community-chat",
+            "https://github.com/imbue-openhost/app-catalog",
+            "https://github.com/imbue-openhost/backup",
+            "https://github.com/imbue-openhost/bottled-community-chat",
         ]
     )
 

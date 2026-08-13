@@ -1,6 +1,6 @@
 ## Logs
 
-OpenHost produces several distinct log streams, stored in different places depending on the process.
+Cloud in a Bottle produces several distinct log streams, stored in different places depending on the process.
 
 ---
 
@@ -20,7 +20,7 @@ The router writes to two sinks simultaneously via loguru:
 - Written at DEBUG level and above.
 - Captured by systemd from the router process's stderr and stored in journald's binary database at `/var/log/journal/`.
 - Also contains output from Caddy and CoreDNS, because both are child processes of the router — their stdout is read line-by-line and re-emitted through the router's logger.
-- Persists across restarts and accumulates until journald's on-disk size cap is hit. OpenHost caps the total journal at 500 MB via a drop-in at `/etc/systemd/journald.conf.d/10-openhost.conf` (`SystemMaxUse=500M`) so the journal alone can't fill the host disk; older entries are discarded once the cap is reached.
+- Persists across restarts and accumulates until journald's on-disk size cap is hit. Cloud in a Bottle caps the total journal at 500 MB via a drop-in at `/etc/systemd/journald.conf.d/10-openhost.conf` (`SystemMaxUse=500M`) so the journal alone can't fill the host disk; older entries are discarded once the cap is reached.
 - Access via `journalctl -u openhost` or `journalctl -u openhost -f` to follow.
 
 ---
@@ -39,7 +39,7 @@ Container stdout and stderr are written to a per-app file via podman's `k8s-file
 - Up to 5 archived build logs are kept per app; older ones are deleted when the limit is exceeded.
 - Deleted entirely when the app is removed.
 - Access via `oh app logs <name>` (the current runtime log is appended to the build log).
-- Runtime logs do not appear in journald, which is used for openhost status logs
+- Runtime logs do not appear in journald, which is used for Cloud in a Bottle status logs
 
 ---
 
@@ -65,4 +65,4 @@ journalctl -u openhost-juicefs
 - App container stdout/stderr (now written to `container.log` via k8s-file)
 - The contents of `compute_space.log` (the file sink is separate from journald)
 
-Journald stores logs in a binary indexed format across multiple files. Queries are indexed by unit, priority, and time — they are not a linear scan — but total journal size still affects seek time. OpenHost caps the total on-disk journal at 500 MB via `SystemMaxUse` in a drop-in at `/etc/systemd/journald.conf.d/10-openhost.conf`. Operators who need a different limit can add `SystemMaxFiles` or `MaxRetentionSec`, or override `SystemMaxUse`, in a higher-numbered drop-in (e.g. `/etc/systemd/journald.conf.d/20-local.conf`).
+Journald stores logs in a binary indexed format across multiple files. Queries are indexed by unit, priority, and time — they are not a linear scan — but total journal size still affects seek time. Cloud in a Bottle caps the total on-disk journal at 500 MB via `SystemMaxUse` in a drop-in at `/etc/systemd/journald.conf.d/10-openhost.conf`. Operators who need a different limit can add `SystemMaxFiles` or `MaxRetentionSec`, or override `SystemMaxUse`, in a higher-numbered drop-in (e.g. `/etc/systemd/journald.conf.d/20-local.conf`).
