@@ -456,15 +456,18 @@ def test_platform_diagnostics_survives_storage_failure(
     assert resp.json()["storage"] == {}
 
 
-def test_platform_diagnostics_survives_db_failure(cfg: Any) -> None:
+def test_platform_diagnostics_propagates_db_failure(cfg: Any) -> None:
+    # An unreadable control-plane DB is a foundational fault: the instance is
+    # broken and a bundle can't meaningfully describe it, so the error
+    # propagates (→ 500) rather than degrading to a hollow "0 apps" report.
     broken = MagicMock()
     broken.execute.side_effect = sqlite3.OperationalError("no such table")
     real_config = Config(**{f.name: getattr(cfg, f.name) for f in attr.fields(Config)})
-    with patch("compute_space.core.diagnostics.storage_status", return_value={}):
-        diag = asyncio.run(diagnostics.collect_platform_diagnostics(broken, real_config))
-    # A failing apps query leaves apps empty but still returns a bundle.
-    assert diag.apps == []
-    assert diag.system.python_version
+    with (
+        patch("compute_space.core.diagnostics.storage_status", return_value={}),
+        pytest.raises(sqlite3.OperationalError),
+    ):
+        asyncio.run(diagnostics.collect_platform_diagnostics(broken, real_config))
 
 
 def test_platform_diagnostics_no_apps(cfg: Any, system_client: TestClient[Litestar], cookies: dict[str, str]) -> None:
@@ -624,60 +627,122 @@ def test_parse_stats_percent() -> None:
     assert diagnostics._parse_stats_percent(None) is None
 
 
-def test_collect_app_resources_no_container() -> None:
-    r = diagnostics._collect_app_resources(None, 0.5, 256)
+def _stats(
+    *,
+    cpu_percent: float | None = None,
+    memory_usage_bytes: int | None = None,
+    memory_limit_bytes: int | None = None,
+    memory_percent: float | None = None,
+) -> Any:
+    return diagnostics._PodmanStats(
+        cpu_percent=cpu_percent,
+        memory_usage_bytes=memory_usage_bytes,
+        memory_limit_bytes=memory_limit_bytes,
+        memory_percent=memory_percent,
+    )
+
+
+def _make_batch(
+    *,
+    running: set[str] | None = None,
+    stats: dict[str, Any] | None = None,
+    error: str | None = None,
+) -> Any:
+    return diagnostics._ContainerStatsBatch(
+        running_short_ids=frozenset(running or set()),
+        stats_by_short_id=stats or {},
+        error=error,
+    )
+
+
+def test_split_mem_usage() -> None:
+    assert diagnostics._split_mem_usage("64MB / 128MB") == (64 * 1000**2, 128 * 1000**2)
+    # No ' / ' separator, dashes, or a non-string all degrade to (None, None).
+    assert diagnostics._split_mem_usage("10MB") == (None, None)
+    assert diagnostics._split_mem_usage("-- / --") == (None, None)
+    assert diagnostics._split_mem_usage(None) == (None, None)
+
+
+def test_stats_by_short_id_parses_entries() -> None:
+    cid = "f" * 64
+    entry = {"id": cid[:12], "cpu_percent": "7.00%", "mem_usage": "10MB / 100MB", "mem_percent": "10.00%"}
+    fake = subprocess.CompletedProcess([], 0, json.dumps([entry]), "")
+    with (
+        patch("compute_space.core.diagnostics.shutil.which", return_value="/usr/bin/podman"),
+        patch("compute_space.core.diagnostics.subprocess.run", return_value=fake),
+    ):
+        stats = diagnostics._stats_by_short_id()
+    parsed = stats[cid[:12]]
+    assert parsed.cpu_percent == 7.0
+    assert parsed.memory_usage_bytes == 10 * 1000**2
+    assert parsed.memory_limit_bytes == 100 * 1000**2
+    assert parsed.memory_percent == 10.0
+
+
+def test_stats_by_short_id_dashes_render_as_none() -> None:
+    cid = "a" * 64
+    entry = {"id": cid[:12], "cpu_percent": "--", "mem_usage": "-- / --", "mem_percent": "--"}
+    fake = subprocess.CompletedProcess([], 0, json.dumps([entry]), "")
+    with (
+        patch("compute_space.core.diagnostics.shutil.which", return_value="/usr/bin/podman"),
+        patch("compute_space.core.diagnostics.subprocess.run", return_value=fake),
+    ):
+        stats = diagnostics._stats_by_short_id()
+    parsed = stats[cid[:12]]
+    assert parsed.cpu_percent is None
+    assert parsed.memory_usage_bytes is None
+    assert parsed.memory_percent is None
+
+
+def test_app_resources_from_batch_no_container() -> None:
+    r = diagnostics._app_resources_from_batch(_make_batch(), None, 0.5, 256)
     assert r.running is False
     assert r.cpu_cores_limit == 0.5
     assert r.memory_mb_limit == 256
     assert r.cpu_percent is None
 
 
-def test_collect_app_resources_running_parses_stats() -> None:
-    stats = json.dumps([{"CPU": "12.50%", "MemUsage": "64MB / 128MB", "MemPerc": "50.00%"}])
-    fake = subprocess.CompletedProcess(args=[], returncode=0, stdout=stats, stderr="")
-    with (
-        patch("compute_space.core.diagnostics.shutil.which", return_value="/usr/bin/podman"),
-        patch("compute_space.core.diagnostics.is_container_running", return_value=True),
-        patch("compute_space.core.diagnostics.subprocess.run", return_value=fake),
-    ):
-        r = diagnostics._collect_app_resources("cid123", 0.5, 128)
+def test_app_resources_from_batch_running_reads_matching_entry() -> None:
+    cid = "abc123def456" + "0" * 52  # full 64-char id; batch keys on the short id
+    batch = _make_batch(
+        running={cid[:12]},
+        stats={cid[:12]: _stats(cpu_percent=12.5, memory_usage_bytes=64 * 1000**2, memory_limit_bytes=128 * 1000**2)},
+    )
+    r = diagnostics._app_resources_from_batch(batch, cid, 0.5, 128)
     assert r.running is True
     assert r.cpu_percent == 12.5
     assert r.memory_usage_bytes == 64 * 1000**2
     assert r.memory_limit_bytes == 128 * 1000**2
-    assert r.memory_percent == 50.0
 
 
-def test_collect_app_resources_not_running_when_container_stopped() -> None:
-    # An exited container is reported as not-running WITHOUT invoking stats:
-    # podman stats emits a zero-valued entry for a stopped container, so we
-    # trust the authoritative container-state check instead.
-    with (
-        patch("compute_space.core.diagnostics.shutil.which", return_value="/usr/bin/podman"),
-        patch("compute_space.core.diagnostics.is_container_running", return_value=False),
-        patch("compute_space.core.diagnostics.subprocess.run") as run_mock,
-    ):
-        r = diagnostics._collect_app_resources("cid123", 0.5, 128)
+def test_app_resources_from_batch_not_running_when_absent_from_ps() -> None:
+    # Present in stats but NOT in the running set (podman ps) -> not running, no
+    # misleading zero stats. Running state is authoritative from ``podman ps``.
+    cid = "d" * 64
+    batch = _make_batch(running=set(), stats={cid[:12]: _stats(cpu_percent=0.0)})
+    r = diagnostics._app_resources_from_batch(batch, cid, 0.5, 128)
     assert r.running is False
     assert r.error is None
     assert r.cpu_cores_limit == 0.5
     assert r.memory_mb_limit == 128
-    # stats must not be probed once the container is known to be stopped.
-    run_mock.assert_not_called()
 
 
-def test_collect_app_resources_stats_timeout() -> None:
-    with (
-        patch("compute_space.core.diagnostics.shutil.which", return_value="/usr/bin/podman"),
-        patch("compute_space.core.diagnostics.is_container_running", return_value=True),
-        patch(
-            "compute_space.core.diagnostics.subprocess.run",
-            side_effect=subprocess.TimeoutExpired(cmd="podman", timeout=10),
-        ),
-    ):
-        r = diagnostics._collect_app_resources("cid123", 0.5, 128)
+def test_app_resources_from_batch_running_without_stats_row() -> None:
+    # Running per ``podman ps`` but no stats entry (a stats gap): report running
+    # with unknown usage rather than dropping the app.
+    cid = "e" * 64
+    batch = _make_batch(running={cid[:12]}, stats={})
+    r = diagnostics._app_resources_from_batch(batch, cid, 1.0, 64)
+    assert r.running is True
+    assert r.cpu_percent is None
+    assert r.memory_usage_bytes is None
+
+
+def test_app_resources_from_batch_podman_unavailable() -> None:
+    batch = _make_batch(error="podman not found on PATH")
+    r = diagnostics._app_resources_from_batch(batch, "cid", 1.0, 64)
     assert r.running is False
-    assert "timed out" in (r.error or "")
+    assert "podman" in (r.error or "")
 
 
 # ─── health checks ────────────────────────────────────────────────────────────
@@ -933,7 +998,7 @@ def test_reachability_uses_configured_timeout_and_no_redirects(tmp_path: Path) -
     assert captured.get("follow_redirects") is False
 
 
-def test_stats_subprocess_uses_bounded_timeout() -> None:
+def test_stats_batch_subprocess_uses_bounded_timeout() -> None:
     captured: dict[str, Any] = {}
 
     def _fake_run(cmd: Any, **kwargs: Any) -> subprocess.CompletedProcess[str]:
@@ -942,10 +1007,10 @@ def test_stats_subprocess_uses_bounded_timeout() -> None:
 
     with (
         patch("compute_space.core.diagnostics.shutil.which", return_value="/usr/bin/podman"),
-        patch("compute_space.core.diagnostics.is_container_running", return_value=True),
         patch("compute_space.core.diagnostics.subprocess.run", _fake_run),
     ):
-        diagnostics._collect_app_resources("cid", 0.5, 128)
+        diagnostics._collect_container_stats_batch()
+    # A regression that drops the timeout would let a hung podman stall diagnostics.
     assert captured.get("timeout") == diagnostics._SUBPROCESS_TIMEOUT_S
 
 
@@ -995,10 +1060,10 @@ def test_one_bad_app_does_not_drop_the_others(
 
     real_summary = diagnostics._collect_app_summary
 
-    async def _flaky_summary(row: Any) -> Any:
+    async def _flaky_summary(row: Any, batch: Any = None) -> Any:
         if row["name"] == "good-a":
             raise RuntimeError("boom collecting good-a")
-        return await real_summary(row)
+        return await real_summary(row, batch)
 
     with patch("compute_space.core.diagnostics._collect_app_summary", side_effect=_flaky_summary):
         system_client.cookies.update(cookies)
@@ -1009,74 +1074,55 @@ def test_one_bad_app_does_not_drop_the_others(
     assert "good-a" not in names
 
 
-def test_apps_query_failure_yields_empty_apps_not_500(cfg: Any) -> None:
-    """A failure querying the apps table degrades to empty apps + a valid bundle
-    (rather than raising), so the rest of the diagnostics still reach the owner."""
+def test_apps_query_failure_propagates(cfg: Any) -> None:
+    """A failure querying the apps table propagates (→ 500) rather than degrading
+    to empty apps: an unreadable DB means the instance is broken, and a bundle
+    that renders that as "0 apps" would masquerade as a healthy empty instance."""
     broken = MagicMock()
     broken.execute.side_effect = sqlite3.OperationalError("apps table exploded")
-    real_config = Config(**{f.name: getattr(cfg, f.name) for f in attr.fields(Config)})
-    with (
-        patch("compute_space.core.diagnostics.storage_status", return_value={}),
-        patch("compute_space.core.diagnostics._collect_reachability", side_effect=_stub_reach),
-    ):
-        diag = asyncio.run(diagnostics.collect_platform_diagnostics(broken, real_config))
-    assert diag.apps == []
-    # The rest of the bundle is still populated.
-    assert diag.system.python_version
-    assert diag.resource_pressure is not None
-
-
-async def _stub_reach(_config: Any) -> list[Any]:
-    return []
+    with pytest.raises(sqlite3.OperationalError):
+        asyncio.run(diagnostics._collect_apps(broken))
 
 
 # ─── podman stats: partial / unusual shapes ──────────────────────────────────
 
 
-def _stats_run(stdout: str) -> Any:
-    fake = subprocess.CompletedProcess(args=[], returncode=0, stdout=stdout, stderr="")
-    return (
+def test_stats_batch_parses_ps_and_stats() -> None:
+    cid = "f" * 64
+
+    def _fake_run(cmd: Any, **_: Any) -> subprocess.CompletedProcess[str]:
+        sub = cmd[1] if len(cmd) > 1 else ""
+        if sub == "ps":
+            return subprocess.CompletedProcess(cmd, 0, json.dumps([{"Id": cid, "State": "running"}]), "")
+        if sub == "stats":
+            entry = {"id": cid[:12], "cpu_percent": "5.0%", "mem_usage": "10MB / 100MB"}
+            return subprocess.CompletedProcess(cmd, 0, json.dumps([entry]), "")
+        return subprocess.CompletedProcess(cmd, 0, "[]", "")
+
+    with (
         patch("compute_space.core.diagnostics.shutil.which", return_value="/usr/bin/podman"),
-        patch("compute_space.core.diagnostics.is_container_running", return_value=True),
-        patch("compute_space.core.diagnostics.subprocess.run", return_value=fake),
-    )
-
-
-def test_stats_dict_shape_not_list() -> None:
-    # Some podman versions emit a bare object rather than a list.
-    which_p, running_p, run_p = _stats_run(json.dumps({"CPU": "5.0%", "MemUsage": "10MB / 100MB", "MemPerc": "10%"}))
-    with which_p, running_p, run_p:
-        r = diagnostics._collect_app_resources("cid", 1.0, 100)
+        patch("compute_space.core.diagnostics.subprocess.run", _fake_run),
+    ):
+        batch = diagnostics._collect_container_stats_batch()
+    assert cid[:12] in batch.running_short_ids
+    assert cid[:12] in batch.stats_by_short_id
+    r = diagnostics._app_resources_from_batch(batch, cid, 1.0, 100)
     assert r.running is True
     assert r.cpu_percent == 5.0
     assert r.memory_usage_bytes == 10 * 1000**2
 
 
-def test_stats_empty_list_is_not_running() -> None:
-    which_p, running_p, run_p = _stats_run("[]")
-    with which_p, running_p, run_p:
-        r = diagnostics._collect_app_resources("cid", 1.0, 100)
+def test_stats_batch_no_containers_is_not_running() -> None:
+    with (
+        patch("compute_space.core.diagnostics.shutil.which", return_value="/usr/bin/podman"),
+        patch(
+            "compute_space.core.diagnostics.subprocess.run",
+            return_value=subprocess.CompletedProcess([], 0, "[]", ""),
+        ),
+    ):
+        batch = diagnostics._collect_container_stats_batch()
+    r = diagnostics._app_resources_from_batch(batch, "z" * 64, 1.0, 100)
     assert r.running is False
-
-
-def test_stats_missing_memusage_leaves_bytes_none() -> None:
-    which_p, running_p, run_p = _stats_run(json.dumps([{"CPU": "7.5%"}]))
-    with which_p, running_p, run_p:
-        r = diagnostics._collect_app_resources("cid", 1.0, 100)
-    assert r.running is True
-    assert r.cpu_percent == 7.5
-    assert r.memory_usage_bytes is None
-    assert r.memory_limit_bytes is None
-
-
-def test_stats_dashes_render_as_none() -> None:
-    which_p, running_p, run_p = _stats_run(json.dumps([{"CPU": "--", "MemUsage": "-- / --", "MemPerc": "--"}]))
-    with which_p, running_p, run_p:
-        r = diagnostics._collect_app_resources("cid", 1.0, 100)
-    assert r.running is True
-    assert r.cpu_percent is None
-    assert r.memory_usage_bytes is None
-    assert r.memory_percent is None
 
 
 # ─── full DTO JSON serialization round-trip ──────────────────────────────────
@@ -1264,43 +1310,205 @@ def test_reachability_collection_never_raises(tmp_path: Path) -> None:
     assert results == []
 
 
-def test_app_resources_memusage_without_slash(cfg: Any) -> None:
-    """A MemUsage string without ' / ' leaves the byte fields None but still
-    reports running with the manifest limits."""
-    stats = json.dumps([{"CPU": "1.0%", "MemUsage": "10MB", "MemPerc": "5%"}])
-    fake = subprocess.CompletedProcess(args=[], returncode=0, stdout=stats, stderr="")
+def test_stats_batch_podman_missing_is_not_an_error() -> None:
+    """Podman being absent is reported once in ``container_runtime``, so the
+    batch is simply empty with no error — every app then reads as having no live
+    stats (like a stopped container) rather than carrying a duplicated message."""
+    with patch("compute_space.core.diagnostics.shutil.which", return_value=None):
+        batch = diagnostics._collect_container_stats_batch()
+    assert batch.error is None
+    assert batch.running_short_ids == frozenset()
+    assert batch.stats_by_short_id == {}
+    # An app reads as not-running with no error — just data, not a failure.
+    r = diagnostics._app_resources_from_batch(batch, "a" * 64, 0.5, 128)
+    assert r.running is False
+    assert r.error is None
+    assert r.cpu_cores_limit == 0.5
+
+
+def test_stats_batch_unreadable_output_surfaces_error() -> None:
+    """Unparseable podman output must surface as a visible error, not be masked
+    as an empty fleet (which would read as 'every app is stopped')."""
+    fake = subprocess.CompletedProcess([], 0, "not json", "")
     with (
         patch("compute_space.core.diagnostics.shutil.which", return_value="/usr/bin/podman"),
-        patch("compute_space.core.diagnostics.is_container_running", return_value=True),
         patch("compute_space.core.diagnostics.subprocess.run", return_value=fake),
     ):
-        r = diagnostics._collect_app_resources("cid", 0.5, 128)
+        batch = diagnostics._collect_container_stats_batch()
+    assert batch.error is not None
+    assert batch.running_short_ids == frozenset()
+    assert batch.stats_by_short_id == {}
+    # Every app then carries that error rather than a misleading 'not running'.
+    r = diagnostics._app_resources_from_batch(batch, "a" * 64, 0.5, 128)
+    assert r.running is False
+    assert r.error == batch.error
+
+
+def test_stats_batch_non_list_output_surfaces_error() -> None:
+    # Valid JSON but the wrong shape (a bare string) is still a failure to read,
+    # not an empty fleet.
+    fake = subprocess.CompletedProcess([], 0, '"a string"', "")
+    with (
+        patch("compute_space.core.diagnostics.shutil.which", return_value="/usr/bin/podman"),
+        patch("compute_space.core.diagnostics.subprocess.run", return_value=fake),
+    ):
+        batch = diagnostics._collect_container_stats_batch()
+    assert batch.error is not None
+
+
+def test_stats_batch_nonzero_exit_surfaces_error() -> None:
+    fake = subprocess.CompletedProcess([], 125, "", "boom")
+    with (
+        patch("compute_space.core.diagnostics.shutil.which", return_value="/usr/bin/podman"),
+        patch("compute_space.core.diagnostics.subprocess.run", return_value=fake),
+    ):
+        batch = diagnostics._collect_container_stats_batch()
+    assert batch.error is not None
+    assert "125" in batch.error
+
+
+def test_stats_batch_stats_failure_keeps_running_set() -> None:
+    """``podman stats`` failing on its own must not throw away the ``podman ps``
+    running set: the app still reads as running, just without live usage, and the
+    error is surfaced."""
+    cid = "f" * 64
+
+    def _fake_run(cmd: Any, **_: Any) -> subprocess.CompletedProcess[str]:
+        sub = cmd[1] if len(cmd) > 1 else ""
+        if sub == "ps":
+            return subprocess.CompletedProcess(cmd, 0, json.dumps([{"Id": cid, "State": "running"}]), "")
+        # stats fails on its own.
+        return subprocess.CompletedProcess(cmd, 125, "", "stats boom")
+
+    with (
+        patch("compute_space.core.diagnostics.shutil.which", return_value="/usr/bin/podman"),
+        patch("compute_space.core.diagnostics.subprocess.run", _fake_run),
+    ):
+        batch = diagnostics._collect_container_stats_batch()
+    assert cid[:12] in batch.running_short_ids
+    assert batch.stats_by_short_id == {}
+    assert batch.error is not None
+    assert "stats" in batch.error
+    r = diagnostics._app_resources_from_batch(batch, cid, 1.0, 100)
     assert r.running is True
-    assert r.cpu_percent == 1.0
-    assert r.memory_usage_bytes is None
-    assert r.memory_limit_bytes is None
+    assert r.cpu_percent is None
+    assert r.error == batch.error
 
 
-def test_app_resources_unexpected_stats_shape(cfg: Any) -> None:
-    """A non-list, non-dict stats payload degrades to an error, not a crash."""
-    fake = subprocess.CompletedProcess(args=[], returncode=0, stdout='"a string"', stderr="")
+def test_stats_batch_ps_failure_keeps_stats() -> None:
+    """Symmetrically, ``podman ps`` failing must not throw away the ``podman
+    stats`` usage that already succeeded."""
+    cid = "f" * 64
+
+    def _fake_run(cmd: Any, **_: Any) -> subprocess.CompletedProcess[str]:
+        sub = cmd[1] if len(cmd) > 1 else ""
+        if sub == "stats":
+            entry = {"id": cid[:12], "cpu_percent": "5.0%", "mem_usage": "10MB / 100MB"}
+            return subprocess.CompletedProcess(cmd, 0, json.dumps([entry]), "")
+        # ps fails on its own.
+        return subprocess.CompletedProcess(cmd, 125, "", "ps boom")
+
     with (
         patch("compute_space.core.diagnostics.shutil.which", return_value="/usr/bin/podman"),
-        patch("compute_space.core.diagnostics.is_container_running", return_value=True),
-        patch("compute_space.core.diagnostics.subprocess.run", return_value=fake),
+        patch("compute_space.core.diagnostics.subprocess.run", _fake_run),
     ):
-        r = diagnostics._collect_app_resources("cid", 0.5, 128)
-    assert r.running is False
-    assert r.error is not None
+        batch = diagnostics._collect_container_stats_batch()
+    assert batch.running_short_ids == frozenset()
+    assert cid[:12] in batch.stats_by_short_id
+    assert batch.error is not None
+    assert "ps" in batch.error
 
 
-def test_app_resources_non_json_stats(cfg: Any) -> None:
-    fake = subprocess.CompletedProcess(args=[], returncode=0, stdout="not json", stderr="")
+# ─── batched podman stats + per-app concurrency ──────────────────────────────
+
+
+def _row_conn(db_path: str) -> sqlite3.Connection:
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def _seed_app_with_container(db_path: str, name: str, *, container_id: str) -> str:
+    app_id = new_app_id()
+    local_port = _next_local_port[0]
+    _next_local_port[0] += 1
+    db = sqlite3.connect(db_path)
+    try:
+        db.execute(
+            "INSERT INTO apps (app_id, name, version, runtime_type, repo_path, local_port, status, container_id) "
+            "VALUES (?, ?, '1.0', 'serverfull', '/r', ?, 'running', ?)",
+            (app_id, name, local_port, container_id),
+        )
+        db.commit()
+    finally:
+        db.close()
+    return app_id
+
+
+def test_apps_collected_concurrently(cfg: Any) -> None:
+    """Per-app summaries must be gathered concurrently, not collected serially —
+    with the blocking probes offloaded to threads, this is what turns an N-app
+    bundle from N serial probes into one parallel batch."""
+    for name in ("app-a", "app-b", "app-c"):
+        _seed_app(cfg.db_path, name, manifest_raw=_MINIMAL_MANIFEST)
+
+    concurrency = {"current": 0, "max": 0}
+    real_summary = diagnostics._collect_app_summary
+
+    async def _tracked(row: Any, batch: Any) -> Any:
+        concurrency["current"] += 1
+        concurrency["max"] = max(concurrency["max"], concurrency["current"])
+        await asyncio.sleep(0.05)
+        concurrency["current"] -= 1
+        return await real_summary(row, batch)
+
+    with patch("compute_space.core.diagnostics._collect_app_summary", side_effect=_tracked):
+        apps = asyncio.run(diagnostics._collect_apps(_row_conn(cfg.db_path)))
+    assert len(apps) == 3
+    # If apps were collected serially, max in-flight would be 1.
+    assert concurrency["max"] > 1
+
+
+def test_apps_batch_podman_stats_into_one_call(cfg: Any) -> None:
+    """The per-app resource probe must be batched: one ``podman ps`` + one
+    ``podman stats`` for the whole fleet, regardless of app count — never a
+    per-app ``inspect``/``stats``."""
+    ids = ["a" * 64, "b" * 64, "c" * 64]
+    for i, cid in enumerate(ids):
+        _seed_app_with_container(cfg.db_path, f"app{i}", container_id=cid)
+
+    calls: list[list[str]] = []
+
+    def _fake_run(cmd: Any, **_: Any) -> subprocess.CompletedProcess[str]:
+        calls.append(list(cmd))
+        sub = cmd[1] if len(cmd) > 1 else ""
+        if sub == "ps":
+            payload = [{"Id": c, "State": "running", "Names": [f"openhost-app{i}"]} for i, c in enumerate(ids)]
+            return subprocess.CompletedProcess(cmd, 0, json.dumps(payload), "")
+        if sub == "stats":
+            payload = [
+                {"id": c[:12], "cpu_percent": "5.00%", "mem_usage": "10MB / 100MB", "mem_percent": "10.00%"}
+                for c in ids
+            ]
+            return subprocess.CompletedProcess(cmd, 0, json.dumps(payload), "")
+        return subprocess.CompletedProcess(cmd, 0, "[]", "")
+
     with (
         patch("compute_space.core.diagnostics.shutil.which", return_value="/usr/bin/podman"),
-        patch("compute_space.core.diagnostics.is_container_running", return_value=True),
-        patch("compute_space.core.diagnostics.subprocess.run", return_value=fake),
+        patch("compute_space.core.diagnostics.subprocess.run", _fake_run),
     ):
-        r = diagnostics._collect_app_resources("cid", 0.5, 128)
-    assert r.running is False
-    assert "non-JSON" in (r.error or "")
+        apps = asyncio.run(diagnostics._collect_apps(_row_conn(cfg.db_path)))
+
+    stats_calls = [c for c in calls if len(c) > 1 and c[1] == "stats"]
+    ps_calls = [c for c in calls if len(c) > 1 and c[1] == "ps"]
+    inspect_calls = [c for c in calls if len(c) > 1 and c[1] == "inspect"]
+    # One stats + one ps for THREE apps — and no per-app inspect.
+    assert len(stats_calls) == 1, f"expected exactly 1 podman stats call, got {len(stats_calls)}"
+    assert len(ps_calls) == 1, f"expected exactly 1 podman ps call, got {len(ps_calls)}"
+    assert inspect_calls == []
+    # The batched stats populate every app's live usage.
+    by_name = {a.name: a for a in apps}
+    assert by_name["app0"].resources is not None
+    assert by_name["app0"].resources.running is True
+    assert by_name["app0"].resources.cpu_percent == 5.0
+    assert by_name["app0"].resources.memory_usage_bytes == 10 * 1000**2
