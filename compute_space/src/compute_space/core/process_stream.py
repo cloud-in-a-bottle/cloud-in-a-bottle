@@ -44,15 +44,23 @@ def _terminate(proc: asyncio.subprocess.Process) -> None:
             proc.terminate()
 
 
-async def stream_process_lines(argv: list[str], *, merge_stderr: bool) -> AsyncGenerator[bytes, None]:
+async def stream_process_lines(
+    argv: list[str], *, merge_stderr: bool, raise_on_error: bool = False
+) -> AsyncGenerator[bytes, None]:
     """Spawn ``argv`` and yield its stdout line by line (newline stripped) until EOF.
 
     ``merge_stderr`` folds the child's stderr into the yielded stream (True — right
     for ``podman logs``, where container stderr is part of the log) or discards it
     (False — right for the OOM streams, where stderr is diagnostic noise).
 
-    Only EOF ends the generator cleanly. A spawn or read failure propagates; see the
-    module docstring. The child is terminated and reaped in all exit paths.
+    ``raise_on_error`` turns a non-zero *self*-exit into a raised ``RuntimeError``
+    instead of a silent EOF — for callers (like the build-log tail) where the child
+    exiting non-zero means a real failure, not a normal end. It only fires when the
+    child closes stdout on its own; a consumer that stops early (cancels) still tears
+    the child down quietly, since we terminated it, not it failing.
+
+    Only EOF ends the generator cleanly otherwise. A spawn or read failure propagates;
+    see the module docstring. The child is terminated and reaped in all exit paths.
     """
     proc = await asyncio.create_subprocess_exec(
         *argv,
@@ -63,11 +71,14 @@ async def stream_process_lines(argv: list[str], *, merge_stderr: bool) -> AsyncG
     _active.add(proc)
     try:
         assert proc.stdout is not None
-        while True:
-            line = await proc.stdout.readline()
-            if not line:
-                break  # stdout closed — the process has ended (or is ending).
+        # readline() returns b"" only at EOF; a blank line still carries its newline,
+        # so the walrus loop stops on stream close, not on empty output.
+        while line := await proc.stdout.readline():
             yield line.rstrip(b"\n")
+        if raise_on_error:
+            await proc.wait()
+            if proc.returncode:
+                raise RuntimeError(f"`{argv[0]}` exited with status {proc.returncode}")
     finally:
         _active.discard(proc)
         _terminate(proc)

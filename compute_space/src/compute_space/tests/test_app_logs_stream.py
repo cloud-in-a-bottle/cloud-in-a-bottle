@@ -1,13 +1,13 @@
 """Route-level tests for the ``/app_logs_stream/<app_id>`` WebSocket endpoint.
 
-Drives the real WebSocket layer (inline auth check, route wiring, the
-build-log-then-container-follow handoff) via TestClient; podman is faked so no
-daemon is required.
+Drives the real WebSocket layer (inline auth check, route wiring, socket pump) via
+TestClient. ``stream_app_logs`` is faked: the TestClient runs the ASGI app in a
+worker thread whose event loop can't spawn subprocesses (asyncio's child watcher is
+main-thread only), and the log *content* generation is covered by test_log_stream.
 """
 
 from __future__ import annotations
 
-import os
 import sqlite3
 from collections.abc import AsyncIterator
 from collections.abc import Iterator
@@ -19,12 +19,12 @@ from litestar import Litestar
 from litestar.exceptions import WebSocketDisconnect
 from litestar.testing import TestClient
 
-from compute_space.core import log_stream
 from compute_space.core.app_id import new_app_id
 from compute_space.db.connection import init_db
 from compute_space.tests._litestar_helpers import auth_cookie
 from compute_space.tests._litestar_helpers import make_test_app
 from compute_space.tests.conftest import _make_test_config
+from compute_space.web.routes.api import apps
 from compute_space.web.routes.api.apps import api_apps_routes
 
 
@@ -67,19 +67,12 @@ def _seed_running_app(cfg: Any, name: str, container_id: str | None, port: int) 
     return app_id
 
 
-def _write_build_log(cfg: Any, name: str, text: str) -> None:
-    path = os.path.join(cfg.temporary_data_dir, "app_temp_data", name, "docker.log")
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "w") as f:
-        f.write(text)
+def _fake_stream_app_logs(chunks: list[str], monkeypatch: pytest.MonkeyPatch) -> None:
+    async def fake(app_name: str, build_log_path: str, get_state: Any) -> AsyncIterator[str]:
+        for chunk in chunks:
+            yield chunk
 
-
-def _fake_follow(lines: list[str], monkeypatch: pytest.MonkeyPatch) -> None:
-    async def fake(container_id: str, tail_lines: int) -> AsyncIterator[str]:
-        for line in lines:
-            yield line
-
-    monkeypatch.setattr(log_stream, "_podman_follow", fake)
+    monkeypatch.setattr(apps, "stream_app_logs", fake)
 
 
 def test_stream_requires_auth(cfg: Any, client: TestClient[Litestar]) -> None:
@@ -97,34 +90,28 @@ def test_stream_unknown_app_closes(cfg: Any, client: TestClient[Litestar], cooki
     assert exc.value.code == 4404
 
 
-def test_stream_emits_build_log_then_container_lines(
+def test_stream_forwards_chunks_over_the_socket(
     cfg: Any, client: TestClient[Litestar], cookies: dict[str, str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    _write_build_log(cfg, "notes", "build line 1\nbuild line 2\n")
-    _fake_follow(["container line a", "container line b"], monkeypatch)
+    chunks = ["build line 1\nbuild line 2", "=== Container logs ===", "container a", "container b"]
+    _fake_stream_app_logs(chunks, monkeypatch)
     app_id = _seed_running_app(cfg, "notes", "cid1", 20211)
 
     msgs = []
     with client.websocket_connect(f"/app_logs_stream/{app_id}", headers=_cookie_header(cookies)) as ws:
-        for _ in range(4):
+        for _ in range(len(chunks)):
             msgs.append(ws.receive_text())
 
-    assert msgs == [
-        "build line 1\nbuild line 2",
-        "=== Container logs ===",
-        "container line a",
-        "container line b",
-    ]
+    assert msgs == chunks
 
 
-def test_stream_no_container_emits_build_only(
+def test_stream_holds_socket_open_after_the_log_ends(
     cfg: Any, client: TestClient[Litestar], cookies: dict[str, str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    _write_build_log(cfg, "notes", "only a build log\n")
-    _fake_follow(["should not appear"], monkeypatch)
+    # A short (stopped-app) log still delivers, and the socket stays open at the
+    # final state rather than closing and prompting a client reconnect.
+    _fake_stream_app_logs(["only a build log"], monkeypatch)
     app_id = _seed_running_app(cfg, "notes", None, 20212)  # no container
 
     with client.websocket_connect(f"/app_logs_stream/{app_id}", headers=_cookie_header(cookies)) as ws:
-        first = ws.receive_text()
-
-    assert first == "only a build log"
+        assert ws.receive_text() == "only a build log"

@@ -1,8 +1,9 @@
 """Unit tests for compute_space.core.log_stream.
 
-The container-log path shells out to ``podman logs --follow`` (via the shared
-process-stream helper); here that is faked so the tests run without a live podman.
-The file-tailing helpers and the build→container flow are exercised directly.
+The build-log tail command (``sh``/``tail``) is exercised for real against temp
+files — including the fail-loud unreadable case — while the container follow
+(``podman logs``) and the async build→container orchestration are faked so the
+tests run without a live podman and deterministically.
 """
 
 from __future__ import annotations
@@ -16,167 +17,52 @@ from typing import Any
 import pytest
 
 from compute_space.core import log_stream
-from compute_space.core.log_stream import _read_build_tail
-from compute_space.core.log_stream import _read_from
 from compute_space.core.log_stream import stream_app_logs
+from compute_space.core.process_stream import stream_process_lines
 
 
 async def _collect(gen: AsyncIterator[str]) -> list[str]:
     return [chunk async for chunk in gen]
 
 
-def test_read_build_tail_returns_whole_small_file(tmp_path: Path) -> None:
+async def _collect_bytes(gen: AsyncIterator[bytes]) -> list[bytes]:
+    return [chunk async for chunk in gen]
+
+
+# ─── the build-log tail shell command (real sh/tail) ──────────────────────────
+
+
+def test_build_tail_oneshot_reads_existing_file(tmp_path: Path) -> None:
     p = tmp_path / "docker.log"
-    p.write_text("line1\nline2\n")
-    text, offset = _read_build_tail(str(p), max_bytes=1024)
-    assert text == "line1\nline2\n"
-    assert offset == p.stat().st_size
+    p.write_text("build 1\nbuild 2\n")
+    argv = log_stream._build_tail_argv(str(p), follow=False)
+    lines = asyncio.run(_collect_bytes(stream_process_lines(argv, merge_stderr=True, raise_on_error=True)))
+    assert lines == [b"build 1", b"build 2"]
 
 
-def test_read_build_tail_drops_partial_leading_line_when_truncated(tmp_path: Path) -> None:
-    p = tmp_path / "docker.log"
-    p.write_text("aaaa\nbbbb\ncccc\n")
-    # max_bytes lands mid-first-line, so the partial "aaaa" line is dropped.
-    text, offset = _read_build_tail(str(p), max_bytes=11)
-    assert text == "bbbb\ncccc\n"
-    assert offset == p.stat().st_size
-
-
-def test_read_build_tail_missing_file_is_quiet() -> None:
-    # Build hasn't written yet: expected, so empty rather than an error.
-    text, offset = _read_build_tail("/no/such/file.log", max_bytes=1024)
-    assert text == ""
-    assert offset == 0
+def test_build_tail_oneshot_missing_file_is_quiet() -> None:
+    # docker.log not written yet: expected, so empty and a clean (exit-0) end.
+    argv = log_stream._build_tail_argv("/no/such/file.log", follow=False)
+    lines = asyncio.run(_collect_bytes(stream_process_lines(argv, merge_stderr=True, raise_on_error=True)))
+    assert lines == []
 
 
 @pytest.mark.skipif(os.geteuid() == 0, reason="root bypasses file permission checks")
-def test_read_build_tail_permission_denied_fails_loud(tmp_path: Path) -> None:
-    # A weird error (not "hasn't started yet") must not be papered over as empty.
+def test_build_tail_unreadable_fails_loud(tmp_path: Path) -> None:
+    # Exists but unreadable (EACCES): tail exits non-zero, which raise_on_error
+    # surfaces rather than papering over as an empty log.
     p = tmp_path / "docker.log"
     p.write_text("secret\n")
     p.chmod(0o000)
+    argv = log_stream._build_tail_argv(str(p), follow=False)
     try:
-        with pytest.raises(PermissionError):
-            _read_build_tail(str(p), max_bytes=1024)
+        with pytest.raises(RuntimeError):
+            asyncio.run(_collect_bytes(stream_process_lines(argv, merge_stderr=False, raise_on_error=True)))
     finally:
         p.chmod(0o644)
 
 
-def test_read_from_returns_only_appended_bytes(tmp_path: Path) -> None:
-    p = tmp_path / "docker.log"
-    p.write_text("hello\n")
-    text, offset = _read_from(str(p), 0)
-    assert text == "hello\n"
-    assert offset == 6
-    # nothing new since last offset
-    text2, offset2 = _read_from(str(p), offset)
-    assert text2 == ""
-    assert offset2 == 6
-    # append and read only the delta
-    with open(p, "a") as f:
-        f.write("world\n")
-    text3, offset3 = _read_from(str(p), offset2)
-    assert text3 == "world\n"
-    assert offset3 == 12
-
-
-def test_read_from_resyncs_when_file_shrinks(tmp_path: Path) -> None:
-    """A rotated/truncated file (size < offset) resyncs from the start rather
-    than seeking past EOF and reading misaligned bytes."""
-    p = tmp_path / "docker.log"
-    p.write_text("aaaaaaaaaa\n")
-    # Pretend we had already consumed more than the file now holds.
-    p.write_text("new\n")
-    text, offset = _read_from(str(p), 50)
-    assert text == "new\n"
-    assert offset == p.stat().st_size
-
-
-def test_read_from_missing_file_is_quiet() -> None:
-    text, offset = _read_from("/no/such/file.log", 10)
-    assert text == ""
-    assert offset == 10
-
-
-@pytest.fixture
-def fake_podman(monkeypatch: pytest.MonkeyPatch) -> Any:
-    """Replace _podman_follow with a generator yielding canned container lines."""
-
-    def _install(lines: list[str]) -> dict[str, object]:
-        seen: dict[str, object] = {}
-
-        async def fake_follow(container_id: str, tail_lines: int) -> AsyncIterator[str]:
-            seen["container_id"] = container_id
-            seen["tail_lines"] = tail_lines
-            for line in lines:
-                yield line
-
-        monkeypatch.setattr(log_stream, "_podman_follow", fake_follow)
-        return seen
-
-    return _install
-
-
-def test_stream_running_app_emits_build_then_container(tmp_path: Path, fake_podman: Any) -> None:
-    build = tmp_path / "docker.log"
-    build.write_text("build step 1\nbuild step 2\n")
-    seen = fake_podman(["container line a", "container line b"])
-
-    def get_state() -> tuple[str, str | None]:
-        return "running", "cid123"
-
-    chunks = asyncio.run(_collect(stream_app_logs("myapp", str(build), get_state)))
-
-    assert chunks == [
-        "build step 1\nbuild step 2",
-        "=== Container logs ===",
-        "container line a",
-        "container line b",
-    ]
-    assert seen["container_id"] == "cid123"
-
-
-def test_stream_no_container_emits_build_only(tmp_path: Path, fake_podman: Any) -> None:
-    build = tmp_path / "docker.log"
-    build.write_text("just a build log\n")
-    fake_podman(["should not appear"])
-
-    def get_state() -> tuple[str, str | None]:
-        return "stopped", None
-
-    chunks = asyncio.run(_collect(stream_app_logs("myapp", str(build), get_state)))
-    assert chunks == ["just a build log"]
-
-
-def test_stream_building_then_container_appears(
-    tmp_path: Path, fake_podman: Any, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """While building we follow docker.log; once a container id appears we flush
-    the remaining build output and switch to the container feed."""
-    monkeypatch.setattr(log_stream, "_BUILD_POLL_SECONDS", 0)
-    build = tmp_path / "docker.log"
-    build.write_text("building...\n")
-    fake_podman(["container up"])
-
-    states = [("building", None), ("building", None), ("running", "cid9")]
-
-    def get_state() -> tuple[str, str | None]:
-        # Simulate more build output arriving between polls.
-        with open(build, "a") as f:
-            f.write("more build output\n")
-        return states.pop(0)
-
-    chunks = asyncio.run(_collect(stream_app_logs("myapp", str(build), get_state)))
-
-    assert "=== Container logs ===" in chunks
-    assert chunks[-1] == "container up"
-    # all build output is delivered before the container separator
-    sep = chunks.index("=== Container logs ===")
-    joined_build = "\n".join(chunks[:sep])
-    assert "building..." in joined_build
-    assert "more build output" in joined_build
-    # and the container feed contains nothing but the separator + follow lines
-    assert chunks[sep:] == ["=== Container logs ===", "container up"]
+# ─── container follow: timestamp + ANSI stripping ─────────────────────────────
 
 
 def test_podman_follow_strips_timestamp_and_ansi(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -190,7 +76,9 @@ def test_podman_follow_strips_timestamp_and_ansi(monkeypatch: pytest.MonkeyPatch
         b"2026-07-30T15:27:36.000000000+00:00 ",  # empty content
     ]
 
-    async def fake_stream(argv: list[str], *, merge_stderr: bool) -> AsyncIterator[bytes]:
+    async def fake_stream(
+        argv: list[str], *, merge_stderr: bool, raise_on_error: bool = False
+    ) -> AsyncIterator[bytes]:
         assert "--follow" in argv and "--timestamps" in argv
         assert merge_stderr is True
         for line in raw:
@@ -201,5 +89,81 @@ def test_podman_follow_strips_timestamp_and_ansi(monkeypatch: pytest.MonkeyPatch
     async def run() -> list[str]:
         return [line async for line in log_stream._podman_follow("cid", 2000)]
 
-    lines = asyncio.run(run())
-    assert lines == ["plain line", "red text", ""]
+    assert asyncio.run(run()) == ["plain line", "red text", ""]
+
+
+# ─── build→container orchestration ────────────────────────────────────────────
+
+
+def _fake_build_stream(monkeypatch: pytest.MonkeyPatch, lines: list[bytes]) -> None:
+    async def fake_stream(
+        argv: list[str], *, merge_stderr: bool, raise_on_error: bool = False
+    ) -> AsyncIterator[bytes]:
+        for line in lines:
+            yield line
+
+    monkeypatch.setattr(log_stream, "stream_process_lines", fake_stream)
+
+
+def _fake_podman(monkeypatch: pytest.MonkeyPatch, lines: list[str]) -> None:
+    async def fake_follow(container_id: str, tail_lines: int) -> AsyncIterator[str]:
+        for line in lines:
+            yield line
+
+    monkeypatch.setattr(log_stream, "_podman_follow", fake_follow)
+
+
+def test_stream_app_logs_running_emits_build_then_container(monkeypatch: pytest.MonkeyPatch) -> None:
+    _fake_build_stream(monkeypatch, [b"build 1", b"build 2"])
+    _fake_podman(monkeypatch, ["container a", "container b"])
+
+    def get_state() -> tuple[str, str | None]:
+        return "running", "cid123"
+
+    chunks = asyncio.run(_collect(stream_app_logs("app", "/p/docker.log", get_state)))
+    assert chunks == ["build 1", "build 2", "=== Container logs ===", "container a", "container b"]
+
+
+def test_stream_app_logs_no_container_emits_build_only(monkeypatch: pytest.MonkeyPatch) -> None:
+    _fake_build_stream(monkeypatch, [b"only a build log"])
+    _fake_podman(monkeypatch, ["should not appear"])
+
+    def get_state() -> tuple[str, str | None]:
+        return "stopped", None
+
+    chunks = asyncio.run(_collect(stream_app_logs("app", "/p/docker.log", get_state)))
+    assert chunks == ["only a build log"]
+
+
+def test_stream_app_logs_building_then_container_appears(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def fake_follow_build(build_log_path: str, get_state: Any) -> AsyncIterator[str]:
+        for line in ("building...", "more build output"):
+            yield line
+
+    monkeypatch.setattr(log_stream, "_follow_build_until_container", fake_follow_build)
+    _fake_podman(monkeypatch, ["container up"])
+
+    # building at connect; a container has appeared by the time the build follow returns.
+    states = iter([("building", None), ("running", "cid9")])
+
+    def get_state() -> tuple[str, str | None]:
+        return next(states)
+
+    chunks = asyncio.run(_collect(stream_app_logs("app", "/p/docker.log", get_state)))
+    assert chunks == ["building...", "more build output", "=== Container logs ===", "container up"]
+
+
+def test_follow_build_stops_when_container_appears(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The follow yields build lines and returns as soon as get_state reports a
+    # container, without draining the rest of the (still-live) build stream.
+    _fake_build_stream(monkeypatch, [b"a", b"b", b"c"])
+    states = iter([("building", None), ("running", "cid")])
+
+    def get_state() -> tuple[str, str | None]:
+        try:
+            return next(states)
+        except StopIteration:
+            return "running", "cid"
+
+    lines = asyncio.run(_collect(log_stream._follow_build_until_container("/p/docker.log", get_state)))
+    assert lines == ["a", "b"]

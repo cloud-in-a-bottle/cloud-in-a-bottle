@@ -75,6 +75,34 @@ def test_early_break_terminates_and_reaps_process() -> None:
     assert not process_stream._active
 
 
+def test_raise_on_error_is_quiet_on_clean_exit() -> None:
+    lines = asyncio.run(_collect(stream_process_lines(["printf", "ok\n"], merge_stderr=False, raise_on_error=True)))
+    assert lines == [b"ok"]
+
+
+def test_raise_on_error_raises_on_nonzero_self_exit() -> None:
+    # The child streams a line then exits non-zero on its own: surfaced, not a
+    # silent EOF.
+    async def run() -> None:
+        await _collect(stream_process_lines(["sh", "-c", "echo hi; exit 3"], merge_stderr=True, raise_on_error=True))
+
+    with pytest.raises(RuntimeError, match="status 3"):
+        asyncio.run(run())
+
+
+def test_raise_on_error_does_not_raise_when_consumer_stops_early() -> None:
+    # We terminated it (early break), so a non-zero exit-from-signal is expected,
+    # not a failure — no raise.
+    async def run() -> None:
+        gen = stream_process_lines(_EMIT_THEN_BLOCK, merge_stderr=False, raise_on_error=True)
+        got = await _collect(gen, limit=1)
+        assert got == [b"one"]
+        await gen.aclose()
+
+    asyncio.run(run())
+    assert not process_stream._active
+
+
 def test_cleanup_all_terminates_live_process() -> None:
     async def run() -> None:
         gen = stream_process_lines(_EMIT_THEN_BLOCK, merge_stderr=False)
