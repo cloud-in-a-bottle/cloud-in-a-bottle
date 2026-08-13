@@ -13,10 +13,32 @@ instance that still points at the old owner would then fetch an attacker's
 repository and build it, so the redirect is a migration window, not a
 destination.
 
-Hence this reconcile.  It runs on every boot rather than as a one-shot
-versioned migration so that it lands inert (see ``NEW_ORG``) and activates for
-the whole fleet on the release that accompanies the rename.  It is idempotent,
-and it never raises: a boot must not fail because a rewrite did not apply.
+Hence this reconcile.  It runs on every boot rather than as a one-shot versioned
+migration so that it can land inert (see ``ORG_RENAME_COMPLETE``) and start
+working on whichever release an owner eventually installs.  It is idempotent, and
+it never raises: a boot must not fail because a rewrite did not apply.
+
+What this reconcile is NOT is a guarantee.  Updates are owner-initiated -- the
+only triggers are ``POST /api/settings/update`` behind owner auth and the
+``openhost update`` CLI, and nothing schedules them -- so an instance can sit on
+pre-rename code indefinitely and never run this code at all.  Any instance that
+never updates keeps resolving through the owner redirect forever.
+
+That means the redirect, not this reconcile, is what protects the long tail, so
+the old organization name must stay in our hands.  The plan is to re-register
+``imbue-openhost`` immediately after the rename and hold it empty.  Holding the
+name does not break the redirects -- only creating a repository that collides with
+one does -- so a never-updating instance keeps resolving indefinitely.  Precedent:
+``dotcloud`` and ``elasticsearch`` both still exist with zero public repos while
+their redirects still resolve.
+
+The load-bearing assumption is therefore that we win that re-registration.  If we
+ever lose it, instances still on the old owner would fetch and build whatever the
+new holder publishes, so treat the gap between renaming and re-registering as an
+incident window: have the placeholder ready before renaming.
+
+This reconcile is hygiene on top of that: it moves the instances that do update
+off the old namespace, so the redirect stops being load-bearing for them.
 
 Sequencing matters, and is why the owner name and the decision to act on it are
 separate constants.  ``NEW_ORG`` is settled data; ``ORG_RENAME_COMPLETE`` is the
