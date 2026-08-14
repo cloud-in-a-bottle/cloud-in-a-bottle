@@ -73,15 +73,15 @@ class FakeMdnsSocket:
         self.closed = True
 
 
-def fake_mdns_responder(bases: tuple[str, ...], lan_ip: str, lan_ip6: str | None = None) -> mdns.MdnsResponder:
+def fake_mdns_responder(bases: tuple[str, ...], private_ip: str, private_ip6: str | None = None) -> mdns.MdnsResponder:
     """An unstarted responder over a fake socket — no real socket, no thread, no LAN traffic."""
     transport = mdns.Transport(sock=FakeMdnsSocket(), group=(mdns._MDNS_GROUP, mdns._MDNS_PORT))  # type: ignore[arg-type]
     return mdns.MdnsResponder(
         transports=(transport,),
-        lan_ip=lan_ip,
-        lan_ip_prefix=None,
-        lan_ip6=lan_ip6,
-        lan_ip6_prefix=64,
+        private_ip=private_ip,
+        private_ip_prefix=None,
+        private_ip6=private_ip6,
+        private_ip6_prefix=64,
         bases=bases,
     )
 

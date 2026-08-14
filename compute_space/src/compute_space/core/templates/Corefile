@@ -1,7 +1,6 @@
 {% for zone in zones %}
 {{ zone.domain }}:53 {
-    bind {{ bind_ip }}{% if bind_ip6 %} {{ bind_ip6 }}{% endif %}
-
+    bind {{ bind_ips | join(" ") }}
     file {{ zone.zonefile_path }} {
         reload 2s
     }

@@ -25,11 +25,11 @@ from compute_space.core.caddy import start_caddy
 from compute_space.core.caddy import unix_admin_address
 from compute_space.core.dns import CoreDnsProcess
 from compute_space.core.dns import dns_zones
-from compute_space.core.dns import lan_addresses
-from compute_space.core.dns import reconcile_lan_dns
+from compute_space.core.dns import private_addresses
+from compute_space.core.dns import reconcile_dns
 from compute_space.core.dns import set_active_coredns
 from compute_space.core.dns import start_coredns
-from compute_space.core.dns import start_lan_ip_watcher
+from compute_space.core.dns import start_private_ip_watcher
 from compute_space.core.domains import Domain
 from compute_space.core.domains import effective_domains
 from compute_space.core.first_boot import owner_exists
@@ -150,19 +150,19 @@ def main() -> None:
 
         # Shared by the CoreDNS `.local` zones and the mDNS responder.  IPv6 is gated on the http
         # edge answering, which it can't be doing yet — the post-Caddy reconcile below picks it up.
-        lan_ip, lan_ip6 = lan_addresses()
+        private_ip, private_ip6 = private_addresses()
         if config.coredns_enabled:
             if not config.public_ip:
                 raise RuntimeError("Public IP must be set in config to use CoreDNS")
             # Authoritative for every domain the instance answers on — public zones at the public IP,
-            # `.local` zones at the LAN IP — so delegated/conditional-forwarder clients resolve too.
+            # `.local` zones at the private IP — so delegated/conditional-forwarder clients resolve too.
             coredns = start_coredns(
                 zones,
                 config.public_ip,
                 config.coredns_corefile_path,
                 coredns_bin=_ensure_coredns_binary(config),
-                lan_ip=lan_ip,
-                lan_ip6=lan_ip6,
+                private_ip=private_ip,
+                private_ip6=private_ip6,
             )
             # Register so /api/domains can regenerate zones + restart CoreDNS when a domain is added.
             set_active_coredns(coredns)
@@ -171,7 +171,7 @@ def main() -> None:
         # discovery alongside CoreDNS); reconciled here and by /api/domains, so it toggles at runtime.
         # Guarded so a public-domain-only instance never enters the mDNS code at all.
         if any(d.is_local for d in domains):
-            ensure_mdns_for_domains(domains, lan_ip=lan_ip, lan_ip6=lan_ip6)
+            ensure_mdns_for_domains(domains, private_ip=private_ip, private_ip6=private_ip6)
 
         if domains[0].tls:  # primary is a TLS domain
             _ensure_tls_cert(config, db)
@@ -201,14 +201,14 @@ def main() -> None:
 
         # The edge is up now, so the IPv6 reachability probe can finally succeed.  Re-read before
         # arming the watcher, or its first poll reads the pre-Caddy snapshot as a move and restarts.
-        published = lan_addresses()
-        if published != (lan_ip, lan_ip6):
-            # Republish: CoreDNS binds bind_ip6 for every zone (public and `.local` alike), and
+        published = private_addresses()
+        if published != (private_ip, private_ip6):
+            # Republish: CoreDNS binds the v6 address for every zone (public and `.local` alike), and
             # `.local` zones additionally get an AAAA record, so a late-reachable IPv6 address
             # matters even on a public-only instance, not just one with a `.local` domain.
-            reconcile_lan_dns(config, db, lan_ip=published[0], lan_ip6=published[1])
+            reconcile_dns(config, db, private_ip=published[0], private_ip6=published[1])
         # The addresses are a snapshot: republish if they later move (DHCP renewal, v6 coming or going).
-        start_lan_ip_watcher(config, published=published)
+        start_private_ip_watcher(config, published=published)
 
     def _all_children() -> list[subprocess.Popen[bytes]]:
         # Read caddy.proc / coredns.proc at shutdown time: restart() may have replaced them.

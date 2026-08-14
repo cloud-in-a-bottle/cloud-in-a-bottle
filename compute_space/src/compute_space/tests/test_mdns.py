@@ -238,11 +238,11 @@ def test_answers_query_from_private_source() -> None:
 
 def test_ensure_starts_then_stops_responder(monkeypatch: pytest.MonkeyPatch) -> None:
     fake = _responder(("openhost.local",))
-    monkeypatch.setattr(mdns, "start_mdns", lambda bases, lan_ip, lan_ip6=None: fake)
+    monkeypatch.setattr(mdns, "start_mdns", lambda bases, private_ip, private_ip6=None: fake)
     mdns.set_active_mdns(None)
 
     # First `.local` domain appears → responder starts.
-    mdns.ensure_mdns_for_domains(_LOCAL_DOMAINS, lan_ip="192.168.1.50")
+    mdns.ensure_mdns_for_domains(_LOCAL_DOMAINS, private_ip="192.168.1.50")
     assert mdns.get_active_mdns() is fake
 
     # Last `.local` domain removed → responder stops and deregisters.
@@ -251,22 +251,22 @@ def test_ensure_starts_then_stops_responder(monkeypatch: pytest.MonkeyPatch) -> 
     assert fake.transports[0].sock.closed  # type: ignore[attr-defined]
 
 
-def test_ensure_rebinds_when_lan_ip_moves(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_ensure_rebinds_when_private_ip_moves(monkeypatch: pytest.MonkeyPatch) -> None:
     first = _responder(("openhost.local",))
     second = _responder(("openhost.local",), "192.168.1.60")
     started: list[str] = []
 
-    def _start(bases: tuple[str, ...], lan_ip: str, lan_ip6: str | None = None) -> mdns.MdnsResponder:
-        started.append(lan_ip)
+    def _start(bases: tuple[str, ...], private_ip: str, private_ip6: str | None = None) -> mdns.MdnsResponder:
+        started.append(private_ip)
         return second if started[1:] else first
 
     monkeypatch.setattr(mdns, "start_mdns", _start)
     mdns.set_active_mdns(None)
-    mdns.ensure_mdns_for_domains(_LOCAL_DOMAINS, lan_ip="192.168.1.50")
+    mdns.ensure_mdns_for_domains(_LOCAL_DOMAINS, private_ip="192.168.1.50")
 
     # A DHCP renewal moves the address; the socket's group membership is pinned to the interface it
     # was opened on, so the responder must be rebound rather than just re-pointed.
-    mdns.ensure_mdns_for_domains(_LOCAL_DOMAINS, lan_ip="192.168.1.60")
+    mdns.ensure_mdns_for_domains(_LOCAL_DOMAINS, private_ip="192.168.1.60")
 
     assert started == ["192.168.1.50", "192.168.1.60"]
     assert first.transports[0].sock.closed  # type: ignore[attr-defined]

@@ -29,7 +29,7 @@ from litestar.params import FromPath
 from compute_space.config import Config
 from compute_space.config import get_config
 from compute_space.core.caddy import reload_caddy_for_domains
-from compute_space.core.dns import reconcile_lan_dns
+from compute_space.core.dns import reconcile_dns
 from compute_space.core.domains import Domain
 from compute_space.core.domains import DomainCertStatus
 from compute_space.core.domains import DomainRecord
@@ -197,7 +197,7 @@ async def add_domain(
     # acquisition: DNS-01 writes the _acme-challenge TXT into this domain's zone file, which only
     # resolves once CoreDNS serves the zone.  Off the event loop (CoreDNS restart, socket bind +
     # conflict probe all block) but awaited so ordering before acquisition holds.
-    await anyio.to_thread.run_sync(reconcile_lan_dns, config, db)
+    await anyio.to_thread.run_sync(reconcile_dns, config, db)
     if tls:
         _spawn_acquisition(config, domain)
     # Return the full updated list so the client repaints the table without a follow-up GET, and
@@ -226,7 +226,7 @@ async def remove_domain(
     if removed is not None:
         # Drop the zone from CoreDNS and stop the responder if that was the last `.local` domain.
         # Off the event loop — the CoreDNS restart and the responder's thread-join (up to 2s) block.
-        await anyio.to_thread.run_sync(reconcile_lan_dns, config, db)
+        await anyio.to_thread.run_sync(reconcile_dns, config, db)
     # Regenerate Caddy only after this response has been sent — see _reload_caddy_after_response.
     return Response(
         DomainListResponse(domains=_domain_list(config, db)),

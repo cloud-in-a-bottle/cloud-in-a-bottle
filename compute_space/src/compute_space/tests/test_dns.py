@@ -50,12 +50,37 @@ def _write_zonefile(path: Path, serial: int = 100) -> None:
     )
 
 
-def test_coredns_bind_ip_prefers_lan_ip() -> None:
-    assert dns_mod._coredns_bind_ip("10.0.0.5", "203.0.113.10") == "10.0.0.5"
+def _stub_bindable(monkeypatch: pytest.MonkeyPatch, *local: str) -> None:
+    """Only ``local`` addresses sit on an interface of the (fake) host; CoreDNS binds those and
+    drops the rest."""
+    monkeypatch.setattr(dns_mod, "is_bindable", lambda ip: ip in local)
 
 
-def test_coredns_bind_ip_falls_back_to_public_ip() -> None:
-    assert dns_mod._coredns_bind_ip(None, "203.0.113.10") == "203.0.113.10"
+def test_coredns_binds_every_local_address(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A directly-assigned public address carries the DNS-01 and delegated-NS queries the private one
+    # never sees, so a multi-homed box has to answer on both rather than pick one.
+    _stub_bindable(monkeypatch, "10.0.0.5", "203.0.113.10", "fd00::5")
+    assert dns_mod._coredns_bind_ips("10.0.0.5", "fd00::5", "203.0.113.10") == ("10.0.0.5", "203.0.113.10", "fd00::5")
+
+
+def test_coredns_bind_skips_addresses_not_on_an_interface(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Behind NAT the configured public IP lives on the router, so binding it would crash CoreDNS.
+    _stub_bindable(monkeypatch, "10.0.0.5")
+    assert dns_mod._coredns_bind_ips("10.0.0.5", None, "203.0.113.10") == ("10.0.0.5",)
+    # ...and on a cloud VM the public address is the only one there is.
+    _stub_bindable(monkeypatch, "203.0.113.10")
+    assert dns_mod._coredns_bind_ips(None, None, "203.0.113.10") == ("203.0.113.10",)
+    # One address reachable both ways is still bound once — a repeated bind is an error to CoreDNS.
+    _stub_bindable(monkeypatch, "10.0.0.5")
+    assert dns_mod._coredns_bind_ips("10.0.0.5", None, "10.0.0.5") == ("10.0.0.5",)
+
+
+def test_coredns_bind_raises_when_no_address_is_local(monkeypatch: pytest.MonkeyPatch) -> None:
+    # An empty `bind` would make CoreDNS listen on the wildcard and collide with aardvark-dns, so
+    # this must fail loudly instead.
+    _stub_bindable(monkeypatch)
+    with pytest.raises(RuntimeError, match="no local address"):
+        dns_mod._coredns_bind_ips("10.0.0.5", None, "203.0.113.10")
 
 
 def test_append_txt_records_writes_relative_names_verbatim(tmp_path: Path) -> None:
@@ -124,8 +149,7 @@ def _stub_popen(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_container_dns_view_rendered_when_gateway_bindable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(dns_mod, "_coredns_bind_ip", lambda *args: "10.0.0.5")
-    monkeypatch.setattr(dns_mod, "_gateway_ip_is_bindable", lambda ip: True)
+    _stub_bindable(monkeypatch, "203.0.113.10", "10.200.0.1")
     monkeypatch.setattr(dns_mod, "_host_upstream_resolvers", lambda: ["9.9.9.9"])
     _stub_popen(monkeypatch)
 
@@ -139,8 +163,8 @@ def test_container_dns_view_rendered_when_gateway_bindable(tmp_path: Path, monke
     )
 
     cf = corefile.read_text()
-    # Public view binds the discovered local IP; container view binds the gateway.
-    assert "bind 10.0.0.5" in cf
+    # Public view binds the host's own address; container view binds the gateway.
+    assert "bind 203.0.113.10" in cf
     assert "bind 10.200.0.1" in cf
     assert "forward . 9.9.9.9" in cf
 
@@ -154,8 +178,7 @@ def test_container_dns_view_rendered_when_gateway_bindable(tmp_path: Path, monke
 
 
 def test_container_dns_view_skipped_when_gateway_not_bindable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(dns_mod, "_coredns_bind_ip", lambda *args: "10.0.0.5")
-    monkeypatch.setattr(dns_mod, "_gateway_ip_is_bindable", lambda ip: False)
+    _stub_bindable(monkeypatch, "203.0.113.10")
     _stub_popen(monkeypatch)
 
     corefile = tmp_path / "Corefile"
@@ -218,11 +241,10 @@ def test_host_upstream_resolvers_falls_back_when_only_loopback(
 def test_container_view_forward_uses_discovered_resolvers_and_distinct_bind(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # The public view and the container view must bind different addresses (the
-    # default-route source vs the gateway), and the container catch-all must
-    # forward to the discovered upstreams.
-    monkeypatch.setattr(dns_mod, "_coredns_bind_ip", lambda *args: "10.0.0.5")
-    monkeypatch.setattr(dns_mod, "_gateway_ip_is_bindable", lambda ip: True)
+    # The public view and the container view must bind different addresses (the box's own
+    # address vs the gateway), and the container catch-all must forward to the discovered
+    # upstreams.
+    _stub_bindable(monkeypatch, "203.0.113.10", "10.200.0.1")
     monkeypatch.setattr(dns_mod, "_host_upstream_resolvers", lambda: ["185.12.64.1", "1.1.1.1"])
     _stub_popen(monkeypatch)
 
@@ -230,14 +252,14 @@ def test_container_view_forward_uses_discovered_resolvers_and_distinct_bind(
     dns_mod.start_coredns((dns_mod.DnsZone("app.example.com", tmp_path / "zonefile"),), "203.0.113.10", corefile)
     cf = corefile.read_text()
 
-    assert "bind 10.0.0.5" in cf  # public/authoritative view
+    assert "bind 203.0.113.10" in cf  # public/authoritative view
     assert "bind 10.200.0.1" in cf  # container view + catch-all
     assert "forward . 185.12.64.1 1.1.1.1" in cf
     # Catch-all is scoped to the container gateway only (never the public bind),
     # so the public IP is not turned into an open recursive resolver.
     catch_all = cf.split(".:53 {", 1)[1]
     assert "bind 10.200.0.1" in catch_all
-    assert "bind 10.0.0.5" not in catch_all
+    assert "bind 203.0.113.10" not in catch_all
 
 
 def test_dns_zones_covers_every_domain_including_local(tmp_path: Path) -> None:
@@ -256,9 +278,10 @@ def test_dns_zones_covers_every_domain_including_local(tmp_path: Path) -> None:
     assert zones[1].zonefile_path == config.zones_dir / "host.example.org.zone"
 
 
-def test_local_zone_uses_lan_ip_public_zone_uses_public_ip(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(dns_mod, "_coredns_bind_ip", lambda *args: "10.0.0.5")
-    monkeypatch.setattr(dns_mod, "_gateway_ip_is_bindable", lambda ip: False)
+def test_local_zone_uses_private_ip_public_zone_uses_public_ip(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _stub_bindable(monkeypatch, "192.168.1.50", "fd00::5")
     _stub_popen(monkeypatch)
 
     corefile = tmp_path / "Corefile"
@@ -268,18 +291,17 @@ def test_local_zone_uses_lan_ip_public_zone_uses_public_ip(tmp_path: Path, monke
         (DnsZone("host.example.com", public_zone), DnsZone("myhost.local", local_zone)),
         "203.0.113.10",
         corefile,
-        lan_ip="192.168.1.50",
+        private_ip="192.168.1.50",
     )
     assert "*   IN A    203.0.113.10" in public_zone.read_text()  # public → public IP
     # CoreDNS stays authoritative for the `.local` zone (so `*.myhost.local` resolves for a
-    # conditional-forwarder client, e.g. Windows), answering with the LAN IP.
+    # conditional-forwarder client, e.g. Windows), answering with the private IP.
     assert "myhost.local:53" in corefile.read_text()
     assert "*   IN A    192.168.1.50" in local_zone.read_text()
 
 
 def test_local_zone_gets_aaaa_and_v6_bind(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(dns_mod, "_coredns_bind_ip", lambda *args: "10.0.0.5")
-    monkeypatch.setattr(dns_mod, "_gateway_ip_is_bindable", lambda ip: False)
+    _stub_bindable(monkeypatch, "192.168.1.50", "fd00::5")
     _stub_popen(monkeypatch)
 
     corefile = tmp_path / "Corefile"
@@ -289,32 +311,31 @@ def test_local_zone_gets_aaaa_and_v6_bind(tmp_path: Path, monkeypatch: pytest.Mo
         (DnsZone("host.example.com", public_zone), DnsZone("myhost.local", local_zone)),
         "203.0.113.10",
         corefile,
-        lan_ip="192.168.1.50",
-        lan_ip6="fd00::5",
+        private_ip="192.168.1.50",
+        private_ip6="fd00::5",
     )
     assert "*   IN AAAA fd00::5" in local_zone.read_text()
     # Public zones resolve to public_ip, which has no v6 counterpart — no AAAA there.
     assert "AAAA" not in public_zone.read_text()
     # Binding the v6 address too lets a v6-only client use us as a conditional forwarder.
-    assert "bind 10.0.0.5 fd00::5" in corefile.read_text()
+    assert "bind 192.168.1.50 fd00::5" in corefile.read_text()
 
 
-def test_publishable_lan_ip6_requires_a_listening_edge(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_publishable_private_ip6_requires_a_listening_edge(monkeypatch: pytest.MonkeyPatch) -> None:
     # Publishing an AAAA nothing answers on makes clients (which prefer v6) hang on connect and
     # fall back — the exact stall this whole change set removes.
-    monkeypatch.setattr(dns_mod, "lan_ip6", lambda: "fd00::5")
+    monkeypatch.setattr(dns_mod, "private_ip6", lambda: "fd00::5")
     monkeypatch.setattr(dns_mod, "is_reachable", lambda ip, port: False)
-    assert dns_mod.publishable_lan_ip6() is None
+    assert dns_mod.publishable_private_ip6() is None
 
     monkeypatch.setattr(dns_mod, "is_reachable", lambda ip, port: True)
-    assert dns_mod.publishable_lan_ip6() == "fd00::5"
+    assert dns_mod.publishable_private_ip6() == "fd00::5"
 
 
-def test_local_zone_dropped_when_no_lan_ip(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    # With no LAN IP there is no honest answer for a `.local` name, and handing LAN clients the
+def test_local_zone_dropped_when_no_private_ip(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # With no private IP there is no honest answer for a `.local` name, and handing LAN clients the
     # public IP sends their traffic off-box — so the zone is not published at all.
-    monkeypatch.setattr(dns_mod, "_coredns_bind_ip", lambda *args: "10.0.0.5")
-    monkeypatch.setattr(dns_mod, "_gateway_ip_is_bindable", lambda ip: False)
+    _stub_bindable(monkeypatch, "203.0.113.10")
     _stub_popen(monkeypatch)
 
     corefile = tmp_path / "Corefile"
@@ -324,7 +345,7 @@ def test_local_zone_dropped_when_no_lan_ip(tmp_path: Path, monkeypatch: pytest.M
         (DnsZone("host.example.com", public_zone), DnsZone("myhost.local", local_zone)),
         "203.0.113.10",
         corefile,
-        lan_ip=None,
+        private_ip=None,
     )
     assert "myhost.local:53" not in corefile.read_text() and not local_zone.exists()
     assert "host.example.com:53" in corefile.read_text()  # public zones unaffected
@@ -333,8 +354,7 @@ def test_local_zone_dropped_when_no_lan_ip(tmp_path: Path, monkeypatch: pytest.M
 def test_start_coredns_writes_a_zone_block_and_file_per_public_domain(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(dns_mod, "_coredns_bind_ip", lambda *args: "10.0.0.5")
-    monkeypatch.setattr(dns_mod, "_gateway_ip_is_bindable", lambda ip: False)
+    _stub_bindable(monkeypatch, "203.0.113.10")
     _stub_popen(monkeypatch)
 
     corefile = tmp_path / "Corefile"
@@ -363,8 +383,7 @@ def test_start_coredns_writes_a_zone_block_and_file_per_public_domain(
 def test_reload_coredns_for_domains_regenerates_zones_and_restarts(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(dns_mod, "_coredns_bind_ip", lambda *args: "10.0.0.5")
-    monkeypatch.setattr(dns_mod, "_gateway_ip_is_bindable", lambda ip: False)
+    _stub_bindable(monkeypatch, "203.0.113.10")
     _stub_popen(monkeypatch)
 
     config = _seed_dns_cfg(tmp_path, Domain(name="host.example.com", tls=True), public_ip="203.0.113.10")
@@ -388,8 +407,7 @@ def test_reload_coredns_for_domains_regenerates_zones_and_restarts(
 
 
 def test_reload_preserves_in_flight_challenge_txt_records(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(dns_mod, "_coredns_bind_ip", lambda *args: "10.0.0.5")
-    monkeypatch.setattr(dns_mod, "_gateway_ip_is_bindable", lambda ip: False)
+    _stub_bindable(monkeypatch, "203.0.113.10")
     _stub_popen(monkeypatch)
 
     config = _seed_dns_cfg(tmp_path, Domain(name="host.example.com", tls=True), public_ip="203.0.113.10")

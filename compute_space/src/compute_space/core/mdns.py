@@ -48,7 +48,7 @@ def _is_local_source(
 
     The sockets bind the wildcard address, so they also receive *unicast* datagrams sent straight to
     a routable address; answering those would make an internet-facing box an mDNS reflection vector
-    (and leak the LAN IP).
+    (and leak the private IP).
 
     IPv4 LAN senders are private, but a private address alone isn't enough: two boxes can each sit on
     an unrelated RFC 1918 range that isn't actually the same broadcast domain (a routed corporate net,
@@ -267,15 +267,15 @@ class Transport:
 
 @attr.s(auto_attribs=True)
 class MdnsResponder:
-    """Answers ``.local`` queries for ``_bases`` (and their ``*.base`` subdomains) with ``lan_ip``
-    and, when the box has one, ``lan_ip6``.  One thread per transport (IPv4 multicast, and IPv6 when
+    """Answers ``.local`` queries for ``_bases`` (and their ``*.base`` subdomains) with ``private_ip``
+    and, when the box has one, ``private_ip6``.  One thread per transport (IPv4 multicast, and IPv6 when
     available); ``update()`` swaps the served set live, ``stop()`` tears it all down."""
 
     transports: tuple[Transport, ...]
-    lan_ip: str
-    lan_ip_prefix: int | None
-    lan_ip6: str | None
-    lan_ip6_prefix: int
+    private_ip: str
+    private_ip_prefix: int | None
+    private_ip6: str | None
+    private_ip6_prefix: int
     _bases: tuple[str, ...]
     _stop: threading.Event = attr.ib(factory=threading.Event, init=False, eq=False, repr=False)
     _lock: threading.Lock = attr.ib(factory=threading.Lock, init=False, eq=False, repr=False)
@@ -317,8 +317,10 @@ class MdnsResponder:
 
     def _handle(self, transport: Transport, data: bytes, addr: tuple[object, ...]) -> None:
         with self._lock:
-            ip, ip6 = self.lan_ip, self.lan_ip6
-        if not _is_local_source(str(addr[0]), ip6, self.lan_ip6_prefix, our_ip=ip, our_ip_prefix=self.lan_ip_prefix):
+            ip, ip6 = self.private_ip, self.private_ip6
+        if not _is_local_source(
+            str(addr[0]), ip6, self.private_ip6_prefix, our_ip=ip, our_ip_prefix=self.private_ip_prefix
+        ):
             return  # never answer a routed unicast query from off-LAN
         ident, is_query, questions = _parse_questions(data)
         if not is_query:
@@ -344,20 +346,20 @@ class MdnsResponder:
             thread.join(timeout=2)
 
 
-def _join_group(sock: socket.socket, lan_ip: str) -> None:
-    """Join 224.0.0.251 on the interface that owns ``lan_ip``.
+def _join_group(sock: socket.socket, private_ip: str) -> None:
+    """Join 224.0.0.251 on the interface that owns ``private_ip``.
 
     A wildcard join lets the kernel pick one interface off the route to the group — the default-route
     NIC — so on a multi-homed box (separate WAN/LAN NICs, or a VPN owning the default route) queries
     arriving on the LAN would never reach us.  Falls back to the wildcard if that interface is gone.
     """
     try:
-        sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_IF, socket.inet_aton(lan_ip))
+        sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_IF, socket.inet_aton(private_ip))
         sock.setsockopt(
-            socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, socket.inet_aton(_MDNS_GROUP) + socket.inet_aton(lan_ip)
+            socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, socket.inet_aton(_MDNS_GROUP) + socket.inet_aton(private_ip)
         )
     except OSError:
-        logger.warning("mDNS: cannot join 224.0.0.251 on {}; using the default interface", lan_ip)
+        logger.warning("mDNS: cannot join 224.0.0.251 on {}; using the default interface", private_ip)
         sock.setsockopt(
             socket.IPPROTO_IP,
             socket.IP_ADD_MEMBERSHIP,
@@ -372,12 +374,12 @@ def _share_port(sock: socket.socket) -> None:
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
 
 
-def _open_socket(lan_ip: str) -> socket.socket:
+def _open_socket(private_ip: str) -> socket.socket:
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
         _share_port(sock)
         sock.bind(("", _MDNS_PORT))
-        _join_group(sock, lan_ip)
+        _join_group(sock, private_ip)
         sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 255)  # RFC 6762 §11: mDNS uses TTL 255
     except OSError:
         sock.close()
@@ -472,15 +474,15 @@ def _interface_prefix_len(ip6: str) -> int:
     return int(fields[2], 16) if fields else 64
 
 
-def _open_socket6(lan_ip6: str) -> socket.socket:
-    """An IPv6 mDNS socket joined to ff02::fb on the interface holding ``lan_ip6``."""
+def _open_socket6(private_ip6: str) -> socket.socket:
+    """An IPv6 mDNS socket joined to ff02::fb on the interface holding ``private_ip6``."""
     sock = socket.socket(socket.AF_INET6, socket.SOCK_DGRAM)
     try:
         # v6-only: the IPv4 transport is its own socket, and a dual-stack bind would collide with it.
         sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
         _share_port(sock)
         sock.bind(("", _MDNS_PORT))
-        index = _interface_index(lan_ip6)
+        index = _interface_index(private_ip6)
         mreq = socket.inet_pton(socket.AF_INET6, _MDNS_GROUP6) + struct.pack("@I", index)
         sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_JOIN_GROUP, mreq)
         sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_MULTICAST_HOPS, 255)
@@ -493,18 +495,18 @@ def _open_socket6(lan_ip6: str) -> socket.socket:
     return sock
 
 
-def _open_transports(lan_ip: str, lan_ip6: str | None) -> tuple[Transport, ...]:
+def _open_transports(private_ip: str, private_ip6: str | None) -> tuple[Transport, ...]:
     """The IPv4 transport, plus the IPv6 one when the box has an address for it.
 
     IPv6 is best-effort: a kernel without it, or a join the interface won't accept, must not cost us
     the IPv4 responder — we still serve AAAA *records* over IPv4, only v6-only queriers lose out.
     """
-    transports = [Transport(sock=_open_socket(lan_ip), group=(_MDNS_GROUP, _MDNS_PORT))]
-    if lan_ip6 is not None:
+    transports = [Transport(sock=_open_socket(private_ip), group=(_MDNS_GROUP, _MDNS_PORT))]
+    if private_ip6 is not None:
         try:
-            index = _interface_index(lan_ip6)
+            index = _interface_index(private_ip6)
             transports.append(
-                Transport(sock=_open_socket6(lan_ip6), group=(_MDNS_GROUP6, _MDNS_PORT, 0, index)),
+                Transport(sock=_open_socket6(private_ip6), group=(_MDNS_GROUP6, _MDNS_PORT, 0, index)),
             )
         except (OSError, AttributeError) as exc:
             logger.warning(f"mDNS: no IPv6 transport ({exc}); serving AAAA over IPv4 only")
@@ -547,25 +549,25 @@ def mdns_bases(domains: Sequence[Domain]) -> tuple[str, ...]:
     return tuple(d.name_no_port for d in domains if d.is_local)
 
 
-def start_mdns(bases: tuple[str, ...], lan_ip: str, lan_ip6: str | None = None) -> MdnsResponder:
+def start_mdns(bases: tuple[str, ...], private_ip: str, private_ip6: str | None = None) -> MdnsResponder:
     """Bind the mDNS sockets, warn on any pre-existing claimant, and start answering for ``bases``."""
-    transports = _open_transports(lan_ip, lan_ip6)
-    lan_ip_prefix = _interface_ipv4_prefix_len(lan_ip)
+    transports = _open_transports(private_ip, private_ip6)
+    private_ip_prefix = _interface_ipv4_prefix_len(private_ip)
     for base in bases:  # probe on IPv4 only — a name clash is a clash whatever family finds it
-        conflict = _probe_conflict(transports[0].sock, base, lan_ip, lan_ip_prefix)
+        conflict = _probe_conflict(transports[0].sock, base, private_ip, private_ip_prefix)
         if conflict is not None:
-            logger.warning("mDNS: {} already claimed on the LAN by {}; serving {} anyway", base, conflict, lan_ip)
-    lan_ip6_prefix = _interface_prefix_len(lan_ip6) if lan_ip6 is not None else 64
+            logger.warning("mDNS: {} already claimed on the LAN by {}; serving {} anyway", base, conflict, private_ip)
+    private_ip6_prefix = _interface_prefix_len(private_ip6) if private_ip6 is not None else 64
     responder = MdnsResponder(
         transports=transports,
-        lan_ip=lan_ip,
-        lan_ip_prefix=lan_ip_prefix,
-        lan_ip6=lan_ip6,
-        lan_ip6_prefix=lan_ip6_prefix,
+        private_ip=private_ip,
+        private_ip_prefix=private_ip_prefix,
+        private_ip6=private_ip6,
+        private_ip6_prefix=private_ip6_prefix,
         bases=bases,
     )
     responder.start()
-    served = lan_ip if lan_ip6 is None else f"{lan_ip}, {lan_ip6}"
+    served = private_ip if private_ip6 is None else f"{private_ip}, {private_ip6}"
     logger.info("Started mDNS responder for {} -> {}", ", ".join(bases), served)
     return responder
 
@@ -585,16 +587,18 @@ def get_active_mdns() -> MdnsResponder | None:
     return _active_mdns
 
 
-def _start_and_register(bases: tuple[str, ...], lan_ip: str, lan_ip6: str | None) -> None:
+def _start_and_register(bases: tuple[str, ...], private_ip: str, private_ip6: str | None) -> None:
     try:
-        set_active_mdns(start_mdns(bases, lan_ip, lan_ip6))
+        set_active_mdns(start_mdns(bases, private_ip, private_ip6))
     except OSError as exc:
         # A :5353 bind clash (e.g. an avahi/systemd-resolved without SO_REUSEPORT) must never take
         # the router down — degrade to no mDNS and keep serving.
         logger.warning("mDNS responder failed to start ({}); continuing without it", exc)
 
 
-def ensure_mdns_for_domains(domains: Sequence[Domain], lan_ip: str | None = None, lan_ip6: str | None = None) -> None:
+def ensure_mdns_for_domains(
+    domains: Sequence[Domain], private_ip: str | None = None, private_ip6: str | None = None
+) -> None:
     """Reconcile the responder with ``domains``' ``.local`` (mDNS) entries: start it when the first
     one appears, refresh its served set, or stop it when the last one is removed.  In-process, no
     restart.  Called at boot and by /api/domains, so mDNS turns on/off at runtime."""
@@ -607,22 +611,22 @@ def ensure_mdns_for_domains(domains: Sequence[Domain], lan_ip: str | None = None
             logger.info("Stopped mDNS responder (no .local domains)")
         return
     if responder is None:
-        if lan_ip is None:
-            logger.warning("mDNS domain configured but no LAN IP found; responder not started")
+        if private_ip is None:
+            logger.warning("mDNS domain configured but no private IP found; responder not started")
             return
-        _start_and_register(bases, lan_ip, lan_ip6)
-    elif lan_ip is not None and (lan_ip, lan_ip6) != (responder.lan_ip, responder.lan_ip6):
-        # (A vanished LAN IP falls through to `update`: keep serving the last known address rather
+        _start_and_register(bases, private_ip, private_ip6)
+    elif private_ip is not None and (private_ip, private_ip6) != (responder.private_ip, responder.private_ip6):
+        # (A vanished private IP falls through to `update`: keep serving the last known address rather
         # than tearing down the responder over a transient lookup failure.)
         # Group memberships are pinned to the interfaces the sockets were opened on, so a moved
         # address needs fresh sockets — not just a new advertised IP.
         logger.info(
             "mDNS: addresses moved {} -> {}; rebinding responder",
-            (responder.lan_ip, responder.lan_ip6),
-            (lan_ip, lan_ip6),
+            (responder.private_ip, responder.private_ip6),
+            (private_ip, private_ip6),
         )
         responder.stop()
         set_active_mdns(None)
-        _start_and_register(bases, lan_ip, lan_ip6)
+        _start_and_register(bases, private_ip, private_ip6)
     else:
         responder.update(bases)

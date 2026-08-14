@@ -30,8 +30,8 @@ def _is_publishable(ip: str, family: socket.AddressFamily) -> bool:
     return not (family == socket.AF_INET6 and addr.is_link_local)
 
 
-def lan_ip() -> str | None:
-    """Best private IPv4 LAN address, or None.  Prefers a private address, then link-local."""
+def private_ip() -> str | None:
+    """Best private IPv4 address of this box, or None.  Prefers a private address, then link-local."""
     try:
         infos = socket.getaddrinfo(socket.gethostname(), None, family=socket.AF_INET)
     except OSError:
@@ -49,9 +49,9 @@ def lan_ip() -> str | None:
     return link_local
 
 
-def lan_ip6() -> str | None:
-    """A publishable IPv6 LAN address (global or ULA), or None.  Link-local is excluded: it needs a
-    ``%interface`` scope no URL or DNS record can carry."""
+def private_ip6() -> str | None:
+    """A publishable IPv6 address of this box (global or ULA), or None.  Link-local is excluded: it
+    needs a ``%interface`` scope no URL or DNS record can carry."""
     try:
         infos = socket.getaddrinfo(socket.gethostname(), None, family=socket.AF_INET6)
     except OSError:
@@ -75,6 +75,18 @@ def is_reachable(ip: str, port: int, timeout: float = 0.5) -> bool:
         with socket.socket(family, socket.SOCK_STREAM) as sock:
             sock.settimeout(timeout)
             sock.connect((ip, port))
+        return True
+    except OSError:
+        return False
+
+
+def is_bindable(ip: str) -> bool:
+    """True if ``ip`` is an address on one of this box's interfaces, probed by binding an ephemeral
+    UDP port.  A NATed box's public IP and a not-yet-created dummy interface both fail this."""
+    family = socket.AF_INET6 if ":" in ip else socket.AF_INET
+    try:
+        with socket.socket(family, socket.SOCK_DGRAM) as sock:
+            sock.bind((ip, 0))
         return True
     except OSError:
         return False
