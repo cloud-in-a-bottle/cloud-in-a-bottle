@@ -61,8 +61,7 @@ function saveRemote() {
         errEl.textContent = (res.data && res.data.error) || 'Failed to save';
         return;
       }
-      // Upstream persisted; now pull the new ref and rebuild. Reuses the
-      // oauth-aware /reload_app?update flow (it may redirect for github auth).
+      // Reuse the oauth-aware update flow, which may redirect for github auth.
       appAction(config.reloadAppUrl, {update: true}, {label: 'Updating & reloading'});
     })
     .catch(function() { errEl.textContent = 'Failed to save'; });
@@ -94,9 +93,8 @@ function setActionsBusy(label) {
 }
 
 function appAction(url, data, opts) {
-  // opts: { isRemove?: bool, label?: string }. isRemove navigates to
-  // /dashboard on success; otherwise location.reload(). label is the
-  // text shown next to the action buttons while the request is in flight.
+  // opts: { isRemove?: bool, label?: string }. isRemove navigates to /dashboard
+  // on success rather than reloading the (now-gone) detail page.
   opts = opts || {};
   var label = opts.label || (opts.isRemove ? 'Removing' : 'Working');
   var clear = setActionsBusy(label);
@@ -108,10 +106,8 @@ function appAction(url, data, opts) {
   })
     .then(function(r) { return r.json().then(function(d) { return {ok: r.ok, data: d}; }); })
     .then(function(res) {
-      // An update whose manifest declares new service permissions is refused
-      // until the owner explicitly approves them (mirrors install-time
-      // approval). Prompt, and on confirmation re-issue the request with
-      // approve_new_permissions so the grants are written before the reload.
+      // An update declaring new permissions is refused until the owner approves;
+      // re-issue with approve_new_permissions so the grants are written first.
       if (res.ok && res.data && res.data.permissions_required) {
         if (clear) clear();
         if (confirmNewPermissions(res.data.permissions_required)) {
@@ -135,8 +131,6 @@ function appAction(url, data, opts) {
     });
 }
 
-// Show the owner exactly which new permissions an update wants and get an
-// explicit yes/no. Returns true if the owner approved.
 function confirmNewPermissions(perms) {
   var lines = perms.map(function(p) {
     var label = p.shortname ? (p.shortname + ' (' + p.service_url + ')') : p.service_url;
@@ -193,24 +187,14 @@ function clearCacheAndReload() {
     var nextUrl = config.nextUrl;
     var toastKey = 'cache-toast-shown-' + config.appStatusUrl;
 
-    // The container the log stream is currently following. The server-side follow
-    // is bound to one container and holds the socket open at its final line when
-    // that container stops, so a reload/restart from elsewhere (CLI, another tab, a
-    // crash-restart) would otherwise freeze the view on the dead container's logs.
-    // pollStatus watches app_status.container_id and re-points the stream when it
-    // changes. Seeded from the first poll (the id the initial stream already
-    // follows) so only a *change* triggers a reset.
+    // The container the stream follows; when it changes we reset to the new logs.
     var streamContainerId = null;
 
-    // Cap the <pre> so a long-lived stream can't grow the DOM unbounded.
     var MAX_LOG_CHARS = 2 * 1024 * 1024;
     var logPrimed = false;
 
-    // Buffer incoming lines and flush once per animation frame. The backlog
-    // arrives as one WebSocket message per line (podman `--tail 2000`), and
-    // appending each one individually would reflow the <pre> per line; batching a
-    // burst into one append keeps the initial render cheap. logLen is tracked in
-    // JS so measuring the length never serializes logEl.textContent.
+    // Buffer incoming lines and flush once per animation frame: the backlog arrives
+    // one WebSocket message per line, so batching avoids reflowing the <pre> each line.
     var pending = [];
     var pendingLen = 0;
     var flushQueued = false;
@@ -228,13 +212,11 @@ function clearCacheAndReload() {
     function flushLog() {
         flushQueued = false;
         if (!pending.length) return;
-        // One layout read for the whole batch, before we touch the DOM.
         var wasAtBottom = isNearBottom(logEl);
         var text = pending.join('');
         pending = [];
         pendingLen = 0;
-        // One text node per batch leaves existing content — and any active text
-        // selection — untouched.
+        // A text node leaves existing content and any active selection intact.
         logEl.appendChild(document.createTextNode(text));
         logLen += text.length;
         if (logLen > MAX_LOG_CHARS && !hasSelectionIn(logEl)) {
@@ -249,8 +231,7 @@ function clearCacheAndReload() {
         if (!text) return;
         pending.push(text);
         pendingLen += text.length;
-        // If frames are paused (e.g. a backgrounded tab) the buffer could grow
-        // unbounded, so keep only the most recent MAX_LOG_CHARS worth.
+        // If frames are paused (backgrounded tab) drop all but the most recent MAX_LOG_CHARS.
         while (pending.length > 1 && pendingLen - pending[0].length > MAX_LOG_CHARS) {
             pendingLen -= pending.shift().length;
         }
@@ -260,22 +241,16 @@ function clearCacheAndReload() {
         }
     }
 
-    // The socket the page is currently following. Tracked so a deliberate reset
-    // can silence the old socket's auto-reconnect instead of racing a second
-    // stream against the new one.
+    // Tracked so a reset can tell the old socket's onclose not to reconnect.
     var currentWs = null;
 
     function startLogStream() {
-        // Same-origin WebSocket; the session cookie authenticates the handshake.
-        // The server replays the log tail then follows live output, so we append
-        // new lines instead of re-fetching the whole log on a timer.
         var proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
         var ws = new WebSocket(proto + '//' + window.location.host + config.appLogsStreamUrl);
         currentWs = ws;
         ws.onmessage = function(e) {
             // Clear on the first message so the replayed tail replaces the
-            // placeholder (or, on reconnect, the old contents) instead of
-            // duplicating it; drop buffered lines too so none land post-clear.
+            // placeholder (or, on reconnect, stale contents) instead of appending.
             if (!logPrimed) {
                 logEl.textContent = ''; logLen = 0;
                 pending = []; pendingLen = 0;
@@ -284,29 +259,20 @@ function clearCacheAndReload() {
             appendLog(e.data + '\n');
         };
         ws.onclose = function() {
-            // Superseded by a reset (a fresh stream already took over) — don't
-            // reconnect this dead socket on top of the new one.
-            if (ws !== currentWs) return;
-            // A WebSocket won't auto-reconnect, and the server holds the socket
-            // open past end-of-log, so a close means a real drop (network blip or
-            // server restart) — retry. Re-prime because the reconnected stream
-            // replays the tail from the start.
+            if (ws !== currentWs) return;  // superseded by a reset
+            // The server holds the socket open past end-of-log, so a close is a real
+            // drop — reconnect (which re-primes to replay the tail).
             logPrimed = false;
             setTimeout(startLogStream, 2000);
         };
         ws.onerror = function() { ws.close(); };
     }
 
-    // Tear down the current stream and start a fresh one, pointed at the app's
-    // current state. Used when the container changes under us: the old follow is
-    // held open at the dead container's final line, so we replace it. Re-priming
-    // makes the new stream's replayed tail overwrite the stale contents rather
-    // than append to them.
     function resetLogStream() {
         var old = currentWs;
         logPrimed = false;
-        startLogStream();  // reassigns currentWs to the new socket
-        if (old && old !== currentWs) old.close();  // its onclose sees it's superseded
+        startLogStream();  // reassigns currentWs
+        if (old && old !== currentWs) old.close();
     }
 
     function showCacheCorruptToast() {
@@ -321,10 +287,8 @@ function clearCacheAndReload() {
         );
     }
 
-    // While status='removing', disable the action buttons and show
-    // "Removing…". Re-enable on transition to 'error' (failed teardown);
-    // a successful teardown deletes the row and we redirect via the
-    // 404 branch in pollStatus.
+    // Disables the action buttons while removing; re-enabled only if teardown
+    // fails (status 'error'). A successful teardown 404s and redirects instead.
     var clearRemovingChrome = null;
     function applyRemovingChrome() {
         if (clearRemovingChrome) return;
@@ -352,11 +316,7 @@ function clearCacheAndReload() {
                     statusEl.textContent = appStatus;
                     statusEl.className = 'status-' + appStatus;
                 }
-                // Re-point the log stream when the container changes. The first
-                // non-null id is the one the initial stream already follows, so we
-                // adopt it silently; only a change to a *different* container (a
-                // reload/restart from elsewhere, or a crash-restart) resets — an app
-                // that simply stops keeps its final logs held open as before.
+                // Adopt the first container_id silently; reset only on a later change.
                 if (data.container_id && data.container_id !== streamContainerId) {
                     if (streamContainerId !== null) resetLogStream();
                     streamContainerId = data.container_id;
@@ -386,16 +346,13 @@ function clearCacheAndReload() {
             });
     }
 
-    // If the page loads with the app already in 'removing', reflect
-    // that before the first poll fires.
     if (appStatus === 'removing') {
         applyRemovingChrome();
     }
 
     logEl.scrollTop = logEl.scrollHeight;
 
-    // Stream regardless of status: a stopped/errored app still has a build log to
-    // replay, after which the server holds the socket open at the final state.
+    // Stream regardless of status: a stopped/errored app still has a build log to replay.
     startLogStream();
 
     // 'removing' polls so the page learns when the row vanishes (404).
