@@ -71,7 +71,7 @@ def test_container_runtime_reports_real_podman() -> None:
     assert rt.error is None
     # A real version string like "5.8.3".
     assert rt.version and rt.version[0].isdigit()
-    # OpenHost's test/CI podman is rootless.
+    # Cloud in a Bottle's test/CI podman is rootless.
     assert rt.rootless is True
 
 
@@ -143,7 +143,8 @@ class TestCollectorsAgainstLiveContainer:
 
     def test_app_resources_running_reports_live_usage(self, http_container: tuple[str, int]) -> None:
         container_id, _ = http_container
-        r = diagnostics._collect_app_resources(container_id, cpu_cores_limit=1.0, memory_mb_limit=128)
+        batch = diagnostics._collect_container_stats_batch()
+        r = diagnostics._app_resources_from_batch(batch, container_id, cpu_cores_limit=1.0, memory_mb_limit=128)
         assert r.running is True
         assert r.error is None
         # Manifest limits are echoed back.
@@ -193,9 +194,10 @@ class TestCollectorsAgainstLiveContainer:
 
     def test_app_resources_stopped_container_not_running(self, stopped_container: str) -> None:
         """A stopped container reports running=False with no misleading zero stats,
-        while still echoing the manifest limits (regression: podman stats emits a
-        zero-valued entry for exited containers)."""
-        r = diagnostics._collect_app_resources(stopped_container, cpu_cores_limit=0.5, memory_mb_limit=64)
+        while still echoing the manifest limits (the batch's running set comes from
+        ``podman ps``, which drops exited containers)."""
+        batch = diagnostics._collect_container_stats_batch()
+        r = diagnostics._app_resources_from_batch(batch, stopped_container, cpu_cores_limit=0.5, memory_mb_limit=64)
         assert r.running is False
         assert r.cpu_percent is None
         assert r.memory_usage_bytes is None

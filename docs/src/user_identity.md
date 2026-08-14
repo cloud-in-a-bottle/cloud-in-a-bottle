@@ -4,23 +4,23 @@
 - eventually this will become a new DID method, so let's keep close to that setup
 - i want a new hybrid method - public key / DID is the source of truth, but the domain is the human-readable advisory ID. anytime you really need to ensure the domain shortname is valid, you’ll hit the domain and verify it still controls its private key. and the user can refer to themselves by their domain - eg to create a login - with the assumption that if the user thinks they control their domain, it’s probably safe to assume that is true for the next ~5 mins or whatever. so you can hit their domain and fetch their public key.
 - openhost-specific context
-  - each user has an openhost space, accessable at a specific domain (user.host.imbue.com or whatever).
+  - each user has a Cloud in a Bottle space, accessable at a specific domain (user.host.imbue.com or whatever).
   - their userspaces all run a copy of an identity provider service that handles to the challenges+flows discussed in this doc.
-  - an openhost app (owned/hosted by user A) can give access to other openhost users (user B) by the following flow
-    - user A adds/invites user B by their openhost URL (userb.host.imbue.com)
+  - a Cloud in a Bottle app (owned/hosted by user A) can give access to other Cloud in a Bottle users (user B) by the following flow
+    - user A adds/invites user B by their Cloud in a Bottle URL (userb.host.imbue.com)
     - the app immediately contacts user B's server to get their full public key / public identity
-    - later, user B visits the app hosted in user A's space. the app says something like "please login with your openhost identity". user B clicks this button, and it routes them to a path in their own space (via the my.host.imbue.com route, which for user B redirects to userb.host.imbue.com). this may be something like `/identity-challenge/?source=app.usera.host.imbue.com`. probably with some type of token thing?
-    - the identity provider server in user B's space receives this request and shows the user a page like "you're getting a login request from app.usera.host.imbue.com, would you like to use your openhost identity to login?". of course this only works if user B is logged into their own space.
+    - later, user B visits the app hosted in user A's space. the app says something like "please login with your Cloud in a Bottle identity". user B clicks this button, and it routes them to a path in their own space (via the my.host.imbue.com route, which for user B redirects to userb.host.imbue.com). this may be something like `/identity-challenge/?source=app.usera.host.imbue.com`. probably with some type of token thing?
+    - the identity provider server in user B's space receives this request and shows the user a page like "you're getting a login request from app.usera.host.imbue.com, would you like to use your Cloud in a Bottle identity to login?". of course this only works if user B is logged into their own space.
     - user B clicks yes, and this redirects back to `app.usera.host.imbue.com/identity-response` with some sort of cryptographic token proving that they do indeed control their private key (which is stored in their space).
 
 
 
 ## General context (copied from another doc)
 
-- i want a way to do things like give permissions to an app to specific other openhost users. so they are authed if they’re logged into their instance, i guess?
+- i want a way to do things like give permissions to an app to specific other Cloud in a Bottle users. so they are authed if they’re logged into their instance, i guess?
 - eg for the project management system - i need a way to invite other users, and i don’t want them to have to make accounts specifically for this. they should be able to use their VM as a SSO provider, maybe?
     - i guess how this would work:
-        - you have some way of uniquely+securely identifying another openhost user, probably via a PGP public key or similar.
+        - you have some way of uniquely+securely identifying another Cloud in a Bottle user, probably via a PGP public key or similar.
             - this could come from a “contacts”/”friends” app/service in your VM, so you can add known people once and then reference them easily later.
         - then you say “i will share this with user xyz”
         - when user xyz accesses your space/app, the app is like “tell me who you are”.

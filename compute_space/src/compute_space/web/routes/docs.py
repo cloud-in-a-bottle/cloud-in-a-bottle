@@ -1,8 +1,8 @@
-"""Server-side-rendered markdown route serving the OpenHost manual.
+"""Server-side-rendered markdown route serving the Cloud in a Bottle manual.
 
 We read ``docs/src/*.md`` directly off the running checkout, render
 through ``markdown-it-py`` + ``pygments``, and inject into a Jinja
-template that matches the OpenHost dashboard's visual language.
+template that matches the Cloud in a Bottle dashboard's visual language.
 There is no build step: ``git pull`` is enough to ship doc changes.
 
 The rendered page carries the same top navigation header as the rest
@@ -423,7 +423,7 @@ _TEMPLATE = """<!DOCTYPE html>
   <meta charset="utf-8">
   <meta name="robots" content="noindex">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{{ page_title }} - OpenHost Manual</title>
+  <title>{{ page_title }} - Cloud in a Bottle Manual</title>
   <style>
     /* The docs page deliberately reuses layout.html's exact palette and
        typography (hardcoded light colours, #222 text on #fff, #ddd
@@ -634,7 +634,7 @@ _TEMPLATE = """<!DOCTYPE html>
 </head>
 <body>
   <header class="space-header">
-    <h1 class="space-title">{% if display_name %}{{ display_name }}'s personal compute space{% else %}OpenHost{% endif %}</h1>
+    <h1 class="space-title">{% if display_name %}{{ display_name }}'s personal compute space{% else %}Cloud in a Bottle{% endif %}</h1>
     {% include "_nav_header.html" %}
   </header>
   <svg width="0" height="0" style="position: absolute" aria-hidden="true" focusable="false">
@@ -650,7 +650,7 @@ _TEMPLATE = """<!DOCTYPE html>
   </svg>
   <div class="layout">
     <aside class="sidebar">
-      <h1><a href="/docs/">OpenHost Manual</a>{{ manual_copy_button | safe }}</h1>
+      <h1><a href="/docs/">Cloud in a Bottle Manual</a>{{ manual_copy_button | safe }}</h1>
       {% for section in sections %}
         <div class="section">
           {% if section.title %}<div class="section-title">{{ section.title }}</div>{% endif %}
@@ -775,7 +775,7 @@ _PAGE_TIP = "Copy page as Markdown"
 _H1_END_RE = re.compile(r"</h1>")
 
 _ALL_MARKDOWN_LEAD = (
-    "# OpenHost Manual\n"
+    "# Cloud in a Bottle Manual\n"
     "\n"
     "Every page of `docs/src/`, in `SUMMARY.md` reading order, as one document.  Pages are separated\n"
     "by `---` and tagged with their source path; a relative link like `./routing.md` points at\n"
@@ -872,9 +872,9 @@ def _missing_src_response() -> Response[str] | None:
         return None
     return Response(
         content=(
-            "The OpenHost docs source directory is missing on this installation. "
-            f"Expected: {src}.  This usually means the OpenHost code checkout is "
-            "incomplete; reinstalling the openhost service should fix it."
+            "The Cloud in a Bottle docs source directory is missing on this installation. "
+            f"Expected: {src}.  This usually means the Cloud in a Bottle code checkout is "
+            "incomplete; reinstalling the Cloud in a Bottle service should fix it."
         ),
         status_code=503,
         media_type=MediaType.TEXT,

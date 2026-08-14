@@ -74,7 +74,7 @@ step through tags that are ancestors of the pinned target. Without both, a targe
 ## Pinning to a target ref
 
 By default the destination is the latest release tag. To pin a host to a specific branch or commit, append `@<ref>` to
-the remote URL (e.g. via `update set_remote` or the dashboard): `https://github.com/imbue-openhost/openhost@my-branch`.
+the remote URL (e.g. via `update set_remote` or the dashboard): `https://github.com/cloud-in-a-bottle/cloud-in-a-bottle@my-branch`.
 This persists `openhost.target-ref` in git config. Updates then walk the release tags the target contains as stepping
 stones and end on the target's tip instead of the latest tag. Passing a URL with no `@<ref>` clears the pin and
 restores latest-tag behavior.

@@ -1,5 +1,5 @@
 #!/bin/bash
-# Unified e2e setup: create instance, deploy OpenHost via ansible, verify.
+# Unified e2e setup: create instance, deploy Cloud in a Bottle via ansible, verify.
 #
 # Provider-agnostic — the cloud provider is specified via the PROVIDER env var
 # (or first argument). Each provider implements a simple interface in
@@ -45,7 +45,7 @@ fi
 # threads this into the playbook; the test reads OPENHOST_CLAIM_TOKEN.
 export CLAIM_TOKEN="${CLAIM_TOKEN:-$(od -An -tx1 -N16 /dev/urandom | tr -d ' \n')}"
 
-echo "=== Setting up OpenHost on $PROVIDER ==="
+echo "=== Setting up Cloud in a Bottle on $PROVIDER ==="
 if $USE_TLS; then
     echo "  Domain: $DOMAIN (TLS mode)"
 else
@@ -103,17 +103,17 @@ else
     run_ansible_setup "$PUBLIC_IP" "$SSH_KEY" "" "$SSH_USER"
 fi
 
-# ── 6. Verify OpenHost service is running ────────────────────────────────
+# ── 6. Verify Cloud in a Bottle service is running ────────────────────────────────
 
 echo ""
-echo "--- Verifying OpenHost service ---"
+echo "--- Verifying Cloud in a Bottle service ---"
 HOST_SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -i $SSH_KEY"
 if ! ssh $HOST_SSH_OPTS "host@${PUBLIC_IP}" "systemctl is-active openhost" 2>/dev/null; then
-    echo "ERROR: OpenHost service is not running!" >&2
+    echo "ERROR: Cloud in a Bottle service is not running!" >&2
     ssh $HOST_SSH_OPTS "host@${PUBLIC_IP}" "sudo journalctl -u openhost --no-pager -n 50" 2>/dev/null || true
     exit 1
 fi
-echo "  OpenHost service is active"
+echo "  Cloud in a Bottle service is active"
 
 if $USE_TLS; then
     echo "Waiting for health endpoint..."
@@ -134,7 +134,7 @@ fi
 
 echo ""
 echo "========================================"
-echo "  OpenHost is running on $PROVIDER"
+echo "  Cloud in a Bottle is running on $PROVIDER"
 echo "========================================"
 if $USE_TLS; then
     echo "  URL:      https://$DOMAIN"

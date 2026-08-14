@@ -8,7 +8,7 @@ Requests are authenticated with a per-instance bearer token from a TokenProvider
 (Keycloak client-credentials in production); the header is set per-request so a
 token can refresh mid-flow during the long finalize-poll loop.
 
-See the broker contract: github.com/imbue-openhost/openhost-cert-api.
+See the broker contract: github.com/cloud-in-a-bottle/cert-api.
 """
 
 from __future__ import annotations

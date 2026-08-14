@@ -2,11 +2,7 @@ var config = JSON.parse(document.getElementById('page-config').textContent);
 
 var latest = null;
 
-function escHtml(s) {
-  var d = document.createElement('div');
-  d.textContent = (s == null) ? '' : String(s);
-  return d.innerHTML;
-}
+// escHtml comes from chart.js, loaded before this file.
 
 function formatBytes(bytes) {
   if (bytes == null) return '';
@@ -34,9 +30,9 @@ function renderSummary(data) {
   }
   row('Generated at', escHtml(data.generated_at));
   row('Zone domain', escHtml(data.zone_domain));
-  row('OpenHost version', escHtml(gitText(data.openhost)));
+  row('Cloud in a Bottle version', escHtml(gitText(data.openhost)));
   if (data.openhost && data.openhost.remote_url) {
-    row('OpenHost remote', '<code>' + escHtml(data.openhost.remote_url) + '</code>');
+    row('Cloud in a Bottle remote', '<code>' + escHtml(data.openhost.remote_url) + '</code>');
   }
   row('Host', escHtml(sys.hostname) + ' — ' + escHtml(sys.platform));
   row('Kernel', escHtml(sys.system) + ' ' + escHtml(sys.release) + ' (' + escHtml(sys.machine) + ')');
@@ -85,30 +81,95 @@ function healthCell(h) {
   return '<span class="status-error">FAIL (' + escHtml(detail) + ')</span>';
 }
 
-function resourceCell(r) {
-  if (!r || !r.running) return '<span class="muted">not running</span>';
-  var cpu = (r.cpu_percent != null) ? (r.cpu_percent + '%') : '?';
+function cpuCell(r) {
+  if (!r || !r.running) return '<span class="muted">&mdash;</span>';
+  return escHtml(r.cpu_percent != null ? r.cpu_percent + '%' : '?');
+}
+
+function memCell(r) {
+  if (!r || !r.running) return '<span class="muted">&mdash;</span>';
   var mem = (r.memory_usage_bytes != null) ? formatBytes(r.memory_usage_bytes) : '?';
   if (r.memory_percent != null) mem += ' (' + r.memory_percent + '%)';
-  return escHtml(cpu + ' cpu, ' + mem);
+  return escHtml(mem);
+}
+
+// ─── Installed Apps table (sortable) ───
+// The apps arrive in the combined diagnostics payload; we keep the last-seen
+// list so a header click can re-sort it in place without re-fetching.
+
+var appsData = [];
+var appSort = {key: 'name', dir: 1};
+
+function cmp(x, y) { return x < y ? -1 : (x > y ? 1 : 0); }
+
+// The header's data-sort-key is a dotted path into the app (e.g. "resources.cpu_percent"
+// or "health.healthy"), resolved generically to a scalar. Only columns with a scalar
+// value are marked sortable; Git (an object with no natural order) is left non-sortable.
+function appSortValue(a, path) {
+  return path.split('.').reduce(function(o, k) { return o == null ? null : o[k]; }, a);
+}
+
+function sortApps() {
+  // Sort by the active column, then break ties by name so equal rows stay stable.
+  appsData.sort(function(a, b) {
+    return cmp(appSortValue(a, appSort.key), appSortValue(b, appSort.key)) * appSort.dir
+      || cmp(a.name, b.name);
+  });
 }
 
 function renderApps(data) {
-  var apps = data.apps || [];
+  appsData = (data.apps || []).slice();
+  sortApps();
+  renderAppRows();
+}
+
+function renderAppRows() {
   var body = document.getElementById('apps-body');
-  if (!apps.length) {
-    body.innerHTML = '<tr><td colspan="6" class="muted">No apps installed.</td></tr>';
+  if (!appsData.length) {
+    body.innerHTML = '<tr><td colspan="7" class="muted">No apps installed.</td></tr>';
     return;
   }
-  body.innerHTML = apps.map(function(a) {
+  body.innerHTML = appsData.map(function(a) {
     var statusCls = a.status === 'running' ? 'status-running' : (a.status === 'error' ? 'status-error' : 'status-stopped');
     return '<tr><td>' + escHtml(a.name) + '</td>'
       + '<td>' + escHtml(a.version || '') + '</td>'
       + '<td class="' + statusCls + '">' + escHtml(a.status) + '</td>'
       + '<td>' + healthCell(a.health) + '</td>'
-      + '<td>' + resourceCell(a.resources) + '</td>'
+      + '<td>' + cpuCell(a.resources) + '</td>'
+      + '<td>' + memCell(a.resources) + '</td>'
       + '<td>' + escHtml(gitText(a.git)) + '</td></tr>';
   }).join('');
+}
+
+function updateSortIndicators() {
+  var ths = document.querySelectorAll('#apps-table th.sortable');
+  Array.prototype.forEach.call(ths, function(th) {
+    var key = th.getAttribute('data-sort-key');
+    var active = appSort.key === key;
+    var arrow = active ? (appSort.dir > 0 ? ' ▲' : ' ▼') : '';
+    th.textContent = th.getAttribute('data-label') + arrow;
+    th.setAttribute('aria-sort', active ? (appSort.dir > 0 ? 'ascending' : 'descending') : 'none');
+  });
+}
+
+function wireAppSorting() {
+  var ths = document.querySelectorAll('#apps-table th.sortable');
+  Array.prototype.forEach.call(ths, function(th) {
+    th.setAttribute('data-label', th.textContent);
+    th.addEventListener('click', function() {
+      var key = th.getAttribute('data-sort-key');
+      if (appSort.key === key) {
+        appSort.dir = -appSort.dir;
+      } else {
+        appSort.key = key;
+        appSort.dir = 1;
+      }
+      sortApps();
+      renderAppRows();
+      updateSortIndicators();
+    });
+  });
+  updateSortIndicators();
 }
 
 function renderReachability(data) {
@@ -171,4 +232,5 @@ document.getElementById('copy-btn').addEventListener('click', function() {
 
 document.getElementById('refresh-btn').addEventListener('click', loadDiagnostics);
 
+wireAppSorting();
 loadDiagnostics();

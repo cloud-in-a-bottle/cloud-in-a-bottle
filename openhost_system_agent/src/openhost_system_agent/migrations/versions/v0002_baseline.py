@@ -21,7 +21,7 @@ OPENHOST_SERVICE_PATH = "/etc/systemd/system/openhost.service"
 # Fixed path for the reclaim script the service runs before ExecStart.
 RECLAIM_SCRIPT_PATH = "/usr/local/bin/openhost-reclaim-pixi"
 
-# The reclaim script: hand the host's OpenHost trees back to the host user. Run
+# The reclaim script: hand the host's Cloud in a Bottle trees back to the host user. Run
 # as root (the unit's ExecStartPre uses the `+` prefix) before the host-user
 # `git`/`pixi run`, so files a root-run update left behind can't brick the
 # service. A standalone script — not an inline ExecStartPre snippet — so no
@@ -30,9 +30,9 @@ RECLAIM_SCRIPT_PATH = "/usr/local/bin/openhost-reclaim-pixi"
 # Kept byte-identical with ansible/files/openhost-reclaim-pixi (a test enforces
 # this).
 RECLAIM_SCRIPT = """#!/bin/sh
-# Reclaim ownership of the host's OpenHost trees for the host user, so files a
+# Reclaim ownership of the host's Cloud in a Bottle trees for the host user, so files a
 # root-run update left behind can't brick the host-user service. Run as root
-# before the host `git`/`pixi run`. Managed by OpenHost; keep byte-identical
+# before the host `git`/`pixi run`. Managed by Cloud in a Bottle; keep byte-identical
 # with RECLAIM_SCRIPT in the openhost_system_agent baseline (v0002_baseline.py).
 # Best-effort: one overall timeout, failure swallowed, so it can't block startup.
 # shellcheck disable=SC2016  # $dir is expanded by the inner `sh -c`, not here.
@@ -58,7 +58,7 @@ def build_openhost_service_unit(host_uid: int) -> str:
     stay consistent with the baseline (and with ansible's template)."""
     return (
         "[Unit]\n"
-        "Description=OpenHost Compute Space\n"
+        "Description=Cloud in a Bottle Compute Space\n"
         f"After=network-online.target user@{host_uid}.service\n"
         f"Wants=network-online.target user@{host_uid}.service\n"
         # Crash limiter for Restart=on-failure (see below): after StartLimitBurst
@@ -145,7 +145,7 @@ class Migration0002Baseline(SystemMigration):
     def _sysctls(self) -> None:
         write_file(
             "/etc/sysctl.d/90-openhost-podman.conf",
-            "# Managed by OpenHost; do not edit by hand.\n"
+            "# Managed by Cloud in a Bottle; do not edit by hand.\n"
             "net.ipv4.ip_unprivileged_port_start = 25\n"
             "kernel.apparmor_restrict_unprivileged_userns = 0\n",
             mode=0o644,
@@ -156,7 +156,7 @@ class Migration0002Baseline(SystemMigration):
         Path("/etc/containers").mkdir(parents=True, exist_ok=True)
         write_file(
             "/etc/containers/registries.conf",
-            "# Managed by OpenHost; do not edit by hand.\n"
+            "# Managed by Cloud in a Bottle; do not edit by hand.\n"
             'unqualified-search-registries = ["docker.io"]\n'
             'short-name-mode = "permissive"\n',
             mode=0o644,
@@ -185,7 +185,7 @@ class Migration0002Baseline(SystemMigration):
         conf_dir.mkdir(parents=True, exist_ok=True)
         write_file(
             str(conf_dir / "containers.conf"),
-            '# Managed by OpenHost; do not edit by hand.\n[containers]\nhost_containers_internal_ip = "10.200.0.1"\n',
+            '# Managed by Cloud in a Bottle; do not edit by hand.\n[containers]\nhost_containers_internal_ip = "10.200.0.1"\n',
             mode=0o644,
         )
         for p in [conf_dir, conf_dir / "containers.conf"]:

@@ -2,7 +2,7 @@
 
 The nav header (``_nav_header.html``, included by both ``layout.html`` and the
 standalone docs template) surfaces a GitHub icon linking to the exact branch/fork
-of OpenHost the instance is running. The link is built from the running checkout's
+of Cloud in a Bottle the instance is running. The link is built from the running checkout's
 origin remote + current branch via ``github_web_url_from_local_repo`` and exposed to
 templates as the ``source_url`` global; it is hidden entirely when that is None
 (tarball deploy, detached HEAD with no branch, non-GitHub remote, ...).
@@ -39,9 +39,9 @@ from .conftest import _make_test_config
     [
         # HTTPS clone URL, with and without the .git suffix.
         (
-            "https://github.com/imbue-openhost/openhost.git",
+            "https://github.com/cloud-in-a-bottle/cloud-in-a-bottle.git",
             "main",
-            "https://github.com/imbue-openhost/openhost/tree/main",
+            "https://github.com/cloud-in-a-bottle/cloud-in-a-bottle/tree/main",
         ),
         ("https://github.com/owner/repo", "dev", "https://github.com/owner/repo/tree/dev"),
         # SCP-style SSH shorthand.

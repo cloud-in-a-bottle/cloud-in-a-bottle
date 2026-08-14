@@ -1,6 +1,6 @@
 # Test Cases
 
-Test cases for the OpenHost platform. Automated tests are in:
+Test cases for the Cloud in a Bottle platform. Automated tests are in:
 - `test_e2e.py` — cloud E2E (ephemeral GCE instance, real TLS)
 - `test_full_stack.py` — local full-stack (router on host + rootless podman, no VM needed)
 - `test_tls.py` — TLS cert acquisition (Pebble ACME + CoreDNS, no VM needed)

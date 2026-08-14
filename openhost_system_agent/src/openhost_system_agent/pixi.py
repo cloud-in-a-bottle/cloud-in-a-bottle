@@ -8,7 +8,7 @@ import subprocess
 PIXI_VERSION = "0.70.2"
 PIXI_BIN = "/home/host/.pixi/bin/pixi"
 
-#: The unprivileged user that owns ``/home/host/.pixi`` and runs the openhost
+#: The unprivileged user that owns ``/home/host/.pixi`` and runs the Cloud in a Bottle
 #: service. Pixi operations must run as this user so they never leave
 #: root-owned files behind (see ``reclaim.py``).
 HOST_USER = "host"

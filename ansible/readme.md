@@ -53,9 +53,9 @@ pass with `-e key=value`.
 
 version precedence: `openhost_branch` > `openhost_commit` > default `main`.
 
-> **openhost version compatibility.** These playbooks seed the domain + claim token via
+> **Cloud in a Bottle version compatibility.** These playbooks seed the domain + claim token via
 > `first_boot.toml` and no longer write `zone_domain`/`tls_enabled` into `config.toml`. The deployed
-> openhost code must be new enough to read `first_boot.toml` — i.e. the config/domains-consolidation
+> Cloud in a Bottle code must be new enough to read `first_boot.toml` — i.e. the config/domains-consolidation
 > change (the `samuel/local-support` branch, and `main` once it merges) or later. Pinning an
 > `openhost_commit`/`openhost_branch` from **before** that change will boot with **no domain seeded**;
 > deploy a matching or newer ref.

@@ -85,9 +85,19 @@ def _agent_path(container: str) -> str:
 
 
 def _run_agent(container: str, *subargs: str, timeout: int = 600) -> subprocess.CompletedProcess[str]:
-    """Run ``sudo <agent> <subargs...>`` as root, never raising on nonzero."""
+    """Run ``sudo <agent> <subargs...>`` as root, never raising on nonzero.
+
+    ``update apply`` is given ``--wait``: the walk runs detached as
+    openhost-apply.service, so without it the command returns before any of the
+    work has happened and every assertion below would race it. ``--wait`` blocks
+    on the unit and surfaces the walk's outcome as an exit code, which is exactly
+    the contract these tests assert on.
+    """
     agent = _agent_path(container)
-    return _exec(container, "sudo", agent, *subargs, timeout=timeout, check=False)
+    args = list(subargs)
+    if args[:2] == ["update", "apply"]:
+        args.append("--wait")
+    return _exec(container, "sudo", agent, *args, timeout=timeout, check=False)
 
 
 def _agent_json(container: str, *subargs: str, timeout: int = 120) -> dict[str, object]:

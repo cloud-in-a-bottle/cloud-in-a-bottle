@@ -44,7 +44,15 @@ _ENV_PYTHON = "/home/host/openhost/.pixi/envs/default/bin/python"
 
 
 def _podman(*args: str, timeout: int = 30, check: bool = True) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(["podman", *args], capture_output=True, text=True, timeout=timeout, check=check)
+    # Check by hand rather than with check=True: CalledProcessError does not include
+    # captured output, which leaves a CI failure in here undiagnosable.
+    result = subprocess.run(["podman", *args], capture_output=True, text=True, timeout=timeout)
+    if check and result.returncode != 0:
+        raise AssertionError(
+            f"podman {' '.join(args)} exited {result.returncode}\n"
+            f"--- stdout ---\n{result.stdout}\n--- stderr ---\n{result.stderr}"
+        )
+    return result
 
 
 def _exec(container: str, *args: str, timeout: int = 60, check: bool = True) -> subprocess.CompletedProcess[str]:
@@ -97,6 +105,27 @@ def _wait_for_health(container: str, timeout: int = 60) -> str:
     raise RuntimeError(f"/health did not respond within {timeout}s (last stderr: {last_stderr!r})")
 
 
+def _wait_for_apply_unit(container: str, timeout: int = 900) -> None:
+    """Block until openhost-apply.service is gone.
+
+    `update apply` hands the walk to that transient unit and returns immediately,
+    so the assertions below have to wait for the real work rather than the exit
+    code of the launcher.
+    """
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        result = _podman(
+            "exec", container, "systemctl", "is-active", "openhost-apply.service", timeout=10, check=False
+        )
+        state = result.stdout.strip()
+        # --collect removes the unit once it exits, so "inactive"/"failed"/absent
+        # (an empty or unknown state) all mean the walk is over.
+        if state not in ("active", "activating", "deactivating", "reloading"):
+            return
+        time.sleep(2)
+    raise RuntimeError(f"openhost-apply.service still running after {timeout}s")
+
+
 def _dump_openhost_journal(container: str) -> str:
     journal = _podman(
         "exec", container, "journalctl", "-u", "openhost", "--no-pager", "-n", "50", timeout=10, check=False
@@ -129,7 +158,8 @@ def _ensure_migration_image() -> None:
 
 @requires_containers
 class TestApplyUpdateWalk:
-    """End-to-end: `update apply` walks onto a new tag, upgrades pixi, restarts."""
+    """End-to-end: `update apply` detaches, stops openhost, walks onto a new tag,
+    upgrades pixi, and starts openhost again."""
 
     container = "openhost-apply-walk-test"
 
@@ -183,8 +213,14 @@ class TestApplyUpdateWalk:
         # test image, so resolve the console script from the pixi env).
         which = _host_sh(c, f"cd {_REPO} && {_PIXI} run -e default which openhost_system_agent")
         agent = which.stdout.strip().splitlines()[-1]
-        apply = _exec(c, "sudo", agent, "update", "apply", timeout=600, check=False)
+        # --wait: the walk runs detached as openhost-apply.service, so without it
+        # this returns before any work has happened. With it we still get an exit
+        # code for the walk itself.
+        apply = _exec(c, "sudo", agent, "update", "apply", "--wait", timeout=900, check=False)
         assert apply.returncode == 0, f"update apply failed (exit {apply.returncode}):\n{apply.stdout}\n{apply.stderr}"
+        assert '"detached": true' in apply.stdout, f"expected a detached handoff: {apply.stdout!r}"
+        # Belt and braces: the unit really is gone before we assert on host state.
+        _wait_for_apply_unit(c)
 
         # The pixi-version migration upgraded pixi to the pinned version.
         after = _host_sh(c, f"{_PIXI} --version")
@@ -200,7 +236,8 @@ class TestApplyUpdateWalk:
         log = _exec(c, "cat", "/etc/openhost/migrations.jsonl")
         assert f'"version":{latest}' in log.stdout.replace(" ", ""), f"log did not reach v{latest}:\n{log.stdout}"
 
-        # openhost was restarted by the walk and serves /health.
+        # openhost was stopped for the walk and started again at the end; the
+        # unit's ExecStopPost guarantees that even on a failure path.
         try:
             body = _wait_for_health(c, timeout=120)
         except RuntimeError:

@@ -1,6 +1,6 @@
-# Creating an App for OpenHost
+# Creating an App for Cloud in a Bottle
 
-This guide walks through building an app that runs on OpenHost.
+This guide walks through building an app that runs on Cloud in a Bottle.
 
 ## Deploying your app
 
@@ -9,19 +9,19 @@ From the dashboard, click "Deploy New App" and provide a git repo URL (public or
 The router reads `openhost.toml`, builds the container image from your `Dockerfile` using rootless podman, and starts routing requests to it. Apps are accessible at `https://{app_name}.{zone_domain}/` (e.g., `https://my-app.user.host.imbue.com/`).
 
 
-## Writing an app to run on OpenHost
+## Writing an app to run on Cloud in a Bottle
 
-Apps can be anything that can run in an OCI container, and accessed via HTTP(s). OpenHost runs every app under rootless podman, so container-root maps to an unprivileged subuid on the host rather than real root.
+Apps can be anything that can run in an OCI container, and accessed via HTTP(s). Cloud in a Bottle runs every app under rootless podman, so container-root maps to an unprivileged subuid on the host rather than real root.
 
-An `openhost.toml` manifest must be placed at the root of your repo, to indicate to OpenHost how to run your app. See the [manifest spec](manifest_spec.md) for the full field reference.
+An `openhost.toml` manifest must be placed at the root of your repo, to indicate to Cloud in a Bottle how to run your app. See the [manifest spec](manifest_spec.md) for the full field reference.
 
 ## App template
 
-OpenHost has a standard app template available as a starting point: [https://github.com/imbue-openhost/app-template](https://github.com/imbue-openhost/app-template)
+Cloud in a Bottle has a standard app template available as a starting point: [https://github.com/cloud-in-a-bottle/app-template](https://github.com/cloud-in-a-bottle/app-template)
 
-This repo contains a Python 3.12 server using Litestar and Hypercorn, managed with uv. It includes pre-commit hooks (ruff formatting, mypy strict type checking), and an integration test suite using pytest, httpx, and Playwright. Tests run both locally and as a full containerized app, building the Dockerfile and fronting it with the real OpenHost router. 
+This repo contains a Python 3.12 server using Litestar and Hypercorn, managed with uv. It includes pre-commit hooks (ruff formatting, mypy strict type checking), and an integration test suite using pytest, httpx, and Playwright. Tests run both locally and as a full containerized app, building the Dockerfile and fronting it with the real Cloud in a Bottle router. 
 
-The template is recommended when starting a new app from scratch. Existing projects can also be deployed to OpenHost directly via their own Dockerfile without using this template.
+The template is recommended when starting a new app from scratch. Existing projects can also be deployed to Cloud in a Bottle directly via their own Dockerfile without using this template.
 
 
 ### Rootless constraints
@@ -97,7 +97,7 @@ app = Flask(__name__)
 
 @app.route("/")
 def index():
-    return "<h1>Hello from OpenHost</h1>"
+    return "<h1>Hello from Cloud in a Bottle</h1>"
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8080)
@@ -115,7 +115,7 @@ The router injects these environment variables into your app:
 
 | Variable | Example | Description                                                                                                     |
 |----------|---------|-----------------------------------------------------------------------------------------------------------------|
-| `OPENHOST_APP_NAME` | `my-app` | Your app's name, as registered with OpenHost. This will be the subdomain the app is routeable at.               |
+| `OPENHOST_APP_NAME` | `my-app` | Your app's name, as registered with Cloud in a Bottle. This will be the subdomain the app is routeable at.               |
 | `OPENHOST_APP_ID` | `4Hm9pX2Qk7Lt` (12-char base58) | Opaque, immutable per-app identity. Stable across renames; safe to key persistent state on. |
 | `OPENHOST_APP_TOKEN` | `kF3xP_2qA-bN4...` (43-char url-safe token) | Random per-app token used to authenticate cross-app service calls                                               |
 | `OPENHOST_ROUTER_URL` | `http://host.containers.internal:8080` | internal URL of the router, used for constructing service requests. |
@@ -141,7 +141,7 @@ Apps receive a persistent data directory by default. You can opt out or request 
 - **`access_all_data = true`** — convenience shorthand for `access_all_app_data = true` + `access_all_archive = true`.
 
 
-The storage guard requires a minimum amount of free persistent storage, stopping running apps when free space drops below `storage_min_free_mb` until space is freed. It is enabled by default; the host operator can change the threshold (or disable it with `0`) in the OpenHost config and reboot. The guard can be temporarily paused from the System page to allow starting a file-browser app for cleanup.
+The storage guard requires a minimum amount of free persistent storage, stopping running apps when free space drops below `storage_min_free_mb` until space is freed. It is enabled by default; the host operator can change the threshold (or disable it with `0`) in the Cloud in a Bottle config and reboot. The guard can be temporarily paused from the System page to allow starting a file-browser app for cleanup.
 
 See the [manifest spec](manifest_spec.md) for the full reference.
 
@@ -153,7 +153,7 @@ See [OAuth in Apps](./oauth.md) for an example - getting oauth tokens to externa
 
 ### Identity
 
-For apps that should be available to multiple users and require more than trivial publicly routes or token-protected public routes, see [User Identity](./user_identity.md) for how to implement this with the OpenHost user identity provider.
+For apps that should be available to multiple users and require more than trivial publicly routes or token-protected public routes, see [User Identity](./user_identity.md) for how to implement this with the Cloud in a Bottle user identity provider.
 
 
 ## Development / Debugging workflow
@@ -166,8 +166,8 @@ In general, the debugging flow is something like:
 5. "Update and reload" from the app details page (pulls new code and rebuilds)
 6. Retest and repeat
 
-We find AI tools work best when they can directly reference openhost code+docs. So we'd suggest:
-```cd some_dir && git clone https://github.com/imbue-openhost/openhost.git```
+We find AI tools work best when they can directly reference Cloud in a Bottle code+docs. So we'd suggest:
+```cd some_dir && git clone https://github.com/cloud-in-a-bottle/cloud-in-a-bottle.git```
 then point them at that checkout and tell them to read this doc.
 
 ## CLI
@@ -182,7 +182,7 @@ this will automatically get updates if you pull new changes from the openhost re
 
 or if not,
 ```bash
-uv tool install "oh @ git+https://github.com/imbue-openhost/openhost.git#subdirectory=compute_space_cli"
+uv tool install "oh @ git+https://github.com/cloud-in-a-bottle/cloud-in-a-bottle.git#subdirectory=compute_space_cli"
 ```
 Run `oh instance login` to login to your compute space.
 

@@ -1,5 +1,5 @@
 $ORIGIN {{ zone_domain }}.
-$TTL 60
+$TTL 300
 @   IN SOA  ns.{{ zone_domain }}. admin.{{ zone_domain }}. (
     {{ serial }}   ; serial
     3600  ; refresh

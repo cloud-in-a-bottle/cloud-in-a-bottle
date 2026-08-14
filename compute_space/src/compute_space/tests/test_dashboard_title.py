@@ -2,7 +2,7 @@
 
 The top-of-page ``<h1>`` (and ``<title>``) prefers the owner's configured
 username over the zone subdomain, falling back to the zone name (and then to
-"OpenHost") when no username is set. The name is exposed to templates via the
+"Cloud in a Bottle") when no username is set. The name is exposed to templates via the
 ``owner_name`` callable installed in ``_template_globals``.
 """
 

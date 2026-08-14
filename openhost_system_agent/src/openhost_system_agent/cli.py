@@ -12,11 +12,21 @@ from openhost_system_agent.migrations.runner import apply_system_migrations
 from openhost_system_agent.status import get_migration_status
 from openhost_system_agent.swap import get_swap_status
 from openhost_system_agent.swap import resize_swapfile
-from openhost_system_agent.update import apply_update
 from openhost_system_agent.update import fetch_updates
 from openhost_system_agent.update import get_remote_info
 from openhost_system_agent.update import set_remote_url
 from openhost_system_agent.update import show_diff
+from openhost_system_agent.update import start_apply
+from openhost_system_agent.updater.launcher import launch_updater
+from openhost_system_agent.updater.launcher import stop_updater
+from openhost_system_agent.updater.paths import clear_token
+from openhost_system_agent.updater.paths import tls_cert_path
+from openhost_system_agent.updater.paths import tls_key_path
+from openhost_system_agent.updater.paths import write_token
+from openhost_system_agent.updater.progress import mark_boot_complete
+from openhost_system_agent.updater.progress import record_failure_if_not_terminal
+from openhost_system_agent.updater.progress import reset_progress
+from openhost_system_agent.updater.server import run as run_updater_server
 
 
 def _output(obj: object) -> None:
@@ -45,14 +55,21 @@ class UpdateCmd:
         except Exception as e:
             _error(str(e))
 
-    @cappa.command(name="apply", help="Apply pending update: checkout, migrate, install deps, restart openhost.")
-    def apply(self) -> None:
-        # apply_update execs into the apply walk and restarts openhost on
-        # success, so it never returns; only failures surface here.
+    @cappa.command(name="apply", help="Apply pending update: stop openhost, checkout, migrate, install, start again.")
+    def apply(
+        self,
+        wait: Annotated[
+            bool,
+            cappa.Arg(long=True, help="Block until the detached walk finishes and fail if it did."),
+        ] = False,
+    ) -> None:
+        # Returns as soon as systemd accepts the job, so by default this exits
+        # while the update runs and the caller follows the progress log.
         try:
-            apply_update()
+            start_apply(wait=wait)
         except Exception as e:
             _error(str(e))
+        print(json.dumps({"ok": True, "detached": True, "waited": wait}))
 
     @cappa.command(
         name="migrate", help="Apply pending system migrations for the current checkout (no fetch/checkout/restart)."
@@ -111,13 +128,59 @@ class SwapCmd:
             _error(str(e))
 
 
+@cappa.command(name="updater", help="Seamless-update downtime server (internal; launched by compute_space).")
+@attrs.define
+class UpdaterCmd:
+    @cappa.command(name="launch", help="Launch the detached updater mini-server (survives the compute_space restart).")
+    def launch(self) -> None:
+        print(json.dumps({"ok": True, "launched": launch_updater()}))
+
+    @cappa.command(
+        name="serve", help="Run the updater mini-server in the foreground (invoked inside the transient unit)."
+    )
+    def serve(self) -> None:
+        run_updater_server(tls_cert_path(), tls_key_path())
+
+    @cappa.command(name="stop", help="Stop the detached updater, releasing 80/443 (called before Caddy starts).")
+    def stop(self) -> None:
+        stop_updater()
+        print(json.dumps({"ok": True}))
+
+    @cappa.command(name="set-token", help="Persist the update token so the updater can auth the owner tab.")
+    def set_token(self, token: Annotated[str, cappa.Arg(help="Opaque update token minted by compute_space")]) -> None:
+        # Reset synchronously before the browser can poll /updates, so its first
+        # poll can't see the PREVIOUS run's terminal "done" entry.
+        reset_progress()
+        write_token(token)
+        print(json.dumps({"ok": True}))
+
+    @cappa.command(name="clear-token", help="Remove the update token (e.g. after a failed apply).")
+    def clear_token(self) -> None:
+        clear_token()
+        print(json.dumps({"ok": True}))
+
+    @cappa.command(
+        name="mark-booted",
+        help="Finalize the progress log after a restart (root fallback when the log predates host ownership).",
+    )
+    def mark_booted(self) -> None:
+        print(json.dumps({"ok": mark_boot_complete()}))
+
+    @cappa.command(
+        name="fail",
+        help="Record a terminal 'failed' progress entry unless the log already ended (root fallback).",
+    )
+    def fail(self, message: Annotated[str, cappa.Arg(help="Human-readable failure message")]) -> None:
+        print(json.dumps({"ok": record_failure_if_not_terminal(message)}))
+
+
 @cappa.command(
     name="openhost_system_agent",
-    help="OpenHost system agent — host-level updates and migrations.",
+    help="Cloud in a Bottle system agent — host-level updates and migrations.",
 )
 @attrs.define
 class SystemAgent:
-    subcommand: cappa.Subcommands[UpdateCmd | StatusCmd | SwapCmd]
+    subcommand: cappa.Subcommands[UpdateCmd | StatusCmd | SwapCmd | UpdaterCmd]
 
 
 def main() -> None:

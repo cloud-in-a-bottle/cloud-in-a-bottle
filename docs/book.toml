@@ -1,13 +1,13 @@
 [book]
-title = "OpenHost Manual"
+title = "Cloud in a Bottle Manual"
 authors = ["Imbue"]
-description = "Documentation for the OpenHost platform, for operators and app authors."
+description = "Documentation for the Cloud in a Bottle platform, for operators and app authors."
 src = "src"
 language = "en"
 
 [output.html]
-git-repository-url = "https://github.com/imbue-openhost/openhost"
-edit-url-template = "https://github.com/imbue-openhost/openhost/edit/main/docs/{path}"
+git-repository-url = "https://github.com/cloud-in-a-bottle/cloud-in-a-bottle"
+edit-url-template = "https://github.com/cloud-in-a-bottle/cloud-in-a-bottle/edit/main/docs/{path}"
 default-theme = "rust"
 
 [output.html.search]

@@ -1,4 +1,4 @@
-Roadmap for the Openhost team - what is done and what we are planning to work on in the future.
+Roadmap for the Cloud in a Bottle team - what is done and what we are planning to work on in the future.
 
 
 last updated 8/10/26
@@ -18,7 +18,7 @@ things being worked on / polished up now:
 - great self-hosted onboarding
 
 roadmap (likely to happen):
-- add openhost platform support for notifications
+- add Cloud in a Bottle platform support for notifications
 - get notifications working in community chat app
 - email auto-setup in new spaces
 - share apps with others via email address (with email magic link auth)

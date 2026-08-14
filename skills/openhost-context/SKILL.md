@@ -1,12 +1,12 @@
 ---
 name: openhost-context
-description: Deploy and debug apps on OpenHost, a platform for self-hosting apps. Use when working with the `oh` CLI, deploying or reloading an app on an OpenHost zone, or building an openhost app.
+description: Deploy and debug apps on Cloud in a Bottle, a platform for self-hosting apps. Use when working with the `oh` CLI, deploying or reloading an app on a Cloud in a Bottle zone, or building a Cloud in a Bottle app.
 ---
 
-# OpenHost
+# Cloud in a Bottle
 
-OpenHost is a platform for self-hosting apps. Each app runs in its own
-container; the OpenHost router terminates TLS, handles auth, and
+Cloud in a Bottle is a platform for self-hosting apps. Each app runs in its own
+container; the Cloud in a Bottle router terminates TLS, handles auth, and
 proxies requests to apps by subdomain (`https://{app_name}.{zone_domain}/`).
 
 You interact with a zone through the `oh` CLI, which injects auth for you.
@@ -17,7 +17,7 @@ Prefer `oh` over raw HTTP requests so you never have to handle tokens by hand.
 If `oh` isn't installed:
 
 ```bash
-uv tool install "oh @ git+https://github.com/imbue-openhost/openhost.git#subdirectory=compute_space_cli"
+uv tool install "oh @ git+https://github.com/cloud-in-a-bottle/cloud-in-a-bottle.git#subdirectory=compute_space_cli"
 ```
 
 Then the **user** logs in (this is interactive — ask them to run it):
@@ -104,7 +104,7 @@ Other app commands: `oh app status|list|stop|rename|remove`. Run
 Start from the template and build on top of it:
 
 ```
-github.com/imbue-openhost/app-template
+github.com/cloud-in-a-bottle/app-template
 ```
 
 An app is any OCI container reachable over HTTP. It needs an `openhost.toml`
@@ -115,13 +115,13 @@ For the full app-authoring reference (manifest fields, the runtime
 contract, injected env vars, data storage, auth, cross-app services):
 
 - Read the manual on your own zone at `https://<zone-domain>/docs/` — it
-  always matches the OpenHost version you're running.
+  always matches the Cloud in a Bottle version you're running.
 - Or read the source docs at
-  `github.com/imbue-openhost/openhost/tree/main/docs/src` (start with
+  `github.com/cloud-in-a-bottle/cloud-in-a-bottle/tree/main/docs/src` (start with
   `creating_an_app.md` and `manifest_spec.md`).
-- You can also always clone `github.com/imbue-openhost/openhost
+- You can also always clone `github.com/cloud-in-a-bottle/cloud-in-a-bottle
 
-To reference OpenHost's code and docs directly, you can always just clone the openhost repo locally:
+To reference Cloud in a Bottle's code and docs directly, you can always just clone the openhost repo locally:
 ```bash
-git clone https://github.com/imbue-openhost/openhost.git
+git clone https://github.com/cloud-in-a-bottle/cloud-in-a-bottle.git
 ```
