@@ -1,5 +1,5 @@
 """
-End-to-end integration tests for the OpenHost router.
+End-to-end integration tests for the Cloud in a Bottle router.
 
 The full production flow is: build outer VM -> boot VM -> start router inside
 VM -> deploy apps.  The VM step requires Linux with KVM and diskimage-builder,

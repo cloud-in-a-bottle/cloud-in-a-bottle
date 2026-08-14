@@ -74,9 +74,9 @@ def test_prune_dangling_images_raises_on_error(monkeypatch: pytest.MonkeyPatch) 
         ("localhost/openhost-notes:latest", "notes"),
         ("openhost-my-cool-app:latest", "my-cool-app"),  # interior hyphens
         ("localhost/openhost-a1:latest", "a1"),
-        # Non-OpenHost repos and shapes must not match.
+        # Non-Cloud in a Bottle repos and shapes must not match.
         ("docker.io/library/python:3.12", None),
-        ("openhost-notes:v2", None),  # only :latest is an OpenHost app tag
+        ("openhost-notes:v2", None),  # only :latest is a Cloud in a Bottle app tag
         ("notopenhost-notes:latest", None),
         ("python:latest", None),
         ("<none>:<none>", None),

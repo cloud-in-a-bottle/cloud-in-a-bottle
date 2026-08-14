@@ -1,4 +1,4 @@
-"""Run a full OpenHost stack locally for browser testing.
+"""Run a full Cloud in a Bottle stack locally for browser testing.
 
 HTTP-only, bound to loopback, with a ``*.localhost`` zone domain — browsers and the OS
 resolver send any ``*.localhost`` name to loopback, so no DNS or /etc/hosts setup is

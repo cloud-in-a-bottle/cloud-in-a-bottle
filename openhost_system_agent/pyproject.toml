@@ -1,7 +1,7 @@
 [project]
 name = "openhost_system_agent"
 version = "0.1.0"
-description = "OpenHost system agent — host-level updates and migrations"
+description = "Cloud in a Bottle system agent — host-level updates and migrations"
 requires-python = ">=3.12"
 dependencies = [
     "attrs",

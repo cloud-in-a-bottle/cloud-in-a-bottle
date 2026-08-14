@@ -176,7 +176,7 @@ class UpdaterCmd:
 
 @cappa.command(
     name="openhost_system_agent",
-    help="OpenHost system agent — host-level updates and migrations.",
+    help="Cloud in a Bottle system agent — host-level updates and migrations.",
 )
 @attrs.define
 class SystemAgent:

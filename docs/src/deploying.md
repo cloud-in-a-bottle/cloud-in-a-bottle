@@ -14,7 +14,7 @@ Two parts:
 
 1. **[Build the VM](#part-1--build-an-ubuntu-vm-in-qemu)** — install QEMU and
    stand up an Ubuntu VM.
-2. **[Deploy Cloud in a Bottle](#part-2--deploy-openhost-onto-the-vm)** — run the Ansible
+2. **[Deploy Cloud in a Bottle](#part-2--deploy-cloud-in-a-bottle-onto-the-vm)** — run the Ansible
    playbook against that VM (HTTP-only mode; no domain needed).
 
 For a dedicated instance instead, see
@@ -41,7 +41,7 @@ export DISK_SIZE=40G
 export RAM_MB=8192
 export CPUS=4
 
-# --- OpenHost ---
+# --- Cloud in a Bottle ---
 export DOMAIN=lvh.me:8080              # zone domain for app routing (see note in Part 2)
 export OPENHOST_REPO=~/openhost        # path to your checkout of this repo
 

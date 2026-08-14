@@ -1,5 +1,5 @@
 #!/bin/bash
-# Shared helper functions for OpenHost E2E setup and teardown scripts.
+# Shared helper functions for Cloud in a Bottle E2E setup and teardown scripts.
 #
 # Source this file from provider-specific scripts or e2e-setup.sh:
 #   source "$(cd "$(dirname "$0")" && pwd)/common.sh"
@@ -29,7 +29,7 @@ wait_for_ssh() {
 }
 
 # ── create_route53_dns ───────────────────────────────────────────────────
-# Create Route53 NS + A records for delegating a subdomain to OpenHost's
+# Create Route53 NS + A records for delegating a subdomain to Cloud in a Bottle's
 # built-in DNS server.
 #
 # Args:
@@ -133,7 +133,7 @@ EOF
 }
 
 # ── run_ansible_setup ────────────────────────────────────────────────────
-# Deploy OpenHost via ansible playbooks (no outer VM required).
+# Deploy Cloud in a Bottle via ansible playbooks (no outer VM required).
 # Runs ansible-playbook from the local machine targeting the remote host.
 #
 # Args:
@@ -153,7 +153,7 @@ run_ansible_setup() {
     repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
     echo ""
-    echo "--- Deploying OpenHost via ansible ---"
+    echo "--- Deploying Cloud in a Bottle via ansible ---"
 
     # Build extra vars.
     local extra_vars=()

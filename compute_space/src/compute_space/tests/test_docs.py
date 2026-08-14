@@ -79,9 +79,9 @@ def _populate_fake_docs(src_dir: Path) -> None:
         "- [Creating an App](./creating_an_app.md)\n"
     )
     (src_dir / "introduction.md").write_text(
-        "# Welcome to OpenHost\n"
+        "# Welcome to Cloud in a Bottle\n"
         "\n"
-        "OpenHost is a self-hosted application platform.\n"
+        "Cloud in a Bottle is a self-hosted application platform.\n"
         "See the [manifest spec](./manifest_spec.md).\n"
     )
     (src_dir / "manifest_spec.md").write_text(
@@ -132,7 +132,7 @@ def test_index_renders_introduction(client_with_docs: TestClient[Litestar]) -> N
     resp = client_with_docs.get("/docs/")
     assert resp.status_code == 200
     body = resp.text
-    assert "Welcome to OpenHost" in body
+    assert "Welcome to Cloud in a Bottle" in body
     assert "self-hosted application platform" in body
 
 
@@ -278,7 +278,7 @@ def test_both_slash_variants_serve_index(client_with_docs: TestClient[Litestar])
     for path in ("/docs", "/docs/"):
         resp = client_with_docs.get(path, follow_redirects=False)
         assert resp.status_code == 200, path
-        assert "Welcome to OpenHost" in resp.text, path
+        assert "Welcome to Cloud in a Bottle" in resp.text, path
 
 
 # -- cache ----------------------------------------------------------
@@ -293,7 +293,7 @@ def test_render_cache_invalidates_on_mtime_change(tmp_path: Path) -> None:
     client, _cfg = _client(repo_root)
     with client as c:
         resp1 = c.get("/docs/")
-        assert "Welcome to OpenHost" in resp1.text
+        assert "Welcome to Cloud in a Bottle" in resp1.text
 
         # Mutate the source.  Sleep so mtime resolution definitely
         # increases (some filesystems have 1s resolution).
@@ -304,7 +304,7 @@ def test_render_cache_invalidates_on_mtime_change(tmp_path: Path) -> None:
         resp2 = c.get("/docs/")
         body2 = resp2.text
         assert "A New Heading" in body2
-        assert "Welcome to OpenHost" not in body2
+        assert "Welcome to Cloud in a Bottle" not in body2
 
 
 # -- markdown export ------------------------------------------------
@@ -318,7 +318,9 @@ def test_all_markdown_returns_the_whole_manual(client_with_docs: TestClient[Lite
     assert resp.headers["content-type"].startswith("text/plain")
     body = resp.text
     assert "```toml" in body and "<h1" not in body
-    positions = [body.index(h) for h in ("# Welcome to OpenHost", "# Manifest", "# Routing", "# Creating an App")]
+    positions = [
+        body.index(h) for h in ("# Welcome to Cloud in a Bottle", "# Manifest", "# Routing", "# Creating an App")
+    ]
     assert positions == sorted(positions)
 
 

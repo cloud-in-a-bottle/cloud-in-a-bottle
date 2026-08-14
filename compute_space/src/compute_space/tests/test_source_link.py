@@ -2,7 +2,7 @@
 
 The nav header (``_nav_header.html``, included by both ``layout.html`` and the
 standalone docs template) surfaces a GitHub icon linking to the exact branch/fork
-of OpenHost the instance is running. The link is built from the running checkout's
+of Cloud in a Bottle the instance is running. The link is built from the running checkout's
 origin remote + current branch via ``github_web_url_from_local_repo`` and exposed to
 templates as the ``source_url`` global; it is hidden entirely when that is None
 (tarball deploy, detached HEAD with no branch, non-GitHub remote, ...).

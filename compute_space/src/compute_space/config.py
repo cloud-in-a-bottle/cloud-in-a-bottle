@@ -69,7 +69,7 @@ class Config:
     # How often (seconds) to prune dangling container images (0 = disabled).
     image_prune_interval_seconds: int
 
-    # Age (seconds) above which a tagged OpenHost app image with no matching app
+    # Age (seconds) above which a tagged Cloud in a Bottle app image with no matching app
     # in the DB is treated as orphaned and pruned (0 = never prune orphaned
     # tagged images).
     image_orphan_max_age_seconds: int
@@ -173,7 +173,7 @@ class Config:
 
     @property
     def openhost_data_path(self) -> Path:
-        # openhost-specific data, including the sqlite db and TLS certs.
+        # Cloud in a Bottle-specific data, including the sqlite db and TLS certs.
         return Path(self.persistent_data_dir) / "openhost"
 
     @property

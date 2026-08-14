@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# provision.sh — Bootstrap a fresh Ubuntu 24.04 server into a running OpenHost instance.
+# provision.sh — Bootstrap a fresh Ubuntu 24.04 server into a running Cloud in a Bottle instance.
 #
 # Usage (run as root on the target server):
 #   curl -fsSL https://raw.githubusercontent.com/imbue-openhost/openhost/main/scripts/provision.sh | bash -s -- --domain myhost.example.com
@@ -61,7 +61,7 @@ if [ "$(id -u)" -ne 0 ]; then
     exit 1
 fi
 
-echo "=== OpenHost Provisioning ==="
+echo "=== Cloud in a Bottle Provisioning ==="
 echo "  Domain: $DOMAIN"
 echo "  Branch: $BRANCH"
 echo ""
@@ -89,7 +89,7 @@ apt-get update -qq
 apt-get install -y -qq ansible-core git > /dev/null 2>&1
 
 # ---- Clone the repo ----
-echo "--- Cloning OpenHost ($BRANCH) ---"
+echo "--- Cloning Cloud in a Bottle ($BRANCH) ---"
 if [ -d "$OPENHOST_DIR/.git" ]; then
     cd "$OPENHOST_DIR"
     su host -c "git fetch origin"
@@ -137,11 +137,11 @@ fi
 # with skip_service_start=true, which now also skips enabling the unit for boot
 # persistence (so warm-pool prebakes stay fully dormant). This is the point in
 # the bare-metal flow where openhost is meant to come up for good, so enable it.
-echo "--- Starting OpenHost ---"
+echo "--- Starting Cloud in a Bottle ---"
 systemctl enable --now openhost
 
 echo ""
-echo "=== OpenHost provisioning complete ==="
+echo "=== Cloud in a Bottle provisioning complete ==="
 echo ""
 if [ "$LOCAL_HTTP_ONLY" = "true" ]; then
     echo "  Mode:      HTTP-only localhost (no TLS/CoreDNS/Caddy)"

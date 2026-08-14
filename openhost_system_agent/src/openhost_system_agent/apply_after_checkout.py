@@ -167,7 +167,7 @@ def _apply(project: str) -> None:
     progress.record("migrate", "Applying system migrations\u2026")
     apply_system_migrations()
 
-    # Install as the unprivileged 'host' user, not root. The openhost service
+    # Install as the unprivileged 'host' user, not root. The Cloud in a Bottle service
     # runs as host via `pixi run`, and pixi tracks its PyPI sync per-user; a
     # root install leaves root-owned files in the env that the host service
     # then can't update, so its `pixi run` fails with EACCES.

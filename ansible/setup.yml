@@ -48,7 +48,7 @@
   tasks:
     - import_tasks: tasks/dev_machine.yml
 
-- name: Setup OpenHost
+- name: Setup Cloud in a Bottle
   hosts: all
   user: host
   vars:

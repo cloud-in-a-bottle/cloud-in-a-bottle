@@ -30,9 +30,9 @@ function renderSummary(data) {
   }
   row('Generated at', escHtml(data.generated_at));
   row('Zone domain', escHtml(data.zone_domain));
-  row('OpenHost version', escHtml(gitText(data.openhost)));
+  row('Cloud in a Bottle version', escHtml(gitText(data.openhost)));
   if (data.openhost && data.openhost.remote_url) {
-    row('OpenHost remote', '<code>' + escHtml(data.openhost.remote_url) + '</code>');
+    row('Cloud in a Bottle remote', '<code>' + escHtml(data.openhost.remote_url) + '</code>');
   }
   row('Host', escHtml(sys.hostname) + ' — ' + escHtml(sys.platform));
   row('Kernel', escHtml(sys.system) + ' ' + escHtml(sys.release) + ' (' + escHtml(sys.machine) + ')');

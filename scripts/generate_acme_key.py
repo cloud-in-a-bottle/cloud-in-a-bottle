@@ -4,7 +4,7 @@
 Usage: python3 generate_acme_key.py <output-path> [--email <email>]
 
 Generates an RSA-2048 key, registers it with Let's Encrypt, and saves
-the JWK to the output path. The key can then be used by OpenHost for
+the JWK to the output path. The key can then be used by Cloud in a Bottle for
 TLS certificate acquisition via DNS-01 challenges.
 """
 
@@ -18,7 +18,7 @@ from acme import messages
 from cryptography.hazmat.primitives.asymmetric import rsa
 from josepy import JWKRSA
 
-# Google Trust Services — the default ACME provider used by OpenHost
+# Google Trust Services — the default ACME provider used by Cloud in a Bottle
 GTS_PRODUCTION = "https://dv.acme-v02.api.pki.goog/directory"
 # Let's Encrypt as fallback
 LETS_ENCRYPT_DIRECTORY = "https://acme-v02.api.letsencrypt.org/directory"
@@ -53,7 +53,7 @@ def _generate_jwk() -> tuple[dict, JWKRSA]:
 def _register_account(jwk_rsa: JWKRSA, email: str | None = None) -> str:
     """Register the key with ACME providers. Returns the account URI.
 
-    Registers with both Google Trust Services (OpenHost's default) and
+    Registers with both Google Trust Services (Cloud in a Bottle's default) and
     Let's Encrypt for maximum compatibility.
     """
     for name, directory_url in [("Google Trust Services", GTS_PRODUCTION), ("Let's Encrypt", LETS_ENCRYPT_DIRECTORY)]:

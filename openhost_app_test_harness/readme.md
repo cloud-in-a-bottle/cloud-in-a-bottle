@@ -1,6 +1,6 @@
 # openhost_test_harness
 
-Test scaffolding for OpenHost apps, running the **real OpenHost router** locally.
+Test scaffolding for Cloud in a Bottle apps, running the **real Cloud in a Bottle router** locally.
 The harness starts an HTTP-only router on a `*.localhost` zone (resolves to loopback on
 Linux and macOS, no DNS setup), deploys your app through the real install path with rootless
 podman, and gives your tests authenticated access. Routing, auth, identity env vars, and the

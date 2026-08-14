@@ -1,9 +1,9 @@
-"""Collect diagnostic information for debugging OpenHost instances and apps.
+"""Collect diagnostic information for debugging Cloud in a Bottle instances and apps.
 
 Two public entry points:
 
   - :func:`collect_platform_diagnostics` — a snapshot of the whole instance:
-    OpenHost git checkout (branch/SHA/dirty), host OS/kernel, Python and
+    Cloud in a Bottle git checkout (branch/SHA/dirty), host OS/kernel, Python and
     installed dependency versions, container runtime (podman) info, disk usage,
     and a summary of every installed app.  Owner-only; intended to be copied or
     downloaded and pasted into a bug report.
