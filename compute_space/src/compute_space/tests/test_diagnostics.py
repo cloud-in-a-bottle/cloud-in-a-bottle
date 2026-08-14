@@ -567,22 +567,40 @@ def test_gitinfo_is_frozen() -> None:
 
 
 def test_read_meminfo_parses(tmp_path: Path) -> None:
-    meminfo = "MemTotal:       16384000 kB\nMemFree:         1000000 kB\nMemAvailable:    8192000 kB\n"
+    meminfo = (
+        "MemTotal:       16384000 kB\nMemFree:         1000000 kB\nMemAvailable:    8192000 kB\n"
+        "SwapTotal:      16777216 kB\nSwapFree:       16000000 kB\n"
+    )
     m = mock_open(read_data=meminfo)
     with patch("compute_space.core.diagnostics.open", m):
-        total, available = diagnostics._read_meminfo()
-    assert total == 16384000 * 1024
-    assert available == 8192000 * 1024
+        mem = diagnostics._read_meminfo()
+    assert mem.mem_total == 16384000 * 1024
+    assert mem.mem_available == 8192000 * 1024
+    assert mem.swap_total == 16777216 * 1024
+    assert mem.swap_free == 16000000 * 1024
 
 
 def test_read_meminfo_missing_file() -> None:
     with patch("compute_space.core.diagnostics.open", side_effect=FileNotFoundError):
-        assert diagnostics._read_meminfo() == (None, None)
+        mem = diagnostics._read_meminfo()
+    assert (mem.mem_total, mem.mem_available, mem.swap_total, mem.swap_free) == (None, None, None, None)
+
+
+def test_read_meminfo_without_swap() -> None:
+    # A host with swap disabled still reports SwapTotal/SwapFree as 0; a kernel
+    # without swap support omits them entirely — both degrade cleanly.
+    meminfo = "MemTotal:       16384000 kB\nMemAvailable:    8192000 kB\n"
+    with patch("compute_space.core.diagnostics.open", mock_open(read_data=meminfo)):
+        mem = diagnostics._read_meminfo()
+    assert mem.mem_total == 16384000 * 1024
+    assert mem.swap_total is None
+    assert mem.swap_free is None
 
 
 def test_collect_resource_pressure_computes_percent_and_load() -> None:
+    meminfo = diagnostics._MemInfo(mem_total=1000, mem_available=250, swap_total=2000, swap_free=1500)
     with (
-        patch("compute_space.core.diagnostics._read_meminfo", return_value=(1000, 250)),
+        patch("compute_space.core.diagnostics._read_meminfo", return_value=meminfo),
         patch("compute_space.core.diagnostics.os.getloadavg", return_value=(0.5, 1.0, 2.0)),
         patch("compute_space.core.diagnostics.os.cpu_count", return_value=4),
     ):
@@ -593,17 +611,21 @@ def test_collect_resource_pressure_computes_percent_and_load() -> None:
     assert rp.load_avg_1m == 0.5
     assert rp.load_avg_15m == 2.0
     assert rp.cpu_count == 4
+    assert rp.swap_total_bytes == 2000
+    assert rp.swap_free_bytes == 1500
 
 
 def test_collect_resource_pressure_degrades_without_loadavg() -> None:
+    meminfo = diagnostics._MemInfo(mem_total=None, mem_available=None, swap_total=None, swap_free=None)
     with (
-        patch("compute_space.core.diagnostics._read_meminfo", return_value=(None, None)),
+        patch("compute_space.core.diagnostics._read_meminfo", return_value=meminfo),
         patch("compute_space.core.diagnostics.os.getloadavg", side_effect=OSError),
     ):
         rp = diagnostics._collect_resource_pressure()
     assert rp.memory_total_bytes is None
     assert rp.memory_used_percent is None
     assert rp.load_avg_1m is None
+    assert rp.swap_total_bytes is None
 
 
 # ─── podman stats parsing ─────────────────────────────────────────────────────
@@ -1152,6 +1174,8 @@ def test_platform_bundle_fully_json_serializable_all_fields(
         "load_avg_5m",
         "load_avg_15m",
         "cpu_count",
+        "swap_total_bytes",
+        "swap_free_bytes",
         "error",
     ):
         assert key in rp, f"resource_pressure missing {key}"
