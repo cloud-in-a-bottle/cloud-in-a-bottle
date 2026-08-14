@@ -30,13 +30,13 @@ from compute_space.core.services_v2 import resolve_provider
 from compute_space.web.auth.auth import require_owner_auth
 from compute_space.web.helpers.zone import zone_for_request
 
-EDIT_APP_SERVICE_URL = "github.com/imbue-openhost/claude-code-container/services/open-workspace"
+EDIT_APP_SERVICE_URL = "github.com/cloud-in-a-bottle/claude-code-container/services/open-workspace"
 EDIT_APP_VERSION_SPEC = "<1.0"
 
 # The app catalog ships as a default app (see Config.default_apps); the Deploy
 # page links to it when installed and offers to install it otherwise.
 CATALOG_APP_NAME = "catalog"
-CATALOG_REPO_URL = "https://github.com/imbue-openhost/app-catalog"
+CATALOG_REPO_URL = "https://github.com/cloud-in-a-bottle/app-catalog"
 
 
 @get(["/", "/dashboard"], guards=[require_owner_auth])
@@ -129,7 +129,7 @@ async def _resolve_edit_app(
     Returns one of:
       - ``{"mode": "service", "action": ..., "repo": ..., "ref": ...}`` — POST to
         a provider of the open-workspace service (see
-        github.com/imbue-openhost/claude-code-container/services/open-workspace).
+        github.com/cloud-in-a-bottle/claude-code-container/services/open-workspace).
       - ``{"mode": "repo", "href": ...}`` — fallback link to the repo URL.
       - ``None`` — no actionable URL available.
     """

@@ -203,13 +203,13 @@ The user-facing manual lives in `docs/src/` and is served at `https://<zone>/doc
 An agent skill that gives an AI coding agent context for deploying and debugging apps on Cloud in a Bottle via the `oh` CLI. Install with:
 
 ```bash
-npx skills add imbue-openhost/openhost --skill openhost-context
+npx skills add cloud-in-a-bottle/cloud-in-a-bottle --skill openhost-context
 ```
 
 The skill works best with the `oh` CLI installed and logged in:
 
 ```bash
-uv tool install "oh @ git+https://github.com/imbue-openhost/openhost.git#subdirectory=compute_space_cli"
+uv tool install "oh @ git+https://github.com/cloud-in-a-bottle/cloud-in-a-bottle.git#subdirectory=compute_space_cli"
 oh instance login
 ```
 

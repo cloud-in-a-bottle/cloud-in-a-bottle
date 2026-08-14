@@ -86,7 +86,7 @@ def _run_system_agent(*args: str, timeout: int = 300) -> str:
                 "\n"
                 "The openhost_system_agent binary is not on sudo's PATH. "
                 "Re-running the ansible deploy against this host will reinstall it — "
-                "see https://github.com/imbue-openhost/openhost/blob/main/ansible/readme.md"
+                "see https://github.com/cloud-in-a-bottle/cloud-in-a-bottle/blob/main/ansible/readme.md"
             )
         raise SystemAgentError(str(error))
 

@@ -39,9 +39,9 @@ from .conftest import _make_test_config
     [
         # HTTPS clone URL, with and without the .git suffix.
         (
-            "https://github.com/imbue-openhost/openhost.git",
+            "https://github.com/cloud-in-a-bottle/cloud-in-a-bottle.git",
             "main",
-            "https://github.com/imbue-openhost/openhost/tree/main",
+            "https://github.com/cloud-in-a-bottle/cloud-in-a-bottle/tree/main",
         ),
         ("https://github.com/owner/repo", "dev", "https://github.com/owner/repo/tree/dev"),
         # SCP-style SSH shorthand.

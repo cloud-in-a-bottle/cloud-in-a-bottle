@@ -721,7 +721,7 @@ class TestSelfHost:
         """Deploy MinIO from its public GitHub repo."""
         r = session.post(
             f"{router_url}/api/add_app",
-            json={"repo_url": "https://github.com/imbue-openhost/bottled-minio"},
+            json={"repo_url": "https://github.com/cloud-in-a-bottle/bottled-minio"},
             timeout=120,
         )
         assert r.status_code == 200, f"add_app minio failed: {r.status_code}: {r.text[:500]}"

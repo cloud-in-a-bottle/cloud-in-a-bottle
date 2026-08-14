@@ -1,7 +1,7 @@
 # Running Cloud in a Bottle in a local QEMU VM
 
 > The authoritative deployment reference is
-> **[`ansible/readme.md`](https://github.com/imbue-openhost/openhost/blob/main/ansible/readme.md)**
+> **[`ansible/readme.md`](https://github.com/cloud-in-a-bottle/cloud-in-a-bottle/blob/main/ansible/readme.md)**
 > and `ansible/setup.yml`; this guide walks the local-VM path end to end.
 >
 > Upstream docs for the tools used here:
@@ -188,7 +188,7 @@ still running.
 uv tool install ansible-core        # or: pipx install ansible-core
 
 # A checkout of this repo (skip if you already have $OPENHOST_REPO)
-git clone https://github.com/imbue-openhost/openhost.git "$OPENHOST_REPO"
+git clone https://github.com/cloud-in-a-bottle/cloud-in-a-bottle.git "$OPENHOST_REPO"
 ```
 
 ### 2. Run the playbook (HTTP-only)
@@ -288,4 +288,4 @@ over SSH as `root`) and turning on TLS by dropping `local_http_only`:
 
 Your instance comes up at `https://host.example.com/`. Full options and the
 authoritative reference are in
-**[`ansible/readme.md`](https://github.com/imbue-openhost/openhost/blob/main/ansible/readme.md)**.
+**[`ansible/readme.md`](https://github.com/cloud-in-a-bottle/cloud-in-a-bottle/blob/main/ansible/readme.md)**.

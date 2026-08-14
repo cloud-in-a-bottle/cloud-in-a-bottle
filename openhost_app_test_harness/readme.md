@@ -11,7 +11,7 @@ v2 service interface behave exactly as on a real server.
 ```toml
 [dependency-groups]
 dev = [
-    "openhost[test-harness] @ git+https://github.com/imbue-openhost/openhost@main",
+    "openhost[test-harness] @ git+https://github.com/cloud-in-a-bottle/cloud-in-a-bottle@main",
 ]
 ```
 
@@ -98,7 +98,7 @@ Deploy a real provider next to it and grant permissions:
 
 ```python
 def test_my_app_reads_secrets(stack):
-    stack.deploy_app("https://github.com/imbue-openhost/secrets")
+    stack.deploy_app("https://github.com/cloud-in-a-bottle/secrets")
     stack.grant(stack.app_id, "github.com/imbue-openhost/openhost/services/secrets", {"key": "DB_URL"})
     ...  # exercise your app; its service calls go through the real router proxy
 ```
@@ -114,7 +114,7 @@ server before installing the app:
 
 ```python
 def _seed(s: OpenhostStack) -> None:
-    s.deploy_app("https://github.com/imbue-openhost/secrets")
+    s.deploy_app("https://github.com/cloud-in-a-bottle/secrets")
     s.owner_session.post(f"{s.url_for('secrets')}/api/secrets", json={"key": "DB_URL", "value": "..."})
 
 @pytest.fixture(scope="session")

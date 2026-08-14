@@ -30,7 +30,7 @@ This delegates `*.host.example.com` to the CoreDNS instance that Cloud in a Bott
 SSH into the server as root and run:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/imbue-openhost/openhost/main/scripts/provision.sh | bash -s -- --domain host.example.com
+curl -fsSL https://raw.githubusercontent.com/cloud-in-a-bottle/cloud-in-a-bottle/main/scripts/provision.sh | bash -s -- --domain host.example.com
 ```
 
 Optional flags:

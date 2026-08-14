@@ -17,7 +17,7 @@ An `openhost.toml` manifest must be placed at the root of your repo, to indicate
 
 ## App template
 
-Cloud in a Bottle has a standard app template available as a starting point: [https://github.com/imbue-openhost/app-template](https://github.com/imbue-openhost/app-template)
+Cloud in a Bottle has a standard app template available as a starting point: [https://github.com/cloud-in-a-bottle/app-template](https://github.com/cloud-in-a-bottle/app-template)
 
 This repo contains a Python 3.12 server using Litestar and Hypercorn, managed with uv. It includes pre-commit hooks (ruff formatting, mypy strict type checking), and an integration test suite using pytest, httpx, and Playwright. Tests run both locally and as a full containerized app, building the Dockerfile and fronting it with the real Cloud in a Bottle router. 
 
@@ -167,7 +167,7 @@ In general, the debugging flow is something like:
 6. Retest and repeat
 
 We find AI tools work best when they can directly reference Cloud in a Bottle code+docs. So we'd suggest:
-```cd some_dir && git clone https://github.com/imbue-openhost/openhost.git```
+```cd some_dir && git clone https://github.com/cloud-in-a-bottle/cloud-in-a-bottle.git```
 then point them at that checkout and tell them to read this doc.
 
 ## CLI
@@ -182,7 +182,7 @@ this will automatically get updates if you pull new changes from the openhost re
 
 or if not,
 ```bash
-uv tool install "oh @ git+https://github.com/imbue-openhost/openhost.git#subdirectory=compute_space_cli"
+uv tool install "oh @ git+https://github.com/cloud-in-a-bottle/cloud-in-a-bottle.git#subdirectory=compute_space_cli"
 ```
 Run `oh instance login` to login to your compute space.
 

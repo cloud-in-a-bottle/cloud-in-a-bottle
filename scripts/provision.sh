@@ -2,7 +2,7 @@
 # provision.sh — Bootstrap a fresh Ubuntu 24.04 server into a running Cloud in a Bottle instance.
 #
 # Usage (run as root on the target server):
-#   curl -fsSL https://raw.githubusercontent.com/imbue-openhost/openhost/main/scripts/provision.sh | bash -s -- --domain myhost.example.com
+#   curl -fsSL https://raw.githubusercontent.com/cloud-in-a-bottle/cloud-in-a-bottle/main/scripts/provision.sh | bash -s -- --domain myhost.example.com
 #
 # Prerequisites:
 #   - Fresh Ubuntu 24.04 server with root access
@@ -22,7 +22,7 @@ set -euo pipefail
 
 DOMAIN=""
 BRANCH="main"
-REPO_URL="https://github.com/imbue-openhost/openhost.git"
+REPO_URL="https://github.com/cloud-in-a-bottle/cloud-in-a-bottle.git"
 OPENHOST_DIR="/home/host/openhost"
 LOCAL_HTTP_ONLY="false"
 
@@ -33,7 +33,7 @@ usage() {
     echo "                      In --local-http-only mode this is only used for app"
     echo "                      subdomain routing (e.g. lvh.me), not TLS/DNS."
     echo "  --branch            Git branch to deploy (default: main)"
-    echo "  --repo              Git repo URL (default: imbue-openhost/openhost)"
+    echo "  --repo              Git repo URL (default: cloud-in-a-bottle/cloud-in-a-bottle)"
     echo "  --local-http-only   HTTP-only localhost mode: no TLS, CoreDNS, or Caddy."
     echo "                      For bringing an instance up before a public domain +"
     echo "                      DNS are ready.  Reach it via an SSH tunnel to :8080."

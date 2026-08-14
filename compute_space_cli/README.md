@@ -6,11 +6,11 @@ Command-line tool for managing apps on your Cloud in a Bottle compute space.
 
 HTTPS:
 ```bash
-uv tool install "oh @ git+https://github.com/imbue-openhost/openhost.git#subdirectory=compute_space_cli"
+uv tool install "oh @ git+https://github.com/cloud-in-a-bottle/cloud-in-a-bottle.git#subdirectory=compute_space_cli"
 ```
 SSH:
 ```bash
-uv tool install "oh @ git+ssh://git@github.com/imbue-openhost/openhost.git#subdirectory=compute_space_cli"
+uv tool install "oh @ git+ssh://git@github.com/cloud-in-a-bottle/cloud-in-a-bottle.git#subdirectory=compute_space_cli"
 ```
 
 ## Setup
