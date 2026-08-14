@@ -876,7 +876,7 @@ def _zone_domain(db: sqlite3.Connection) -> str:
 
 
 async def _collect_openhost_git_info() -> GitInfo:
-    """Git checkout state for the running OpenHost install.
+    """Git checkout state for the running Cloud in a Bottle install.
 
     Falls back to an empty-but-stable :class:`GitInfo` when OPENHOST_PROJECT_DIR
     isn't a git checkout (e.g. a tarball deploy) so the field shape is stable for
