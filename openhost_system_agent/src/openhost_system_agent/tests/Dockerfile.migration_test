@@ -15,16 +15,16 @@ RUN useradd -m -s /bin/bash -G sudo host && \
     echo "host ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/host && \
     chmod 0440 /etc/sudoers.d/host
 
-# Install an older pixi to mirror a pre-migration host (reads the v6 lockfile,
-# predates v7); the pixi-version migration self-updates it to the pinned prod version.
-RUN su - host -c "curl -fsSL https://pixi.sh/install.sh | PIXI_VERSION=v0.69.0 bash"
-
 # Copy the repo in
 COPY --chown=host:host . /home/host/openhost
 WORKDIR /home/host/openhost
 
-# Install deps via pixi (provides python + all packages)
-RUN su - host -c "cd /home/host/openhost && /home/host/.pixi/bin/pixi install"
+# Install deps with the manifest-pinned pixi (requires-pixi rejects older binaries), then
+# downgrade to mirror a pre-migration host; the pixi-version migration self-updates it back.
+RUN PIXI_PIN=$(sed -n 's/.*requires-pixi = "==\([0-9.]*\)".*/\1/p' pyproject.toml) && \
+    su - host -c "curl -fsSL https://pixi.sh/install.sh | PIXI_VERSION=v${PIXI_PIN} bash" && \
+    su - host -c "cd /home/host/openhost && /home/host/.pixi/bin/pixi install" && \
+    su - host -c "curl -fsSL https://pixi.sh/install.sh | PIXI_VERSION=v0.69.0 bash"
 
 # Bootstrap migration log at v1 (baseline)
 RUN mkdir -p /etc/openhost && \
