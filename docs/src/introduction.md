@@ -32,7 +32,7 @@ to know which knob in `openhost.toml` controls what, jump to the
 ## How this manual is built and shipped
 
 The Markdown source for this manual lives in `docs/src/` in the
-[imbue-openhost/openhost](https://github.com/imbue-openhost/openhost)
+[cloud-in-a-bottle/cloud-in-a-bottle](https://github.com/cloud-in-a-bottle/cloud-in-a-bottle)
 repository.  The pages are rendered server-side on every request
 (with an mtime-keyed cache), so a `git pull` on the zone is enough
 to ship doc changes — no build step required.  When you're reading
@@ -59,5 +59,5 @@ Manual** in the sidebar copies the whole thing.
 ## Improving the docs
 
 PRs against `docs/src/*.md` in the
-[openhost repo](https://github.com/imbue-openhost/openhost)
+[openhost repo](https://github.com/cloud-in-a-bottle/cloud-in-a-bottle)
 are welcome.
