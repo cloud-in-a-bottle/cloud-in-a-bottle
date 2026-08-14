@@ -193,6 +193,15 @@ function clearCacheAndReload() {
     var nextUrl = config.nextUrl;
     var toastKey = 'cache-toast-shown-' + config.appStatusUrl;
 
+    // The container the log stream is currently following. The server-side follow
+    // is bound to one container and holds the socket open at its final line when
+    // that container stops, so a reload/restart from elsewhere (CLI, another tab, a
+    // crash-restart) would otherwise freeze the view on the dead container's logs.
+    // pollStatus watches app_status.container_id and re-points the stream when it
+    // changes. Seeded from the first poll (the id the initial stream already
+    // follows) so only a *change* triggers a reset.
+    var streamContainerId = null;
+
     // Cap the <pre> so a long-lived stream can't grow the DOM unbounded.
     var MAX_LOG_CHARS = 2 * 1024 * 1024;
     var logPrimed = false;
@@ -251,12 +260,18 @@ function clearCacheAndReload() {
         }
     }
 
+    // The socket the page is currently following. Tracked so a deliberate reset
+    // can silence the old socket's auto-reconnect instead of racing a second
+    // stream against the new one.
+    var currentWs = null;
+
     function startLogStream() {
         // Same-origin WebSocket; the session cookie authenticates the handshake.
         // The server replays the log tail then follows live output, so we append
         // new lines instead of re-fetching the whole log on a timer.
         var proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
         var ws = new WebSocket(proto + '//' + window.location.host + config.appLogsStreamUrl);
+        currentWs = ws;
         ws.onmessage = function(e) {
             // Clear on the first message so the replayed tail replaces the
             // placeholder (or, on reconnect, the old contents) instead of
@@ -269,6 +284,9 @@ function clearCacheAndReload() {
             appendLog(e.data + '\n');
         };
         ws.onclose = function() {
+            // Superseded by a reset (a fresh stream already took over) — don't
+            // reconnect this dead socket on top of the new one.
+            if (ws !== currentWs) return;
             // A WebSocket won't auto-reconnect, and the server holds the socket
             // open past end-of-log, so a close means a real drop (network blip or
             // server restart) — retry. Re-prime because the reconnected stream
@@ -277,6 +295,18 @@ function clearCacheAndReload() {
             setTimeout(startLogStream, 2000);
         };
         ws.onerror = function() { ws.close(); };
+    }
+
+    // Tear down the current stream and start a fresh one, pointed at the app's
+    // current state. Used when the container changes under us: the old follow is
+    // held open at the dead container's final line, so we replace it. Re-priming
+    // makes the new stream's replayed tail overwrite the stale contents rather
+    // than append to them.
+    function resetLogStream() {
+        var old = currentWs;
+        logPrimed = false;
+        startLogStream();  // reassigns currentWs to the new socket
+        if (old && old !== currentWs) old.close();  // its onclose sees it's superseded
     }
 
     function showCacheCorruptToast() {
@@ -321,6 +351,15 @@ function clearCacheAndReload() {
                     appStatus = data.status;
                     statusEl.textContent = appStatus;
                     statusEl.className = 'status-' + appStatus;
+                }
+                // Re-point the log stream when the container changes. The first
+                // non-null id is the one the initial stream already follows, so we
+                // adopt it silently; only a change to a *different* container (a
+                // reload/restart from elsewhere, or a crash-restart) resets — an app
+                // that simply stops keeps its final logs held open as before.
+                if (data.container_id && data.container_id !== streamContainerId) {
+                    if (streamContainerId !== null) resetLogStream();
+                    streamContainerId = data.container_id;
                 }
                 if (appStatus === 'removing') {
                     applyRemovingChrome();
