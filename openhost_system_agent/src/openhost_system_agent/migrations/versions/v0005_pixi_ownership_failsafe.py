@@ -1,7 +1,7 @@
 """Reclaim host ownership and add the startup failsafe to openhost.service.
 
 The root-run update walk (migrations, git checkout/clean, and in older versions
-``pixi install``) can leave root-owned files under the host-owned OpenHost trees
+``pixi install``) can leave root-owned files under the host-owned Cloud in a Bottle trees
 (``/home/host/openhost`` and ``/home/host/.pixi``). The host service's ``pixi
 run`` then fails with EACCES and its git ops fail on root-owned objects, so it
 won't start.

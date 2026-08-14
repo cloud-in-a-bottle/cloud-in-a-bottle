@@ -1,7 +1,7 @@
 name: e2e
 
 # End-to-end tests for all cloud providers.
-# Spins up an instance, deploys OpenHost via ansible, runs tests, tears down.
+# Spins up an instance, deploys Cloud in a Bottle via ansible, runs tests, tears down.
 
 on:
   push:
@@ -106,7 +106,7 @@ jobs:
             echo "E2E_SSH_USER=root" >> "$GITHUB_ENV"
           fi
 
-      - name: Setup instance + deploy OpenHost via ansible
+      - name: Setup instance + deploy Cloud in a Bottle via ansible
         run: |
           chmod +x tests/e2e-setup.sh
           tests/e2e-setup.sh
@@ -129,10 +129,10 @@ jobs:
         run: |
           source "$E2E_ENV_FILE"
           SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -i $OPENHOST_SSH_KEY"
-          echo "=== OpenHost service log ==="
+          echo "=== Cloud in a Bottle service log ==="
           ssh $SSH_OPTS "host@${OPENHOST_PUBLIC_IP}" \
             "sudo journalctl -u openhost --no-pager -n 1000 2>/dev/null" || true
-          echo "=== OpenHost service status ==="
+          echo "=== Cloud in a Bottle service status ==="
           ssh $SSH_OPTS "host@${OPENHOST_PUBLIC_IP}" \
             "sudo systemctl status openhost 2>/dev/null" || true
 

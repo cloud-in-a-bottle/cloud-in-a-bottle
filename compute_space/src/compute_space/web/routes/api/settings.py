@@ -5,12 +5,15 @@ import sqlite3
 from enum import StrEnum
 from typing import Any
 
+import anyio
 import attr
 import bcrypt
 from litestar import Request
+from litestar import Response
 from litestar import Router
 from litestar import get
 from litestar import post
+from litestar.background_tasks import BackgroundTask
 from litestar.di import NamedDependency
 from litestar.exceptions import HTTPException
 from litestar.params import FromQuery
@@ -27,15 +30,22 @@ from compute_space.core.domains import primary_domain
 from compute_space.core.identity_store import get_connect_base_url
 from compute_space.core.identity_store import get_instance_identity
 from compute_space.core.identity_store import set_instance_identity
-from compute_space.core.system_agent import SystemAgentError
-from compute_space.core.system_agent import system_agent_apply
-from compute_space.core.system_agent import system_agent_fetch
-from compute_space.core.system_agent import system_agent_get_remote
-from compute_space.core.system_agent import system_agent_set_remote
-from compute_space.core.system_agent import system_agent_status
+from compute_space.core.logging import logger
+from compute_space.core.system_agent.client import SystemAgentError
+from compute_space.core.system_agent.client import system_agent_apply
+from compute_space.core.system_agent.client import system_agent_fetch
+from compute_space.core.system_agent.client import system_agent_get_remote
+from compute_space.core.system_agent.client import system_agent_set_remote
+from compute_space.core.system_agent.client import system_agent_status
+from compute_space.core.system_agent.progress import read_progress
+from compute_space.core.system_agent.progress import record_apply_failure
+from compute_space.core.system_agent.update_token import clear_update_token
+from compute_space.core.system_agent.update_token import new_update_token
+from compute_space.core.system_agent.update_token import persist_update_token
 from compute_space.core.updates import trigger_restart
 from compute_space.core.util import not_blank
 from compute_space.web.auth.auth import require_owner_auth
+from openhost_system_agent.detach import apply_is_running
 from openhost_system_agent.protocol import RemoteInfo
 
 # --- request / response types -----------------------------------------------
@@ -55,7 +65,14 @@ _GIT_STATE_TO_UPDATE_STATE = {
 
 # Explanatory text shown to the owner for git states that need a heads-up
 # beyond the generic "Updates available." message.
-_GIT_STATE_NOTICE: dict[str, str] = {}
+_GIT_STATE_NOTICE: dict[str, str] = {
+    # The apply refuses to run on a dirty tree, so say so instead of letting the
+    # owner click into a guaranteed failure.
+    "DIRTY": (
+        "This instance has uncommitted local changes. Updating will refuse to run until they are "
+        "committed or discarded."
+    ),
+}
 
 
 @attr.s(auto_attribs=True, frozen=True)
@@ -72,6 +89,13 @@ class SetOwnerUsernameRequest:
 class CheckUpdatesResponse:
     state: str
     error: str | None = None
+
+
+@attr.s(auto_attribs=True, frozen=True)
+class ApplyUpdateResponse:
+    # Carried by the browser to the detached updater so it authenticates the
+    # owner's tab and streams live progress during the downtime.
+    token: str
 
 
 @attr.s(auto_attribs=True, frozen=True)
@@ -128,19 +152,41 @@ async def check_for_updates() -> CheckUpdatesResponse:
     return CheckUpdatesResponse(state=state, error=_GIT_STATE_NOTICE.get(fetch_result.state))
 
 
-# Serializes apply_update: the agent checks out tags and runs migrations on a
-# shared repo, so two concurrent applies would race. On success the agent
-# restarts compute_space (killing this process), so the lock is only released
-# on failure, leaving the host free to retry.
+# Serializes apply_update. Held for the rest of this process's life once the walk
+# is launched: the apply stops openhost moments later, so releasing early would
+# only let a second click race the walk. A launch failure releases it for a retry.
 _apply_lock = asyncio.Lock()
 
+# The agent's refusal when a walk is already running. Its log belongs to that walk,
+# so don't terminate it here.
+_ALREADY_RUNNING = "already in progress"
 
-@post("/api/settings/update", status_code=204, guards=[require_owner_auth])
-async def apply_update() -> None:
+
+async def _launch_apply() -> None:
+    """Hand the update to the detached apply unit, which stops openhost next."""
+    try:
+        await system_agent_apply()
+    except Exception as e:
+        if _ALREADY_RUNNING in str(e):
+            logger.warning("apply already in progress; leaving its progress log alone")
+            return
+        # Not just SystemAgentError: ANY failure must leave the log terminal, or
+        # the /updating page would poll forever with no explanation.
+        logger.exception("system agent apply failed")
+        await record_apply_failure(f"Update failed: {e}")
+        await clear_update_token()
+        _apply_lock.release()
+
+
+@post("/api/settings/update", status_code=200, guards=[require_owner_auth])
+async def apply_update() -> Response[ApplyUpdateResponse]:
     if _apply_lock.locked():
         raise HTTPException(detail="An update is already in progress.", status_code=409)
+    await _apply_lock.acquire()
 
-    async with _apply_lock:
+    # Any error before the apply task is scheduled must release the lock.
+    handed_off = False
+    try:
         try:
             migration_status = await system_agent_status()
         except SystemAgentError as e:
@@ -149,10 +195,41 @@ async def apply_update() -> None:
         if not migration_status.ok and migration_status.reason != "behind":
             raise HTTPException(detail=migration_status.message, status_code=409)
 
-        try:
-            await system_agent_apply()
-        except SystemAgentError as e:
-            raise HTTPException(detail=str(e), status_code=500) from e
+        # Check the host too: the walk restarts us, so a fresh process can hold a
+        # free lock while an apply is still running, and minting a token then would
+        # overwrite the one the owner's tab is polling with.
+        if await anyio.to_thread.run_sync(apply_is_running):
+            raise HTTPException(detail="An update is already in progress.", status_code=409)
+
+        token = new_update_token()
+        await persist_update_token(token)
+
+        # A response background task, not create_task: the apply stops openhost
+        # moments after launch, so the browser must already hold this response.
+        response = Response(content=ApplyUpdateResponse(token=token), status_code=200)
+        response.background = BackgroundTask(_launch_apply)
+        handed_off = True
+        return response
+    finally:
+        if not handed_off and _apply_lock.locked():
+            _apply_lock.release()
+
+
+@attr.s(auto_attribs=True, frozen=True)
+class UpdateProgressResponse:
+    entries: list[dict[str, Any]]
+    terminal: bool
+
+
+@get("/updates", guards=[require_owner_auth])
+async def update_progress() -> UpdateProgressResponse:
+    # Same path and shape the detached updater serves while openhost is stopped, so
+    # the page polls one endpoint throughout. This one answers at the ends of the
+    # update -- before the stop, and once we are back -- and it is what the page
+    # sees the terminal "done" on, which is what sends it to the dashboard. It
+    # returns the whole log, so the finished update stays readable afterwards.
+    view = read_progress()
+    return UpdateProgressResponse(entries=view.entries, terminal=view.terminal)
 
 
 @post("/api/settings/restart_compute_space", status_code=204, guards=[require_owner_auth])
@@ -309,6 +386,7 @@ api_settings_routes = Router(
         set_remote,
         check_for_updates,
         apply_update,
+        update_progress,
         restart_compute_space,
         connect_imbue_status,
         connect_imbue_start,

@@ -98,8 +98,8 @@ def test_append_txt_records_writes_relative_names_verbatim(tmp_path: Path) -> No
     )
 
     content = zonefile.read_text()
-    assert '_acme-challenge   IN TXT  "base-value"' in content
-    assert '_acme-challenge   IN TXT  "wildcard-value"' in content
+    assert '_acme-challenge   60  IN TXT  "base-value"' in content
+    assert '_acme-challenge   60  IN TXT  "wildcard-value"' in content
     # Relative name is not turned into an absolute FQDN.
     assert "_acme-challenge.   IN TXT" not in content
     # Serial bumped so CoreDNS reloads.
@@ -115,7 +115,7 @@ def test_append_txt_records_writes_absolute_fqdn_names_verbatim(tmp_path: Path) 
     append_txt_records(zonefile, [TxtRecord(record_name="_acme-challenge.app.example.com.", record_value="v")])
 
     content = zonefile.read_text()
-    assert '_acme-challenge.app.example.com.   IN TXT  "v"' in content
+    assert '_acme-challenge.app.example.com.   60  IN TXT  "v"' in content
     # Not doubled up into _acme-challenge.app.example.com.app.example.com.
     assert "app.example.com.app.example.com" not in content
 
@@ -420,7 +420,7 @@ def test_reload_preserves_in_flight_challenge_txt_records(tmp_path: Path, monkey
 
             assert reload_coredns_for_domains(config, db) is True
 
-            assert '_acme-challenge   IN TXT  "token"' in zonefile.read_text()
+            assert '_acme-challenge   60  IN TXT  "token"' in zonefile.read_text()
         finally:
             set_active_coredns(None)
 
@@ -430,3 +430,30 @@ def test_reload_coredns_for_domains_noop_when_not_running(tmp_path: Path) -> Non
     config = _seed_dns_cfg(tmp_path, Domain(name="host.example.com", tls=True), public_ip="203.0.113.10")
     with closing(open_db(config)) as db:
         assert reload_coredns_for_domains(config, db) is False
+
+
+def test_zone_caches_addresses_long_but_acme_challenges_briefly(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The wildcard TTL is what a visitor's resolver caches, and it is the only
+    # thing keeping them able to reach the instance while CoreDNS is down during an
+    # update -- so it is deliberately long. ACME challenge records must NOT inherit
+    # it: a renewal would then find the CA (and our own propagation check) served
+    # the previous run's token out of a resolver cache.
+    _stub_bindable(monkeypatch, "203.0.113.10")
+    corefile = tmp_path / "Corefile"
+    zonefile = tmp_path / "zonefile"
+    dns_mod._write_coredns_config(
+        (dns_mod.DnsZone("app.example.com", zonefile),), "203.0.113.10", corefile, container_gateway_ip=None
+    )
+    content = zonefile.read_text()
+    assert "$TTL 300" in content
+    # Negative caching stays short (RFC 2308 uses min(SOA MINIMUM, SOA TTL)), which
+    # is what lets the NODATA left by clear_txt expire before the next renewal.
+    assert "60    ; minimum" in content
+
+    dns_mod.append_txt_records(zonefile, [dns_mod.TxtRecord(record_name="_acme-challenge", record_value="tok")])
+    assert '_acme-challenge   60  IN TXT  "tok"' in zonefile.read_text()
+    # And the explicit TTL column must not stop clear_txt from finding the record.
+    dns_mod.clear_txt(zonefile)
+    assert "IN TXT" not in zonefile.read_text()

@@ -1,7 +1,7 @@
 [project]
 name = "openhost"
 version = "0.1.0"
-description = "OpenHost – run open-source apps on your own compute"
+description = "Cloud in a Bottle – run open-source apps on your own compute"
 requires-python = ">=3.12"
 dependencies = [
     "PyJWT[crypto]",

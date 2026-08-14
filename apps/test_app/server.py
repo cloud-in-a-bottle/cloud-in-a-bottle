@@ -1,7 +1,7 @@
 """Minimal HTTP + WebSocket server for testing app deployment.
 
 Serves both HTTP routes and a WebSocket echo endpoint on the same port,
-which is required because the OpenHost router proxies both HTTP and WS
+which is required because the Cloud in a Bottle router proxies both HTTP and WS
 traffic to the app's single port.
 
 Routes:

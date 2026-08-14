@@ -1,10 +1,10 @@
 ---
-# Enable (boot persistence) and start the openhost service. Both are gated by
+# Enable (boot persistence) and start the Cloud in a Bottle service. Both are gated by
 # skip_service_start so a prebake / warm-pool bake leaves the service fully
 # dormant — not started now, and not started on reboot either — since a
 # domain-less host has no config.toml and no claim token and must not let anyone
 # in. Finalize runs this with skip_service_start unset/false to bring it up.
-- name: Enable openhost service
+- name: Enable Cloud in a Bottle service
   become: yes
   become_user: root
   systemd:
@@ -12,7 +12,7 @@
     enabled: yes
   when: not (skip_service_start | default(false) | bool)
 
-- name: Restart openhost service
+- name: Restart Cloud in a Bottle service
   become: yes
   become_user: root
   systemd:

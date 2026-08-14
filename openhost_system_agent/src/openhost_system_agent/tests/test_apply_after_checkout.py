@@ -18,6 +18,8 @@ from unittest.mock import patch
 import pytest
 
 import openhost_system_agent.apply_after_checkout as aac
+from openhost_system_agent.updater import paths as updater_paths
+from openhost_system_agent.updater import progress as updater_progress
 
 _GIT_ENV = {
     **os.environ,
@@ -248,16 +250,64 @@ def test_main_reclaims_host_ownership_before_migrations_and_install() -> None:
         patch.object(aac, "_ensure_repo_trusted"),
         patch.object(aac, "apply_system_migrations", side_effect=lambda: order.append("migrations")),
         patch.object(aac, "reclaim_host_ownership", side_effect=lambda: order.append("reclaim")),
+        # openhost is stopped for the whole walk; the start at the end talks to
+        # systemd, so stub it rather than touching the host.
+        patch.object(aac, "start_openhost", side_effect=lambda: order.append("start")),
         patch("openhost_system_agent.apply_after_checkout.subprocess.run", side_effect=_install) as mock_run,
         patch.object(aac, "_next_step", return_value=None),
     ):
-        # No next step -> falls through to the systemctl restart, which our
-        # mocked subprocess.run also records as an "install" entry; assert the
-        # relative order of reclaim -> migrations -> first subprocess call.
         aac.main()
 
-    assert order[:3] == ["reclaim", "migrations", "install"]
+    assert order == ["reclaim", "migrations", "install", "start"]
     # The first subprocess call is the host-user pixi install.
     first_call = mock_run.call_args_list[0]
     assert first_call.args[0] == ["sudo", "-u", "host", "-H", aac.PIXI_BIN, "install"]
     assert first_call.kwargs["timeout"] == 300
+
+
+@pytest.fixture
+def progress_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    monkeypatch.setenv(updater_paths.DATA_DIR_ENV, str(tmp_path))
+    return tmp_path
+
+
+def test_main_records_restarting_not_done(progress_dir: Path) -> None:
+    # The pre-start record must be the NON-terminal "restarting": the terminal
+    # "done" is appended by the freshly booted compute_space, so the /updating
+    # page can't finish against the old instance right before it dies.
+    def _ok(*_args: object, **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(args=[], returncode=0)
+
+    with (
+        patch.object(aac, "_ensure_repo_trusted"),
+        patch.object(aac, "apply_system_migrations"),
+        patch.object(aac, "reclaim_host_ownership"),
+        patch.object(aac, "start_openhost") as mock_start,
+        patch("openhost_system_agent.apply_after_checkout.subprocess.run", side_effect=_ok),
+        patch.object(aac, "_next_step", return_value=None),
+    ):
+        aac.main()
+
+    entries = updater_progress.read_entries()
+    assert entries, "expected progress entries"
+    assert entries[-1]["phase"] == updater_progress.Phase.RESTARTING
+    assert updater_progress.is_terminal(entries) is False
+    # The record must land BEFORE the start, so the page shows it while the
+    # instance is still coming up rather than after it is already back.
+    assert mock_start.called
+
+
+def test_main_records_failed_on_unhandled_error(progress_dir: Path) -> None:
+    # Any unhandled failure must leave a terminal "failed" entry or the
+    # /updating page would spin forever with no explanation.
+    with (
+        patch.object(aac, "_ensure_repo_trusted"),
+        patch.object(aac, "reclaim_host_ownership"),
+        patch.object(aac, "apply_system_migrations", side_effect=RuntimeError("migration blew up")),
+    ):
+        with pytest.raises(RuntimeError, match="migration blew up"):
+            aac.main()
+
+    entries = updater_progress.read_entries()
+    assert entries[-1]["phase"] == updater_progress.Phase.FAILED
+    assert "migration blew up" in str(entries[-1]["message"])

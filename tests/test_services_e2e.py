@@ -27,7 +27,7 @@ from compute_space.tests.utils import managed_router
 
 ROUTER_PORT = 28180
 
-SECRETS_REPO_URL = "https://github.com/imbue-openhost/secrets"
+SECRETS_REPO_URL = "https://github.com/cloud-in-a-bottle/secrets"
 SECRETS_SERVICE_URL = "github.com/imbue-openhost/openhost/services/secrets"
 TEST_APP_REPO_URL = f"file://{OPENHOST_PROJECT_DIR / 'apps' / 'test_app'}"
 

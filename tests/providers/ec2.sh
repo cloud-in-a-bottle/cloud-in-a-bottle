@@ -1,5 +1,5 @@
 #!/bin/bash
-# EC2 provider for OpenHost e2e tests.
+# EC2 provider for Cloud in a Bottle e2e tests.
 #
 # Implements the provider interface: provider_create, provider_teardown,
 # provider_env_vars.

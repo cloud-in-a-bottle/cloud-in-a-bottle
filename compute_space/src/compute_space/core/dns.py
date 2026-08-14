@@ -46,6 +46,11 @@ _TEMPLATES_DIR = Path(__file__).parent / "templates"
 # of silently rendering an empty string (e.g. a blank `file` path that CoreDNS would reject).
 _jinja_env = Environment(loader=FileSystemLoader(_TEMPLATES_DIR), undefined=StrictUndefined)
 
+# Challenge records get an explicit short TTL rather than the zone default: a
+# renewal must not have the CA (or our own propagation check) served the previous
+# run's token out of a resolver cache.
+_CHALLENGE_TTL_SECONDS = 60
+
 _SERIAL_RE = re.compile(r"^(\s+)(\d+)(\s+;\s*serial\s*)$", re.MULTILINE)
 
 # Fallback upstream resolvers for the container-facing DNS view's catch-all
@@ -434,7 +439,7 @@ def append_txt_records(zone_file_path: Path, records: list[TxtRecord]) -> None:
         content = f.read()
     content = _bump_serial(content)
     for record in records:
-        content += f'{record.record_name}   IN TXT  "{record.record_value}"\n'
+        content += f'{record.record_name}   {_CHALLENGE_TTL_SECONDS}  IN TXT  "{record.record_value}"\n'
     with open(zone_file_path, "w") as f:
         f.write(content)
     logger.info(f"Appended {len(records)} TXT record(s)")
