@@ -14,6 +14,7 @@ from litestar import post
 from litestar.di import NamedDependency
 from litestar.params import Body
 
+from compute_space.core.apps import find_app_by_name
 from compute_space.core.auth.permissions_v2 import get_all_permissions_v2
 from compute_space.core.auth.permissions_v2 import grant_permission_v2
 from compute_space.core.auth.permissions_v2 import revoke_permission_v2
@@ -100,16 +101,35 @@ def grant_app_scoped(
 
     The calling app must be a registered provider for the specified service.
     The permission is automatically scoped to the calling provider app.
+
+    Identify the consumer by ``consumer_app_name``.  The provider reaches this endpoint after
+    telling the owner *which app* is asking, and the name is what it showed them — so keying the
+    grant to the name makes a misleading consent screen unprofitable: name a different app and
+    that app gets the access, name nothing real and the call 404s.  An id can't do that, since
+    the provider is free to display one app's name while passing another's id.
+
+    ``consumer_app_id`` is still accepted for providers written before this, and behaves as
+    before.  Apps and the router upgrade independently, so it can't simply be dropped.
     """
     # ``require_app_auth`` already enforced this; verify_app_auth re-derives
     # the app_id for us (it returns the resolved id, raising if missing).
     provider_app_id = verify_app_auth(request)
 
-    consumer_app_id = data.get("consumer_app_id")
     service_url = data.get("service_url")
     grant_payload = data.get("grant")
+
+    consumer_app_name = data.get("consumer_app_name")
+    consumer_app_id: str | None
+    if consumer_app_name:
+        consumer_app = find_app_by_name(consumer_app_name)
+        if consumer_app is None:
+            return _json_error(f"No app named '{consumer_app_name}'", 404)
+        consumer_app_id = consumer_app.app_id
+    else:
+        consumer_app_id = data.get("consumer_app_id")
+
     if not consumer_app_id or not service_url or grant_payload is None:
-        return _json_error("consumer_app_id, service_url, and grant are required", 400)
+        return _json_error("consumer_app_name (or consumer_app_id), service_url, and grant are required", 400)
 
     # Verify the calling app is actually a registered provider for this
     # service.  Without this check any app with a token could grant
