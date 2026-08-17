@@ -174,7 +174,7 @@ async def _resolve_edit_app(
 
     provider_row = db.execute("SELECT name FROM apps WHERE app_id = ?", (provider_app_id,)).fetchone()
     if not provider_row:
-        logger.warning("resolve_provider returned unknown app_id %s", provider_app_id)
+        logger.warning("resolve_provider returned unknown app_id {}", provider_app_id)
         return repo_link_fallback
 
     # Pass repo+ref in the query string too: the Cloud in a Bottle router 302's

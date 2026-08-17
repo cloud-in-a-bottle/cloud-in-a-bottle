@@ -290,7 +290,7 @@ def format_local_volume(config: Config, juicefs_volume_name: str) -> None:
         _format_meta_dsn(config),
         juicefs_volume_name,
     ]
-    logger.info("Running juicefs format (local file backend) at %s", store_dir)
+    logger.info("Running juicefs format (local file backend) at {}", store_dir)
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
     if result.returncode != 0:
         raise RuntimeError(
@@ -336,7 +336,7 @@ def format_s3_volume(
     env = os.environ.copy()
     env["ACCESS_KEY"] = s3_access_key_id
     env["SECRET_KEY"] = s3_secret_access_key
-    logger.info("Running juicefs format against %s", bucket_url)
+    logger.info("Running juicefs format against {}", bucket_url)
     result = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=60)
     if result.returncode != 0:
         raise RuntimeError(
@@ -387,7 +387,7 @@ def _write_env_file(
     finally:
         os.close(fd)
     os.rename(tmp_path, env_path)
-    logger.info("Wrote JuiceFS env file at %s", env_path)
+    logger.info("Wrote JuiceFS env file at {}", env_path)
 
 
 def _systemctl(*args: str, timeout: int = 30) -> subprocess.CompletedProcess[str]:
@@ -442,12 +442,12 @@ def mount(
     os.makedirs(mount_point, exist_ok=True)
 
     if is_mounted(mount_point):
-        logger.info("juicefs already mounted at %s", mount_point)
+        logger.info("juicefs already mounted at {}", mount_point)
         return
 
     _write_env_file(config, s3_access_key_id, s3_secret_access_key)
 
-    logger.info("Starting %s systemd service", JUICEFS_SERVICE)
+    logger.info("Starting {} systemd service", JUICEFS_SERVICE)
     # daemon-reload in case the unit file was just installed or updated.
     _systemctl("daemon-reload")
     _systemctl("enable", "--now", JUICEFS_SERVICE)
@@ -458,7 +458,7 @@ def mount(
     deadline = time.time() + 30
     while time.time() < deadline:
         if is_mounted(mount_point):
-            logger.info("juicefs mount ready at %s (via systemd)", mount_point)
+            logger.info("juicefs mount ready at {} (via systemd)", mount_point)
             return
         time.sleep(0.5)
 
@@ -496,7 +496,7 @@ def umount(config: Config) -> None:
             pass  # already stopped/disabled
         return
 
-    logger.info("Stopping %s systemd service", JUICEFS_SERVICE)
+    logger.info("Stopping {} systemd service", JUICEFS_SERVICE)
     try:
         # Give the stop generous headroom: JuiceFS's own umount flushes
         # buffered data and its signal handler only force-exits after ~30s, so
@@ -512,7 +512,7 @@ def umount(config: Config) -> None:
         ) from exc
 
     _systemctl("disable", JUICEFS_SERVICE)
-    logger.info("juicefs unmounted from %s (via systemd)", mount_point)
+    logger.info("juicefs unmounted from {} (via systemd)", mount_point)
 
 
 def _remount(config: Config, s3_access_key_id: str | None, s3_secret_access_key: str | None) -> None:
@@ -892,7 +892,7 @@ def _sync_objects(
     if s3_access_key_id is not None and s3_secret_access_key is not None:
         env["AWS_ACCESS_KEY_ID"] = s3_access_key_id
         env["AWS_SECRET_ACCESS_KEY"] = s3_secret_access_key
-    logger.info("juicefs sync %s -> %s", src, dst)
+    logger.info("juicefs sync {} -> {}", src, dst)
     # Generous but bounded timeout: large archives on slow S3 links take a
     # while, but a wedged sync must not hang the configure request forever.
     result = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=6 * 60 * 60)
@@ -957,7 +957,7 @@ def _sync_objects_s3_to_s3(
         _s3_url_with_creds(dst, dst_access_key_id, dst_secret_access_key),
     ]
     # Log without the credential-bearing URLs.
-    logger.info("juicefs sync (s3->s3) %s -> %s", src, dst)
+    logger.info("juicefs sync (s3->s3) {} -> {}", src, dst)
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=6 * 60 * 60)
     if result.returncode != 0:
         detail = (result.stderr or "").strip() or (result.stdout or "").strip() or f"exit {result.returncode}"
@@ -1004,7 +1004,7 @@ def _reconfigure_volume_storage(
         # an acceptable trade on a single-tenant, root-only host, and the
         # secret is already stored (encrypted) in the meta DB afterwards.
         cmd += ["--secret-key", s3_secret_access_key]
-    logger.info("juicefs config: re-point volume storage -> %s (%s)", storage, bucket)
+    logger.info("juicefs config: re-point volume storage -> {} ({})", storage, bucket)
     result = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=120)
     if result.returncode != 0:
         detail = (result.stderr or "").strip() or (result.stdout or "").strip() or f"exit {result.returncode}"
@@ -1458,7 +1458,7 @@ def _remove_local_object_store(config: Config) -> None:
         os.makedirs(path, exist_ok=True)
     except Exception:  # noqa: BLE001
         logger.exception(
-            "migrated local archive to S3 but failed to remove the local object store at %s; safe to delete manually",
+            "migrated local archive to S3 but failed to remove the local object store at {}; safe to delete manually",
             path,
         )
 
@@ -1507,7 +1507,7 @@ def _remove_s3_object_prefix(
             client.delete_objects(Bucket=s3_bucket, Delete={"Objects": to_delete, "Quiet": True})
     except Exception:  # noqa: BLE001
         logger.exception(
-            "migrated archive to new S3 bucket but failed to reclaim old objects under %s/%s; safe to delete manually",
+            "migrated archive to new S3 bucket but failed to reclaim old objects under {}/{}; safe to delete manually",
             s3_bucket,
             list_prefix,
         )

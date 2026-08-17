@@ -327,7 +327,7 @@ def _parse_cpu_cores(resources: dict[str, Any], app_name: str) -> float:
         return float(resources["cpu_cores"])
     if "cpu_millicores" in resources:
         logger.warning(
-            "App '%s' uses deprecated 'cpu_millicores' in [resources]. Use 'cpu_cores' (fractional cores) instead.",
+            "App '{}' uses deprecated 'cpu_millicores' in [resources]. Use 'cpu_cores' (fractional cores) instead.",
             app_name,
         )
         return float(resources["cpu_millicores"]) / 1000.0
@@ -423,7 +423,7 @@ def parse_manifest_from_string(raw_text: str) -> AppManifest:
     # Deprecated: extra_ports (raw Docker -p strings)
     if container.get("extra_ports"):
         logger.warning(
-            "App '%s' uses deprecated 'extra_ports' in [runtime.container]. Migrate to [[ports]] tables instead.",
+            "App '{}' uses deprecated 'extra_ports' in [runtime.container]. Migrate to [[ports]] tables instead.",
             app_name,
         )
 

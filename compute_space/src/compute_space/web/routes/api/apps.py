@@ -928,7 +928,7 @@ async def remove_app(
     except Exception as e:
         # Thread spawn failed (resource exhaustion). Roll the row back
         # to 'error' so a retry can re-claim it via the atomic UPDATE.
-        logger.exception("Could not spawn remove worker for %s", app_id)
+        logger.exception("Could not spawn remove worker for {}", app_id)
         db.execute(
             "UPDATE apps SET status = 'error', error_message = ? WHERE app_id = ?",
             (f"Could not start removal worker: {e}", app_id),
@@ -977,7 +977,7 @@ def _rename_app_storage_dirs(config: Config, old_name: str, new_name: str, archi
                 os.rename(new_dir, old_dir)
             except OSError as rollback_exc:
                 logger.error(
-                    "Rollback of partial rename %s -> %s failed: %s",
+                    "Rollback of partial rename {} -> {} failed: {}",
                     new_dir,
                     old_dir,
                     rollback_exc,
@@ -1070,7 +1070,7 @@ async def rename_app(
             )
             db.commit()
         except sqlite3.Error as db_exc:
-            logger.error("Failed to restore status during rename rollback: %s", db_exc)
+            logger.error("Failed to restore status during rename rollback: {}", db_exc)
             rollback_db_error = str(db_exc)
         error_message = f"Failed to rename app data directories: {rename_error}"
         if rollback_db_error is not None:
@@ -1102,7 +1102,7 @@ async def rename_app(
         try:
             start_app_process(app_id, db, config)
         except (RuntimeError, ValueError) as e:
-            logger.warning("Failed to restart %s after rename: %s", new_name, e)
+            logger.warning("Failed to restart {} after rename: {}", new_name, e)
             db.execute(
                 "UPDATE apps SET status = 'error', error_message = ? WHERE app_id = ?",
                 (str(e), app_id),

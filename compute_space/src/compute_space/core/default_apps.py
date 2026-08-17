@@ -72,7 +72,7 @@ def _load_sentinel(path: str) -> dict[str, dict[str, Any]]:
             return {}
         return {k: v for k, v in raw.items() if isinstance(v, dict)}
     except (OSError, UnicodeDecodeError, json.JSONDecodeError):
-        logger.warning("default_apps sentinel at %s is unreadable; ignoring", path)
+        logger.warning("default_apps sentinel at {} is unreadable; ignoring", path)
         return {}
 
 
@@ -84,7 +84,7 @@ def _write_sentinel(path: str, state: dict[str, dict[str, Any]]) -> None:
             json.dump(state, f, indent=2, sort_keys=True)
         os.replace(tmp, path)
     except OSError as exc:
-        logger.warning("Could not write default_apps sentinel %s: %s", path, exc)
+        logger.warning("Could not write default_apps sentinel {}: {}", path, exc)
 
 
 def _install_vendored(dir_name: str, config: Config, db: sqlite3.Connection) -> tuple[str, str | None]:
@@ -251,10 +251,10 @@ def deploy_default_apps(config: Config, db: sqlite3.Connection) -> list[DefaultA
 
     for o in outcomes:
         if o.status == "ok":
-            logger.info("default_apps: %s deployed", o.name)
+            logger.info("default_apps: {} deployed", o.name)
         elif o.status == "skipped":
-            logger.info("default_apps: %s skipped (already installed)", o.name)
+            logger.info("default_apps: {} skipped (already installed)", o.name)
         else:
-            logger.warning("default_apps: %s failed (attempt %d): %s", o.name, o.attempts, o.error)
+            logger.warning("default_apps: {} failed (attempt {}): {}", o.name, o.attempts, o.error)
 
     return outcomes
