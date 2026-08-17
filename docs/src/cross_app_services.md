@@ -164,7 +164,7 @@ Note for `scope: "app"`, the provider must include its own `grant_url`.
    {"consumer_app_name": "<consumer_app_name>", "service_url": "<url>", "grant": <grant>}
    ```
 
-   Identify the consumer by **name** — the value from the `X-OpenHost-Consumer-Name` header, which is also what your consent page should have shown the user. Keying the grant to the name is what makes that page trustworthy: the field the user read is the field the access is granted to, so a page that names the wrong app grants to the wrong app instead of to itself. An unknown name is a 404. (`consumer_app_id` is still accepted for providers written before this and behaves as before, but a provider using it can display any name it likes while granting to a different app.)
+   Identify the consumer by **name** — the value from the `X-OpenHost-Consumer-Name` header, which is also what your consent page should have shown the user. Keying the grant to the name is what makes that page trustworthy: the field the user read is the field the access is granted to, so a page that names the wrong app grants to the wrong app instead of to itself. An unknown name is a 404.
 
    The router takes the provider's own app ID from the bearer token, so the provider can only grant permissions *for itself* — it can't create grants attributed to another provider. The grant body is the same shape the provider will later see in `X-OpenHost-Permissions`. str or json can be used.
 
@@ -179,7 +179,7 @@ These endpoints back the owner-facing UI and are authenticated by the owner logi
 
 - `GET /api/permissions/v2[?app_id=<consumer_app_id>]` — list grants, optionally filtered to one consumer app. Returns an array of `{consumer_app_id, service_url, grant, scope, provider_app_id}`.
 - `POST /api/permissions/v2/grant_global_scoped` — grant a global-scoped permission. Body: `{app_id, service_url, grant}`.
-- `POST /api/permissions/v2/grant_app_scoped` — grant an app-scoped permission. **Authenticated with the calling provider's app token** (not the owner cookie); the provider's app ID is taken from the token. Body: `{consumer_app_name, service_url, grant}` (404 if no app has that name). Used by provider apps after running their own user-facing approval flow (e.g. an OAuth dance). `consumer_app_id` is accepted in place of `consumer_app_name` for older providers — see the Provider-app-scoped section for why the name is preferred.
+- `POST /api/permissions/v2/grant_app_scoped` — grant an app-scoped permission. **Authenticated with the calling provider's app token** (not the owner cookie); the provider's app ID is taken from the token. Body: `{consumer_app_name, service_url, grant}` (404 if no app has that name). Used by provider apps after running their own user-facing approval flow (e.g. an OAuth dance).
 - `POST /api/permissions/v2/revoke` — revoke a permission. Body: `{app_id, service_url, grant, scope?, provider_app_id?}`. `scope` defaults to `"global"`. 404 if no matching row.
 
 The `grant` field on these endpoints is whatever shape the service defines — passed through the router verbatim.
