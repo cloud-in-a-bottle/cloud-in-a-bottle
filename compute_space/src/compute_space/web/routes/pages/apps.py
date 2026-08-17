@@ -94,7 +94,7 @@ async def app_detail(
                     }
                 )
         except Exception:
-            logger.opt(exception=True).warning("Failed to parse manifest for permission display (app %s)", app_id)
+            logger.opt(exception=True).warning("Failed to parse manifest for permission display (app {})", app_id)
 
     edit_app = await _resolve_edit_app(
         app_row["repo_url"], app_row["repo_path"], db, config, zone_for_request(request)
@@ -162,7 +162,7 @@ async def _resolve_edit_app(
         try:
             ref = await get_head_sha(Path(repo_path))
         except Exception:
-            logger.opt(exception=True).warning("Failed to read HEAD sha for %s", repo_path)
+            logger.opt(exception=True).warning("Failed to read HEAD sha for {}", repo_path)
 
     try:
         provider_app_id, _, _, endpoint = resolve_provider(EDIT_APP_SERVICE_URL, EDIT_APP_VERSION_SPEC, db)
