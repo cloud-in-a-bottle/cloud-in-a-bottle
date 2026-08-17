@@ -5,12 +5,11 @@ from litestar import Router
 from litestar import WebSocket
 from litestar import get
 from litestar import websocket
-from litestar.exceptions import NotAuthorizedException
 from litestar.response import Template
 
 from compute_space.core.terminal import handle_terminal_ws
 from compute_space.web.auth.auth import require_owner_auth
-from compute_space.web.auth.auth import verify_owner_auth
+from compute_space.web.auth.auth import verify_owner_ws
 
 
 @get("/system/", guards=[require_owner_auth])
@@ -48,16 +47,8 @@ class _LitestarTerminalAdapter:
 
 @websocket("/terminal/ws")
 async def terminal_ws(socket: WebSocket[Any, Any, Any]) -> None:
-    """WebSocket endpoint for the terminal PTY bridge.
-
-    Guards currently only signal failure via HTTPException, so the auth check is
-    inline: accept first so the client gets a clean close on failure.
-    """
-    try:
-        verify_owner_auth(socket)
-    except NotAuthorizedException:
-        await socket.accept()
-        await socket.close(code=4401, reason="Missing or invalid authorization")
+    """WebSocket endpoint for the terminal PTY bridge."""
+    if not await verify_owner_ws(socket):
         return
     await socket.accept()
     await handle_terminal_ws(_LitestarTerminalAdapter(socket))

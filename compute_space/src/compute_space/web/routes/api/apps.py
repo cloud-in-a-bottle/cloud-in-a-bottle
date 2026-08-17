@@ -20,7 +20,6 @@ from litestar import get
 from litestar import post
 from litestar import websocket
 from litestar.di import NamedDependency
-from litestar.exceptions import NotAuthorizedException
 from litestar.exceptions import WebSocketDisconnect
 from litestar.params import FromPath
 from litestar.params import FromQuery
@@ -72,7 +71,7 @@ from compute_space.core.services_v2 import ServiceNotAvailable
 from compute_space.core.updates import wait_for_shutdown
 from compute_space.db.connection import get_db
 from compute_space.web.auth.auth import require_owner_auth
-from compute_space.web.auth.auth import verify_owner_auth
+from compute_space.web.auth.auth import verify_owner_ws
 
 # ─── attrs request / response models ──────────────────────────────────────
 
@@ -566,21 +565,12 @@ async def app_logs_stream(
     --follow``) for the life of the connection, so the browser appends new lines
     instead of re-fetching the whole (possibly huge) log on a timer.
     """
-    # Guards on websocket handlers only raise HTTPException, which a WS client
-    # can't read; do the owner check inline and close cleanly on failure. Accept
-    # first so the browser sees a close frame rather than a bare handshake reset
-    # (mirrors ``terminal_ws`` / ``service_call_ws``).
-    try:
-        verify_owner_auth(socket)
-    except NotAuthorizedException:
-        await socket.accept()
-        await socket.close(code=4401, reason="Missing or invalid authorization")
+    if not await verify_owner_ws(socket):
         return
 
-    # Resolve the app to a build-log path (and a clean close before we accept). The
-    # request-scoped ``db`` dependency is closed once a handler returns, but the
-    # stream outlives that; stream_app_logs re-queries the app's state itself via
-    # its own short-lived connections.
+    # Unlike a normal route, this handler stays open for the life of the stream, so we
+    # must not leave a DB connection open across it — open one just to resolve the app
+    # to a build-log path, then close it before we accept.
     with contextlib.closing(get_db()) as conn:
         app_row, err = _resolve_app_or_error(app_id, conn)
     if err is not None:
@@ -605,11 +595,7 @@ async def app_logs_stream(
             # connection closes and the client reconnects.
             logger.exception("Streaming logs for app %s failed", app_id)
             return
-        # The stream ends when the container stops (or a build finished without
-        # producing a container). Hold the socket open so the client shows the
-        # final log without reconnecting; the race below tears everything down on
-        # client disconnect or server shutdown.
-        await asyncio.Event().wait()
+        await asyncio.Event().wait()  # hold open; let the client decide when to refresh after a restart
 
     async def watch_close() -> None:
         # This is a send-only stream, so any inbound frame — or, more usually, a
