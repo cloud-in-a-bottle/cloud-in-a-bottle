@@ -118,7 +118,7 @@ async def identity_approve_submit(
     try:
         token = identity.sign_identity_token(data.callback, db)
     except RuntimeError as e:
-        logger.error("Failed to sign identity token: %s", e)
+        logger.error("Failed to sign identity token: {}", e)
         raise HTTPException(detail="Identity service unavailable", status_code=503) from e
 
     separator = "&" if "?" in data.callback else "?"

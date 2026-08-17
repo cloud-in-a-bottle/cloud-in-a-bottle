@@ -137,7 +137,7 @@ async def setup_post(request: Request[Any, Any, Any], config: NamedDependency[Co
     try:
         deploy_default_apps(config, db)
     except Exception as exc:
-        logger.error("default_apps deploy raised unexpectedly: %s", exc)
+        logger.error("default_apps deploy raised unexpectedly: {}", exc)
 
     # 200 + cookie + small "restarting" page (with meta-refresh to land on
     # the dashboard once the full app is up).  We can't redirect synchronously

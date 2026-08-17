@@ -107,7 +107,7 @@ def install_pinned_binary(binary: PinnedBinary, dest_path: str) -> None:
     os.makedirs(os.path.dirname(dest_path), exist_ok=True)
     arch = host_arch()
     asset = binary.asset_for(arch)
-    logger.info("Downloading %s %s for %s", binary.name, binary.version, arch)
+    logger.info("Downloading {} {} for {}", binary.name, binary.version, arch)
     try:
         with urllib.request.urlopen(asset.url, timeout=120) as resp:
             tarball_bytes = resp.read()
@@ -130,4 +130,4 @@ def install_pinned_binary(binary: PinnedBinary, dest_path: str) -> None:
         with f, open(dest_path, "wb") as out:
             shutil.copyfileobj(f, out)
     os.chmod(dest_path, 0o700)
-    logger.info("%s installed at %s", binary.name, dest_path)
+    logger.info("{} installed at {}", binary.name, dest_path)
