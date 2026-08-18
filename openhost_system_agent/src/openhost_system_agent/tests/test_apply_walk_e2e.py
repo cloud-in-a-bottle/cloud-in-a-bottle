@@ -245,9 +245,10 @@ class TestApplyWalkE2E:
     # ── Multi-tag walk in a single invocation, then idempotent re-apply ──
 
     @pytest.fixture(scope="class")
-    def walked_to_latest(self) -> str:
+    @classmethod
+    def walked_to_latest(cls) -> str:
         """Build the origin and walk v1 → v3 once for the class; return the resulting HEAD sha."""
-        c = self.container
+        c = cls.container
         # Host physically has only v1; v2 and v3 live on origin.
         _build_tagged_origin(c, "/tmp/origin_multitag.git", ["v1", "v2", "v3"], checkout="v1")
 

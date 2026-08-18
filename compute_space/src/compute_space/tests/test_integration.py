@@ -818,7 +818,8 @@ class TestContainerE2E:
     # -- container-engine restart recovery, then final full removal --
 
     @pytest.fixture(scope="class")
-    def restarted_router(self, admin_session, config, router_process):
+    @classmethod
+    def restarted_router(cls, admin_session, config, router_process):
         """Simulate a VM reboot: stop the shared router and container, then boot a
         replacement so check_app_status() rebuilds the dead container. Yields the
         replacement router; both tests below share this one restart.

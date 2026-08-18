@@ -106,7 +106,8 @@ class TestCollectorsAgainstLiveContainer:
     """
 
     @pytest.fixture(scope="class")
-    def http_container(self) -> Iterator[tuple[str, int]]:
+    @classmethod
+    def http_container(cls) -> Iterator[tuple[str, int]]:
         """Start a real container serving HTTP on a mapped loopback port; yield
         ``(container_id, host_port)`` and force-remove it afterwards."""
         port = _free_port()
@@ -179,7 +180,8 @@ class TestCollectorsAgainstLiveContainer:
     # -- stopped state --
 
     @pytest.fixture(scope="class")
-    def stopped_container(self, http_container: tuple[str, int]) -> str:
+    @classmethod
+    def stopped_container(cls, http_container: tuple[str, int]) -> str:
         """Stop the shared container once and poll until podman reports it
         stopped; return its id for the stopped-state tests."""
         container_id, _ = http_container
