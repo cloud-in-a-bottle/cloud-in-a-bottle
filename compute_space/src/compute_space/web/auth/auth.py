@@ -39,6 +39,11 @@ def _get_bearer_token_if_set(connection: AnyConnection) -> str | None:
     return None
 
 
+# The opaque-origin token get_connection_origin returns for a present-but-hostless Origin (notably
+# ``Origin: null``).  Never equals a real host[:port], so origin-match checks fail closed on it.
+_OPAQUE_ORIGIN_TOKEN = "null"
+
+
 def get_connection_origin(connection: AnyConnection) -> str | None:
     """gets and formats the origin header as "sub.example.com" or "sub.example.com:1234", no protocol or path, if set.
     port is included if non-default.
@@ -64,13 +69,8 @@ def get_connection_origin(connection: AnyConnection) -> str | None:
     host, port = parsed.hostname, parsed.port
     if not host:
         # present but opaque/unparseable (e.g. "null"): return a non-matching token, not None.
-        return raw.strip().lower() or "null"
+        return raw.strip().lower() or _OPAQUE_ORIGIN_TOKEN
     return f"{host}:{port}" if port else host
-
-
-# The opaque-origin token get_connection_origin returns for a present-but-hostless Origin (notably
-# ``Origin: null``).  Never equals a real host[:port], so origin-match checks fail closed on it.
-_OPAQUE_ORIGIN_TOKEN = "null"
 
 
 def is_same_origin_request(connection: AnyConnection) -> bool:
