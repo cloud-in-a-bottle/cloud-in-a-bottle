@@ -41,7 +41,7 @@ from compute_space.core.storage import start_storage_guard
 from compute_space.core.terminal import cleanup_all as cleanup_terminal
 from compute_space.db import get_db
 from compute_space.db import provide_db
-from compute_space.web.auth.auth import login_required_redirect
+from compute_space.web.auth.auth import auth_required_response
 from compute_space.web.helpers.static import make_static_url
 from compute_space.web.helpers.zone import ZONE_SCOPE_KEY
 from compute_space.web.middleware.subdomain_proxy import SubdomainProxyMiddleware
@@ -153,8 +153,12 @@ def setup_already_done_post() -> None:
     raise PermissionDeniedException(detail="This instance has already been set up.")
 
 
-def _login_required_redirect(request: Request[Any, Any, Any], exc: NotAuthorizedException) -> Response[Any]:
-    """Exception handler: redirect HTML clients to /login; JSON clients get 401.
+def _auth_required_handler(request: Request[Any, Any, Any], exc: NotAuthorizedException) -> Response[Any]:
+    """Exception handler for an unauthorized request.
+
+    JSON clients get 401.  HTML clients get a /login redirect for navigational GET/HEAD, but a 403 for
+    unsafe methods — a 302→/login on a POST/PUT/PATCH/DELETE is lossy (the browser follows it as a
+    bodyless GET and the target answers 405), so ``auth_required_response`` refuses those honestly.
 
     websocket-type requests should never get here - they start as HTTP requests with `Upgrade: websocket`, and should fail then.
     """
@@ -164,7 +168,7 @@ def _login_required_redirect(request: Request[Any, Any, Any], exc: NotAuthorized
             content["extra"] = exc.extra
         return Response(content=content, status_code=401)
 
-    return login_required_redirect(request)
+    return auth_required_response(request)
 
 
 def _log_unhandled_exception(request: Request[Any, Any, Any], exc: Exception) -> Response[Any]:
@@ -259,7 +263,7 @@ def create_app(config: Config) -> ASGIApp:
             "db": Provide(provide_db),
         },
         exception_handlers={
-            NotAuthorizedException: _login_required_redirect,
+            NotAuthorizedException: _auth_required_handler,
             Exception: _log_unhandled_exception,
         },
         on_startup=[_install_template_globals],

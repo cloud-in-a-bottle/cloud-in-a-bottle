@@ -10,6 +10,7 @@ from litestar import Request
 from litestar import Response
 from litestar import WebSocket
 from litestar.connection import ASGIConnection
+from litestar.enums import MediaType
 from litestar.exceptions import NotAuthorizedException
 from litestar.handlers.base import BaseRouteHandler
 from litestar.response import Redirect
@@ -67,6 +68,37 @@ def get_connection_origin(connection: AnyConnection) -> str | None:
     return f"{host}:{port}" if port else host
 
 
+# The opaque-origin token get_connection_origin returns for a present-but-hostless Origin (notably
+# ``Origin: null``).  Never equals a real host[:port], so origin-match checks fail closed on it.
+_OPAQUE_ORIGIN_TOKEN = "null"
+
+
+def is_user_request_same_origin(connection: AnyConnection) -> bool:
+    """Whether a browser request carrying owner (session) auth is same-origin with its target.
+
+    The primary, unforgeable signal is the ``Origin`` header: browsers set it on all cross-origin
+    requests and app JS cannot spoof it, so an Origin that matches the target host is same-origin, and a
+    concrete Origin for a *different* host (e.g. another app subdomain) is cross-origin and rejected.
+
+    An absent Origin is treated as same-origin (browsers omit it on ordinary same-origin GET navigations).
+
+    The awkward case is ``Origin: null``: some *legitimate* same-origin top-level form POSTs send it (a
+    referrer policy or a redirect in the POST chain can opaque-ify the Origin while the request stays
+    same-origin and still carries the SameSite=Lax session cookie).  We can't tell those apart from a
+    hostile opaque context by the Origin alone, so we consult Fetch-Metadata: ``Sec-Fetch-Site`` is set
+    by the browser from the true initiator and is a forbidden header name (JS cannot forge it).  A real
+    app-posting-to-itself reports ``same-origin``; a cross-app (``same-site``) or ``cross-site`` request
+    does not — so honoring ``same-origin`` here unblocks legitimate app forms without reopening cross-app
+    CSRF.  Browsers that don't send Sec-Fetch-Site (very old) keep failing closed on a null Origin.
+    """
+    origin = get_connection_origin(connection)
+    if origin is None or origin == connection.base_url.netloc:
+        return True
+    if origin == _OPAQUE_ORIGIN_TOKEN:
+        return connection.headers.get("Sec-Fetch-Site") == "same-origin"
+    return False
+
+
 def verify_same_origin(connection: AnyConnection) -> None:
     """Reject cross-origin requests to unauthenticated state-changing endpoints (e.g. /logout).
 
@@ -117,16 +149,13 @@ def verify_owner_auth(connection: AnyConnection) -> None:
     returns if authed; raises NotAuthorizedException if not authenticated.
     """
     accessor = authenticate(connection, db=get_db())
-    origin = get_connection_origin(connection)
 
     if isinstance(accessor, AuthenticatedUser):
-        if origin is not None and origin != connection.base_url.netloc:
-            # if origin is set (it is set on all browser cross-origin requests and cannot be forged by js),
-            # it must match the target URL. either router-to-router or same-app-origin is fine.
-            # in theory router->app is also fine but idk if this happens in practice.
-            # we never allow cross-origin requests with user auth, even from other subdomains, as these could be forged by untrusted app js.
+        # User (session-cookie) auth is only valid for same-origin requests: we never trust a
+        # cross-origin request bearing the owner's cookie, since it could be forged by untrusted app js.
+        # See is_user_request_same_origin for how Origin + Fetch-Metadata decide this (incl. Origin: null).
+        if not is_user_request_same_origin(connection):
             raise NotAuthorizedException(detail="user authentication only valid for router-origin requests")
-        # origin is not set on normal same-origin GETs, for example, so we allow these.
         return
     if isinstance(accessor, AuthenticatedAPIKey):
         # API key requests won't come from untrusted JS, so can be trusted regardless of origin.
@@ -225,3 +254,30 @@ def login_required_redirect(request: Request[Any, Any, Any]) -> Response[Any]:
     """
     zone = zone_for_request(request)
     return Redirect(path=build_login_url(zone, request.url.netloc, request.url.path, request.url.query))
+
+
+# HTTP methods a browser will safely re-issue as a plain navigation when it follows a 302.  For any
+# *other* (unsafe / state-changing) method, redirecting an unauthenticated request to /login is lossy:
+# a browser that follows the 302 drops the method and body and re-requests the target as a bodyless
+# GET, so the app sees a GET on a POST-only route and answers 405 (or silently no-ops).  We only ever
+# send the login redirect for these methods; unsafe methods get an honest 403 instead.
+_LOGIN_REDIRECTABLE_METHODS = frozenset({"GET", "HEAD"})
+
+
+def is_login_redirectable_method(method: str) -> bool:
+    """True iff redirecting an unauthenticated request with this method to /login is non-lossy."""
+    return method.upper() in _LOGIN_REDIRECTABLE_METHODS
+
+
+def auth_required_response(request: Request[Any, Any, Any]) -> Response[Any]:
+    """Response for an unauthenticated non-API HTTP request to a protected path.
+
+    For navigational methods (GET/HEAD) redirect to /login so a logged-out user lands on the login page
+    and is bounced back to ``next`` after signing in.  For unsafe methods (POST/PUT/PATCH/DELETE/...) a
+    302→/login is lossy — a browser that follows it re-issues the request as a bodyless GET, which the
+    target app then rejects with 405 — so answer those with a 403 instead.  The failure stays honest and
+    the method/body are never silently downgraded.
+    """
+    if is_login_redirectable_method(request.method):
+        return login_required_redirect(request)
+    return Response(content="Authentication required", status_code=403, media_type=MediaType.TEXT)
