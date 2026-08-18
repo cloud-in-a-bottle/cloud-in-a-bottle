@@ -2,7 +2,8 @@
 {% block title_suffix %} - System Info{% endblock %}
 {% block layout_class %}layout--wide{% endblock %}
 {% block content %}
-<h2 class="section-title">Resource Usage</h2>
+{% from "_components/section.html" import section_head %}
+{% call section_head("Resource Usage") %}{% endcall %}
 <div class="usage-charts">
   <div class="usage-chart">
     <h3>Disk</h3>
@@ -22,21 +23,24 @@
   </div>
 </div>
 
-<h2 class="section-title">Storage</h2>
+{% call section_head("Storage") %}{% endcall %}
 <table id="storage-table" class="form-table">
   <tbody id="storage-body"></tbody>
 </table>
 <div id="storage-guard-row"></div>
 
-<h2 class="section-title">Externally Open Ports</h2>
+{% call section_head("Externally Open Ports") %}{% endcall %}
+<div class="table-scroll">
 <table id="ports-table">
   <thead><tr><th>Port</th><th>Address</th><th>Detail</th></tr></thead>
   <tbody id="ports-body"></tbody>
 </table>
+</div>
 
-<h2 class="section-title">Logs</h2>
-<pre class="log-output" id="cs-logs" style="max-height: 120em; white-space: pre-wrap; word-break: break-all;"></pre>
+{% call section_head("Logs") %}{% endcall %}
+<pre class="log-output log-output--tall" id="cs-logs"></pre>
 
+<script src="{{ static_url('js/dom.js') }}"></script>
 <script id="page-config" type="application/json">
 {
   "listeningPortsUrl": "/api/listening-ports",

@@ -163,7 +163,7 @@ function showToast(message, actions) {
     actionsDiv.className = 'toast-actions';
     actions.forEach(function(a) {
         var btn = document.createElement('button');
-        btn.className = 'btn' + (a.primary ? ' btn-primary' : '');
+        btn.className = 'btn' + (a.primary ? ' btn--primary' : '');
         btn.textContent = a.label;
         btn.onclick = function() { toast.remove(); a.onClick(); };
         actionsDiv.appendChild(btn);

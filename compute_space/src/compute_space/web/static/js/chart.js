@@ -15,13 +15,16 @@ function escAttr(s) {
 // Golden-angle hue steps keep adjacent app slices distinct at any app count;
 // fixed low saturation keeps the palette muted. Shared by every app-colored
 // donut so the same app gets a consistent hue slot across charts.
+// Golden-angle hue rotation so adjacent apps stay distinguishable, pitched at
+// the lightness/saturation of the brand pastels (#a2d9ff, #d4ffbc) so the
+// charts read as part of the same palette rather than a separate one.
 function appColor(i) {
-  return 'hsl(' + ((215 + i * 137.5) % 360).toFixed(1) + ', 45%, 62%)';
+  return 'hsl(' + ((205 + i * 137.5) % 360).toFixed(1) + ', 72%, 78%)';
 }
 
 // Neutral greys for the non-app slices of a usage donut.
-var COLOR_UNUSED = '#e3e6ea';   // free headroom on the box
-var COLOR_OTHER = '#b9c0c9';    // used by the host but not attributed to an app
+var COLOR_UNUSED = '#ececec';   // free headroom on the box
+var COLOR_OTHER = '#c4c4c4';    // used by the host but not attributed to an app
 
 // Generic donut chart. `segments` is [{name, value, valueText, color}] drawn in
 // order from 12 o'clock; hovering a slice shows its name + valueText in the

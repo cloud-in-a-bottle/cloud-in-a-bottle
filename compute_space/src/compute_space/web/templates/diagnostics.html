@@ -1,28 +1,32 @@
 {% extends "layout.html" %}
 {% block title_suffix %} - Diagnostics{% endblock %}
 {% block layout_class %}layout--wide{% endblock %}
+{% from "_components/section.html" import section_head %}
 {% block content %}
-<h2>Diagnostics</h2>
+{% call section_head("Diagnostics") %}{% endcall %}
 <p class="hint">A snapshot of this instance for debugging: Cloud in a Bottle version, host system
 info, installed dependency versions, container runtime, disk usage, and every
 installed app. Copy or download it and include it in a bug report.</p>
 
-<div class="control-row">
-  <button class="btn btn-primary" id="copy-btn">Copy to clipboard</button>
+<div class="action-bar">
+  <button class="btn btn--primary" id="copy-btn">Copy to clipboard</button>
   <a class="btn" id="download-btn" href="/api/diagnostics?download=1">Download JSON</a>
   <button class="btn" id="refresh-btn">Refresh</button>
   <span class="hint" id="copy-status"></span>
 </div>
 
-<h2>Summary</h2>
+{% call section_head("Summary") %}{% endcall %}
+<div class="table-scroll">
 <table id="summary-table">
   <tbody id="summary-body">
     <tr><td colspan="2" class="muted">Loading&hellip;</td></tr>
   </tbody>
 </table>
+</div>
 
-<h2>Installed Apps</h2>
+{% call section_head("Installed Apps") %}{% endcall %}
 <p class="hint">Click a column header to sort.</p>
+<div class="table-scroll">
 <table id="apps-table">
   <thead><tr>
     <th class="sortable" data-sort-key="name">App</th>
@@ -37,16 +41,19 @@ installed app. Copy or download it and include it in a bug report.</p>
     <tr><td colspan="7" class="muted">Loading&hellip;</td></tr>
   </tbody>
 </table>
+</div>
 
-<h2>Outbound Reachability</h2>
+{% call section_head("Outbound Reachability") %}{% endcall %}
+<div class="table-scroll">
 <table id="reachability-table">
   <thead><tr><th>Target</th><th>URL</th><th>Reachable</th><th>Latency</th></tr></thead>
   <tbody id="reachability-body">
     <tr><td colspan="4" class="muted">Loading&hellip;</td></tr>
   </tbody>
 </table>
+</div>
 
-<h2>Raw JSON</h2>
+{% call section_head("Raw JSON") %}{% endcall %}
 <pre class="log-output" id="diag-json" style="max-height: 40em; white-space: pre-wrap; word-break: break-all;">Loading...</pre>
 
 <script id="page-config" type="application/json">
@@ -55,5 +62,6 @@ installed app. Copy or download it and include it in a bug report.</p>
 }
 </script>
 <script src="{{ static_url('js/chart.js') }}"></script>
+<script src="{{ static_url('js/dom.js') }}"></script>
 <script src="{{ static_url('js/diagnostics.js') }}"></script>
 {% endblock %}

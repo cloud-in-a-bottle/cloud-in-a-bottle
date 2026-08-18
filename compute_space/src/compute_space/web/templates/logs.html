@@ -1,6 +1,7 @@
 {% extends "layout.html" %}
 {% block title_suffix %} - Logs{% endblock %}
 {% block layout_class %}layout--wide{% endblock %}
+{% from "_components/section.html" import section_head %}
 {% block content %}
 <style>
   /* Full-height log viewer: the layout column becomes the flex parent so the
@@ -11,7 +12,7 @@
   .layout > * { flex: none; }
   #cs-logs { flex: 1 1 auto; min-height: 0; max-height: none; white-space: pre-wrap; word-break: break-all; }
 </style>
-<h2>Compute Space Logs</h2>
+{% call section_head("Compute Space Logs") %}{% endcall %}
 <pre class="log-output" id="cs-logs">Loading...</pre>
 
 <script>

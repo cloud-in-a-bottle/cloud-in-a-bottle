@@ -1,11 +1,12 @@
 {% extends "layout.html" %}
 {% block title_suffix %} - Deploy App{% endblock %}
 {% block layout_class %}layout--wide{% endblock %}
+{% from "_components/section.html" import section_head %}
 {% block content %}
 
-<h2>Deploy New App</h2>
+{% call section_head("Deploy New App") %}{% endcall %}
 
-<p id="error" class="error" style="display:none;"></p>
+<p id="error" class="notice notice--error" hidden></p>
 
 <div id="clone-form">
 
@@ -16,19 +17,19 @@
       <p>Discover new apps for your compute space and install them with a click.</p>
     </div>
     {% if catalog_installed %}
-    <a class="btn btn-primary callout-action" href="{{ app_url(catalog_app_name) }}" target="_blank" rel="noopener">Browse the catalog</a>
+    <a class="btn btn--primary callout-action" href="{{ app_url(catalog_app_name) }}" target="_blank" rel="noopener">Browse the catalog</a>
     {% else %}
-    <button class="btn btn-primary callout-action" onclick="cloneApp('{{ catalog_repo_url }}')">Install the catalog</button>
+    <button class="btn btn--primary callout-action" onclick="cloneApp('{{ catalog_repo_url }}')">Install the catalog</button>
     {% endif %}
   </div>
 
-  <h3>Deploy from Git URL</h3>
-  <p>Clone a git repository containing an <code>openhost.toml</code> manifest file.
+  {% call section_head("Deploy from Git URL", level=3) %}{% endcall %}
+  <p class="hint">Clone a git repository containing an <code>openhost.toml</code> manifest file.
   Private GitHub repos are supported automatically &mdash; you'll be prompted to connect your
   GitHub account if needed.</p>
   <div class="repo-url-row">
     <input type="text" id="repo-url" required placeholder="https://github.com/user/my-app@branch">
-    <button onclick="cloneApp()" class="btn btn-primary">Deploy</button>
+    <button onclick="cloneApp()" class="btn btn--primary">Deploy</button>
   </div>
   <details class="url-help">
     <summary>URL format examples</summary>
@@ -56,8 +57,8 @@
   <table id="manifest-table"></table>
 
   <div id="port-mappings-section" style="display:none; margin-top:1em;">
-    <h3>Port Mappings</h3>
-    <p>This app declares extra port mappings. You can set specific host ports or leave them as 0 for auto-assignment.</p>
+    {% call section_head("Port Mappings", level=3) %}{% endcall %}
+    <p class="hint">This app declares extra port mappings. You can set specific host ports or leave them as 0 for auto-assignment.</p>
     <table>
       <thead>
         <tr><th>Label</th><th>Container Port</th><th>Host Port</th><th>Status</th></tr>
@@ -70,7 +71,7 @@
   <label>App name: </label>
   <input type="text" id="app-name" style="font-family:monospace; width:12em; display:inline-block;">
   <br><br>
-  <button onclick="deployApp()" class="btn btn-primary">Authorize &amp; Deploy</button>
+  <button onclick="deployApp()" class="btn btn--primary">Authorize &amp; Deploy</button>
   <button onclick="cancelDeploy()" class="btn" style="margin-left:0.5em;">Cancel</button>
 </div>
 
@@ -81,5 +82,6 @@
   "nextUrl": {{ next_url | tojson }}
 }
 </script>
+<script src="{{ static_url('js/dom.js') }}"></script>
 <script src="{{ static_url('js/add-app.js') }}"></script>
 {% endblock %}

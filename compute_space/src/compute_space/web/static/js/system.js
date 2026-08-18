@@ -164,10 +164,10 @@ function renderStorageStatus(data) {
   // Guard toggle button (separate row below the table for clarity)
   var guardRow = document.getElementById('storage-guard-row');
   if (hasMinFree && guardPaused) {
-    guardRow.innerHTML = '<div class="control-row"><button class="btn" onclick="toggleStorageGuard(false)">Resume Guard</button>'
+    guardRow.innerHTML = '<div class="action-bar"><button class="btn" onclick="toggleStorageGuard(false)">Resume Guard</button>'
       + '<span class="hint">Apps will not be stopped while paused.</span></div>';
   } else if (hasMinFree && isLow) {
-    guardRow.innerHTML = '<div class="control-row"><button class="btn" onclick="toggleStorageGuard(true)">Pause Guard</button>'
+    guardRow.innerHTML = '<div class="action-bar"><button class="btn" onclick="toggleStorageGuard(true)">Pause Guard</button>'
       + '<span class="hint">Pause to start an app for cleanup.</span></div>';
   } else {
     guardRow.innerHTML = '';

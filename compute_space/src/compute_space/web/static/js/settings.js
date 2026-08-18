@@ -9,10 +9,10 @@ function showError(msg) {
     if (pageHidden) return;
     const el = document.getElementById('error');
     el.textContent = msg;
-    el.style.display = '';
+    el.hidden = false;
   }, 100);
 }
-function clearError() { document.getElementById('error').style.display = 'none'; }
+function clearError() { document.getElementById('error').hidden = true; }
 function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
 
 async function checkForUpdates() {
@@ -26,23 +26,23 @@ async function checkForUpdates() {
       const err = await resp.json();
       el.innerHTML = '<p class="error">Repo is in an invalid state for updating (no .git perhaps?)</p>'
         + (err.detail ? '<div class="error-inline">' + esc(err.detail) + '</div>' : '')
-        + '<button onclick="checkForUpdates()" class="btn" style="margin-top:0.5em;">Retry</button>';
+        + '<button onclick="checkForUpdates()" class="btn">Retry</button>';
       return;
     }
     const data = await resp.json();
 
-    const checkAgainBtn = '<button onclick="checkForUpdates()" class="btn" style="margin-top:0.5em;">Check again</button>';
+    const checkAgainBtn = '<button onclick="checkForUpdates()" class="btn">Check again</button>';
 
     if (data.state === 'UP_TO_DATE') {
-      el.innerHTML = '<p style="color:#080;">Up to date.</p>' + checkAgainBtn;
+      el.innerHTML = '<p class="notice notice--ok">Up to date.</p>' + checkAgainBtn;
     } else if (data.state === 'UPDATE_AVAILABLE') {
       const notice = data.error ? '<div class="error-inline">' + esc(data.error) + '</div>' : '';
-      el.innerHTML = '<p>Updates available.</p>'
+      el.innerHTML = '<p class="notice">Updates available.</p>'
         + notice
-        + '<button onclick="applyUpdate()" class="btn btn-primary" style="margin-top:0.5em;">Update &amp; restart</button> '
+        + '<button onclick="applyUpdate()" class="btn btn--primary">Update &amp; restart</button> '
         + checkAgainBtn;
     } else if (data.state === 'ERROR') {
-      el.innerHTML = '<p class="error">Update check failed.</p>'
+      el.innerHTML = '<p class="notice notice--error">Update check failed.</p>'
         + '<div class="error-inline">' + esc(data.error || 'Unknown error') + '</div>'
         + checkAgainBtn;
     }
@@ -66,14 +66,14 @@ async function applyUpdate() {
     if (!resp.ok) {
       const err = await resp.json();
       el.innerHTML = '<p class="error">' + esc(err.detail || '') + '</p>'
-        + '<button onclick="checkForUpdates()" class="btn" style="margin-top:0.5em;">Retry</button>';
+        + '<button onclick="checkForUpdates()" class="btn">Retry</button>';
       return;
     }
     const data = await resp.json();
     token = data.token;
   } catch (e) {
     el.innerHTML = '<p class="error">Update failed: ' + esc(e.message) + '</p>'
-      + '<button onclick="checkForUpdates()" class="btn" style="margin-top:0.5em;">Retry</button>';
+      + '<button onclick="checkForUpdates()" class="btn">Retry</button>';
     return;
   }
 
@@ -84,8 +84,8 @@ async function applyUpdate() {
 }
 
 function showRestartOverlay() {
-  document.getElementById('restart-overlay').style.display = '';
-  document.getElementById('update-status').style.display = 'none';
+  document.getElementById('restart-overlay').hidden = false;
+  document.getElementById('update-status').hidden = true;
   document.getElementById('restart-status').innerHTML = '<strong>Waiting for shutdown&hellip;</strong>';
   pollShutdown();
 }
@@ -138,8 +138,8 @@ async function loadRemote() {
     input.placeholder = '';
     const msg = document.getElementById('remote-msg');
     msg.textContent = 'Failed to load current remote. Reload the page to retry.';
-    msg.className = 'error';
-    msg.style.display = '';
+    msg.className = 'msg msg--error';
+    msg.hidden = false;
   }
 }
 
@@ -152,7 +152,7 @@ async function setRemote() {
   if (!url) return;
 
   btn.disabled = true;
-  msg.style.display = 'none';
+  msg.hidden = true;
 
   try {
     const resp = await fetch('/api/settings/set-remote', {
@@ -168,14 +168,14 @@ async function setRemote() {
     // ref is the update walk's job (checkout+migrate+install+restart, in order),
     // so surface it as an available update instead of rebooting onto unmigrated code.
     msg.textContent = 'Remote saved.';
-    msg.className = '';
-    msg.style.display = '';
+    msg.className = 'msg';
+    msg.hidden = false;
     btn.disabled = false;
     await checkForUpdates();
   } catch (e) {
     msg.textContent = e.message;
-    msg.className = 'error';
-    msg.style.display = '';
+    msg.className = 'msg msg--error';
+    msg.hidden = false;
     btn.disabled = false;
   }
 }
@@ -208,17 +208,16 @@ async function changePassword() {
       throw new Error(err.detail || 'failed to change password');
     }
     msg.textContent = 'Password changed successfully';
-    msg.className = '';
-    msg.style.display = '';
-    msg.style.color = '#080';
+    msg.className = 'msg';
+    msg.hidden = false;
+    msg.className = 'msg msg--ok';
     document.getElementById('current-pw').value = '';
     document.getElementById('new-pw').value = '';
     document.getElementById('confirm-pw').value = '';
   } catch (e) {
     msg.textContent = e.message;
-    msg.className = 'error';
-    msg.style.display = '';
-    msg.style.color = '';
+    msg.className = 'msg msg--error';
+    msg.hidden = false;
   }
 }
 
@@ -253,11 +252,10 @@ async function loadOwnerUsername() {
       const err = usernameError(v);
       if (err) {
         msg.textContent = err;
-        msg.className = 'error';
-        msg.style.color = '';
-        msg.style.display = '';
+        msg.className = 'msg msg--error';
+        msg.hidden = false;
       } else {
-        msg.style.display = 'none';
+        msg.hidden = true;
       }
       // Save stays disabled when the value matches what's stored,
       // is empty, OR fails client-side validation.  Server-side
@@ -272,8 +270,8 @@ async function loadOwnerUsername() {
     // even if they've scrolled past the top of the page.
     showError('Failed to load owner username: ' + e.message);
     msg.textContent = 'Failed to load. Reload the page to retry.';
-    msg.className = 'error';
-    msg.style.display = '';
+    msg.className = 'msg msg--error';
+    msg.hidden = false;
     input.placeholder = 'Failed to load — reload to retry';
   }
 }
@@ -289,14 +287,13 @@ async function setOwnerUsername() {
   const clientErr = usernameError(username);
   if (clientErr) {
     msg.textContent = clientErr;
-    msg.className = 'error';
-    msg.style.color = '';
-    msg.style.display = '';
+    msg.className = 'msg msg--error';
+    msg.hidden = false;
     return;
   }
 
   btn.disabled = true;
-  msg.style.display = 'none';
+  msg.hidden = true;
 
   try {
     const resp = await fetch('/api/settings/owner_username', {
@@ -311,15 +308,13 @@ async function setOwnerUsername() {
     const data = await resp.json();
     savedUsername = data.username;
     msg.textContent = 'Saved.';
-    msg.className = '';
-    msg.style.color = '#080';
-    msg.style.display = '';
-    setTimeout(() => { msg.style.display = 'none'; }, 4000);
+    msg.className = 'msg msg--ok';
+    msg.hidden = false;
+    setTimeout(() => { msg.hidden = true; }, 4000);
   } catch (e) {
     msg.textContent = e.message;
-    msg.className = 'error';
-    msg.style.color = '';
-    msg.style.display = '';
+    msg.className = 'msg msg--error';
+    msg.hidden = false;
     btn.disabled = false;
   }
 }
@@ -356,7 +351,7 @@ function dropBuildCache() {
     .then(function(r) { return r.json(); })
     .then(function(data) {
       if (data.error) {
-        msg.className = 'error';
+        msg.className = 'msg msg--error';
         msg.textContent = 'Drop failed: ' + data.error;
         return;
       }
@@ -367,11 +362,11 @@ function dropBuildCache() {
           reclaimed = ' Freed ' + match[1] + '.';
         }
       }
-      msg.className = 'status-running';
+      msg.className = 'msg msg--ok';
       msg.textContent = 'Build cache dropped.' + reclaimed;
     })
     .catch(function() {
-      msg.className = 'error';
+      msg.className = 'msg msg--error';
       msg.textContent = 'Drop failed: request error';
     })
     .then(function() {
@@ -390,7 +385,7 @@ function updateSshStatus() {
       btn.disabled = false;
       if (data.ssh_enabled) {
         btn.textContent = 'Disable SSH';
-        btn.className = 'btn btn-danger';
+        btn.className = 'btn btn--danger';
         status.textContent = 'SSH active';
         status.className = 'status-error';
       } else {
@@ -420,7 +415,7 @@ function renderArchiveBackend(state) {
   var rows = '';
   if (state.backend === 's3') {
     rows += '<tr><th>Backend</th>'
-      + '<td><span class="status-running">S3 (JuiceFS)</span>'
+      + '<td><span class="badge badge--ok">S3 (JuiceFS)</span>'
       + (state.state_message ? ' <span class="error">' + escSettingsHtml(state.state_message) + '</span>' : '')
       + '</td></tr>';
     var bucketLine = escSettingsHtml(state.s3_bucket || '?')
@@ -451,13 +446,13 @@ function renderArchiveBackend(state) {
     rows += '<tr><th>Latest meta dump</th><td>' + dumpLine + '</td></tr>';
   } else if (state.backend === 'local') {
     rows += '<tr><th>Backend</th>'
-      + '<td><span class="status-running">Local disk (JuiceFS)</span>'
+      + '<td><span class="badge">Local disk (JuiceFS)</span>'
       + (state.state_message ? ' <span class="error">' + escSettingsHtml(state.state_message) + '</span>' : '')
       + '</td></tr>';
     if (state.archive_dir) {
       rows += '<tr><th>Host path</th><td><code>' + escSettingsHtml(state.archive_dir) + '</code></td></tr>';
     }
-    rows += '<tr><th>Durability</th><td><span class="error">Local disk only.</span> '
+    rows += '<tr><th>Durability</th><td><span class="badge badge--warn">Local disk only</span> '
       + 'The archive is a JuiceFS volume whose objects live on this instance\u2019s local disk '
       + '(included in backups) but NOT on durable object storage. Configure S3 below for elastic, durable storage.</td></tr>';
     var apps = state.local_archive_apps || [];
@@ -483,11 +478,11 @@ function renderArchiveBackend(state) {
   // 's3' backend (data is migrated to a new bucket/provider).
   var configureBtn = '';
   if (state.backend === 'local') {
-    configureBtn = '<div class="control-row"><button class="btn" id="archive-backend-configure-btn">Upgrade to S3 backend…</button></div>';
+    configureBtn = '<div class="action-bar"><button class="btn" id="archive-backend-configure-btn">Upgrade to S3 backend…</button></div>';
   } else if (state.backend === 'disabled') {
-    configureBtn = '<div class="control-row"><button class="btn" id="archive-backend-configure-btn">Configure S3 backend…</button></div>';
+    configureBtn = '<div class="action-bar"><button class="btn" id="archive-backend-configure-btn">Configure S3 backend…</button></div>';
   } else if (state.backend === 's3') {
-    configureBtn = '<div class="control-row"><button class="btn" id="archive-backend-configure-btn">Migrate to a new bucket…</button></div>';
+    configureBtn = '<div class="action-bar"><button class="btn" id="archive-backend-configure-btn">Migrate to a new bucket…</button></div>';
   }
 
   el.innerHTML = '<table id="archive-backend-table" class="form-table"><tbody>' + rows + '</tbody></table>'
@@ -508,19 +503,19 @@ function showConfigureForm(state) {
     var appsLine = localApps.length
       ? ' Apps whose archive data will be migrated: ' + localApps.map(function(a){ return '<code>' + escSettingsHtml(a) + '</code>'; }).join(', ') + '.'
       : ' There is no local archive data yet, so nothing will be migrated.';
-    migrateNote = '<p class="error"><strong>This migrates your existing LOCAL archive data into S3.</strong> '
+    migrateNote = '<p class="notice notice--warn"><strong>This migrates your existing LOCAL archive data into S3.</strong> '
       + 'JuiceFS copies the archive objects into the bucket (verified with <code>--check-all</code>) and re-points the volume; if anything fails the switch is aborted and your local data is left intact (fail-open). '
       + 'After a successful migration the local copy is removed and the switch to S3 is <strong>one-way</strong>.'
       + appsLine + '</p>';
   } else if (state.backend === 's3') {
-    migrateNote = '<p class="error"><strong>This migrates your archive from the current bucket (<code>'
+    migrateNote = '<p class="notice notice--warn"><strong>This migrates your archive from the current bucket (<code>'
       + escSettingsHtml(state.s3_bucket || '?') + '</code>) to the NEW bucket below.</strong> '
       + 'JuiceFS copies every archive object to the new bucket (verified with <code>--check-all</code>) and re-points the volume; if anything fails the switch is aborted and your current bucket is left intact (fail-open). '
       + 'After a successful migration the old bucket\u2019s objects (under this zone\u2019s prefix only) are reclaimed.</p>';
   }
   formEl.innerHTML = '<p><strong>Configure S3 archive storage.</strong> JuiceFS will format the bucket and mount it locally; this is a one-time operation.</p>'
     + migrateNote
-    + '<p class="error"><strong>Experimental.</strong> Filename-to-S3-chunk mappings live in a SQLite metadata DB on this zone’s local disk, not in the bucket. If the local disk is wiped, the bucket bytes can be recovered only from JuiceFS\'s periodic meta dumps in S3 (replayed via <code>juicefs load</code>).</p>'
+    + '<p class="notice notice--warn"><strong>Experimental.</strong> Filename-to-S3-chunk mappings live in a SQLite metadata DB on this zone’s local disk, not in the bucket. If the local disk is wiped, the bucket bytes can be recovered only from JuiceFS\'s periodic meta dumps in S3 (replayed via <code>juicefs load</code>).</p>'
     + '<p class="hint">JuiceFS will automatically dump the metadata DB to <code>&lt;bucket&gt;/&lt;prefix&gt;/meta/dump-*.json.gz</code> once an hour. These dumps are the recovery anchor for reattaching a freshly-installed zone to an existing bucket.</p>'
     + '<table class="form-table"><tbody>'
     + '<tr><th><label for="ab-bucket">S3 bucket</label></th><td><input id="ab-bucket" type="text" placeholder="my-openhost-archive"></td></tr>'
@@ -535,16 +530,16 @@ function showConfigureForm(state) {
     + '<tr><th><label for="ab-access-key">Access key ID</label></th><td><input id="ab-access-key" type="text"></td></tr>'
     + '<tr><th><label for="ab-secret-key">Secret access key</label></th><td><input id="ab-secret-key" type="password"></td></tr>'
     + '</tbody></table>'
-    + '<p><label><input type="checkbox" id="ab-confirm"> I understand the S3 archive backend is experimental'
+    + '<p><label class="field--check"><input type="checkbox" id="ab-confirm"><span> I understand the S3 archive backend is experimental'
     + (state.backend === 'local'
         ? ' and that my existing local archive data will be migrated into S3.'
         : state.backend === 's3'
         ? ' and that my archive will be migrated to the new bucket and the old bucket reclaimed.'
         : ' and that this configures S3 for the archive tier.')
-    + '</label></p>'
-    + '<div class="control-row">'
+    + '</span></label></p>'
+    + '<div class="action-bar">'
     + '<button class="btn" id="ab-test-btn">Test connection</button>'
-    + '<button class="btn btn-primary" id="ab-submit-btn">Configure</button>'
+    + '<button class="btn btn--primary" id="ab-submit-btn">Configure</button>'
     + '<button class="btn" id="ab-cancel-btn">Cancel</button>'
     + '<span id="ab-msg" class="hint"></span>'
     + '</div>';
@@ -579,7 +574,7 @@ function _archiveBackendBody() {
 function testArchiveConnection() {
   var msg = document.getElementById('ab-msg');
   msg.textContent = 'Testing…';
-  msg.style.color = '';
+  msg.className = 'hint';
   fetch('/api/storage/archive_backend/test_connection', {
     method: 'POST',
     credentials: 'same-origin',
@@ -589,11 +584,11 @@ function testArchiveConnection() {
     .then(function(r) { return r.json().then(function(b) { return [r.status, b]; }); })
     .then(function(pair) {
       var ok = pair[0] === 200 && pair[1].ok;
-      msg.style.color = ok ? '#16a34a' : '#dc3545';
+      msg.className = ok ? 'msg msg--ok' : 'msg msg--error';
       msg.textContent = ok ? 'Bucket reachable' : ('Failed: ' + (pair[1].error || ''));
     })
     .catch(function(err) {
-      msg.style.color = '#dc3545';
+      msg.className = 'msg msg--error';
       msg.textContent = 'Network error: ' + err;
     });
 }
@@ -601,11 +596,11 @@ function testArchiveConnection() {
 function submitConfigure() {
   var msg = document.getElementById('ab-msg');
   if (!document.getElementById('ab-confirm').checked) {
-    msg.style.color = '#dc3545';
+    msg.className = 'msg msg--error';
     msg.textContent = 'Tick the confirmation checkbox first.';
     return;
   }
-  msg.style.color = '';
+  msg.className = 'hint';
   msg.textContent = 'Configuring (may take 10-30s)…';
   document.getElementById('ab-submit-btn').disabled = true;
   fetch('/api/storage/archive_backend/configure', {
@@ -619,13 +614,13 @@ function submitConfigure() {
       if (pair[0] === 200) {
         loadArchiveBackend();
       } else {
-        msg.style.color = '#dc3545';
+        msg.className = 'msg msg--error';
         msg.textContent = 'Failed: ' + (pair[1].error || pair[1]);
         document.getElementById('ab-submit-btn').disabled = false;
       }
     })
     .catch(function(err) {
-      msg.style.color = '#dc3545';
+      msg.className = 'msg msg--error';
       msg.textContent = 'Network error: ' + err;
       document.getElementById('ab-submit-btn').disabled = false;
     });
@@ -646,8 +641,9 @@ function loadArchiveBackend() {
     .catch(function(err) {
       var el = document.getElementById('archive-backend-status');
       if (el) {
-        el.innerHTML = '<p class="error"><strong>Archive backend status unavailable.</strong> '
-          + escSettingsHtml(String(err)) + '</p>';
+        dom.replace(el, dom.el('p', {class: 'notice notice--error'}, [
+          dom.el('strong', {text: 'Archive backend status unavailable.'}), ' ', String(err),
+        ]));
       }
     });
 }
@@ -663,7 +659,7 @@ async function loadConnectImbueStatus() {
     if (!resp.ok) return;  // feature not present; leave the section hidden
     const data = await resp.json();
     if (!data.available) return;  // no Imbue URL configured
-    section.style.display = '';
+    section.hidden = false;
     if (data.connected) {
       state.textContent = 'Connected to Imbue.';
       btn.textContent = 'Reconnect to Imbue';
@@ -671,7 +667,7 @@ async function loadConnectImbueStatus() {
       state.textContent = 'Not connected.';
       btn.textContent = 'Connect to Imbue';
     }
-    btn.style.display = '';
+    btn.hidden = false;
   } catch (e) {
     // Non-fatal: the section just stays hidden.
   }
@@ -695,8 +691,8 @@ async function connectImbue() {
   } catch (e) {
     btn.disabled = false;
     msg.textContent = 'Could not start connect: ' + e.message;
-    msg.className = 'error';
-    msg.style.display = '';
+    msg.className = 'msg msg--error';
+    msg.hidden = false;
   }
 }
 
@@ -709,13 +705,12 @@ async function connectImbue() {
   if (!msg) return;
   if (result === 'ok') {
     msg.textContent = 'Connected to Imbue.';
-    msg.className = '';
-    msg.style.color = '#2ea043';
+    msg.className = 'msg msg--ok';
   } else {
     msg.textContent = 'Connecting to Imbue failed. Please try again.';
-    msg.className = 'error';
+    msg.className = 'msg msg--error';
   }
-  msg.style.display = '';
+  msg.hidden = false;
 })();
 
 loadOwnerUsername();

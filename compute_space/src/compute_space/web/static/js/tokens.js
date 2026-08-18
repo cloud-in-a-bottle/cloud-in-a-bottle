@@ -7,18 +7,25 @@ function loadTokens() {
     .then(function(r) { return r.json(); })
     .then(function(tokens) {
       var tbody = document.getElementById('tokens-body');
-      var table = document.getElementById('tokens-table');
+      var wrap = document.getElementById('tokens-table-wrap');
       var noTokens = document.getElementById('no-tokens');
-      if (!tokens.length) { table.style.display = 'none'; noTokens.style.display = ''; return; }
-      table.style.display = ''; noTokens.style.display = 'none';
-      tbody.innerHTML = tokens.map(function(t) {
-        var style = t.expired ? ' style="color:#888;text-decoration:line-through;"' : '';
-        var expiresDisplay = t.expires_at ? t.expires_at : 'Never';
-        return '<tr><td' + style + '>' + t.name + '</td>'
-          + '<td>' + t.created_at + '</td>'
-          + '<td' + (t.expired ? ' style="color:#c00;"' : '') + '>' + expiresDisplay + '</td>'
-          + '<td><button class="btn btn-danger" onclick="deleteToken(' + t.id + ')">Delete</button></td></tr>';
-      }).join('');
+      if (!tokens.length) { wrap.hidden = true; noTokens.hidden = false; return; }
+      wrap.hidden = false;
+      noTokens.hidden = true;
+      dom.replace(tbody, tokens.map(function(t) {
+        return dom.el('tr', {class: t.expired ? 'is-expired' : null}, [
+          dom.el('td', {text: t.name}),
+          dom.el('td', {text: t.created_at}),
+          dom.el('td', null, t.expires_at
+            ? (t.expired ? dom.badge('Expired', 'error', t.expires_at) : t.expires_at)
+            : dom.badge('Never', null)),
+          dom.el('td', null, dom.el('button', {
+            class: 'btn btn--danger',
+            text: 'Delete',
+            onclick: function() { deleteToken(t.id); },
+          })),
+        ]);
+      }));
     });
 }
 
@@ -39,7 +46,7 @@ function createToken() {
     .then(function(data) {
       if (data.error) { alert(data.error); return; }
       document.getElementById('token-value').textContent = data.token;
-      document.getElementById('token-created').style.display = '';
+      document.getElementById('token-created').hidden = false;
       document.getElementById('token-name').value = '';
       loadTokens();
     });

@@ -130,32 +130,50 @@ pre {
   font-size: 0.92em;
 }
 
-/* Tables. Wide tables scroll horizontally rather than forcing the page wide;
-   .spec-list is the responsive replacement for key/value tables. */
+/* Tables share the app list's vocabulary: horizontal rules only, so columns are
+   carried by mono alignment rather than a grid of borders. Wide tables scroll
+   inside .table-scroll rather than forcing the page wide; .spec-list is the
+   responsive replacement for key/value tables. */
 table {
   border-collapse: collapse;
   width: 100%;
   margin: var(--space-4) 0;
   background: var(--color-surface);
+  border: var(--border-w) solid var(--color-border);
   font-size: var(--text-xs);
 }
 
 th,
 td {
-  border: var(--border-w) solid var(--color-border);
   padding: var(--space-2) var(--space-4);
+  border-bottom: var(--border-w) solid var(--color-border);
   text-align: left;
   vertical-align: top;
 }
 
+tr:last-child td {
+  border-bottom: 0;
+}
+
 th {
-  font-weight: var(--weight-semibold);
-  background: #f4f4f4;
+  background: var(--color-surface-raised);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+  white-space: nowrap;
+  opacity: 0.8;
 }
 
 .table-scroll {
+  margin: var(--space-4) 0;
   overflow-x: auto;
   -webkit-overflow-scrolling: touch;
+  box-shadow: var(--shadow-card);
+}
+
+.table-scroll table {
+  margin: 0;
 }
 
 /* Forms */

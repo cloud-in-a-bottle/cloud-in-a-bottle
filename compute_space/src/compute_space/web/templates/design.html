@@ -80,6 +80,72 @@ that preserves newlines.</div>
 </section>
 
 <section class="section">
+  {% call section_head("Badges") %}{% endcall %}
+  <div class="action-bar">
+    <span class="badge">Neutral</span>
+    <span class="badge badge--ok">Active</span>
+    <span class="badge badge--info">Primary</span>
+    <span class="badge badge--warn">Acquiring</span>
+    <span class="badge badge--error">Error</span>
+  </div>
+</section>
+
+<section class="section">
+  {% call section_head("Notices") %}{% endcall %}
+  <p class="notice">Neutral &mdash; informational.</p>
+  <p class="notice notice--ok">Success &mdash; up to date.</p>
+  <p class="notice notice--warn">Warning &mdash; this operation is one-way.</p>
+  <p class="notice notice--error">Error &mdash; the update check failed.</p>
+  <p class="msg msg--ok">Inline ok message</p>
+  <p class="msg msg--error">Inline error message</p>
+</section>
+
+<section class="section">
+  {% call section_head("Meters") %}{% endcall %}
+  <div class="meter"><div class="meter__fill" style="width:35%"></div></div>
+  <div class="meter"><div class="meter__fill meter__fill--ok" style="width:60%"></div></div>
+  <div class="meter"><div class="meter__fill meter__fill--warn" style="width:80%"></div></div>
+  <div class="meter"><div class="meter__fill meter__fill--error" style="width:96%"></div></div>
+</section>
+
+<section class="section">
+  {% call section_head("Form controls") %}{% endcall %}
+  <div class="panel">
+    <label class="field">
+      <span>Text input</span>
+      <input type="text" placeholder="host.example.com">
+    </label>
+    <label class="field">
+      <span>Select</span>
+      <select><option>Public (HTTPS)</option><option>Local mDNS</option></select>
+    </label>
+    <label class="field field--check">
+      <input type="checkbox" checked><span>Checkbox</span>
+    </label>
+    <div class="field-row">
+      <label class="field"><span>Inline field</span><input type="text"></label>
+      {{ button("Add", variant="primary") }}
+    </div>
+  </div>
+</section>
+
+<section class="section">
+  {% call section_head("Data table") %}{% endcall %}
+  <div class="table-scroll">
+    <table>
+      <thead><tr><th>Domain</th><th>Scheme</th><th>Certificate</th><th>Actions</th></tr></thead>
+      <tbody>
+        <tr><td>host.example.com <span class="muted">(primary)</span></td><td>https</td>
+            <td><span class="badge badge--ok">Active</span></td><td><span class="muted">—</span></td></tr>
+        <tr><td>second.example.com</td><td>https</td>
+            <td><span class="badge badge--warn">Acquiring</span></td>
+            <td>{{ button("Remove", variant="danger") }}</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="section">
   {% call section_head("Icons") %}{% endcall %}
   <div class="action-bar">
     {% for name in ["code", "box", "gear", "search"] %}

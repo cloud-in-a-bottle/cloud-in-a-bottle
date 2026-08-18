@@ -101,7 +101,9 @@
 }
 
 .section-label {
+  margin: 0;
   font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
   line-height: var(--leading-tight);
   letter-spacing: var(--tracking-label);
   text-transform: uppercase;
@@ -706,4 +708,322 @@ th.sortable:hover {
 .info-tip:hover,
 .info-tip:focus {
   color: var(--color-text);
+}
+
+/* ── Badge ──────────────────────────────────────────────────────────────
+   Square status chip, derived from the "+ NEW" button in the Figma: flat
+   pastel fill, 1px border, uppercase and tracked. Replaces the ad-hoc
+   coloured <span>s the page scripts used to emit. */
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 1px var(--space-2);
+  border: var(--border-w) solid var(--color-border);
+  background: #efefef;
+  color: var(--color-text-subtle);
+  font-size: var(--text-xs);
+  line-height: var(--leading-tight);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.badge--ok {
+  background: var(--color-accent-alt);
+  border-color: #9fdd7a;
+  color: #1d5c00;
+}
+
+.badge--info {
+  background: var(--color-accent);
+  border-color: #6fbdf0;
+  color: #073b5c;
+}
+
+.badge--warn {
+  background: #fff0c2;
+  border-color: #e8c860;
+  color: #6b4c00;
+}
+
+.badge--error {
+  background: var(--color-danger-bg);
+  border-color: var(--color-danger-border);
+  color: var(--color-danger-text);
+}
+
+/* ── Notices ────────────────────────────────────────────────────────────
+   Same tints as the badges at panel scale, with a 3px bar carrying the
+   status so the message itself stays plain text. */
+
+.notice {
+  padding: var(--space-3) var(--space-4);
+  margin: var(--space-3) 0;
+  background: #e6f2ff;
+  border: var(--border-w) solid #b8d8f5;
+  border-left-width: 3px;
+  font-size: var(--text-xs);
+}
+
+.notice--ok {
+  background: #f2ffe9;
+  border-color: #9fdd7a;
+}
+
+.notice--warn {
+  background: #fff8e6;
+  border-color: #e8c860;
+}
+
+.notice--error {
+  background: var(--color-danger-bg);
+  border-color: var(--color-danger-border);
+  color: var(--color-danger-text);
+}
+
+/* ── Meter ──────────────────────────────────────────────────────────────
+   Blocky progress bar. The segmented fill echoes the pixel-art clouds and
+   grass rather than reading as a smooth modern progress bar. */
+
+.meter {
+  height: 12px;
+  margin: var(--space-2) 0;
+  background: var(--color-surface-raised);
+  border: var(--border-w) solid var(--color-border);
+  overflow: hidden;
+}
+
+.meter__fill {
+  height: 100%;
+  background: repeating-linear-gradient(to right,
+    var(--color-accent) 0 10px, transparent 10px 14px);
+}
+
+.meter__fill--ok { background: repeating-linear-gradient(to right, var(--color-status-running) 0 10px, transparent 10px 14px); }
+.meter__fill--warn { background: repeating-linear-gradient(to right, var(--color-status-pending) 0 10px, transparent 10px 14px); }
+.meter__fill--error { background: repeating-linear-gradient(to right, var(--color-status-error) 0 10px, transparent 10px 14px); }
+
+/* ── Form controls ──────────────────────────────────────────────────────
+   Native checkboxes and selects arrive rounded and OS-tinted, which fights
+   the sharp-cornered flat treatment everywhere else. */
+
+input[type="checkbox"],
+input[type="radio"] {
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  flex: none;
+  background: var(--color-surface-raised);
+  border: var(--border-w) solid var(--color-border-strong);
+  display: inline-grid;
+  place-content: center;
+  cursor: pointer;
+}
+
+input[type="checkbox"]:checked,
+input[type="radio"]:checked {
+  background: var(--color-accent);
+  border-color: #6fbdf0;
+}
+
+input[type="checkbox"]:checked::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  background: var(--color-text);
+}
+
+input[type="radio"]:checked::before {
+  content: "";
+  width: 4px;
+  height: 4px;
+  background: var(--color-text);
+}
+
+select {
+  appearance: none;
+  padding-right: var(--space-6);
+  background-image: linear-gradient(45deg, transparent 50%, var(--color-text) 50%),
+                    linear-gradient(135deg, var(--color-text) 50%, transparent 50%);
+  background-position: right 12px top 55%, right 7px top 55%;
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+}
+
+/* ── Field rows ─────────────────────────────────────────────────────────
+   .field stacks a tracked uppercase label over its control; .field-row is
+   the inline variant used by the "add domain" / "create token" bars. */
+
+.field-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--space-3);
+  margin: var(--space-4) 0;
+}
+
+.field-row .field {
+  flex: 0 1 auto;
+  margin-bottom: 0;
+}
+
+/* Inputs default to width:100%, which in a field-row consumed the whole line
+   and pushed the adjacent button onto its own row. */
+.field-row > input,
+.field-row > select {
+  flex: 1 1 16rem;
+  width: auto;
+  min-width: 0;
+  max-width: 26rem;
+}
+
+.field > input,
+.field > select,
+.field > .field-row {
+  max-width: 32rem;
+}
+
+.field--check {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-xs);
+}
+
+.field--check > span {
+  margin: 0;
+  letter-spacing: normal;
+  text-transform: none;
+  opacity: 1;
+}
+
+/* ── Copyable value ─────────────────────────────────────────────────────
+   One-time secrets (API tokens) shown for copying. */
+
+.copy-field {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+
+.copy-field code {
+  flex: 1 1 20rem;
+  min-width: 0;
+  padding: var(--space-1) var(--space-2);
+  background: var(--color-surface-raised);
+  border: var(--border-w) solid var(--color-border);
+  user-select: all;
+  word-break: break-all;
+}
+
+/* ── Charts (system info) ───────────────────────────────────────────────
+   Donuts stay for multi-segment breakdowns, where proportion between parts
+   is the point; single values use .meter instead. Flat fills, no gradients. */
+
+.chart-legend {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--space-1) var(--space-3);
+  margin-top: var(--space-2);
+  font-size: var(--text-xs);
+}
+
+.chart-legend__swatch {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: var(--space-1);
+}
+
+/* ── Log list (update progress) ─────────────────────────────────────────── */
+
+.log-list {
+  margin: 0;
+  padding: var(--space-3);
+  list-style: none;
+  background: #1e1e1e;
+  color: #d4d4d4;
+  font-size: var(--text-xs);
+  max-height: 30em;
+  overflow-y: auto;
+}
+
+.log-list li {
+  display: flex;
+  gap: var(--space-3);
+  padding: 1px 0;
+}
+
+.log-list .ts {
+  flex: none;
+  color: #7f7f7f;
+}
+
+.is-expired td {
+  color: var(--color-text-muted);
+}
+
+/* ── Inline status messages ─────────────────────────────────────────────
+   The one-line feedback beside a control. Page scripts used to set a raw
+   hex on style.color for these; they set a variant class now. */
+
+.msg {
+  font-size: var(--text-xs);
+}
+
+.msg--ok { color: #1d5c00; }
+.msg--warn { color: #6b4c00; }
+.msg--error { color: var(--color-danger-text); }
+
+/* Key/value form tables keep a plain label column -- the uppercase tracked
+   treatment on `th` is for data tables, where the header names a column. */
+table.form-table th {
+  background: var(--color-surface-raised);
+  letter-spacing: normal;
+  text-transform: none;
+  opacity: 1;
+}
+
+.rule {
+  height: 0;
+  margin: var(--space-5) 0;
+  border: 0;
+  border-top: var(--border-w) solid var(--color-border);
+}
+
+.panel .field:last-child {
+  margin-bottom: 0;
+}
+
+.log-output--tall {
+  max-height: 120em;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+/* ── Terminal ───────────────────────────────────────────────────────────
+   Breaks out of the content column to the full viewport width; sharp
+   corners, matching the log-output surface. */
+
+.terminal-frame {
+  width: calc(100vw - 2 * var(--layout-gutter));
+  margin-left: calc((100% - 100vw) / 2 + var(--layout-gutter));
+  height: calc(100vh - 220px);
+  min-height: 20em;
+  padding: var(--space-2);
+  background: #1e1e1e;
+  border: var(--border-w) solid var(--color-border);
+  box-shadow: var(--shadow-card);
+  overflow: hidden;
+}
+
+.terminal-frame > #terminal {
+  width: 100%;
+  height: 100%;
 }

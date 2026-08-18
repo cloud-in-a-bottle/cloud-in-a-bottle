@@ -70,7 +70,7 @@
 </section>
 
 {% if links %}
-<h3>Links</h3>
+{% call section_head("Links", level=3) %}{% endcall %}
 <div class="table-scroll">
   <table>
     <tr><th>Name</th><th>Path</th></tr>
@@ -85,7 +85,7 @@
 {% endif %}
 
 {% if port_mappings %}
-<h3>Port Mappings</h3>
+{% call section_head("Port Mappings", level=3) %}{% endcall %}
 <div class="table-scroll">
   <table>
     <tr><th>Label</th><th>Container Port</th><th>Host Port</th></tr>
@@ -101,7 +101,7 @@
 {% endif %}
 
 {% if services_provided %}
-<h3>Services Provided</h3>
+{% call section_head("Services Provided", level=3) %}{% endcall %}
 <div class="table-scroll">
   <table>
     <tr><th>Service URL</th><th>Version</th></tr>
@@ -116,7 +116,7 @@
 {% endif %}
 
 {% if databases %}
-<h3>SQLite Databases</h3>
+{% call section_head("SQLite Databases", level=3) %}{% endcall %}
 <div class="table-scroll">
   <table>
     <tr><th>Name</th><th>Path</th></tr>
@@ -128,7 +128,7 @@
 {% endif %}
 
 {% if granted_permissions or ungranted_permissions %}
-<h3>Service Permissions</h3>
+{% call section_head("Service Permissions", level=3) %}{% endcall %}
 {% if granted_permissions %}
 <div class="table-scroll">
   <table>
@@ -163,10 +163,10 @@
 {% endif %}
 {% endif %}
 
-<h3>Logs</h3>
+{% call section_head("Logs", level=3) %}{% endcall %}
 <pre class="log-output" id="app-logs">{{ logs or "No log output available." }}</pre>
 
-<h3>Actions</h3>
+{% call section_head("Actions", level=3) %}{% endcall %}
 <div id="app-action-buttons" class="action-bar">
   <button class="btn" onclick="appAction('/stop_app/{{ app.app_id }}', null, {label: 'Stopping'})">Stop App</button>
   <button class="btn" onclick="appAction('/reload_app/{{ app.app_id }}', null, {label: 'Reloading'})">Reload App</button>

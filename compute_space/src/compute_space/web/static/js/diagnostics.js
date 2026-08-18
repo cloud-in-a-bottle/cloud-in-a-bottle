@@ -75,10 +75,10 @@ function renderSummary(data) {
 }
 
 function healthCell(h) {
-  if (!h || !h.checked) return '<span class="muted">n/a</span>';
-  if (h.healthy) return '<span class="status-running">OK' + (h.status_code ? ' (' + escHtml(h.status_code) + ')' : '') + '</span>';
+  if (!h || !h.checked) return '<span class="badge">n/a</span>';
+  if (h.healthy) return '<span class="badge badge--ok">OK' + (h.status_code ? ' ' + escHtml(h.status_code) : '') + '</span>';
   var detail = h.status_code ? String(h.status_code) : (h.error || 'unreachable');
-  return '<span class="status-error">FAIL (' + escHtml(detail) + ')</span>';
+  return '<span class="badge badge--error" title="' + escAttr(detail) + '">Fail</span>';
 }
 
 function cpuCell(r) {
@@ -126,14 +126,16 @@ function renderApps(data) {
 function renderAppRows() {
   var body = document.getElementById('apps-body');
   if (!appsData.length) {
-    body.innerHTML = '<tr><td colspan="7" class="muted">No apps installed.</td></tr>';
+    dom.replace(body, dom.el('tr', null, dom.el('td', {colspan: '7', class: 'muted', text: 'No apps installed.'})));
     return;
   }
   body.innerHTML = appsData.map(function(a) {
-    var statusCls = a.status === 'running' ? 'status-running' : (a.status === 'error' ? 'status-error' : 'status-stopped');
+    var statusVariant = a.status === 'running' ? 'ok'
+      : a.status === 'error' ? 'error'
+      : (a.status === 'building' || a.status === 'starting' || a.status === 'removing') ? 'warn' : '';
     return '<tr><td>' + escHtml(a.name) + '</td>'
       + '<td>' + escHtml(a.version || '') + '</td>'
-      + '<td class="' + statusCls + '">' + escHtml(a.status) + '</td>'
+      + '<td><span class="badge' + (statusVariant ? ' badge--' + statusVariant : '') + '">' + escHtml(a.status) + '</span></td>'
       + '<td>' + healthCell(a.health) + '</td>'
       + '<td>' + cpuCell(a.resources) + '</td>'
       + '<td>' + memCell(a.resources) + '</td>'
@@ -176,18 +178,20 @@ function renderReachability(data) {
   var targets = data.reachability || [];
   var body = document.getElementById('reachability-body');
   if (!targets.length) {
-    body.innerHTML = '<tr><td colspan="4" class="muted">No reachability data.</td></tr>';
+    dom.replace(body, dom.el('tr', null, dom.el('td', {colspan: '4', class: 'muted', text: 'No reachability data.'})));
     return;
   }
-  body.innerHTML = targets.map(function(t) {
-    var cls = t.reachable ? 'status-running' : 'status-error';
-    var label = t.reachable ? ('yes' + (t.status_code ? ' (' + escHtml(t.status_code) + ')' : '')) : ('no' + (t.error ? ' (' + escHtml(t.error) + ')' : ''));
-    var latency = (t.latency_ms != null) ? (t.latency_ms + ' ms') : '';
-    return '<tr><td>' + escHtml(t.label) + '</td>'
-      + '<td><code>' + escHtml(t.url) + '</code></td>'
-      + '<td class="' + cls + '">' + label + '</td>'
-      + '<td>' + escHtml(latency) + '</td></tr>';
-  }).join('');
+  dom.replace(body, targets.map(function(t) {
+    var detail = t.reachable ? t.status_code : t.error;
+    return dom.el('tr', null, [
+      dom.el('td', {text: t.label}),
+      dom.el('td', null, dom.el('code', {text: t.url})),
+      dom.el('td', null, dom.badge(t.reachable ? 'Yes' : 'No',
+                                   t.reachable ? 'ok' : 'error',
+                                   detail ? String(detail) : null)),
+      dom.el('td', {text: t.latency_ms != null ? t.latency_ms + ' ms' : ''}),
+    ]);
+  }));
 }
 
 function loadDiagnostics() {

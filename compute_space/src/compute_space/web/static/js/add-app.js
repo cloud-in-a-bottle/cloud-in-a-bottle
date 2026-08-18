@@ -12,11 +12,11 @@ if (initialRepo) {
 function showError(msg) {
   const el = document.getElementById('error');
   el.textContent = msg;
-  el.style.display = '';
+  el.hidden = false;
 }
 
 function clearError() {
-  document.getElementById('error').style.display = 'none';
+  document.getElementById('error').hidden = true;
 }
 
 function show(id) { document.getElementById(id).style.display = ''; }
@@ -227,22 +227,22 @@ function onPortInput(el) {
   const statusEl = document.querySelector(`.port-status[data-label="${label}"]`);
 
   if (isNaN(val) || val === 0) {
-    statusEl.innerHTML = '<span style="color:#888">auto-assign</span>';
+    dom.replace(statusEl, dom.badge('Auto-assign'));
     portConflicts.delete(label);
     updateDeployButton();
     return;
   }
 
   // Debounce: check after 400ms of no typing
-  statusEl.innerHTML = '<span style="color:#888">checking…</span>';
+  dom.replace(statusEl, dom.badge('Checking…'));
   if (portDebounceTimers[label]) clearTimeout(portDebounceTimers[label]);
   portDebounceTimers[label] = setTimeout(() => checkPortAvailability(label, val), 400);
 }
 
 function formatUsedBy(usedBy) {
   if (!usedBy) return 'unknown';
-  if (usedBy.type === 'main_port') return `${esc(usedBy.app_name)} (main port)`;
-  if (usedBy.type === 'port_mapping') return `${esc(usedBy.app_name)} (port '${esc(usedBy.label)}')`;
+  if (usedBy.type === 'main_port') return `${usedBy.app_name} (main port)`;
+  if (usedBy.type === 'port_mapping') return `${usedBy.app_name} (port '${usedBy.label}')`;
   return 'host-level service';
 }
 
@@ -252,14 +252,14 @@ async function checkPortAvailability(label, port) {
     const resp = await fetch(`/api/check_port?port=${port}`);
     const data = await resp.json();
     if (data.available) {
-      statusEl.innerHTML = '<span style="color:green">✓ available</span>';
+      dom.replace(statusEl, dom.badge('Available', 'ok'));
       portConflicts.delete(label);
     } else {
-      statusEl.innerHTML = `<span style="color:red">✗ in use by ${formatUsedBy(data.used_by)}</span>`;
+      dom.replace(statusEl, dom.badge('In use', 'error', 'In use by ' + formatUsedBy(data.used_by)));
       portConflicts.add(label);
     }
   } catch (e) {
-    statusEl.innerHTML = '<span style="color:orange">check failed</span>';
+    dom.replace(statusEl, dom.badge('Check failed', 'warn'));
     portConflicts.delete(label);
   }
   updateDeployButton();
@@ -279,7 +279,7 @@ async function recheckAllPorts() {
 }
 
 function updateDeployButton() {
-  const btn = document.querySelector('#confirm-section .btn-primary');
+  const btn = document.querySelector('#confirm-section .btn--primary');
   if (btn) btn.disabled = portConflicts.size > 0;
 }
 
