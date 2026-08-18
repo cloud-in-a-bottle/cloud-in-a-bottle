@@ -32,6 +32,7 @@ from compute_space.core.first_boot import seed_first_boot
 from compute_space.core.git_ops import SOURCE_URL
 from compute_space.core.image_pruner import start_image_pruner
 from compute_space.core.logging import logger
+from compute_space.core.memory_guard import ensure_memory_guard
 from compute_space.core.org_rename import reconcile_app_repo_urls
 from compute_space.core.startup import check_app_status
 from compute_space.core.startup import retry_pending_default_apps
@@ -150,6 +151,7 @@ def _full_app_bootstrap(config: Config) -> None:
     load_identity_keys(config.persistent_data_dir)
     start_storage_guard(config)
     start_image_pruner(config)
+    ensure_memory_guard(config)
     retry_pending_default_apps(config)
     # The DB `domains` table is the source of truth.  Seed it once (+ claim token) from
     # first_boot.toml; everything reads the primary live from the DB thereafter.
