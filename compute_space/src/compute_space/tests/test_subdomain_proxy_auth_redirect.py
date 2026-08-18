@@ -17,6 +17,7 @@ from typing import Any
 import pytest
 
 from compute_space.core.app_id import new_app_id
+from compute_space.tests._litestar_helpers import make_http_scope
 from compute_space.tests.conftest import _make_test_config
 from compute_space.web.middleware.subdomain_proxy import SubdomainProxyMiddleware
 
@@ -58,19 +59,14 @@ async def _drive(method: str) -> tuple[int, dict[str, str], bool]:
     """Run one unauthenticated request through the middleware; return (status, headers, wrapped_app_called)."""
     sentinel = _SentinelApp()
     middleware = SubdomainProxyMiddleware(sentinel)
-    scope: dict[str, Any] = {
-        "type": "http",
-        "method": method,
-        "path": PROTECTED_PATH,
-        "raw_path": PROTECTED_PATH.encode(),
-        "query_string": b"",
-        "scheme": "http",
-        "server": ("127.0.0.1", 8080),
-        "client": ("127.0.0.1", 12345),
-        "root_path": "",
-        # same-origin form post: host + matching Origin, but NO session cookie -> unauthenticated.
-        "headers": [(b"host", APP_HOST.encode()), (b"origin", f"https://{APP_HOST}".encode())],
-    }
+    # same-origin form post: host + matching Origin, but NO session cookie -> unauthenticated.
+    scope: dict[str, Any] = make_http_scope(
+        method,
+        PROTECTED_PATH,
+        host=APP_HOST,
+        headers={"origin": f"https://{APP_HOST}"},
+        client=("127.0.0.1", 12345),
+    )
 
     async def receive() -> dict[str, Any]:
         return {"type": "http.request", "body": b"", "more_body": False}

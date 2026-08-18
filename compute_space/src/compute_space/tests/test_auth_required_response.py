@@ -15,6 +15,7 @@ import pytest
 from litestar import Request
 
 from compute_space.core.domains import Domain
+from compute_space.tests._litestar_helpers import make_http_scope
 from compute_space.tests.conftest import _make_test_config
 from compute_space.web.auth.auth import auth_required_response
 from compute_space.web.auth.auth import is_login_redirectable_method
@@ -28,20 +29,14 @@ def _cfg(tmp_path: Path) -> Any:
 
 
 def _request(method: str) -> Request[Any, Any, Any]:
-    scope = {
-        "type": "http",
-        "method": method,
-        "path": "/feeds/refresh",
-        "raw_path": b"/feeds/refresh",
-        "query_string": b"",
-        "scheme": "http",
-        "server": ("127.0.0.1", 8080),
-        "root_path": "",
-        "headers": [(b"host", b"miniflux.testzone.local")],
-        # SubdomainProxyMiddleware normally stashes the arriving Domain here; login_required_redirect
-        # reads it via zone_for_request, so provide it directly in this middleware-less unit test.
-        ZONE_SCOPE_KEY: Domain(name="testzone.local", tls=True),
-    }
+    # SubdomainProxyMiddleware normally stashes the arriving Domain in ZONE_SCOPE_KEY; login_required_redirect
+    # reads it via zone_for_request, so provide it directly in this middleware-less unit test.
+    scope = make_http_scope(
+        method,
+        "/feeds/refresh",
+        host="miniflux.testzone.local",
+        extra_scope={ZONE_SCOPE_KEY: Domain(name="testzone.local", tls=True)},
+    )
     return Request(scope)  # type: ignore[arg-type]
 
 

@@ -73,8 +73,10 @@ def get_connection_origin(connection: AnyConnection) -> str | None:
 _OPAQUE_ORIGIN_TOKEN = "null"
 
 
-def is_user_request_same_origin(connection: AnyConnection) -> bool:
-    """Whether a browser request carrying owner (session) auth is same-origin with its target.
+def is_same_origin_request(connection: AnyConnection) -> bool:
+    """Whether a browser request is same-origin with its target.  The one canonical same-origin check —
+    used both for owner (session-cookie) auth and to guard unauthenticated state-changing endpoints
+    (e.g. /logout) against CSRF.
 
     The primary, unforgeable signal is the ``Origin`` header: browsers set it on all cross-origin
     requests and app JS cannot spoof it, so an Origin that matches the target host is same-origin, and a
@@ -85,11 +87,13 @@ def is_user_request_same_origin(connection: AnyConnection) -> bool:
     The awkward case is ``Origin: null``: some *legitimate* same-origin top-level form POSTs send it (a
     referrer policy or a redirect in the POST chain can opaque-ify the Origin while the request stays
     same-origin and still carries the SameSite=Lax session cookie).  We can't tell those apart from a
-    hostile opaque context by the Origin alone, so we consult Fetch-Metadata: ``Sec-Fetch-Site`` is set
-    by the browser from the true initiator and is a forbidden header name (JS cannot forge it).  A real
-    app-posting-to-itself reports ``same-origin``; a cross-app (``same-site``) or ``cross-site`` request
-    does not — so honoring ``same-origin`` here unblocks legitimate app forms without reopening cross-app
-    CSRF.  Browsers that don't send Sec-Fetch-Site (very old) keep failing closed on a null Origin.
+    hostile opaque context (e.g. a sandboxed iframe forging a cross-site POST) by the Origin alone, so we
+    consult Fetch-Metadata: ``Sec-Fetch-Site`` is set by the browser from the true initiator and is a
+    forbidden header name (JS cannot forge it).  A document posting to its own origin reports
+    ``same-origin``; a cross-app (``same-site``) or ``cross-site`` (incl. any sandboxed/opaque initiator)
+    request does not — so honoring ``same-origin`` here unblocks legitimate null-Origin form posts
+    without reopening CSRF.  Browsers that don't send Sec-Fetch-Site (very old) keep failing closed on a
+    null Origin.
     """
     origin = get_connection_origin(connection)
     if origin is None or origin == connection.base_url.netloc:
@@ -97,26 +101,6 @@ def is_user_request_same_origin(connection: AnyConnection) -> bool:
     if origin == _OPAQUE_ORIGIN_TOKEN:
         return connection.headers.get("Sec-Fetch-Site") == "same-origin"
     return False
-
-
-def verify_same_origin(connection: AnyConnection) -> None:
-    """Reject cross-origin requests to unauthenticated state-changing endpoints (e.g. /logout).
-
-    The ``Origin`` header is set by browsers on all cross-origin requests (including from subdomains
-    and from sandboxed/opaque contexts, which send ``Origin: null``) and cannot be forged by js. So
-    if an Origin header is present at all, it must match the target host; otherwise the request is
-    cross-site and is rejected. This stops a hostile page (including a sandboxed iframe sending
-    ``Origin: null``) from cross-site POSTing to endpoints like /logout, which has no owner-auth
-    guard of its own (it must work for any session state).
-
-    A genuinely same-origin top-level form post either omits Origin or sends the matching host, so
-    legitimate logout still works.
-
-    raises NotAuthorizedException on a cross-origin request.
-    """
-    origin = get_connection_origin(connection)
-    if origin is not None and origin != connection.base_url.netloc:
-        raise NotAuthorizedException(detail="cross-origin request not allowed")
 
 
 def authenticate(connection: AnyConnection, db: sqlite3.Connection) -> AuthenticatedAccessor | None:
@@ -153,8 +137,8 @@ def verify_owner_auth(connection: AnyConnection) -> None:
     if isinstance(accessor, AuthenticatedUser):
         # User (session-cookie) auth is only valid for same-origin requests: we never trust a
         # cross-origin request bearing the owner's cookie, since it could be forged by untrusted app js.
-        # See is_user_request_same_origin for how Origin + Fetch-Metadata decide this (incl. Origin: null).
-        if not is_user_request_same_origin(connection):
+        # See is_same_origin_request for how Origin + Fetch-Metadata decide this (incl. Origin: null).
+        if not is_same_origin_request(connection):
             raise NotAuthorizedException(detail="user authentication only valid for router-origin requests")
         return
     if isinstance(accessor, AuthenticatedAPIKey):
@@ -220,9 +204,14 @@ def require_owner_or_app_auth(connection: AnyConnection, _route_handler: BaseRou
 
 
 def require_same_origin(connection: AnyConnection, _route_handler: BaseRouteHandler) -> None:
-    """Adapt verify_same_origin to be used as a route guard (for unauthenticated state-changing
-    endpoints like /logout that still need cross-origin/CSRF protection)."""
-    verify_same_origin(connection)
+    """Guard for unauthenticated state-changing endpoints (e.g. /logout) that have no owner-auth of
+    their own (they must work for any session state) but still need CSRF protection: reject unless the
+    request is same-origin with its target.  An ``Origin: null`` is honored only when
+    ``Sec-Fetch-Site: same-origin`` corroborates it, so a sandboxed-iframe forced-logout forgery — which
+    reports cross-site — stays blocked.  See is_same_origin_request.
+    """
+    if not is_same_origin_request(connection):
+        raise NotAuthorizedException(detail="cross-origin request not allowed")
 
 
 def build_login_url(zone: Domain, netloc: str, path: str, query: str) -> str:

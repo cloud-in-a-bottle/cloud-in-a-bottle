@@ -26,6 +26,7 @@ import compute_space.web.auth.auth as authmod
 from compute_space.core.auth.auth import SESSION_COOKIE_NAME
 from compute_space.core.auth.auth import create_session
 from compute_space.db.schema import schema_path
+from compute_space.tests._litestar_helpers import make_http_scope
 from compute_space.tests.conftest import _make_test_config
 from compute_space.web.auth.auth import verify_owner_auth
 
@@ -53,17 +54,7 @@ def _session_cookie(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator
 
 
 def _authed(cookie: str, headers: dict[str, str]) -> ASGIConnection[Any, Any, Any, Any]:
-    scope = {
-        "type": "http",
-        "method": "POST",
-        "path": "/feeds/refresh",
-        "query_string": b"",
-        "scheme": "http",
-        "server": ("127.0.0.1", 8080),
-        "root_path": "",
-        "headers": [(b"host", APP_HOST.encode()), (b"cookie", cookie.encode())]
-        + [(k.lower().encode(), v.encode()) for k, v in headers.items()],
-    }
+    scope = make_http_scope("POST", "/feeds/refresh", host=APP_HOST, cookie=cookie, headers=headers)
     return ASGIConnection(scope)  # type: ignore[arg-type]
 
 
