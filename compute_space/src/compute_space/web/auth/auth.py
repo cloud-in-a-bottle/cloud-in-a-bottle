@@ -74,26 +74,18 @@ _OPAQUE_ORIGIN_TOKEN = "null"
 
 
 def is_same_origin_request(connection: AnyConnection) -> bool:
-    """Whether a browser request is same-origin with its target.  The one canonical same-origin check —
-    used both for owner (session-cookie) auth and to guard unauthenticated state-changing endpoints
-    (e.g. /logout) against CSRF.
+    """Whether a browser request is same-origin with its target. The canonical check, used for owner
+    (session-cookie) auth and to guard unauthenticated state-changing endpoints (e.g. /logout) against CSRF.
 
-    The primary, unforgeable signal is the ``Origin`` header: browsers set it on all cross-origin
-    requests and app JS cannot spoof it, so an Origin that matches the target host is same-origin, and a
-    concrete Origin for a *different* host (e.g. another app subdomain) is cross-origin and rejected.
+    The ``Origin`` header is the primary signal: browsers set it on cross-origin requests and JS can't
+    spoof it. A matching Origin is same-origin; a concrete Origin for another host is rejected. An absent
+    Origin is same-origin (browsers omit it on ordinary same-origin GET navigations).
 
-    An absent Origin is treated as same-origin (browsers omit it on ordinary same-origin GET navigations).
-
-    The awkward case is ``Origin: null``: some *legitimate* same-origin top-level form POSTs send it (a
-    referrer policy or a redirect in the POST chain can opaque-ify the Origin while the request stays
-    same-origin and still carries the SameSite=Lax session cookie).  We can't tell those apart from a
-    hostile opaque context (e.g. a sandboxed iframe forging a cross-site POST) by the Origin alone, so we
-    consult Fetch-Metadata: ``Sec-Fetch-Site`` is set by the browser from the true initiator and is a
-    forbidden header name (JS cannot forge it).  A document posting to its own origin reports
-    ``same-origin``; a cross-app (``same-site``) or ``cross-site`` (incl. any sandboxed/opaque initiator)
-    request does not — so honoring ``same-origin`` here unblocks legitimate null-Origin form posts
-    without reopening CSRF.  Browsers that don't send Sec-Fetch-Site (very old) keep failing closed on a
-    null Origin.
+    ``Origin: null`` is ambiguous: some legitimate same-origin form POSTs send it (a referrer policy or
+    redirect can opaque-ify the Origin while the request stays same-origin with its SameSite=Lax cookie),
+    but so does a hostile opaque context (e.g. a sandboxed iframe). We disambiguate via ``Sec-Fetch-Site``,
+    a forbidden header the browser sets from the true initiator: only ``same-origin`` is honored. Very old
+    browsers that omit it keep failing closed on a null Origin.
     """
     origin = get_connection_origin(connection)
     if origin is None or origin == connection.base_url.netloc:
@@ -245,11 +237,9 @@ def login_required_redirect(request: Request[Any, Any, Any]) -> Response[Any]:
     return Redirect(path=build_login_url(zone, request.url.netloc, request.url.path, request.url.query))
 
 
-# HTTP methods a browser will safely re-issue as a plain navigation when it follows a 302.  For any
-# *other* (unsafe / state-changing) method, redirecting an unauthenticated request to /login is lossy:
-# a browser that follows the 302 drops the method and body and re-requests the target as a bodyless
-# GET, so the app sees a GET on a POST-only route and answers 405 (or silently no-ops).  We only ever
-# send the login redirect for these methods; unsafe methods get an honest 403 instead.
+# Methods a browser re-issues as a plain navigation when it follows a 302. For unsafe methods a
+# login redirect is lossy — the browser drops the method/body and re-requests as a bodyless GET —
+# so we only send the redirect for these, and give unsafe methods an honest 403.
 _LOGIN_REDIRECTABLE_METHODS = frozenset({"GET", "HEAD"})
 
 
@@ -261,11 +251,8 @@ def is_login_redirectable_method(method: str) -> bool:
 def auth_required_response(request: Request[Any, Any, Any]) -> Response[Any]:
     """Response for an unauthenticated non-API HTTP request to a protected path.
 
-    For navigational methods (GET/HEAD) redirect to /login so a logged-out user lands on the login page
-    and is bounced back to ``next`` after signing in.  For unsafe methods (POST/PUT/PATCH/DELETE/...) a
-    302→/login is lossy — a browser that follows it re-issues the request as a bodyless GET, which the
-    target app then rejects with 405 — so answer those with a 403 instead.  The failure stays honest and
-    the method/body are never silently downgraded.
+    GET/HEAD redirect to /login (and back to ``next`` after signing in). Unsafe methods get a 403
+    instead, since a login redirect would be re-issued as a bodyless GET and rejected with 405.
     """
     if is_login_redirectable_method(request.method):
         return login_required_redirect(request)
