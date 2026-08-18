@@ -1,0 +1,268 @@
+/* Element-level defaults and the sky/grass page frame. Component classes live
+   in components.css. */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  scrollbar-gutter: stable;
+  -webkit-text-size-adjust: 100%;
+}
+
+/* A class-level `display` beats the UA stylesheet's `[hidden] { display: none }`,
+   which silently breaks any JS that toggles the attribute (the dashboard filter
+   and its poll loop both do). */
+[hidden] {
+  display: none !important;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  padding: 0 var(--layout-gutter) calc(var(--grass-height) + var(--space-7));
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  line-height: var(--leading-snug);
+  color: var(--color-text);
+  background: linear-gradient(180deg, var(--color-sky) 0%, var(--color-sky) 80%, var(--color-meadow) 100%) fixed;
+}
+
+/* Decorative bands. The clouds scroll with the document, the grass stays
+   pinned to the bottom of the viewport so the frame reads the same on a short
+   dashboard and a long settings page. */
+.deco-clouds,
+.deco-grass {
+  pointer-events: none;
+  user-select: none;
+  z-index: 0;
+}
+
+.deco-clouds {
+  position: absolute;
+  top: 28px;
+  left: -4%;
+  right: -4%;
+  height: 76px;
+  background: url("../img/deco/clouds.svg") no-repeat center / 100% 100%;
+}
+
+.deco-grass {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: var(--grass-height);
+  background: url("../img/deco/grass.svg") repeat-x bottom / auto 100%;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  html {
+    scroll-behavior: smooth;
+  }
+}
+
+/* Content sits above the decorations. */
+.layout {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  max-width: var(--layout-width);
+  margin: 0 auto;
+  padding-top: var(--space-8);
+}
+
+.layout--wide {
+  max-width: var(--layout-width-wide);
+}
+
+.layout--narrow {
+  max-width: var(--layout-width-narrow);
+}
+
+@media (max-width: 640px) {
+  .layout {
+    padding-top: var(--space-6);
+  }
+}
+
+h1,
+h2,
+h3,
+h4 {
+  font-weight: var(--weight-semibold);
+  line-height: var(--leading-tight);
+  letter-spacing: var(--tracking-heading);
+  margin: 0;
+}
+
+h2 {
+  font-size: var(--text-md);
+  margin-top: var(--space-7);
+  margin-bottom: var(--space-3);
+}
+
+h3 {
+  font-size: var(--text-sm);
+  margin-top: var(--space-6);
+  margin-bottom: var(--space-2);
+}
+
+p {
+  margin: 0 0 var(--space-3);
+}
+
+a {
+  color: var(--color-text);
+  text-underline-offset: 2px;
+}
+
+a:hover {
+  text-decoration-thickness: 2px;
+}
+
+code,
+pre {
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+}
+
+/* Tables. Wide tables scroll horizontally rather than forcing the page wide;
+   .spec-list is the responsive replacement for key/value tables. */
+table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: var(--space-4) 0;
+  background: var(--color-surface);
+  font-size: var(--text-xs);
+}
+
+th,
+td {
+  border: var(--border-w) solid var(--color-border);
+  padding: var(--space-2) var(--space-4);
+  text-align: left;
+  vertical-align: top;
+}
+
+th {
+  font-weight: var(--weight-semibold);
+  background: #f4f4f4;
+}
+
+.table-scroll {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Forms */
+input,
+select,
+textarea,
+button {
+  font: inherit;
+  color: inherit;
+}
+
+input[type="text"],
+input[type="password"],
+input[type="number"],
+input[type="search"],
+input[type="url"],
+input[type="email"],
+select,
+textarea {
+  width: 100%;
+  padding: var(--space-1) var(--space-2);
+  background: var(--color-surface-raised);
+  border: var(--border-w) solid var(--color-border);
+  border-radius: var(--radius-none);
+  font-size: var(--text-xs);
+}
+
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+button:focus-visible,
+a:focus-visible,
+[tabindex]:focus-visible {
+  outline: 2px solid var(--color-text);
+  outline-offset: 1px;
+}
+
+input.invalid {
+  border-color: var(--color-danger-text);
+}
+
+label {
+  font-size: var(--text-xs);
+}
+
+/* Utilities carried over from the previous stylesheet so existing pages keep
+   working while they are migrated. */
+.muted {
+  color: var(--color-text-muted);
+  font-size: var(--text-xs);
+}
+
+.hint {
+  color: var(--color-text-subtle);
+  font-size: var(--text-xs);
+  line-height: var(--leading-tight);
+}
+
+.error {
+  color: var(--color-danger-text);
+}
+
+.field-error {
+  color: var(--color-danger-text);
+  font-size: var(--text-xs);
+}
+
+.error-inline {
+  background: var(--color-danger-bg);
+  border: var(--border-w) solid var(--color-danger-border);
+  padding: var(--space-2);
+  margin-top: var(--space-1);
+  font-size: var(--text-xs);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 12em;
+  overflow-y: auto;
+}
+
+.log-output {
+  background: #1e1e1e;
+  color: #d4d4d4;
+  padding: var(--space-4);
+  font-size: var(--text-xs);
+  overflow: auto;
+  max-height: 30em;
+}
+
+.control-row {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  flex-wrap: wrap;
+  margin: var(--space-4) 0;
+}
+
+.label-col {
+  width: 14em;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}

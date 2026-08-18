@@ -1,0 +1,15 @@
+{% from "_components/button.html" import button %}
+
+{% macro card(title, desc, cta_label, cta_href=none, cta_onclick=none,
+              cta_variant="primary", cta_new_tab=false) -%}
+<div class="card">
+  <div class="card__body">
+    <h3 class="card__title">{{ title }}</h3>
+    <p class="card__desc">{{ desc }}</p>
+  </div>
+  <div class="card__footer">
+    {{ button(cta_label, href=cta_href, onclick=cta_onclick, variant=cta_variant,
+              block=true, new_tab=cta_new_tab) }}
+  </div>
+</div>
+{%- endmacro %}

@@ -87,6 +87,8 @@ from compute_space.core.domains import primary_domain_or_none
 from compute_space.core.git_ops import SOURCE_URL
 from compute_space.core.logging import logger
 from compute_space.db import get_db
+from compute_space.web.helpers.static import STATIC_DIR
+from compute_space.web.helpers.static import make_static_url
 
 # ─── Filesystem layout ──────────────────────────────────────────────
 
@@ -424,6 +426,11 @@ _TEMPLATE = """<!DOCTYPE html>
   <meta name="robots" content="noindex">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{{ page_title }} - Cloud in a Bottle Manual</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible+Mono:wght@500;600&display=swap">
+  <link rel="stylesheet" href="{{ static_url('css/tokens.css') }}">
+  <link rel="stylesheet" href="{{ static_url('css/components.css') }}">
   <style>
     /* The docs page deliberately reuses layout.html's exact palette and
        typography (hardcoded light colours, #222 text on #fff, #ddd
@@ -611,23 +618,13 @@ _TEMPLATE = """<!DOCTYPE html>
       font-size: 0.9em;
     }
     .footer-nav a { color: #36c; text-decoration: none; }
-    /* Space navigation header — mirrors layout.html so the docs page keeps
-       the same top nav (and header geometry) as the rest of the compute
-       space.  The h1 uses the browser-default h1 size/margins (2em, 0.67em)
-       exactly like layout.html's bare <h1>, so the title + nav land at the
-       same vertical position on both pages. */
-    .space-header { max-width: 960px; margin: 2em auto 0; padding: 0 1em; }
-    .space-header h1.space-title { font-size: 2em; font-weight: bold; margin: 0.67em 0; }
-    nav#main-nav { display: flex; align-items: flex-end; gap: 0.25em; border-bottom: 1px solid #e8e8e8; }
-    nav#main-nav .nav-tab {
-      display: inline-block; padding: 0.4em 1em; border: 1px solid transparent;
-      border-bottom: none; border-radius: 4px 4px 0 0; text-decoration: none;
-      color: #444; background: transparent;
-    }
-    nav#main-nav .nav-tab:hover { background: #f0f0f0; color: #222; border-color: #ddd; }
-    nav#main-nav .nav-tab.active {
-      background: #fff; border-color: #ddd; color: #222;
-      margin-bottom: -1px; padding-bottom: calc(0.4em + 1px);
+    /* Space navigation header.  The tab strip itself is styled by the shared
+       components.css linked above, so the docs nav can't drift from the rest
+       of the compute space; only the header's own geometry lives here. */
+    .space-header { max-width: 960px; margin: 0 auto; padding: 2em 1em 0; }
+    .space-header h1.space-title {
+      font-family: var(--font-mono); font-size: 1.15em; font-weight: 500;
+      letter-spacing: var(--tracking-title); text-transform: uppercase; margin: 0 0 1em;
     }
     {{ pygments_css }}
   </style>
@@ -718,6 +715,7 @@ _TEMPLATE = """<!DOCTYPE html>
 # disk — keeping the route's serving surface self-contained.
 _TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "templates"
 _JINJA_ENV = Environment(loader=FileSystemLoader(str(_TEMPLATES_DIR)), autoescape=True)
+_JINJA_ENV.globals["static_url"] = make_static_url(STATIC_DIR)
 _COMPILED_TEMPLATE = _JINJA_ENV.from_string(_TEMPLATE)
 
 

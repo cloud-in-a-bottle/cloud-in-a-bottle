@@ -1,19 +1,7 @@
 {% extends "layout.html" %}
 {% block title_suffix %} - Deploy App{% endblock %}
+{% block layout_class %}layout--wide{% endblock %}
 {% block content %}
-<style>
-  .catalog-callout { display: flex; align-items: center; gap: 1.2em; border: 1px solid #cfdcf5; background: #f5f8fe; border-radius: 8px; padding: 1.1em 1.4em; margin: 1.2em 0 2em; }
-  .catalog-callout .callout-icon { font-size: 2.1em; line-height: 1; }
-  .catalog-callout h3 { margin: 0 0 0.25em; }
-  .catalog-callout p { margin: 0; color: #555; }
-  .catalog-callout .callout-action { margin-left: auto; white-space: nowrap; }
-  .repo-url-row { display: flex; gap: 0.5em; margin-top: 0.6em; }
-  .repo-url-row input { flex: 1; }
-  .repo-url-row .btn { white-space: nowrap; }
-  details.url-help { margin-top: 0.8em; color: #555; font-size: 0.9em; }
-  details.url-help summary { cursor: pointer; color: #36c; }
-  details.url-help ul { margin: 0.5em 0 0; }
-</style>
 
 <h2>Deploy New App</h2>
 

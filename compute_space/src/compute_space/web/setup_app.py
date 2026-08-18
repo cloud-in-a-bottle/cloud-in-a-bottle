@@ -40,6 +40,7 @@ from compute_space.core.updates import is_shutdown_pending
 from compute_space.core.updates import trigger_restart
 from compute_space.db import get_db
 from compute_space.web.auth.cookies import build_session_cookie
+from compute_space.web.helpers.static import make_static_url
 
 # Set when setup_post succeeds. /health flips to 503 immediately so clients
 # polling for the post-restart main app don't see a stale 200 from the setup
@@ -195,8 +196,14 @@ def create_setup_app(config: Config) -> Litestar:
     )
     static_router = create_static_files_router(path="/static", directories=[static_dir])
 
+    def _install_template_globals(app: Litestar) -> None:
+        engine = app.template_engine
+        if isinstance(engine, JinjaTemplateEngine):
+            engine.engine.globals["static_url"] = make_static_url(static_dir)
+
     return Litestar(
         route_handlers=[root_redirect, setup_get, setup_post, health, static_router],
         template_config=template_config,
         dependencies={"config": Provide(provide_config, sync_to_thread=False)},
+        on_startup=[_install_template_globals],
     )

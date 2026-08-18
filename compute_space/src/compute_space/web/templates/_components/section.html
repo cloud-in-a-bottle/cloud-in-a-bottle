@@ -1,0 +1,10 @@
+{#- Section label plus an optional right-hand action cluster, supplied by
+    wrapping the call in {% call section_head("...") %}...{% endcall %}. -#}
+{% macro section_head(label) -%}
+<div class="section-head">
+  <span class="section-label">{{ label }}</span>
+  {%- if caller %}
+  <div class="section-actions">{{ caller() }}</div>
+  {%- endif %}
+</div>
+{%- endmacro %}

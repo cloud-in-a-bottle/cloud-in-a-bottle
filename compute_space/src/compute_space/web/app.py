@@ -41,6 +41,7 @@ from compute_space.core.terminal import cleanup_all as cleanup_terminal
 from compute_space.db import get_db
 from compute_space.db import provide_db
 from compute_space.web.auth.auth import login_required_redirect
+from compute_space.web.helpers.static import make_static_url
 from compute_space.web.helpers.zone import ZONE_SCOPE_KEY
 from compute_space.web.middleware.subdomain_proxy import SubdomainProxyMiddleware
 from compute_space.web.routes.api.apps import api_apps_routes
@@ -53,30 +54,12 @@ from compute_space.web.routes.api.settings import api_settings_routes
 from compute_space.web.routes.api.system import system_routes
 from compute_space.web.routes.docs import docs_routes
 from compute_space.web.routes.pages.apps import pages_apps_routes
+from compute_space.web.routes.pages.design import pages_design_routes
 from compute_space.web.routes.pages.login import pages_login_routes
 from compute_space.web.routes.pages.permissions_v2 import pages_permissions_v2_routes
 from compute_space.web.routes.pages.settings import pages_settings_routes
 from compute_space.web.routes.pages.system import pages_system_routes
 from compute_space.web.routes.services_v2 import services_v2_routes
-
-
-def _make_static_url(static_dir: Path) -> Any:
-    """Build a Jinja ``static_url`` global that appends ``?v=<mtime>`` for cache-busting.
-
-    Browsers aggressively cache static JS/CSS, so a deploy that ships a new
-    template + JS would otherwise leave returning visitors running stale JS
-    against new HTML.  Appending the file's mtime forces a fresh fetch.
-    """
-
-    def static_url(filename: str) -> str:
-        base = f"/static/{filename}"
-        try:
-            mtime = int((static_dir / filename).stat().st_mtime)
-        except OSError:
-            return base
-        return f"{base}?v={mtime}"
-
-    return static_url
 
 
 def _template_globals(config: Config, static_dir: Path) -> dict[str, Any]:
@@ -126,7 +109,7 @@ def _template_globals(config: Config, static_dir: Path) -> dict[str, Any]:
         "zone_domain": zone_domain,
         "app_url": app_url,
         "owner_name": owner_name,
-        "static_url": _make_static_url(static_dir),
+        "static_url": make_static_url(static_dir),
         "source_url": SOURCE_URL,
     }
 
@@ -258,6 +241,7 @@ def create_app(config: Config) -> ASGIApp:
             identity_routes,
             docs_routes,
             pages_apps_routes,
+            pages_design_routes,
             pages_login_routes,
             pages_permissions_v2_routes,
             pages_settings_routes,

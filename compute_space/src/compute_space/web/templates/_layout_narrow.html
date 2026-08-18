@@ -1,13 +1,14 @@
-{#- Owner username (if set) takes precedence over the zone subdomain for the
-   instance name shown in the title + banner. Computed once and reused below. -#}
-{%- set display_name = owner_name() or zone_name() -%}
+{#- Base for the single-purpose pages that render outside the authenticated
+    shell (login, first-boot setup, identity approval). Same tokens and
+    components as layout.html, but no nav — there is nowhere to navigate to
+    yet — and a narrower column. -#}
 <!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="robots" content="noindex">
-  <title>{% if display_name %}{{ display_name }}'s personal compute space{% else %}Cloud in a Bottle{% endif %}{% block title_suffix %}{% endblock %}</title>
+  <title>Cloud in a Bottle{% block title_suffix %}{% endblock %}</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible+Mono:wght@500;600&display=swap">
@@ -20,12 +21,11 @@
   <div class="deco-clouds"></div>
   <div class="deco-grass"></div>
 
-  <div class="layout {% block layout_class %}{% endblock %}">
-    <h1 class="banner">
-      <span class="banner__text">{% if display_name %}{{ display_name }}'s personal compute space{% else %}Cloud in a Bottle{% endif %}</span>
-    </h1>
-    {% include "_nav_header.html" %}
-    {% block content %}{% endblock %}
+  <div class="layout layout--narrow">
+    <h1 class="banner"><span class="banner__text">{% block heading %}Cloud in a Bottle{% endblock %}</span></h1>
+    <div class="panel">
+      {% block content %}{% endblock %}
+    </div>
   </div>
 </body>
 </html>

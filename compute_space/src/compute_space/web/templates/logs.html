@@ -1,11 +1,15 @@
 {% extends "layout.html" %}
 {% block title_suffix %} - Logs{% endblock %}
+{% block layout_class %}layout--wide{% endblock %}
 {% block content %}
 <style>
-  html, body { height: 100%; margin: 0; overflow: hidden; }
-  body { max-width: none; padding: 1em; display: flex; flex-direction: column; box-sizing: border-box; }
-  body > * { flex-shrink: 0; }
-  #cs-logs { flex: 1; min-height: 0; max-height: none; white-space: pre-wrap; word-break: break-all; }
+  /* Full-height log viewer: the layout column becomes the flex parent so the
+     <pre> takes the remaining space instead of the page scrolling. */
+  html, body { height: 100%; overflow: hidden; }
+  body { padding-bottom: 0; }
+  .layout { display: flex; flex-direction: column; height: 100%; padding-bottom: var(--space-4); }
+  .layout > * { flex: none; }
+  #cs-logs { flex: 1 1 auto; min-height: 0; max-height: none; white-space: pre-wrap; word-break: break-all; }
 </style>
 <h2>Compute Space Logs</h2>
 <pre class="log-output" id="cs-logs">Loading...</pre>

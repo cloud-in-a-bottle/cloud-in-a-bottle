@@ -2,9 +2,9 @@
     highlighter.  Included by ``layout.html`` (every standard page) and by
     the docs route's standalone template so the manual carries the same nav.
     Keeping the tab list + script here means adding/renaming a tab or tweaking
-    the highlight logic touches exactly one file. Styling is left to each
-    including template (they use different colour palettes). -#}
-<nav id="main-nav">
+    the highlight logic touches exactly one file. Styling lives in
+    ``static/css/components.css`` (``.nav``, ``.nav-tab``, ``.nav-source``). -#}
+<nav id="main-nav" class="nav" aria-label="Compute space">
   <a href="/dashboard" class="nav-tab">Dashboard</a>
   <a href="/docs/" class="nav-tab">Docs</a>
   <a href="/add_app" class="nav-tab">Deploy App</a>
@@ -25,22 +25,21 @@
   </a>
   {% endif %}
 </nav>
-<style>
-  /* Right-align the source mark and keep it muted so it never competes with the
-     tab labels. Defined here (not in the palette-specific host templates) so the
-     dashboard and the standalone docs nav render it identically. */
-  #main-nav .nav-source { margin-left: auto; align-self: center; display: inline-flex;
-    padding: 0.4em 0.5em; color: #888; text-decoration: none; }
-  #main-nav .nav-source:hover { color: #222; }
-</style>
 <script>
   (function() {
     var p = window.location.pathname.replace(/\/+$/, '') || '/';
+    var active = null;
     document.querySelectorAll('#main-nav .nav-tab').forEach(function(a) {
       var href = a.getAttribute('href').replace(/\/+$/, '') || '/';
       if (p === href || p === '/' && href === '/dashboard' || (href !== '/dashboard' && p.startsWith(href))) {
         a.classList.add('active');
+        active = a;
       }
     });
+    // The tab strip scrolls horizontally on narrow screens; make sure the tab
+    // you are actually on is the one in view.
+    if (active && active.scrollIntoView) {
+      active.scrollIntoView({block: 'nearest', inline: 'nearest'});
+    }
   })();
 </script>

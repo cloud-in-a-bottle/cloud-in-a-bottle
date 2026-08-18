@@ -1,0 +1,90 @@
+{% extends "layout.html" %}
+{% from "_components/app_row.html" import app_row %}
+{% from "_components/button.html" import button %}
+{% from "_components/card.html" import card %}
+{% from "_components/icon.html" import icon %}
+{% from "_components/section.html" import section_head %}
+{% from "_components/spec.html" import spec_list, spec_row %}
+
+{% block title_suffix %} - Design{% endblock %}
+{% block layout_class %}layout--wide{% endblock %}
+
+{% block content %}
+<p class="hint">Every component in every state. Renders from the same macros the real pages
+use, so anything that drifts here has drifted everywhere.</p>
+
+<section class="section">
+  {% call section_head("Buttons") %}{% endcall %}
+  <div class="action-bar">
+    {{ button("Default") }}
+    {{ button("Primary", variant="primary") }}
+    {{ button("+ New", variant="accent") }}
+    {{ button("Danger", variant="danger") }}
+    {{ button("Disabled", disabled=true) }}
+    {{ button("Link button", href="#") }}
+  </div>
+</section>
+
+<section class="section">
+  {% call section_head("Cards") %}{% endcall %}
+  <div class="card-grid">
+    {{ card("Short title", "One line.", "Go", cta_href="#") }}
+    {{ card("A considerably longer card title that wraps", "A longer description that runs to
+             several lines so the footer alignment across a row can be checked.", "Continue", cta_href="#") }}
+    {{ card("Third card", "Guides and GitHub repo.", "View docs", cta_href="#") }}
+  </div>
+</section>
+
+<section class="section">
+  {% call section_head("App rows") %}
+    <div class="search">
+      {{ icon("search", 14, class_="search__icon") }}
+      <input type="search" class="search__input" placeholder=" " aria-label="Demo filter">
+    </div>
+    <a class="btn btn--accent" href="#">+ New</a>
+  {% endcall %}
+  <div class="app-list">
+    {% for demo in demo_apps %}{{ app_row(demo) }}{% endfor %}
+  </div>
+</section>
+
+<section class="section">
+  {% call section_head("Spec list") %}{% endcall %}
+  {% call spec_list() %}
+    {{ spec_row("Version", "1.4.2") }}
+    {{ spec_row("Description", "A value long enough to wrap onto a second line in the narrow column layout.") }}
+    {{ spec_row("Repo path", "/var/lib/openhost/repos/example-app") }}
+  {% endcall %}
+</section>
+
+<section class="section">
+  {% call section_head("Messages") %}{% endcall %}
+  <p class="notice">A neutral notice, e.g. waiting for a deploy to finish.</p>
+  <p class="error">An error line.</p>
+  <div class="error-inline">Traceback-style detail
+that preserves newlines.</div>
+  <p class="hint">A hint line explaining a field.</p>
+  <p class="muted">Muted secondary text.</p>
+  <p class="empty">An empty-state panel.</p>
+</section>
+
+<section class="section">
+  {% call section_head("Status") %}{% endcall %}
+  <div class="action-bar">
+    {% for s in ["running", "stopped", "error", "building", "starting", "removing"] %}
+    <span data-status="{{ s }}" style="display:inline-flex;align-items:center;gap:6px;">
+      <span class="status-dot"></span><span class="status-{{ s }}">{{ s }}</span>
+    </span>
+    {% endfor %}
+  </div>
+</section>
+
+<section class="section">
+  {% call section_head("Icons") %}{% endcall %}
+  <div class="action-bar">
+    {% for name in ["code", "box", "gear", "search"] %}
+    <span title="{{ name }}">{{ icon(name, 20, alt=name) }}</span>
+    {% endfor %}
+  </div>
+</section>
+{% endblock %}

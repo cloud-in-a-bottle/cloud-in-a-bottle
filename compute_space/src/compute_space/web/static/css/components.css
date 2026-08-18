@@ -1,0 +1,709 @@
+/* Component vocabulary. Each block here is the style contract for one Jinja
+   macro in templates/_components/. */
+
+/* ── Banner ─────────────────────────────────────────────────────────── */
+
+.banner {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  margin: 0 0 var(--space-6);
+  font-size: clamp(var(--text-xs), 2.2vw, var(--text-md));
+  font-weight: var(--weight-medium);
+  line-height: var(--leading-loose);
+  letter-spacing: var(--tracking-title);
+  text-transform: uppercase;
+}
+
+.banner::before,
+.banner::after {
+  content: "";
+  flex: 1 1 0;
+  min-width: 12px;
+  height: 2px;
+  background: repeating-linear-gradient(to right, currentColor 0 9px, transparent 9px 15px);
+}
+
+.banner__text {
+  text-align: center;
+}
+
+/* ── Nav ────────────────────────────────────────────────────────────── */
+
+.nav {
+  display: flex;
+  align-items: stretch;
+  gap: var(--space-1);
+  margin-bottom: var(--space-6);
+  border-bottom: var(--border-w) solid var(--color-border);
+  overflow-x: auto;
+  scrollbar-width: none;
+  overscroll-behavior-x: contain;
+}
+
+.nav::-webkit-scrollbar {
+  display: none;
+}
+
+.nav-tab {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  padding: var(--space-2);
+  color: var(--color-text);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+  text-decoration: none;
+  white-space: nowrap;
+  opacity: 0.7;
+  border-bottom: 2px solid transparent;
+}
+
+.nav-tab:hover {
+  opacity: 1;
+  background: rgba(255, 255, 255, 0.55);
+}
+
+.nav-tab.active {
+  opacity: 1;
+  font-weight: var(--weight-semibold);
+  border-bottom-color: var(--color-text);
+}
+
+.nav-source {
+  flex: none;
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  padding: var(--space-2);
+  color: var(--color-text-muted);
+  text-decoration: none;
+}
+
+.nav-source:hover {
+  color: var(--color-text);
+}
+
+/* ── Section header ─────────────────────────────────────────────────── */
+
+.section {
+  margin-bottom: var(--space-6);
+}
+
+.section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  margin-bottom: var(--space-2);
+}
+
+.section-label {
+  font-size: var(--text-xs);
+  line-height: var(--leading-tight);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+  opacity: 0.8;
+}
+
+.section-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+}
+
+/* Legacy heading style still used by settings/system/diagnostics. */
+h2.section-title {
+  border-bottom: var(--border-w) solid var(--color-border);
+  padding-bottom: var(--space-1);
+}
+
+/* ── Icons ──────────────────────────────────────────────────────────── */
+
+.icon {
+  display: block;
+  flex: none;
+  object-fit: contain;
+}
+
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  opacity: 0.8;
+}
+
+.icon-btn:hover {
+  opacity: 1;
+}
+
+@media (hover: none) {
+  .icon-btn {
+    width: 36px;
+    height: 36px;
+  }
+}
+
+/* ── Buttons ────────────────────────────────────────────────────────── */
+
+.btn,
+.btn-primary,
+.btn-danger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  min-height: 28px;
+  padding: 3px var(--space-3);
+  font-size: var(--text-xs);
+  line-height: var(--leading-tight);
+  letter-spacing: var(--tracking-body);
+  color: var(--color-text);
+  background: var(--color-surface-raised);
+  border: var(--border-w) solid var(--color-border);
+  border-radius: var(--radius-none);
+  text-decoration: none;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.btn:hover {
+  background: #f0f0f0;
+}
+
+.btn:disabled,
+.btn[aria-disabled="true"] {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.btn--primary,
+.btn-primary {
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+}
+
+.btn--primary:hover,
+.btn-primary:hover {
+  background: var(--color-accent-hover);
+}
+
+.btn--accent {
+  background: var(--color-accent-alt);
+  border-color: var(--color-accent-alt);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-label);
+}
+
+.btn--accent:hover {
+  background: var(--color-accent-alt-hover);
+}
+
+.btn--danger,
+.btn-danger {
+  background: var(--color-danger-bg);
+  border-color: var(--color-danger-border);
+  color: var(--color-danger-text);
+}
+
+.btn--block {
+  width: 100%;
+}
+
+@media (hover: none) {
+  .btn,
+  .btn-primary,
+  .btn-danger {
+    min-height: 36px;
+  }
+}
+
+/* ── Card ───────────────────────────────────────────────────────────── */
+
+.card-grid {
+  display: grid;
+  gap: var(--space-3);
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+}
+
+.card {
+  display: flex;
+  flex-direction: column;
+  background: var(--color-surface);
+  border: var(--border-w) solid var(--color-border);
+  box-shadow: var(--shadow-card);
+}
+
+.card__body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-height: 100px;
+  padding: var(--space-4);
+}
+
+.card__title {
+  margin: 0;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+  line-height: var(--leading-tight);
+  letter-spacing: var(--tracking-heading);
+}
+
+.card__desc {
+  margin: 0;
+  font-size: var(--text-xs);
+  line-height: var(--leading-tight);
+  letter-spacing: var(--tracking-body);
+}
+
+.card__footer {
+  display: flex;
+  padding: 0 var(--space-4) var(--space-4);
+}
+
+/* ── App list ───────────────────────────────────────────────────────── */
+
+.app-list {
+  box-shadow: var(--shadow-card);
+}
+
+.app-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 40px;
+  padding: var(--space-2) var(--space-4);
+  background: var(--color-surface);
+  border: var(--border-w) solid var(--color-border);
+  margin-bottom: -1px;
+}
+
+.app-row:last-child {
+  margin-bottom: 0;
+}
+
+/* Icon, name and status travel together; the actions cluster is the only
+   thing allowed to break onto its own line in a narrow container. */
+.app-row__main {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.app-row__name {
+  /* A flex item won't shrink below its content width without min-width:0, so
+     without this the ellipsis never engages and long names push the row wide. */
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  font-size: var(--text-sm);
+  line-height: var(--leading-snug);
+  letter-spacing: var(--tracking-name);
+  text-overflow: ellipsis;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.app-row__name:hover {
+  text-decoration: underline;
+}
+
+.app-row__alias {
+  color: var(--color-text-muted);
+  font-size: var(--text-xs);
+}
+
+.app-row__details {
+  margin-left: auto;
+  padding-left: var(--space-4);
+  color: var(--color-text-muted);
+  font-size: var(--text-xs);
+  letter-spacing: var(--tracking-body);
+  text-decoration: none;
+}
+
+.app-row__details:hover {
+  color: var(--color-text);
+  text-decoration: underline;
+}
+
+.status-dot {
+  flex: none;
+  width: 5px;
+  height: 5px;
+  background: var(--color-status-stopped);
+}
+
+[data-status="running"] .status-dot {
+  background: var(--color-status-running);
+}
+
+[data-status="error"] .status-dot {
+  background: var(--color-status-error);
+}
+
+[data-status="building"] .status-dot,
+[data-status="starting"] .status-dot,
+[data-status="removing"] .status-dot {
+  background: var(--color-status-pending);
+}
+
+/* Status words, still rendered as text on the detail page. */
+.status-running {
+  color: #2a8c00;
+  font-weight: var(--weight-semibold);
+}
+
+.status-error {
+  color: var(--color-danger-text);
+  font-weight: var(--weight-semibold);
+}
+
+.status-stopped {
+  color: var(--color-text-muted);
+}
+
+.status-building,
+.status-starting,
+.status-removing {
+  color: #a4700a;
+}
+
+/* ── Search ─────────────────────────────────────────────────────────── */
+
+.search {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.search__icon {
+  position: absolute;
+  left: 6px;
+  width: 14px;
+  height: 14px;
+  opacity: 0.8;
+  pointer-events: none;
+}
+
+input.search__input {
+  width: 26px;
+  max-width: 50vw;
+  padding-left: 26px;
+  background: transparent;
+  border-color: transparent;
+  cursor: pointer;
+  transition: width 0.15s ease, background-color 0.15s ease, border-color 0.15s ease;
+}
+
+input.search__input:focus,
+input.search__input:not(:placeholder-shown) {
+  width: 200px;
+  background: var(--color-surface-raised);
+  border-color: var(--color-border);
+  cursor: text;
+}
+
+/* ── Spec list (responsive replacement for key/value tables) ────────── */
+
+.spec {
+  container-type: inline-size;
+  margin: var(--space-4) 0;
+}
+
+.spec-list {
+  display: grid;
+  grid-template-columns: minmax(8rem, 13rem) 1fr;
+  gap: var(--space-2) var(--space-4);
+  margin: 0;
+  font-size: var(--text-xs);
+}
+
+.spec-list dt {
+  color: var(--color-text-subtle);
+}
+
+.spec-list dd {
+  margin: 0;
+  word-break: break-word;
+}
+
+@container (max-width: 34rem) {
+  .spec-list {
+    grid-template-columns: 1fr;
+    gap: var(--space-1);
+  }
+
+  .spec-list dd {
+    margin-bottom: var(--space-3);
+  }
+}
+
+/* ── Misc ───────────────────────────────────────────────────────────── */
+
+.empty {
+  padding: var(--space-6);
+  background: var(--color-surface);
+  border: var(--border-w) solid var(--color-border);
+  box-shadow: var(--shadow-card);
+  font-size: var(--text-xs);
+  text-align: center;
+}
+
+.app-link {
+  font-weight: var(--weight-semibold);
+  text-decoration: none;
+}
+
+.app-link:hover {
+  text-decoration: underline;
+}
+
+.toast {
+  position: fixed;
+  bottom: calc(var(--grass-height) + var(--space-4));
+  right: var(--space-4);
+  max-width: 28em;
+  padding: var(--space-4);
+  background: var(--color-surface-raised);
+  border: var(--border-w) solid var(--color-border);
+  border-left: 4px solid var(--color-status-pending);
+  box-shadow: var(--shadow-card);
+  font-size: var(--text-xs);
+  z-index: 1000;
+}
+
+.toast p {
+  margin: 0 0 var(--space-3);
+}
+
+.toast .toast-actions {
+  display: flex;
+  gap: var(--space-2);
+}
+
+@media (max-width: 640px) {
+  .toast {
+    left: var(--space-4);
+    right: var(--space-4);
+    max-width: none;
+  }
+}
+
+.pie-slice {
+  stroke: #fff;
+  stroke-width: 1.5;
+}
+
+.pie-slice:hover {
+  filter: brightness(0.88);
+}
+
+.pie-center-name {
+  font-size: 14px;
+  font-weight: var(--weight-semibold);
+  fill: var(--color-text);
+  text-anchor: middle;
+}
+
+.pie-center-size {
+  font-size: 12px;
+  fill: var(--color-text-subtle);
+  text-anchor: middle;
+}
+
+/* Settings and friends still use form-tables; stack them on narrow screens
+   so the label does not squeeze the control into a sliver. */
+table.form-table th {
+  width: 12em;
+  font-weight: var(--weight-medium);
+}
+
+table.form-table input[type="text"],
+table.form-table input[type="password"] {
+  max-width: 24em;
+}
+
+@media (max-width: 640px) {
+  table.form-table,
+  table.form-table tbody,
+  table.form-table tr,
+  table.form-table th,
+  table.form-table td {
+    display: block;
+    width: auto;
+  }
+
+  table.form-table th {
+    border-bottom: 0;
+    font-weight: var(--weight-semibold);
+  }
+
+  table.form-table td {
+    border-top: 0;
+  }
+}
+
+/* ── Panel (single-purpose pages: login, setup, approvals) ──────────── */
+
+.panel {
+  padding: var(--space-6);
+  background: var(--color-surface);
+  border: var(--border-w) solid var(--color-border);
+  box-shadow: var(--shadow-card);
+}
+
+.panel h2 {
+  margin-top: 0;
+}
+
+.field {
+  display: block;
+  margin-bottom: var(--space-4);
+}
+
+.field > span {
+  display: block;
+  margin-bottom: var(--space-1);
+  font-size: var(--text-xs);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+  opacity: 0.8;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-top: var(--space-5);
+}
+
+/* ── Action bar ─────────────────────────────────────────────────────── */
+
+.action-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin: var(--space-4) 0;
+}
+
+.notice {
+  padding: var(--space-3) var(--space-4);
+  background: #e6f2ff;
+  border: var(--border-w) solid #b8d8f5;
+  font-size: var(--text-xs);
+}
+
+/* ── Deploy page ────────────────────────────────────────────────────── */
+
+.catalog-callout {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-5);
+  margin: var(--space-4) 0 var(--space-7);
+  padding: var(--space-5);
+  background: var(--color-surface);
+  border: var(--border-w) solid var(--color-border);
+  box-shadow: var(--shadow-card);
+}
+
+.catalog-callout .callout-icon {
+  font-size: 2em;
+  line-height: 1;
+}
+
+.catalog-callout h3 {
+  margin: 0 0 var(--space-1);
+}
+
+.catalog-callout p {
+  margin: 0;
+  color: var(--color-text-subtle);
+  font-size: var(--text-xs);
+}
+
+.catalog-callout .callout-action {
+  margin-left: auto;
+}
+
+.repo-url-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+}
+
+.repo-url-row input {
+  flex: 1 1 16rem;
+}
+
+details.url-help {
+  margin-top: var(--space-3);
+  color: var(--color-text-subtle);
+  font-size: var(--text-xs);
+}
+
+details.url-help summary {
+  cursor: pointer;
+}
+
+details.url-help ul {
+  margin: var(--space-2) 0 0;
+}
+
+/* ── Sortable table headers (diagnostics) ───────────────────────────── */
+
+th.sortable {
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+
+th.sortable:hover {
+  background: #ececec;
+}
+
+/* ── Usage charts (system info) ─────────────────────────────────────── */
+
+.usage-charts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: var(--space-7);
+  margin: var(--space-2) 0;
+}
+
+.usage-chart {
+  text-align: center;
+}
+
+.usage-chart h3 {
+  margin: 0 0 var(--space-1);
+  font-size: var(--text-sm);
+}
+
+.info-tip {
+  color: var(--color-text-muted);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  cursor: help;
+}
+
+.info-tip:hover,
+.info-tip:focus {
+  color: var(--color-text);
+}

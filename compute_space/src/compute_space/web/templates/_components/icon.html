@@ -1,0 +1,6 @@
+{% macro icon(name, size=16, alt="", class_="") -%}
+<img class="icon{% if class_ %} {{ class_ }}{% endif %}"
+     src="{{ static_url('img/icons/' ~ name ~ '.svg') }}"
+     width="{{ size }}" height="{{ size }}" alt="{{ alt }}"
+     {%- if not alt %} aria-hidden="true"{% endif %}>
+{%- endmacro %}
