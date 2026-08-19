@@ -12,7 +12,11 @@ from litestar import Router
 from litestar import get
 from litestar import post
 from litestar.di import NamedDependency
-from litestar.exceptions import HTTPException
+from litestar.exceptions import InternalServerException
+from litestar.exceptions import NotFoundException
+from litestar.exceptions import PermissionDeniedException
+from litestar.exceptions import ServiceUnavailableException
+from litestar.exceptions import ValidationException
 from litestar.params import FromQuery
 from litestar.response import Redirect
 
@@ -20,14 +24,12 @@ from compute_space.config import Config
 from compute_space.core.auth.auth import read_owner_username
 from compute_space.core.auth.auth import update_owner_username
 from compute_space.core.auth.auth import validate_owner_username
-from compute_space.core.connect import ConnectError
 from compute_space.core.connect import build_connect_url
 from compute_space.core.connect import exchange_code_for_credential
 from compute_space.core.domains import primary_domain
 from compute_space.core.identity_store import get_connect_base_url
 from compute_space.core.identity_store import get_instance_identity
 from compute_space.core.identity_store import set_instance_identity
-from compute_space.core.system_agent import SystemAgentError
 from compute_space.core.system_agent import system_agent_apply
 from compute_space.core.system_agent import system_agent_fetch
 from compute_space.core.system_agent import system_agent_get_remote
@@ -36,6 +38,8 @@ from compute_space.core.system_agent import system_agent_status
 from compute_space.core.updates import trigger_restart
 from compute_space.core.util import not_blank
 from compute_space.web.auth.auth import require_owner_auth
+from compute_space.web.exceptions import BadGatewayException
+from compute_space.web.exceptions import ConflictException
 from openhost_system_agent.protocol import RemoteInfo
 
 # --- request / response types -----------------------------------------------
@@ -82,32 +86,32 @@ class OwnerUsernameResponse:
 # --- routes -----------------------------------------------------------------
 
 
-@get("/api/settings/get-remote", guards=[require_owner_auth])
+@get("/api/settings/get-remote", guards=[require_owner_auth], raises=[InternalServerException])
 async def get_remote() -> RemoteInfo:
     try:
         return await system_agent_get_remote()
-    except SystemAgentError as e:
-        raise HTTPException(detail=str(e), status_code=500) from e
+    except RuntimeError as e:
+        raise InternalServerException(detail="Failed to read the git remote", extra={"output": str(e)}) from e
 
 
-@post("/api/settings/set-remote", status_code=200, guards=[require_owner_auth])
+@post("/api/settings/set-remote", status_code=200, guards=[require_owner_auth], raises=[InternalServerException])
 async def set_remote(data: SetRemoteRequest) -> RemoteInfo:
     try:
         return await system_agent_set_remote(data.url.strip())
-    except SystemAgentError as e:
-        raise HTTPException(detail=str(e), status_code=500) from e
+    except RuntimeError as e:
+        raise InternalServerException(detail="Failed to set the git remote", extra={"output": str(e)}) from e
 
 
 @get("/api/settings/update", guards=[require_owner_auth])
 async def check_for_updates() -> CheckUpdatesResponse:
     try:
         fetch_result = await system_agent_fetch()
-    except SystemAgentError as e:
+    except RuntimeError as e:
         return CheckUpdatesResponse(state=UpdateState.ERROR, error=str(e))
 
     try:
         migration_status = await system_agent_status()
-    except SystemAgentError as e:
+    except RuntimeError as e:
         return CheckUpdatesResponse(state=UpdateState.ERROR, error=str(e))
 
     if not migration_status.ok and migration_status.reason == "behind":
@@ -135,24 +139,31 @@ async def check_for_updates() -> CheckUpdatesResponse:
 _apply_lock = asyncio.Lock()
 
 
-@post("/api/settings/update", status_code=204, guards=[require_owner_auth])
+@post(
+    "/api/settings/update",
+    status_code=204,
+    guards=[require_owner_auth],
+    raises=[ConflictException, InternalServerException],
+)
 async def apply_update() -> None:
     if _apply_lock.locked():
-        raise HTTPException(detail="An update is already in progress.", status_code=409)
+        raise ConflictException(
+            detail="An update is already in progress.", extra={"code": "update_in_progress"}
+        )
 
     async with _apply_lock:
         try:
             migration_status = await system_agent_status()
-        except SystemAgentError as e:
-            raise HTTPException(detail=str(e), status_code=500) from e
+        except RuntimeError as e:
+            raise InternalServerException(detail="Failed to read migration status", extra={"output": str(e)}) from e
 
         if not migration_status.ok and migration_status.reason != "behind":
-            raise HTTPException(detail=migration_status.message, status_code=409)
+            raise ConflictException(detail=migration_status.message, extra={"code": "migrations_not_ok"})
 
         try:
             await system_agent_apply()
-        except SystemAgentError as e:
-            raise HTTPException(detail=str(e), status_code=500) from e
+        except RuntimeError as e:
+            raise InternalServerException(detail="Failed to apply the update", extra={"output": str(e)}) from e
 
 
 @post("/api/settings/restart_compute_space", status_code=204, guards=[require_owner_auth])
@@ -187,7 +198,12 @@ async def connect_imbue_status(
     )
 
 
-@post("/api/settings/connect-imbue/start", status_code=200, guards=[require_owner_auth])
+@post(
+    "/api/settings/connect-imbue/start",
+    status_code=200,
+    guards=[require_owner_auth],
+    raises=[ServiceUnavailableException],
+)
 async def connect_imbue_start(
     config: NamedDependency[Config],
     db: NamedDependency[sqlite3.Connection],
@@ -195,7 +211,9 @@ async def connect_imbue_start(
 ) -> ConnectStartResponse:
     frontend = get_connect_base_url(db)
     if not frontend:
-        raise HTTPException(detail="Connect to Imbue is not available on this deployment", status_code=503)
+        raise ServiceUnavailableException(
+            detail="Connect to Imbue is not available on this deployment", extra={"code": "connect_unavailable"}
+        )
     # The one-time code is returned to this instance's own https origin, so derive
     # it from the request (honoring proxy headers).
     scheme = request.headers.get("x-forwarded-proto") or request.url.scheme
@@ -206,7 +224,12 @@ async def connect_imbue_start(
     return ConnectStartResponse(redirect_url=redirect_url)
 
 
-@get("/api/settings/connect-imbue/callback", guards=[require_owner_auth], sync_to_thread=True)
+@get(
+    "/api/settings/connect-imbue/callback",
+    guards=[require_owner_auth],
+    sync_to_thread=True,
+    raises=[ServiceUnavailableException, BadGatewayException],
+)
 def connect_imbue_callback(
     config: NamedDependency[Config],
     db: NamedDependency[sqlite3.Connection],
@@ -223,14 +246,16 @@ def connect_imbue_callback(
     """
     frontend = get_connect_base_url(db)
     if not frontend:
-        raise HTTPException(detail="Connect to Imbue is not available on this deployment", status_code=503)
+        raise ServiceUnavailableException(
+            detail="Connect to Imbue is not available on this deployment", extra={"code": "connect_unavailable"}
+        )
     if not code.strip():
         return Redirect(path="/settings?connect=error")
     try:
         credential = exchange_code_for_credential(frontend, code.strip())
         set_instance_identity(db, credential)
-    except ConnectError as e:
-        raise HTTPException(detail=str(e), status_code=502) from e
+    except RuntimeError as e:
+        raise BadGatewayException(detail=str(e), extra={"code": "connect_exchange_failed"}) from e
     return Redirect(path="/settings?connect=ok")
 
 
@@ -246,7 +271,12 @@ class ChangePasswordResponse:
     ok: bool
 
 
-@post("/api/settings/change_password", status_code=200, guards=[require_owner_auth])
+@post(
+    "/api/settings/change_password",
+    status_code=200,
+    guards=[require_owner_auth],
+    raises=[ValidationException, NotFoundException, PermissionDeniedException],
+)
 async def change_password(
     data: ChangePasswordRequest, db: NamedDependency[sqlite3.Connection]
 ) -> ChangePasswordResponse:
@@ -255,18 +285,20 @@ async def change_password(
     confirm = data.confirm_password.strip()
 
     if not current or not new_pw:
-        raise HTTPException(detail="All fields required", status_code=400)
+        raise ValidationException(detail="All fields required", extra={"code": "missing_fields"})
     if new_pw != confirm:
-        raise HTTPException(detail="Passwords do not match", status_code=400)
+        raise ValidationException(detail="Passwords do not match", extra={"code": "password_mismatch"})
     if len(new_pw) < 8:
-        raise HTTPException(detail="Password must be at least 8 characters", status_code=400)
+        raise ValidationException(
+            detail="Password must be at least 8 characters", extra={"code": "password_too_short"}
+        )
 
     row = db.execute("SELECT user_id, password_hash FROM users LIMIT 1").fetchone()
     if not row:
-        raise HTTPException(detail="No owner found", status_code=404)
+        raise NotFoundException(detail="No owner found", extra={"code": "owner_not_found"})
 
     if not bcrypt.checkpw(current.encode(), row["password_hash"].encode()):
-        raise HTTPException(detail="Current password is incorrect", status_code=403)
+        raise PermissionDeniedException(detail="Current password is incorrect", extra={"code": "wrong_password"})
 
     new_hash = bcrypt.hashpw(new_pw.encode(), bcrypt.gensalt()).decode()
     db.execute(
@@ -283,21 +315,26 @@ async def get_owner_username(db: NamedDependency[sqlite3.Connection]) -> OwnerUs
     return OwnerUsernameResponse(username=read_owner_username(db))
 
 
-@post("/api/settings/owner_username", status_code=200, guards=[require_owner_auth])
+@post(
+    "/api/settings/owner_username",
+    status_code=200,
+    guards=[require_owner_auth],
+    raises=[ValidationException, InternalServerException],
+)
 async def set_owner_username(
     data: SetOwnerUsernameRequest, db: NamedDependency[sqlite3.Connection]
 ) -> OwnerUsernameResponse:
     error = validate_owner_username(data.username)
     if error is not None:
-        raise HTTPException(detail=error, status_code=400)
+        raise ValidationException(detail=error, extra={"code": "invalid_username"})
 
     try:
         update_owner_username(db, data.username)
         db.commit()
     except ValueError as e:
-        raise HTTPException(detail=str(e), status_code=400) from e
+        raise ValidationException(detail=str(e), extra={"code": "invalid_username"}) from e
     except sqlite3.Error as e:
-        raise HTTPException(detail=f"database error: {e}", status_code=500) from e
+        raise InternalServerException(detail="Failed to save the username", extra={"output": str(e)}) from e
 
     return OwnerUsernameResponse(username=data.username)
 

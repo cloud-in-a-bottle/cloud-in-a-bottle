@@ -8,13 +8,10 @@ relies on.
 
 from __future__ import annotations
 
-import pytest
-
 from compute_space.core.installer import GRANT_KEY_CAPABILITY
 from compute_space.core.installer import GRANT_KEY_REPO_URL_PREFIX
 from compute_space.core.installer import INSTALLER_SERVICE_URL
 from compute_space.core.installer import INSTALL_CAPABILITY
-from compute_space.core.installer import InstallError
 from compute_space.core.installer import check_install_allowed
 
 
@@ -78,18 +75,3 @@ class TestCheckInstallAllowed:
         # The catalog manifest pins this string; if it ever needs to
         # change we should bump the service version too.
         assert INSTALLER_SERVICE_URL == "github.com/imbue-openhost/openhost/services/installer"
-
-
-class TestInstallError:
-    def test_default_status_code(self) -> None:
-        err = InstallError("oops")
-        assert err.message == "oops"
-        assert err.status_code == 400
-
-    def test_custom_status_code(self) -> None:
-        err = InstallError("nope", status_code=401)
-        assert err.status_code == 401
-
-    def test_is_exception(self) -> None:
-        with pytest.raises(InstallError):
-            raise InstallError("boom")

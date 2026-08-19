@@ -163,8 +163,11 @@ def _login_required_redirect(request: Request[Any, Any, Any], exc: NotAuthorized
 
     websocket-type requests should never get here - they start as HTTP requests with `Upgrade: websocket`, and should fail then.
     """
-    if "application/json" in request.headers.get("Accept", ""):
-        return Response(content={"error": exc.detail}, status_code=401)
+    if "application/json" in request.headers.get("Accept", "") or (exc.extra and "authorize_url" in exc.extra):
+        content: dict[str, Any] = {"error": exc.detail}
+        if exc.extra:
+            content["extra"] = exc.extra
+        return Response(content=content, status_code=401)
 
     return login_required_redirect(request)
 

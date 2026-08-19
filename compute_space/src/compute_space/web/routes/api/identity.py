@@ -11,7 +11,8 @@ from litestar import get
 from litestar import post
 from litestar.di import NamedDependency
 from litestar.enums import RequestEncodingType
-from litestar.exceptions import HTTPException
+from litestar.exceptions import ServiceUnavailableException
+from litestar.exceptions import ValidationException
 from litestar.params import Body
 from litestar.response import Redirect
 from litestar.response import Template
@@ -74,13 +75,15 @@ def jwks() -> JwksResponse:
     )
 
 
-@get("/.well-known/openhost-identity", sync_to_thread=False)
+@get("/.well-known/openhost-identity", sync_to_thread=False, raises=[ServiceUnavailableException])
 def openhost_identity(db: NamedDependency[sqlite3.Connection]) -> ZoneIdentityResponse:
     """Public endpoint: expose this zone's identity (domain + public key)."""
     try:
         data = identity.get_zone_identity(db)
     except RuntimeError as e:
-        raise HTTPException(detail="Identity not yet available", status_code=503) from e
+        raise ServiceUnavailableException(
+            detail="Identity not yet available", extra={"code": "identity_unavailable"}
+        ) from e
     return ZoneIdentityResponse(
         domain=data["domain"],
         public_key_pem=data["public_key_pem"],
@@ -88,12 +91,12 @@ def openhost_identity(db: NamedDependency[sqlite3.Connection]) -> ZoneIdentityRe
     )
 
 
-@get("/identity/approve", guards=[require_owner_auth])
+@get("/identity/approve", guards=[require_owner_auth], raises=[ValidationException])
 async def identity_approve(callback: str, app_name: str, requesting_domain: str) -> Template:
     """Show the owner an approval page for a federated login request."""
     parsed = urllib.parse.urlparse(callback)
     if parsed.scheme not in ("https", "http") or not parsed.netloc:
-        raise HTTPException(detail="Invalid callback URL", status_code=400)
+        raise ValidationException(detail="Invalid callback URL", extra={"code": "invalid_callback"})
 
     return Template(
         template_name="identity_approve.html",
@@ -105,7 +108,12 @@ async def identity_approve(callback: str, app_name: str, requesting_domain: str)
     )
 
 
-@post("/identity/approve", status_code=302, guards=[require_owner_auth])
+@post(
+    "/identity/approve",
+    status_code=302,
+    guards=[require_owner_auth],
+    raises=[ValidationException, ServiceUnavailableException],
+)
 async def identity_approve_submit(
     data: Annotated[IdentityApproveForm, Body(media_type=RequestEncodingType.URL_ENCODED)],
     db: NamedDependency[sqlite3.Connection],
@@ -113,13 +121,15 @@ async def identity_approve_submit(
     """Owner approved the login — sign an identity token and redirect back."""
     parsed = urllib.parse.urlparse(data.callback)
     if parsed.scheme not in ("https", "http") or not parsed.netloc:
-        raise HTTPException(detail="Invalid callback URL", status_code=400)
+        raise ValidationException(detail="Invalid callback URL", extra={"code": "invalid_callback"})
 
     try:
         token = identity.sign_identity_token(data.callback, db)
     except RuntimeError as e:
         logger.error("Failed to sign identity token: %s", e)
-        raise HTTPException(detail="Identity service unavailable", status_code=503) from e
+        raise ServiceUnavailableException(
+            detail="Identity service unavailable", extra={"code": "identity_unavailable"}
+        ) from e
 
     separator = "&" if "?" in data.callback else "?"
     encoded_token = urllib.parse.quote(token, safe="")

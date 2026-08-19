@@ -13,7 +13,6 @@ from __future__ import annotations
 
 from urllib.parse import urlencode
 
-import attr
 import httpx
 
 from compute_space.core.tls.keycloak import KeycloakClientCredentials
@@ -23,16 +22,6 @@ CONNECT_CALLBACK_PATH = "/api/settings/connect-imbue/callback"
 
 _CONNECT_START_PATH = "/connect/imbue"
 _CONNECT_EXCHANGE_PATH = "/connect/imbue/exchange"
-
-
-@attr.s(auto_attribs=True, frozen=True)
-class ConnectError(Exception):
-    """The connect exchange with Imbue failed."""
-
-    message: str
-
-    def __str__(self) -> str:
-        return self.message
 
 
 def build_connect_url(frontend_base_url: str, zone: str, instance_base_url: str) -> str:
@@ -56,15 +45,15 @@ def exchange_code_for_credential(
     the owner authorized (see the module docstring). Here we hand it back to Imbue
     over a direct server-to-server call, so the credential itself never travels
     through the owner's browser. Returns the shared per-instance credential; raises
-    ConnectError on any non-200 response or malformed body.
+    RuntimeError on any non-200 response or malformed body.
     """
     url = f"{frontend_base_url.rstrip('/')}{_CONNECT_EXCHANGE_PATH}"
     try:
         resp = httpx.post(url, json={"code": code}, timeout=timeout)
     except httpx.HTTPError as e:
-        raise ConnectError(f"could not reach the Imbue connect endpoint: {e}") from e
+        raise RuntimeError(f"could not reach the Imbue connect endpoint: {e}") from e
     if resp.status_code != 200:
-        raise ConnectError(f"connect exchange failed: HTTP {resp.status_code} {_error_message(resp)}")
+        raise RuntimeError(f"connect exchange failed: HTTP {resp.status_code} {_error_message(resp)}")
     try:
         body = resp.json()
         return KeycloakClientCredentials(
@@ -73,7 +62,7 @@ def exchange_code_for_credential(
             client_secret=str(body["client_secret"]),
         )
     except (ValueError, KeyError, TypeError) as e:
-        raise ConnectError("connect exchange returned a malformed response") from e
+        raise RuntimeError("connect exchange returned a malformed response") from e
 
 
 def _error_message(resp: httpx.Response) -> str:

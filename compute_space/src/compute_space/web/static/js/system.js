@@ -221,7 +221,9 @@ function fetchLogs() {
     .then(function(r) {
       if (!r.ok) {
         return r.json().then(function(d) {
-          return (d.extra && d.extra.reason) || d.detail || 'Failed to load logs.';
+          return responseErrorMessage(d, 'Failed to load logs.');
+        }, function() {
+          return 'Failed to load logs.';
         });
       }
       return r.text();

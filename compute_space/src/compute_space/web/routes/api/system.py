@@ -214,7 +214,7 @@ def compute_space_logs() -> Response[str]:
     log_path = get_log_path()
     if log_path is None:
         # Litestar masks `detail` on 500s, so the operator-actionable reason rides in `extra`.
-        raise ImproperlyConfiguredException(extra={"reason": "Log file not configured"})
+        raise ImproperlyConfiguredException(extra={"output": "Log file not configured"})
     with open(log_path, "rb") as f:
         size = f.seek(0, os.SEEK_END)
         f.seek(max(0, size - _LOG_TAIL_BYTES))

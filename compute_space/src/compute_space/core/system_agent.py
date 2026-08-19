@@ -12,12 +12,8 @@ from openhost_system_agent.protocol import MigrationStatus
 from openhost_system_agent.protocol import RemoteInfo
 
 
-class SystemAgentError(Exception):
-    pass
-
-
 def _run_system_agent(*args: str, timeout: int = 300) -> str:
-    """Run the agent, raising SystemAgentError on failure. Returns stdout."""
+    """Run the agent, raising RuntimeError on failure. Returns stdout."""
     try:
         result = subprocess.run(
             ["sudo", "openhost_system_agent", *args],
@@ -26,9 +22,9 @@ def _run_system_agent(*args: str, timeout: int = 300) -> str:
             timeout=timeout,
         )
     except FileNotFoundError as e:
-        raise SystemAgentError("openhost_system_agent not found on PATH") from e
+        raise RuntimeError("openhost_system_agent not found on PATH") from e
     except subprocess.TimeoutExpired as e:
-        raise SystemAgentError(f"openhost_system_agent timed out after {timeout}s") from e
+        raise RuntimeError(f"openhost_system_agent timed out after {timeout}s") from e
 
     if result.returncode != 0:
         try:
@@ -41,14 +37,14 @@ def _run_system_agent(*args: str, timeout: int = 300) -> str:
         # ansible installs it (install_openhost_units.yml); pre-symlink
         # installs hit this and need to re-run ansible to fix it.
         if "openhost_system_agent: command not found" in str(error):
-            raise SystemAgentError(
+            raise RuntimeError(
                 f"{str(error).strip()}\n"
                 "\n"
                 "The openhost_system_agent binary is not on sudo's PATH. "
                 "Re-running the ansible deploy against this host will reinstall it — "
                 "see https://github.com/imbue-openhost/openhost/blob/main/ansible/readme.md"
             )
-        raise SystemAgentError(str(error))
+        raise RuntimeError(str(error))
 
     return result.stdout
 
@@ -58,12 +54,12 @@ def _call_system_agent_sync[ResultT](result_type: type[ResultT], *args: str, tim
     try:
         raw = json.loads(stdout)
     except (json.JSONDecodeError, ValueError) as e:
-        raise SystemAgentError(f"Invalid JSON from system agent: {stdout}") from e
+        raise RuntimeError(f"Invalid JSON from system agent: {stdout}") from e
 
     try:
         return cattrs.structure(raw, result_type)
     except (cattrs.ClassValidationError, KeyError, TypeError) as e:
-        raise SystemAgentError(f"Unexpected response shape from system agent: {e}") from e
+        raise RuntimeError(f"Unexpected response shape from system agent: {e}") from e
 
 
 @async_wrap

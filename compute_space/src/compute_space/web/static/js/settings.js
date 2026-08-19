@@ -25,7 +25,7 @@ async function checkForUpdates() {
     if (!resp.ok) {
       const err = await resp.json();
       el.innerHTML = '<p class="error">Repo is in an invalid state for updating (no .git perhaps?)</p>'
-        + (err.detail ? '<div class="error-inline">' + esc(err.detail) + '</div>' : '')
+        + (responseErrorMessage(err, '') ? '<div class="error-inline">' + esc(responseErrorMessage(err, '')) + '</div>' : '')
         + '<button onclick="checkForUpdates()" class="btn" style="margin-top:0.5em;">Retry</button>';
       return;
     }
@@ -61,7 +61,7 @@ async function applyUpdate() {
     const resp = await fetch('/api/settings/update', {method: 'POST'});
     if (!resp.ok) {
       const err = await resp.json();
-      el.innerHTML = '<p class="error">' + esc(err.detail || '') + '</p>'
+      el.innerHTML = '<p class="error">' + esc(responseErrorMessage(err, '')) + '</p>'
         + '<button onclick="checkForUpdates()" class="btn" style="margin-top:0.5em;">Retry</button>';
       return;
     }
@@ -159,7 +159,7 @@ async function setRemote() {
     });
     if (!resp.ok) {
       const err = await resp.json();
-      throw new Error(err.detail || 'failed to set remote');
+      throw new Error(responseErrorMessage(err, 'failed to set remote'));
     }
     // Only records the pin — it deliberately does NOT restart. Moving to the new
     // ref is the update walk's job (checkout+migrate+install+restart, in order),
@@ -202,7 +202,7 @@ async function changePassword() {
     });
     if (!resp.ok) {
       const err = await resp.json();
-      throw new Error(err.detail || 'failed to change password');
+      throw new Error(responseErrorMessage(err, 'failed to change password'));
     }
     msg.textContent = 'Password changed successfully';
     msg.className = '';
@@ -237,7 +237,7 @@ async function loadOwnerUsername() {
     const resp = await fetch('/api/settings/owner_username');
     if (!resp.ok) {
       const err = await resp.json();
-      throw new Error(err.detail || 'failed to load');
+      throw new Error(responseErrorMessage(err, 'failed to load'));
     }
     const data = await resp.json();
     savedUsername = data.username || '';
@@ -303,7 +303,7 @@ async function setOwnerUsername() {
     });
     if (!resp.ok) {
       const err = await resp.json();
-      throw new Error(err.detail || 'failed to save');
+      throw new Error(responseErrorMessage(err, 'failed to save'));
     }
     const data = await resp.json();
     savedUsername = data.username;
@@ -350,12 +350,11 @@ function dropBuildCache() {
   msg.textContent = 'Dropping cache...';
 
   fetch('/api/drop-docker-cache', {method: 'POST', credentials: 'same-origin'})
-    .then(function(r) { return r.json().then(function(d) { return {ok: r.ok, data: d}; }); })
+    .then(readJsonResponse)
     .then(function(res) {
       if (!res.ok) {
         msg.className = 'error';
-        var output = res.data.extra && res.data.extra.output;
-        msg.textContent = 'Drop failed: ' + (output || res.data.detail);
+        msg.textContent = 'Drop failed: ' + responseErrorMessage(res.data, 'unknown error');
         return;
       }
       var data = res.data;
@@ -585,11 +584,11 @@ function testArchiveConnection() {
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify(_archiveBackendBody()),
   })
-    .then(function(r) { return r.json().then(function(b) { return [r.status, b]; }); })
-    .then(function(pair) {
-      var ok = pair[0] === 200 && pair[1].ok;
-      msg.style.color = ok ? '#16a34a' : '#dc3545';
-      msg.textContent = ok ? 'Bucket reachable' : ('Failed: ' + (pair[1].error || ''));
+    .then(readJsonResponse)
+    .then(function(res) {
+      msg.style.color = res.ok ? '#16a34a' : '#dc3545';
+      if (res.ok) { msg.textContent = 'Bucket reachable'; return; }
+      msg.textContent = 'Failed: ' + responseErrorMessage(res.data, '');
     })
     .catch(function(err) {
       msg.style.color = '#dc3545';
@@ -613,13 +612,13 @@ function submitConfigure() {
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify(_archiveBackendBody()),
   })
-    .then(function(r) { return r.json().then(function(b) { return [r.status, b]; }); })
-    .then(function(pair) {
-      if (pair[0] === 200) {
+    .then(readJsonResponse)
+    .then(function(res) {
+      if (res.ok) {
         loadArchiveBackend();
       } else {
         msg.style.color = '#dc3545';
-        msg.textContent = 'Failed: ' + (pair[1].error || pair[1]);
+        msg.textContent = 'Failed: ' + responseErrorMessage(res.data, '');
         document.getElementById('ab-submit-btn').disabled = false;
       }
     })
@@ -685,7 +684,7 @@ async function connectImbue() {
     const resp = await fetch('/api/settings/connect-imbue/start', { method: 'POST' });
     if (!resp.ok) {
       const err = await resp.json();
-      throw new Error(err.detail || 'failed to start');
+      throw new Error(responseErrorMessage(err, 'failed to start'));
     }
     const data = await resp.json();
     // Hand off to Imbue to authorize; it returns to this instance's callback,

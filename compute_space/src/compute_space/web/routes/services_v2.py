@@ -35,7 +35,12 @@ from litestar import route
 from litestar import websocket
 from litestar.datastructures import MutableScopeHeaders
 from litestar.di import NamedDependency
+from litestar.exceptions import ClientException
+from litestar.exceptions import HTTPException
 from litestar.exceptions import NotAuthorizedException
+from litestar.exceptions import NotFoundException
+from litestar.exceptions import PermissionDeniedException
+from litestar.exceptions import ServiceUnavailableException
 from litestar.params import FromPath
 from litestar.response import Response
 from litestar.response.base import ASGIResponse
@@ -54,16 +59,15 @@ from compute_space.core.installer import GRANT_KEY_REPO_URL_PREFIX
 from compute_space.core.installer import INSTALLER_SERVICE_URL
 from compute_space.core.installer import INSTALLER_SERVICE_VERSION
 from compute_space.core.installer import INSTALL_CAPABILITY
-from compute_space.core.installer import InstallError
 from compute_space.core.installer import check_install_allowed
 from compute_space.core.installer import install_from_repo_url
 from compute_space.core.manifest import parse_manifest_from_string
-from compute_space.core.services_v2 import ServiceNotAvailable
-from compute_space.core.services_v2 import ShortnameNotDeclared
+from compute_space.core.oauth import OAuthRequired
 from compute_space.core.services_v2 import lookup_shortname
 from compute_space.core.services_v2 import resolve_provider
 from compute_space.web.auth.auth import require_app_auth
 from compute_space.web.auth.auth import verify_app_auth
+from compute_space.web.exceptions import ConflictException
 from compute_space.web.helpers.proxy import proxy_http_request
 from compute_space.web.helpers.proxy import proxy_websocket_request
 
@@ -78,21 +82,8 @@ _HTTP_METHODS = [
 ]
 
 
-def _json_error(error: str, message: str, status: int) -> Response[dict[str, Any]]:
-    return Response(content={"error": error, "message": message}, status_code=status, media_type=MediaType.JSON)
-
-
 def _json_ok(body: dict[str, Any]) -> Response[dict[str, Any]]:
     return Response(content=body, status_code=200, media_type=MediaType.JSON)
-
-
-def _asgi_json_error(error: str, message: str, status: int) -> ASGIResponse:
-    """JSON error as an already-encoded ASGIResponse — for handlers that return ASGIResponse."""
-    return ASGIResponse(
-        body=json.dumps({"error": error, "message": message}).encode(),
-        status_code=status,
-        media_type=MediaType.JSON,
-    )
 
 
 def _build_permissions_header(consumer_app_id: str, service_url: str, provider_app_id: str) -> str:
@@ -196,7 +187,7 @@ def _add_cors_response_headers(response: ASGIResponse, request: Request[Any, Any
             response.headers.add(k, v)
 
 
-@route(_CALL_PATH, http_method=[HttpMethod.OPTIONS])
+@route(_CALL_PATH, http_method=[HttpMethod.OPTIONS], raises=[PermissionDeniedException])
 async def service_call_cors(
     request: Request[Any, Any, Any],
     shortname: FromPath[str],
@@ -208,7 +199,7 @@ async def service_call_cors(
     # block CORS preflight if Origin is not a known app - no auth headers yet but we can at least verify this,
     # to help avoid XSRF from external sites.
     if origin is None or get_app_from_hostname(origin, db) is None:
-        return Response(content="Forbidden", status_code=403, media_type=MediaType.TEXT)
+        raise PermissionDeniedException(detail="Forbidden")
     return Response(content="", status_code=204, headers=_cors_headers(origin))
 
 
@@ -263,7 +254,20 @@ def _service_call_common(
         )
 
 
-@route(_CALL_PATH, http_method=_HTTP_METHODS, guards=[require_app_auth])
+@route(
+    _CALL_PATH,
+    http_method=_HTTP_METHODS,
+    guards=[require_app_auth],
+    raises=[
+        NotFoundException,
+        ServiceUnavailableException,
+        ClientException,
+        NotAuthorizedException,
+        PermissionDeniedException,
+        ConflictException,
+        HTTPException,
+    ],
+)
 async def service_call(
     shortname: FromPath[str],
     rest: FromPath[str],
@@ -279,10 +283,10 @@ async def service_call(
 
     try:
         resolved = _service_call_common(consumer_app_id, shortname, rest, db, provider_app_id=provider_override)
-    except ShortnameNotDeclared as e:
-        return _asgi_json_error("shortname_not_declared", e.message, 404)
-    except ServiceNotAvailable as e:
-        return _asgi_json_error("service_not_available", e.message, 503)
+    except LookupError as e:
+        raise NotFoundException(detail=str(e), extra={"code": "shortname_not_declared"}) from e
+    except RuntimeError as e:
+        raise ServiceUnavailableException(detail=str(e), extra={"code": "service_not_available"}) from e
 
     if isinstance(resolved, InstallerServiceRequest):
         installer_response = await _handle_installer_request(
@@ -324,13 +328,13 @@ async def service_call_ws(
 
     try:
         resolved = _service_call_common(consumer_app_id, shortname, rest, db, provider_app_id=provider_override)
-    except ShortnameNotDeclared as e:
+    except LookupError as e:
         await socket.accept()
-        await socket.close(code=4404, reason=e.message)
+        await socket.close(code=4404, reason=str(e))
         return
-    except ServiceNotAvailable as e:
+    except RuntimeError as e:
         await socket.accept()
-        await socket.close(code=4503, reason=e.message)
+        await socket.close(code=4503, reason=str(e))
         return
 
     if isinstance(resolved, InstallerServiceRequest):
@@ -346,7 +350,7 @@ async def service_call_ws(
     )
 
 
-@get("/api/services/v2/oauth_callback")
+@get("/api/services/v2/oauth_callback", raises=[ClientException, ServiceUnavailableException])
 async def oauth_callback_proxy_v2(request: Request[Any, Any, Any]) -> ASGIResponse:
     """Proxy OAuth provider callbacks to the correct oauth service app.
 
@@ -361,22 +365,26 @@ async def oauth_callback_proxy_v2(request: Request[Any, Any, Any]) -> ASGIRespon
     """
     state_raw = request.query_params.get("state", "")
     if not state_raw:
-        return _asgi_json_error("bad_request", "Missing state parameter", 400)
+        raise ClientException(detail="Missing state parameter", extra={"code": "bad_request"})
 
     try:
         state = json.loads(state_raw)
-    except json.JSONDecodeError:
-        return _asgi_json_error("bad_request", "Invalid state parameter", 400)
+    except json.JSONDecodeError as e:
+        raise ClientException(detail="Invalid state parameter", extra={"code": "bad_request"}) from e
 
     app_name = state.get("app")
     if not app_name or not isinstance(app_name, str):
-        return _asgi_json_error("bad_request", "Missing app in state", 400)
+        raise ClientException(detail="Missing app in state", extra={"code": "bad_request"})
 
     app_row = find_app_by_name(app_name)
     if not app_row:
-        return _asgi_json_error("service_not_available", f"App '{app_name}' not found", 503)
+        raise ServiceUnavailableException(
+            detail=f"App '{app_name}' not found", extra={"code": "service_not_available"}
+        )
     if app_row.status != "running":
-        return _asgi_json_error("service_not_available", f"App '{app_name}' is not running", 503)
+        raise ServiceUnavailableException(
+            detail=f"App '{app_name}' is not running", extra={"code": "service_not_available"}
+        )
 
     return await proxy_http_request(request, target_port=app_row.local_port, override_path="/callback")
 
@@ -412,13 +420,14 @@ async def _handle_installer_request(
     """
     try:
         spec = SpecifierSet(version_spec)
-    except InvalidSpecifier:
-        return _json_error("bad_request", f"Invalid version specifier: {version_spec}", 400)
+    except InvalidSpecifier as e:
+        raise ClientException(
+            detail=f"Invalid version specifier: {version_spec}", extra={"code": "bad_request"}
+        ) from e
     if Version(INSTALLER_SERVICE_VERSION) not in spec:
-        return _json_error(
-            "service_not_available",
-            f"installer version {INSTALLER_SERVICE_VERSION} does not match {version_spec}",
-            503,
+        raise ServiceUnavailableException(
+            detail=f"installer version {INSTALLER_SERVICE_VERSION} does not match {version_spec}",
+            extra={"code": "service_not_available"},
         )
 
     method = str(request.method)
@@ -427,51 +436,59 @@ async def _handle_installer_request(
     if method == "POST" and parts == ["install"]:
         try:
             body = await request.json()
-        except Exception:
-            return _json_error("bad_request", "request body must be JSON object", 400)
+        except Exception as e:
+            raise ClientException(detail="request body must be JSON object", extra={"code": "bad_request"}) from e
         if not isinstance(body, dict):
-            return _json_error("bad_request", "request body must be JSON object", 400)
+            raise ClientException(detail="request body must be JSON object", extra={"code": "bad_request"})
         repo_url = (body.get("repo_url") or "").strip()
         if not repo_url:
-            return _json_error("bad_request", "repo_url is required", 400)
+            raise ClientException(detail="repo_url is required", extra={"code": "bad_request"})
         app_name = (body.get("app_name") or "").strip() or None
 
         grants = [g.grant for g in get_granted_permissions_v2(consumer_app_id, INSTALLER_SERVICE_URL)]
         if (reason := check_install_allowed(repo_url, grants)) is not None:
-            return _installer_permission_denied(consumer_app_id, repo_url, reason, db, config)
+            raise _installer_permission_denied(consumer_app_id, repo_url, reason, db)
 
         try:
             result = await install_from_repo_url(repo_url, config, db, app_name=app_name, installed_by=consumer_app_id)
-        except InstallError as exc:
-            return _json_error("install_failed", exc.message, exc.status_code)
+        except OAuthRequired as exc:
+            raise NotAuthorizedException(
+                detail="GitHub authorization required",
+                extra={"authorize_url": exc.authorize_url},
+            ) from exc
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail=str(exc),
+                extra={"code": "install_failed", "output": str(exc)},
+            ) from exc
         return _json_ok({"ok": True, "app_name": result.app_name, "status": result.status})
 
     if method == "GET" and len(parts) == 2 and parts[0] in ("status", "logs"):
         sub, app_name = parts
-        row, denied = _lookup_consumer_install(consumer_app_id, app_name, db)
-        if denied is not None:
-            return denied
-        assert row is not None
+        row = _lookup_consumer_install(consumer_app_id, app_name, db)
         if sub == "status":
             return _json_ok({"status": row["status"], "error": row["error_message"]})
         logs = get_docker_logs(app_name, config.temporary_data_dir, row["container_id"])
         return Response(content=logs, status_code=200, media_type="text/plain; charset=utf-8")
 
-    return _json_error("bad_request", f"Unknown installer endpoint: {method} /{rest.lstrip('/')}", 404)
+    raise NotFoundException(
+        detail=f"Unknown installer endpoint: {method} /{rest.lstrip('/')}", extra={"code": "bad_request"}
+    )
 
 
-def _lookup_consumer_install(
-    consumer_app_id: str, app_name: str, db: sqlite3.Connection
-) -> tuple[sqlite3.Row | None, Response[dict[str, Any]] | None]:
+def _lookup_consumer_install(consumer_app_id: str, app_name: str, db: sqlite3.Connection) -> sqlite3.Row:
     row = db.execute(
         "SELECT status, error_message, container_id, installed_by FROM apps WHERE name = ?",
         (app_name,),
     ).fetchone()
     if not row:
-        return None, _json_error("not_found", f"app {app_name!r} not found", 404)
+        raise NotFoundException(detail=f"app {app_name!r} not found", extra={"code": "not_found"})
     if row["installed_by"] != consumer_app_id:
-        return None, _json_error("forbidden", f"{consumer_app_id} did not install {app_name!r}", 403)
-    return row, None
+        raise PermissionDeniedException(
+            detail=f"{consumer_app_id} did not install {app_name!r}", extra={"code": "forbidden"}
+        )
+    return row
 
 
 def _proposed_install_grant_from_manifest(
@@ -514,19 +531,20 @@ def _proposed_install_grant_from_manifest(
 
 
 def _installer_permission_denied(
-    consumer_app_id: str, repo_url: str, reason: str, db: sqlite3.Connection, config: Config
-) -> Response[dict[str, Any]]:
+    consumer_app_id: str, repo_url: str, reason: str, db: sqlite3.Connection
+) -> PermissionDeniedException:
     grant = _proposed_install_grant_from_manifest(consumer_app_id, repo_url, db)
-    body = {
-        "error": "permission_required",
-        "message": reason,
-        "required_grant": {
-            "grant": grant,
-            "scope": "global",
-            "grant_url": _approve_grant_url(consumer_app_id, INSTALLER_SERVICE_URL, grant, db),
+    return PermissionDeniedException(
+        detail=reason,
+        extra={
+            "code": "permission_required",
+            "required_grant": {
+                "grant": grant,
+                "scope": "global",
+                "grant_url": _approve_grant_url(consumer_app_id, INSTALLER_SERVICE_URL, grant, db),
+            },
         },
-    }
-    return Response(content=body, status_code=403, media_type=MediaType.JSON)
+    )
 
 
 # ─── Router ─────────────────────────────────────────────────────────────────

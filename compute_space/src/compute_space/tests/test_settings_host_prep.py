@@ -15,7 +15,6 @@ import pytest
 from litestar.exceptions import HTTPException
 
 import compute_space.web.routes.api.settings as settings_mod
-from compute_space.core.system_agent import SystemAgentError
 from openhost_system_agent.protocol import FetchResult
 from openhost_system_agent.protocol import MigrationStatus
 
@@ -98,7 +97,7 @@ async def test_check_for_updates_migration_missing_is_error(monkeypatch: pytest.
 @pytest.mark.asyncio
 async def test_check_for_updates_agent_unreachable(monkeypatch: pytest.MonkeyPatch) -> None:
     async def fake_fetch() -> FetchResult:
-        raise SystemAgentError("agent down")
+        raise RuntimeError("agent down")
 
     monkeypatch.setattr(settings_mod, "system_agent_fetch", fake_fetch)
 

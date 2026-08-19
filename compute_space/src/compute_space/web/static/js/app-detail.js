@@ -25,7 +25,7 @@ function saveName() {
   })
     .then(function(r) { return r.json().then(function(d) { return {ok: r.ok, data: d}; }); })
     .then(function(res) {
-      if (!res.ok) { errEl.textContent = res.data.error; return; }
+      if (!res.ok) { errEl.textContent = responseErrorMessage(res.data, 'Failed to rename app'); return; }
       // The detail URL is keyed by name, so a rename changes it.
       window.location.href = '/app_detail/' + encodeURIComponent(res.data.name);
     });
@@ -57,8 +57,8 @@ function saveRemote() {
   })
     .then(function(r) { return r.json().then(function(d) { return {ok: r.ok, data: d}; }); })
     .then(function(res) {
-      if (!res.ok || (res.data && res.data.error)) {
-        errEl.textContent = (res.data && res.data.error) || 'Failed to save';
+      if (!res.ok) {
+        errEl.textContent = responseErrorMessage(res.data, 'Failed to save');
         return;
       }
       // Upstream persisted; now pull the new ref and rebuild. Reuses the
@@ -120,8 +120,8 @@ function appAction(url, data, opts) {
         }
         return;
       }
-      if (!res.ok || (res.data && res.data.error)) {
-        var msg = (res.data && res.data.error) || 'Request failed';
+      if (!res.ok) {
+        var msg = responseErrorMessage(res.data, 'Request failed');
         if (clear) clear(msg);
         alert(msg);
         return;
@@ -176,9 +176,13 @@ function showToast(message, actions) {
 function clearCacheAndReload() {
     showToast('Clearing build cache...', []);
     fetch(config.dropBuildCacheUrl, {method: 'POST', credentials: 'same-origin'})
-        .then(function(r) { return r.json(); })
-        .then(function(data) {
-            if (!data.ok) { alert('Failed to clear cache: ' + (data.error || 'unknown error')); return; }
+        .then(readJsonResponse)
+        .then(function(res) {
+            if (!res.ok) {
+                var data = res.data;
+                alert('Failed to clear cache: ' + responseErrorMessage(data, 'unknown error'));
+                return;
+            }
             appAction(config.reloadAppUrl, null, {label: 'Reloading'});
         })
         .catch(function() { alert('Failed to clear cache'); });
@@ -207,7 +211,16 @@ function clearCacheAndReload() {
 
     function fetchLogs() {
         fetch(config.appLogsUrl)
-            .then(function(r) { return r.text(); })
+            .then(function(r) {
+                if (!r.ok) {
+                    return r.json().then(function(data) {
+                        return responseErrorMessage(data, 'Failed to load logs.');
+                    }, function() {
+                        return 'Failed to load logs.';
+                    });
+                }
+                return r.text();
+            })
             .then(function(text) { updateLog(logEl, text); });
     }
 
