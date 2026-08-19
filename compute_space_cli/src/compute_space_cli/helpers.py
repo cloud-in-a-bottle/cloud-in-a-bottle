@@ -22,6 +22,21 @@ def resolve_app_id_by_name(url: str, token: str, app_name: str) -> str:
     return app_id
 
 
+def error_message(body: object, fallback: str) -> str:
+    """Pull the displayable reason out of an API error body.
+
+    Litestar masks ``detail`` on 500s, so there the reason rides in ``extra.output``.
+    """
+    if not isinstance(body, dict):
+        return fallback
+    extra = body.get("extra")
+    output = extra.get("output") if isinstance(extra, dict) else None
+    if body.get("status_code", 0) >= 500 and isinstance(output, str):
+        return output
+    message = body.get("detail") or output or body.get("error") or body.get("message")
+    return message if isinstance(message, str) else fallback
+
+
 def make_api_request(
     domain: str,
     token: str,
@@ -46,8 +61,7 @@ def make_api_request(
     )
     if not raw and resp.status_code >= 300:
         try:
-            body = resp.json()
-            msg = body.get("error", body.get("message", resp.text))
+            msg = error_message(resp.json(), resp.text)
         except Exception:
             msg = resp.text
         print(f"Error ({resp.status_code}): {msg}", file=sys.stderr)

@@ -1,10 +1,14 @@
-"""Tests for :func:`compute_space_cli.helpers.make_api_request`."""
+"""Tests for :func:`compute_space_cli.helpers.make_api_request` and its error parsing."""
 
 from __future__ import annotations
 
+from typing import Any
 from unittest.mock import MagicMock
 from unittest.mock import patch
 
+import pytest
+
+from compute_space_cli.helpers import error_message
 from compute_space_cli.helpers import make_api_request
 
 
@@ -45,3 +49,19 @@ def test_bearer_header_attached() -> None:
         make_api_request("https://x", "tok-123", "GET", "/api/foo")
         kwargs = mock_req.call_args.kwargs
         assert kwargs["headers"]["Authorization"] == "Bearer tok-123"
+
+
+@pytest.mark.parametrize(
+    ("body", "expected"),
+    [
+        ({"status_code": 400, "detail": "Invalid app name"}, "Invalid app name"),
+        ({"status_code": 503, "detail": "no provider", "extra": {"code": "x"}}, "no provider"),
+        # litestar replaces `detail` on 500s, so the reason has to come from `extra`
+        ({"status_code": 500, "detail": "Internal Server Error", "extra": {"output": "docker died"}}, "docker died"),
+        ({"error": "Not authorized"}, "Not authorized"),
+        ({}, "fallback"),
+        (["not", "a", "dict"], "fallback"),
+    ],
+)
+def test_error_message_reads_displayable_reason(body: Any, expected: str) -> None:
+    assert error_message(body, "fallback") == expected

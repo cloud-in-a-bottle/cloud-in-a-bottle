@@ -92,7 +92,7 @@ class TestHarness:
         assert r.status_code == 200
         result = r.json()
         assert result["service_status"] == 404
-        assert result["service_body"]["error"] == "shortname_not_declared"
+        assert result["service_body"]["extra"]["code"] == "shortname_not_declared"
 
     def test_app_logs(self, stack: OpenhostStack) -> None:
         logs = stack.app_logs()

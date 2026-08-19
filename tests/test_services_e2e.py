@@ -137,4 +137,4 @@ class TestSecretsServiceE2E:
     def test_undeclared_shortname_rejected(self, stack, owner, test_app):
         result = call_service_via_test_app(owner, stack, {"shortname": "not-declared", "path": "get", "payload": {}})
         assert result["service_status"] == 404
-        assert result["service_body"]["error"] == "shortname_not_declared"
+        assert result["service_body"]["extra"]["code"] == "shortname_not_declared"
