@@ -216,6 +216,11 @@ h2.section-title {
   color: var(--color-danger-text);
 }
 
+.btn--danger:hover,
+.btn-danger:hover {
+  background: var(--color-danger-hover);
+}
+
 .btn--block {
   width: 100%;
 }
@@ -602,14 +607,11 @@ table.form-table input[type="password"] {
   margin: var(--space-4) 0;
 }
 
-.notice {
-  padding: var(--space-3) var(--space-4);
-  background: #e6f2ff;
-  border: var(--border-w) solid #b8d8f5;
-  font-size: var(--text-xs);
-}
-
 /* ── Deploy page ────────────────────────────────────────────────────── */
+
+.port-mappings {
+  margin-top: var(--space-4);
+}
 
 .catalog-callout {
   display: flex;

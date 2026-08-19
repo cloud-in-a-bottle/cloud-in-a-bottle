@@ -1,5 +1,8 @@
+import time
 from collections.abc import Callable
 from pathlib import Path
+
+from loguru import logger
 
 WEB_DIR = Path(__file__).resolve().parent.parent
 STATIC_DIR = WEB_DIR / "static"
@@ -18,11 +21,14 @@ def make_static_url(static_dir: Path) -> Callable[[str], str]:
         try:
             mtime = int(path.stat().st_mtime)
         except OSError as exc:
-            # Only reachable when a template names a file that isn't there (a
-            # typo, or an asset deleted without updating its references). Fail
-            # loudly: silently emitting an un-cache-busted URL to a 404 means
-            # the page renders subtly broken instead of telling anyone.
-            raise RuntimeError(f"static_url({filename!r}): no such static file at {path}") from exc
+            # A template naming a file that isn't there.  Log it and carry on: the
+            # only admin surface for this box is these pages, so taking every page
+            # that references a missing asset down to a 500 is worse than one 404.
+            # Version on the current time so the request always reaches the server
+            # -- an un-versioned URL can be served from a cache populated before
+            # the file went missing, hiding the breakage entirely.
+            logger.warning("static_url({!r}): no such static file at {} ({})", filename, path, exc)
+            return f"/static/{filename}?v={int(time.time())}"
         return f"/static/{filename}?v={mtime}"
 
     return static_url

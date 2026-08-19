@@ -43,20 +43,20 @@
   </details>
 </div>
 
-<div id="cloning-status" style="display:none;">
+<div id="cloning-status" hidden>
   <p>Cloning repository&hellip;</p>
 </div>
 
-<div id="installing-status" style="display:none;">
+<div id="installing-status" hidden>
   <p>Installing&hellip;</p>
 </div>
 
-<div id="confirm-section" style="display:none;">
+<div id="confirm-section" hidden>
   <div id="confirm-header"></div>
 
   <table id="manifest-table"></table>
 
-  <div id="port-mappings-section" style="display:none; margin-top:1em;">
+  <div id="port-mappings-section" class="port-mappings" hidden>
     {% call section_head("Port Mappings", level=3) %}{% endcall %}
     <p class="hint">This app declares extra port mappings. You can set specific host ports or leave them as 0 for auto-assignment.</p>
     <table>

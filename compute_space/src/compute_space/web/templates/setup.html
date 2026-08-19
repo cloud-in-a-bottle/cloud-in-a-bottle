@@ -16,7 +16,7 @@
            pattern="[a-z0-9][a-z0-9._\-]{0,29}" maxlength="30"
            aria-describedby="username-hint username-error">
   </label>
-  <p class="field-error" id="username-error" style="display:none;"></p>
+  <p class="field-error" id="username-error" hidden></p>
   <p class="hint" id="username-hint">
     Used by apps you install (PeerTube, Mastodon, etc.) as your
     account name. Leave blank to use the default
@@ -58,12 +58,12 @@
     var err = usernameError(usernameInput.value.trim());
     if (err) {
       usernameErrorEl.textContent = err;
-      usernameErrorEl.style.display = 'block';
+      usernameErrorEl.hidden = false;
       usernameInput.classList.add('invalid');
       usernameInput.setCustomValidity(err);
     } else {
       usernameErrorEl.textContent = '';
-      usernameErrorEl.style.display = 'none';
+      usernameErrorEl.hidden = true;
       usernameInput.classList.remove('invalid');
       usernameInput.setCustomValidity('');
     }

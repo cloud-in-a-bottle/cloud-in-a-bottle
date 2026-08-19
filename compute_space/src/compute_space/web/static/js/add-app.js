@@ -19,8 +19,8 @@ function clearError() {
   document.getElementById('error').hidden = true;
 }
 
-function show(id) { document.getElementById(id).style.display = ''; }
-function hide(id) { document.getElementById(id).style.display = 'none'; }
+function show(id) { document.getElementById(id).hidden = false; }
+function hide(id) { document.getElementById(id).hidden = true; }
 
 async function cloneApp(url) {
   clearError();
@@ -188,8 +188,8 @@ let portDebounceTimers = {};
 function renderPortMappings(mappings) {
   const section = document.getElementById('port-mappings-section');
   const body = document.getElementById('port-mappings-body');
-  if (!mappings.length) { section.style.display = 'none'; return; }
-  section.style.display = '';
+  if (!mappings.length) { section.hidden = true; return; }
+  section.hidden = false;
   portConflicts.clear();
   let html = '';
   for (const pm of mappings) {

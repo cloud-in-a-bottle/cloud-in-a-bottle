@@ -3,15 +3,15 @@ var config = JSON.parse(document.getElementById('page-config').textContent);
 // ─── Rename ───
 
 function editName() {
-  document.getElementById('name-display').style.display = 'none';
-  document.getElementById('name-edit').style.display = '';
+  document.getElementById('name-display').hidden = true;
+  document.getElementById('name-edit').hidden = false;
   document.getElementById('name-input').focus();
   document.getElementById('name-error').textContent = '';
 }
 
 function cancelName() {
-  document.getElementById('name-edit').style.display = 'none';
-  document.getElementById('name-display').style.display = '';
+  document.getElementById('name-edit').hidden = true;
+  document.getElementById('name-display').hidden = false;
 }
 
 function saveName() {
@@ -34,15 +34,15 @@ function saveName() {
 // ─── Edit git upstream ───
 
 function editRemote() {
-  document.getElementById('remote-display').style.display = 'none';
-  document.getElementById('remote-edit').style.display = '';
+  document.getElementById('remote-display').hidden = true;
+  document.getElementById('remote-edit').hidden = false;
   document.getElementById('remote-input').focus();
   document.getElementById('remote-error').textContent = '';
 }
 
 function cancelRemote() {
-  document.getElementById('remote-edit').style.display = 'none';
-  document.getElementById('remote-display').style.display = '';
+  document.getElementById('remote-edit').hidden = true;
+  document.getElementById('remote-display').hidden = false;
 }
 
 function saveRemote() {

@@ -29,7 +29,7 @@
         <a href="{{ app_url(app.name) }}" class="app-link" target="_blank" rel="noopener">{{ app_url(app.name) }}</a>
         {{ button("Edit", onclick="editName()") }}
       </span>
-      <span id="name-edit" style="display:none;">
+      <span id="name-edit" hidden>
         <input type="text" id="name-input" value="{{ app.name }}" style="max-width:15em;">
         {{ button("Save", variant="primary", onclick="saveName()") }}
         {{ button("Cancel", onclick="cancelName()") }}
@@ -47,7 +47,7 @@
         <code>{{ app.repo_url }}</code>
         {{ button("Edit", onclick="editRemote()") }}
       </span>
-      <span id="remote-edit" style="display:none;">
+      <span id="remote-edit" hidden>
         <input type="text" id="remote-input" value="{{ app.repo_url }}"
                placeholder="https://github.com/owner/repo@branch">
         {{ button("Save & update", variant="primary", onclick="saveRemote()") }}
