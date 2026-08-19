@@ -49,51 +49,24 @@ body {
   height: 76px;
 }
 
-/* Each cloud is its own element rather than one background strip, so any of
-   them can be positioned or animated independently. */
+/* One sprite, six placements. Each cloud is its own element rather than a
+   single background strip so any of them can be positioned or animated
+   independently. */
 .cloud {
   position: absolute;
+  left: var(--cloud-x);
+  top: var(--cloud-y);
   width: 6.83%;
   aspect-ratio: 2.671;
-  background-repeat: no-repeat;
-  background-size: 100% 100%;
+  background: url("../img/deco/cloud.svg") no-repeat center / 100% 100%;
 }
 
-.cloud--1 {
-  left: -0.01%;
-  top: 0%;
-  background-image: url("../img/deco/cloud-1.svg");
-}
-
-.cloud--2 {
-  left: 37.76%;
-  top: 0%;
-  background-image: url("../img/deco/cloud-2.svg");
-}
-
-.cloud--3 {
-  left: 75.54%;
-  top: 0%;
-  background-image: url("../img/deco/cloud-3.svg");
-}
-
-.cloud--4 {
-  left: 17.63%;
-  top: 53.43%;
-  background-image: url("../img/deco/cloud-4.svg");
-}
-
-.cloud--5 {
-  left: 55.4%;
-  top: 53.43%;
-  background-image: url("../img/deco/cloud-5.svg");
-}
-
-.cloud--6 {
-  left: 93.18%;
-  top: 53.43%;
-  background-image: url("../img/deco/cloud-6.svg");
-}
+.cloud--1 { --cloud-x: 0%; --cloud-y: 0%; }
+.cloud--2 { --cloud-x: 37.76%; --cloud-y: 0%; }
+.cloud--3 { --cloud-x: 75.54%; --cloud-y: 0%; }
+.cloud--4 { --cloud-x: 17.63%; --cloud-y: 53.43%; }
+.cloud--5 { --cloud-x: 55.4%; --cloud-y: 53.43%; }
+.cloud--6 { --cloud-x: 93.18%; --cloud-y: 53.43%; }
 
 .deco-grass {
   position: fixed;
