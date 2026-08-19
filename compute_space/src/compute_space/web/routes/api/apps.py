@@ -885,12 +885,9 @@ async def remove_app(
         if archive_backend.manifest_uses_archive(app_row["manifest_raw"] or ""):
             raise ServiceUnavailableException(
                 detail=(
-                    "Archive backend is not healthy; refusing to "
-                    "remove an archive-using app's data because the "
-                    "S3-side bytes wouldn't actually be deleted.  "
-                    "Either restore the archive mount and retry, or "
-                    "use keep_data=1 to remove the app while leaving "
-                    "its data in place."
+                    "Archive backend is not healthy; refusing to remove an archive-using app's data because the "
+                    "S3-side bytes wouldn't actually be deleted.  Either restore the archive mount and retry, or use "
+                    "keep_data=1 to remove the app while leaving its data in place."
                 )
             )
 
