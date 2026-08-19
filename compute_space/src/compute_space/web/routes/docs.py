@@ -867,7 +867,11 @@ def docs_slug(slug: FromPath[str]) -> Response[str]:
 
 
 def _require_docs_src() -> None:
-    """Raise the 503 for a broken checkout; return normally when ``docs/src/`` is present."""
+    """Ensure the docs source directory exists.
+
+    Raises:
+        ServiceUnavailableException: If the docs source directory is missing.
+    """
     src = _docs_src_dir()
     if not src.is_dir():
         raise ServiceUnavailableException(
@@ -880,13 +884,24 @@ def _require_docs_src() -> None:
 
 
 def _raw_doc(slug: str) -> Response[str]:
-    """One page's markdown source, verbatim."""
+    """Return one page's markdown source verbatim.
+
+    Raises:
+        NotFoundException: If ``slug`` does not identify a markdown page.
+        ServiceUnavailableException: If the docs source directory is missing.
+    """
     _require_docs_src()
     path = _resolve_doc_path(slug)
     return Response(content=path.read_text(encoding="utf-8"), media_type=MediaType.TEXT)
 
 
 def _render_doc(slug: str) -> Response[str]:
+    """Render one documentation page as HTML.
+
+    Raises:
+        NotFoundException: If ``slug`` does not identify a markdown page.
+        ServiceUnavailableException: If the docs source directory is missing.
+    """
     _require_docs_src()
     path = _resolve_doc_path(slug)
     sections = _read_summary()
