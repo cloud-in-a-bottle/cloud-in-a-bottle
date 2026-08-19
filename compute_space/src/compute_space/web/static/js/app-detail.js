@@ -192,6 +192,9 @@ function clearCacheAndReload() {
 
     var MAX_LOG_CHARS = 2 * 1024 * 1024;
     var logPrimed = false;
+    // Set when a (re)connect's first message arrives; the next flush replaces the pane's
+    // contents in one paint rather than blanking it first (which flashed the scroll to top).
+    var needsReset = false;
 
     // Buffer incoming lines and flush once per animation frame: the backlog arrives
     // one WebSocket message per line, so batching avoids reflowing the <pre> each line.
@@ -216,9 +219,17 @@ function clearCacheAndReload() {
         var text = pending.join('');
         pending = [];
         pendingLen = 0;
-        // A text node leaves existing content and any active selection intact.
-        logEl.appendChild(document.createTextNode(text));
-        logLen += text.length;
+        if (needsReset) {
+            // Replace the stale contents in the same flush that refills them, so the
+            // emptied <pre> never paints on its own and jerks the scroll to the top.
+            needsReset = false;
+            logEl.textContent = text;
+            logLen = text.length;
+        } else {
+            // A text node leaves existing content and any active selection intact.
+            logEl.appendChild(document.createTextNode(text));
+            logLen += text.length;
+        }
         if (logLen > MAX_LOG_CHARS && !hasSelectionIn(logEl)) {
             var trimmed = logEl.textContent.slice(-MAX_LOG_CHARS);
             logEl.textContent = trimmed;
@@ -249,12 +260,12 @@ function clearCacheAndReload() {
         var ws = new WebSocket(proto + '//' + window.location.host + config.appLogsStreamUrl);
         currentWs = ws;
         ws.onmessage = function(e) {
-            // Clear on the first message so the replayed tail replaces the
-            // placeholder (or, on reconnect, stale contents) instead of appending.
+            // First message of a (re)connect replays the tail: drop anything buffered from
+            // the old socket and let the next flush swap in the fresh contents atomically.
             if (!logPrimed) {
-                logEl.textContent = ''; logLen = 0;
-                pending = []; pendingLen = 0;
                 logPrimed = true;
+                needsReset = true;
+                pending = []; pendingLen = 0;
             }
             appendLog(e.data + '\n');
         };
