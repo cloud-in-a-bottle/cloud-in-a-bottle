@@ -209,11 +209,16 @@ class _MemoryGuard:
     async def _run_podman_oom(self, config: Config) -> None:
         """Report each per-app OOM kill, naming the owning app when we can map it.
 
-        ``_parse_podman_event`` raises on an unrecognized shape rather than silently
-        dropping the kill; that surfaces at ``run``'s caller (the loop's handler).
+        A malformed event line is logged and skipped, not propagated: letting the
+        ``ValueError`` escape would fail ``run``'s gather and tear down the sibling
+        host-OOM and pressure detectors, losing far more than the one dropped kill.
         """
         async for line in _follow_lines(_PODMAN_OOM_EVENTS, "Per-app OOM detection"):
-            kill = _parse_podman_event(line)
+            try:
+                kill = _parse_podman_event(line)
+            except ValueError:
+                logger.exception("Skipping unparseable podman OOM event")
+                continue
             rows = _query_container_rows(config)
             self._report_container_ooms([kill], rows)
 

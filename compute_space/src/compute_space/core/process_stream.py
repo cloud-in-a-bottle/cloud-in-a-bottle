@@ -113,15 +113,20 @@ async def stream_process_lines(
     finally:
         _active.discard(proc)
         _terminate(proc)
+        # Shield the reap: _terminate only signals, so wait() must run to actually reap
+        # the child. A cancellation arriving here is a BaseException that suppress(Exception)
+        # wouldn't catch, so a bare ``await proc.wait()`` would leave the signalled child
+        # unreaped. Shielding lets wait() finish reaping in the background while the
+        # CancelledError still propagates, keeping both the reap guarantee and cancellation.
         with contextlib.suppress(Exception):
-            await proc.wait()
+            await asyncio.shield(proc.wait())
         if drain is not None:
             # The child is reaped above, so its stderr is now closed; the drain task
             # reads the last buffered lines, sees EOF, and ends on its own. Await it
             # (rather than cancel) so a normally-exiting child's buffered stderr is
             # fully delivered to the sink instead of being cut off mid-drain.
             with contextlib.suppress(Exception):
-                await drain
+                await asyncio.shield(drain)
 
 
 def cleanup_all() -> None:

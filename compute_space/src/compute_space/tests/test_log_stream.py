@@ -145,6 +145,30 @@ def test_stream_app_logs_building_then_container_appears(monkeypatch: pytest.Mon
     assert chunks == ["building...", "more build output", "=== Container logs ===", "container up"]
 
 
+def test_stream_app_logs_replays_build_log_that_lands_as_build_ends(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The build ended before docker.log ever appeared, so the live follow yields
+    # nothing; the file lands a moment later. The tail must still be replayed (the
+    # replay is a standalone `if not emitted`, not an `elif`), else the viewer is
+    # left with an empty pane.
+    build = tmp_path / "docker.log"
+    build.write_text("late build output")
+
+    async def empty_follow(app_id: str, build_log_path: str) -> AsyncIterator[str]:
+        for line in []:  # an async generator that yields nothing
+            yield line
+
+    monkeypatch.setattr(log_stream, "_follow_build_until_container", empty_follow)
+    _fake_build_stream(monkeypatch, [b"late build output"])
+    # building at connect (so we enter the follow), and no container ever came up.
+    states = iter([("building", None), ("error", None)])
+    _fake_state(monkeypatch, lambda: next(states))
+
+    chunks = asyncio.run(_collect(stream_app_logs("app-1", str(build))))
+    assert chunks == ["late build output"]
+
+
 def test_follow_build_streams_until_eof(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # While the build keeps going, every build line is yielded until the stream ends.
     build = tmp_path / "docker.log"

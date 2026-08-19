@@ -213,19 +213,25 @@ def test_run_podman_oom_reports_kill_and_maps_app() -> None:
     assert "myapp" in warn.call_args.args[1]
 
 
-def test_run_podman_oom_raises_loudly_on_bad_event() -> None:
-    # A shape we can't parse is a dropped kill; it must surface (to the guard loop's
-    # handler), not be swallowed.
+def test_run_podman_oom_skips_bad_event_and_keeps_going() -> None:
+    # A shape we can't parse is logged and skipped, not raised: raising would fail
+    # run()'s gather and take down the sibling detectors. A later valid event still lands.
     guard = _guard()
+    rows = [_app_row(app_id="a1", name="myapp")]  # container_id == "cid"
 
     def fake_follow(argv: list[str], detector: str) -> AsyncIterator[bytes]:
-        return _agen([b'{"unexpected": true}'])
+        return _agen([b'{"unexpected": true}', _oom_event_line("cid", "myapp-ctr")])
 
     with (
         patch("compute_space.core.memory_guard._follow_lines", fake_follow),
-        pytest.raises(ValueError),
+        patch("compute_space.core.memory_guard._query_container_rows", return_value=rows),
+        patch("compute_space.core.memory_guard.logger.exception") as log_exc,
+        patch("compute_space.core.memory_guard.logger.warning") as warn,
     ):
         asyncio.run(guard._run_podman_oom(cast(Config, object())))
+    log_exc.assert_called_once()  # the unparseable line surfaced, not silently dropped
+    assert warn.call_count == 1  # and the loop survived to report the good one
+    assert "myapp" in warn.call_args.args[1]
 
 
 # ─── host OOM (journalctl) ────────────────────────────────────────────────────

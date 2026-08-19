@@ -260,6 +260,7 @@ function clearCacheAndReload() {
         var ws = new WebSocket(proto + '//' + window.location.host + config.appLogsStreamUrl);
         currentWs = ws;
         ws.onmessage = function(e) {
+            if (ws !== currentWs) return;  // superseded by a reset; don't consume the reprime
             // First message of a (re)connect replays the tail: drop anything buffered from
             // the old socket and let the next flush swap in the fresh contents atomically.
             if (!logPrimed) {

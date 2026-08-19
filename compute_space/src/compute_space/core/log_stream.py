@@ -129,12 +129,17 @@ async def stream_app_logs(app_id: str, build_log_path: str) -> AsyncIterator[str
     The app's ``(status, container_id)`` is re-queried while a build is in flight so we
     can hand off from tailing ``docker.log`` to following the container as it comes up.
     """
+    emitted = False
     if _still_building(app_id):
         # Build in flight: follow docker.log live until the container comes up.
         async for line in _follow_build_until_container(app_id, build_log_path):
+            emitted = True
             yield line
-    elif os.path.exists(build_log_path):
-        # Already built: replay the build log's tail once, then show container logs.
+
+    # Replay the build log's tail once if the live follow produced nothing — either the
+    # app was already built, or the build ended before docker.log appeared and it only
+    # landed just now. Guarded on ``emitted`` so a followed build isn't replayed twice.
+    if not emitted and os.path.exists(build_log_path):
         async for raw in stream_process_lines(
             _tail_argv(build_log_path, follow=False), merge_stderr=True, raise_on_error=True
         ):
