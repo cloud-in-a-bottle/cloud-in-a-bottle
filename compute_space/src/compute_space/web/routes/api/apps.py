@@ -221,7 +221,7 @@ def _resolve_app(app_id: str, db: sqlite3.Connection) -> sqlite3.Row:
     """Validate app_id format and load the app row."""
     if not is_valid_app_id(app_id):
         raise ValidationException(detail="Invalid app_id")
-    row = db.execute("SELECT * FROM apps WHERE app_id = ?", (app_id,)).fetchone()
+    row: sqlite3.Row | None = db.execute("SELECT * FROM apps WHERE app_id = ?", (app_id,)).fetchone()
     if not row:
         raise NotFoundException(detail="App not found")
     return row

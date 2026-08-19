@@ -499,7 +499,7 @@ async def _handle_installer_request(
 
 
 def _lookup_consumer_install(consumer_app_id: str, app_name: str, db: sqlite3.Connection) -> sqlite3.Row:
-    row = db.execute(
+    row: sqlite3.Row | None = db.execute(
         "SELECT status, error_message, container_id, installed_by FROM apps WHERE name = ?",
         (app_name,),
     ).fetchone()
