@@ -141,7 +141,7 @@ class TestSecretsServiceE2E:
     def test_undeclared_shortname_rejected(self, stack, owner, test_app):
         result = call_service_via_test_app(owner, stack, {"shortname": "not-declared", "path": "get", "payload": {}})
         assert result["service_status"] == 404
-        assert result["service_body"]["error"] == "shortname_not_declared"
+        assert result["service_body"]["extra"]["code"] == "shortname_not_declared"
 
     def test_add_app_reuses_existing_clone_dir(self, stack, owner):
         """add_app reuses a pre-existing clone_dir from clone_and_get_app_info instead of

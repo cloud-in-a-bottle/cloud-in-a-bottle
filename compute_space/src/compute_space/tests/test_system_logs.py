@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from litestar.exceptions import ServiceUnavailableException
 
 import compute_space.web.routes.api.system as system_api
 
@@ -33,3 +34,14 @@ def test_logs_larger_than_tail_served_from_line_boundary(monkeypatch: pytest.Mon
     # The tail starts at a line boundary, not mid-line.
     assert resp.content.startswith("x" * 99 + "\n")
     assert resp.content.endswith(line)
+
+
+def test_unconfigured_log_path_reports_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(system_api, "get_log_path", lambda: None)
+
+    with pytest.raises(ServiceUnavailableException) as excinfo:
+        system_api.compute_space_logs.fn()
+
+    # 503 keeps `detail` unmasked, unlike the 500 litestar would rewrite.
+    assert excinfo.value.status_code == 503
+    assert excinfo.value.detail == "Log file not configured"

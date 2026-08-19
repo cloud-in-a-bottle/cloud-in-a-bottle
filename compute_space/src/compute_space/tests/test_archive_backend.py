@@ -14,7 +14,6 @@ import pytest
 
 from compute_space.core import apps as apps_mod
 from compute_space.core import archive_backend
-from compute_space.core.archive_backend import BackendConfigureError
 from compute_space.core.archive_backend import configure_backend
 from compute_space.core.archive_backend import juicefs_mount_dir
 from compute_space.core.archive_backend import read_state
@@ -622,7 +621,7 @@ def test_configure_backend_s3_to_s3_refuses_without_source_creds(cfg, db):
     an s3->s3 migration is refused up front rather than losing data."""
     db.execute("UPDATE archive_backend SET backend='s3', s3_bucket=NULL WHERE id=1")
     db.commit()
-    with pytest.raises(BackendConfigureError, match="missing its bucket/credentials"):
+    with pytest.raises(RuntimeError, match="missing its bucket/credentials"):
         configure_backend(
             cfg,
             db,
@@ -793,7 +792,7 @@ def test_configure_backend_s3_to_s3_failopen_restores_old_bucket(cfg, db):
         mock.patch.object(archive_backend, "_reconfigure_volume_storage", side_effect=fake_reconfig),
         mock.patch.object(archive_backend, "_remove_s3_object_prefix") as reclaim,
     ):
-        with pytest.raises(BackendConfigureError):
+        with pytest.raises(RuntimeError):
             configure_backend(
                 cfg,
                 db,
@@ -1044,7 +1043,7 @@ def test_configure_backend_migration_failopen_restores_local(cfg, db):
         mock.patch.object(archive_backend, "_reconfigure_volume_storage", side_effect=fake_reconfig),
         mock.patch.object(archive_backend, "_remove_local_object_store") as rm,
     ):
-        with pytest.raises(BackendConfigureError):
+        with pytest.raises(RuntimeError):
             configure_backend(
                 cfg,
                 db,

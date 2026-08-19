@@ -108,7 +108,7 @@ def test_set_app_remote_rejects_builtin_without_git(cfg: Any, tmp_path: Path) ->
             json={"repo_url": "https://github.com/new/repo"},
         )
     assert resp.status_code == 400, resp.text
-    assert "no git repository" in resp.json()["error"].lower()
+    assert "no git repository" in resp.json()["detail"].lower()
 
 
 @pytest.mark.parametrize(
@@ -127,7 +127,7 @@ def test_set_app_remote_rejects_ssh_url(cfg: Any, tmp_path: Path, ssh_url: str) 
         client.cookies.update(cookies)
         resp = client.post(f"/set_app_remote/{app_id}", json={"repo_url": ssh_url})
     assert resp.status_code == 400, resp.text
-    assert "HTTPS" in resp.json()["error"]
+    assert "HTTPS" in resp.json()["detail"]
 
     db = sqlite3.connect(cfg.db_path)
     try:
@@ -149,7 +149,7 @@ def test_clone_and_get_app_info_rejects_ssh_url(cfg: Any, ssh_url: str) -> None:
         client.cookies.update(cookies)
         resp = client.post("/api/clone_and_get_app_info", json={"repo_url": ssh_url})
     assert resp.status_code == 400, resp.text
-    assert "HTTPS" in resp.json()["error"]
+    assert "HTTPS" in resp.json()["detail"]
 
 
 def test_git_pull_rejects_ssh_url(tmp_path: Path) -> None:

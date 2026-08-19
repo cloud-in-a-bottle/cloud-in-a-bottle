@@ -136,7 +136,7 @@ def test_naming_another_app_grants_that_app_not_the_provider(client: TestClient[
 def test_unknown_consumer_app_name_is_404(client: TestClient[Litestar], db_path: str) -> None:
     response = _grant(client, consumer_app_name="no-such-app")
     assert response.status_code == 404
-    assert "no-such-app" in response.json()["error"]
+    assert "no-such-app" in response.json()["detail"]
     assert _rows(db_path) == []
 
 

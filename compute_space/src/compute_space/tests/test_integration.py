@@ -303,7 +303,7 @@ class TestRouterCore:
             json={"repo_url": "file:///nonexistent/path"},
         )
         assert r.status_code == 400
-        assert "Local path does not exist" in r.json()["error"]
+        assert "Local path does not exist" in r.json()["detail"]
 
     def test_add_app_file_url_non_git_accepted(self, admin_session, config):
         """POST with a file:// URL to a non-git dir with openhost.toml succeeds."""

@@ -9,6 +9,7 @@ import secrets
 from contextlib import closing
 from pathlib import Path
 from typing import Any
+from typing import NoReturn
 
 import bcrypt
 from litestar import Litestar
@@ -20,6 +21,8 @@ from litestar import post
 from litestar.background_tasks import BackgroundTask
 from litestar.di import NamedDependency
 from litestar.di import Provide
+from litestar.exceptions import PermissionDeniedException
+from litestar.openapi import ResponseSpec
 from litestar.plugins.jinja import JinjaTemplateEngine
 from litestar.response import Template
 from litestar.static_files import create_static_files_router
@@ -66,8 +69,8 @@ def _claim_token_required(config: Config) -> bool:
     return config.claim_token_required
 
 
-def _claim_unauthorized() -> Response[str]:
-    return Response(content="Invalid or missing claim token.", status_code=403, media_type=MediaType.TEXT)
+def _claim_unauthorized() -> NoReturn:
+    raise PermissionDeniedException(detail="Invalid or missing claim token.")
 
 
 @get("/")
@@ -78,20 +81,20 @@ async def root_redirect() -> Response[None]:
     return Redirect(path="/setup")
 
 
-@get("/setup")
-async def setup_get(request: Request[Any, Any, Any], config: NamedDependency[Config]) -> Template | Response[str]:
+@get("/setup", raises=[PermissionDeniedException])
+async def setup_get(request: Request[Any, Any, Any], config: NamedDependency[Config]) -> Template:
     claim_token = request.query_params.get("claim", "")
     if _claim_token_required(config) and not _verify_claim_token(claim_token):
-        return _claim_unauthorized()
+        _claim_unauthorized()
     return Template(template_name="setup.html", context={"claim": claim_token})
 
 
-@post("/setup", status_code=200)
+@post("/setup", status_code=200, raises=[PermissionDeniedException])
 async def setup_post(request: Request[Any, Any, Any], config: NamedDependency[Config]) -> Response[Any]:
     form = await request.form()
     form_claim = form.get("claim", "")
     if _claim_token_required(config) and not _verify_claim_token(form_claim):
-        return _claim_unauthorized()
+        _claim_unauthorized()
 
     password = form.get("password", "")
     confirm = form.get("confirm_password", "")
@@ -174,7 +177,11 @@ async def _trigger_restart_after_response() -> None:
     trigger_restart()
 
 
-@get("/health", sync_to_thread=False)
+@get(
+    "/health",
+    sync_to_thread=False,
+    responses={503: ResponseSpec(data_container=dict[str, str], description="The setup service is restarting.")},
+)
 def health() -> Response[dict[str, str]]:
     """Liveness probe.  Returns ``{"status": "ok"}`` (or 503 when restarting)."""
     if is_shutdown_pending() or _setup_completed:

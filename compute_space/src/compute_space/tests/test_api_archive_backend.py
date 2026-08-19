@@ -198,7 +198,7 @@ def test_configure_rejects_invalid_s3_prefix(client: TestClient[Litestar], cooki
         )
         body = resp.json()
         assert resp.status_code == 400, (bad, body)
-        assert "s3_prefix" in body["error"], (bad, body)
+        assert "s3_prefix" in body["detail"], (bad, body)
 
 
 def test_configure_s3_requires_confirm_migrate_s3(
@@ -221,8 +221,9 @@ def test_configure_s3_requires_confirm_migrate_s3(
         json={"s3_bucket": "newbucket", "s3_access_key_id": "a", "s3_secret_access_key": "s"},
     )
     assert resp.status_code == 409
-    assert "confirm_migrate_s3" in resp.json()["error"]
-    assert "oldbucket" in resp.json()["error"]
+    assert "confirm_migrate_s3" in resp.json()["detail"]
+    assert "oldbucket" in resp.json()["detail"]
+    assert resp.json()["extra"] == {"code": "confirm_migrate_s3_required"}
 
 
 def test_configure_s3_to_s3_happy_path(cfg: Any, client: TestClient[Litestar], cookies: dict[str, str]) -> None:
@@ -341,7 +342,7 @@ def test_test_connection_surfaces_errors(client: TestClient[Litestar], cookies: 
             json={"s3_bucket": "b", "s3_access_key_id": "a", "s3_secret_access_key": "s"},
         )
     assert resp.status_code == 400
-    assert "bucket not found" in resp.json()["error"]
+    assert "bucket not found" in resp.json()["detail"]
 
 
 def test_test_connection_succeeds(client: TestClient[Litestar], cookies: dict[str, str]) -> None:
@@ -452,9 +453,8 @@ def test_add_app_allows_archive_app_on_default_local_backend(
         )
     # The archive gate no longer produces a 400/"configure S3" error.
     if resp.status_code == 400:
-        body = resp.json()
-        assert "S3" not in body.get("error", "")
-        assert "archive" not in body.get("error", "").lower()
+        assert "S3" not in resp.text
+        assert "archive" not in resp.text.lower()
     # And it is not blocked as a transient archive-unhealthy 503 either.
     assert resp.status_code != 503
 
@@ -564,7 +564,8 @@ def test_configure_requires_confirm_when_local_has_data(
             json={"s3_bucket": "b", "s3_access_key_id": "a", "s3_secret_access_key": "s"},
         )
     assert resp.status_code == 409, resp.text
-    assert "nextcloud" in resp.json()["error"]
+    assert "nextcloud" in resp.json()["detail"]
+    assert resp.json()["extra"] == {"code": "confirm_migrate_local_required"}
 
     # With confirm -> proceeds (configure_backend is mocked to flip state).
     with (
