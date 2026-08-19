@@ -54,7 +54,6 @@ from compute_space.web.routes.api.settings import api_settings_routes
 from compute_space.web.routes.api.system import system_routes
 from compute_space.web.routes.docs import docs_routes
 from compute_space.web.routes.pages.apps import pages_apps_routes
-from compute_space.web.routes.pages.design import pages_design_routes
 from compute_space.web.routes.pages.login import pages_login_routes
 from compute_space.web.routes.pages.permissions_v2 import pages_permissions_v2_routes
 from compute_space.web.routes.pages.settings import pages_settings_routes
@@ -221,8 +220,11 @@ def create_app(config: Config) -> ASGIApp:
 
     def _install_template_globals(app: Litestar) -> None:
         engine = app.template_engine
-        if isinstance(engine, JinjaTemplateEngine):
-            engine.engine.globals.update(_template_globals(config, static_dir))
+        # Same reasoning as setup_app: the engine is the one configured below,
+        # and skipping the globals would 500 on the first template render
+        # rather than here.
+        assert isinstance(engine, JinjaTemplateEngine), f"expected a Jinja engine, got {type(engine)}"
+        engine.engine.globals.update(_template_globals(config, static_dir))
 
     static_router = create_static_files_router(path="/static", directories=[static_dir])
 
@@ -241,7 +243,6 @@ def create_app(config: Config) -> ASGIApp:
             identity_routes,
             docs_routes,
             pages_apps_routes,
-            pages_design_routes,
             pages_login_routes,
             pages_permissions_v2_routes,
             pages_settings_routes,

@@ -17,8 +17,15 @@
   {% block head %}{% endblock %}
 </head>
 <body>
-  <div class="deco-clouds"></div>
-  <div class="deco-grass"></div>
+  <div class="deco-clouds" aria-hidden="true">
+    <span class="cloud cloud--1"></span>
+    <span class="cloud cloud--2"></span>
+    <span class="cloud cloud--3"></span>
+    <span class="cloud cloud--4"></span>
+    <span class="cloud cloud--5"></span>
+    <span class="cloud cloud--6"></span>
+  </div>
+  <div class="deco-grass" aria-hidden="true"></div>
 
   <div class="layout {% block layout_class %}{% endblock %}">
     <h1 class="banner">

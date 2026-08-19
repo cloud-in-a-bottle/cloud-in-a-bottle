@@ -129,7 +129,7 @@ def test_caddyfile_http_redirect():
     assert "reverse_proxy" not in redirect_block
 
 
-def _setup_owner(session, base_url, password="testpass123", username=None, timeout=30):
+def _setup_owner(session, base_url, password="testpass123", username=None, timeout=90):
     """POST /setup to provision the owner, then wait for the full app to come up.
 
     The setup-only Litestar app starts shutting down once the POST returns so

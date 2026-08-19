@@ -14,11 +14,15 @@ def make_static_url(static_dir: Path) -> Callable[[str], str]:
     """
 
     def static_url(filename: str) -> str:
-        base = f"/static/{filename}"
+        path = static_dir / filename
         try:
-            mtime = int((static_dir / filename).stat().st_mtime)
-        except OSError:
-            return base
-        return f"{base}?v={mtime}"
+            mtime = int(path.stat().st_mtime)
+        except OSError as exc:
+            # Only reachable when a template names a file that isn't there (a
+            # typo, or an asset deleted without updating its references). Fail
+            # loudly: silently emitting an un-cache-busted URL to a 404 means
+            # the page renders subtly broken instead of telling anyone.
+            raise RuntimeError(f"static_url({filename!r}): no such static file at {path}") from exc
+        return f"/static/{filename}?v={mtime}"
 
     return static_url
