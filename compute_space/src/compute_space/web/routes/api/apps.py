@@ -261,7 +261,7 @@ async def _pin_refless_to_landed_branch(repo_url: str | None, repo_path: str) ->
     "/api/clone_and_get_app_info",
     status_code=200,
     guards=[require_owner_auth],
-    raises=[ValidationException, NotAuthorizedException, InternalServerException],
+    raises=[ValidationException, NotAuthorizedException],
 )
 async def clone_and_get_app_info(
     data: CloneRequest,
@@ -322,7 +322,7 @@ async def check_port(
     "/api/add_app",
     status_code=200,
     guards=[require_owner_auth],
-    raises=[ValidationException, NotAuthorizedException, ServiceUnavailableException, InternalServerException],
+    raises=[ValidationException, NotAuthorizedException, ServiceUnavailableException],
 )
 async def api_add_app(
     data: AddAppRequest,

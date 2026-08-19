@@ -37,6 +37,16 @@ def error_message(body: object, fallback: str) -> str:
     return message if isinstance(message, str) else fallback
 
 
+def authorization_url(body: object) -> str | None:
+    """Extract an OAuth URL from current or legacy API error envelopes."""
+    if not isinstance(body, dict):
+        return None
+    extra = body.get("extra")
+    candidate = extra.get("authorize_url") if isinstance(extra, dict) else None
+    candidate = candidate or body.get("authorize_url")
+    return candidate if isinstance(candidate, str) else None
+
+
 def make_api_request(
     domain: str,
     token: str,

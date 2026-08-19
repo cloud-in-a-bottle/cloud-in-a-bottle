@@ -15,6 +15,8 @@ import httpx
 from cappa import Dep
 
 from compute_space_cli import config
+from compute_space_cli.helpers import authorization_url
+from compute_space_cli.helpers import error_message
 from compute_space_cli.helpers import make_api_request
 from compute_space_cli.helpers import resolve_app_id_by_name
 from compute_space_cli.helpers import wait_for_app_removed
@@ -106,8 +108,8 @@ class AppCmd:
         except Exception:
             print(f"Error ({result.status_code}): {result.text[:500]}", file=sys.stderr)
             raise SystemExit(1) from None
-        if result.status_code == 401 and body.get("authorize_url"):
-            auth_url = body["authorize_url"]
+        auth_url = authorization_url(body) if result.status_code == 401 else None
+        if auth_url:
             if auth_url.startswith("//"):
                 proto = cfg.url.split("://")[0]
                 auth_url = f"{proto}:{auth_url}"
@@ -117,10 +119,7 @@ class AppCmd:
             print("\nThen re-run this command.", file=sys.stderr)
             raise SystemExit(1)
         if result.status_code >= 400:
-            print(
-                f"Error ({result.status_code}): {body.get('error', result.text)}",
-                file=sys.stderr,
-            )
+            print(f"Error ({result.status_code}): {error_message(body, result.text)}", file=sys.stderr)
             raise SystemExit(1)
         app_id = body.get("app_id")
         app_name = body.get("app_name")

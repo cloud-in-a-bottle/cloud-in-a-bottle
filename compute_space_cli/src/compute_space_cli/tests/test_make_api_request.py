@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 import pytest
 
+from compute_space_cli.helpers import authorization_url
 from compute_space_cli.helpers import error_message
 from compute_space_cli.helpers import make_api_request
 
@@ -65,3 +66,16 @@ def test_bearer_header_attached() -> None:
 )
 def test_error_message_reads_displayable_reason(body: Any, expected: str) -> None:
     assert error_message(body, "fallback") == expected
+
+
+@pytest.mark.parametrize(
+    ("body", "expected"),
+    [
+        ({"extra": {"authorize_url": "//oauth"}}, "//oauth"),
+        ({"authorize_url": "//legacy-oauth"}, "//legacy-oauth"),
+        ({"extra": {"authorize_url": 123}}, None),
+        ({}, None),
+    ],
+)
+def test_authorization_url_reads_current_and_legacy_envelopes(body: Any, expected: str | None) -> None:
+    assert authorization_url(body) == expected
