@@ -7,13 +7,13 @@ from jinja2 import pass_context
 from jinja2.runtime import Context
 from litestar import HttpMethod
 from litestar import Litestar
-from litestar import MediaType
 from litestar import Request
 from litestar import Response
 from litestar import route
 from litestar.di import Provide
 from litestar.exceptions import HTTPException
 from litestar.exceptions import NotAuthorizedException
+from litestar.exceptions import PermissionDeniedException
 from litestar.exceptions.responses import create_exception_response
 from litestar.plugins.jinja import JinjaTemplateEngine
 from litestar.static_files import create_static_files_router
@@ -149,13 +149,15 @@ def _full_app_bootstrap(config: Config) -> None:
     seed_first_boot(config)
 
 
-@route("/setup", http_method=[HttpMethod.GET, HttpMethod.POST], status_code=403, sync_to_thread=False)
-def setup_already_done() -> Response[str]:
-    return Response(
-        content="This instance has already been set up.",
-        status_code=403,
-        media_type=MediaType.TEXT,
-    )
+@route(
+    "/setup",
+    http_method=[HttpMethod.GET, HttpMethod.POST],
+    status_code=403,
+    sync_to_thread=False,
+    raises=[PermissionDeniedException],
+)
+def setup_already_done() -> None:
+    raise PermissionDeniedException(detail="This instance has already been set up.")
 
 
 def _login_required_redirect(request: Request[Any, Any, Any], exc: NotAuthorizedException) -> Response[Any]:

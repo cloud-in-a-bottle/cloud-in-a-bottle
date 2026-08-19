@@ -70,6 +70,7 @@ from litestar import Response
 from litestar import Router
 from litestar import get
 from litestar.exceptions import NotFoundException
+from litestar.exceptions import ServiceUnavailableException
 from litestar.params import FromPath
 from markdown_it import MarkdownIt
 from markupsafe import escape as html_escape
@@ -691,22 +692,24 @@ def _page_title(slug: str, path: Path) -> str:
 # ─── Routes ─────────────────────────────────────────────────────────
 
 
-@get("/docs", sync_to_thread=False)
+@get("/docs", sync_to_thread=False, raises=[NotFoundException, ServiceUnavailableException])
 def docs_index() -> Response[str]:
     """The docs landing page, served from ``introduction.md``.
 
     Litestar normalises trailing slashes during routing, so this single
     handler serves both ``/docs`` and ``/docs/``.
 
-    Falls back to a 503 (with a clear, operator-actionable
-    message) if the markdown source dir is missing — that
-    shouldn't happen in production but is what tests use to
-    verify the missing-dir path.
+    Raises a 503 with an actionable message if the markdown source
+    directory is missing.
     """
     return _render_doc(_DEFAULT_INDEX)
 
 
-@get("/docs/{slug:str}", sync_to_thread=False)
+@get(
+    "/docs/{slug:str}",
+    sync_to_thread=False,
+    raises=[NotFoundException, ServiceUnavailableException],
+)
 def docs_slug(slug: FromPath[str]) -> Response[str]:
     """Serve ``docs/src/<slug>.md`` rendered to HTML.
 
@@ -721,14 +724,12 @@ def docs_slug(slug: FromPath[str]) -> Response[str]:
 def _render_doc(slug: str) -> Response[str]:
     src = _docs_src_dir()
     if not src.is_dir():
-        return Response(
-            content=(
+        raise ServiceUnavailableException(
+            detail=(
                 "The OpenHost docs source directory is missing on this installation. "
                 f"Expected: {src}.  This usually means the OpenHost code checkout is "
                 "incomplete; reinstalling the openhost service should fix it."
-            ),
-            status_code=503,
-            media_type=MediaType.TEXT,
+            )
         )
     path = _resolve_doc_path(slug)
     sections = _read_summary()

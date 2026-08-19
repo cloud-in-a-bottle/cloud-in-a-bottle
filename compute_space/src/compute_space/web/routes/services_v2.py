@@ -41,6 +41,7 @@ from litestar.exceptions import NotAuthorizedException
 from litestar.exceptions import NotFoundException
 from litestar.exceptions import PermissionDeniedException
 from litestar.exceptions import ServiceUnavailableException
+from litestar.openapi import ResponseSpec
 from litestar.params import FromPath
 from litestar.response import Response
 from litestar.response.base import ASGIResponse
@@ -67,7 +68,6 @@ from compute_space.core.services_v2 import lookup_shortname
 from compute_space.core.services_v2 import resolve_provider
 from compute_space.web.auth.auth import require_app_auth
 from compute_space.web.auth.auth import verify_app_auth
-from compute_space.web.exceptions import ConflictException
 from compute_space.web.helpers.proxy import proxy_http_request
 from compute_space.web.helpers.proxy import proxy_websocket_request
 
@@ -264,9 +264,14 @@ def _service_call_common(
         ClientException,
         NotAuthorizedException,
         PermissionDeniedException,
-        ConflictException,
         HTTPException,
     ],
+    responses={
+        502: ResponseSpec(
+            data_container=str, media_type=MediaType.TEXT, description="The provider app is unavailable."
+        ),
+        504: ResponseSpec(data_container=str, media_type=MediaType.TEXT, description="The provider app timed out."),
+    },
 )
 async def service_call(
     shortname: FromPath[str],
@@ -350,7 +355,16 @@ async def service_call_ws(
     )
 
 
-@get("/api/services/v2/oauth_callback", raises=[ClientException, ServiceUnavailableException])
+@get(
+    "/api/services/v2/oauth_callback",
+    raises=[ClientException, ServiceUnavailableException],
+    responses={
+        502: ResponseSpec(
+            data_container=str, media_type=MediaType.TEXT, description="The OAuth provider app is unavailable."
+        ),
+        504: ResponseSpec(data_container=str, media_type=MediaType.TEXT, description="The OAuth provider app timed out."),
+    },
+)
 async def oauth_callback_proxy_v2(request: Request[Any, Any, Any]) -> ASGIResponse:
     """Proxy OAuth provider callbacks to the correct oauth service app.
 

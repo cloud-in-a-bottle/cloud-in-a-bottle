@@ -18,6 +18,7 @@ from litestar.di import NamedDependency
 from litestar.exceptions import ImproperlyConfiguredException
 from litestar.exceptions import InternalServerException
 from litestar.exceptions import ValidationException
+from litestar.openapi import ResponseSpec
 from litestar.params import FromPath
 from litestar.params import FromQuery
 
@@ -227,7 +228,11 @@ def compute_space_logs() -> Response[str]:
 # ─── Health & Security ─────────────────────────────────────────────────────
 
 
-@get("/health", sync_to_thread=False)
+@get(
+    "/health",
+    sync_to_thread=False,
+    responses={503: ResponseSpec(data_container=HealthRestarting, description="The service is restarting.")},
+)
 def health() -> Response[HealthRestarting] | HealthOk:
     if is_shutdown_pending():
         return Response(content=HealthRestarting(status="restarting"), status_code=503)
