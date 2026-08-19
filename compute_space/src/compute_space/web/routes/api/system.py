@@ -15,8 +15,8 @@ from litestar import delete
 from litestar import get
 from litestar import post
 from litestar.di import NamedDependency
-from litestar.exceptions import ImproperlyConfiguredException
 from litestar.exceptions import InternalServerException
+from litestar.exceptions import ServiceUnavailableException
 from litestar.exceptions import ValidationException
 from litestar.openapi import ResponseSpec
 from litestar.params import FromPath
@@ -208,14 +208,13 @@ _LOG_TAIL_BYTES = 256 * 1024
     guards=[require_owner_auth],
     media_type=MediaType.TEXT,
     sync_to_thread=False,
-    raises=[ImproperlyConfiguredException],
+    raises=[ServiceUnavailableException],
 )
 def compute_space_logs() -> Response[str]:
     """Return the tail (last 256 KiB) of the compute space log file."""
     log_path = get_log_path()
     if log_path is None:
-        # Litestar masks `detail` on 500s, so the operator-actionable reason rides in `extra`.
-        raise ImproperlyConfiguredException(extra={"output": "Log file not configured"})
+        raise ServiceUnavailableException(detail="Log file not configured")
     with open(log_path, "rb") as f:
         size = f.seek(0, os.SEEK_END)
         f.seek(max(0, size - _LOG_TAIL_BYTES))

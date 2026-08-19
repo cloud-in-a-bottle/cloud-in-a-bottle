@@ -226,7 +226,14 @@ def _service_call_common(
     db: sqlite3.Connection,
     provider_app_id: str | None = None,
 ) -> ServiceRequest | InstallerServiceRequest:
-    service_url, version_spec = lookup_shortname(consumer_app_id, shortname, db)
+    """Resolve a consumer's shortname to a proxyable request.
+
+    Only the two resolution calls are translated, so an accidental lookup bug still surfaces as a 500.
+    """
+    try:
+        service_url, version_spec = lookup_shortname(consumer_app_id, shortname, db)
+    except LookupError as e:
+        raise NotFoundException(detail=str(e), extra={"code": "shortname_not_declared"}) from e
 
     if service_url == INSTALLER_SERVICE_URL:
         return InstallerServiceRequest(
@@ -234,9 +241,12 @@ def _service_call_common(
             version_spec=version_spec,
         )
     else:
-        provider_app_id, provider_port, _, provider_endpoint = resolve_provider(
-            service_url, version_spec, db, provider_app_id=provider_app_id
-        )
+        try:
+            provider_app_id, provider_port, _, provider_endpoint = resolve_provider(
+                service_url, version_spec, db, provider_app_id=provider_app_id
+            )
+        except RuntimeError as e:
+            raise ServiceUnavailableException(detail=str(e), extra={"code": "service_not_available"}) from e
         # `rest` is captured as "/sub/path" (leading slash); fold into the
         # provider's endpoint.
         target_path = provider_endpoint.rstrip("/") + "/" + rest.lstrip("/")
@@ -286,12 +296,7 @@ async def service_call(
     consumer_app_id = verify_app_auth(request)
     provider_override = request.headers.get("X-OpenHost-Provider") or None
 
-    try:
-        resolved = _service_call_common(consumer_app_id, shortname, rest, db, provider_app_id=provider_override)
-    except LookupError as e:
-        raise NotFoundException(detail=str(e), extra={"code": "shortname_not_declared"}) from e
-    except RuntimeError as e:
-        raise ServiceUnavailableException(detail=str(e), extra={"code": "service_not_available"}) from e
+    resolved = _service_call_common(consumer_app_id, shortname, rest, db, provider_app_id=provider_override)
 
     if isinstance(resolved, InstallerServiceRequest):
         installer_response = await _handle_installer_request(
@@ -333,13 +338,13 @@ async def service_call_ws(
 
     try:
         resolved = _service_call_common(consumer_app_id, shortname, rest, db, provider_app_id=provider_override)
-    except LookupError as e:
+    except NotFoundException as e:
         await socket.accept()
-        await socket.close(code=4404, reason=str(e))
+        await socket.close(code=4404, reason=e.detail)
         return
-    except RuntimeError as e:
+    except ServiceUnavailableException as e:
         await socket.accept()
-        await socket.close(code=4503, reason=str(e))
+        await socket.close(code=4503, reason=e.detail)
         return
 
     if isinstance(resolved, InstallerServiceRequest):
@@ -362,7 +367,9 @@ async def service_call_ws(
         502: ResponseSpec(
             data_container=str, media_type=MediaType.TEXT, description="The OAuth provider app is unavailable."
         ),
-        504: ResponseSpec(data_container=str, media_type=MediaType.TEXT, description="The OAuth provider app timed out."),
+        504: ResponseSpec(
+            data_container=str, media_type=MediaType.TEXT, description="The OAuth provider app timed out."
+        ),
     },
 )
 async def oauth_callback_proxy_v2(request: Request[Any, Any, Any]) -> ASGIResponse:

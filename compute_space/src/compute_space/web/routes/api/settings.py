@@ -147,9 +147,7 @@ _apply_lock = asyncio.Lock()
 )
 async def apply_update() -> None:
     if _apply_lock.locked():
-        raise ConflictException(
-            detail="An update is already in progress.", extra={"code": "update_in_progress"}
-        )
+        raise ConflictException(detail="An update is already in progress.", extra={"code": "update_in_progress"})
 
     async with _apply_lock:
         try:

@@ -39,8 +39,6 @@ async def check_git_state(repo_path: Path) -> GitState:
         ahead, behind = await count_commits_vs_remote(repo_path)
     except LookupError:
         return GitState.NO_REMOTE
-    except ValueError:
-        raise
 
     if await is_dirty(repo_path):
         return GitState.DIRTY
