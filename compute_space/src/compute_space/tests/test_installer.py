@@ -23,16 +23,16 @@ class TestCheckInstallAllowed:
         grants = [
             {
                 GRANT_KEY_CAPABILITY: INSTALL_CAPABILITY,
-                GRANT_KEY_REPO_URL_PREFIX: "https://github.com/imbue-openhost/",
+                GRANT_KEY_REPO_URL_PREFIX: "https://github.com/cloud-in-a-bottle/",
             },
         ]
-        assert check_install_allowed("https://github.com/imbue-openhost/openhost-catalog", grants) is None
+        assert check_install_allowed("https://github.com/cloud-in-a-bottle/app-catalog", grants) is None
 
     def test_non_matching_prefix_denied(self) -> None:
         grants = [
             {
                 GRANT_KEY_CAPABILITY: INSTALL_CAPABILITY,
-                GRANT_KEY_REPO_URL_PREFIX: "https://github.com/imbue-openhost/",
+                GRANT_KEY_REPO_URL_PREFIX: "https://github.com/cloud-in-a-bottle/",
             },
         ]
         assert check_install_allowed("https://github.com/evil/badapp", grants) is not None
@@ -65,10 +65,10 @@ class TestCheckInstallAllowed:
             {GRANT_KEY_CAPABILITY: "noop", GRANT_KEY_REPO_URL_PREFIX: "*"},
             {
                 GRANT_KEY_CAPABILITY: INSTALL_CAPABILITY,
-                GRANT_KEY_REPO_URL_PREFIX: "https://github.com/imbue-openhost/",
+                GRANT_KEY_REPO_URL_PREFIX: "https://github.com/cloud-in-a-bottle/",
             },
         ]
-        assert check_install_allowed("https://github.com/imbue-openhost/openhost-catalog", grants) is None
+        assert check_install_allowed("https://github.com/cloud-in-a-bottle/app-catalog", grants) is None
         assert check_install_allowed("https://github.com/other/", grants) is not None
 
     def test_service_url_constant_is_stable(self) -> None:

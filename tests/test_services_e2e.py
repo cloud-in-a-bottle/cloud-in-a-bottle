@@ -16,18 +16,22 @@ Run:
     pixi run -e dev pytest tests/test_services_e2e.py -v -s -x --run-containers --timeout=900
 """
 
+import os
+
 import pytest
 
 from compute_space import OPENHOST_PROJECT_DIR
 from compute_space.tests.local_stack import LocalStack
+from compute_space.tests.local_stack import clone_and_get_app_info
 from compute_space.tests.local_stack import complete_setup
+from compute_space.tests.local_stack import create_bare_git_repo
 from compute_space.tests.local_stack import deploy_app
 from compute_space.tests.local_stack import make_local_stack_config
 from compute_space.tests.utils import managed_router
 
 ROUTER_PORT = 28180
 
-SECRETS_REPO_URL = "https://github.com/imbue-openhost/secrets"
+SECRETS_REPO_URL = "https://github.com/cloud-in-a-bottle/secrets"
 SECRETS_SERVICE_URL = "github.com/imbue-openhost/openhost/services/secrets"
 TEST_APP_REPO_URL = f"file://{OPENHOST_PROJECT_DIR / 'apps' / 'test_app'}"
 
@@ -138,3 +142,26 @@ class TestSecretsServiceE2E:
         result = call_service_via_test_app(owner, stack, {"shortname": "not-declared", "path": "get", "payload": {}})
         assert result["service_status"] == 404
         assert result["service_body"]["extra"]["code"] == "shortname_not_declared"
+
+    def test_add_app_reuses_existing_clone_dir(self, stack, owner):
+        """add_app reuses a pre-existing clone_dir from clone_and_get_app_info instead of
+        re-cloning, and the result is a real git clone (has .git), not a copy.
+
+        TEST_APP_REPO_URL has no .git dir itself, so clone_and_read_manifest would take
+        the shutil.copytree fallback path instead of a real clone -- build a bare repo so
+        this actually exercises the git-clone path, not just the plain-directory-copy path.
+        """
+        bare_path = os.path.join(stack.config.temporary_data_dir, "test-app-clonedir.git")
+        create_bare_git_repo(str(OPENHOST_PROJECT_DIR / "apps" / "test_app"), bare_path)
+        repo_url = f"file://{bare_path}"
+
+        clone_dir, app_name = clone_and_get_app_info(owner, stack, repo_url)
+        assert app_name == "test-app"
+
+        deployed_app_name = "test-app-clonedir"
+        deploy_app(owner, stack, repo_url, app_name=deployed_app_name, clone_dir=clone_dir)
+
+        repo_dir = os.path.join(stack.config.temporary_data_dir, "app_temp_data", deployed_app_name, "repo")
+        assert os.path.isdir(os.path.join(repo_dir, ".git")), (
+            ".git directory not found — app may have been copied instead of cloned"
+        )

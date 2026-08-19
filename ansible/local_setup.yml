@@ -8,7 +8,7 @@
 #   ansible-playbook ansible/local_setup.yml -e domain=<domain> -e public_ip=<ip> --connection=local -i localhost,
 #
 # Privilege model: provision.sh runs as root. In setup.yml, the "Setup
-# OpenHost" play runs as user=host (SSH'd in as host) with become=yes
+# Cloud in a Bottle" play runs as user=host (SSH'd in as host) with become=yes
 # for tasks that need root. Here we invert that: the play runs as root
 # and we use become/become_user=host for the pixi and service tasks
 # that should run as host. The pixi.yml tasks that use become: yes
@@ -25,6 +25,7 @@
     - import_tasks: tasks/apt_packages.yml
     - import_tasks: tasks/containers.yml
     - import_tasks: tasks/journald.yml
+    - import_tasks: tasks/swap.yml
 
 - name: Dev environment
   hosts: localhost
@@ -39,7 +40,7 @@
 # pixi.yml needs to run as host for pixi install, but escalate to root
 # for setcap. In local mode (running as root), we set become_user=host
 # at the play level. Tasks with become: yes override this back to root.
-- name: Setup OpenHost (pixi + service)
+- name: Setup Cloud in a Bottle (pixi + service)
   hosts: localhost
   connection: local
   become: yes

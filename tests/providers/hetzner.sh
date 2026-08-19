@@ -1,5 +1,5 @@
 #!/bin/bash
-# Hetzner Cloud provider for OpenHost e2e tests.
+# Hetzner Cloud provider for Cloud in a Bottle e2e tests.
 #
 # Implements the provider interface: provider_create, provider_teardown,
 # provider_env_vars.

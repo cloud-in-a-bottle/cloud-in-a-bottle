@@ -1,7 +1,7 @@
 #!/bin/sh
-# Reclaim ownership of the host's OpenHost trees for the host user, so files a
+# Reclaim ownership of the host's Cloud in a Bottle trees for the host user, so files a
 # root-run update left behind can't brick the host-user service. Run as root
-# before the host `git`/`pixi run`. Managed by OpenHost; keep byte-identical
+# before the host `git`/`pixi run`. Managed by Cloud in a Bottle; keep byte-identical
 # with RECLAIM_SCRIPT in the openhost_system_agent baseline (v0002_baseline.py).
 # Best-effort: one overall timeout, failure swallowed, so it can't block startup.
 # shellcheck disable=SC2016  # $dir is expanded by the inner `sh -c`, not here.

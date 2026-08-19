@@ -57,6 +57,32 @@
     host_uid: "{{ ansible_facts['getent_passwd'].host[1] }}"
   register: service_file
 
+# Drop-in that adds the host user to the systemd-journal group so the memory
+# guard can read the kernel log (journalctl --dmesg) for host-level OOM detection.
+# Additive — it layers onto openhost.service without touching the main unit; kept
+# byte-identical with the JOURNAL_READ_DROPIN constant in the system agent's v0010
+# migration, which installs the same file on existing hosts during self-update.
+#
+# Create the drop-in directory first: the `copy` module (unlike the migration's
+# write_file, which mkdir -p's) does not create parent dirs, so without this the
+# copy fails on a fresh host with "Destination directory ... does not exist".
+- name: Ensure openhost drop-in directory exists
+  become: yes
+  become_user: root
+  file:
+    path: /etc/systemd/system/openhost.service.d
+    state: directory
+    mode: "0755"
+
+- name: Install openhost journal-read drop-in
+  become: yes
+  become_user: root
+  copy:
+    src: files/openhost.service.d/10-journal-read.conf
+    dest: /etc/systemd/system/openhost.service.d/10-journal-read.conf
+    mode: "0644"
+  register: journal_dropin_file
+
 # JuiceFS archive-tier mount: a dedicated systemd service with
 # Restart=always so the FUSE mount recovers automatically if the
 # JuiceFS process is OOM-killed or crashes.  Installed disabled;
@@ -76,7 +102,7 @@
   become_user: root
   systemd:
     daemon_reload: yes
-  when: service_file.changed or juicefs_service_file.changed
+  when: service_file.changed or juicefs_service_file.changed or journal_dropin_file.changed
 
 # Enabling openhost is deliberately NOT done here — see the note at the top of
 # this file. It happens in tasks/restart_openhost_service.yml alongside the

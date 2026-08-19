@@ -69,7 +69,7 @@ If permission is needed to access the service, a 403 is returned - see the Permi
 
 ### Provider selection
 
-Each service URL has a configured default provider - by default it's first app installed providing that service, but can be configured in openhost's settings.
+Each service URL has a configured default provider - by default it's first app installed providing that service, but can be configured in Cloud in a Bottle's settings.
 
 If the resolved default's version doesn't satisfy the consumer's version specifier, the router returns 503 `service_not_available`.
 
@@ -123,7 +123,7 @@ For `scope: "global"`, the router rewrites the response to add a `grant_url` poi
 
 The consumer redirects the owner to `grant_url`; after approval, the call can be retried.
 
-**Granting at deploy time.** Global-scoped permissions specified in the consumer app manifest (`grants`) can be granted as part of the app install, either in the openhost web UI or via the compute_space CLI's `--grant-permissions-v2` flag.
+**Granting at deploy time.** Global-scoped permissions specified in the consumer app manifest (`grants`) can be granted as part of the app install, either in the Cloud in a Bottle web UI or via the compute_space CLI's `--grant-permissions-v2` flag.
 
 #### Provider-app-scoped permissions
 
@@ -161,10 +161,12 @@ Note for `scope: "app"`, the provider must include its own `grant_url`.
    Authorization: Bearer $OPENHOST_APP_TOKEN
    Content-Type: application/json
 
-   {"consumer_app_id": "<consumer_app_id>", "service_url": "<url>", "grant": <grant>}
+   {"consumer_app_name": "<consumer_app_name>", "service_url": "<url>", "grant": <grant>}
    ```
 
-   The consumer's app ID is the value the provider received in the `X-OpenHost-Consumer-Id` header. The router takes the provider's own app ID from the bearer token, so the provider can only grant permissions *for itself* — it can't create grants attributed to another provider. The grant body is the same shape the provider will later see in `X-OpenHost-Permissions`. str or json can be used.
+   Identify the consumer by **name** — the value from the `X-OpenHost-Consumer-Name` header, which is also what your consent page should have shown the user. Keying the grant to the name is what makes that page trustworthy: the field the user read is the field the access is granted to, so a page that names the wrong app grants to the wrong app instead of to itself. An unknown name is a 404.
+
+   The router takes the provider's own app ID from the bearer token, so the provider can only grant permissions *for itself* — it can't create grants attributed to another provider. The grant body is the same shape the provider will later see in `X-OpenHost-Permissions`. str or json can be used.
 
 4. **Provider sends the user back.** After the grant call succeeds, the provider should redirect the user's browser to the consumer-supplied `return_to`. The consumer can then retry the original service call, which will now succeed. If the user declines, the provider should also redirect to `return_to` (without creating a grant) so the consumer can show its own "permission denied" UI rather than leaving the user stranded on the provider's page.
 
@@ -177,7 +179,7 @@ These endpoints back the owner-facing UI and are authenticated by the owner logi
 
 - `GET /api/permissions/v2[?app_id=<consumer_app_id>]` — list grants, optionally filtered to one consumer app. Returns an array of `{consumer_app_id, service_url, grant, scope, provider_app_id}`.
 - `POST /api/permissions/v2/grant_global_scoped` — grant a global-scoped permission. Body: `{app_id, service_url, grant}`.
-- `POST /api/permissions/v2/grant_app_scoped` — grant an app-scoped permission. **Authenticated with the calling provider's app token** (not the owner cookie); the provider's app ID is taken from the token. Body: `{consumer_app_id, service_url, grant}`. Used by provider apps after running their own user-facing approval flow (e.g. an OAuth dance).
+- `POST /api/permissions/v2/grant_app_scoped` — grant an app-scoped permission. **Authenticated with the calling provider's app token** (not the owner cookie); the provider's app ID is taken from the token. Body: `{consumer_app_name, service_url, grant}` (404 if no app has that name). Used by provider apps after running their own user-facing approval flow (e.g. an OAuth dance).
 - `POST /api/permissions/v2/revoke` — revoke a permission. Body: `{app_id, service_url, grant, scope?, provider_app_id?}`. `scope` defaults to `"global"`. 404 if no matching row.
 
 The `grant` field on these endpoints is whatever shape the service defines — passed through the router verbatim.
@@ -193,7 +195,7 @@ Each service URL has at most one default provider (set automatically to the firs
 
 ### Retrofitting existing apps
 
-Many existing apps provide or consume APIs in a non-openhost-native way, and can be adapted readily to consume or expose these through the service interface.
+Many existing apps provide or consume APIs in a way that is not native to Cloud in a Bottle, and can be adapted readily to consume or expose these through the service interface.
 
 #### Consumer apps
 

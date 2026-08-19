@@ -1,16 +1,26 @@
 """Container-based tests against a real Ubuntu+systemd host.
 
-``TestMigrationContainer`` runs the migrations directly and checks openhost
-comes up. ``TestApplyUpdateWalk`` drives the *real* ``update apply`` entrypoint
-end to end — fetch tags, step onto the next release tag, run migrations (which
+``TestApplyUpdateWalk`` drives the *real* ``update apply`` entrypoint end to
+end — fetch tags, step onto the next release tag, run migrations (which
 upgrade pixi), reinstall deps, and restart openhost — which is the path the
-phased-update framework exists to make safe.
+phased-update framework exists to make safe. It needs its own pristine,
+never-migrated container: it asserts pixi starts at the image's baseline
+version and the walk's migrations upgrade it, which conflicts with
+test_apply_walk_e2e.py's test class, which deliberately pre-migrates in
+``setup_class`` so its own walks run as fast no-ops.
+
+The rest of this module (``_podman``/``_exec``/``_host_sh``/``_start_container``/
+health-wait helpers, and ``_ensure_migration_image``) is also imported by
+test_apply_walk_e2e.py, which covers migrations-alone-enable-the-service and
+the tag-walk / fetch / apply / show_diff / target-ref control flow in one
+shared container that pre-migrates up front so its walks run as fast no-ops.
 
 Requires podman and the --run-containers flag.
 """
 
 from __future__ import annotations
 
+import atexit
 import subprocess
 import time
 from pathlib import Path
@@ -34,7 +44,15 @@ _ENV_PYTHON = "/home/host/openhost/.pixi/envs/default/bin/python"
 
 
 def _podman(*args: str, timeout: int = 30, check: bool = True) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(["podman", *args], capture_output=True, text=True, timeout=timeout, check=check)
+    # Check by hand rather than with check=True: CalledProcessError does not include
+    # captured output, which leaves a CI failure in here undiagnosable.
+    result = subprocess.run(["podman", *args], capture_output=True, text=True, timeout=timeout)
+    if check and result.returncode != 0:
+        raise AssertionError(
+            f"podman {' '.join(args)} exited {result.returncode}\n"
+            f"--- stdout ---\n{result.stdout}\n--- stderr ---\n{result.stderr}"
+        )
+    return result
 
 
 def _exec(container: str, *args: str, timeout: int = 60, check: bool = True) -> subprocess.CompletedProcess[str]:
@@ -87,6 +105,27 @@ def _wait_for_health(container: str, timeout: int = 60) -> str:
     raise RuntimeError(f"/health did not respond within {timeout}s (last stderr: {last_stderr!r})")
 
 
+def _wait_for_apply_unit(container: str, timeout: int = 900) -> None:
+    """Block until openhost-apply.service is gone.
+
+    `update apply` hands the walk to that transient unit and returns immediately,
+    so the assertions below have to wait for the real work rather than the exit
+    code of the launcher.
+    """
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        result = _podman(
+            "exec", container, "systemctl", "is-active", "openhost-apply.service", timeout=10, check=False
+        )
+        state = result.stdout.strip()
+        # --collect removes the unit once it exits, so "inactive"/"failed"/absent
+        # (an empty or unknown state) all mean the walk is over.
+        if state not in ("active", "activating", "deactivating", "reloading"):
+            return
+        time.sleep(2)
+    raise RuntimeError(f"openhost-apply.service still running after {timeout}s")
+
+
 def _dump_openhost_journal(container: str) -> str:
     journal = _podman(
         "exec", container, "journalctl", "-u", "openhost", "--no-pager", "-n", "50", timeout=10, check=False
@@ -94,60 +133,39 @@ def _dump_openhost_journal(container: str) -> str:
     return f"{journal.stdout}\n{journal.stderr}"
 
 
-@pytest.fixture(scope="module", autouse=True)
-def _migration_image() -> object:
-    """Build the test image once for the module; reuse it across containers."""
+_migration_image_built = False
+
+
+def _ensure_migration_image() -> None:
+    """Build the test image once per process; safe to call from every setup_class that needs it.
+
+    A plain function, not a pytest fixture: a pytest.fixture imported into a
+    sibling test module gets re-registered (and its setup re-run) once per
+    importing module even at session scope, and an autouse fixture placed in
+    conftest.py instead applies to every test collected under this whole
+    directory -- including fast non-container unit tests that never touch
+    podman. A plain function call from each setup_class that actually needs
+    the image has neither problem.
+    """
+    global _migration_image_built
+    if _migration_image_built:
+        return
     if _podman("image", "exists", _IMAGE_NAME, check=False).returncode != 0:
         _podman("build", "-t", _IMAGE_NAME, "-f", str(_DOCKERFILE), str(_REPO_ROOT), timeout=600)
-    yield
-    _podman("rmi", "-f", _IMAGE_NAME, check=False, timeout=30)
-
-
-@requires_containers
-class TestMigrationContainer:
-    container = "openhost-migration-test"
-
-    @classmethod
-    def setup_class(cls) -> None:
-        _start_container(cls.container)
-
-    @classmethod
-    def teardown_class(cls) -> None:
-        _podman("rm", "-f", "-t", "0", cls.container, check=False, timeout=15)
-
-    def test_migrations_apply(self) -> None:
-        result = _exec(
-            self.container,
-            _ENV_PYTHON,
-            "-c",
-            "from openhost_system_agent.migrations.runner import apply_system_migrations; "
-            "print(apply_system_migrations())",
-            timeout=300,
-        )
-        assert result.returncode == 0, f"Migration failed:\n{result.stderr}"
-
-    def test_openhost_service_starts(self) -> None:
-        _exec(self.container, "systemctl", "start", "openhost", timeout=30)
-        time.sleep(2)
-        result = _exec(self.container, "systemctl", "is-active", "openhost", timeout=10)
-        assert result.stdout.strip() == "active", f"Service not active: {result.stdout}\n{result.stderr}"
-
-    def test_health_endpoint(self) -> None:
-        try:
-            body = _wait_for_health(self.container, timeout=120)
-        except RuntimeError:
-            raise RuntimeError(f"Health check failed. Journal:\n{_dump_openhost_journal(self.container)}") from None
-        assert '"ok"' in body or '"status"' in body
+    _migration_image_built = True
+    atexit.register(lambda: _podman("rmi", "-f", _IMAGE_NAME, check=False, timeout=30))
 
 
 @requires_containers
 class TestApplyUpdateWalk:
-    """End-to-end: `update apply` walks onto a new tag, upgrades pixi, restarts."""
+    """End-to-end: `update apply` detaches, stops openhost, walks onto a new tag,
+    upgrades pixi, and starts openhost again."""
 
     container = "openhost-apply-walk-test"
 
     @classmethod
     def setup_class(cls) -> None:
+        _ensure_migration_image()
         _start_container(cls.container)
 
     @classmethod
@@ -195,8 +213,14 @@ class TestApplyUpdateWalk:
         # test image, so resolve the console script from the pixi env).
         which = _host_sh(c, f"cd {_REPO} && {_PIXI} run -e default which openhost_system_agent")
         agent = which.stdout.strip().splitlines()[-1]
-        apply = _exec(c, "sudo", agent, "update", "apply", timeout=600, check=False)
+        # --wait: the walk runs detached as openhost-apply.service, so without it
+        # this returns before any work has happened. With it we still get an exit
+        # code for the walk itself.
+        apply = _exec(c, "sudo", agent, "update", "apply", "--wait", timeout=900, check=False)
         assert apply.returncode == 0, f"update apply failed (exit {apply.returncode}):\n{apply.stdout}\n{apply.stderr}"
+        assert '"detached": true' in apply.stdout, f"expected a detached handoff: {apply.stdout!r}"
+        # Belt and braces: the unit really is gone before we assert on host state.
+        _wait_for_apply_unit(c)
 
         # The pixi-version migration upgraded pixi to the pinned version.
         after = _host_sh(c, f"{_PIXI} --version")
@@ -212,7 +236,8 @@ class TestApplyUpdateWalk:
         log = _exec(c, "cat", "/etc/openhost/migrations.jsonl")
         assert f'"version":{latest}' in log.stdout.replace(" ", ""), f"log did not reach v{latest}:\n{log.stdout}"
 
-        # openhost was restarted by the walk and serves /health.
+        # openhost was stopped for the walk and started again at the end; the
+        # unit's ExecStopPost guarantees that even on a failure path.
         try:
             body = _wait_for_health(c, timeout=120)
         except RuntimeError:

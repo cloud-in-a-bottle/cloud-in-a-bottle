@@ -145,7 +145,7 @@ def test_install_without_grant_returns_permission_required(client: TestClient[Li
     resp = client.post(
         _url("install"),
         headers=_headers(),
-        content=json.dumps({"repo_url": "https://github.com/imbue-openhost/openhost-catalog"}),
+        content=json.dumps({"repo_url": "https://github.com/cloud-in-a-bottle/app-catalog"}),
     )
     assert resp.status_code == 403
     body = resp.json()
@@ -158,7 +158,7 @@ def test_install_without_grant_returns_permission_required(client: TestClient[Li
 
 
 def test_install_with_non_matching_grant_denied(client: TestClient[Litestar], cfg: Any) -> None:
-    _grant_installer(cfg.db_path, CALLER_APP_ID, repo_url_prefix="https://github.com/imbue-openhost/")
+    _grant_installer(cfg.db_path, CALLER_APP_ID, repo_url_prefix="https://github.com/cloud-in-a-bottle/")
     resp = client.post(
         _url("install"),
         headers=_headers(),
@@ -187,7 +187,7 @@ port = 8080
 service = "github.com/imbue-openhost/openhost/services/installer"
 shortname = "installer"
 version = ">=0.1.0"
-grants = [{capability = "install", repo_url_prefix = "https://github.com/imbue-openhost/"}]
+grants = [{capability = "install", repo_url_prefix = "https://github.com/cloud-in-a-bottle/"}]
 """
 
 
@@ -206,13 +206,13 @@ def test_proposed_grant_uses_manifest_declared_prefix(cfg: Any) -> None:
         resp = client.post(
             _url("install"),
             headers={"Authorization": f"Bearer {NARROW_CALLER_TOKEN}", "Content-Type": "application/json"},
-            content=json.dumps({"repo_url": "https://github.com/imbue-openhost/openhost-gemini"}),
+            content=json.dumps({"repo_url": "https://github.com/cloud-in-a-bottle/bottled-gemini"}),
         )
     assert resp.status_code == 403
     body = resp.json()
     assert body["extra"]["required_grant"]["grant"] == {
         "capability": "install",
-        "repo_url_prefix": "https://github.com/imbue-openhost/",
+        "repo_url_prefix": "https://github.com/cloud-in-a-bottle/",
     }
 
 

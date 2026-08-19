@@ -10,10 +10,21 @@ from typing import NoReturn
 import git
 from loguru import logger
 
+from openhost_system_agent.detach import APPLY_UNIT
+from openhost_system_agent.detach import ApplyAlreadyRunningError
+from openhost_system_agent.detach import apply_is_running
+from openhost_system_agent.detach import detach_apply
+from openhost_system_agent.detach import is_detached
+from openhost_system_agent.detach import stop_openhost
+from openhost_system_agent.detach import wait_for_apply
 from openhost_system_agent.protocol import DiffCommit
 from openhost_system_agent.protocol import DiffResult
 from openhost_system_agent.protocol import FetchResult
 from openhost_system_agent.protocol import RemoteInfo
+from openhost_system_agent.reclaim import reclaim_host_ownership
+from openhost_system_agent.updater import progress
+from openhost_system_agent.updater.launcher import launch_updater
+from openhost_system_agent.updater.launcher import stop_updater
 
 _PACKAGE_DIR = Path(__file__).resolve().parent
 _PROJECT_DIR = _PACKAGE_DIR.parent.parent.parent
@@ -42,6 +53,15 @@ def _get_remote(repo: git.Repo) -> git.Remote:
         return repo.remote("origin")
     except (AttributeError, ValueError) as e:
         raise RuntimeError("remote 'origin' is not set") from e
+
+
+def _fetch_chown_host(repo: git.Repo, *args: str, **kwargs: object) -> None:
+    """The openhost service needs the repo to be host owned."""
+    try:
+        repo.git.fetch(*args, **kwargs)
+    finally:
+        if os.geteuid() == 0:
+            reclaim_host_ownership()
 
 
 _KNOWN_SCHEMES = {"http", "https", "ssh", "git", "file"}
@@ -97,6 +117,9 @@ def _latest_ancestor_tag(repo: git.Repo) -> str | None:
 # end on this ref (a branch tip or commit) instead of the latest tag. Unset →
 # the latest tag is the destination. Kept in sync with apply_after_checkout.py.
 _TARGET_REF_CONFIG = "openhost.target-ref"
+
+# Without a ceiling a hung connection blocks every future update attempt.
+_FETCH_TIMEOUT_SECONDS = 300
 
 
 def _get_target_ref(repo: git.Repo) -> str | None:
@@ -187,7 +210,7 @@ def _next_step(repo: git.Repo) -> str | None:
 def fetch_updates() -> FetchResult:
     repo = _repo()
     _get_remote(repo)
-    repo.git.fetch("origin", "--tags")
+    _fetch_chown_host(repo, "origin", "--tags")
 
     if repo.is_dirty(untracked_files=True):
         return FetchResult(state="DIRTY")
@@ -254,27 +277,93 @@ def show_diff() -> DiffResult:
 _APPLY_ENTRYPOINT = _PACKAGE_DIR / "apply_after_checkout.py"
 
 
+def start_apply(wait: bool = False) -> None:
+    """Entry point for `update apply`: hand the walk to systemd, then return.
+
+    ``wait`` blocks until the walk finishes and raises if it failed, so scripts
+    keep an exit code. The dashboard never waits -- the walk stops the process
+    that would be doing the waiting. When already running as the detached unit
+    this is the walk itself and never returns.
+    """
+    if is_detached():
+        apply_update()  # NoReturn
+        return
+
+    # Check before resetting: an apply already in flight owns the progress log,
+    # and blanking it would strand the page watching that update.
+    if apply_is_running():
+        raise ApplyAlreadyRunningError("An update is already in progress.")
+
+    # Reset here rather than in the detached copy, which would blank the log under
+    # a browser that is already polling it.
+    progress.reset_progress()
+    try:
+        detach_apply()
+    except ApplyAlreadyRunningError:
+        raise  # lost the race; the winner's log is the live one now
+    except BaseException as e:
+        progress.record(progress.Phase.FAILED, f"Update failed: {e}")
+        raise
+
+    if not wait:
+        return
+    if not wait_for_apply():
+        raise RuntimeError(f"{APPLY_UNIT} did not finish in time; see `journalctl -u {APPLY_UNIT}`")
+    # A successful walk ends on the non-terminal "restarting" (only the freshly
+    # started compute_space appends "done"), so only "failed" is a failure.
+    entries = progress.read_entries()
+    last = entries[-1] if entries else {}
+    if last.get("phase") == progress.Phase.FAILED:
+        raise RuntimeError(str(last.get("message") or "the update failed"))
+
+
 def apply_update() -> NoReturn:
-    repo = _repo()
+    """The walk, running as openhost-apply.service outside openhost's cgroup.
 
-    if repo.is_dirty(untracked_files=True):
-        raise RuntimeError("Working tree has uncommitted changes. Stash or commit first.")
+    Stops the service before touching the working tree, so migrations no longer
+    race a live router. That is not the same as a quiesced system, and a migration
+    must not assume one: juicefs keeps the archive meta DB and its mount open in
+    the data dir, app containers keep conmon and their logs there, and both they
+    and this process run from the pixi env that `pixi install` rewrites.
+    """
+    try:
+        # Fetch and preflight first, with the router still up: they only read the
+        # repo, and they are the steps most likely to fail or hang. A dirty tree or
+        # an unreachable remote therefore costs no downtime at all.
+        repo = _repo()
 
-    repo.git.fetch("origin", "--tags")
-    if not _get_sorted_tags(repo) and _get_target_ref(repo) is None:
-        raise RuntimeError("No tags found on remote. Tag a release first.")
+        if repo.is_dirty(untracked_files=True):
+            raise RuntimeError("Working tree has uncommitted changes. Stash or commit first.")
 
-    # Take the first step (next tag, or the pinned target once tags are done);
-    # apply_after_checkout tail-calls forward through the rest itself.
-    step = _next_step(repo)
-    if step is not None:
-        logger.info(f"Checking out {step}...")
-        repo.git.checkout(_resolve_ref_sha(repo, step) or step)
-        repo.git.clean("-fd")
+        progress.record("fetch", "Fetching latest code\u2026")
+        _fetch_chown_host(repo, "origin", "--tags", kill_after_timeout=_FETCH_TIMEOUT_SECONDS)
+        if not _get_sorted_tags(repo) and _get_target_ref(repo) is None:
+            raise RuntimeError("No tags found on remote. Tag a release first.")
 
-    # Hand off to the checked-out ref's apply code, replacing this process.
-    # It walks any remaining steps and restarts openhost when done, so this
-    # never returns; the migration log records what happened for the next boot.
+        # The first step; apply_after_checkout tail-calls through the rest.
+        step = _next_step(repo)
+
+        # From here the tree changes, so the router has to be down. Cover the
+        # downtime first, so the page is poised to take 80/443 as Caddy frees them.
+        launch_updater()
+        try:
+            stop_openhost()
+        except BaseException:
+            # Nothing to cover: the updater would idle and could then take 80/443
+            # during a later, unrelated restart.
+            stop_updater()
+            raise
+
+        if step is not None:
+            logger.info(f"Checking out {step}...")
+            progress.record("checkout", f"Checking out {step}\u2026", ref=step)
+            repo.git.checkout(_resolve_ref_sha(repo, step) or step)
+            repo.git.clean("-fd")
+    except BaseException as e:
+        progress.record(progress.Phase.FAILED, f"Update failed: {e}")
+        raise  # ExecStopPost still starts openhost, so a failure here still serves
+
+    # Hand off to the checked-out ref's own apply code, replacing this process.
     os.execv(sys.executable, [sys.executable, str(_APPLY_ENTRYPOINT)])
 
 
@@ -305,7 +394,7 @@ def set_remote_url(url: str) -> RemoteInfo:
     # would report as UP_TO_DATE forever — but do NOT check out or restart, which
     # would boot new code before its migrations run.
     if ref:
-        _get_remote(repo).fetch()
+        _fetch_chown_host(repo, "origin")
         if _resolve_ref_sha(repo, ref) is None:
             raise RuntimeError(f"Ref '{ref}' could not be resolved on the remote. Check the branch or commit name.")
 

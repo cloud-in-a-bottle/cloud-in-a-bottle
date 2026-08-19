@@ -44,7 +44,7 @@
 - name: Configure podman-related sysctls
   copy:
     content: |
-      # Managed by OpenHost; do not edit by hand.
+      # Managed by Cloud in a Bottle; do not edit by hand.
       net.ipv4.ip_unprivileged_port_start = 25
       kernel.apparmor_restrict_unprivileged_userns = 0
       # Required for network_host containers that do IP forwarding (VPN
@@ -72,7 +72,7 @@
 - name: Configure podman registries
   copy:
     content: |
-      # Managed by OpenHost; do not edit by hand.
+      # Managed by Cloud in a Bottle; do not edit by hand.
       unqualified-search-registries = ["docker.io"]
       short-name-mode = "permissive"
     dest: /etc/containers/registries.conf
@@ -160,7 +160,7 @@
 - name: Configure host user podman containers.conf
   copy:
     content: |
-      # Managed by OpenHost; do not edit by hand.
+      # Managed by Cloud in a Bottle; do not edit by hand.
       [containers]
       host_containers_internal_ip = "10.200.0.1"
     dest: /home/host/.config/containers/containers.conf

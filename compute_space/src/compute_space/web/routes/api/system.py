@@ -119,7 +119,7 @@ class DropCacheOk:
 
 @attr.s(auto_attribs=True, frozen=True)
 class VersionInfo:
-    """Git info for the running openhost checkout. ``branch`` is None when HEAD is detached.
+    """Git info for the running Cloud in a Bottle checkout. ``branch`` is None when HEAD is detached.
     ``sha`` is empty when the install isn't a git checkout (e.g. tarball deploys)."""
 
     branch: str | None
@@ -311,9 +311,9 @@ def drop_docker_cache() -> Response[DropCacheOk]:
 
 @get("/api/version", guards=[require_owner_auth])
 async def api_version() -> VersionInfo:
-    """Return git branch/SHA of the running openhost checkout.
+    """Return git branch/SHA of the running Cloud in a Bottle checkout.
 
-    If openhost wasn't installed via git, sha/short_sha are empty and dirty is False.
+    If Cloud in a Bottle wasn't installed via git, sha/short_sha are empty and dirty is False.
     """
     try:
         sha = await get_head_sha(OPENHOST_PROJECT_DIR)
@@ -343,7 +343,7 @@ async def api_diagnostics(
 ) -> Response[PlatformDiagnostics]:
     """Return a full instance diagnostics bundle for debugging.
 
-    Includes the OpenHost git checkout, host OS/Python/dependency versions,
+    Includes the Cloud in a Bottle git checkout, host OS/Python/dependency versions,
     container runtime info, disk usage, and a summary of every installed app.
 
     ``?download=1`` adds a Content-Disposition header so browsers save the JSON

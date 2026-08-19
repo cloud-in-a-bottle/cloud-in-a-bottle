@@ -43,6 +43,7 @@
     - import_tasks: tasks/apt_packages.yml
     - import_tasks: tasks/containers.yml
     - import_tasks: tasks/journald.yml
+    - import_tasks: tasks/swap.yml
 
 - name: Dev environment
   hosts: all
@@ -53,7 +54,7 @@
   tasks:
     - import_tasks: tasks/dev_machine.yml
 
-- name: Prebake OpenHost (code, pixi, and systemd units — no domain)
+- name: Prebake Cloud in a Bottle (code, pixi, and systemd units — no domain)
   hosts: all
   user: host
   vars:

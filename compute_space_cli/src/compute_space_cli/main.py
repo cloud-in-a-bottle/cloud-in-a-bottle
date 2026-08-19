@@ -588,7 +588,7 @@ class InstanceCmd:
         raise SystemExit(subprocess.call(cmd))
 
 
-@cappa.command(name="version", help="Show the git branch/SHA of the running openhost.")
+@cappa.command(name="version", help="Show the git branch/SHA of the running Cloud in a Bottle.")
 @attrs.define
 class Version:
     def __call__(self, cfg: Annotated[config.Instance, Dep(resolve_instance)]) -> None:
@@ -597,7 +597,7 @@ class Version:
         short = result.get("short_sha") or (sha[:8] if sha else "")
         branch = result.get("branch") or "(detached HEAD)"
         if not sha:
-            print(f"{cfg.url}: openhost is not a git checkout — no version info available")
+            print(f"{cfg.url}: Cloud in a Bottle is not a git checkout — no version info available")
             return
         dirty = " (dirty)" if result.get("dirty") else ""
         print(f"{cfg.url}: {branch} @ {short}{dirty}")
@@ -612,7 +612,7 @@ class Diagnostics:
         print(json.dumps(result.json(), indent=2))
 
 
-@cappa.command(name="curl", help="curl with your OpenHost bearer token injected.")
+@cappa.command(name="curl", help="curl with your Cloud in a Bottle bearer token injected.")
 @attrs.define
 class Curl:
     args: Annotated[
@@ -629,7 +629,7 @@ class Curl:
         raise SystemExit(subprocess.call(cmd))
 
 
-@cappa.command(name="oh", help="OpenHost compute space CLI — manage things in your compute space.")
+@cappa.command(name="oh", help="Cloud in a Bottle compute space CLI — manage things in your compute space.")
 @attrs.define
 class Oh:
     subcommand: cappa.Subcommands[Status | AppCmd | TokensCmd | LogsCmd | InstanceCmd | Curl | Version | Diagnostics]

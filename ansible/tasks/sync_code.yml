@@ -12,7 +12,7 @@
 
 - name: Clone or update openhost repo
   ansible.builtin.git:
-    repo: https://github.com/imbue-openhost/openhost.git
+    repo: https://github.com/cloud-in-a-bottle/cloud-in-a-bottle.git
     dest: /home/host/openhost
     version: "{{ openhost_branch | default(openhost_commit | default('main'), true) }}"
     refspec: "{{ openhost_refspec | default(omit) }}"

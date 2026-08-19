@@ -1,4 +1,4 @@
-"""OpenHost CLI entry point.
+"""Cloud in a Bottle CLI entry point.
 
 Usage:
     openhost up [--domain DOMAIN] [--zone-domain DOMAIN]
@@ -20,15 +20,15 @@ from self_host_cli.update import run_update
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="openhost",
-        description="OpenHost -- run open-source apps on your own compute.",
+        description="Cloud in a Bottle -- run open-source apps on your own compute.",
     )
     sub = parser.add_subparsers(dest="command")
 
     # --- openhost up ---
     up_parser = sub.add_parser(
         "up",
-        help="Start OpenHost.",
-        description="Launches the OpenHost router directly on this machine.",
+        help="Start Cloud in a Bottle.",
+        description="Launches the Cloud in a Bottle router directly on this machine.",
     )
     up_parser.add_argument(
         "--domain",
@@ -68,7 +68,7 @@ def _build_parser() -> argparse.ArgumentParser:
         type=str,
         default=None,
         help=(
-            "Secret required to claim this OpenHost on first boot. If omitted, "
+            "Secret required to claim this Cloud in a Bottle on first boot. If omitted, "
             "a URL-safe random token is generated and printed. The password-"
             "setup page rejects every caller that doesn't supply this token, "
             "preventing a MITM from claiming the instance. Must be URL-safe "
@@ -79,7 +79,7 @@ def _build_parser() -> argparse.ArgumentParser:
     # --- openhost down ---
     sub.add_parser(
         "down",
-        help="Stop OpenHost.",
+        help="Stop Cloud in a Bottle.",
         description="Stops the running router cleanly.",
     )
 
@@ -93,7 +93,7 @@ def _build_parser() -> argparse.ArgumentParser:
     # --- openhost update ---
     sub.add_parser(
         "update",
-        help="Update OpenHost code.",
+        help="Update Cloud in a Bottle code.",
         description="Pulls latest code (git pull) and syncs dependencies.",
     )
 

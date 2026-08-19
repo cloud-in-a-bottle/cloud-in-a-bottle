@@ -174,8 +174,13 @@ def build_image(
     repo_path: str,
     dockerfile_rel_path: str,
     temp_data_dir: str | None = None,
+    memory_mb: int | None = None,
 ) -> str:
-    """Build the container image for an app.  Returns the image tag."""
+    """Build the container image for an app.  Returns the image tag.
+
+    ``memory_mb`` caps the memory available to the build via podman's
+    ``--memory`` flag; None leaves the build unconstrained.
+    """
     image_tag = f"openhost-{app_name}:latest"
     dockerfile_path = os.path.join(repo_path, dockerfile_rel_path)
     cmd = [
@@ -185,8 +190,16 @@ def build_image(
         image_tag,
         "-f",
         dockerfile_path,
-        repo_path,
     ]
+    if memory_mb is not None:
+        # Cap build RAM at the app's declared limit for isolation, but allow
+        # unlimited swap (the host has a large swap file). A build that needs
+        # more than memory_mb then spills to swap instead of OOM-killing —
+        # keeping most builds working even with a small memory_mb, without
+        # letting a "small" app hog host RAM. --memory-swap=-1 requires --memory.
+        cmd.append(f"--memory={memory_mb}m")
+        cmd.append("--memory-swap=-1")
+    cmd.append(repo_path)
     logger.info("Building container image: %s", " ".join(cmd))
 
     if temp_data_dir:
@@ -536,7 +549,7 @@ def prune_dangling_images() -> str:
     return output
 
 
-# An OpenHost app image is always tagged ``openhost-{app_name}:latest`` (see
+# A Cloud in a Bottle app image is always tagged ``openhost-{app_name}:latest`` (see
 # ``build_image``).  podman reports the tag fully qualified, e.g.
 # ``localhost/openhost-{app_name}:latest``.  This matches that form and pulls
 # out the app name.  App names are DNS-label-like (see core.app_id), so the
@@ -548,7 +561,7 @@ _OPENHOST_IMAGE_TAG_RE = re.compile(r"^(?:localhost/)?openhost-(?P<app_name>.+):
 def parse_openhost_image_app_name(tag: str) -> str | None:
     """Return the app name for an ``openhost-{name}:latest`` tag, else None.
 
-    Only OpenHost app images are matched; any other repo tag (base images an
+    Only Cloud in a Bottle app images are matched; any other repo tag (base images an
     app FROMs, unrelated tags) returns None so it is never a prune candidate.
     """
     match = _OPENHOST_IMAGE_TAG_RE.match(tag)
@@ -557,7 +570,7 @@ def parse_openhost_image_app_name(tag: str) -> str | None:
 
 @attr.s(auto_attribs=True, frozen=True)
 class OpenHostImage:
-    """A tagged OpenHost app image as reported by ``podman images``."""
+    """A tagged Cloud in a Bottle app image as reported by ``podman images``."""
 
     image_id: str
     app_name: str
@@ -565,10 +578,10 @@ class OpenHostImage:
 
 
 def list_openhost_images() -> list[OpenHostImage]:
-    """List tagged OpenHost app images (``openhost-{name}:latest``).
+    """List tagged Cloud in a Bottle app images (``openhost-{name}:latest``).
 
     Parses ``podman images --format json``.  Only images whose tag matches the
-    OpenHost app scheme are returned; dangling (untagged) images and unrelated
+    Cloud in a Bottle app scheme are returned; dangling (untagged) images and unrelated
     repos are skipped.  Returns an empty list when podman is unavailable or its
     output can't be parsed, so a transient error degrades to "prune nothing"
     rather than raising.
@@ -597,7 +610,7 @@ def list_openhost_images() -> list[OpenHostImage]:
         if not isinstance(created, int):
             continue
         # A single image id can carry several tags (Names/RepoTags).  Match any
-        # that is an OpenHost app tag; one physical image mapping to two app
+        # that is a Cloud in a Bottle app tag; one physical image mapping to two app
         # names is not expected, but handle each tag independently.
         names = row.get("Names") or row.get("RepoTags") or []
         if not isinstance(names, list):

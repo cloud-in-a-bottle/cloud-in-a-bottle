@@ -1,8 +1,8 @@
 """Cap journald's on-disk size so the system journal can't fill the disk.
 
-OpenHost forwards the router process's stderr (plus forwarded Caddy and CoreDNS
+Cloud in a Bottle forwards the router process's stderr (plus forwarded Caddy and CoreDNS
 output) to journald via systemd.  journald's own defaults let the journal grow
-to ~10% of the filesystem (capped at 4 GB), and OpenHost previously configured
+to ~10% of the filesystem (capped at 4 GB), and Cloud in a Bottle previously configured
 no limit — so on long-lived hosts the journal steadily grew and, combined with
 accumulated container images, could fill the disk and take the instance down.
 
@@ -33,7 +33,9 @@ JOURNALD_DROPIN_PATH = "/etc/systemd/journald.conf.d/10-openhost.conf"
 # leaving no path for the journal alone to fill a host disk.
 JOURNALD_MAX_USE = "500M"
 
-JOURNALD_DROPIN_CONTENT = f"# Managed by OpenHost; do not edit by hand.\n[Journal]\nSystemMaxUse={JOURNALD_MAX_USE}\n"
+JOURNALD_DROPIN_CONTENT = (
+    f"# Managed by Cloud in a Bottle; do not edit by hand.\n[Journal]\nSystemMaxUse={JOURNALD_MAX_USE}\n"
+)
 
 
 class Migration0006JournaldSizeCap(SystemMigration):

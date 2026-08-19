@@ -55,9 +55,13 @@ async function checkForUpdates() {
 async function applyUpdate() {
   clearError();
   const el = document.getElementById('update-status');
-  el.innerHTML = '<p>Updating&hellip;</p>';
+  el.innerHTML = '<p>Starting update&hellip;</p>';
 
+  let token;
   try {
+    // Kicks off the update in the background and returns a token that lets the
+    // dedicated /updating page recognize this tab and stream live progress from
+    // the detached updater across the (brief) compute_space restart.
     const resp = await fetch('/api/settings/update', {method: 'POST'});
     if (!resp.ok) {
       const err = await resp.json();
@@ -65,19 +69,18 @@ async function applyUpdate() {
         + '<button onclick="checkForUpdates()" class="btn" style="margin-top:0.5em;">Retry</button>';
       return;
     }
+    const data = await resp.json();
+    token = data.token;
   } catch (e) {
     el.innerHTML = '<p class="error">Update failed: ' + esc(e.message) + '</p>'
       + '<button onclick="checkForUpdates()" class="btn" style="margin-top:0.5em;">Retry</button>';
     return;
   }
 
-  el.innerHTML = '<p>Update applied. Restarting&hellip;</p>';
-  try {
-    await fetch('/api/settings/restart_compute_space', {method: 'POST'});
-  } catch (e) {
-    // Expected — server may die before responding
-  }
-  showRestartOverlay();
+  // Navigate to the dedicated update page. It renders live progress and, once
+  // the new instance is back, reloads into the dashboard. Carrying the token in
+  // the URL is what lets the detached updater show *this* owner the logs.
+  window.location.href = '/updating?token=' + encodeURIComponent(token || '');
 }
 
 function showRestartOverlay() {

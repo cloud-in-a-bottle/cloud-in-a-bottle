@@ -1,8 +1,8 @@
-"""Server-side-rendered markdown route serving the OpenHost manual.
+"""Server-side-rendered markdown route serving the Cloud in a Bottle manual.
 
 We read ``docs/src/*.md`` directly off the running checkout, render
 through ``markdown-it-py`` + ``pygments``, and inject into a Jinja
-template that matches the OpenHost dashboard's visual language.
+template that matches the Cloud in a Bottle dashboard's visual language.
 There is no build step: ``git pull`` is enough to ship doc changes.
 
 The rendered page carries the same top navigation header as the rest
@@ -103,6 +103,8 @@ def _docs_src_dir() -> Path:
 
 _DEFAULT_INDEX = "introduction"
 _SUMMARY_FILENAME = "SUMMARY.md"
+
+_ALL_MARKDOWN_PATH = "/docs/all.md"
 
 
 # ─── Space navigation header ────────────────────────────────────────
@@ -422,7 +424,7 @@ _TEMPLATE = """<!DOCTYPE html>
   <meta charset="utf-8">
   <meta name="robots" content="noindex">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{{ page_title }} - OpenHost Manual</title>
+  <title>{{ page_title }} - Cloud in a Bottle Manual</title>
   <style>
     /* The docs page deliberately reuses layout.html's exact palette and
        typography (hardcoded light colours, #222 text on #fff, #ddd
@@ -555,9 +557,52 @@ _TEMPLATE = """<!DOCTYPE html>
       font-size: 1em;
     }
     main.content .codehilite pre { background: transparent; padding: 0; }
+    main.content .page-actions { float: right; margin-top: 0.2em; }
     main.content ul, main.content ol { padding-left: 1.5em; }
     main.content hr { border: 0; border-top: 1px solid #ddd; margin: 2em 0; }
     main.content img { max-width: 100%; }
+    /* Copy controls.  Sized in px, not em, so they render the same next to the 1.05em sidebar
+       title and the 1.7em page heading. */
+    a.copy-md {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      position: relative;
+      width: 22px;
+      height: 22px;
+      margin-left: 0.3em;
+      vertical-align: middle;
+      border-radius: 3px;
+      color: #aaa;
+      text-decoration: none;
+      opacity: 0.6;
+      transition: opacity 0.12s ease, color 0.12s ease;
+    }
+    h1:hover a.copy-md, a.copy-md:focus-visible { opacity: 1; }
+    a.copy-md:hover { color: #36c; background: #f0f0f0; opacity: 1; }
+    a.copy-md.copied { color: #36c; background: transparent; opacity: 1; }
+    /* Tooltip.  Not the native ``title`` attribute: it waits about a second, and browsers are
+       inconsistent about showing it while the pointer is over the <svg> inside the anchor. */
+    a.copy-md .tip {
+      position: absolute;
+      bottom: calc(100% + 5px);
+      left: 50%;
+      transform: translateX(-50%);
+      padding: 0.35em 0.6em;
+      border-radius: 4px;
+      background: #333;
+      color: #fff;
+      font-size: 12px;
+      font-weight: normal;
+      font-style: normal;
+      line-height: 1.2;
+      white-space: nowrap;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.12s ease;
+    }
+    a.copy-md .tip b { font-weight: 700; }
+    a.copy-md:hover .tip, a.copy-md:focus-visible .tip { opacity: 1; }
     .footer-nav {
       display: flex;
       justify-content: space-between;
@@ -590,12 +635,23 @@ _TEMPLATE = """<!DOCTYPE html>
 </head>
 <body>
   <header class="space-header">
-    <h1 class="space-title">{% if display_name %}{{ display_name }}'s personal compute space{% else %}OpenHost{% endif %}</h1>
+    <h1 class="space-title">{% if display_name %}{{ display_name }}'s personal compute space{% else %}Cloud in a Bottle{% endif %}</h1>
     {% include "_nav_header.html" %}
   </header>
+  <svg width="0" height="0" style="position: absolute" aria-hidden="true" focusable="false">
+    <symbol id="i-copy" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"
+            stroke-linecap="round" stroke-linejoin="round">
+      <rect x="6" y="6" width="8" height="8" rx="1.5"></rect>
+      <path d="M10 6V3.5A1.5 1.5 0 0 0 8.5 2h-5A1.5 1.5 0 0 0 2 3.5v5A1.5 1.5 0 0 0 3.5 10H6"></path>
+    </symbol>
+    <symbol id="i-check" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8"
+            stroke-linecap="round" stroke-linejoin="round">
+      <path d="M3 8.5 6.5 12 13 4.5"></path>
+    </symbol>
+  </svg>
   <div class="layout">
     <aside class="sidebar">
-      <h1><a href="/docs/">OpenHost Manual</a></h1>
+      <h1><a href="/docs/">Cloud in a Bottle Manual</a>{{ manual_copy_button | safe }}</h1>
       {% for section in sections %}
         <div class="section">
           {% if section.title %}<div class="section-title">{{ section.title }}</div>{% endif %}
@@ -618,6 +674,38 @@ _TEMPLATE = """<!DOCTYPE html>
       {% endif %}
     </main>
   </div>
+  <script>
+    (function () {
+      // Every control is a plain link to the markdown it copies; this upgrades them in place.
+      // Without a clipboard API (insecure context, old browser) they stay plain links.
+      if (!navigator.clipboard) { return; }
+
+      function flash(button) {
+        var glyph = button.querySelector('use');
+        clearTimeout(button.resetTimer);
+        glyph.setAttribute('href', '#i-check');
+        button.classList.add('copied');
+        button.resetTimer = setTimeout(function () {
+          glyph.setAttribute('href', '#i-copy');
+          button.classList.remove('copied');
+        }, 1500);
+      }
+
+      document.addEventListener('click', function (event) {
+        var button = event.target.closest('a.copy-md');
+        if (!button) { return; }
+        event.preventDefault();
+        fetch(button.href, { headers: { 'Accept': 'text/plain' } })
+          .then(function (response) {
+            if (!response.ok) { throw new Error('HTTP ' + response.status); }
+            return response.text();
+          })
+          .then(function (text) { return navigator.clipboard.writeText(text); })
+          .then(function () { flash(button); })
+          .catch(function () { window.location.href = button.href; });
+      });
+    })();
+  </script>
 </body>
 </html>
 """
@@ -680,6 +768,54 @@ def _read_summary() -> tuple[_SidebarSection, ...]:
     return (_SidebarSection(title="", links=tuple(links)),)
 
 
+# ─── Markdown export ────────────────────────────────────────────────
+
+_COPY_ICON = '<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><use href="#i-copy"></use></svg>'
+_MANUAL_TIP = "Copy <b>entire</b> manual"
+_PAGE_TIP = "Copy page as Markdown"
+_H1_END_RE = re.compile(r"</h1>")
+
+_ALL_MARKDOWN_LEAD = (
+    "# Cloud in a Bottle Manual\n"
+    "\n"
+    "Every page of `docs/src/`, in `SUMMARY.md` reading order, as one document.  Pages are separated\n"
+    "by `---` and tagged with their source path; a relative link like `./routing.md` points at\n"
+    "another page in this file."
+)
+
+
+def _copy_button(href: str, tip_html: str, aria_label: str) -> str:
+    """A copy control.  ``tip_html`` is markup, so it must only ever be a constant from above —
+    never a page title or anything else read off disk."""
+    return (
+        f'<a class="copy-md" href="{html_escape(href)}" aria-label="{html_escape(aria_label)}">'
+        f'{_COPY_ICON}<span class="tip" aria-hidden="true">{tip_html}</span></a>'
+    )
+
+
+def _with_page_copy_button(content_html: str, slug: str, page_title: str) -> str:
+    """Put the copy control in the page's ``<h1>``, or float it above the prose when the page
+    has none (``routing.md`` opens at ``##``)."""
+    button = _copy_button(f"/docs/{slug}.md", _PAGE_TIP, f"Copy {page_title} as Markdown")
+    html, replaced = _H1_END_RE.subn(f"{button}</h1>", content_html, count=1)
+    return html if replaced else f'<div class="page-actions">{button}</div>{content_html}'
+
+
+def _concatenated_markdown() -> str:
+    """Every page joined into one document, in ``SUMMARY.md`` order.  Sources go out verbatim, so
+    the export can't drift from what the page routes serve."""
+    lead = f"{_ALL_MARKDOWN_LEAD}\n\nSource: {SOURCE_URL}" if SOURCE_URL else _ALL_MARKDOWN_LEAD
+    pages: list[str] = [lead]
+    for link in _flatten_links(_read_summary()):
+        try:
+            path = _resolve_doc_path(link.slug)
+        except NotFoundException:
+            logger.warning("{} lists {}.md, but no such file exists; omitting it", _SUMMARY_FILENAME, link.slug)
+            continue
+        pages.append(f"<!-- docs/src/{link.slug}.md -->\n\n{path.read_text(encoding='utf-8').strip()}")
+    return "\n\n---\n\n".join(pages) + "\n"
+
+
 def _page_title(slug: str, path: Path) -> str:
     """Use the page's first ``# H1`` as the title, falling back to
     the slug with underscores converted to spaces."""
@@ -705,38 +841,60 @@ def docs_index() -> Response[str]:
     return _render_doc(_DEFAULT_INDEX)
 
 
+@get(_ALL_MARKDOWN_PATH, sync_to_thread=False, raises=[ServiceUnavailableException])
+def docs_all_markdown() -> Response[str]:
+    """The whole manual as one markdown document."""
+    _require_docs_src()
+    return Response(content=_concatenated_markdown(), media_type=MediaType.TEXT)
+
+
 @get(
     "/docs/{slug:str}",
     sync_to_thread=False,
     raises=[NotFoundException, ServiceUnavailableException],
 )
 def docs_slug(slug: FromPath[str]) -> Response[str]:
-    """Serve ``docs/src/<slug>.md`` rendered to HTML.
+    """``/docs/routing`` renders the page; ``/docs/routing.md`` returns its source.
 
-    ``slug`` is the markdown filename without extension.  Anything
-    not matching the slug regex (alphanumerics + ``-`` + ``_``)
-    returns a 404 — protects against path traversal, weird unicode,
-    and the implicit ``./``/``../`` shenanigans.
+    The suffix is stripped here rather than routed separately because Litestar matches path
+    parameters per whole segment: a ``/docs/{slug:str}.md`` handler registers without complaint
+    but never matches, since this handler's bare ``{slug}`` claims the segment first.  The slug
+    regex still runs after stripping, so ``foo.md.bak`` and ``../secrets.md`` stay 404s.
     """
+    if slug.endswith(".md"):
+        return _raw_doc(slug.removesuffix(".md"))
     return _render_doc(slug)
 
 
-def _render_doc(slug: str) -> Response[str]:
+def _require_docs_src() -> None:
+    """Raise the 503 for a broken checkout; return normally when ``docs/src/`` is present."""
     src = _docs_src_dir()
     if not src.is_dir():
         raise ServiceUnavailableException(
             detail=(
-                "The OpenHost docs source directory is missing on this installation. "
-                f"Expected: {src}.  This usually means the OpenHost code checkout is "
-                "incomplete; reinstalling the openhost service should fix it."
+                "The Cloud in a Bottle docs source directory is missing on this installation. "
+                f"Expected: {src}.  This usually means the Cloud in a Bottle code checkout is "
+                "incomplete; reinstalling the Cloud in a Bottle service should fix it."
             )
         )
+
+
+def _raw_doc(slug: str) -> Response[str]:
+    """One page's markdown source, verbatim."""
+    _require_docs_src()
+    path = _resolve_doc_path(slug)
+    return Response(content=path.read_text(encoding="utf-8"), media_type=MediaType.TEXT)
+
+
+def _render_doc(slug: str) -> Response[str]:
+    _require_docs_src()
     path = _resolve_doc_path(slug)
     sections = _read_summary()
     content_html = _cached_render(slug, path)
     ordered = _flatten_links(sections)
     prev_l, next_l = _find_neighbors(slug, ordered)
     page_title = _page_title(slug, path)
+    content_html = _with_page_copy_button(content_html, slug, page_title)
     html = _COMPILED_TEMPLATE.render(
         sections=sections,
         current_slug=slug,
@@ -747,8 +905,9 @@ def _render_doc(slug: str) -> Response[str]:
         pygments_css=PYGMENTS_CSS,
         display_name=_space_display_name(),
         source_url=SOURCE_URL,
+        manual_copy_button=_copy_button(_ALL_MARKDOWN_PATH, _MANUAL_TIP, "Copy the entire manual as Markdown"),
     )
     return Response(content=html, media_type=MediaType.HTML)
 
 
-docs_routes = Router(path="/", route_handlers=[docs_index, docs_slug])
+docs_routes = Router(path="/", route_handlers=[docs_index, docs_all_markdown, docs_slug])

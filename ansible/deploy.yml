@@ -4,7 +4,7 @@
 # Optional: -e openhost_branch=<branch> to deploy a branch (defaults to main),
 #           or -e openhost_commit=<sha> to pin an exact commit.
 
-- name: Deploy OpenHost
+- name: Deploy Cloud in a Bottle
   hosts: all
   user: host
   tasks:

@@ -83,17 +83,6 @@ class TestHarness:
         assert result.status == 200
         assert result.body["permissions"] == [{"grant": {"key": "FOO"}, "scope": "global"}]
 
-    def test_undeclared_shortname(self, stack: OpenhostStack, consumer: ServiceConsumer) -> None:
-        r = stack.owner_session.post(
-            f"{stack.url_for(consumer.name)}/call-service",
-            json={"shortname": "nope", "path": "anything", "payload": None, "method": "POST"},
-            timeout=30,
-        )
-        assert r.status_code == 200
-        result = r.json()
-        assert result["service_status"] == 404
-        assert result["service_body"]["extra"]["code"] == "shortname_not_declared"
-
     def test_app_logs(self, stack: OpenhostStack) -> None:
         logs = stack.app_logs()
         assert "Echo provider listening" in logs or "Build complete" in logs

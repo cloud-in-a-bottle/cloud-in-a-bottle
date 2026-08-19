@@ -1,7 +1,7 @@
 [project]
 name = "openhost_system_agent"
 version = "0.1.0"
-description = "OpenHost system agent — host-level updates and migrations"
+description = "Cloud in a Bottle system agent — host-level updates and migrations"
 requires-python = ">=3.12"
 dependencies = [
     "attrs",
@@ -12,6 +12,11 @@ dependencies = [
 
 [project.scripts]
 openhost_system_agent = "openhost_system_agent.cli:main"
+
+[dependency-groups]
+# Test-only: the updater tests mint self-signed certs to exercise the downtime
+# server over real TLS. The monorepo dev environment already provides these.
+dev = ["pytest", "cryptography"]
 
 [build-system]
 requires = ["hatchling"]

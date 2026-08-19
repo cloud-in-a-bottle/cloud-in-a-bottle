@@ -10,6 +10,7 @@ from openhost_system_agent.migrations.versions.v0002_baseline import RECLAIM_EXE
 from openhost_system_agent.migrations.versions.v0002_baseline import RECLAIM_SCRIPT
 from openhost_system_agent.migrations.versions.v0002_baseline import RECLAIM_SCRIPT_PATH
 from openhost_system_agent.migrations.versions.v0002_baseline import build_openhost_service_unit
+from openhost_system_agent.migrations.versions.v0010_journal_read_for_oom import JOURNAL_READ_DROPIN
 
 
 def _effective_directives(unit_text: str) -> list[str]:
@@ -33,6 +34,17 @@ def test_ansible_template_and_builder_agree_on_directives() -> None:
     )
     rendered_j2 = env.get_template("openhost.service.j2").render(host_uid="1001")
     assert _effective_directives(rendered_j2) == _effective_directives(build_openhost_service_unit(1001))
+
+
+def test_journal_read_dropin_matches_ansible_copy_byte_for_byte() -> None:
+    """The migration-written drop-in and the ansible-installed drop-in must be
+    identical so a host grants journal access the same way however it was set up.
+    The group lives in this additive drop-in, not the main unit, so no existing
+    migration (or the shared builder) has to change to add it."""
+    repo_root = Path(__file__).resolve().parents[4]
+    ansible_copy = repo_root / "ansible" / "files" / "openhost.service.d" / "10-journal-read.conf"
+    assert ansible_copy.read_text() == JOURNAL_READ_DROPIN
+    assert "SupplementaryGroups=systemd-journal\n" in JOURNAL_READ_DROPIN
 
 
 class TestOpenhostServiceUnit:

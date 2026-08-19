@@ -19,4 +19,8 @@ grants = [{ key = "TEST_SECRET" }]
 
 [resources]
 memory_mb = 64
+# The running app is tiny (64 MB), but `pip install aiohttp` needs far more
+# than that to build. build_memory_mb defaults to memory_mb, so the build
+# must opt into a higher cap explicitly or it gets OOM-killed.
+build_memory_mb = 1024
 cpu_cores = 0.1

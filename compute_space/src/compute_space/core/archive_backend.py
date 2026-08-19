@@ -1369,7 +1369,7 @@ def configure_backend(
                         db,
                         "Migration to S3 failed and the local archive mount could not be "
                         "restarted automatically; your archive data is intact on local disk. "
-                        "Restart the instance (or the openhost service) to bring the archive "
+                        "Restart the instance (or the Cloud in a Bottle service) to bring the archive "
                         "back online, then retry.",
                     )
                 except Exception:  # noqa: BLE001
@@ -1398,7 +1398,7 @@ def configure_backend(
                         db,
                         "Migration to a new S3 bucket failed and the original archive mount "
                         "could not be restarted automatically; your archive data is intact in "
-                        "the original bucket. Restart the instance (or the openhost service) to "
+                        "the original bucket. Restart the instance (or the Cloud in a Bottle service) to "
                         "bring the archive back online, then retry.",
                     )
                 except Exception:  # noqa: BLE001

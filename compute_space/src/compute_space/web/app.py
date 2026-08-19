@@ -5,17 +5,18 @@ from typing import Any
 
 from jinja2 import pass_context
 from jinja2.runtime import Context
-from litestar import HttpMethod
 from litestar import Litestar
 from litestar import Request
 from litestar import Response
-from litestar import route
+from litestar import get
+from litestar import post
 from litestar.di import Provide
 from litestar.exceptions import HTTPException
 from litestar.exceptions import NotAuthorizedException
 from litestar.exceptions import PermissionDeniedException
 from litestar.exceptions.responses import create_exception_response
 from litestar.plugins.jinja import JinjaTemplateEngine
+from litestar.response import Redirect
 from litestar.static_files import create_static_files_router
 from litestar.template.config import TemplateConfig
 from litestar.types import ASGIApp
@@ -31,6 +32,8 @@ from compute_space.core.first_boot import seed_first_boot
 from compute_space.core.git_ops import SOURCE_URL
 from compute_space.core.image_pruner import start_image_pruner
 from compute_space.core.logging import logger
+from compute_space.core.memory_guard import ensure_memory_guard
+from compute_space.core.org_rename import reconcile_app_repo_urls
 from compute_space.core.startup import check_app_status
 from compute_space.core.startup import retry_pending_default_apps
 from compute_space.core.storage import start_storage_guard
@@ -137,26 +140,33 @@ def _full_app_bootstrap(config: Config) -> None:
     db = get_db()  # row_factory=Row; the archive derives its per-zone volume from the domains store
     try:
         archive_backend.attach_on_startup(config, db)
+        # Move any app repo URLs still pointing at the pre-rename GitHub owner.
+        # Idempotent, and inert until org_rename.ORG_RENAME_COMPLETE is flipped;
+        # see that module for why this is a per-boot reconcile rather than a
+        # versioned migration.
+        reconcile_app_repo_urls(db)
     finally:
         db.close()
     check_app_status(config)
     load_identity_keys(config.persistent_data_dir)
     start_storage_guard(config)
     start_image_pruner(config)
+    ensure_memory_guard(config)
     retry_pending_default_apps(config)
     # The DB `domains` table is the source of truth.  Seed it once (+ claim token) from
     # first_boot.toml; everything reads the primary live from the DB thereafter.
     seed_first_boot(config)
 
 
-@route(
-    "/setup",
-    http_method=[HttpMethod.GET, HttpMethod.POST],
-    status_code=403,
-    sync_to_thread=False,
-    raises=[PermissionDeniedException],
-)
-def setup_already_done() -> None:
+@get("/setup", sync_to_thread=False)
+def setup_already_done_get() -> Response[None]:
+    """The claim link (``/setup?claim=...``) printed by ``openhost up`` should keep working after setup,
+    so redirect instead of 403 — the dashboard guard bounces to /login unless the owner is signed in."""
+    return Redirect(path="/")
+
+
+@post("/setup", sync_to_thread=False, raises=[PermissionDeniedException])
+def setup_already_done_post() -> None:
     raise PermissionDeniedException(detail="This instance has already been set up.")
 
 
@@ -252,7 +262,8 @@ def create_app(config: Config) -> ASGIApp:
             pages_settings_routes,
             pages_system_routes,
             services_v2_routes,
-            setup_already_done,
+            setup_already_done_get,
+            setup_already_done_post,
         ],
         template_config=template_config,
         before_request=_reject_app_subdomain_requests,
