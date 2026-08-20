@@ -1142,6 +1142,11 @@ def wipe_data_restart_background(app_id: str, config: Config) -> None:
             container_id = app_row["container_id"]
             if container_id and is_container_running(container_id):
                 raise RuntimeError("App container is still running after stop; refusing to wipe data")
+            # The old container ID has served its purpose for the stop safety
+            # check. Clear it before wiping or rebuilding so status/log polling
+            # cannot ask Podman for a container that was just removed.
+            db.execute("UPDATE apps SET container_id = NULL WHERE app_id = ?", (app_id,))
+            db.commit()
             remove_image(app_name)
             wipe_data_preserving_repo(
                 app_name,

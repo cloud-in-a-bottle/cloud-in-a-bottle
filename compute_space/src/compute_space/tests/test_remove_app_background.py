@@ -121,6 +121,11 @@ def test_wipe_data_restart_preserves_repo_and_reloads(tmp_path: Path) -> None:
     assert not (Path(cfg.app_archive_dir) / "myapp").exists()
     assert not (Path(cfg.temporary_data_dir) / "app_temp_data" / "myapp" / "container.log").exists()
     reload_app.assert_called_once_with(app_id, str(repo), cfg)
+    db = sqlite3.connect(cfg.db_path)
+    try:
+        assert db.execute("SELECT container_id FROM apps WHERE app_id = ?", (app_id,)).fetchone() == (None,)
+    finally:
+        db.close()
 
 
 def test_wipe_refuses_data_deletion_when_container_still_running(tmp_path: Path) -> None:
