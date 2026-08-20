@@ -46,7 +46,9 @@ def _seed_db(db_path: str) -> None:
         conn.close()
 
 
-def _make_app_dir(apps_dir: Path, dir_name: str, *, manifest_name: str, manifest_filename: str = "ciab.toml") -> None:
+def _make_app_dir(
+    apps_dir: Path, dir_name: str, *, manifest_name: str, manifest_filename: str = "cloudinabottle.toml"
+) -> None:
     app_dir = apps_dir / dir_name
     app_dir.mkdir(parents=True)
     (app_dir / manifest_filename).write_text(
@@ -99,12 +101,12 @@ def test_deploy_default_apps_installs_each(cfg_with_apps, monkeypatch):
     assert all(entry["status"] == "ok" for entry in sentinel.values())
 
 
-def test_vendored_install_accepts_ciab_toml(tmp_path: Path, monkeypatch):
-    """A vendored builtin whose manifest is named ciab.toml installs fine."""
+def test_vendored_install_accepts_cloudinabottle_toml(tmp_path: Path, monkeypatch):
+    """A vendored builtin whose manifest is named cloudinabottle.toml installs fine."""
     apps_dir = tmp_path / "apps"
     apps_dir.mkdir()
-    _make_app_dir(apps_dir, "ciab_app", manifest_name="ciab-app", manifest_filename="ciab.toml")
-    cfg = _make_cfg(tmp_path, apps_dir=apps_dir, default_apps=["ciab_app"])
+    _make_app_dir(apps_dir, "canonical_app", manifest_name="canonical-app", manifest_filename="cloudinabottle.toml")
+    cfg = _make_cfg(tmp_path, apps_dir=apps_dir, default_apps=["canonical_app"])
     _seed_db(cfg.db_path)
     _patch_insert_and_deploy(monkeypatch)
 
@@ -136,7 +138,7 @@ def test_vendored_install_accepts_legacy_openhost_toml(tmp_path: Path, monkeypat
 
 
 def test_vendored_install_missing_manifest_fails(tmp_path: Path, monkeypatch):
-    """A vendored builtin dir with neither ciab.toml nor openhost.toml fails."""
+    """A vendored builtin dir with neither cloudinabottle.toml nor openhost.toml fails."""
     apps_dir = tmp_path / "apps"
     apps_dir.mkdir()
     (apps_dir / "no_manifest").mkdir()

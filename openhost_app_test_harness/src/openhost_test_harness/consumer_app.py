@@ -30,7 +30,7 @@ def write_consumer_app_dir(
     version: str,
     grants: list[Grant],
 ) -> None:
-    """Write a deployable consumer app (ciab.toml + Dockerfile + server.py) to target_dir."""
+    """Write a deployable consumer app (cloudinabottle.toml + Dockerfile + server.py) to target_dir."""
     manifest = {
         "app": {
             "name": name,

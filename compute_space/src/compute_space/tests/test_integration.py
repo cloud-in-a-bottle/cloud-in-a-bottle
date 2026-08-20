@@ -306,7 +306,7 @@ class TestRouterCore:
         assert "Local path does not exist" in r.json()["detail"]
 
     def test_add_app_file_url_non_git_accepted(self, admin_session, config):
-        """POST with a file:// URL to a non-git dir with ciab.toml succeeds."""
+        """POST with a file:// URL to a non-git dir with cloudinabottle.toml succeeds."""
         base_url = _zone_url(config)
         repo_url = f"file://{_FIXTURES_DIR}/test_app"
         r = admin_session.post(
@@ -353,7 +353,7 @@ class TestRouterCore:
         assert data["app_name"] == "test-git-dir"
 
     def test_add_app_file_url_bare_repo_manifest(self, admin_session, config, tmp_path):
-        """POST with a file:// URL to a bare git repo fetches ciab.toml."""
+        """POST with a file:// URL to a bare git repo fetches cloudinabottle.toml."""
         base_url = _zone_url(config)
         bare_path = str(tmp_path / "bare_repo.git")
         create_bare_git_repo(os.path.join(_FIXTURES_DIR, "test_app"), bare_path)

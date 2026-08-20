@@ -8,7 +8,7 @@ Typical use in an app repo's ``conftest.py``::
     @pytest.fixture(scope="session")
     def stack():
         # app_dir is discovered by walking up from the cwd to the nearest
-        # ciab.toml; pass app_dir=... explicitly to override.
+        # cloudinabottle.toml; pass app_dir=... explicitly to override.
         with OpenhostStack() as s:
             yield s
 
@@ -58,7 +58,7 @@ logger = logging.getLogger(__name__)
 def find_manifest_dir(start: Path | None = None) -> Path:
     """Walk up from ``start`` (default: cwd) to the nearest directory containing an app manifest.
 
-    Looks for the canonical ``ciab.toml`` first and falls back to the legacy
+    Looks for the canonical ``cloudinabottle.toml`` first and falls back to the legacy
     ``openhost.toml`` (see ``MANIFEST_FILENAMES``).
     """
     cur = (start or Path.cwd()).resolve()
@@ -193,7 +193,7 @@ class OpenhostStack:
     """Build, deploy, and front a Cloud in a Bottle app on a real local router for tests.
 
     Use as a context manager.  ``app_dir`` defaults to the nearest directory containing a
-    ``ciab.toml``, found by walking up from the current working directory.
+    ``cloudinabottle.toml``, found by walking up from the current working directory.
 
     - ``stack.url`` — the app through the router (subdomain routing, real auth)
     - ``stack.owner_session`` — a requests.Session authenticated as the zone owner; its
@@ -205,7 +205,7 @@ class OpenhostStack:
 
     app_dir: Path = attr.field(default=None, converter=_resolve_app_dir)
     app_name: str | None = None
-    """Deploy under this name; defaults to the ciab.toml [app].name."""
+    """Deploy under this name; defaults to the cloudinabottle.toml [app].name."""
     grant_manifest_permissions: bool = True
     """Auto-grant the grants declared in the app's [[services.v2.consumes]] at install."""
     pre_deploy: Callable[["OpenhostStack"], None] | None = None

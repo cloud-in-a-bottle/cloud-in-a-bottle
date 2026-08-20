@@ -49,7 +49,7 @@ def _allow_file_submodules(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def _make_submodule_origin(tmp_path: Path) -> tuple[Path, Path]:
-    """A superproject (with ciab.toml) containing one submodule at sub/."""
+    """A superproject (with cloudinabottle.toml) containing one submodule at sub/."""
     sub_origin = tmp_path / "sub_origin"
     sub_origin.mkdir()
     _git(sub_origin, "init", "-b", "main")
@@ -60,7 +60,7 @@ def _make_submodule_origin(tmp_path: Path) -> tuple[Path, Path]:
     origin = tmp_path / "origin"
     origin.mkdir()
     _git(origin, "init", "-b", "main")
-    (origin / "ciab.toml").write_text(MANIFEST)
+    (origin / "cloudinabottle.toml").write_text(MANIFEST)
     _git(origin, "add", ".")
     _git(origin, "commit", "-m", "init")
     _git(origin, "submodule", "add", f"file://{sub_origin}", "sub")
@@ -109,7 +109,7 @@ def test_git_pull_inits_submodule_added_upstream(tmp_path: Path) -> None:
     origin = tmp_path / "origin"
     origin.mkdir()
     _git(origin, "init", "-b", "main")
-    (origin / "ciab.toml").write_text(MANIFEST)
+    (origin / "cloudinabottle.toml").write_text(MANIFEST)
     _git(origin, "add", ".")
     _git(origin, "commit", "-m", "init")
 

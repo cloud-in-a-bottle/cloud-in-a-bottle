@@ -12,10 +12,10 @@ from compute_space.core.auth.permissions_v2 import Grant
 from compute_space.core.logging import logger
 
 # App manifest filenames, in the order they are looked for inside a repo.
-# ``ciab.toml`` is the canonical name; ``openhost.toml`` is the legacy name
+# ``cloudinabottle.toml`` is the canonical name; ``openhost.toml`` is the legacy name
 # and is still accepted as a silent fallback so existing app repos keep
 # working without changes.
-MANIFEST_FILENAMES: tuple[str, ...] = ("ciab.toml", "openhost.toml")
+MANIFEST_FILENAMES: tuple[str, ...] = ("cloudinabottle.toml", "openhost.toml")
 
 _SHORTNAME_RE = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
 
@@ -396,7 +396,7 @@ def _parse_services_v2_consumes(data: dict[str, Any]) -> list[ServiceConsumes]:
 
 
 def parse_manifest_from_string(raw_text: str) -> AppManifest:
-    """Parse an app manifest (``ciab.toml``) from its string content."""
+    """Parse an app manifest (``cloudinabottle.toml``) from its string content."""
     data = tomllib.loads(raw_text)
 
     app_section = data.get("app", {})
@@ -473,9 +473,9 @@ def parse_manifest_from_string(raw_text: str) -> AppManifest:
 def find_manifest_path(repo_path: str) -> str | None:
     """Return the path to the app manifest inside ``repo_path``, or ``None``.
 
-    Looks for the canonical ``ciab.toml`` first and falls back to the legacy
+    Looks for the canonical ``cloudinabottle.toml`` first and falls back to the legacy
     ``openhost.toml`` (see ``MANIFEST_FILENAMES``). When both exist,
-    ``ciab.toml`` wins.
+    ``cloudinabottle.toml`` wins.
     """
     for name in MANIFEST_FILENAMES:
         candidate = os.path.join(repo_path, name)

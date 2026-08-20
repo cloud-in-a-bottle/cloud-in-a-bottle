@@ -51,7 +51,7 @@ port = 5000
 
 def _manifest_with_consumes(repo: Path, consumes: str) -> Any:
     repo.mkdir(parents=True, exist_ok=True)
-    (repo / "ciab.toml").write_text(_CONSUMES.format(consumes=consumes))
+    (repo / "cloudinabottle.toml").write_text(_CONSUMES.format(consumes=consumes))
     return parse_manifest(str(repo))
 
 
@@ -297,7 +297,7 @@ def test_gate_ignores_already_granted_permission(cfg: Any, tmp_path: Path) -> No
 def test_gate_returns_none_for_unparseable_manifest(cfg: Any, tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
-    (repo / "ciab.toml").write_text("not = valid [ toml")
+    (repo / "cloudinabottle.toml").write_text("not = valid [ toml")
     app_id = _seed_perm_app(cfg, str(repo))
 
     # A broken manifest isn't the gate's problem; the reload path surfaces it.
@@ -533,12 +533,12 @@ def _init_two_commit_repo(tmp_path: Path) -> tuple[Path, Path, str, str]:
     subprocess.run(["git", "-C", str(origin), "init", "-q", "-b", "main"], check=True)
     subprocess.run(["git", "-C", str(origin), "config", "user.email", "t@t"], check=True)
     subprocess.run(["git", "-C", str(origin), "config", "user.name", "t"], check=True)
-    (origin / "ciab.toml").write_text(_CONSUMES.format(consumes=""))
+    (origin / "cloudinabottle.toml").write_text(_CONSUMES.format(consumes=""))
     _git(origin, "add", "-A")
     _git(origin, "commit", "-qm", "v1 no consumes")
     v1 = _git(origin, "rev-parse", "HEAD")
     # v2 adds a new consume
-    (origin / "ciab.toml").write_text(
+    (origin / "cloudinabottle.toml").write_text(
         _CONSUMES.format(consumes=_consume_block("github.com/x/secrets", "secrets", '{ key = "API_KEY" }'))
     )
     _git(origin, "add", "-A")
@@ -601,4 +601,4 @@ def test_refused_update_rolls_back_working_tree(
     # The working tree must be rolled back to v1 — NOT left on the pulled v2 — so
     # a subsequent plain (ungated) reload can't deploy the unapproved version.
     assert _git(clone, "rev-parse", "HEAD") == v1
-    assert "consumes" not in (clone / "ciab.toml").read_text()
+    assert "consumes" not in (clone / "cloudinabottle.toml").read_text()

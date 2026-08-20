@@ -20,7 +20,7 @@ openhost/
 
 ## how components connect
 
-1. **compute_space** is a litestar app (port 8080). it reads `ciab.toml` manifests from app repos, builds images from each app's `Dockerfile` using rootless podman, and runs each app in its own user namespace.
+1. **compute_space** is a litestar app (port 8080). it reads `cloudinabottle.toml` manifests from app repos, builds images from each app's `Dockerfile` using rootless podman, and runs each app in its own user namespace.
 2. it proxies incoming HTTP requests to the correct app by matching subdomain.
 3. **auth** uses JWT with RS256. apps verify with the public key passed as env var.
 

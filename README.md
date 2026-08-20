@@ -21,7 +21,7 @@ Cloud in a Bottle is the project our team needed and couldn't find: a corner of 
 - Personal tools — AI-generated apps, scripts, and utilities with nowhere useful to host them
 - Open source software — Matrix, Minecraft servers, notes apps, project management tools
 - Dev and creative tools — coding agents, image-making software, anything you built and want to share with a real URL
-- Anything Docker-compatible — add a `ciab.toml` manifest to any repo and it's deployable
+- Anything Docker-compatible — add a `cloudinabottle.toml` manifest to any repo and it's deployable
 
 ## Managed hosting
 
@@ -72,7 +72,7 @@ See `ansible/readme.md` for prerequisites and full details.
 
 ## How it works
 
-The router is a Python app that provides a web dashboard for deploying and managing apps. It reads `ciab.toml` manifests from app repos, builds container images from each app's `Dockerfile`, runs each app in its own isolated container, and proxies inbound HTTP requests to the right app by subdomain.
+The router is a Python app that provides a web dashboard for deploying and managing apps. It reads `cloudinabottle.toml` manifests from app repos, builds container images from each app's `Dockerfile`, runs each app in its own isolated container, and proxies inbound HTTP requests to the right app by subdomain.
 
 ### Server mode
 
@@ -187,7 +187,7 @@ The user-facing manual lives in `docs/src/` and is served at `https://<zone>/doc
 
 - `docs/src/introduction.md` — introduction + table of contents
 - `docs/src/creating_an_app.md` — guide to building apps
-- `docs/src/manifest_spec.md` — `ciab.toml` app manifest specification
+- `docs/src/manifest_spec.md` — `cloudinabottle.toml` app manifest specification
 - `docs/src/routing.md` — subdomain + path routing model
 - `docs/src/data.md` — persistent + archive data tiers
 - `docs/src/user_identity.md` — identity / login flow for apps

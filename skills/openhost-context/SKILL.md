@@ -54,7 +54,7 @@ Zones serve the public internet. Be careful with anything that could open
 unauthenticated access:
 
 - By default every route requires the zone owner to be logged in. Routes
-  listed in `public_paths` in `ciab.toml` are reachable by **anyone** —
+  listed in `public_paths` in `cloudinabottle.toml` are reachable by **anyone** —
   only expose paths that are meant to be public.
 - Don't put API tokens in code, commits, or anything that might be pushed.
   `oh` already injects auth; reach for a raw token only if truly necessary
@@ -70,7 +70,7 @@ oh app deploy https://github.com/you/my-app --name my-app --wait --instance my-z
 
 You can deploy from a branch with `https://github.com/you/my-app@branch_name`.
 
-The router reads `ciab.toml` from the repo, builds the image from the
+The router reads `cloudinabottle.toml` from the repo, builds the image from the
 app's `Dockerfile`, and starts routing to it.
 
 The common iterate loop — commit + push your changes, then pull & rebuild
@@ -107,7 +107,7 @@ Start from the template and build on top of it:
 github.com/cloud-in-a-bottle/app-template
 ```
 
-An app is any OCI container reachable over HTTP. It needs a `ciab.toml`
+An app is any OCI container reachable over HTTP. It needs a `cloudinabottle.toml`
 manifest and a `Dockerfile` at the repo root; it should listen on
 `0.0.0.0:<port>` matching `runtime.container.port` in the manifest.
 

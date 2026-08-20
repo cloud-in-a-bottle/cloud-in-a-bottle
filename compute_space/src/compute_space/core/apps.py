@@ -207,7 +207,7 @@ def github_token_git_config(token: str | None) -> list[str]:
 async def clone_and_read_manifest(
     repo_url: str, github_token: str | None = None
 ) -> tuple[AppManifest | None, str | None, str | None]:
-    """Clone a repo to a temp dir and read its manifest (``ciab.toml``).
+    """Clone a repo to a temp dir and read its manifest (``cloudinabottle.toml``).
 
     Returns (manifest, clone_dir, error). On success error is None.
     """
