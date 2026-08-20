@@ -65,7 +65,7 @@ function loadDomains() {
 function addDomain() {
   var name = document.getElementById('domain-name').value.trim();
   var msg = document.getElementById('domain-msg');
-  if (!name) { alert('Enter a domain name.'); return; }
+  if (!name) { return; }
   var type = document.getElementById('domain-type').value;
   var body = {name: name, tls: type === 'public', mdns: type === 'mdns'};
   fetch(DOMAINS_URL, {
@@ -79,6 +79,7 @@ function addDomain() {
       if (!res.ok) { alert(responseErrorMessage(res.data, 'Failed to add domain.')); return; }
       var data = res.data;
       document.getElementById('domain-name').value = '';
+      document.getElementById('add-domain-btn').disabled = true;
       if (body.tls) {
         msg.textContent = 'Added. Acquiring a TLS certificate in the background — '
           + 'its DNS must be delegated to this instance for acquisition to succeed.';
@@ -99,5 +100,9 @@ function removeDomain(name) {
       renderDomains((res.data && res.data.domains) || []);
     });
 }
+
+document.getElementById('domain-name').addEventListener('input', function(e) {
+  document.getElementById('add-domain-btn').disabled = e.target.value.trim() === '';
+});
 
 loadDomains();
