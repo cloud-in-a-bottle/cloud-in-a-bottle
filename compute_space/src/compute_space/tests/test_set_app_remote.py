@@ -305,7 +305,7 @@ def test_add_app_pins_default_branch_at_install(cfg: Any, tmp_path: Path) -> Non
     clone = tmp_path / "clone"
     clone.mkdir()
     _git(clone, "init", "-b", "main")
-    (clone / "openhost.toml").write_text(
+    (clone / "ciab.toml").write_text(
         '[app]\nname = "myapp"\nversion = "0.1.0"\n[runtime.container]\nimage = "Dockerfile"\nport = 8080\n'
     )
     _git(clone, "add", ".")
@@ -346,7 +346,7 @@ def test_add_app_non_git_clone_does_not_pin_or_error(cfg: Any, tmp_path: Path) -
     refless."""
     clone = tmp_path / "clone"
     clone.mkdir()
-    (clone / "openhost.toml").write_text(
+    (clone / "ciab.toml").write_text(
         '[app]\nname = "myapp"\nversion = "0.1.0"\n[runtime.container]\nimage = "Dockerfile"\nport = 8080\n'
     )
     assert not (clone / ".git").exists()
