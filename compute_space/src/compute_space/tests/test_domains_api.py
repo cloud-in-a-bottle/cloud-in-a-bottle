@@ -202,12 +202,17 @@ def test_add_tls_domain_records_acquisition_error(
 
 def test_add_duplicate_rejected(cfg: Any, client: TestClient[Litestar]) -> None:
     client.cookies.update(_auth_cookie(cfg.db_path))
-    assert client.post("/api/domains", json="host.example.com").status_code == 400
+    resp = client.post("/api/domains", json="host.example.com")
+    assert resp.status_code == 400
+    # 4xx keeps `detail` unmasked, so the reason reaches the client verbatim.
+    assert resp.json()["detail"] == "domain is already configured"
 
 
 def test_add_invalid_name_rejected(cfg: Any, client: TestClient[Litestar]) -> None:
     client.cookies.update(_auth_cookie(cfg.db_path))
-    assert client.post("/api/domains", json="not a domain").status_code == 400
+    resp = client.post("/api/domains", json="not a domain")
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == "invalid domain name"
     assert client.post("/api/domains", json="nodot").status_code == 400
 
 
@@ -234,9 +239,13 @@ def test_remove_runtime_domain(cfg: Any, client: TestClient[Litestar]) -> None:
 
 def test_remove_primary_rejected(cfg: Any, client: TestClient[Litestar]) -> None:
     client.cookies.update(_auth_cookie(cfg.db_path))
-    assert client.delete("/api/domains/host.example.com").status_code == 400
+    resp = client.delete("/api/domains/host.example.com")
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == "cannot remove the primary domain"
 
 
 def test_remove_unknown_domain_404(cfg: Any, client: TestClient[Litestar]) -> None:
     client.cookies.update(_auth_cookie(cfg.db_path))
-    assert client.delete("/api/domains/nope.example.net").status_code == 404
+    resp = client.delete("/api/domains/nope.example.net")
+    assert resp.status_code == 404
+    assert resp.json()["detail"] == "domain not found"

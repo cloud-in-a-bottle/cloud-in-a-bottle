@@ -44,8 +44,17 @@ function appAction(appId, action, body) {
                           function() { return {ok: r.ok, data: {}}; });
     })
     .then(function(res) {
-      if (!res.ok || (res.data && res.data.error)) {
-        alert((res.data && res.data.error) || 'Request failed');
+      // An update declaring new service permissions is refused with 200 and the
+      // grants it wants; approving them is done from the app detail page.
+      if (res.ok && res.data && res.data.permissions_required) {
+        alert(res.data.error || 'This update requires approving new service permissions.');
+        if (row) setRowBusy(row, false);
+        refreshApps();
+        return;
+      }
+      if (!res.ok) {
+        var message = responseErrorMessage(res.data, 'Request failed');
+        alert(message);
         if (row) setRowBusy(row, false);
       }
       refreshApps();

@@ -11,7 +11,6 @@ import sqlite3
 
 import httpx
 
-from compute_space.core.services_v2 import ServiceNotAvailable
 from compute_space.core.services_v2 import resolve_provider
 from compute_space.core.util import assert_str
 from compute_space.db import get_db
@@ -24,8 +23,9 @@ ROUTER_CONSUMER_ID = "0"
 ROUTER_CONSUMER_NAME = "OPENHOST"
 
 
-class OAuthAuthorizationRequired(Exception):
+class OAuthRequired(RuntimeError):
     def __init__(self, authorize_url: str):
+        super().__init__(authorize_url)
         self.authorize_url = authorize_url
 
 
@@ -38,8 +38,8 @@ async def get_oauth_token(
     """Fetch an OAuth access token from the v2 oauth service.
 
     Raises:
-        ServiceNotAvailable: The oauth service isn't installed/running, or didn't respond.
-        OAuthAuthorizationRequired: User authorization is needed (carries authorize_url).
+        RuntimeError: The oauth service isn't installed/running, or didn't respond.
+        OAuthRequired: User authorization is needed (carries authorize_url).
     """
     if db is None:
         db = get_db()
@@ -65,11 +65,11 @@ async def get_oauth_token(
                 },
             )
     except httpx.HTTPError as e:
-        raise ServiceNotAvailable(f"OAuth service is not responding: {e}") from e
+        raise RuntimeError(f"OAuth service is not responding: {e}") from e
 
     data = resp.json()
     if resp.status_code == 200:
         return assert_str(data["access_token"])
     if resp.status_code == 401 and data.get("status") == "authorization_required":
-        raise OAuthAuthorizationRequired(data["authorize_url"])
-    raise ServiceNotAvailable(f"OAuth service returned unexpected status {resp.status_code}: {resp.text}")
+        raise OAuthRequired(data["authorize_url"])
+    raise RuntimeError(f"OAuth service returned unexpected status {resp.status_code}: {resp.text}")

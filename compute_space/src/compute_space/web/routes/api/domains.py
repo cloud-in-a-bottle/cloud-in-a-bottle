@@ -24,6 +24,8 @@ from litestar import post
 from litestar.background_tasks import BackgroundTask
 from litestar.di import NamedDependency
 from litestar.enums import MediaType
+from litestar.exceptions import NotFoundException
+from litestar.exceptions import ValidationException
 from litestar.params import FromPath
 
 from compute_space.config import Config
@@ -68,11 +70,6 @@ class DomainInfo:
 @attr.s(auto_attribs=True, frozen=True)
 class DomainListResponse:
     domains: list[DomainInfo]
-
-
-@attr.s(auto_attribs=True, frozen=True)
-class ErrorResponse:
-    error: str
 
 
 def _tls_cert_display(
@@ -169,17 +166,17 @@ async def list_domains(config: NamedDependency[Config], db: NamedDependency[sqli
     return DomainListResponse(domains=_domain_list(config, db))
 
 
-@post("/api/domains", status_code=202, guards=[require_owner_auth])
+@post("/api/domains", status_code=202, guards=[require_owner_auth], raises=[ValidationException])
 async def add_domain(
     data: str,
     config: NamedDependency[Config],
     db: NamedDependency[sqlite3.Connection],
-) -> Response[DomainListResponse] | Response[ErrorResponse]:
+) -> Response[DomainListResponse]:
     # `.local` means mDNS over http, anything else a public HTTPS domain (`is_local_name` decides).
     name = data.strip().lower()
     error = _validate_new_domain(name, db)
     if error is not None:
-        return Response(ErrorResponse(error=error), status_code=400, media_type=MediaType.JSON)
+        raise ValidationException(detail=error)
 
     tls = not is_local_name(name)  # a `.local` name can never get a public cert
     domain = Domain(name=name, tls=tls)
@@ -211,18 +208,23 @@ async def add_domain(
     )
 
 
-@delete("/api/domains/{name:str}", status_code=200, guards=[require_owner_auth])
+@delete(
+    "/api/domains/{name:str}",
+    status_code=200,
+    guards=[require_owner_auth],
+    raises=[ValidationException, NotFoundException],
+)
 async def remove_domain(
     name: FromPath[str],
     config: NamedDependency[Config],
     db: NamedDependency[sqlite3.Connection],
-) -> Response[DomainListResponse] | Response[ErrorResponse]:
+) -> Response[DomainListResponse]:
     name = name.strip().lower()
     if name == primary_domain(db).name_no_port:
-        return Response(ErrorResponse(error="cannot remove the primary domain"), status_code=400)
+        raise ValidationException(detail="cannot remove the primary domain")
     removed = get_record(db, name)
     if not remove_record(db, name):
-        return Response(ErrorResponse(error="domain not found"), status_code=404)
+        raise NotFoundException(detail="domain not found")
     if removed is not None:
         # Drop the zone from CoreDNS and stop the responder if that was the last `.local` domain.
         # Off the event loop — the CoreDNS restart and the responder's thread-join (up to 2s) block.

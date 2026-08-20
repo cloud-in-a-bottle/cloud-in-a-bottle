@@ -36,7 +36,6 @@ from compute_space.core.data import provision_data
 from compute_space.core.data import rmtree_with_sudo_fallback
 from compute_space.core.domains import Domain
 from compute_space.core.domains import primary_domain
-from compute_space.core.git_ops import UnsupportedRepoUrlError
 from compute_space.core.git_ops import is_github_repo_url
 from compute_space.core.git_ops import is_ssh_url
 from compute_space.core.git_ops import parse_repo_url
@@ -45,11 +44,10 @@ from compute_space.core.manifest import AppLink
 from compute_space.core.manifest import AppManifest
 from compute_space.core.manifest import PortMapping
 from compute_space.core.manifest import parse_manifest
-from compute_space.core.oauth import OAuthAuthorizationRequired
+from compute_space.core.oauth import OAuthRequired
 from compute_space.core.oauth import get_oauth_token
 from compute_space.core.ports import allocate_port
 from compute_space.core.ports import resolve_port_mappings
-from compute_space.core.services_v2 import ServiceNotAvailable
 from compute_space.core.services_v2 import register_v2_service_providers
 from compute_space.db import get_db
 
@@ -214,7 +212,7 @@ async def clone_and_read_manifest(
     """
     try:
         base_url, ref = parse_repo_url(repo_url)
-    except UnsupportedRepoUrlError as e:
+    except ValueError as e:
         return None, None, str(e)
     clone_url = base_url
 
@@ -329,10 +327,10 @@ async def clone_with_github_fallback(
         clone_error = error
         try:
             token = await get_oauth_token("github", ["repo"], return_to=return_to)
-        except ServiceNotAvailable as e:
-            return None, None, f"{clone_error} (also failed to fetch GitHub OAuth token: {e.message})", None
-        except OAuthAuthorizationRequired as e:
+        except OAuthRequired as e:
             return None, None, f"{clone_error} (GitHub OAuth not configured: {e.authorize_url})", e.authorize_url
+        except RuntimeError as e:
+            return None, None, f"{clone_error} (also failed to fetch GitHub OAuth token: {str(e)})", None
         manifest, tmp_dir, error = await clone_and_read_manifest(repo_url, github_token=token)
 
     return manifest, tmp_dir, error, None
@@ -915,7 +913,7 @@ def git_pull(
     if repo_url:
         try:
             base_url, ref = parse_repo_url(repo_url)
-        except UnsupportedRepoUrlError as e:
+        except ValueError as e:
             _log(str(e))
             return False, str(e)
         try:

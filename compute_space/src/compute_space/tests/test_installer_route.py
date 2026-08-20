@@ -26,7 +26,6 @@ from compute_space.config import provide_config
 from compute_space.core.app_id import new_app_id
 from compute_space.core.auth.permissions_v2 import grant_permission_v2
 from compute_space.core.installer import INSTALLER_SERVICE_URL
-from compute_space.core.installer import InstallError
 from compute_space.core.installer import InstallResult
 from compute_space.db import provide_db
 from compute_space.db.connection import init_db
@@ -150,12 +149,12 @@ def test_install_without_grant_returns_permission_required(client: TestClient[Li
     )
     assert resp.status_code == 403
     body = resp.json()
-    assert body["error"] == "permission_required"
-    assert body["required_grant"]["grant"]["capability"] == "install"
+    assert body["extra"]["code"] == "permission_required"
+    assert body["extra"]["required_grant"]["grant"]["capability"] == "install"
     # The proposed grant must come from the consumer's manifest-declared
     # prefix ("*" in CALLER_MANIFEST), not the verbatim requested URL —
     # otherwise the owner gets a fresh approval prompt per repo.
-    assert body["required_grant"]["grant"]["repo_url_prefix"] == "*"
+    assert body["extra"]["required_grant"]["grant"]["repo_url_prefix"] == "*"
 
 
 def test_install_with_non_matching_grant_denied(client: TestClient[Litestar], cfg: Any) -> None:
@@ -167,7 +166,7 @@ def test_install_with_non_matching_grant_denied(client: TestClient[Litestar], cf
     )
     assert resp.status_code == 403
     body = resp.json()
-    assert body["error"] == "permission_required"
+    assert body["extra"]["code"] == "permission_required"
 
 
 # Caller whose manifest declares the GitHub-org prefix the catalog actually ships
@@ -211,7 +210,7 @@ def test_proposed_grant_uses_manifest_declared_prefix(cfg: Any) -> None:
         )
     assert resp.status_code == 403
     body = resp.json()
-    assert body["required_grant"]["grant"] == {
+    assert body["extra"]["required_grant"]["grant"] == {
         "capability": "install",
         "repo_url_prefix": "https://github.com/cloud-in-a-bottle/",
     }
@@ -236,7 +235,7 @@ def test_proposed_grant_falls_back_when_manifest_prefix_doesnt_match(cfg: Any) -
         )
     assert resp.status_code == 403
     body = resp.json()
-    assert body["required_grant"]["grant"]["repo_url_prefix"] == "https://gitlab.com/something/else"
+    assert body["extra"]["required_grant"]["grant"]["repo_url_prefix"] == "https://gitlab.com/something/else"
 
 
 def test_install_with_matching_grant_succeeds(client: TestClient[Litestar], cfg: Any) -> None:
@@ -260,7 +259,7 @@ def test_install_propagates_install_error_status_code(client: TestClient[Litesta
     _grant_installer(cfg.db_path, CALLER_APP_ID, repo_url_prefix="*")
 
     async def fake_install(*args: Any, **kwargs: Any) -> Any:
-        raise InstallError("manifest invalid", status_code=400)
+        raise ValueError("manifest invalid")
 
     with mock.patch("compute_space.web.routes.services_v2.install_from_repo_url", side_effect=fake_install):
         resp = client.post(
@@ -270,8 +269,8 @@ def test_install_propagates_install_error_status_code(client: TestClient[Litesta
         )
     assert resp.status_code == 400
     body = resp.json()
-    assert body["error"] == "install_failed"
-    assert "manifest invalid" in body["message"]
+    assert body["extra"]["code"] == "install_failed"
+    assert body["extra"]["output"] == "manifest invalid"
 
 
 def test_install_rejects_missing_repo_url(client: TestClient[Litestar], cfg: Any) -> None:
@@ -347,7 +346,7 @@ def test_unknown_shortname_returns_404(client: TestClient[Litestar], cfg: Any) -
     )
     assert resp.status_code == 404
     body = resp.json()
-    assert body["error"] == "shortname_not_declared"
+    assert body["extra"]["code"] == "shortname_not_declared"
 
 
 # --- Unknown installer sub-endpoint ----------------------------------------
