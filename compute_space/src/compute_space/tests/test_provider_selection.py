@@ -305,4 +305,3 @@ class TestServiceProxyStripsAuthorization:
             server.shutdown()
             server.server_close()
             thread.join(timeout=5)
-

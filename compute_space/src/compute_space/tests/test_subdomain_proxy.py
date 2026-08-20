@@ -108,4 +108,3 @@ def test_build_forwarded_request_headers_drops_authorization() -> None:
     assert "x-custom" in keys
     # router-injected identity header still present
     assert ("X-OpenHost-Is-Owner", "true") in built
-
