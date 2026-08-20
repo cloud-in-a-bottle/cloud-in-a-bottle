@@ -106,14 +106,17 @@ function appAction(url, data, opts) {
   })
     .then(function(r) { return r.json().then(function(d) { return {ok: r.ok, data: d}; }); })
     .then(function(res) {
-      // An update declaring new permissions is refused until the owner approves;
-      // re-issue with approve_new_permissions so the grants are written first.
-      if (res.ok && res.data && res.data.permissions_required) {
+      // Hand off to full-page review when manifest changes require approval;
+      // re-issues reload with approve_new_permissions once approved.
+      if (res.ok && res.data && res.data.review_required) {
         if (clear) clear();
-        if (confirmNewPermissions(res.data.permissions_required)) {
-          var approved = Object.assign({}, data || {}, {approve_new_permissions: true});
-          appAction(url, approved, opts);
-        }
+        try {
+          sessionStorage.setItem('openhost.updateReview.' + config.appId, JSON.stringify({
+            settings_changed: res.data.settings_changed || [],
+            permissions_required: res.data.permissions_required || [],
+          }));
+        } catch (e) { /* sessionStorage unavailable; review page shows a fallback */ }
+        window.location.href = config.updateReviewUrl;
         return;
       }
       if (!res.ok) {
@@ -129,18 +132,6 @@ function appAction(url, data, opts) {
       if (clear) clear('Request failed');
       alert('Request failed');
     });
-}
-
-function confirmNewPermissions(perms) {
-  var lines = perms.map(function(p) {
-    var label = p.shortname ? (p.shortname + ' (' + p.service_url + ')') : p.service_url;
-    return '\u2022 ' + label + ': ' + JSON.stringify(p.grant);
-  });
-  return confirm(
-    'This update requests new service permissions:\n\n' +
-    lines.join('\n') +
-    '\n\nApprove these and continue updating?'
-  );
 }
 
 // ─── Toast ───

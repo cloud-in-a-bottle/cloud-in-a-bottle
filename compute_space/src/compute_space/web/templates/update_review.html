@@ -1,0 +1,42 @@
+{% extends "layout.html" %}
+{% block title_suffix %} - Review Update{% endblock %}
+{% block content %}
+<h2>Review Update &mdash; {{ app.name }}</h2>
+<p>This update changes the app's settings. Review the changes below and approve
+them to apply the update, mirroring the approval required when the app was installed.</p>
+
+<p id="review-error" class="error" style="display:none;"></p>
+
+<div id="no-review" style="display:none;">
+  <p>No pending update to review. Return to
+    <a href="/app_detail/{{ app.name }}">{{ app.name }}</a> and choose
+    <strong>Update &amp; Reload</strong> to check for changes.</p>
+</div>
+
+<div id="review-body" style="display:none;">
+  <div id="settings-section" style="display:none;">
+    <h3>Changed settings</h3>
+    <table id="settings-table"></table>
+  </div>
+
+  <div id="permissions-section" style="display:none;">
+    <h3>New service permissions</h3>
+    <p>These are granted when you approve the update.</p>
+    <table id="permissions-table"></table>
+  </div>
+
+  <br>
+  <button id="approve-btn" onclick="approveUpdate()" class="btn btn-primary">Approve &amp; Update</button>
+  <button onclick="cancelReview()" class="btn" style="margin-left:0.5em;">Cancel</button>
+  <span id="review-msg" style="margin-left:0.5em;"></span>
+</div>
+
+<script id="page-config" type="application/json">
+{
+  "appId": {{ app.app_id | tojson }},
+  "reloadAppUrl": "/reload_app/{{ app.app_id }}",
+  "appDetailUrl": "/app_detail/{{ app.name }}"
+}
+</script>
+<script src="{{ static_url('js/update-review.js') }}"></script>
+{% endblock %}

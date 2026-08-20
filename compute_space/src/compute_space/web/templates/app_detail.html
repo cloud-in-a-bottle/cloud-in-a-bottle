@@ -106,19 +106,24 @@
 {% if granted_permissions or ungranted_permissions %}
 <h3>Service Permissions</h3>
 {% if granted_permissions %}
+<script id="granted-perms-data" type="application/json">{{ granted_permissions | tojson }}</script>
 <table>
-  <tr><th>Service</th><th>Grant</th><th>Scope</th></tr>
+  <tr><th>Service</th><th>Grant</th><th>Scope</th><th>Actions</th></tr>
   {% for p in granted_permissions %}
   <tr>
     <td><code>{{ p.service_url }}</code></td>
     <td><code>{{ p.grant | tojson }}</code></td>
     <td>{{ p.scope }}</td>
+    <td><button class="btn btn-danger"
+      data-perm-idx="{{ loop.index0 }}"
+      onclick="revokePermission(this)">Revoke</button></td>
   </tr>
   {% endfor %}
 </table>
 {% endif %}
 {% if ungranted_permissions %}
-<p style="margin-top:0.5em;">The following permissions are declared in the app manifest but not yet granted:</p>
+<h4 style="margin-bottom:0.2em;">Declared dependencies (not currently granted)</h4>
+<p style="margin-top:0;">Permissions declared by the app but not granted</p>
 <script id="ungranted-perms-data" type="application/json">{{ ungranted_permissions | tojson }}</script>
 <table>
   <tr><th>Service</th><th>Grant</th><th>Actions</th></tr>
@@ -207,6 +212,35 @@ async function grantPermission(btn) {
   }
 }
 
+async function revokePermission(btn) {
+  const perms = JSON.parse(document.getElementById('granted-perms-data').textContent);
+  const perm = perms[parseInt(btn.dataset.permIdx, 10)];
+  if (!confirm('Revoke ' + perm.service_url + ' permission from {{ app.name }}?')) return;
+  const appId = '{{ app.app_id }}';
+  btn.disabled = true;
+  btn.textContent = 'Revoking…';
+  try {
+    const resp = await fetch('/api/permissions/v2/revoke', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        app_id: appId,
+        service_url: perm.service_url,
+        grant: perm.grant,
+        scope: perm.scope,
+        provider_app_id: perm.provider_app_id,
+      }),
+    });
+    if (!resp.ok) throw new Error(await resp.text());
+    btn.textContent = 'Revoked';
+    btn.closest('tr').style.opacity = '0.5';
+  } catch (e) {
+    btn.textContent = 'Error';
+    btn.disabled = false;
+    alert('Failed to revoke: ' + e.message);
+  }
+}
+
 // Fetch this app's diagnostics bundle and copy the JSON to the clipboard.
 // Uses the async Clipboard API where available, with a textarea fallback for
 // non-secure (plain-HTTP dev) contexts, mirroring the Diagnostics page.
@@ -252,6 +286,8 @@ async function copyAppDiagnostics(btn) {
   "appStatus": {{ app.status | tojson }},
   "nextUrl": {{ next_url | default("", true) | tojson }},
   "reloadAppUrl": "/reload_app/{{ app.app_id }}",
+  "updateReviewUrl": "/update_review/{{ app.name }}",
+  "appId": {{ app.app_id | tojson }},
   "setAppRemoteUrl": "/set_app_remote/{{ app.app_id }}",
   "dropBuildCacheUrl": "/api/drop-docker-cache"
 }
