@@ -340,7 +340,7 @@ def run_container(
 
     # max-file is not supported by podman's k8s-file driver; archiving is
     # handled by the reload route before run_container is called.
-    # max-size=10mb is kept as a safety net against unbounded growth between reloads.
+    # max-size=1mb is kept as a safety net against unbounded growth between reloads.
     container_log_file = os.path.join(app_temp_dir, "container.log")
     os.makedirs(app_temp_dir, exist_ok=True)
 
@@ -353,7 +353,7 @@ def run_container(
             "--security-opt=no-new-privileges=true",
             "--log-driver=k8s-file",
             f"--log-opt=path={container_log_file}",
-            "--log-opt=max-size=10mb",
+            "--log-opt=max-size=1mb",
         ]
     )
     if manifest.shm_mb > 0:

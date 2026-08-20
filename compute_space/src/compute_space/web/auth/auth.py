@@ -8,6 +8,7 @@ from urllib.parse import urlparse
 
 from litestar import Request
 from litestar import Response
+from litestar import WebSocket
 from litestar.connection import ASGIConnection
 from litestar.exceptions import NotAuthorizedException
 from litestar.handlers.base import BaseRouteHandler
@@ -156,6 +157,22 @@ def verify_app_auth(connection: AnyConnection) -> str:
 def require_owner_auth(connection: AnyConnection, _route_handler: BaseRouteHandler) -> None:
     """Adapt verify_owner_auth to be used as a route guard."""
     verify_owner_auth(connection)
+
+
+async def verify_owner_ws(socket: WebSocket[Any, Any, Any]) -> bool:
+    """Owner-auth a WebSocket; on success return True and leave accepting to the caller.
+
+    Guards can't be used here: they signal failure by raising, which on a WS rejects the
+    handshake before the client can read why. So on failure we accept and send a 4401 close
+    frame the browser's ``onclose`` can see, then return False for the caller to bail on.
+    """
+    try:
+        verify_owner_auth(socket)
+        return True
+    except NotAuthorizedException:
+        await socket.accept()
+        await socket.close(code=4401, reason="Missing or invalid authorization")
+        return False
 
 
 def require_app_auth(connection: AnyConnection, _route_handler: BaseRouteHandler) -> None:
