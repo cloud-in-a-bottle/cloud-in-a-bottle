@@ -830,10 +830,6 @@ def test_s3_credentials(
     return None
 
 
-class BackendConfigureError(Exception):
-    """Raised by ``configure_backend`` when configuration fails."""
-
-
 def _endpoint_is_insecure_http(s3_endpoint: str | None) -> bool:
     """True iff a custom endpoint uses plain HTTP (e.g. a same-host MinIO).
 
@@ -1202,7 +1198,7 @@ def configure_backend(
     """
     state = read_state(db)
     if state.backend not in ("local", "disabled", "s3"):
-        raise BackendConfigureError(f"cannot configure S3 from backend={state.backend!r}")
+        raise RuntimeError(f"cannot configure S3 from backend={state.backend!r}")
 
     migrating_from_local = state.backend == "local"
     migrating_from_s3 = state.backend == "s3"
@@ -1210,7 +1206,7 @@ def configure_backend(
         # Source creds must exist for an s3->s3 migration; without them we
         # cannot read the old bucket to copy it forward.
         if not state.s3_bucket or state.s3_access_key_id is None or state.s3_secret_access_key is None:
-            raise BackendConfigureError(
+            raise RuntimeError(
                 "current S3 archive backend is missing its bucket/credentials in the "
                 "database; cannot migrate to a new bucket.  Re-provision or contact support."
             )
@@ -1373,7 +1369,7 @@ def configure_backend(
                         db,
                         "Migration to S3 failed and the local archive mount could not be "
                         "restarted automatically; your archive data is intact on local disk. "
-                        "Restart the instance (or the openhost service) to bring the archive "
+                        "Restart the instance (or the Cloud in a Bottle service) to bring the archive "
                         "back online, then retry.",
                     )
                 except Exception:  # noqa: BLE001
@@ -1402,7 +1398,7 @@ def configure_backend(
                         db,
                         "Migration to a new S3 bucket failed and the original archive mount "
                         "could not be restarted automatically; your archive data is intact in "
-                        "the original bucket. Restart the instance (or the openhost service) to "
+                        "the original bucket. Restart the instance (or the Cloud in a Bottle service) to "
                         "bring the archive back online, then retry.",
                     )
                 except Exception:  # noqa: BLE001
@@ -1412,7 +1408,7 @@ def configure_backend(
                 umount(config)
             except Exception:  # noqa: BLE001
                 logger.exception("failed to unmount juicefs after aborted S3 format")
-        raise BackendConfigureError(f"Failed to configure S3 archive backend: {exc}") from exc
+        raise RuntimeError(f"Failed to configure S3 archive backend: {exc}") from exc
 
     # DB is now committed to 's3' and the volume reads from the new store.
     # Only now is it safe to reclaim the source objects.  A failure here is

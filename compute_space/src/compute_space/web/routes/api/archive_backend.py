@@ -14,13 +14,16 @@ from litestar import Router
 from litestar import get
 from litestar import post
 from litestar.di import NamedDependency
+from litestar.exceptions import ClientException
+from litestar.exceptions import InternalServerException
+from litestar.exceptions import ValidationException
 from litestar.params import Body
 
 from compute_space.config import Config
 from compute_space.core import archive_backend
-from compute_space.core.archive_backend import BackendConfigureError
 from compute_space.core.archive_backend import BackendState
 from compute_space.web.auth.auth import require_owner_auth
+from compute_space.web.exceptions import ConflictException
 
 
 @attr.s(auto_attribs=True, frozen=True)
@@ -55,17 +58,6 @@ class BackendStateResponse:
 @attr.s(auto_attribs=True, frozen=True)
 class TestConnectionOk:
     ok: bool  # always True
-
-
-@attr.s(auto_attribs=True, frozen=True)
-class TestConnectionError:
-    ok: bool  # always False
-    error: str
-
-
-@attr.s(auto_attribs=True, frozen=True)
-class ErrorResponse:
-    error: str
 
 
 def _state_to_response(
@@ -182,15 +174,20 @@ async def get_archive_backend(
     return _state_to_response(state, archive_dir, meta_db_path, meta_dumps, local_apps)
 
 
-@post("/api/storage/archive_backend/test_connection", status_code=200, guards=[require_owner_auth])
+@post(
+    "/api/storage/archive_backend/test_connection",
+    status_code=200,
+    guards=[require_owner_auth],
+    raises=[ValidationException, ClientException],
+)
 async def test_connection(
     data: Annotated[TestConnectionRequest, Body(media_type=MediaType.JSON)],
-) -> Response[TestConnectionOk] | Response[TestConnectionError]:
+) -> Response[TestConnectionOk]:
     """Pre-flight S3 reachability/credentials check; doesn't touch the DB or live mount."""
     try:
         _normalise_s3_prefix(data.s3_prefix or None)
     except ValueError as exc:
-        return Response(content=TestConnectionError(ok=False, error=f"invalid s3_prefix: {exc}"), status_code=400)
+        raise ValidationException(detail=f"invalid s3_prefix: {exc}") from exc
     error = await asyncio.to_thread(
         archive_backend.test_s3_credentials,
         data.s3_bucket,
@@ -200,16 +197,21 @@ async def test_connection(
         data.s3_secret_access_key,
     )
     if error:
-        return Response(content=TestConnectionError(ok=False, error=error), status_code=400)
+        raise ClientException(detail=error)
     return Response(content=TestConnectionOk(ok=True), status_code=200, media_type=MediaType.JSON)
 
 
-@post("/api/storage/archive_backend/configure", status_code=200, guards=[require_owner_auth])
+@post(
+    "/api/storage/archive_backend/configure",
+    status_code=200,
+    guards=[require_owner_auth],
+    raises=[ValidationException, ConflictException, InternalServerException],
+)
 async def configure_archive_backend(
     data: Annotated[ConfigureArchiveRequest, Body(media_type=MediaType.JSON)],
     db: NamedDependency[sqlite3.Connection],
     config: NamedDependency[Config],
-) -> Response[BackendStateResponse] | Response[ErrorResponse]:
+) -> Response[BackendStateResponse]:
     """One-shot S3 configure / re-configure.  Allowed from ``'local'`` (the
     default — migrates local archive data into the bucket), the legacy
     ``'disabled'`` state (fresh format), or ``'s3'`` (migrates the archive from
@@ -225,17 +227,16 @@ async def configure_archive_backend(
     if local_apps_with_data:
         if not data.confirm_migrate_local:
             apps = local_apps_with_data
-            return Response(
-                content=ErrorResponse(
-                    error=(
-                        "The archive tier currently uses LOCAL disk and these "
-                        f"apps have data on it: {', '.join(apps)}.  Configuring "
-                        "S3 will migrate that data into the bucket and then "
-                        "remove the local copy.  This switch is one-way.  "
-                        "Re-submit with confirm_migrate_local=true to proceed."
-                    )
+            raise ConflictException(
+                detail=(
+                    "The archive tier currently uses LOCAL disk and these "
+                    f"apps have data on it: {', '.join(apps)}.  Configuring "
+                    "S3 will migrate that data into the bucket and then "
+                    "remove the local copy.  This switch is one-way.  "
+                    "Re-submit with confirm_migrate_local=true to proceed."
                 ),
                 status_code=409,
+                extra={"code": "confirm_migrate_local_required"},
             )
 
     # Guard the s3->s3 migration behind its own explicit acknowledgement: the
@@ -243,24 +244,23 @@ async def configure_archive_backend(
     # the new bucket, re-points the volume, and reclaims the old bucket.  It is
     # fail-open, but it moves live data, so require confirm_migrate_s3.
     if state.backend == "s3" and not data.confirm_migrate_s3:
-        return Response(
-            content=ErrorResponse(
-                error=(
-                    "The archive tier is already on S3 (bucket "
-                    f"{state.s3_bucket!r}).  Configuring a new bucket will MIGRATE the "
-                    "archive to it (copy + verify), re-point the volume, and then reclaim "
-                    "the old bucket's objects.  This is fail-open (the old bucket is kept "
-                    "intact if anything fails), but it moves live data.  Re-submit with "
-                    "confirm_migrate_s3=true to proceed."
-                )
+        raise ConflictException(
+            detail=(
+                "The archive tier is already on S3 (bucket "
+                f"{state.s3_bucket!r}).  Configuring a new bucket will MIGRATE the "
+                "archive to it (copy + verify), re-point the volume, and then reclaim "
+                "the old bucket's objects.  This is fail-open (the old bucket is kept "
+                "intact if anything fails), but it moves live data.  Re-submit with "
+                "confirm_migrate_s3=true to proceed."
             ),
             status_code=409,
+            extra={"code": "confirm_migrate_s3_required"},
         )
 
     try:
         prefix = _normalise_s3_prefix(data.s3_prefix or None)
     except ValueError as exc:
-        return Response(content=ErrorResponse(error=f"invalid s3_prefix: {exc}"), status_code=400)
+        raise ValidationException(detail=f"invalid s3_prefix: {exc}") from exc
 
     region = data.s3_region.strip() or None
     endpoint = data.s3_endpoint.strip() or None
@@ -332,12 +332,14 @@ async def configure_archive_backend(
 
     try:
         await asyncio.to_thread(_run)
-    except BackendConfigureError as exc:
+    except RuntimeError as exc:
         # 409 if it was a TOCTOU race against another configure attempt;
-        # 500 for genuine bring-up failures.
+        # 500 for genuine bring-up failures (detail is masked, so it rides in extra).
         if "already configured" in str(exc):
-            return Response(content=ErrorResponse(error=str(exc)), status_code=409)
-        return Response(content=ErrorResponse(error=str(exc)), status_code=500)
+            raise ConflictException(detail=str(exc), extra={"code": "already_configured"}) from exc
+        raise InternalServerException(
+            detail="Failed to configure archive backend", extra={"output": str(exc)}
+        ) from exc
 
     state = archive_backend.read_state(db)
     archive_dir = archive_backend.juicefs_mount_dir(config) if state.backend == "s3" else None

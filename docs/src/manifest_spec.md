@@ -1,6 +1,6 @@
-# OpenHost Manifest Spec (v0.1)
+# Cloud in a Bottle Manifest Spec (v0.1)
 
-Apps declare how they should be deployed on OpenHost by placing an `openhost.toml` file at the root of their repository. For a walkthrough of building an app from scratch, see [Creating an App](creating_an_app.md).
+Apps declare how they should be deployed on Cloud in a Bottle by placing an `openhost.toml` file at the root of their repository. For a walkthrough of building an app from scratch, see [Creating an App](creating_an_app.md).
 
 ## Field Reference
 
@@ -45,7 +45,7 @@ Rootless podman can bind ports >= 25 only; `host_port` values below 25 are rejec
 
 ### `[[links]]` — optional, repeatable
 
-User-facing links the app advertises for paths on its own URL that aren't the bare root — for example an admin console at `/_openhost/admin`. The dashboard displays these on the app's detail page. The `path` is taken at face value: OpenHost does not check that it exists, is reachable, or is (or isn't) behind auth — it just shows it to the user.
+User-facing links the app advertises for paths on its own URL that aren't the bare root — for example an admin console at `/_openhost/admin`. The dashboard displays these on the app's detail page. The `path` is taken at face value: Cloud in a Bottle does not check that it exists, is reachable, or is (or isn't) behind auth — it just shows it to the user.
 
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
@@ -86,7 +86,7 @@ Apps have three storage areas, each with different durability + size + latency t
 
 The archive tier defaults to local-disk backing and is always available. The operator can upgrade a zone to S3 one-shot from the dashboard, supplying S3 credentials and a per-zone prefix; archive bytes then route through a JuiceFS mount of the operator-supplied bucket (and any existing local archive data is migrated into it). Apps see `/data/app_archive/<app>/` as a normal POSIX directory and don't need to know which backing is in use.
 
-The storage guard requires a minimum amount of free disk space, stopping running apps when free space drops below `storage_min_free_mb` until space is freed. It is enabled by default; the host operator can change the threshold (or disable it with `0`) in the OpenHost config and reboot.
+The storage guard requires a minimum amount of free disk space, stopping running apps when free space drops below `storage_min_free_mb` until space is freed. It is enabled by default; the host operator can change the threshold (or disable it with `0`) in the Cloud in a Bottle config and reboot.
 
 All data dirs live under `/data/` in the container. All apps see the same path structure regardless of permissions — only the dirs they have access to are mounted. With `access_all_app_data`, the parent dirs `/data/app_data/` and `/data/app_temp_data/` are mounted so the app can see all apps' data. With `access_all_archive`, the `/data/app_archive/` parent is mounted.
 

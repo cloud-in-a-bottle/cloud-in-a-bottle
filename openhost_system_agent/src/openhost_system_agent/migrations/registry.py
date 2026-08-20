@@ -13,6 +13,7 @@ from openhost_system_agent.migrations.versions.v0006_journald_size_cap import Mi
 from openhost_system_agent.migrations.versions.v0007_seed_domains_and_scrub import Migration0007SeedDomainsAndScrub
 from openhost_system_agent.migrations.versions.v0008_restart_on_failure import Migration0008RestartOnFailure
 from openhost_system_agent.migrations.versions.v0009_swap_file import Migration0009SwapFile
+from openhost_system_agent.migrations.versions.v0010_journal_read_for_oom import Migration0010JournalReadForOom
 
 # Numbered migrations in apply order. Versions MUST start at 2 and be
 # contiguous. v1 is the baseline produced by ansible setup.yml.
@@ -25,6 +26,7 @@ REGISTRY: list[SystemMigration] = [
     Migration0007SeedDomainsAndScrub(),
     Migration0008RestartOnFailure(),
     Migration0009SwapFile(),
+    Migration0010JournalReadForOom(),
 ]
 
 

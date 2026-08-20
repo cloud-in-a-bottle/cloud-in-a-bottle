@@ -12,6 +12,7 @@ venv/
 env/
 .env
 .pixi/
+.pi*/
 
 # uv
 .python-version

@@ -1,4 +1,4 @@
-# Openhost
+# Cloud in a Bottle
 
 Your corner of the cloud.
 
@@ -6,15 +6,15 @@ Deploy, use, and share any app on a server you control. Built on the idea that m
 
 [![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
 
-> **Early access.** Openhost is in active beta. We want you to try it and share feedback! Note that no password recovery exists yet and we don't hold keys to your instance so we can't reset it. Response time on issues and PRs may be slow as we're heads-down on the core product.
+> **Early access.** Cloud in a Bottle is in active beta. We want you to try it and share feedback! Note that no password recovery exists yet and we don't hold keys to your instance so we can't reset it. Response time on issues and PRs may be slow as we're heads-down on the core product.
 
 
 
-## Why Openhost
+## Why Cloud in a Bottle
 
 Most people have no access to the cloud that isn't mediated by a company with different incentives than theirs. Open source web software exists but running it somewhere means fighting infrastructure that most people don't want to touch.
 
-Openhost is the project our team needed and couldn't find: a corner of the cloud that's genuinely yours. Where apps install as easily as on your phone, and the data lives on hardware you control.
+Cloud in a Bottle is the project our team needed and couldn't find: a corner of the cloud that's genuinely yours. Where apps install as easily as on your phone, and the data lives on hardware you control.
 
 ## What people deploy
 
@@ -25,7 +25,7 @@ Openhost is the project our team needed and couldn't find: a corner of the cloud
 
 ## Managed hosting
 
-If you'd rather not run your own server, [Openhost](https://openhost.imbue.com/plans) provisions one for you: your SSH key, your data, your instance. We just set you up with everything you need to get going, and then it's all yours from there.
+If you'd rather not run your own server, [Cloud in a Bottle](https://openhost.imbue.com/plans) provisions one for you: your SSH key, your data, your instance. We just set you up with everything you need to get going, and then it's all yours from there.
 
 ---
 
@@ -200,26 +200,26 @@ The user-facing manual lives in `docs/src/` and is served at `https://<zone>/doc
 
 ## Agent skill
 
-An agent skill that gives an AI coding agent context for deploying and debugging apps on Openhost via the `oh` CLI. Install with:
+An agent skill that gives an AI coding agent context for deploying and debugging apps on Cloud in a Bottle via the `oh` CLI. Install with:
 
 ```bash
-npx skills add imbue-openhost/openhost --skill openhost-context
+npx skills add cloud-in-a-bottle/cloud-in-a-bottle --skill openhost-context
 ```
 
 The skill works best with the `oh` CLI installed and logged in:
 
 ```bash
-uv tool install "oh @ git+https://github.com/imbue-openhost/openhost.git#subdirectory=compute_space_cli"
+uv tool install "oh @ git+https://github.com/cloud-in-a-bottle/cloud-in-a-bottle.git#subdirectory=compute_space_cli"
 oh instance login
 ```
 
-Once set up, ask your coding agent to package any existing project for Openhost and deploy it directly — no manual manifest editing required.
+Once set up, ask your coding agent to package any existing project for Cloud in a Bottle and deploy it directly — no manual manifest editing required.
 
 ---
 
 ## License
 
-Openhost is provided under the [AGPL-3.0 license](LICENSE).
+Cloud in a Bottle is provided under the [AGPL-3.0 license](LICENSE).
 
 We may move to a different license in the future — something like a [fair source license](https://fair.io/licenses/) — with the intent that personal use will always be unrestricted, while commercial use may be scoped to support a sustainable project.
 

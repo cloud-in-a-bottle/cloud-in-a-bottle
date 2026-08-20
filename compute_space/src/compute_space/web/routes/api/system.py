@@ -15,6 +15,10 @@ from litestar import delete
 from litestar import get
 from litestar import post
 from litestar.di import NamedDependency
+from litestar.exceptions import InternalServerException
+from litestar.exceptions import ServiceUnavailableException
+from litestar.exceptions import ValidationException
+from litestar.openapi import ResponseSpec
 from litestar.params import FromPath
 from litestar.params import FromQuery
 
@@ -70,11 +74,6 @@ class CreatedToken:
 
 
 @attr.s(auto_attribs=True, frozen=True)
-class ErrorResponse:
-    error: str
-
-
-@attr.s(auto_attribs=True, frozen=True)
 class OkResponse:
     ok: bool
 
@@ -120,7 +119,7 @@ class DropCacheOk:
 
 @attr.s(auto_attribs=True, frozen=True)
 class VersionInfo:
-    """Git info for the running openhost checkout. ``branch`` is None when HEAD is detached.
+    """Git info for the running Cloud in a Bottle checkout. ``branch`` is None when HEAD is detached.
     ``sha`` is empty when the install isn't a git checkout (e.g. tarball deploys)."""
 
     branch: str | None
@@ -152,10 +151,10 @@ async def api_tokens_list(db: NamedDependency[sqlite3.Connection]) -> list[ApiTo
     return tokens
 
 
-@post("/api/tokens", status_code=200, guards=[require_owner_auth])
+@post("/api/tokens", status_code=200, guards=[require_owner_auth], raises=[ValidationException])
 async def api_tokens_create(
     data: CreateTokenRequest, db: NamedDependency[sqlite3.Connection]
-) -> Response[CreatedToken] | Response[ErrorResponse]:
+) -> Response[CreatedToken]:
     name = data.name.strip() or "Untitled"
     expiry_hours_raw = data.expiry_hours.strip() if data.expiry_hours else ""
     expires_at: datetime | None
@@ -167,7 +166,7 @@ async def api_tokens_create(
         except ValueError:
             expiry_hours = DEFAULT_TOKEN_EXPIRY_HOURS
         if expiry_hours <= 0:
-            return Response(content=ErrorResponse(error="Expiry must be positive"), status_code=400)
+            raise ValidationException(detail="Expiry must be positive")
         expires_at = datetime.now(UTC) + timedelta(hours=expiry_hours)
 
     raw_token = secrets.token_urlsafe(32)
@@ -204,12 +203,18 @@ async def api_tokens_delete(token_id: FromPath[int], db: NamedDependency[sqlite3
 _LOG_TAIL_BYTES = 256 * 1024
 
 
-@get("/api/compute_space_logs", guards=[require_owner_auth], media_type=MediaType.TEXT, sync_to_thread=False)
+@get(
+    "/api/compute_space_logs",
+    guards=[require_owner_auth],
+    media_type=MediaType.TEXT,
+    sync_to_thread=False,
+    raises=[ServiceUnavailableException],
+)
 def compute_space_logs() -> Response[str]:
     """Return the tail (last 256 KiB) of the compute space log file."""
     log_path = get_log_path()
     if log_path is None:
-        return Response(content="Log file not configured", status_code=503, media_type=MediaType.TEXT)
+        raise ServiceUnavailableException(detail="Log file not configured")
     with open(log_path, "rb") as f:
         size = f.seek(0, os.SEEK_END)
         f.seek(max(0, size - _LOG_TAIL_BYTES))
@@ -222,7 +227,11 @@ def compute_space_logs() -> Response[str]:
 # ─── Health & Security ─────────────────────────────────────────────────────
 
 
-@get("/health", sync_to_thread=False)
+@get(
+    "/health",
+    sync_to_thread=False,
+    responses={503: ResponseSpec(data_container=HealthRestarting, description="The service is restarting.")},
+)
 def health() -> Response[HealthRestarting] | HealthOk:
     if is_shutdown_pending():
         return Response(content=HealthRestarting(status="restarting"), status_code=503)
@@ -284,21 +293,27 @@ def toggle_ssh() -> SshStatusResponse:
 # ─── Router restart ────────────────────────────────────────────────────────
 
 
-@post("/api/drop-docker-cache", status_code=200, guards=[require_owner_auth], sync_to_thread=False)
-def drop_docker_cache() -> Response[DropCacheOk] | Response[ErrorResponse]:
+@post(
+    "/api/drop-docker-cache",
+    status_code=200,
+    guards=[require_owner_auth],
+    sync_to_thread=False,
+    raises=[InternalServerException],
+)
+def drop_docker_cache() -> Response[DropCacheOk]:
     """Drop the container build cache to free disk space."""
     try:
         output = drop_docker_build_cache()
     except RuntimeError as e:
-        return Response(content=ErrorResponse(error=str(e)), status_code=500)
+        raise InternalServerException(detail="Failed to drop build cache", extra={"output": str(e)}) from e
     return Response(content=DropCacheOk(ok=True, output=output), status_code=200, media_type=MediaType.JSON)
 
 
 @get("/api/version", guards=[require_owner_auth])
 async def api_version() -> VersionInfo:
-    """Return git branch/SHA of the running openhost checkout.
+    """Return git branch/SHA of the running Cloud in a Bottle checkout.
 
-    If openhost wasn't installed via git, sha/short_sha are empty and dirty is False.
+    If Cloud in a Bottle wasn't installed via git, sha/short_sha are empty and dirty is False.
     """
     try:
         sha = await get_head_sha(OPENHOST_PROJECT_DIR)
@@ -328,7 +343,7 @@ async def api_diagnostics(
 ) -> Response[PlatformDiagnostics]:
     """Return a full instance diagnostics bundle for debugging.
 
-    Includes the OpenHost git checkout, host OS/Python/dependency versions,
+    Includes the Cloud in a Bottle git checkout, host OS/Python/dependency versions,
     container runtime info, disk usage, and a summary of every installed app.
 
     ``?download=1`` adds a Content-Disposition header so browsers save the JSON

@@ -35,6 +35,8 @@ from compute_space.core.logging import logger
 from compute_space.core.logging import setup_file_logging
 from compute_space.core.pinned_binary import get_pinned_binary
 from compute_space.core.pinned_binary import install_pinned_binary
+from compute_space.core.system_agent.client import system_agent_stop_updater_sync
+from compute_space.core.system_agent.progress import mark_boot_complete
 from compute_space.core.terminal import cleanup_all as cleanup_terminal_sessions
 from compute_space.core.tls.provision import provision_cert
 from compute_space.core.tls.renewal import CertStatus
@@ -46,6 +48,7 @@ from compute_space.db import get_db
 from compute_space.db import init_db
 from compute_space.web.app import create_app
 from compute_space.web.setup_app import create_setup_app
+from openhost_system_agent.updater.paths import DATA_DIR_ENV
 
 
 def _terminate_children(children: list[subprocess.Popen[bytes]]) -> None:
@@ -64,6 +67,13 @@ def _terminate_children(children: list[subprocess.Popen[bytes]]) -> None:
 def _bootstrap(config: Config) -> None:
     """One-time process-wide initialization shared by the setup and full apps."""
     set_active_config(config)
+    # Process-wide rather than an argument to the agent calls, because we resolve
+    # these paths in-process too: compute_space reads the progress log and appends
+    # to it (read_progress, mark_boot_complete, record_apply_failure) through the
+    # same shared module the agent, the apply unit and the updater use, and that
+    # module resolves the directory from this variable so all four agree on one
+    # path. Agent invocations forward it explicitly on top (see _agent_argv).
+    os.environ[DATA_DIR_ENV] = str(config.openhost_data_path)
     setup_file_logging(Path(os.path.dirname(config.db_path)) / "compute_space.log")
     load_keys(config.keys_dir)
     init_db(config.db_path)
@@ -165,6 +175,9 @@ def main() -> None:
         # any additional TLS domains fall back to Caddy's internal CA (see generate_caddyfile).
         needs_caddy_for_tls = any(d.tls for d in domains)
         if config.start_caddy:
+            # Release 80/443 from the detached updater (if a self-update just
+            # happened) before Caddy binds, so Caddy can't lose the handoff race.
+            system_agent_stop_updater_sync()
             caddy = start_caddy(
                 config.caddyfile_path,
                 domains,
@@ -182,6 +195,10 @@ def main() -> None:
             raise RuntimeError(
                 "A TLS domain is configured but start_caddy is False. Caddy is required for TLS termination."
             )
+
+    # Finalize the progress log only now that we're actually serving, so the
+    # /updating page's "back online" doesn't fire before CoreDNS/cert/Caddy are up.
+    mark_boot_complete()
 
     def _all_children() -> list[subprocess.Popen[bytes]]:
         # Read caddy.proc / coredns.proc at shutdown time: restart() may have replaced them.

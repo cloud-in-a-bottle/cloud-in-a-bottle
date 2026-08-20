@@ -69,7 +69,7 @@ class Config:
     # How often (seconds) to prune dangling container images (0 = disabled).
     image_prune_interval_seconds: int
 
-    # Age (seconds) above which a tagged OpenHost app image with no matching app
+    # Age (seconds) above which a tagged Cloud in a Bottle app image with no matching app
     # in the DB is treated as orphaned and pruned (0 = never prune orphaned
     # tagged images).
     image_orphan_max_age_seconds: int
@@ -90,7 +90,7 @@ class Config:
     # Each entry is either:
     #   - a bare dirname under apps_dir (vendored builtin, e.g. "secrets_v2"), or
     #   - a remote git URL the router will clone on first boot
-    #     (e.g. "https://github.com/imbue-openhost/openhost-catalog").
+    #     (e.g. "https://github.com/cloud-in-a-bottle/app-catalog").
     # Remote URLs are dispatched through the same clone path as
     # /api/add_app and do not need to be present on disk ahead of time.
     default_apps: list[str]
@@ -173,7 +173,7 @@ class Config:
 
     @property
     def openhost_data_path(self) -> Path:
-        # openhost-specific data, including the sqlite db and TLS certs.
+        # Cloud in a Bottle-specific data, including the sqlite db and TLS certs.
         return Path(self.persistent_data_dir) / "openhost"
 
     @property
@@ -348,12 +348,12 @@ class DefaultConfig(Config):
     #   - a remote git URL cloned on demand (see core/default_apps).
     default_apps: list[str] = attr.Factory(
         lambda: [
-            "https://github.com/imbue-openhost/secrets",
-            "https://github.com/imbue-openhost/openhost-filestash",
+            "https://github.com/cloud-in-a-bottle/secrets",
+            "https://github.com/cloud-in-a-bottle/bottled-filestash",
             "oauth_provider",
-            "https://github.com/imbue-openhost/openhost-catalog",
-            "https://github.com/imbue-openhost/openhost-backup",
-            "https://github.com/imbue-openhost/openhost-community-chat",
+            "https://github.com/cloud-in-a-bottle/app-catalog",
+            "https://github.com/cloud-in-a-bottle/backup",
+            "https://github.com/cloud-in-a-bottle/bottled-community-chat",
         ]
     )
 

@@ -25,7 +25,7 @@ async function checkForUpdates() {
     if (!resp.ok) {
       const err = await resp.json();
       el.innerHTML = '<p class="error">Repo is in an invalid state for updating (no .git perhaps?)</p>'
-        + (err.detail ? '<div class="error-inline">' + esc(err.detail) + '</div>' : '')
+        + (responseErrorMessage(err, '') ? '<div class="error-inline">' + esc(responseErrorMessage(err, '')) + '</div>' : '')
         + '<button onclick="checkForUpdates()" class="btn" style="margin-top:0.5em;">Retry</button>';
       return;
     }
@@ -55,29 +55,32 @@ async function checkForUpdates() {
 async function applyUpdate() {
   clearError();
   const el = document.getElementById('update-status');
-  el.innerHTML = '<p>Updating&hellip;</p>';
+  el.innerHTML = '<p>Starting update&hellip;</p>';
 
+  let token;
   try {
+    // Kicks off the update in the background and returns a token that lets the
+    // dedicated /updating page recognize this tab and stream live progress from
+    // the detached updater across the (brief) compute_space restart.
     const resp = await fetch('/api/settings/update', {method: 'POST'});
     if (!resp.ok) {
       const err = await resp.json();
-      el.innerHTML = '<p class="error">' + esc(err.detail || '') + '</p>'
+      el.innerHTML = '<p class="error">' + esc(responseErrorMessage(err, '')) + '</p>'
         + '<button onclick="checkForUpdates()" class="btn" style="margin-top:0.5em;">Retry</button>';
       return;
     }
+    const data = await resp.json();
+    token = data.token;
   } catch (e) {
     el.innerHTML = '<p class="error">Update failed: ' + esc(e.message) + '</p>'
       + '<button onclick="checkForUpdates()" class="btn" style="margin-top:0.5em;">Retry</button>';
     return;
   }
 
-  el.innerHTML = '<p>Update applied. Restarting&hellip;</p>';
-  try {
-    await fetch('/api/settings/restart_compute_space', {method: 'POST'});
-  } catch (e) {
-    // Expected — server may die before responding
-  }
-  showRestartOverlay();
+  // Navigate to the dedicated update page. It renders live progress and, once
+  // the new instance is back, reloads into the dashboard. Carrying the token in
+  // the URL is what lets the detached updater show *this* owner the logs.
+  window.location.href = '/updating?token=' + encodeURIComponent(token || '');
 }
 
 function showRestartOverlay() {
@@ -159,7 +162,7 @@ async function setRemote() {
     });
     if (!resp.ok) {
       const err = await resp.json();
-      throw new Error(err.detail || 'failed to set remote');
+      throw new Error(responseErrorMessage(err, 'failed to set remote'));
     }
     // Only records the pin — it deliberately does NOT restart. Moving to the new
     // ref is the update walk's job (checkout+migrate+install+restart, in order),
@@ -202,7 +205,7 @@ async function changePassword() {
     });
     if (!resp.ok) {
       const err = await resp.json();
-      throw new Error(err.detail || 'failed to change password');
+      throw new Error(responseErrorMessage(err, 'failed to change password'));
     }
     msg.textContent = 'Password changed successfully';
     msg.className = '';
@@ -237,7 +240,7 @@ async function loadOwnerUsername() {
     const resp = await fetch('/api/settings/owner_username');
     if (!resp.ok) {
       const err = await resp.json();
-      throw new Error(err.detail || 'failed to load');
+      throw new Error(responseErrorMessage(err, 'failed to load'));
     }
     const data = await resp.json();
     savedUsername = data.username || '';
@@ -303,7 +306,7 @@ async function setOwnerUsername() {
     });
     if (!resp.ok) {
       const err = await resp.json();
-      throw new Error(err.detail || 'failed to save');
+      throw new Error(responseErrorMessage(err, 'failed to save'));
     }
     const data = await resp.json();
     savedUsername = data.username;
@@ -350,13 +353,14 @@ function dropBuildCache() {
   msg.textContent = 'Dropping cache...';
 
   fetch('/api/drop-docker-cache', {method: 'POST', credentials: 'same-origin'})
-    .then(function(r) { return r.json(); })
-    .then(function(data) {
-      if (data.error) {
+    .then(readJsonResponse)
+    .then(function(res) {
+      if (!res.ok) {
         msg.className = 'error';
-        msg.textContent = 'Drop failed: ' + data.error;
+        msg.textContent = 'Drop failed: ' + responseErrorMessage(res.data, 'unknown error');
         return;
       }
+      var data = res.data;
       var reclaimed = '';
       if (data.output) {
         var match = data.output.match(/Total reclaimed space:\s*(.+)/i);
@@ -583,11 +587,11 @@ function testArchiveConnection() {
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify(_archiveBackendBody()),
   })
-    .then(function(r) { return r.json().then(function(b) { return [r.status, b]; }); })
-    .then(function(pair) {
-      var ok = pair[0] === 200 && pair[1].ok;
-      msg.style.color = ok ? '#16a34a' : '#dc3545';
-      msg.textContent = ok ? 'Bucket reachable' : ('Failed: ' + (pair[1].error || ''));
+    .then(readJsonResponse)
+    .then(function(res) {
+      msg.style.color = res.ok ? '#16a34a' : '#dc3545';
+      if (res.ok) { msg.textContent = 'Bucket reachable'; return; }
+      msg.textContent = 'Failed: ' + responseErrorMessage(res.data, '');
     })
     .catch(function(err) {
       msg.style.color = '#dc3545';
@@ -611,13 +615,13 @@ function submitConfigure() {
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify(_archiveBackendBody()),
   })
-    .then(function(r) { return r.json().then(function(b) { return [r.status, b]; }); })
-    .then(function(pair) {
-      if (pair[0] === 200) {
+    .then(readJsonResponse)
+    .then(function(res) {
+      if (res.ok) {
         loadArchiveBackend();
       } else {
         msg.style.color = '#dc3545';
-        msg.textContent = 'Failed: ' + (pair[1].error || pair[1]);
+        msg.textContent = 'Failed: ' + responseErrorMessage(res.data, '');
         document.getElementById('ab-submit-btn').disabled = false;
       }
     })
@@ -683,7 +687,7 @@ async function connectImbue() {
     const resp = await fetch('/api/settings/connect-imbue/start', { method: 'POST' });
     if (!resp.ok) {
       const err = await resp.json();
-      throw new Error(err.detail || 'failed to start');
+      throw new Error(responseErrorMessage(err, 'failed to start'));
     }
     const data = await resp.json();
     // Hand off to Imbue to authorize; it returns to this instance's callback,

@@ -36,7 +36,7 @@ def hostname_from_url(url: str) -> str:
 
 @attr.s(auto_attribs=True, frozen=True)
 class Instance:
-    """A single OpenHost compute-space instance."""
+    """A single Cloud in a Bottle compute-space instance."""
 
     hostname: str = attr.ib()
     token: str = attr.ib()

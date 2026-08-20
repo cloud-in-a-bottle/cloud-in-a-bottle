@@ -7,7 +7,8 @@ from litestar import Request
 from litestar import Router
 from litestar import get
 from litestar.di import NamedDependency
-from litestar.exceptions import HTTPException
+from litestar.exceptions import NotFoundException
+from litestar.exceptions import ValidationException
 from litestar.params import FromPath
 from litestar.params import FromQuery
 from litestar.response import Template
@@ -18,25 +19,23 @@ from compute_space.core.apps import deserialize_links
 from compute_space.core.auth.permissions_v2 import get_all_permissions_v2
 from compute_space.core.containers import get_docker_logs
 from compute_space.core.domains import Domain
-from compute_space.core.git_ops import UnsupportedRepoUrlError
 from compute_space.core.git_ops import get_head_sha
 from compute_space.core.git_ops import get_remote_url
 from compute_space.core.git_ops import parse_repo_url
 from compute_space.core.logging import logger
 from compute_space.core.manifest import manifest_ungranted_permissions_v2
 from compute_space.core.manifest import parse_manifest_from_string
-from compute_space.core.services_v2 import ServiceNotAvailable
 from compute_space.core.services_v2 import resolve_provider
 from compute_space.web.auth.auth import require_owner_auth
 from compute_space.web.helpers.zone import zone_for_request
 
-EDIT_APP_SERVICE_URL = "github.com/imbue-openhost/claude-code-container/services/open-workspace"
+EDIT_APP_SERVICE_URL = "github.com/cloud-in-a-bottle/claude-code-container/services/open-workspace"
 EDIT_APP_VERSION_SPEC = "<1.0"
 
 # The app catalog ships as a default app (see Config.default_apps); the Deploy
 # page links to it when installed and offers to install it otherwise.
 CATALOG_APP_NAME = "catalog"
-CATALOG_REPO_URL = "https://github.com/imbue-openhost/openhost-catalog"
+CATALOG_REPO_URL = "https://github.com/cloud-in-a-bottle/app-catalog"
 
 
 @get(["/", "/dashboard"], guards=[require_owner_auth])
@@ -45,7 +44,11 @@ async def dashboard(db: NamedDependency[sqlite3.Connection]) -> Template:
     return Template(template_name="dashboard.html", context={"apps": apps_list})
 
 
-@get("/app_detail/{app_name:str}", guards=[require_owner_auth])
+@get(
+    "/app_detail/{app_name:str}",
+    guards=[require_owner_auth],
+    raises=[ValidationException, NotFoundException],
+)
 async def app_detail(
     request: Request[Any, Any, Any],
     app_name: FromPath[str],
@@ -54,10 +57,10 @@ async def app_detail(
     next: FromQuery[str] = "",
 ) -> Template:
     if not is_valid_app_name(app_name):
-        raise HTTPException(detail="Invalid app name", status_code=400)
+        raise ValidationException(detail="Invalid app name")
     app_row = db.execute("SELECT * FROM apps WHERE name = ?", (app_name,)).fetchone()
     if not app_row:
-        raise HTTPException(detail="App not found", status_code=404)
+        raise NotFoundException(detail="App not found")
     app_id = app_row["app_id"]
     databases = db.execute("SELECT * FROM app_databases WHERE app_id = ?", (app_id,)).fetchall()
     port_mappings = db.execute(
@@ -132,7 +135,7 @@ async def _resolve_edit_app(
     Returns one of:
       - ``{"mode": "service", "action": ..., "repo": ..., "ref": ...}`` — POST to
         a provider of the open-workspace service (see
-        github.com/imbue-openhost/claude-code-container/services/open-workspace).
+        github.com/cloud-in-a-bottle/claude-code-container/services/open-workspace).
       - ``{"mode": "repo", "href": ...}`` — fallback link to the repo URL.
       - ``None`` — no actionable URL available.
     """
@@ -155,7 +158,7 @@ async def _resolve_edit_app(
         repo_path = str(config.openhost_repo_path)
     try:
         base_url, ref_from_url = parse_repo_url(repo_url)
-    except UnsupportedRepoUrlError:
+    except ValueError:
         # Legacy SSH upstream (set_app_remote rejects these now): fall back to a
         # plain link to the raw URL rather than failing the detail page render.
         return {"mode": "repo", "href": repo_url}
@@ -169,7 +172,7 @@ async def _resolve_edit_app(
 
     try:
         provider_app_id, _, _, endpoint = resolve_provider(EDIT_APP_SERVICE_URL, EDIT_APP_VERSION_SPEC, db)
-    except ServiceNotAvailable:
+    except RuntimeError:
         return repo_link_fallback
 
     if not ref:
@@ -180,7 +183,7 @@ async def _resolve_edit_app(
         logger.warning("resolve_provider returned unknown app_id %s", provider_app_id)
         return repo_link_fallback
 
-    # Pass repo+ref in the query string too: the openhost router 302's
+    # Pass repo+ref in the query string too: the Cloud in a Bottle router 302's
     # unauthenticated POSTs to /login, and the post-login redirect comes back
     # as a GET (only 307/308 preserve method), dropping the form body. Query
     # params survive the bounce, and the provider falls back to them.
@@ -209,16 +212,20 @@ async def add_app(
     )
 
 
-@get("/update_review/{app_name:str}", guards=[require_owner_auth])
+@get(
+    "/update_review/{app_name:str}",
+    guards=[require_owner_auth],
+    raises=[ValidationException, NotFoundException],
+)
 async def update_review(app_name: FromPath[str], db: NamedDependency[sqlite3.Connection]) -> Template:
     """Full-page review of the settings an update changes, mirroring the deploy
     page. The diff itself is produced by the reload gate and handed to this page
     by the browser (sessionStorage); the page validates the app exists."""
     if not is_valid_app_name(app_name):
-        raise HTTPException(detail="Invalid app name", status_code=400)
+        raise ValidationException(detail="Invalid app name")
     app_row = db.execute("SELECT app_id, name FROM apps WHERE name = ?", (app_name,)).fetchone()
     if not app_row:
-        raise HTTPException(detail="App not found", status_code=404)
+        raise NotFoundException(detail="App not found")
     return Template(
         template_name="update_review.html",
         context={"app": {"app_id": app_row["app_id"], "name": app_row["name"]}},

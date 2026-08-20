@@ -101,15 +101,19 @@ def _check_error_response(resp: httpx.Response) -> None:
         data = resp.json()
     except Exception as e:
         raise OAuthError(f"Request failed: {resp.status_code} {resp.text}") from e
-    error = data.get("error")
-    if error == "service_not_available":
-        raise OAuthServiceUnavailable(data.get("message", "OAuth service unavailable"))
-    if error == "permission_required":
-        grant = data.get("required_grant", {})
+    # The router puts the code and grant in `extra`; a provider app's own body keeps them at the root.
+    extra = data.get("extra") if isinstance(data.get("extra"), dict) else {}
+    code = extra.get("code") or data.get("error")
+    message = data.get("detail") or data.get("message")
+    if code == "service_not_available":
+        raise OAuthServiceUnavailable(message or "OAuth service unavailable")
+    if code == "permission_required":
+        grant = extra.get("required_grant") or data.get("required_grant") or {}
         raise _PermissionDenied(grant_url=grant.get("grant_url", ""))
-    if resp.status_code == 401 and data.get("authorize_url"):
-        raise _OAuthConsentRequired(data["authorize_url"])
-    raise OAuthError(data.get("message", f"Request failed: {resp.status_code}"))
+    authorize_url = extra.get("authorize_url") or data.get("authorize_url")
+    if resp.status_code == 401 and authorize_url:
+        raise _OAuthConsentRequired(authorize_url)
+    raise OAuthError(message or f"Request failed: {resp.status_code}")
 
 
 async def get_accounts(provider: str) -> list[str]:

@@ -1,11 +1,11 @@
 ---
 name: openhost-deployment
-description: Reference for provisioning and deploying OpenHost instances. Covers server requirements, DNS setup, Ansible deployment, and the provision script.
+description: Reference for provisioning and deploying Cloud in a Bottle instances. Covers server requirements, DNS setup, Ansible deployment, and the provision script.
 ---
 
-# OpenHost Instance Deployment
+# Cloud in a Bottle Instance Deployment
 
-How to stand up a new OpenHost instance on a server.
+How to stand up a new Cloud in a Bottle instance on a server.
 
 ## Requirements
 
@@ -23,14 +23,14 @@ Two records are needed before deployment:
 | NS | `host.example.com` | `ns1.host.example.com` |
 | A | `ns1.host.example.com` | server IP |
 
-This delegates `*.host.example.com` to the CoreDNS instance that OpenHost runs on the server.
+This delegates `*.host.example.com` to the CoreDNS instance that Cloud in a Bottle runs on the server.
 
 ## Option 1: Provision script (run on the server)
 
 SSH into the server as root and run:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/imbue-openhost/openhost/main/scripts/provision.sh | bash -s -- --domain host.example.com
+curl -fsSL https://raw.githubusercontent.com/cloud-in-a-bottle/cloud-in-a-bottle/main/scripts/provision.sh | bash -s -- --domain host.example.com
 ```
 
 Optional flags:
@@ -75,7 +75,7 @@ The ansible playbook configures:
 - **podman** (rootless) -- container runtime, runs as the `host` user
 - **CoreDNS** (:53) -- authoritative DNS, wildcard `*.domain` to server IP
 - **Caddy** (:443/:80) -- TLS termination via ACME DNS-01, reverse proxy to the router
-- **OpenHost router** (:8080) -- Python app (Quart/Hypercorn), runs as a systemd service (`openhost.service`)
+- **Cloud in a Bottle router** (:8080) -- Python app (Quart/Hypercorn), runs as a systemd service (`openhost.service`)
 - **pixi** -- package manager for the Python environment
 - Data directories under `/opt/openhost`
 - The `openhost0` dummy interface at `10.200.0.1` for container-to-host networking

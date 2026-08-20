@@ -1,4 +1,4 @@
-"""``openhost down`` -- stop the OpenHost router cleanly."""
+"""``openhost down`` -- stop the Cloud in a Bottle router cleanly."""
 
 import argparse
 import os
@@ -72,7 +72,7 @@ def _cleanup_pidfile(path: str) -> None:
 
 
 def run_down(_args: argparse.Namespace) -> None:
-    print("Stopping OpenHost...")
+    print("Stopping Cloud in a Bottle...")
     _stop_process("Router", _ROUTER_PID)
     print()
-    print("OpenHost stopped.")
+    print("Cloud in a Bottle stopped.")

@@ -79,9 +79,9 @@ def _populate_fake_docs(src_dir: Path) -> None:
         "- [Creating an App](./creating_an_app.md)\n"
     )
     (src_dir / "introduction.md").write_text(
-        "# Welcome to OpenHost\n"
+        "# Welcome to Cloud in a Bottle\n"
         "\n"
-        "OpenHost is a self-hosted application platform.\n"
+        "Cloud in a Bottle is a self-hosted application platform.\n"
         "See the [manifest spec](./manifest_spec.md).\n"
     )
     (src_dir / "manifest_spec.md").write_text(
@@ -132,7 +132,7 @@ def test_index_renders_introduction(client_with_docs: TestClient[Litestar]) -> N
     resp = client_with_docs.get("/docs/")
     assert resp.status_code == 200
     body = resp.text
-    assert "Welcome to OpenHost" in body
+    assert "Welcome to Cloud in a Bottle" in body
     assert "self-hosted application platform" in body
 
 
@@ -237,8 +237,9 @@ def test_unknown_slug_404(client_with_docs: TestClient[Litestar]) -> None:
         "subdir/foo",
         ".gitignore",
         " ",
-        "introduction.md",  # we accept slugs WITHOUT .md, with-extension should 404
         "introduction.md.bak",
+        "../secrets.md",  # the .md suffix is stripped before the slug regex, so this still 404s
+        ".md",
     ],
 )
 def test_path_traversal_blocked(client_with_docs: TestClient[Litestar], evil_slug: str) -> None:
@@ -277,7 +278,7 @@ def test_both_slash_variants_serve_index(client_with_docs: TestClient[Litestar])
     for path in ("/docs", "/docs/"):
         resp = client_with_docs.get(path, follow_redirects=False)
         assert resp.status_code == 200, path
-        assert "Welcome to OpenHost" in resp.text, path
+        assert "Welcome to Cloud in a Bottle" in resp.text, path
 
 
 # -- cache ----------------------------------------------------------
@@ -292,7 +293,7 @@ def test_render_cache_invalidates_on_mtime_change(tmp_path: Path) -> None:
     client, _cfg = _client(repo_root)
     with client as c:
         resp1 = c.get("/docs/")
-        assert "Welcome to OpenHost" in resp1.text
+        assert "Welcome to Cloud in a Bottle" in resp1.text
 
         # Mutate the source.  Sleep so mtime resolution definitely
         # increases (some filesystems have 1s resolution).
@@ -303,7 +304,73 @@ def test_render_cache_invalidates_on_mtime_change(tmp_path: Path) -> None:
         resp2 = c.get("/docs/")
         body2 = resp2.text
         assert "A New Heading" in body2
-        assert "Welcome to OpenHost" not in body2
+        assert "Welcome to Cloud in a Bottle" not in body2
+
+
+# -- markdown export ------------------------------------------------
+
+
+def test_all_markdown_returns_the_whole_manual(client_with_docs: TestClient[Litestar]) -> None:
+    """``/docs/all.md`` is every page as plain markdown, in SUMMARY.md order.  A 200 here also
+    proves the literal route wins over ``/docs/{slug}``, whose regex would reject the dot."""
+    resp = client_with_docs.get("/docs/all.md")
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("text/plain")
+    body = resp.text
+    assert "```toml" in body and "<h1" not in body
+    positions = [
+        body.index(h) for h in ("# Welcome to Cloud in a Bottle", "# Manifest", "# Routing", "# Creating an App")
+    ]
+    assert positions == sorted(positions)
+
+
+def test_all_markdown_omits_pages_missing_from_summary(tmp_path: Path) -> None:
+    """A file SUMMARY.md doesn't list is an unpublished draft, not content."""
+    repo_root = tmp_path / "repo"
+    src = repo_root / "docs" / "src"
+    _populate_fake_docs(src)
+    (src / "unlisted_draft.md").write_text("# Draft\n\nNot ready for readers.\n")
+    client, _cfg = _client(repo_root)
+    with client as c:
+        body = c.get("/docs/all.md").text
+    assert "Routing prose here." in body
+    assert "Not ready for readers." not in body
+
+
+def test_page_markdown_returns_the_source(client_with_docs: TestClient[Litestar]) -> None:
+    """Adding ``.md`` switches a page from rendered HTML to source; the plain URL is unchanged."""
+    resp = client_with_docs.get("/docs/routing.md")
+    assert resp.status_code == 200
+    assert resp.text == "# Routing\n\nRouting prose here.\n"
+    assert "<h1" in client_with_docs.get("/docs/routing").text
+    assert client_with_docs.get("/docs/this_does_not_exist.md").status_code == 404
+
+
+def test_copy_controls(client_with_docs: TestClient[Litestar]) -> None:
+    """Two controls — the manual in the sidebar, this page in its own heading — each a real link
+    to the markdown it copies, so both survive JS or the clipboard API being unavailable."""
+    body = client_with_docs.get("/docs/manifest_spec").text
+    assert re.findall(r'<a class="copy-md" href="([^"]+)"', body) == ["/docs/all.md", "/docs/manifest_spec.md"]
+    heading = re.search(r"<h1[^>]*>(.*?)</h1>", body[body.index('<main class="content"') :], re.S)
+    assert heading is not None and 'href="/docs/manifest_spec.md"' in heading.group(1)
+    assert "Copy <b>entire</b> manual" in body
+
+
+def test_page_without_an_h1_gets_a_floated_copy_control(tmp_path: Path) -> None:
+    """``routing.md`` in the real manual opens at ``##`` and renders no <h1> to hang the control
+    off.  Such a page must stay copyable, and a title with markup in it must stay escaped."""
+    repo_root = tmp_path / "repo"
+    src = repo_root / "docs" / "src"
+    _populate_fake_docs(src)
+    (src / "routing.md").write_text("## DNS\n\nNo top-level heading.\n")
+    (src / "creating_an_app.md").write_text('# The "big" <b>spec</b>\n\nProse.\n')
+    client, _cfg = _client(repo_root)
+    with client as c:
+        assert '<div class="page-actions">' in c.get("/docs/routing").text
+        assert (
+            'aria-label="Copy The &#34;big&#34; &lt;b&gt;spec&lt;/b&gt; as Markdown"'
+            in c.get("/docs/creating_an_app").text
+        )
 
 
 # -- RESERVED_PATHS regression --------------------------------------

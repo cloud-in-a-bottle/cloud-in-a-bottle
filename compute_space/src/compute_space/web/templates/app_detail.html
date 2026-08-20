@@ -199,7 +199,10 @@ async function grantPermission(btn) {
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({app_id: appId, service_url: serviceUrl, grant: grant}),
     });
-    if (!resp.ok) throw new Error(await resp.text());
+    if (!resp.ok) {
+      const data = await resp.json().catch(function() { return null; });
+      throw new Error(responseErrorMessage(data, 'HTTP ' + resp.status));
+    }
     btn.textContent = 'Granted';
     btn.closest('tr').style.opacity = '0.5';
   } catch (e) {
@@ -289,5 +292,6 @@ async function copyAppDiagnostics(btn) {
   "dropBuildCacheUrl": "/api/drop-docker-cache"
 }
 </script>
+<script src="{{ static_url('js/http-errors.js') }}"></script>
 <script src="{{ static_url('js/app-detail.js') }}"></script>
 {% endblock %}

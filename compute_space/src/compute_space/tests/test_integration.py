@@ -1,5 +1,5 @@
 """
-End-to-end integration tests for the OpenHost router.
+End-to-end integration tests for the Cloud in a Bottle router.
 
 The full production flow is: build outer VM -> boot VM -> start router inside
 VM -> deploy apps.  The VM step requires Linux with KVM and diskimage-builder,
@@ -9,7 +9,6 @@ would use inside the VM.
 """
 
 import os
-import shutil
 import sqlite3
 import subprocess
 import tempfile
@@ -18,7 +17,6 @@ from pathlib import Path
 
 import pytest
 import requests
-from loguru import logger
 
 from compute_space import OPENHOST_PROJECT_DIR
 from compute_space.core.caddy import generate_caddyfile
@@ -30,7 +28,9 @@ from compute_space.tests.conftest import _start_router_process
 from compute_space.tests.conftest import _stop_router_process
 from compute_space.tests.conftest import primary_of
 from compute_space.tests.container import container_cleanup
+from compute_space.tests.local_stack import create_bare_git_repo
 from compute_space.tests.utils import app_id_for
+from compute_space.tests.utils import managed_router
 from compute_space.tests.utils import wait_app_removed
 from compute_space.tests.utils import wait_app_running
 
@@ -303,7 +303,7 @@ class TestRouterCore:
             json={"repo_url": "file:///nonexistent/path"},
         )
         assert r.status_code == 400
-        assert "Local path does not exist" in r.json()["error"]
+        assert "Local path does not exist" in r.json()["detail"]
 
     def test_add_app_file_url_non_git_accepted(self, admin_session, config):
         """POST with a file:// URL to a non-git dir with openhost.toml succeeds."""
@@ -356,7 +356,7 @@ class TestRouterCore:
         """POST with a file:// URL to a bare git repo fetches openhost.toml."""
         base_url = _zone_url(config)
         bare_path = str(tmp_path / "bare_repo.git")
-        _create_bare_git_repo(os.path.join(_FIXTURES_DIR, "test_app"), bare_path)
+        create_bare_git_repo(os.path.join(_FIXTURES_DIR, "test_app"), bare_path)
         repo_url = f"file://{bare_path}"
         r = admin_session.post(
             f"{base_url}/api/clone_and_get_app_info",
@@ -555,466 +555,17 @@ def _app_url(config, app_name):
 
 
 @requires_containers
-class TestContainerGone:
-    """Test that apps recover when their container is completely gone.
-
-    Simulates a real VM-reboot scenario where the container engine's local
-    storage has been wiped (e.g. the data-root disk didn't remount at boot).
-    check_app_status() should detect this and do a full rebuild
-    (image + container) instead of failing with "No such container".
-    """
-
-    APP_PATH = os.path.join(_FIXTURES_DIR, "test_app")
-    APP_NAME = "test-app"
-    CONTAINER_NAME = "openhost-test-app"
-    ROUTER_PORT = 18082
-    BASE_URL = "http://testzone.local:18082"
-
-    def test_app_recovers_after_container_removed(self, tmp_path):
-        """After container is completely removed, router should rebuild and restart.
-
-        Exercises the real VM-reboot scenario:
-        1. Deploy a app — running and healthy.
-        2. Stop the router process.
-        3. Remove the container AND image (simulates the engine's state
-           being lost because data-root wasn't mounted at boot).
-        4. Start the router — check_app_status() detects the dead container,
-           does a full rebuild via _start_app_process().
-        5. Verify a new container is running and serving traffic.
-        6. Assert the router's DB shows status='running' with a new container ID.
-        """
-        config, env = _make_config_and_env(tmp_path, port=self.ROUTER_PORT)
-        db_path = config.db_path
-        router = None
-
-        container_cleanup(self.CONTAINER_NAME, self.APP_NAME)
-
-        try:
-            # ---- Phase 1: Deploy and verify the app is running ----
-            router = _start_router_process(self.BASE_URL, env)
-
-            session = requests.Session()
-            _setup_owner(session, self.BASE_URL, username="admin")
-
-            _deploy_app(session, self.BASE_URL, self.APP_PATH)
-
-            # Wait for running status in DB.
-            # The first deploy builds the image from scratch (no cache),
-            # which can take well over 15 s in CI.  Use the same generous
-            # timeout that TestContainerE2E.test_app_detail uses (120 s).
-            deadline = time.time() + 120
-            db_status = None
-            db_error = None
-            while time.time() < deadline:
-                try:
-                    poll_db = sqlite3.connect(db_path)
-                    try:
-                        poll_db.row_factory = sqlite3.Row
-                        poll_row = poll_db.execute(
-                            "SELECT status, error_message FROM apps WHERE name = ?",
-                            (self.APP_NAME,),
-                        ).fetchone()
-                        if poll_row:
-                            db_status = poll_row["status"]
-                            db_error = poll_row["error_message"]
-                    finally:
-                        poll_db.close()
-                except Exception as e:
-                    logger.error(f"Error polling DB for app status: {e}")
-                    pass
-                logger.info(f"Polled DB for app status: {db_status}")
-                # 'error' is terminal — stop waiting out the full deadline and
-                # surface the failure reason instead of a bare status.
-                if db_status in ("running", "error"):
-                    break
-                time.sleep(2)
-            assert db_status == "running", (
-                f"App should be running after deploy, got status={db_status} (error_message={db_error!r})"
-            )
-
-            # Record old container ID
-            db = sqlite3.connect(db_path)
-            try:
-                db.row_factory = sqlite3.Row
-                row = db.execute(
-                    "SELECT container_id FROM apps WHERE name = ?",
-                    (self.APP_NAME,),
-                ).fetchone()
-                old_container_id = row["container_id"]
-            finally:
-                db.close()
-            assert old_container_id, "Should have a container ID after deploy"
-
-            # ---- Phase 2: Simulate container completely gone ----
-            _stop_router_process(router)
-            router = None
-
-            # Remove container AND image — simulates engine state loss
-            subprocess.run(
-                ["podman", "rm", "-f", self.CONTAINER_NAME],
-                capture_output=True,
-                timeout=30,
-            )
-            subprocess.run(
-                ["podman", "rmi", "-f", f"openhost-{self.APP_NAME}:latest"],
-                capture_output=True,
-                timeout=30,
-            )
-
-            # Verify container is truly gone
-            result = subprocess.run(
-                ["podman", "inspect", self.CONTAINER_NAME],
-                capture_output=True,
-                timeout=10,
-            )
-            assert result.returncode != 0, "Container should not exist"
-
-            # ---- Phase 3: Restart router (triggers check_app_status) ----
-            # check_app_status() does a synchronous image rebuild during
-            # startup, so /health won't respond until the rebuild finishes.
-            # Give it enough time for the full image build + container start.
-            router = _start_router_process(self.BASE_URL, env, startup_timeout=180)
-
-            # ---- Phase 4: Verify full rebuild happened ----
-            # check_app_status() should have rebuilt the image and created
-            # a new container via _start_app_process()
-            deadline = time.time() + 15  # router is already up, just verify DB
-            db_status = None
-            db_error = None
-            new_container_id = None
-            while time.time() < deadline:
-                try:
-                    poll_db = sqlite3.connect(db_path)
-                    try:
-                        poll_db.row_factory = sqlite3.Row
-                        poll_row = poll_db.execute(
-                            "SELECT status, error_message, container_id FROM apps WHERE name = ?",
-                            (self.APP_NAME,),
-                        ).fetchone()
-                        if poll_row:
-                            db_status = poll_row["status"]
-                            db_error = poll_row["error_message"]
-                            new_container_id = poll_row["container_id"]
-                    finally:
-                        poll_db.close()
-                except Exception:
-                    pass
-                if db_status in ("running", "error"):
-                    break
-                time.sleep(2)
-
-            assert db_status == "running", (
-                f"App should be running after rebuild, got status={db_status} (error_message={db_error!r})"
-            )
-            assert new_container_id, "Should have a new container ID"
-            assert new_container_id != old_container_id, "Container ID should be different after rebuild"
-
-            # Verify the new container is actually serving traffic
-            deadline = time.time() + 15
-            healthy = False
-            while time.time() < deadline:
-                try:
-                    poll_db = sqlite3.connect(db_path)
-                    try:
-                        poll_db.row_factory = sqlite3.Row
-                        poll_row = poll_db.execute(
-                            "SELECT local_port FROM apps WHERE name = ?",
-                            (self.APP_NAME,),
-                        ).fetchone()
-                    finally:
-                        poll_db.close()
-                    if poll_row:
-                        r = requests.get(
-                            f"http://127.0.0.1:{poll_row['local_port']}/health",
-                            timeout=2,
-                        )
-                        if r.status_code == 200:
-                            healthy = True
-                            break
-                except Exception:
-                    pass
-                time.sleep(1)
-            assert healthy, "Rebuilt container should be healthy and serving traffic"
-
-        finally:
-            if router:
-                try:
-                    s = requests.Session()
-                    s.post(
-                        f"{self.BASE_URL}/login",
-                        data={"username": "admin", "password": "testpass123"},
-                    )
-                    app_id = app_id_for(s, self.BASE_URL, self.APP_NAME)
-                    if app_id:
-                        s.post(
-                            f"{self.BASE_URL}/remove_app/{app_id}",
-                            timeout=10,
-                        )
-                    # Wait for the bg worker before stopping the router
-                    # or it gets killed mid-teardown. container_cleanup()
-                    # below force-removes anything left over.
-                    wait_app_removed(s, self.BASE_URL, self.APP_NAME, timeout=30)
-                except Exception:
-                    pass
-                _stop_router_process(router)
-            container_cleanup(self.CONTAINER_NAME, self.APP_NAME)
-
-
-@requires_containers
-class TestContainerRestart:
-    """Test that apps recover after the container engine restarts.
-
-    Simulates the VM reboot path: stop the container, then restart the
-    router.  check_app_status() detects the dead container and does a full
-    rebuild (image + new container) via _start_app_process().
-    """
-
-    APP_PATH = os.path.join(_FIXTURES_DIR, "test_app")
-    APP_NAME = "test-app"
-    CONTAINER_NAME = "openhost-test-app"
-    ROUTER_PORT = 18081
-    BASE_URL = "http://testzone.local:18081"
-
-    def test_app_status_after_container_restart(self, tmp_path):
-        """After the engine restarts, router should rebuild and show app as 'running'.
-
-        Exercises the engine-restart scenario:
-        1. Deploy an app — running and healthy.
-        2. Stop the router process.
-        3. Stop the container (simulates engine shutdown).
-        4. Start the router — check_app_status() detects the dead
-           container and does a full rebuild via _start_app_process().
-        5. Verify a container is running and serving traffic.
-        6. Assert the router's DB shows status='running'.
-        """
-        config, env = _make_config_and_env(tmp_path, port=self.ROUTER_PORT)
-        db_path = config.db_path
-        router = None
-
-        # Clean up any leftover containers from previous runs
-        container_cleanup(self.CONTAINER_NAME, self.APP_NAME)
-
-        try:
-            # ---- Phase 1: Deploy and verify the app is running ----
-            router = _start_router_process(self.BASE_URL, env)
-
-            session = requests.Session()
-            _setup_owner(session, self.BASE_URL, username="admin")
-
-            # Submit and confirm deployment
-            _deploy_app(session, self.BASE_URL, self.APP_PATH)
-
-            # Wait for app status='running' in the DB (not just the HTML).
-            # The initial image build can be slow in CI without cache, so
-            # use a generous timeout consistent with TestContainerE2E (120 s).
-            deadline = time.time() + 120
-            db_status = None
-            while time.time() < deadline:
-                try:
-                    poll_db = sqlite3.connect(db_path)
-                    try:
-                        poll_db.row_factory = sqlite3.Row
-                        poll_row = poll_db.execute(
-                            "SELECT status FROM apps WHERE name = ?",
-                            (self.APP_NAME,),
-                        ).fetchone()
-                        if poll_row:
-                            db_status = poll_row["status"]
-                    finally:
-                        poll_db.close()
-                except Exception:
-                    pass
-                if db_status == "running":
-                    break
-                time.sleep(2)
-            assert db_status == "running", f"App should be running after deploy, got status={db_status}"
-
-            # Verify proxy works
-            _wait_for_url(
-                session,
-                f"http://{self.APP_NAME}.{primary_of(config).name}:{self.ROUTER_PORT}/health",
-                timeout=30,
-            )
-
-            # ---- Phase 2: Simulate container engine restart ----
-            #
-            # In a real VM reboot the container engine stops (killing all
-            # containers), then restarts.  We simulate this by stopping
-            # the router and the container, then restarting the router
-            # so that check_app_status() sees the exited container.
-
-            _stop_router_process(router)
-            router = None
-
-            # Stop the container (simulates the container engine shutting it down)
-            result = subprocess.run(
-                ["podman", "stop", self.CONTAINER_NAME],
-                capture_output=True,
-                text=True,
-                timeout=30,
-            )
-            assert result.returncode == 0, f"podman stop failed: {result.stderr}"
-
-            # Verify container is stopped
-            result = subprocess.run(
-                [
-                    "podman",
-                    "inspect",
-                    "--format",
-                    "{{.State.Status}}",
-                    self.CONTAINER_NAME,
-                ],
-                capture_output=True,
-                text=True,
-                timeout=10,
-            )
-            assert result.stdout.strip() == "exited", "Container should be exited after podman stop"
-
-            # ---- Phase 3: Restart router (triggers check_app_status) ----
-            #
-            # check_app_status() detects the stopped container and does a
-            # full rebuild (image + new container).  This blocks startup,
-            # so allow extra time for /health to respond.
-            router = _start_router_process(self.BASE_URL, env, startup_timeout=180)
-
-            # ---- Phase 4: Verify check_app_status() restarted the container ----
-            #
-            # check_app_status() should have already started the container
-            # during Phase 3.  Verify it is running *before* any additional
-            # podman start call -- this ensures the router's init logic
-            # (not a later manual start) is what brought the container back.
-            deadline = time.time() + 15
-            container_running = False
-            while time.time() < deadline:
-                result = subprocess.run(
-                    [
-                        "podman",
-                        "inspect",
-                        "--format",
-                        "{{.State.Status}}",
-                        self.CONTAINER_NAME,
-                    ],
-                    capture_output=True,
-                    text=True,
-                    timeout=10,
-                )
-                if result.stdout.strip() == "running":
-                    container_running = True
-                    break
-                time.sleep(1)
-            assert container_running, "check_app_status() should have restarted the container"
-
-            # Verify the container is actually serving traffic
-            deadline = time.time() + 15
-            container_healthy = False
-            last_poll_error = None
-            while time.time() < deadline:
-                try:
-                    # Hit the container directly on its mapped port
-                    db = sqlite3.connect(db_path)
-                    try:
-                        db.row_factory = sqlite3.Row
-                        row = db.execute(
-                            "SELECT local_port FROM apps WHERE name = ?",
-                            (self.APP_NAME,),
-                        ).fetchone()
-                    finally:
-                        db.close()
-                    if row:
-                        r = requests.get(
-                            f"http://127.0.0.1:{row['local_port']}/health",
-                            timeout=2,
-                        )
-                        if r.status_code == 200:
-                            container_healthy = True
-                            break
-                except Exception as exc:
-                    last_poll_error = exc
-                time.sleep(1)
-            assert container_healthy, (
-                f"Container should be healthy and serving traffic (last poll error: {last_poll_error})"
-            )
-
-            # ---- Phase 5: Assert router status matches reality ----
-            #
-            # The container IS running and healthy.  The router's
-            # background thread (_restart_apps_sequential) may still be
-            # finishing _wait_for_ready() before it commits
-            # status='running' to the DB, so poll instead of reading once.
-
-            session = requests.Session()
-            r = session.post(
-                f"{self.BASE_URL}/login",
-                data={"username": "admin", "password": "testpass123"},
-            )
-
-            app_id = app_id_for(session, self.BASE_URL, self.APP_NAME)
-            assert app_id is not None, "App row should exist after rebuild"
-            r = session.get(f"{self.BASE_URL}/app_detail/{self.APP_NAME}")
-            assert r.status_code == 200
-
-            # Poll the DB for status='running' (background thread may
-            # still be finishing the _wait_for_ready() health check).
-            deadline = time.time() + 30
-            db_status = None
-            while time.time() < deadline:
-                try:
-                    poll_db = sqlite3.connect(db_path)
-                    try:
-                        poll_db.row_factory = sqlite3.Row
-                        poll_row = poll_db.execute(
-                            "SELECT status FROM apps WHERE name = ?",
-                            (self.APP_NAME,),
-                        ).fetchone()
-                        if poll_row:
-                            db_status = poll_row["status"]
-                    finally:
-                        poll_db.close()
-                except Exception:
-                    pass
-                if db_status == "running":
-                    break
-                time.sleep(2)
-
-            assert db_status == "running", (
-                f"App status in DB is '{db_status}' but the container "
-                f"is running and healthy.  check_app_status() should have "
-                f"restarted the container and set status to 'running'."
-            )
-
-        finally:
-            if router:
-                # Try to remove through the router
-                try:
-                    s = requests.Session()
-                    s.post(
-                        f"{self.BASE_URL}/login",
-                        data={
-                            "username": "admin",
-                            "password": "testpass123",
-                        },
-                    )
-                    app_id = app_id_for(s, self.BASE_URL, self.APP_NAME)
-                    if app_id:
-                        s.post(
-                            f"{self.BASE_URL}/remove_app/{app_id}",
-                            timeout=10,
-                        )
-                    # Wait for the bg worker before stopping the router.
-                    wait_app_removed(s, self.BASE_URL, self.APP_NAME, timeout=30)
-                except Exception:
-                    pass
-                _stop_router_process(router)
-            container_cleanup(self.CONTAINER_NAME, self.APP_NAME)
-
-
-@requires_containers
 class TestContainerE2E:
     """
-    End-to-end test of the container deployment path using a minimal test app.
+    End-to-end test of the container deployment path: deploy, interact via
+    the proxy, stop/reload, remove-with-keep-data + redeploy, container-
+    engine-restart recovery, and a final full removal. One shared
+    build+deploy of ``test-app`` on the module's shared router covers every
+    scenario.
 
-    Tests run in definition order within the class.  Each test builds on the
-    state left by the previous one (deploy -> interact -> remove).
+    DEFINITION ORDER IS LOAD-BEARING: each test builds on state left by the
+    previous one. Do not reorder methods, and expect ``-k`` subsets / ``--ff``
+    to break this.
     """
 
     APP_PATH = os.path.join(_FIXTURES_DIR, "test_app")
@@ -1212,74 +763,7 @@ class TestContainerE2E:
             status_info = {}
         pytest.fail(f"App did not come back after reload. Status: {status_info}")
 
-    # -- remove --
-
-    def test_remove(self, admin_session, config):
-        """Remove the app — stops container, cleans data."""
-        base_url = _zone_url(config)
-        app_id = app_id_for(admin_session, base_url, "test-app")
-        r = admin_session.post(
-            f"{base_url}/remove_app/{app_id}",
-        )
-        assert r.status_code == 202
-        wait_app_removed(admin_session, base_url, "test-app")
-
-    def test_proxy_gone_after_remove(self, admin_session, config):
-        """After removal, proxied requests should 404."""
-        r = admin_session.get(
-            f"{_app_url(config, 'test-app')}/health",
-            timeout=2,
-        )
-        assert r.status_code == 404
-
-    def test_data_cleaned_up(self, config):
-        """App data directory should be deleted after removal."""
-        app_data = os.path.join(config.persistent_data_dir, "app_data", "test-app")
-        app_temp = os.path.join(config.temporary_data_dir, "app_temp_data", "test-app")
-        assert not os.path.exists(app_data)
-        assert not os.path.exists(app_temp)
-
-    def test_container_cleaned_up(self):
-        """Container should be removed after app removal."""
-        r = subprocess.run(
-            [
-                "podman",
-                "ps",
-                "-a",
-                "--filter",
-                "name=openhost-test-app",
-                "--format",
-                "{{.Names}}",
-            ],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        assert "openhost-test-app" not in r.stdout
-
-
-# ---------------------------------------------------------------------------
-# Remove app with keep_data: deploy, write data, remove (keep), re-deploy,
-# verify data survived
-# ---------------------------------------------------------------------------
-
-
-@requires_containers
-class TestRemoveKeepData:
-    """
-    Test that 'Remove App (Keep Data)' preserves persistent app data so the
-    app can be re-deployed and pick up where it left off.
-
-    Uses the test app fixture. Tests run in definition order.
-    """
-
-    APP_PATH = os.path.join(_FIXTURES_DIR, "test_app")
-
-    def test_deploy(self, admin_session, config):
-        """Deploy the test app."""
-        base_url = _zone_url(config)
-        _deploy_app(admin_session, base_url, self.APP_PATH)
-        wait_app_running(admin_session, base_url, "test-app", timeout=120)
+    # -- remove with keep_data, then redeploy and verify data survived --
 
     def test_create_data_file(self, config):
         """Write a marker file into the app's persistent data directory."""
@@ -1331,290 +815,157 @@ class TestRemoveKeepData:
         with open(marker) as f:
             assert f.read() == "preserve-me"
 
-    def test_cleanup(self, admin_session, config):
-        """Final cleanup: remove app fully (with data)."""
+    # -- container-engine restart recovery, then final full removal --
+
+    @pytest.fixture(scope="class")
+    @classmethod
+    def restarted_router(cls, admin_session, config, router_process):
+        """Simulate a VM reboot: stop the shared router and container, then boot a
+        replacement so check_app_status() rebuilds the dead container. Yields the
+        replacement router; both tests below share this one restart.
+
+        Wraps the whole risky window (stop, restart, and whatever the tests using
+        this fixture do with it) so any failure force-removes the container instead
+        of leaving it stopped/broken for whatever deploys next under the same name
+        (e.g. tests/test_services_e2e.py's test_app fixture, run as a separate
+        pytest invocation in the same CI job) -- mirroring the try/finally the
+        original standalone restart test had around its own isolated container.
+        """
+        container_name = "openhost-test-app"
+        try:
+            _stop_router_process(router_process)
+
+            result = subprocess.run(
+                ["podman", "stop", container_name],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            assert result.returncode == 0, f"podman stop failed: {result.stderr}"
+
+            result = subprocess.run(
+                ["podman", "inspect", "--format", "{{.State.Status}}", container_name],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            assert result.stdout.strip() == "exited", "Container should be exited after podman stop"
+
+            # check_app_status() does a synchronous image rebuild during startup,
+            # so /health won't respond until the rebuild finishes -- allow extra
+            # time.  Same config/db as the original router, so admin_session's
+            # DB-backed cookies keep working against this replacement with no
+            # re-login needed.
+            with managed_router(config, startup_timeout=180) as new_router:
+                yield new_router
+        except Exception:
+            container_cleanup(container_name, "test-app")
+            raise
+
+    def test_container_engine_restart_recovers(self, admin_session, config, restarted_router):
+        """check_app_status() detects the dead container on boot and rebuilds it."""
         base_url = _zone_url(config)
-        app_id = app_id_for(admin_session, base_url, "test-app")
-        r = admin_session.post(
-            f"{base_url}/remove_app/{app_id}",
+        db_path = config.db_path
+        container_name = "openhost-test-app"
+
+        deadline = time.time() + 15
+        container_running = False
+        while time.time() < deadline:
+            result = subprocess.run(
+                ["podman", "inspect", "--format", "{{.State.Status}}", container_name],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            if result.stdout.strip() == "running":
+                container_running = True
+                break
+            time.sleep(1)
+        assert container_running, "check_app_status() should have restarted the container"
+
+        # Verify the container is actually serving traffic
+        deadline = time.time() + 15
+        container_healthy = False
+        last_poll_error = None
+        while time.time() < deadline:
+            try:
+                db = sqlite3.connect(db_path)
+                try:
+                    db.row_factory = sqlite3.Row
+                    row = db.execute(
+                        "SELECT local_port FROM apps WHERE name = ?",
+                        ("test-app",),
+                    ).fetchone()
+                finally:
+                    db.close()
+                if row:
+                    r = requests.get(f"http://127.0.0.1:{row['local_port']}/health", timeout=2)
+                    if r.status_code == 200:
+                        container_healthy = True
+                        break
+            except Exception as exc:
+                last_poll_error = exc
+            time.sleep(1)
+        assert container_healthy, (
+            f"Container should be healthy and serving traffic (last poll error: {last_poll_error})"
         )
+
+        app_id = app_id_for(admin_session, base_url, "test-app")
+        assert app_id is not None, "App row should exist after rebuild"
+        r = admin_session.get(f"{base_url}/app_detail/test-app")
+        assert r.status_code == 200
+
+        # Poll the DB for status='running' (background thread may still be
+        # finishing the _wait_for_ready() health check).
+        deadline = time.time() + 30
+        db_status = None
+        while time.time() < deadline:
+            try:
+                poll_db = sqlite3.connect(db_path)
+                try:
+                    poll_db.row_factory = sqlite3.Row
+                    poll_row = poll_db.execute(
+                        "SELECT status FROM apps WHERE name = ?",
+                        ("test-app",),
+                    ).fetchone()
+                    if poll_row:
+                        db_status = poll_row["status"]
+                finally:
+                    poll_db.close()
+            except Exception:
+                pass
+            if db_status == "running":
+                break
+            time.sleep(2)
+        assert db_status == "running", (
+            f"App status in DB is '{db_status}' but the container "
+            f"is running and healthy.  check_app_status() should have "
+            f"restarted the container and set status to 'running'."
+        )
+
+    def test_final_removal_after_recovery(self, admin_session, config, restarted_router):
+        """Full removal after recovery deletes the container, data, and temp dirs."""
+        base_url = _zone_url(config)
+        container_name = "openhost-test-app"
+
+        app_id = app_id_for(admin_session, base_url, "test-app")
+        assert app_id is not None
+        r = admin_session.post(f"{base_url}/remove_app/{app_id}")
         assert r.status_code == 202
         wait_app_removed(admin_session, base_url, "test-app")
+
+        r = admin_session.get(f"{_app_url(config, 'test-app')}/health", timeout=2)
+        assert r.status_code == 404, "Proxied requests should 404 after removal"
 
         app_data = os.path.join(config.persistent_data_dir, "app_data", "test-app")
         app_temp = os.path.join(config.temporary_data_dir, "app_temp_data", "test-app")
         assert not os.path.exists(app_data), "Full remove should delete persistent data"
         assert not os.path.exists(app_temp), "Full remove should delete temp data"
 
-
-# ---------------------------------------------------------------------------
-# Full lifecycle: deploy from Git URL (remote repo flow), proxy, reload, remove
-# ---------------------------------------------------------------------------
-
-
-def _create_bare_git_repo(source_dir, bare_repo_path):
-    """Create a bare git repo from a source directory.
-
-    Initialises a bare repo, commits all files from source_dir, and pushes
-    to the bare repo so it can be cloned via file:// URL.
-    """
-    # Create bare repo
-    subprocess.run(
-        ["git", "init", "--bare", bare_repo_path],
-        check=True,
-        capture_output=True,
-    )
-    # Point HEAD to main so 'git show HEAD:...' works after pushing to main
-    subprocess.run(
-        ["git", "symbolic-ref", "HEAD", "refs/heads/main"],
-        cwd=bare_repo_path,
-        check=True,
-        capture_output=True,
-    )
-
-    # Create a temporary working copy, commit, and push
-    work_dir = bare_repo_path + "_work"
-    try:
-        shutil.copytree(source_dir, work_dir)
-        env = os.environ.copy()
-        env["GIT_AUTHOR_NAME"] = "test"
-        env["GIT_AUTHOR_EMAIL"] = "test@test"
-        env["GIT_COMMITTER_NAME"] = "test"
-        env["GIT_COMMITTER_EMAIL"] = "test@test"
-        subprocess.run(["git", "init"], cwd=work_dir, check=True, capture_output=True)
-        subprocess.run(
-            ["git", "branch", "-m", "main"],
-            cwd=work_dir,
-            check=True,
-            capture_output=True,
-        )
-        subprocess.run(
-            ["git", "add", "."],
-            cwd=work_dir,
-            check=True,
-            capture_output=True,
-        )
-        subprocess.run(
-            ["git", "commit", "-m", "initial commit"],
-            cwd=work_dir,
-            env=env,
-            check=True,
-            capture_output=True,
-        )
-        subprocess.run(
-            ["git", "remote", "add", "origin", bare_repo_path],
-            cwd=work_dir,
-            check=True,
-            capture_output=True,
-        )
-        subprocess.run(
-            ["git", "push", "origin", "main"],
-            cwd=work_dir,
-            env=env,
-            check=True,
-            capture_output=True,
-        )
-    finally:
-        # Clean up the working copy even if git commands fail
-        shutil.rmtree(work_dir, ignore_errors=True)
-    return bare_repo_path
-
-
-@requires_containers
-class TestGitUrlDeployE2E:
-    """
-    End-to-end test of deploying an app from a Git URL.
-
-    This exercises the remote-repo code path (git clone, not shutil.copytree)
-    which is used when deploying from GitHub URLs.  A local bare git repo
-    stands in for GitHub to avoid external network dependencies.
-
-    Tests run in definition order within the class.  Each test builds on the
-    state left by the previous one (deploy -> proxy -> reload -> remove).
-    """
-
-    APP_NAME = "test-git-deploy"
-    APP_PATH = os.path.join(_FIXTURES_DIR, "test_app")
-
-    def _repo_url(self, config):
-        """Return the file:// URL for the bare git repo."""
-        bare_path = os.path.join(config.temporary_data_dir, "test-git-deploy.git")
-        return f"file://{bare_path}"
-
-    # -- setup bare repo + deploy --
-
-    def test_deploy_from_git_url(self, admin_session, config):
-        """Deploy an app from a file:// Git URL via the API."""
-        base_url = _zone_url(config)
-        # Create bare git repo from the test fixture
-        bare_path = os.path.join(config.temporary_data_dir, "test-git-deploy.git")
-        _create_bare_git_repo(self.APP_PATH, bare_path)
-        repo_url = self._repo_url(config)
-
-        # Step 1: clone and get app info
-        r = admin_session.post(
-            f"{base_url}/api/clone_and_get_app_info",
-            json={"repo_url": repo_url},
-        )
-        assert r.status_code == 200, f"clone_and_get_app_info failed: {r.status_code}"
-        data = r.json()
-        assert "manifest" in data
-        clone_dir = data["clone_dir"]
-
-        # Step 2: deploy
-        r = admin_session.post(
-            f"{base_url}/api/add_app",
-            json={
-                "repo_url": repo_url,
-                "app_name": self.APP_NAME,
-                "clone_dir": clone_dir,
-            },
-            timeout=120,
-        )
-        assert r.status_code == 200
-        assert r.json().get("app_name") == self.APP_NAME
-
-    def test_app_detail_running(self, admin_session, config):
-        """Wait for the Git-cloned app to finish building and reach running status.
-
-        Polls the ``/api/app_status`` DB status rather than substring-matching
-        the ``/app_detail`` HTML: that page inlines a ``.status-running`` CSS
-        rule via layout.html, so ``"running" in r.text`` is true regardless of
-        the app's actual status and would let this gate pass while the app is
-        still 'building'/'starting'.  A settled 'running' status is a genuine
-        precondition for the later reload test, which is refused with 409 while
-        the app sits in a transient state.
-        """
-        base_url = _zone_url(config)
-        deadline = time.time() + 120
-        status = None
-        while time.time() < deadline:
-            app_id = app_id_for(admin_session, base_url, self.APP_NAME)
-            if app_id:
-                sr = admin_session.get(f"{base_url}/api/app_status/{app_id}")
-                if sr.status_code == 200:
-                    status = sr.json().get("status")
-                    if status == "running":
-                        break
-                    if status == "error":
-                        pytest.fail(f"Git-deployed app entered error state: {sr.json().get('error')}")
-            time.sleep(2)
-        assert status == "running", f"Git-deployed app did not reach running status (last status={status})"
-
-        # The app_detail page should also render and report the running status.
-        r = admin_session.get(f"{base_url}/app_detail/{self.APP_NAME}")
-        assert r.status_code == 200
-
-    # -- proxy: verify the cloned app works --
-
-    def test_proxy_works(self, admin_session, config):
-        """Verify the app deployed from a Git URL is reachable through the proxy."""
-        url = f"{_app_url(config, self.APP_NAME)}/health"
-        deadline = time.time() + 30
-        last_status = None
-        last_err = None
-        while time.time() < deadline:
-            try:
-                r = admin_session.get(url, timeout=2)
-                last_status = r.status_code
-                if r.status_code == 200:
-                    assert r.json() == {"status": "ok"}
-                    return
-            except (requests.ConnectionError, requests.Timeout) as e:
-                last_err = e
-            time.sleep(1)
-        pytest.fail(
-            f"Git-deployed app did not respond within timeout (last_status={last_status}, last_err={last_err})"
-        )
-
-    # -- verify it was cloned (not copied) --
-
-    def test_cloned_repo_is_git_repo(self, config):
-        """The remote-repo deploy should git-clone, leaving a .git directory."""
-        repo_dir = os.path.join(
-            config.temporary_data_dir,
-            "app_temp_data",
-            self.APP_NAME,
-            "repo",
-        )
-        git_dir = os.path.join(repo_dir, ".git")
-        assert os.path.isdir(repo_dir), f"Cloned repo not found at {repo_dir}"
-        assert os.path.isdir(git_dir), ".git directory not found — app may have been copied instead of cloned"
-
-    # -- reload (exercises the git-pull path) --
-
-    def test_reload_does_git_pull(self, admin_session, config):
-        """Reload the Git-deployed app — should do 'git pull' instead of copytree."""
-        base_url = _zone_url(config)
-        app_id = app_id_for(admin_session, base_url, self.APP_NAME)
-        r = admin_session.post(
-            f"{base_url}/reload_app/{app_id}",
-            timeout=120,
-        )
-        assert r.status_code == 200
-
-        # Wait for the app to come back after reload
-        url = f"{_app_url(config, self.APP_NAME)}/health"
-        deadline = time.time() + 60
-        while time.time() < deadline:
-            try:
-                r = admin_session.get(url, timeout=2)
-                if r.status_code == 200:
-                    return
-            except (requests.ConnectionError, requests.Timeout):
-                pass
-            time.sleep(1)
-        pytest.fail("Git-deployed app did not come back after reload")
-
-    # -- remove + cleanup --
-
-    def test_remove(self, admin_session, config):
-        """Remove the Git-deployed app."""
-        base_url = _zone_url(config)
-        app_id = app_id_for(admin_session, base_url, self.APP_NAME)
-        r = admin_session.post(
-            f"{base_url}/remove_app/{app_id}",
-        )
-        assert r.status_code == 202
-        wait_app_removed(admin_session, base_url, self.APP_NAME)
-
-    def test_proxy_gone_after_remove(self, admin_session, config):
-        """After removal, proxied requests should 404."""
-        r = admin_session.get(
-            f"{_app_url(config, self.APP_NAME)}/health",
-            timeout=2,
-        )
-        assert r.status_code == 404
-
-    def test_data_cleaned_up(self, config):
-        """App data and temp directories should be deleted after removal."""
-        app_data = os.path.join(
-            config.persistent_data_dir,
-            "app_data",
-            self.APP_NAME,
-        )
-        app_temp = os.path.join(
-            config.temporary_data_dir,
-            "app_temp_data",
-            self.APP_NAME,
-        )
-        assert not os.path.exists(app_data)
-        assert not os.path.exists(app_temp)
-
-    def test_container_cleaned_up(self):
-        """Container should be removed after app removal."""
-        r = subprocess.run(
-            [
-                "podman",
-                "ps",
-                "-a",
-                "--filter",
-                f"name=openhost-{self.APP_NAME}",
-                "--format",
-                "{{.Names}}",
-            ],
+        result = subprocess.run(
+            ["podman", "ps", "-a", "--filter", f"name={container_name}", "--format", "{{.Names}}"],
             capture_output=True,
             text=True,
             timeout=10,
         )
-        assert f"openhost-{self.APP_NAME}" not in r.stdout
+        assert container_name not in result.stdout, "Container should be removed after app removal"

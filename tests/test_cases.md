@@ -1,6 +1,6 @@
 # Test Cases
 
-Test cases for the OpenHost platform. Automated tests are in:
+Test cases for the Cloud in a Bottle platform. Automated tests are in:
 - `test_e2e.py` — cloud E2E (ephemeral GCE instance, real TLS)
 - `test_full_stack.py` — local full-stack (router on host + rootless podman, no VM needed)
 - `test_tls.py` — TLS cert acquisition (Pebble ACME + CoreDNS, no VM needed)
@@ -85,7 +85,7 @@ Legend: [x] = automated, [ ] = manual/not yet automated
 
 ### App Deployment
 - [x] Deploy app from local path — `test_e2e.py::test_04`, `test_full_stack.py::TestTestAppPathRouting`
-- [x] Deploy app from Git URL — `test_integration.py::TestGitUrlDeployE2E`
+- [x] Deploy app from Git URL — `test_services_e2e.py::test_add_app_reuses_existing_clone_dir`, `test_integration.py::TestRouterCore::test_add_app_file_url_bare_repo_manifest`
 - [ ] Deploy app from private GitHub repo (with token)
 - [ ] Serverless app (Spin WASM) builds and starts
 - [x] Container app builds and starts — `test_e2e.py::test_05`, `test_full_stack.py::TestTestAppPathRouting`
@@ -96,10 +96,10 @@ Legend: [x] = automated, [ ] = manual/not yet automated
 - [x] Stop app — `test_e2e.py::test_08`, `test_full_stack.py::TestAppLifecycle`
 - [x] Reload app (rebuild + restart) — `test_e2e.py::test_08b`, `test_full_stack.py::TestAppLifecycle`
 - [x] Rename app, routing updates — `test_full_stack.py::TestAppRename`
-- [x] Container engine restart recovery — `test_integration.py::TestContainerRestart`
-- [x] Container gone recovery — `test_integration.py::TestContainerGone`
-- [x] Remove with keep_data preserves persistent data — `test_integration.py::TestRemoveKeepData`
-- [x] Git-deployed app: reload does git pull — `test_integration.py::TestGitUrlDeployE2E`
+- [x] Container engine restart / gone recovery — `test_integration.py::TestContainerE2E`, `test_check_app_status.py`
+- [x] Remove with keep_data preserves persistent data — `test_integration.py::TestContainerE2E`
+- [x] Git-deployed app: clones (not copies) via git — `test_services_e2e.py::test_add_app_reuses_existing_clone_dir`
+- [x] Git-deployed app: reload does git pull — `test_set_app_remote.py::test_git_pull_switches_branch_via_ref`
 
 ### App Routing (path-based)
 - [x] Requests to /base_path/ are proxied to the app — `test_e2e.py::test_06b`, `test_full_stack.py::TestTestAppPathRouting`
@@ -135,7 +135,7 @@ Legend: [x] = automated, [ ] = manual/not yet automated
 - [x] POST /toggle-ssh toggles SSH — `test_full_stack.py::TestSSHToggle`
 
 ### App Data
-- [x] App data persists across remove+redeploy (keep_data) — `test_integration.py::TestRemoveKeepData`
+- [x] App data persists across remove+redeploy (keep_data) — `test_integration.py::TestContainerE2E`
 - [x] App data cleaned up on full remove — `test_integration.py::TestContainerE2E`
 - [x] SQLite databases are provisioned and accessible — `test_integration.py::test_sqlite_provisioning`
 

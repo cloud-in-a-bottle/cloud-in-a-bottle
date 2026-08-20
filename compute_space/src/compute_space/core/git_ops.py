@@ -11,26 +11,8 @@ from compute_space import OPENHOST_PROJECT_DIR
 from compute_space.core.util import async_wrap
 
 
-class RemoteNotSetError(Exception):
-    pass
-
-
-class NoRemoteBranchForLocalBranch(Exception):
-    pass
-
-
 class CloneFailed(Exception):
     """Aborts an in-progress clone; the message is what the caller gets back."""
-
-
-class UnsupportedRepoUrlError(ValueError):
-    """A repo URL whose transport we recognise but deliberately don't support.
-
-    Currently only SSH (``ssh://`` and SCP-style ``git@host:path``) — clones
-    over SSH would need a deploy key, known_hosts, and an SSH agent that the
-    compute_space process doesn't have, so we reject them up front with a clear
-    message rather than letting ``git clone`` fail cryptically.
-    """
 
 
 _KNOWN_SCHEMES = {"http", "https", "ssh", "git", "file"}
@@ -169,14 +151,14 @@ def parse_repo_url(repo_url: str) -> tuple[str, str | None]:
     Returns (base_url, ref) where ref is a branch, tag, or commit hash, or None.
 
     Raises:
-        UnsupportedRepoUrlError: if the URL uses the SSH transport.
+        ValueError: if the URL uses the SSH transport.
     """
     # Reject SSH URLs before the bare-hostname fallback below: an SCP-style
     # URL like "git@github.com:user/repo.git" has no scheme, so it would
     # otherwise be rewritten to a malformed "https://git@github.com:user/..."
     # (git reads "user" as a port) and fail cryptically.
     if is_ssh_url(repo_url):
-        raise UnsupportedRepoUrlError(_SSH_URL_ERROR)
+        raise ValueError(_SSH_URL_ERROR)
     # Allow bare hostnames like "github.com/user/repo" without a scheme.
     # urlparse misidentifies credentials (e.g. "oauth2:TOKEN@host") as a scheme,
     # so we only trust schemes we actually recognise.
@@ -196,7 +178,7 @@ def _get_remote(repo: git.Repo) -> git.Remote:
     try:
         return repo.remote("origin")
     except (AttributeError, ValueError) as e:
-        raise RemoteNotSetError("remote 'origin' is not set") from e
+        raise LookupError("remote 'origin' is not set") from e
 
 
 @async_wrap
@@ -265,7 +247,7 @@ def get_remote_url(repo_path: Path) -> str | None:
     Raises:
         git.InvalidGitRepositoryError: if the path is not a git repository
         git.NoSuchPathError: if the path does not exist
-        RemoteNotSetError: if the repository has no 'origin' remote
+        LookupError: if the repository has no 'origin' remote
     """
     repo = git.Repo(repo_path)
     url = _get_remote(repo).url
@@ -288,7 +270,7 @@ def fetch(repo_path: Path) -> None:
     Raises:
         git.InvalidGitRepositoryError: if the path is not a git repository
         git.NoSuchPathError: if the path does not exist
-        RemoteNotSetError: if the repository has no 'origin' remote
+        LookupError: if the repository has no 'origin' remote
     """
     repo = git.Repo(repo_path)
     _get_remote(repo).fetch()
@@ -301,7 +283,7 @@ def count_commits_vs_remote(repo_path: Path) -> tuple[int, int]:
     Raises:
         git.InvalidGitRepositoryError: if the path is not a git repository
         git.NoSuchPathError: if the path does not exist
-        RemoteNotSetError: if the repository has no 'origin' remote or no tracking branch is set
+        LookupError: if the repository has no 'origin' remote or no tracking branch is set
     """
     repo = git.Repo(repo_path)
     try:
@@ -312,7 +294,7 @@ def count_commits_vs_remote(repo_path: Path) -> tuple[int, int]:
     tracking = branch.tracking_branch()
 
     if tracking is None:
-        raise NoRemoteBranchForLocalBranch(f"{branch.name} has no tracking branch set")
+        raise ValueError(f"{branch.name} has no tracking branch set")
 
     behind = int(repo.git.rev_list("--count", f"{branch}..{tracking}"))
     ahead = int(repo.git.rev_list("--count", f"{tracking}..{branch}"))
@@ -335,7 +317,7 @@ def set_remote_url(repo_path: Path, url: str) -> None:
     try:
         with _get_remote(repo).config_writer as cw:
             cw.set("url", url)
-    except RemoteNotSetError:
+    except LookupError:
         repo.create_remote("origin", url)
 
 
@@ -402,7 +384,7 @@ def github_web_url_from_local_repo(repo_path: Path) -> str | None:
         branch = None
     try:
         remote_url = _get_remote(repo).url
-    except RemoteNotSetError:
+    except LookupError:
         return None
     if not remote_url:
         return None

@@ -10,4 +10,9 @@ async def settings_page() -> Template:
     return Template(template_name="settings.html")
 
 
-pages_settings_routes = Router(path="/", route_handlers=[settings_page])
+@get("/updating", guards=[require_owner_auth])
+async def updating_page() -> Template:
+    return Template(template_name="updating.html")
+
+
+pages_settings_routes = Router(path="/", route_handlers=[settings_page, updating_page])

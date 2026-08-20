@@ -22,7 +22,7 @@
 #
 # Leave skip_service_start unset/false so the service actually starts.
 
-- name: Finalize OpenHost (domain-dependent last mile)
+- name: Finalize Cloud in a Bottle (domain-dependent last mile)
   hosts: all
   user: host
   vars:

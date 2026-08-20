@@ -74,9 +74,10 @@ function addDomain() {
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify(body),
   })
-    .then(function(r) { return r.json(); })
-    .then(function(data) {
-      if (data && data.error) { alert(data.error); return; }
+    .then(readJsonResponse)
+    .then(function(res) {
+      if (!res.ok) { alert(responseErrorMessage(res.data, 'Failed to add domain.')); return; }
+      var data = res.data;
       document.getElementById('domain-name').value = '';
       if (body.tls) {
         msg.textContent = 'Added. Acquiring a TLS certificate in the background — '
@@ -92,10 +93,10 @@ function addDomain() {
 function removeDomain(name) {
   if (!confirm('Remove ' + name + '? This instance will stop answering on it.')) { return; }
   fetch(DOMAINS_URL + '/' + encodeURIComponent(name), {method: 'DELETE', credentials: 'same-origin'})
-    .then(function(r) { return r.json(); })
-    .then(function(data) {
-      if (data && data.error) { alert(data.error); return; }
-      renderDomains((data && data.domains) || []);
+    .then(readJsonResponse)
+    .then(function(res) {
+      if (!res.ok) { alert(responseErrorMessage(res.data, 'Failed to remove domain.')); return; }
+      renderDomains((res.data && res.data.domains) || []);
     });
 }
 
