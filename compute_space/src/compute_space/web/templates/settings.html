@@ -63,8 +63,8 @@
     <th><label for="remote-url">Git remote</label></th>
     <td>
       <input type="text" id="remote-url" placeholder="Loading…" disabled style="width:32em;">
-      <button onclick="setRemote()" class="btn btn-primary" id="set-remote-btn" disabled>Save remote</button>
-      <p class="hint">Repository this instance updates from. Saving pins the target; use Update below to apply it.</p>
+      <button onclick="setRemote()" class="btn btn-primary" id="set-remote-btn" disabled>Save &amp; update</button>
+      <p class="hint">Repository this instance updates from. Saving pins the target and, if it points at different code than what's running, starts the update immediately.</p>
       <p id="remote-msg" style="display:none;"></p>
     </td>
   </tr>
