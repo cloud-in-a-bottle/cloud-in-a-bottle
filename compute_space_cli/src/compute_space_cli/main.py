@@ -148,7 +148,7 @@ class AppCmd:
         if sha:
             branch = result.get("git_branch") or "(detached HEAD)"
             dirty = " (dirty)" if result.get("git_dirty") else ""
-            print(f"  git: {branch} @ {sha}{dirty}")
+            print(f"  git commit: {branch} @ {sha}{dirty}")
 
     @cappa.command(name="logs")
     def logs(
