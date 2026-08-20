@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 from compute_space.core.app_id import new_app_id
 from compute_space.core.apps import remove_app_background
+from compute_space.core.apps import wipe_data_restart_background
 from compute_space.db.connection import init_db
 from compute_space.tests.conftest import _make_test_config
 
@@ -89,6 +90,74 @@ def test_remove_cascades_to_all_child_tables(tmp_path: Path) -> None:
         assert not _table_has_app(cfg.db_path, table, app_id, key_col=key_col), (
             f"{table}.{key_col} still has a row for app_id={app_id!r} — FK cascade did not fire"
         )
+
+
+def test_wipe_data_restart_preserves_repo_and_reloads(tmp_path: Path) -> None:
+    cfg = _make_test_config(tmp_path)
+    init_db(cfg.db_path)
+    app_id = _seed_app_with_children(cfg.db_path, "myapp")
+    repo = Path(cfg.temporary_data_dir) / "app_temp_data" / "myapp" / "repo"
+    repo.mkdir(parents=True)
+    (repo / "openhost.toml").write_text("[app]\nname = 'myapp'\n")
+    db = sqlite3.connect(cfg.db_path)
+    try:
+        db.execute("UPDATE apps SET repo_path = ? WHERE app_id = ?", (str(repo), app_id))
+        db.commit()
+    finally:
+        db.close()
+    (Path(cfg.persistent_data_dir) / "app_data" / "myapp").mkdir(parents=True)
+    (Path(cfg.app_archive_dir) / "myapp").mkdir(parents=True)
+    (Path(cfg.temporary_data_dir) / "app_temp_data" / "myapp" / "container.log").write_text("old")
+
+    with (
+        patch("compute_space.core.apps.stop_app_process"),
+        patch("compute_space.core.apps.remove_image"),
+        patch("compute_space.core.apps.reload_app_background") as reload_app,
+    ):
+        wipe_data_restart_background(app_id, cfg)
+
+    assert repo.is_dir()
+    assert not (Path(cfg.persistent_data_dir) / "app_data" / "myapp").exists()
+    assert not (Path(cfg.app_archive_dir) / "myapp").exists()
+    assert not (Path(cfg.temporary_data_dir) / "app_temp_data" / "myapp" / "container.log").exists()
+    reload_app.assert_called_once_with(app_id, str(repo), cfg)
+
+
+def test_wipe_refuses_data_deletion_when_container_still_running(tmp_path: Path) -> None:
+    cfg = _make_test_config(tmp_path)
+    init_db(cfg.db_path)
+    app_id = _seed_app_with_children(cfg.db_path, "myapp")
+    repo = Path(cfg.temporary_data_dir) / "app_temp_data" / "myapp" / "repo"
+    repo.mkdir(parents=True)
+    db = sqlite3.connect(cfg.db_path)
+    try:
+        db.execute(
+            "UPDATE apps SET repo_path = ?, container_id = 'container-1' WHERE app_id = ?",
+            (str(repo), app_id),
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    with (
+        patch("compute_space.core.apps.stop_app_process"),
+        patch("compute_space.core.apps.is_container_running", return_value=True),
+        patch("compute_space.core.apps.remove_image") as remove_image,
+        patch("compute_space.core.apps.wipe_data_preserving_repo") as wipe_data,
+        patch("compute_space.core.apps.reload_app_background") as reload_app,
+    ):
+        wipe_data_restart_background(app_id, cfg)
+
+    remove_image.assert_not_called()
+    wipe_data.assert_not_called()
+    reload_app.assert_not_called()
+    db = sqlite3.connect(cfg.db_path)
+    try:
+        row = db.execute("SELECT status, error_message FROM apps WHERE app_id = ?", (app_id,)).fetchone()
+    finally:
+        db.close()
+    assert row[0] == "error"
+    assert "still running" in row[1]
 
 
 def test_remove_keep_data_calls_temp_only(tmp_path: Path) -> None:

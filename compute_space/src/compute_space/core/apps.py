@@ -34,6 +34,7 @@ from compute_space.core.data import deprovision_data
 from compute_space.core.data import deprovision_temp_data
 from compute_space.core.data import provision_data
 from compute_space.core.data import rmtree_with_sudo_fallback
+from compute_space.core.data import wipe_data_preserving_repo
 from compute_space.core.domains import Domain
 from compute_space.core.domains import primary_domain
 from compute_space.core.git_ops import is_github_repo_url
@@ -69,6 +70,7 @@ RESERVED_PATHS = {
     "/remove_app",
     "/stop_app",
     "/reload_app",
+    "/wipe_data_restart",
     "/api",
     "/health",
     "/app",
@@ -1120,6 +1122,42 @@ def reload_app_background(app_id: str, repo_path: str, config: Config) -> None:
             (str(e), app_id),
         )
         db.commit()
+    finally:
+        db.close()
+
+
+def wipe_data_restart_background(app_id: str, config: Config) -> None:
+    """Stop an app, remove its data, and rebuild it from its checked-out source."""
+    db = sqlite3.connect(config.db_path, check_same_thread=False)
+    db.row_factory = sqlite3.Row
+    db.execute("PRAGMA journal_mode=WAL")
+    try:
+        app_row = db.execute("SELECT * FROM apps WHERE app_id = ?", (app_id,)).fetchone()
+        if app_row is None:
+            return
+        app_name = app_row["name"]
+        repo_path = app_row["repo_path"]
+        try:
+            stop_app_process(app_row)
+            container_id = app_row["container_id"]
+            if container_id and is_container_running(container_id):
+                raise RuntimeError("App container is still running after stop; refusing to wipe data")
+            remove_image(app_name)
+            wipe_data_preserving_repo(
+                app_name,
+                config.persistent_data_dir,
+                config.temporary_data_dir,
+                archive_backend.effective_archive_dir(config, db),
+                repo_path,
+            )
+            reload_app_background(app_id, repo_path, config)
+        except Exception as exc:
+            logger.exception("Failed to wipe and restart %s", app_name)
+            db.execute(
+                "UPDATE apps SET status = 'error', error_message = ? WHERE app_id = ?",
+                (f"Wipe and restart failed: {exc}", app_id),
+            )
+            db.commit()
     finally:
         db.close()
 

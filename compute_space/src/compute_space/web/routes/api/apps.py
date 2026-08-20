@@ -44,6 +44,7 @@ from compute_space.core.apps import reload_app_background
 from compute_space.core.apps import remove_app_background
 from compute_space.core.apps import start_app_process
 from compute_space.core.apps import validate_manifest
+from compute_space.core.apps import wipe_data_restart_background
 from compute_space.core.auth.permissions_v2 import get_all_permissions_v2
 from compute_space.core.auth.permissions_v2 import grant_permission_v2
 from compute_space.core.containers import BUILD_CACHE_CORRUPT_MARKER
@@ -548,6 +549,8 @@ async def stop_app(app_id: FromPath[str], db: NamedDependency[sqlite3.Connection
     app_row = _resolve_app(app_id, db)
     if _is_removing(app_row):
         raise ConflictException(detail="App is being removed")
+    if app_row["status"] in ("building", "starting"):
+        raise ConflictException(detail="App is already restarting")
 
     stop_app_process(app_row)
     stop_container(f"openhost-{app_row['name']}")
@@ -856,10 +859,60 @@ async def reload_app_after_oauth(
 
 
 @post(
+    "/wipe_data_restart/{app_id:str}",
+    status_code=202,
+    guards=[require_owner_auth],
+    raises=[ValidationException, NotFoundException, ConflictException, ServiceUnavailableException],
+)
+async def wipe_data_restart(
+    app_id: FromPath[str],
+    db: NamedDependency[sqlite3.Connection],
+    config: NamedDependency[Config],
+) -> Response[OkResponse]:
+    """Wipe all app data, including archive data, then rebuild the app in place."""
+    app_row = _resolve_app(app_id, db)
+    if _is_removing(app_row):
+        raise ConflictException(detail="App is being removed")
+    if app_row["status"] in ("building", "starting"):
+        raise ConflictException(detail="App is already restarting")
+
+    if not archive_backend.is_archive_dir_healthy(config, db):
+        if archive_backend.manifest_uses_archive(app_row["manifest_raw"] or ""):
+            raise ServiceUnavailableException(
+                detail=(
+                    "Archive backend is not healthy; refusing to wipe an archive-using app's data "
+                    "until the JuiceFS mount is live again."
+                )
+            )
+
+    cursor = db.execute(
+        "UPDATE apps SET status = 'building', error_message = NULL "
+        "WHERE app_id = ? AND status NOT IN ('building', 'starting', 'removing')",
+        (app_id,),
+    )
+    db.commit()
+    if cursor.rowcount == 0:
+        raise ConflictException(detail="App is already restarting")
+
+    try:
+        Thread(target=wipe_data_restart_background, args=(app_id, config), daemon=True).start()
+    except Exception as exc:
+        logger.exception("Could not spawn wipe/restart worker for %s", app_id)
+        db.execute(
+            "UPDATE apps SET status = 'error', error_message = ? WHERE app_id = ?",
+            (f"Could not start wipe/restart worker: {exc}", app_id),
+        )
+        db.commit()
+        raise ServiceUnavailableException(detail="Could not start wipe/restart worker; try again.") from exc
+
+    return Response(content=OkResponse(ok=True), status_code=202, media_type=MediaType.JSON)
+
+
+@post(
     "/remove_app/{app_id:str}",
     status_code=202,
     guards=[require_owner_auth],
-    raises=[ValidationException, NotFoundException, ServiceUnavailableException],
+    raises=[ValidationException, NotFoundException, ConflictException, ServiceUnavailableException],
 )
 async def remove_app(
     app_id: FromPath[str],
@@ -875,6 +928,8 @@ async def remove_app(
     in-flight state.
     """
     app_row = _resolve_app(app_id, db)
+    if app_row["status"] in ("building", "starting"):
+        raise ConflictException(detail="App is already restarting")
 
     keep_data = data.keep_data
 
@@ -895,7 +950,8 @@ async def remove_app(
     # POSTs safe — only the first one gets rowcount=1 and spawns a
     # worker; later ones short-circuit to the already_removing branch.
     cursor = db.execute(
-        "UPDATE apps SET status = 'removing', error_message = NULL WHERE app_id = ? AND status != 'removing'",
+        "UPDATE apps SET status = 'removing', error_message = NULL "
+        "WHERE app_id = ? AND status NOT IN ('building', 'starting', 'removing')",
         (app_id,),
     )
     db.commit()
@@ -1164,6 +1220,7 @@ api_apps_routes = Router(
         app_logs,
         stop_app,
         reload_app,
+        wipe_data_restart,
         reload_app_after_oauth,
         remove_app,
         rename_app,
