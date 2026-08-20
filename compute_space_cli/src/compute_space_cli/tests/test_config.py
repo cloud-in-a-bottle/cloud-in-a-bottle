@@ -226,6 +226,20 @@ class TestMultiConfigResolve:
         monkeypatch.setenv("CB_INSTANCE", "b.com")
         assert multi.resolve().url == "https://b.com"
 
+    def test_legacy_oh_instance_env_is_ignored(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The pre-rename OH_INSTANCE env var is intentionally no longer honored.
+
+        Only CB_INSTANCE is read; a stale OH_INSTANCE must not silently select an
+        instance, so resolution falls through to the configured default.
+        """
+        monkeypatch.delenv("CB_INSTANCE", raising=False)
+        monkeypatch.setenv("OH_INSTANCE", "b.com")
+        multi = _make_multi(
+            instances={"a.com": _inst("a.com"), "b.com": _inst("b.com")},
+            default="a.com",
+        )
+        assert multi.resolve().url == "https://a.com"
+
 
 class TestUpsertInstance:
     def test_add_to_empty_no_default(self) -> None:
