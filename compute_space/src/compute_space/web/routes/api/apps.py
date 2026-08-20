@@ -20,6 +20,11 @@ from litestar import get
 from litestar import post
 from litestar import websocket
 from litestar.di import NamedDependency
+from litestar.exceptions import InternalServerException
+from litestar.exceptions import NotAuthorizedException
+from litestar.exceptions import NotFoundException
+from litestar.exceptions import ServiceUnavailableException
+from litestar.exceptions import ValidationException
 from litestar.exceptions import WebSocketDisconnect
 from litestar.params import FromPath
 from litestar.params import FromQuery
@@ -54,7 +59,6 @@ from compute_space.core.containers import stop_container
 from compute_space.core.diagnostics import AppDiagnostics
 from compute_space.core.diagnostics import collect_app_diagnostics
 from compute_space.core.domains import primary_domain
-from compute_space.core.git_ops import UnsupportedRepoUrlError
 from compute_space.core.git_ops import get_branch_name
 from compute_space.core.git_ops import get_head_sha
 from compute_space.core.git_ops import is_dirty
@@ -64,32 +68,21 @@ from compute_space.core.git_ops import reset_hard
 from compute_space.core.log_stream import stream_app_logs
 from compute_space.core.logging import logger
 from compute_space.core.manifest import parse_manifest
-from compute_space.core.oauth import OAuthAuthorizationRequired
+from compute_space.core.oauth import OAuthRequired
 from compute_space.core.oauth import get_oauth_token
 from compute_space.core.ports import check_port_available
-from compute_space.core.services_v2 import ServiceNotAvailable
 from compute_space.core.updates import wait_for_shutdown
 from compute_space.db.connection import get_db
 from compute_space.web.auth.auth import require_owner_auth
 from compute_space.web.auth.auth import verify_owner_ws
+from compute_space.web.exceptions import ConflictException
 
 # ─── attrs request / response models ──────────────────────────────────────
 
 
 @attr.s(auto_attribs=True, frozen=True)
-class ErrorResponse:
-    error: str
-
-
-@attr.s(auto_attribs=True, frozen=True)
 class OkResponse:
     ok: bool
-
-
-@attr.s(auto_attribs=True, frozen=True)
-class AuthRequiredResponse:
-    error: str
-    authorize_url: str
 
 
 @attr.s(auto_attribs=True, frozen=True)
@@ -107,11 +100,6 @@ class CloneInfoResponse:
     # on durable S3 or non-durable local disk.  Surfaced on the install screen
     # alongside permissions.  See archive_backend.storage_summary.
     storage: archive_backend.StorageSummary | None = None
-
-
-@attr.s(auto_attribs=True, frozen=True)
-class CloneAuthorizeResponse:
-    authorize_url: str
 
 
 @attr.s(auto_attribs=True, frozen=True)
@@ -237,21 +225,14 @@ def _is_removing(app_row: sqlite3.Row | None) -> bool:
     return app_row is not None and app_row["status"] == "removing"
 
 
-def _resolve_app_or_error(
-    app_id: str, db: sqlite3.Connection
-) -> tuple[sqlite3.Row | None, Response[ErrorResponse] | None]:
-    """Validate app_id format and load the app row.
-
-    Returns (row, None) on success, (None, error_response) on bad id or unknown app.
-    """
+def _resolve_app(app_id: str, db: sqlite3.Connection) -> sqlite3.Row:
+    """Validate app_id format and load the app row."""
     if not is_valid_app_id(app_id):
-        return None, Response(
-            content=ErrorResponse(error="Invalid app_id"), status_code=400, media_type=MediaType.JSON
-        )
-    row = db.execute("SELECT * FROM apps WHERE app_id = ?", (app_id,)).fetchone()
+        raise ValidationException(detail="Invalid app_id")
+    row: sqlite3.Row | None = db.execute("SELECT * FROM apps WHERE app_id = ?", (app_id,)).fetchone()
     if not row:
-        return None, Response(content=ErrorResponse(error="App not found"), status_code=404, media_type=MediaType.JSON)
-    return row, None
+        raise NotFoundException(detail="App not found")
+    return row
 
 
 async def _pin_refless_to_landed_branch(repo_url: str | None, repo_path: str) -> str | None:
@@ -271,7 +252,7 @@ async def _pin_refless_to_landed_branch(repo_url: str | None, repo_path: str) ->
         return None
     try:
         base_url, ref = parse_repo_url(repo_url)
-    except UnsupportedRepoUrlError:
+    except ValueError:
         # A stored SSH upstream can't be pinned (and shouldn't exist after the
         # set_app_remote guard); leave it untouched rather than crashing.
         return None
@@ -284,28 +265,36 @@ async def _pin_refless_to_landed_branch(repo_url: str | None, repo_path: str) ->
 # ─── routes ────────────────────────────────────────────────────────────────
 
 
-@post("/api/clone_and_get_app_info", status_code=200, guards=[require_owner_auth])
+@post(
+    "/api/clone_and_get_app_info",
+    status_code=200,
+    guards=[require_owner_auth],
+    raises=[ValidationException, NotAuthorizedException],
+)
 async def clone_and_get_app_info(
     data: CloneRequest,
     db: NamedDependency[sqlite3.Connection],
     config: NamedDependency[Config],
-) -> Response[CloneInfoResponse] | Response[ErrorResponse] | Response[CloneAuthorizeResponse]:
+) -> Response[CloneInfoResponse]:
     """Clone a repo and return its manifest info + temp clone dir."""
     repo_url = data.repo_url.strip()
     if not repo_url:
-        return Response(content=ErrorResponse(error="No repository URL provided"), status_code=400)
+        raise ValidationException(detail="No repository URL provided")
 
     add_app_url = f"//{primary_domain(db).name}/add_app?repo={repo_url}"
     manifest, clone_dir, error, authorize_url = await clone_with_github_fallback(repo_url, return_to=add_app_url)
 
     if authorize_url:
-        return Response(content=CloneAuthorizeResponse(authorize_url=authorize_url), status_code=401)
+        # The client follows `authorize_url` to complete the GitHub OAuth flow.
+        raise NotAuthorizedException(detail="GitHub authorization required", extra={"authorize_url": authorize_url})
 
     if error:
-        return Response(content=ErrorResponse(error=error), status_code=400)
+        raise ValidationException(detail=error)
 
     if manifest is None:
-        raise RuntimeError("manifest unexpectedly None after successful clone")
+        raise InternalServerException(
+            detail="Internal server error", extra={"output": "manifest unexpectedly None after successful clone"}
+        )
     validation_error = validate_manifest(manifest, db)
     info = attr.asdict(manifest)
     info.pop("raw_toml", None)
@@ -337,39 +326,45 @@ async def check_port(
     )
 
 
-@post("/api/add_app", status_code=200, guards=[require_owner_auth])
+@post(
+    "/api/add_app",
+    status_code=200,
+    guards=[require_owner_auth],
+    raises=[ValidationException, NotAuthorizedException, ServiceUnavailableException],
+)
 async def api_add_app(
     data: AddAppRequest,
     db: NamedDependency[sqlite3.Connection],
     config: NamedDependency[Config],
-) -> Response[AddAppResponse] | Response[ErrorResponse] | Response[AuthRequiredResponse]:
+) -> Response[AddAppResponse]:
     """Install an app. Optionally takes a clone_dir from a prior clone_and_get_app_info call."""
     repo_url = data.repo_url.strip()
     app_name: str | None = (data.app_name.strip() or None) if data.app_name else None
     clone_dir: str | None = (data.clone_dir.strip() or None) if data.clone_dir else None
 
     if not repo_url:
-        return Response(content=ErrorResponse(error="No repository URL provided"), status_code=400)
+        raise ValidationException(detail="No repository URL provided")
 
     # Clone if no existing clone_dir provided
     manifest = None
     if not clone_dir or not os.path.isdir(clone_dir):
         manifest, clone_dir, error, authorize_url = await clone_with_github_fallback(repo_url, return_to="/")
         if authorize_url:
-            return Response(
-                content=AuthRequiredResponse(error="GitHub authorization required", authorize_url=authorize_url),
-                status_code=401,
+            raise NotAuthorizedException(
+                detail="GitHub authorization required", extra={"authorize_url": authorize_url}
             )
         if error:
-            return Response(content=ErrorResponse(error=error), status_code=400)
+            raise ValidationException(detail=error)
 
     if clone_dir is None:
-        raise RuntimeError("clone_dir unexpectedly None after successful clone")
+        raise InternalServerException(
+            detail="Internal server error", extra={"output": "clone_dir unexpectedly None after successful clone"}
+        )
     if manifest is None:
         try:
             manifest = parse_manifest(clone_dir)
         except ValueError as e:
-            return Response(content=ErrorResponse(error=str(e)), status_code=400)
+            raise ValidationException(detail=str(e)) from e
 
     if app_name is None:
         app_name = manifest.name
@@ -377,7 +372,7 @@ async def api_add_app(
     validation_error = validate_manifest(manifest, db, app_name=app_name)
     if validation_error:
         shutil.rmtree(clone_dir, ignore_errors=True)
-        return Response(content=ErrorResponse(error=validation_error), status_code=400)
+        raise ValidationException(detail=validation_error)
 
     # The archive tier is ALWAYS available: it is a JuiceFS mount on every
     # zone (a local file-backed volume by default, S3 after an operator
@@ -388,15 +383,12 @@ async def api_add_app(
     if manifest.app_archive:
         if not archive_backend.is_archive_dir_healthy(config, db):
             shutil.rmtree(clone_dir, ignore_errors=True)
-            return Response(
-                content=ErrorResponse(
-                    error=(
-                        "Archive backend is not healthy; refusing to deploy "
-                        "an archive-using app until the JuiceFS mount is live "
-                        "again (see the dashboard's Archive backend panel)."
-                    )
-                ),
-                status_code=503,
+            raise ServiceUnavailableException(
+                detail=(
+                    "Archive backend is not healthy; refusing to deploy "
+                    "an archive-using app until the JuiceFS mount is live "
+                    "again (see the dashboard's Archive backend panel)."
+                )
             )
 
     final_dir = move_clone_to_app_temp_dir(clone_dir, app_name, config)
@@ -433,7 +425,7 @@ async def api_add_app(
         # ValueError covers uid_map pool exhaustion (see compute_uid_map_base)
         # and other manifest-validation errors raised at insert time; both
         # map to a 400 rather than a 500.
-        return Response(content=ErrorResponse(error=str(e)), status_code=400)
+        raise ValidationException(detail=str(e)) from e
 
     return Response(
         content=AddAppResponse(ok=True, app_id=app_id, app_name=app_name, status="building"),
@@ -472,17 +464,15 @@ async def _read_app_git_info(repo_path: str | None) -> tuple[str | None, str | N
     return branch, sha, dirty
 
 
-@get("/api/app_status/{app_id:str}", guards=[require_owner_auth])
-async def app_status(
-    app_id: FromPath[str], db: NamedDependency[sqlite3.Connection]
-) -> Response[AppStatusResponse] | Response[ErrorResponse]:
+@get("/api/app_status/{app_id:str}", guards=[require_owner_auth], raises=[ValidationException, NotFoundException])
+async def app_status(app_id: FromPath[str], db: NamedDependency[sqlite3.Connection]) -> Response[AppStatusResponse]:
     if not is_valid_app_id(app_id):
-        return Response(content=ErrorResponse(error="Invalid app_id"), status_code=400)
+        raise ValidationException(detail="Invalid app_id")
     app_row = db.execute(
         "SELECT status, error_message, repo_path, container_id FROM apps WHERE app_id = ?", (app_id,)
     ).fetchone()
     if not app_row:
-        return Response(content=ErrorResponse(error="not found"), status_code=404)
+        raise NotFoundException(detail="App not found")
     error_msg = app_row["error_message"]
     error_kind = None
     # error_message may carry either the current BUILD_CACHE_CORRUPT_MARKER
@@ -514,13 +504,17 @@ def _app_diagnostics_filename(app_name: str) -> str:
     return f"openhost-app-diagnostics-{safe_name}-{stamp}.json"
 
 
-@get("/api/app_diagnostics/{app_id:str}", guards=[require_owner_auth])
+@get(
+    "/api/app_diagnostics/{app_id:str}",
+    guards=[require_owner_auth],
+    raises=[ValidationException, NotFoundException],
+)
 async def app_diagnostics(
     app_id: FromPath[str],
     db: NamedDependency[sqlite3.Connection],
     config: NamedDependency[Config],
     download: FromQuery[bool] = False,
-) -> Response[AppDiagnostics] | Response[ErrorResponse]:
+) -> Response[AppDiagnostics]:
     """Return a per-app diagnostics bundle: app version + manifest git checkout,
     container status, and a slice of host/system info so the report is
     self-contained.
@@ -528,10 +522,7 @@ async def app_diagnostics(
     ``?download=1`` adds a Content-Disposition header so browsers save the JSON
     to a timestamped file instead of rendering it inline.
     """
-    app_row, err = _resolve_app_or_error(app_id, db)
-    if err is not None:
-        return err
-    assert app_row is not None
+    app_row = _resolve_app(app_id, db)
     diagnostics = await collect_app_diagnostics(app_row, config, db)
     headers = None
     if download:
@@ -539,16 +530,18 @@ async def app_diagnostics(
     return Response(content=diagnostics, status_code=200, media_type=MediaType.JSON, headers=headers)
 
 
-@get("/app_logs/{app_id:str}", guards=[require_owner_auth], media_type=MediaType.TEXT)
+@get(
+    "/app_logs/{app_id:str}",
+    guards=[require_owner_auth],
+    media_type=MediaType.TEXT,
+    raises=[ValidationException, NotFoundException],
+)
 async def app_logs(
     app_id: FromPath[str],
     db: NamedDependency[sqlite3.Connection],
     config: NamedDependency[Config],
-) -> Response[str] | Response[ErrorResponse]:
-    app_row, err = _resolve_app_or_error(app_id, db)
-    if err is not None:
-        return err
-    assert app_row is not None
+) -> Response[str]:
+    app_row = _resolve_app(app_id, db)
     logs = get_docker_logs(app_row["name"], config.temporary_data_dir, app_row["container_id"])
     return Response(content=logs, status_code=200, media_type=MediaType.TEXT)
 
@@ -572,12 +565,14 @@ async def app_logs_stream(
     # must not leave a DB connection open across it — open one just to resolve the app
     # to a build-log path, then close it before we accept.
     with contextlib.closing(get_db()) as conn:
-        app_row, err = _resolve_app_or_error(app_id, conn)
-    if err is not None:
-        await socket.accept()
-        await socket.close(code=4404, reason="App not found")
-        return
-    assert app_row is not None
+        try:
+            app_row = _resolve_app(app_id, conn)
+        except (ValidationException, NotFoundException):
+            # A WS handler can't return an HTTP error, so report the miss by
+            # accepting and closing with an application close code the client reads.
+            await socket.accept()
+            await socket.close(code=4404, reason="App not found")
+            return
     build_log_path = app_log_path(app_row["name"], config)
 
     await socket.accept()
@@ -616,16 +611,16 @@ async def app_logs_stream(
         await asyncio.gather(*tasks, return_exceptions=True)
 
 
-@post("/stop_app/{app_id:str}", status_code=200, guards=[require_owner_auth])
-async def stop_app(
-    app_id: FromPath[str], db: NamedDependency[sqlite3.Connection]
-) -> Response[OkResponse] | Response[ErrorResponse]:
-    app_row, err = _resolve_app_or_error(app_id, db)
-    if err is not None:
-        return err
-    assert app_row is not None
+@post(
+    "/stop_app/{app_id:str}",
+    status_code=200,
+    guards=[require_owner_auth],
+    raises=[ValidationException, NotFoundException, ConflictException],
+)
+async def stop_app(app_id: FromPath[str], db: NamedDependency[sqlite3.Connection]) -> Response[OkResponse]:
+    app_row = _resolve_app(app_id, db)
     if _is_removing(app_row):
-        return Response(content=ErrorResponse(error="App is being removed"), status_code=409)
+        raise ConflictException(detail="App is being removed")
 
     stop_app_process(app_row)
     stop_container(f"openhost-{app_row['name']}")
@@ -695,31 +690,25 @@ async def _reload_app_impl(
     approve_new_permissions: bool,
     db: sqlite3.Connection,
     config: Config,
-) -> Response[OkResponse] | Response[ErrorResponse] | Response[PermissionsRequiredResponse] | Redirect:
+) -> Response[OkResponse] | Response[PermissionsRequiredResponse] | Redirect:
     """Shared body for the POST (user-initiated reload) and GET (OAuth callback)
     entry points to ``/reload_app/{app_id}``."""
-    app_row, err = _resolve_app_or_error(app_id, db)
-    if err is not None:
-        return err
-    assert app_row is not None
+    app_row = _resolve_app(app_id, db)
     if _is_removing(app_row):
-        return Response(content=ErrorResponse(error="App is being removed"), status_code=409)
+        raise ConflictException(detail="App is being removed")
     app_name = app_row["name"]
 
     # The archive tier is a JuiceFS mount for both the local and S3 backends;
     # refuse to reload an app that hard-requires it while that mount is down.
     if not archive_backend.is_archive_dir_healthy(config, db):
         if archive_backend.manifest_requires_archive(app_row["manifest_raw"] or ""):
-            return Response(
-                content=ErrorResponse(
-                    error=(
-                        "Archive backend is not healthy; refusing to "
-                        "reload an app that requires app_archive until "
-                        "the operator-configured archive mount is live "
-                        "again (see the dashboard's Archive backend panel)."
-                    )
-                ),
-                status_code=503,
+            raise ServiceUnavailableException(
+                detail=(
+                    "Archive backend is not healthy; refusing to "
+                    "reload an app that requires app_archive until "
+                    "the operator-configured archive mount is live "
+                    "again (see the dashboard's Archive backend panel)."
+                )
             )
 
     log_file = app_log_path(app_name, config)
@@ -778,19 +767,19 @@ async def _reload_app_impl(
                 return_to = f"//{primary_domain(db).name}/reload_app/{app_id}?continue_oauth_update=1"
                 try:
                     token = await get_oauth_token("github", ["repo"], return_to=return_to)
-                except ServiceNotAvailable as e:
-                    lf.write(f"Secrets service unavailable: {e.message}\n")
+                except OAuthRequired as e:
+                    lf.write("No token available; redirecting to oauth flow\n")
+                    return Redirect(path=e.authorize_url)
+                except RuntimeError as e:
+                    lf.write(f"Secrets service unavailable: {str(e)}\n")
                     db.execute(
                         "UPDATE apps SET status = 'error', error_message = ? WHERE app_id = ?",
-                        (e.message, app_id),
+                        (str(e), app_id),
                     )
                     db.commit()
                     if continue_oauth:
                         return Redirect(path=f"/app_detail/{app_name}")
                     return Response(content=OkResponse(ok=True), status_code=200, media_type=MediaType.JSON)
-                except OAuthAuthorizationRequired as e:
-                    lf.write("No token available; redirecting to oauth flow\n")
-                    return Redirect(path=e.authorize_url)
                 lf.flush()
                 pull_ok, pull_err = await asyncio.to_thread(
                     git_pull,
@@ -873,11 +862,7 @@ async def _reload_app_impl(
     )
     db.commit()
     if cursor.rowcount == 0 and not continue_oauth:
-        return Response(
-            content=ErrorResponse(error="App is already reloading"),
-            status_code=409,
-            media_type=MediaType.JSON,
-        )
+        raise ConflictException(detail="App is already reloading")
 
     await asyncio.to_thread(stop_app_process, app_row)
 
@@ -890,13 +875,18 @@ async def _reload_app_impl(
     return Response(content=OkResponse(ok=True), status_code=200, media_type=MediaType.JSON)
 
 
-@post("/reload_app/{app_id:str}", status_code=200, guards=[require_owner_auth])
+@post(
+    "/reload_app/{app_id:str}",
+    status_code=200,
+    guards=[require_owner_auth],
+    raises=[ValidationException, NotFoundException, ConflictException, ServiceUnavailableException],
+)
 async def reload_app(
     app_id: FromPath[str],
     db: NamedDependency[sqlite3.Connection],
     config: NamedDependency[Config],
     data: ReloadAppRequest = ReloadAppRequest(),  # noqa: B008 — Litestar resolves this at dependency-injection time
-) -> Response[OkResponse] | Response[ErrorResponse] | Response[PermissionsRequiredResponse] | Redirect:
+) -> Response[OkResponse] | Response[PermissionsRequiredResponse] | Redirect:
     """User-initiated reload, optionally pulling latest code via ``update``."""
     return await _reload_app_impl(
         app_id,
@@ -908,13 +898,17 @@ async def reload_app(
     )
 
 
-@get("/reload_app/{app_id:str}", guards=[require_owner_auth])
+@get(
+    "/reload_app/{app_id:str}",
+    guards=[require_owner_auth],
+    raises=[ValidationException, NotFoundException, ConflictException, ServiceUnavailableException],
+)
 async def reload_app_after_oauth(
     app_id: FromPath[str],
     db: NamedDependency[sqlite3.Connection],
     config: NamedDependency[Config],
     continue_oauth_update: FromQuery[bool] = False,
-) -> Response[OkResponse] | Response[ErrorResponse] | Response[PermissionsRequiredResponse] | Redirect:
+) -> Response[OkResponse] | Response[PermissionsRequiredResponse] | Redirect:
     """OAuth callback re-entry: the secrets app redirected the user back here
     after they granted GitHub access.  Resumes the update with ``continue_oauth=True``
     so we don't truncate the log file again or re-prompt for OAuth."""
@@ -934,13 +928,18 @@ async def reload_app_after_oauth(
     )
 
 
-@post("/remove_app/{app_id:str}", status_code=202, guards=[require_owner_auth])
+@post(
+    "/remove_app/{app_id:str}",
+    status_code=202,
+    guards=[require_owner_auth],
+    raises=[ValidationException, NotFoundException, ServiceUnavailableException],
+)
 async def remove_app(
     app_id: FromPath[str],
     db: NamedDependency[sqlite3.Connection],
     config: NamedDependency[Config],
     data: RemoveAppRequest = RemoveAppRequest(),  # noqa: B008 — body is optional; default = remove with keep_data=False
-) -> Response[OkResponse] | Response[RemoveAppAlreadyRemoving] | Response[ErrorResponse]:
+) -> Response[OkResponse] | Response[RemoveAppAlreadyRemoving]:
     """Flip the row to ``status='removing'`` and run teardown in a thread.
 
     Returns 202 immediately. The dashboard's /api/apps poll picks up
@@ -948,10 +947,7 @@ async def remove_app(
     so reloading the page or opening a second tab still shows the
     in-flight state.
     """
-    app_row, err = _resolve_app_or_error(app_id, db)
-    if err is not None:
-        return err
-    assert app_row is not None
+    app_row = _resolve_app(app_id, db)
 
     keep_data = data.keep_data
 
@@ -960,18 +956,12 @@ async def remove_app(
     # disappears. Must run before the atomic-claim UPDATE.
     if not keep_data and not archive_backend.is_archive_dir_healthy(config, db):
         if archive_backend.manifest_uses_archive(app_row["manifest_raw"] or ""):
-            return Response(
-                content=ErrorResponse(
-                    error=(
-                        "Archive backend is not healthy; refusing to "
-                        "remove an archive-using app's data because the "
-                        "S3-side bytes wouldn't actually be deleted.  "
-                        "Either restore the archive mount and retry, or "
-                        "use keep_data=1 to remove the app while leaving "
-                        "its data in place."
-                    )
-                ),
-                status_code=503,
+            raise ServiceUnavailableException(
+                detail=(
+                    "Archive backend is not healthy; refusing to remove an archive-using app's data because the "
+                    "S3-side bytes wouldn't actually be deleted.  Either restore the archive mount and retry, or use "
+                    "keep_data=1 to remove the app while leaving its data in place."
+                )
             )
 
     # Atomic claim: ``WHERE status != 'removing'`` makes concurrent
@@ -1005,7 +995,7 @@ async def remove_app(
             (f"Could not start removal worker: {e}", app_id),
         )
         db.commit()
-        return Response(content=ErrorResponse(error="Could not start removal worker; try again."), status_code=503)
+        raise ServiceUnavailableException(detail="Could not start removal worker; try again.") from e
 
     return Response(content=OkResponse(ok=True), status_code=202, media_type=MediaType.JSON)
 
@@ -1057,36 +1047,39 @@ def _rename_app_storage_dirs(config: Config, old_name: str, new_name: str, archi
     return None
 
 
-@post("/rename_app/{app_id:str}", status_code=200, guards=[require_owner_auth])
+@post(
+    "/rename_app/{app_id:str}",
+    status_code=200,
+    guards=[require_owner_auth],
+    raises=[
+        ValidationException,
+        NotFoundException,
+        ConflictException,
+        ServiceUnavailableException,
+        InternalServerException,
+    ],
+)
 async def rename_app(
     app_id: FromPath[str],
     data: RenameAppRequest,
     db: NamedDependency[sqlite3.Connection],
     config: NamedDependency[Config],
-) -> Response[RenameAppResponse] | Response[ErrorResponse]:
+) -> Response[RenameAppResponse]:
     """Rename an app's label and subdomain. The app_id (cross-table identity) stays the same."""
     new_name = data.name.strip()
 
     if not new_name:
-        return Response(content=ErrorResponse(error="Name is required"), status_code=400)
+        raise ValidationException(detail="Name is required")
 
     if not re.match(r"^[a-z0-9]([a-z0-9-]*[a-z0-9])?$", new_name):
-        return Response(
-            content=ErrorResponse(error="Name must be lowercase alphanumeric (hyphens allowed, not at start/end)"),
-            status_code=400,
-        )
+        raise ValidationException(detail="Name must be lowercase alphanumeric (hyphens allowed, not at start/end)")
 
     if f"/{new_name}" in RESERVED_PATHS:
-        return Response(
-            content=ErrorResponse(error=f"Name '{new_name}' conflicts with a reserved path"), status_code=400
-        )
+        raise ValidationException(detail=f"Name '{new_name}' conflicts with a reserved path")
 
-    app_row, err = _resolve_app_or_error(app_id, db)
-    if err is not None:
-        return err
-    assert app_row is not None
+    app_row = _resolve_app(app_id, db)
     if _is_removing(app_row):
-        return Response(content=ErrorResponse(error="App is being removed"), status_code=409)
+        raise ConflictException(detail="App is being removed")
     old_name = app_row["name"]
 
     # Refuse rename on an unhealthy archive ONLY if this app actually
@@ -1096,15 +1089,12 @@ async def rename_app(
     # tier are unaffected and can rename freely on any backend state.
     if archive_backend.manifest_uses_archive(app_row["manifest_raw"] or ""):
         if not archive_backend.is_archive_dir_healthy(config, db):
-            return Response(
-                content=ErrorResponse(
-                    error=(
-                        "Archive backend is not healthy; refusing to rename "
-                        "an archive-using app until the JuiceFS mount is live "
-                        "again (see the dashboard's Archive backend panel)."
-                    )
-                ),
-                status_code=503,
+            raise ServiceUnavailableException(
+                detail=(
+                    "Archive backend is not healthy; refusing to rename "
+                    "an archive-using app until the JuiceFS mount is live "
+                    "again (see the dashboard's Archive backend panel)."
+                )
             )
 
     if new_name == old_name:
@@ -1112,7 +1102,7 @@ async def rename_app(
 
     conflict = db.execute("SELECT name FROM apps WHERE name = ?", (new_name,)).fetchone()
     if conflict:
-        return Response(content=ErrorResponse(error=f"Name already in use by '{conflict['name']}'"), status_code=409)
+        raise ConflictException(detail=f"Name already in use by '{conflict['name']}'")
 
     prior_status = app_row["status"]
     prior_container_id = app_row["container_id"]
@@ -1150,7 +1140,8 @@ async def rename_app(
                 f"{rollback_db_error}.  Check the apps table; the row "
                 f"for app_id={app_id!r} may be stuck at status='stopped'."
             )
-        return Response(content=ErrorResponse(error=error_message), status_code=500)
+        # Litestar masks `detail` on 500s, so the actionable message rides in `extra`.
+        raise InternalServerException(detail="Failed to rename app data directories", extra={"output": error_message})
 
     # Identity (app_id) is unchanged, so no FK rewrites in app_tokens,
     # app_databases.app_id, app_port_mappings, service_providers_v2,
@@ -1187,12 +1178,17 @@ async def rename_app(
     )
 
 
-@post("/set_app_remote/{app_id:str}", status_code=200, guards=[require_owner_auth])
+@post(
+    "/set_app_remote/{app_id:str}",
+    status_code=200,
+    guards=[require_owner_auth],
+    raises=[ValidationException, NotFoundException, ConflictException],
+)
 async def set_app_remote(
     app_id: FromPath[str],
     data: SetAppRemoteRequest,
     db: NamedDependency[sqlite3.Connection],
-) -> Response[SetAppRemoteResponse] | Response[ErrorResponse]:
+) -> Response[SetAppRemoteResponse]:
     """Edit an app's git upstream (repo URL and/or ``@branch`` ref).
 
     Persists the new value to ``apps.repo_url``; the next ``Update & Reload``
@@ -1202,27 +1198,21 @@ async def set_app_remote(
     """
     repo_url = data.repo_url.strip()
     if not repo_url:
-        return Response(content=ErrorResponse(error="Repo URL is required"), status_code=400)
+        raise ValidationException(detail="Repo URL is required")
 
-    app_row, err = _resolve_app_or_error(app_id, db)
-    if err is not None:
-        return err
-    assert app_row is not None
+    app_row = _resolve_app(app_id, db)
     if _is_removing(app_row):
-        return Response(content=ErrorResponse(error="App is being removed"), status_code=409)
+        raise ConflictException(detail="App is being removed")
 
     if not app_row["repo_path"] or not os.path.isdir(os.path.join(app_row["repo_path"], ".git")):
-        return Response(
-            content=ErrorResponse(error="This app has no git repository, so its upstream cannot be edited."),
-            status_code=400,
-        )
+        raise ValidationException(detail="This app has no git repository, so its upstream cannot be edited.")
 
     # Normalise via parse_repo_url so a bare hostname gets an https:// scheme
     # and the stored value matches what git_pull will re-point origin to.
     try:
         base_url, ref = parse_repo_url(repo_url)
-    except UnsupportedRepoUrlError as e:
-        return Response(content=ErrorResponse(error=str(e)), status_code=400)
+    except ValueError as e:
+        raise ValidationException(detail=str(e)) from e
     normalized = f"{base_url}@{ref}" if ref else base_url
 
     db.execute("UPDATE apps SET repo_url = ? WHERE app_id = ?", (normalized, app_id))

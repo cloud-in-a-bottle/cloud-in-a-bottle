@@ -22,6 +22,7 @@ from compute_space.core.apps import insert_and_deploy
 from compute_space.core.apps import move_clone_to_app_temp_dir
 from compute_space.core.apps import validate_manifest
 from compute_space.core.auth.permissions_v2 import Grant
+from compute_space.core.oauth import OAuthRequired
 
 # Service URL the v2 service proxy matches against to dispatch to this
 # module instead of resolving a normal provider app.
@@ -45,15 +46,6 @@ class InstallResult:
 
     app_name: str
     status: str  # always "building" — the actual build runs in a daemon thread
-
-
-class InstallError(Exception):
-    """Raised by ``install_from_repo_url`` on any expected failure mode."""
-
-    def __init__(self, message: str, status_code: int = 400):
-        super().__init__(message)
-        self.message = message
-        self.status_code = status_code
 
 
 def check_install_allowed(repo_url: str, grants: list[Grant]) -> str | None:
@@ -105,25 +97,26 @@ async def install_from_repo_url(
     INSERT — no separate UPDATE that could race with the background
     build thread's status writes.
 
-    Raises ``InstallError`` on every expected failure.
+    Raises ``ValueError`` for install failures and ``OAuthRequired`` when the
+    owner must authorize access to the repository.
     """
     if not repo_url:
-        raise InstallError("repo_url is required", status_code=400)
+        raise ValueError("repo_url is required")
 
     manifest, clone_dir, error, authorize_url = await clone_with_github_fallback(repo_url, return_to="/")
     if authorize_url is not None:
         # The owner needs to approve GitHub OAuth to clone a private repo.
         # The installer service is server-to-server; we don't have a
         # browser session to redirect.  Surface the URL in the error.
-        raise InstallError(f"GitHub authorization required: {authorize_url}", status_code=401)
+        raise OAuthRequired(authorize_url)
     if error or manifest is None or clone_dir is None:
-        raise InstallError(f"clone failed: {error or 'unknown error'}", status_code=400)
+        raise ValueError(f"clone failed: {error or 'unknown error'}")
 
     effective_name = app_name or manifest.name
     validation_error = validate_manifest(manifest, db, app_name=effective_name)
     if validation_error is not None:
         shutil.rmtree(clone_dir, ignore_errors=True)
-        raise InstallError(validation_error, status_code=400)
+        raise ValueError(validation_error)
 
     final_dir = move_clone_to_app_temp_dir(clone_dir, effective_name, config)
 
@@ -139,6 +132,6 @@ async def install_from_repo_url(
             installed_by=installed_by,
         )
     except (RuntimeError, ValueError) as exc:
-        raise InstallError(f"deploy failed: {exc}", status_code=400) from exc
+        raise ValueError(f"deploy failed: {exc}") from exc
 
     return InstallResult(app_name=effective_name, status="building")

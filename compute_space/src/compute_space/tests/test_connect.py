@@ -2,7 +2,7 @@
 
 ``build_connect_url`` composes the Imbue authorization URL (zone + instance
 callback); ``exchange_code_for_credential`` swaps the one-time code for the shared
-credential, raising ``ConnectError`` on any transport or protocol failure.  These
+credential, raising ``RuntimeError`` on any transport or protocol failure.  These
 tests pin URL composition and every failure mode of the exchange (mocking
 ``httpx.post``).
 """
@@ -18,7 +18,6 @@ import httpx
 import pytest
 
 from compute_space.core.connect import CONNECT_CALLBACK_PATH
-from compute_space.core.connect import ConnectError
 from compute_space.core.connect import build_connect_url
 from compute_space.core.connect import exchange_code_for_credential
 from compute_space.core.tls.keycloak import KeycloakClientCredentials
@@ -223,14 +222,14 @@ def test_exchange_accepts_large_code(monkeypatch: pytest.MonkeyPatch) -> None:
     assert seen["json"] == {"code": big}
 
 
-# --- exchange: missing fields -> ConnectError --------------------------------
+# --- exchange: missing fields -> RuntimeError --------------------------------
 
 
 def test_exchange_missing_issuer_url_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     body = _ok_body()
     del body["issuer_url"]
     _mock_post(monkeypatch, lambda: httpx.Response(200, json=body))
-    with pytest.raises(ConnectError, match="malformed"):
+    with pytest.raises(RuntimeError, match="malformed"):
         exchange_code_for_credential(_IMBUE, "code")
 
 
@@ -238,7 +237,7 @@ def test_exchange_missing_client_id_raises(monkeypatch: pytest.MonkeyPatch) -> N
     body = _ok_body()
     del body["client_id"]
     _mock_post(monkeypatch, lambda: httpx.Response(200, json=body))
-    with pytest.raises(ConnectError, match="malformed"):
+    with pytest.raises(RuntimeError, match="malformed"):
         exchange_code_for_credential(_IMBUE, "code")
 
 
@@ -246,13 +245,13 @@ def test_exchange_missing_client_secret_raises(monkeypatch: pytest.MonkeyPatch) 
     body = _ok_body()
     del body["client_secret"]
     _mock_post(monkeypatch, lambda: httpx.Response(200, json=body))
-    with pytest.raises(ConnectError, match="malformed"):
+    with pytest.raises(RuntimeError, match="malformed"):
         exchange_code_for_credential(_IMBUE, "code")
 
 
 def test_exchange_empty_object_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     _mock_post(monkeypatch, lambda: httpx.Response(200, json={}))
-    with pytest.raises(ConnectError, match="malformed"):
+    with pytest.raises(RuntimeError, match="malformed"):
         exchange_code_for_credential(_IMBUE, "code")
 
 
@@ -261,20 +260,20 @@ def test_exchange_empty_object_raises(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_exchange_non_json_body_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     _mock_post(monkeypatch, lambda: httpx.Response(200, text="not json at all"))
-    with pytest.raises(ConnectError, match="malformed"):
+    with pytest.raises(RuntimeError, match="malformed"):
         exchange_code_for_credential(_IMBUE, "code")
 
 
 def test_exchange_json_list_body_raises(monkeypatch: pytest.MonkeyPatch) -> None:
-    # A JSON array (not a dict) -> indexing by key raises TypeError -> ConnectError.
+    # A JSON array (not a dict) -> indexing by key raises TypeError -> RuntimeError.
     _mock_post(monkeypatch, lambda: httpx.Response(200, json=["a", "b"]))
-    with pytest.raises(ConnectError, match="malformed"):
+    with pytest.raises(RuntimeError, match="malformed"):
         exchange_code_for_credential(_IMBUE, "code")
 
 
 def test_exchange_json_null_body_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     _mock_post(monkeypatch, lambda: httpx.Response(200, json=None))
-    with pytest.raises(ConnectError, match="malformed"):
+    with pytest.raises(RuntimeError, match="malformed"):
         exchange_code_for_credential(_IMBUE, "code")
 
 
@@ -284,20 +283,20 @@ def test_exchange_json_null_body_raises(monkeypatch: pytest.MonkeyPatch) -> None
 @pytest.mark.parametrize("status", [400, 401, 403, 404, 500, 502, 503])
 def test_exchange_non_200_raises_with_status(monkeypatch: pytest.MonkeyPatch, status: int) -> None:
     _mock_post(monkeypatch, lambda: httpx.Response(status, json={"error": "nope"}))
-    with pytest.raises(ConnectError, match=f"HTTP {status}") as ei:
+    with pytest.raises(RuntimeError, match=f"HTTP {status}") as ei:
         exchange_code_for_credential(_IMBUE, "code")
     assert "connect exchange failed" in str(ei.value)
 
 
 def test_exchange_non_200_includes_error_message_from_body(monkeypatch: pytest.MonkeyPatch) -> None:
     _mock_post(monkeypatch, lambda: httpx.Response(400, json={"error": "code expired"}))
-    with pytest.raises(ConnectError, match="code expired"):
+    with pytest.raises(RuntimeError, match="code expired"):
         exchange_code_for_credential(_IMBUE, "code")
 
 
 def test_exchange_non_200_non_json_body_uses_text(monkeypatch: pytest.MonkeyPatch) -> None:
     _mock_post(monkeypatch, lambda: httpx.Response(500, text="internal boom"))
-    with pytest.raises(ConnectError, match="internal boom"):
+    with pytest.raises(RuntimeError, match="internal boom"):
         exchange_code_for_credential(_IMBUE, "code")
 
 
@@ -309,7 +308,7 @@ def test_exchange_connect_error_raises(monkeypatch: pytest.MonkeyPatch) -> None:
         raise httpx.ConnectError("connection refused")
 
     _mock_post(monkeypatch, boom)
-    with pytest.raises(ConnectError, match="could not reach"):
+    with pytest.raises(RuntimeError, match="could not reach"):
         exchange_code_for_credential(_IMBUE, "code")
 
 
@@ -318,7 +317,7 @@ def test_exchange_timeout_raises(monkeypatch: pytest.MonkeyPatch) -> None:
         raise httpx.ReadTimeout("timed out")
 
     _mock_post(monkeypatch, boom)
-    with pytest.raises(ConnectError, match="could not reach"):
+    with pytest.raises(RuntimeError, match="could not reach"):
         exchange_code_for_credential(_IMBUE, "code")
 
 
@@ -327,14 +326,14 @@ def test_exchange_connect_timeout_raises(monkeypatch: pytest.MonkeyPatch) -> Non
         raise httpx.ConnectTimeout("connect timed out")
 
     _mock_post(monkeypatch, boom)
-    with pytest.raises(ConnectError, match="could not reach"):
+    with pytest.raises(RuntimeError, match="could not reach"):
         exchange_code_for_credential(_IMBUE, "code")
 
 
-# --- ConnectError itself -----------------------------------------------------
+# --- RuntimeError itself -----------------------------------------------------
 
 
 def test_connect_error_str_is_the_message() -> None:
-    err = ConnectError("something broke")
+    err = RuntimeError("something broke")
     assert str(err) == "something broke"
     assert isinstance(err, Exception)

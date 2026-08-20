@@ -28,7 +28,6 @@ from litestar.testing import TestClient
 from compute_space.config import provide_config
 from compute_space.core.auth.auth import SESSION_COOKIE_NAME
 from compute_space.core.auth.auth import create_session
-from compute_space.core.connect import ConnectError
 from compute_space.core.identity_store import IMBUE_CONNECT_BASE_URL_KEY
 from compute_space.core.identity_store import get_stored_instance_identity
 from compute_space.core.identity_store import set_instance_identity
@@ -302,7 +301,7 @@ def test_callback_connect_error_returns_502(cfg: Any, client: TestClient[Litesta
     with (
         mock.patch(
             "compute_space.web.routes.api.settings.exchange_code_for_credential",
-            side_effect=ConnectError("code expired"),
+            side_effect=RuntimeError("code expired"),
         ),
         mock.patch("compute_space.web.routes.api.settings.trigger_restart") as restart,
     ):
@@ -324,7 +323,7 @@ def test_callback_connect_error_does_not_overwrite_existing_identity(cfg: Any, c
     _seed_identity(cfg, prior)
     with mock.patch(
         "compute_space.web.routes.api.settings.exchange_code_for_credential",
-        side_effect=ConnectError("boom"),
+        side_effect=RuntimeError("boom"),
     ):
         client.cookies.update(_auth_cookie(cfg))
         resp = client.get(

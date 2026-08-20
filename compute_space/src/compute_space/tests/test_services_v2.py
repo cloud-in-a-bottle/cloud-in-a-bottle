@@ -5,8 +5,6 @@ from compute_space.core.auth.permissions_v2 import get_all_permissions_v2
 from compute_space.core.auth.permissions_v2 import get_granted_permissions_v2
 from compute_space.core.auth.permissions_v2 import grant_permission_v2
 from compute_space.core.auth.permissions_v2 import revoke_permission_v2
-from compute_space.core.services_v2 import ServiceNotAvailable
-from compute_space.core.services_v2 import ShortnameNotDeclared
 from compute_space.core.services_v2 import lookup_shortname
 from compute_space.core.services_v2 import resolve_provider
 
@@ -54,17 +52,17 @@ class TestVersionResolution:
         assert ver == "1.0.0"
 
     def test_no_provider_raises(self, db):
-        with pytest.raises(ServiceNotAvailable, match="No provider"):
+        with pytest.raises(RuntimeError, match="No provider"):
             resolve_provider(SVC_SECRETS, ">=0.1.0", db)
 
     def test_version_mismatch_raises(self, db):
         _add_provider(db, SVC_SECRETS, "secrets", "0.1.0", "/_svc/")
-        with pytest.raises(ServiceNotAvailable, match="does not match"):
+        with pytest.raises(RuntimeError, match="does not match"):
             resolve_provider(SVC_SECRETS, ">=99.0.0", db)
 
     def test_not_running_raises(self, db):
         _add_provider(db, SVC_SECRETS, "secrets", "0.1.0", "/_svc/", status="stopped")
-        with pytest.raises(ServiceNotAvailable, match="not running"):
+        with pytest.raises(RuntimeError, match="not running"):
             resolve_provider(SVC_SECRETS, ">=0.1.0", db)
 
     def test_explicit_provider_app(self, db):
@@ -77,12 +75,12 @@ class TestVersionResolution:
 
     def test_explicit_provider_app_not_found(self, db):
         _add_provider(db, SVC_SECRETS, "secrets", "0.1.0", "/_svc/")
-        with pytest.raises(ServiceNotAvailable, match="not found"):
+        with pytest.raises(RuntimeError, match="not found"):
             resolve_provider(SVC_SECRETS, ">=0.1.0", db, provider_app_id=new_app_id())
 
     def test_explicit_provider_app_version_mismatch(self, db):
         provider_id = _add_provider(db, SVC_SECRETS, "secrets", "0.1.0", "/_svc/")
-        with pytest.raises(ServiceNotAvailable, match="does not match"):
+        with pytest.raises(RuntimeError, match="does not match"):
             resolve_provider(SVC_SECRETS, ">=99.0.0", db, provider_app_id=provider_id)
 
     def test_uses_default_provider(self, db):
@@ -218,7 +216,7 @@ class TestPermissionsV2:
 class TestVersionResolutionEdgeCases:
     def test_invalid_specifier_raises(self, db):
         _add_provider(db, SVC_SECRETS, "secrets", "0.1.0", "/_svc/")
-        with pytest.raises(ServiceNotAvailable, match="Invalid version specifier"):
+        with pytest.raises(RuntimeError, match="Invalid version specifier"):
             resolve_provider(SVC_SECRETS, "not_a_version!!", db)
 
 
@@ -269,7 +267,7 @@ class TestShortnameLookup:
             "consumer",
             f'\n[[services.v2.consumes]]\nservice = "{SVC_OAUTH}"\nshortname = "oauth"\nversion = ">=0.1.0"\ngrants = []\n',
         )
-        with pytest.raises(ShortnameNotDeclared, match="not declared"):
+        with pytest.raises(LookupError, match="not declared"):
             lookup_shortname(consumer_id, "missing", db)
 
     def test_no_manifest_raises(self, db):
@@ -281,11 +279,11 @@ class TestShortnameLookup:
             (bare_id, "bare", "0.1.0", "/tmp/bare", 9101, "running"),
         )
         db.commit()
-        with pytest.raises(ShortnameNotDeclared, match="No manifest"):
+        with pytest.raises(LookupError, match="No manifest"):
             lookup_shortname(bare_id, "anything", db)
 
     def test_unknown_consumer_raises(self, db):
-        with pytest.raises(ShortnameNotDeclared, match="No manifest"):
+        with pytest.raises(LookupError, match="No manifest"):
             lookup_shortname(new_app_id(), "oauth", db)
 
     def test_picks_correct_entry_among_many(self, db):

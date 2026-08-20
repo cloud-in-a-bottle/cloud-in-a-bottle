@@ -110,7 +110,7 @@ def test_reload_refused_while_transient(
         resp = client.post(f"/reload_app/{app_id}")
 
     assert resp.status_code == 409
-    assert resp.json()["error"] == "App is already reloading"
+    assert resp.json()["detail"] == "App is already reloading"
     Thread.assert_not_called()
     stop.assert_not_called()
     # The in-flight operation's status is left untouched.

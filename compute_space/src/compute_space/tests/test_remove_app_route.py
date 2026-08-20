@@ -87,7 +87,7 @@ def test_remove_404_when_app_missing(client: TestClient[Litestar], cookies: dict
 
     assert resp.status_code == 404
     body = resp.json()
-    assert "not found" in (body.get("error") or "").lower()
+    assert "not found" in body["detail"].lower()
     Thread.assert_not_called()
 
 
@@ -109,7 +109,7 @@ def test_remove_rolls_back_if_thread_spawn_fails(
         resp = client.post(f"/remove_app/{app_id}")
 
     assert resp.status_code == 503
-    assert "removal worker" in resp.json()["error"].lower()
+    assert "removal worker" in resp.json()["detail"].lower()
     db = sqlite3.connect(cfg.db_path)
     try:
         row = db.execute("SELECT status FROM apps WHERE app_id = ?", (app_id,)).fetchone()
@@ -144,7 +144,7 @@ def test_stop_app_refuses_when_removing(cfg: Any, client: TestClient[Litestar], 
     client.cookies.update(cookies)
     resp = client.post(f"/stop_app/{app_id}")
     assert resp.status_code == 409
-    assert "removed" in resp.json()["error"].lower()
+    assert "removed" in resp.json()["detail"].lower()
 
 
 def test_reload_app_refuses_when_removing(cfg: Any, client: TestClient[Litestar], cookies: dict[str, str]) -> None:
@@ -152,7 +152,7 @@ def test_reload_app_refuses_when_removing(cfg: Any, client: TestClient[Litestar]
     client.cookies.update(cookies)
     resp = client.post(f"/reload_app/{app_id}")
     assert resp.status_code == 409
-    assert "removed" in resp.json()["error"].lower()
+    assert "removed" in resp.json()["detail"].lower()
 
 
 def test_rename_app_refuses_when_removing(cfg: Any, client: TestClient[Litestar], cookies: dict[str, str]) -> None:
@@ -160,4 +160,4 @@ def test_rename_app_refuses_when_removing(cfg: Any, client: TestClient[Litestar]
     client.cookies.update(cookies)
     resp = client.post(f"/rename_app/{app_id}", json={"name": "newname"})
     assert resp.status_code == 409
-    assert "removed" in resp.json()["error"].lower()
+    assert "removed" in resp.json()["detail"].lower()

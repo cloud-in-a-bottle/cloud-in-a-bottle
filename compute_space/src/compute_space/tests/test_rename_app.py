@@ -178,6 +178,7 @@ def test_rename_rollback_on_archive_failure(cfg_factory: Any) -> None:
     payload = resp.json()
 
     assert resp.status_code == 500, payload
+    assert payload["extra"]["output"].startswith("Failed to rename app data directories:")
 
     for tier, parent in _tier_parents(cfg).items():
         assert (parent / "old-name").exists(), f"{tier} not rolled back"
@@ -221,7 +222,7 @@ def test_rename_refuses_archive_using_app_when_archive_unhealthy(cfg_factory: An
         resp = client.post(f"/rename_app/{app_id}", json={"name": "new-name"})
     payload = resp.json()
     assert resp.status_code == 503, payload
-    assert "Archive backend" in (payload or {}).get("error", ""), payload
+    assert "Archive backend" in payload["detail"], payload
 
     parents_present = {
         "app_data": Path(cfg.persistent_data_dir) / "app_data",
@@ -262,7 +263,7 @@ def test_rename_rollback_continues_when_a_rollback_rename_itself_fails(cfg_facto
     payload = resp.json()
 
     assert resp.status_code == 500, payload
-    assert "transient archive mount failure" in (payload or {}).get("error", ""), payload
+    assert "transient archive mount failure" in payload["extra"]["output"], payload
 
     parents = _tier_parents(cfg)
     assert (parents["app_data"] / "old-name").exists()

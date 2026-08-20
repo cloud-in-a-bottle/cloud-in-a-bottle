@@ -11,7 +11,9 @@ inside an Ubuntu+systemd container, exercising the phased-update control flow:
   * a pinned target ref (``git config openhost.target-ref``) as the final hop
     after the tags are walked,
   * ``show_diff`` pending-commit listing,
-  * idempotent re-apply.
+  * idempotent re-apply on an already-latest host,
+  * migrations alone installing and enabling the openhost.service unit,
+    independent of any tag walk.
 
 DESIGN DECISION — migrations run once up front, then re-run as no-ops.
 ``setup_class`` runs the real migrations once so the baseline (v2) installs and
@@ -27,9 +29,11 @@ test_migration_container.py, so these tests focus on the tag-walk / fetch /
 apply / show_diff / target-ref control flow.
 
 Because migrations are skipped, the walk does not depend on apt/iptables state
-and can safely step through several tags in one invocation. Each test class
-gets its OWN uniquely-named container so classes never collide, and each tears
-its container down in ``teardown_class``.
+and can safely step through several tags in one invocation. Every scenario
+shares ONE container (built + migrated once) to save container-lifecycle
+overhead: the edge cases each rebuild the host git repo from scratch
+(``rm -rf .git``), so they are order-independent among themselves and can run
+after the walk scenarios in the same container.
 
 Requires podman and the --run-containers flag (see root conftest.py); without
 it every class here is skipped by the ``requires_containers`` marker.
@@ -42,24 +46,23 @@ import subprocess
 import time
 from typing import cast
 
+import pytest
+
 # Bootstrapping the migration log to the registry's highest version makes every
 # migration a skipped no-op during a pure tag walk. Derived from the registry so
 # it can't drift when a migration is added.
 from openhost_system_agent.migrations.registry import REGISTRY as _REGISTRY
 from openhost_system_agent.migrations.registry import latest_registry_version as _latest_registry_version
 
-# Reuse the container-test helper toolkit and the shared, module-scoped image
-# fixture from the sibling container test module. Importing keeps a single
-# source of truth for _start_container / _exec / _host_sh / health-wait / the
-# image build+teardown, and the @requires_containers marker.
+# Reuse the container-test helper toolkit from the sibling container test module.
+# Importing keeps a single source of truth for _start_container / _exec / _host_sh /
+# health-wait / _ensure_migration_image, and the @requires_containers marker.
 from openhost_system_agent.tests.test_migration_container import _ENV_PYTHON
 from openhost_system_agent.tests.test_migration_container import _PIXI
 from openhost_system_agent.tests.test_migration_container import _REPO
+from openhost_system_agent.tests.test_migration_container import _ensure_migration_image
 from openhost_system_agent.tests.test_migration_container import _exec
 from openhost_system_agent.tests.test_migration_container import _host_sh
-from openhost_system_agent.tests.test_migration_container import (  # noqa: F401 — re-exported so the module-scoped image fixture is active here too
-    _migration_image,
-)
 from openhost_system_agent.tests.test_migration_container import _podman
 from openhost_system_agent.tests.test_migration_container import _start_container
 from openhost_system_agent.tests.test_migration_container import _wait_for_health
@@ -190,13 +193,21 @@ def _assert_healthy(container: str) -> None:
     assert '"ok"' in body or '"status"' in body
 
 
-class _WalkContainer:
-    """Mixin: each subclass gets its own uniquely-named container + teardown."""
+@requires_containers
+class TestApplyWalkE2E:
+    """One container covers every apply/fetch/show_diff scenario.
 
-    container: str
+    DEFINITION ORDER IS LOAD-BEARING: the migrations-only service check must
+    run first (it observes the pristine post-migration state, before any walk
+    or ``rm -rf .git``), and the walk tests must precede the edge cases. Do
+    not reorder methods, and expect ``-k`` subsets / ``--ff`` to break this.
+    """
+
+    container = "openhost-e2e-applywalk"
 
     @classmethod
     def setup_class(cls) -> None:
+        _ensure_migration_image()
         _start_container(cls.container)
         # Run the real migrations once so the baseline (v2) installs+enables the
         # openhost.service systemd unit. The apply-walk's final step does
@@ -216,28 +227,47 @@ class _WalkContainer:
     def teardown_class(cls) -> None:
         _podman("rm", "-f", "-t", "0", cls.container, check=False, timeout=15)
 
+    # ── Migrations alone enable the service ──────────────────────────
 
-# ── 1. Multi-tag walk in a single invocation ─────────────────────────
-
-
-@requires_containers
-class TestMultiTagWalk(_WalkContainer):
-    """`update apply` walks v1 → v2 → v3 in ONE execv chain, ending on v3."""
-
-    container = "openhost-e2e-multitag"
-
-    def test_single_apply_walks_all_tags_to_latest(self) -> None:
+    def test_migrations_enable_openhost_service(self) -> None:
+        """setup_class's migration run (independent of any walk) correctly installs
+        and enables the openhost.service unit: a manual start works and the app
+        serves /health. Must run first: the walked_to_latest fixture below is
+        lazily instantiated, so no walk has happened yet at this point.
+        """
         c = self.container
+        _exec(c, "systemctl", "start", "openhost", timeout=30)
+        time.sleep(2)
+        result = _exec(c, "systemctl", "is-active", "openhost", timeout=10)
+        assert result.stdout.strip() == "active", f"Service not active: {result.stdout}\n{result.stderr}"
+        _assert_healthy(c)
+
+    # ── Multi-tag walk in a single invocation, then idempotent re-apply ──
+
+    @pytest.fixture(scope="class")
+    @classmethod
+    def walked_to_latest(cls) -> str:
+        """Build the origin and walk v1 → v3 once for the class; return the resulting HEAD sha."""
+        c = cls.container
         # Host physically has only v1; v2 and v3 live on origin.
         _build_tagged_origin(c, "/tmp/origin_multitag.git", ["v1", "v2", "v3"], checkout="v1")
 
-        pixi_before = _host_sh(c, f"{_PIXI} --version").stdout
+        # Host is behind before the walk applies.
+        assert _agent_json(c, "update", "fetch")["state"] == "BEHIND_REMOTE"
 
         apply = _run_agent(c, "update", "apply")
         assert apply.returncode == 0, f"update apply failed (exit {apply.returncode}):\n{apply.stdout}\n{apply.stderr}"
 
         # Single invocation ended on the latest tag, exactly v3.
         assert _current_tag(c) == "v3", f"HEAD not on v3: {_current_tag(c)!r}"
+
+        # openhost was restarted by the walk and serves /health.
+        _assert_healthy(c)
+
+        return _head_sha(c)
+
+    def test_single_apply_walks_all_tags_to_latest(self, walked_to_latest: str) -> None:
+        c = self.container
 
         # Migration log still reads the latest known version (setup_class already
         # advanced it, so the walk's migrations re-ran as no-ops; the point is the
@@ -247,76 +277,40 @@ class TestMultiTagWalk(_WalkContainer):
             f"log did not reach v{_LATEST_MIGRATION_VERSION}:\n{log.stdout}"
         )
 
-        # pixi ran install at each step (version is whatever the image ships;
+        # pixi ran install during the walk (version is whatever the image ships;
         # we only assert install did not break the toolchain).
         pixi_after = _host_sh(c, f"{_PIXI} --version").stdout
-        assert pixi_after.strip(), f"pixi broken after walk (before={pixi_before!r} after={pixi_after!r})"
+        assert pixi_after.strip(), f"pixi broken after walk (after={pixi_after!r})"
 
-        # openhost was restarted by the walk and serves /health.
-        _assert_healthy(c)
-
-
-# ── 2. Already up to date ────────────────────────────────────────────
-
-
-@requires_containers
-class TestAlreadyUpToDate(_WalkContainer):
-    """Host on the latest tag: fetch is UP_TO_DATE and apply is a no-op."""
-
-    container = "openhost-e2e-uptodate"
-
-    def test_fetch_uptodate_and_apply_is_noop(self) -> None:
+    def test_re_apply_is_noop_on_latest(self, walked_to_latest: str) -> None:
+        """After the class-level walk to v3, a second `update apply` is a healthy no-op."""
         c = self.container
-        # Host already sits on the latest (and only pushed) tag.
-        _build_tagged_origin(c, "/tmp/origin_uptodate.git", ["v1", "v2"], checkout="v2")
 
+        second = _run_agent(c, "update", "apply")
+        assert second.returncode == 0, f"second apply failed:\n{second.stdout}\n{second.stderr}"
+        assert _head_sha(c) == walked_to_latest, "re-apply moved HEAD despite being on latest"
+        assert _current_tag(c) == "v3"
         assert _agent_json(c, "update", "fetch")["state"] == "UP_TO_DATE"
+        # openhost was restarted again by the second apply; confirm the service
+        # comes back active. Poll `systemctl is-active` (the restart is what the
+        # walk drives) rather than the app-level /health, which can cold-start
+        # slowly and is already covered by the class-level _assert_healthy above.
+        deadline = time.time() + 120
+        active = ""
+        while time.time() < deadline:
+            active = _exec(c, "systemctl", "is-active", "openhost", check=False).stdout.strip()
+            if active == "active":
+                break
+            time.sleep(2)
+        assert active == "active", (
+            f"openhost not active after second apply (state={active!r}):\n"
+            f"{_exec(c, 'journalctl', '-u', 'openhost', '--no-pager', '-n', '40', check=False).stdout}"
+        )
 
-        head_before = _head_sha(c)
-        apply = _run_agent(c, "update", "apply")
-        assert apply.returncode == 0, f"apply should succeed as no-op:\n{apply.stdout}\n{apply.stderr}"
-
-        # No-op: HEAD did not move and openhost is (re)started + healthy.
-        assert _head_sha(c) == head_before, "apply moved HEAD despite being up to date"
-        assert _current_tag(c) == "v2"
-        _assert_healthy(c)
-
-
-# ── 3. Fetch reports behind / up-to-date ─────────────────────────────
-
-
-@requires_containers
-class TestFetchReportsBehind(_WalkContainer):
-    """`update fetch` reports BEHIND_REMOTE when behind, UP_TO_DATE after apply."""
-
-    container = "openhost-e2e-fetch-behind"
-
-    def test_fetch_behind_then_up_to_date(self) -> None:
-        c = self.container
-        # Host on v1; origin also has v2 that the host must fetch.
-        _build_tagged_origin(c, "/tmp/origin_behind.git", ["v1", "v2"], checkout="v1")
-
-        assert _agent_json(c, "update", "fetch") == {"state": "BEHIND_REMOTE"}
-
-        apply = _run_agent(c, "update", "apply")
-        assert apply.returncode == 0, f"apply failed:\n{apply.stdout}\n{apply.stderr}"
-        assert _current_tag(c) == "v2"
-
-        # Now caught up: fetch flips to UP_TO_DATE.
-        assert _agent_json(c, "update", "fetch")["state"] == "UP_TO_DATE"
-        _assert_healthy(c)
-
-
-# ── 4. Dirty tree rejected ───────────────────────────────────────────
-
-
-@requires_containers
-class TestDirtyTreeRejected(_WalkContainer):
-    """An uncommitted change makes `update apply` fail without moving HEAD."""
-
-    container = "openhost-e2e-dirty"
+    # ── Dirty tree / no tags / target-ref pin / show_diff (independent) ──
 
     def test_apply_rejects_dirty_tree(self) -> None:
+        """An uncommitted change makes `update apply` fail without moving HEAD."""
         c = self.container
         _build_tagged_origin(c, "/tmp/origin_dirty.git", ["v1", "v2"], checkout="v1")
 
@@ -341,17 +335,13 @@ class TestDirtyTreeRejected(_WalkContainer):
         assert _head_sha(c) == head_before, "apply moved HEAD despite dirty tree"
         assert _current_tag(c) == "v1"
 
-
-# ── 5. No tags on remote ─────────────────────────────────────────────
-
-
-@requires_containers
-class TestNoTags(_WalkContainer):
-    """No v* tags and no target ref: `update apply` fails with 'No tags'."""
-
-    container = "openhost-e2e-notags"
+        # Restore the working tree so the next scenario's `rm -rf .git` +
+        # `git add -A` doesn't silently commit this test's leftover dirty
+        # change into a fresh repo.
+        _host_sh(c, f"cd {_REPO} && git checkout -- openhost_system_agent/README.md")
 
     def test_apply_without_tags_fails(self) -> None:
+        """No v* tags and no target ref: `update apply` fails with 'No tags'."""
         c = self.container
         origin = "/tmp/origin_notags.git"
         # A repo + bare origin with a single untagged commit and no target ref.
@@ -381,17 +371,8 @@ class TestNoTags(_WalkContainer):
         )
         assert _head_sha(c) == head_before, "apply moved HEAD despite failing"
 
-
-# ── 6. Target-ref pin (branch ahead of latest tag) ───────────────────
-
-
-@requires_containers
-class TestTargetRefPin(_WalkContainer):
-    """A pinned target ref becomes the final hop after the tags are walked."""
-
-    container = "openhost-e2e-targetref"
-
     def test_walk_ends_on_pinned_ref_after_tags(self) -> None:
+        """A pinned target ref becomes the final hop after the tags are walked."""
         c = self.container
         origin = "/tmp/origin_targetref.git"
 
@@ -448,17 +429,8 @@ class TestTargetRefPin(_WalkContainer):
         assert _current_tag(c) == "", "HEAD should be on the branch tip, not exactly on a tag"
         _assert_healthy(c)
 
-
-# ── 7. show_diff lists pending commits ───────────────────────────────
-
-
-@requires_containers
-class TestShowDiff(_WalkContainer):
-    """`update show_diff` lists the pending commits with correct refs."""
-
-    container = "openhost-e2e-showdiff"
-
     def test_show_diff_lists_pending_commits(self) -> None:
+        """`update show_diff` lists the pending commits with correct refs."""
         c = self.container
         origin = "/tmp/origin_showdiff.git"
 
@@ -499,48 +471,3 @@ class TestShowDiff(_WalkContainer):
         assert len(commits) == 2, f"expected 2 pending commits, got: {commits!r}"
         messages = [commit["message"] for commit in commits]
         assert "pending one" in messages and "pending two" in messages, f"missing pending messages: {messages!r}"
-
-
-# ── 8. Idempotent re-apply ───────────────────────────────────────────
-
-
-@requires_containers
-class TestIdempotentReApply(_WalkContainer):
-    """After a successful walk, a second `update apply` is a healthy no-op."""
-
-    container = "openhost-e2e-idempotent"
-
-    def test_re_apply_is_noop_on_latest(self) -> None:
-        c = self.container
-        _build_tagged_origin(c, "/tmp/origin_idempotent.git", ["v1", "v2", "v3"], checkout="v1")
-
-        first = _run_agent(c, "update", "apply")
-        assert first.returncode == 0, f"first apply failed:\n{first.stdout}\n{first.stderr}"
-        assert _current_tag(c) == "v3", f"first apply did not reach v3: {_current_tag(c)!r}"
-        _assert_healthy(c)
-
-        head_after_first = _head_sha(c)
-
-        # Second apply: already on latest → a no-op walk that still re-runs the
-        # migrations (no-op), pixi install, and one openhost restart. It must
-        # succeed and leave HEAD/tag unchanged and the host up to date.
-        second = _run_agent(c, "update", "apply")
-        assert second.returncode == 0, f"second apply failed:\n{second.stdout}\n{second.stderr}"
-        assert _head_sha(c) == head_after_first, "re-apply moved HEAD despite being on latest"
-        assert _current_tag(c) == "v3"
-        assert _agent_json(c, "update", "fetch")["state"] == "UP_TO_DATE"
-        # openhost was restarted again by the second apply; confirm the service
-        # comes back active. Poll `systemctl is-active` (the restart is what the
-        # walk drives) rather than the app-level /health, which can cold-start
-        # slowly and is already covered by the single-restart walk tests above.
-        deadline = time.time() + 120
-        active = ""
-        while time.time() < deadline:
-            active = _exec(c, "systemctl", "is-active", "openhost", check=False).stdout.strip()
-            if active == "active":
-                break
-            time.sleep(2)
-        assert active == "active", (
-            f"openhost not active after second apply (state={active!r}):\n"
-            f"{_exec(c, 'journalctl', '-u', 'openhost', '--no-pager', '-n', '40', check=False).stdout}"
-        )

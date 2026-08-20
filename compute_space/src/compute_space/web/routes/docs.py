@@ -70,6 +70,7 @@ from litestar import Response
 from litestar import Router
 from litestar import get
 from litestar.exceptions import NotFoundException
+from litestar.exceptions import ServiceUnavailableException
 from litestar.params import FromPath
 from markdown_it import MarkdownIt
 from markupsafe import escape as html_escape
@@ -827,31 +828,31 @@ def _page_title(slug: str, path: Path) -> str:
 # ─── Routes ─────────────────────────────────────────────────────────
 
 
-@get("/docs", sync_to_thread=False)
+@get("/docs", sync_to_thread=False, raises=[NotFoundException, ServiceUnavailableException])
 def docs_index() -> Response[str]:
     """The docs landing page, served from ``introduction.md``.
 
     Litestar normalises trailing slashes during routing, so this single
     handler serves both ``/docs`` and ``/docs/``.
 
-    Falls back to a 503 (with a clear, operator-actionable
-    message) if the markdown source dir is missing — that
-    shouldn't happen in production but is what tests use to
-    verify the missing-dir path.
+    Raises a 503 with an actionable message if the markdown source
+    directory is missing.
     """
     return _render_doc(_DEFAULT_INDEX)
 
 
-@get(_ALL_MARKDOWN_PATH, sync_to_thread=False)
+@get(_ALL_MARKDOWN_PATH, sync_to_thread=False, raises=[ServiceUnavailableException])
 def docs_all_markdown() -> Response[str]:
     """The whole manual as one markdown document."""
-    missing = _missing_src_response()
-    if missing is not None:
-        return missing
+    _require_docs_src()
     return Response(content=_concatenated_markdown(), media_type=MediaType.TEXT)
 
 
-@get("/docs/{slug:str}", sync_to_thread=False)
+@get(
+    "/docs/{slug:str}",
+    sync_to_thread=False,
+    raises=[NotFoundException, ServiceUnavailableException],
+)
 def docs_slug(slug: FromPath[str]) -> Response[str]:
     """``/docs/routing`` renders the page; ``/docs/routing.md`` returns its source.
 
@@ -865,35 +866,43 @@ def docs_slug(slug: FromPath[str]) -> Response[str]:
     return _render_doc(slug)
 
 
-def _missing_src_response() -> Response[str] | None:
-    """The 503 for a broken checkout, or ``None`` when ``docs/src/`` is present."""
+def _require_docs_src() -> None:
+    """Ensure the docs source directory exists.
+
+    Raises:
+        ServiceUnavailableException: If the docs source directory is missing.
+    """
     src = _docs_src_dir()
-    if src.is_dir():
-        return None
-    return Response(
-        content=(
-            "The Cloud in a Bottle docs source directory is missing on this installation. "
-            f"Expected: {src}.  This usually means the Cloud in a Bottle code checkout is "
-            "incomplete; reinstalling the Cloud in a Bottle service should fix it."
-        ),
-        status_code=503,
-        media_type=MediaType.TEXT,
-    )
+    if not src.is_dir():
+        raise ServiceUnavailableException(
+            detail=(
+                "The Cloud in a Bottle docs source directory is missing on this installation. "
+                f"Expected: {src}.  This usually means the Cloud in a Bottle code checkout is "
+                "incomplete; reinstalling the Cloud in a Bottle service should fix it."
+            )
+        )
 
 
 def _raw_doc(slug: str) -> Response[str]:
-    """One page's markdown source, verbatim."""
-    missing = _missing_src_response()
-    if missing is not None:
-        return missing
+    """Return one page's markdown source verbatim.
+
+    Raises:
+        NotFoundException: If ``slug`` does not identify a markdown page.
+        ServiceUnavailableException: If the docs source directory is missing.
+    """
+    _require_docs_src()
     path = _resolve_doc_path(slug)
     return Response(content=path.read_text(encoding="utf-8"), media_type=MediaType.TEXT)
 
 
 def _render_doc(slug: str) -> Response[str]:
-    missing = _missing_src_response()
-    if missing is not None:
-        return missing
+    """Render one documentation page as HTML.
+
+    Raises:
+        NotFoundException: If ``slug`` does not identify a markdown page.
+        ServiceUnavailableException: If the docs source directory is missing.
+    """
+    _require_docs_src()
     path = _resolve_doc_path(slug)
     sections = _read_summary()
     content_html = _cached_render(slug, path)

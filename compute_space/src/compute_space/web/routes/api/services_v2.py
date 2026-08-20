@@ -6,7 +6,7 @@ from litestar import delete
 from litestar import get
 from litestar import post
 from litestar.di import NamedDependency
-from litestar.exceptions import HTTPException
+from litestar.exceptions import NotFoundException
 from litestar.params import FromQuery
 
 from compute_space.web.auth.auth import require_owner_auth
@@ -128,7 +128,7 @@ async def list_defaults(db: NamedDependency[sqlite3.Connection]) -> list[Default
     return [DefaultEntry(service_url=r["service_url"], app_id=r["app_id"], app_name=r["app_name"]) for r in rows]
 
 
-@post("/api/services/v2/defaults", status_code=200, guards=[require_owner_auth])
+@post("/api/services/v2/defaults", status_code=200, guards=[require_owner_auth], raises=[NotFoundException])
 async def set_default(data: SetDefaultRequest, db: NamedDependency[sqlite3.Connection]) -> OkResponse:
     """Set the default provider for a service."""
     row = db.execute(
@@ -136,7 +136,7 @@ async def set_default(data: SetDefaultRequest, db: NamedDependency[sqlite3.Conne
         (data.service_url, data.app_id),
     ).fetchone()
     if not row:
-        raise HTTPException(detail="No such provider", status_code=404)
+        raise NotFoundException(detail="No such provider")
 
     db.execute(
         "INSERT OR REPLACE INTO service_defaults (service_url, app_id) VALUES (?, ?)",

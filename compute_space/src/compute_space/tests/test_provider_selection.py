@@ -184,7 +184,7 @@ class TestProviderSelectionHeader:
                 headers={**_auth_headers(), "X-OpenHost-Provider": "nonexistent-app-id"},
             )
             assert resp.status_code == 503
-            assert resp.json()["error"] == "service_not_available"
+            assert resp.json()["extra"]["code"] == "service_not_available"
 
 
 # ---------------------------------------------------------------------------

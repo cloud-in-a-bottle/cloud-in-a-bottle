@@ -35,9 +35,10 @@ function createToken() {
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify(body),
   })
-    .then(function(r) { return r.json(); })
-    .then(function(data) {
-      if (data.error) { alert(data.error); return; }
+    .then(readJsonResponse)
+    .then(function(res) {
+      if (!res.ok) { alert(responseErrorMessage(res.data, 'Failed to create token')); return; }
+      var data = res.data;
       document.getElementById('token-value').textContent = data.token;
       document.getElementById('token-created').style.display = '';
       document.getElementById('token-name').value = '';
