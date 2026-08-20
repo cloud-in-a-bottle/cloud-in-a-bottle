@@ -549,8 +549,6 @@ async def stop_app(app_id: FromPath[str], db: NamedDependency[sqlite3.Connection
     app_row = _resolve_app(app_id, db)
     if _is_removing(app_row):
         raise ConflictException(detail="App is being removed")
-    if app_row["status"] in ("building", "starting"):
-        raise ConflictException(detail="App is already restarting")
 
     stop_app_process(app_row)
     stop_container(f"openhost-{app_row['name']}")
@@ -912,7 +910,7 @@ async def wipe_data_restart(
     "/remove_app/{app_id:str}",
     status_code=202,
     guards=[require_owner_auth],
-    raises=[ValidationException, NotFoundException, ConflictException, ServiceUnavailableException],
+    raises=[ValidationException, NotFoundException, ServiceUnavailableException],
 )
 async def remove_app(
     app_id: FromPath[str],
@@ -928,8 +926,6 @@ async def remove_app(
     in-flight state.
     """
     app_row = _resolve_app(app_id, db)
-    if app_row["status"] in ("building", "starting"):
-        raise ConflictException(detail="App is already restarting")
 
     keep_data = data.keep_data
 
@@ -950,8 +946,7 @@ async def remove_app(
     # POSTs safe — only the first one gets rowcount=1 and spawns a
     # worker; later ones short-circuit to the already_removing branch.
     cursor = db.execute(
-        "UPDATE apps SET status = 'removing', error_message = NULL "
-        "WHERE app_id = ? AND status NOT IN ('building', 'starting', 'removing')",
+        "UPDATE apps SET status = 'removing', error_message = NULL WHERE app_id = ? AND status != 'removing'",
         (app_id,),
     )
     db.commit()

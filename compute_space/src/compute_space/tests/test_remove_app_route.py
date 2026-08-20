@@ -89,20 +89,6 @@ def test_wipe_data_restart_refuses_while_restart_in_flight(
     Thread.assert_not_called()
 
 
-@pytest.mark.parametrize("status", ["building", "starting"])
-def test_stop_and_remove_refuse_while_wipe_in_flight(
-    cfg: Any, client: TestClient[Litestar], cookies: dict[str, str], status: str
-) -> None:
-    app_id = _seed_app(cfg.db_path, "myapp", status=status)
-    client.cookies.update(cookies)
-    stop_resp = client.post(f"/stop_app/{app_id}")
-    remove_resp = client.post(f"/remove_app/{app_id}")
-    assert stop_resp.status_code == 409
-    assert remove_resp.status_code == 409
-    assert "already restarting" in stop_resp.json()["detail"]
-    assert "already restarting" in remove_resp.json()["detail"]
-
-
 def test_remove_returns_202_and_marks_removing(
     cfg: Any, client: TestClient[Litestar], cookies: dict[str, str]
 ) -> None:
