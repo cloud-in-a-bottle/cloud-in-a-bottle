@@ -172,7 +172,7 @@ then point them at that checkout and tell them to read this doc.
 
 ## CLI
 
-There is a CLI interface, `oh`, that can be used for interacting with your compute space, if you prefer that style of workflow.
+There is a CLI interface, `cb`, that can be used for interacting with your compute space, if you prefer that style of workflow.
 
 If you have a local clone, do
 ```bash

@@ -200,7 +200,7 @@ The user-facing manual lives in `docs/src/` and is served at `https://<zone>/doc
 
 ## Agent skill
 
-An agent skill that gives an AI coding agent context for deploying and debugging apps on Cloud in a Bottle via the `oh` CLI. Install with:
+An agent skill that gives an AI coding agent context for deploying and debugging apps on Cloud in a Bottle via the `cb` CLI. Install with:
 
 ```bash
 npx skills add cloud-in-a-bottle/cloud-in-a-bottle --skill openhost-context
