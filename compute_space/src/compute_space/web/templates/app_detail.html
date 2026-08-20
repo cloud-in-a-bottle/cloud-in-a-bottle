@@ -136,7 +136,7 @@
 {% endif %}
 
 <h3>Logs</h3>
-<pre class="log-output" id="app-logs">{{ logs or "No log output available." }}</pre>
+<pre class="log-output" id="app-logs">Connecting to log stream…</pre>
 
 <br>
 <style>
@@ -247,7 +247,7 @@ async function copyAppDiagnostics(btn) {
 {
   "renameAppUrl": "/rename_app/{{ app.app_id }}",
   "appDetailUrl": "/app_detail/{{ app.name }}",
-  "appLogsUrl": "/app_logs/{{ app.app_id }}",
+  "appLogsStreamUrl": "/app_logs_stream/{{ app.app_id }}",
   "appStatusUrl": "/api/app_status/{{ app.app_id }}",
   "appStatus": {{ app.status | tojson }},
   "nextUrl": {{ next_url | default("", true) | tojson }},
