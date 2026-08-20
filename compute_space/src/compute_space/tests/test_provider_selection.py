@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import hashlib
 import sqlite3
+import threading
+from http.server import BaseHTTPRequestHandler
+from http.server import HTTPServer
 from pathlib import Path
 from unittest.mock import AsyncMock
 from unittest.mock import patch
@@ -226,3 +229,80 @@ class TestDiscoverProvidersAppAuth:
                 params={"service": SVC_DATA},
             )
             assert resp.status_code == 401
+
+
+# ---------------------------------------------------------------------------
+# Authorization stripping on the cross-app service proxy path (OH-231)
+# ---------------------------------------------------------------------------
+
+
+class _EchoHeadersHandler(BaseHTTPRequestHandler):
+    """Records the headers of the last request it received."""
+
+    last_headers: dict[str, str] = {}
+
+    def do_GET(self) -> None:  # noqa: N802
+        type(self).last_headers = {k.lower(): v for k, v in self.headers.items()}
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", "2")
+        self.end_headers()
+        self.wfile.write(b"{}")
+
+    def log_message(self, *_args: object) -> None:  # silence stderr noise
+        pass
+
+
+class TestServiceProxyStripsAuthorization:
+    """The consumer authenticates to the router with Authorization: Bearer
+    <app token>; the router must consume it and NOT forward it to the provider
+    (OH-231).  The provider is told the caller's identity via X-OpenHost-*.
+    """
+
+    def test_service_proxy_strips_authorization(self, cfg: object) -> None:
+        # Real backend so we exercise the full proxy_http_request path (no mock).
+        server = HTTPServer(("127.0.0.1", 0), _EchoHeadersHandler)
+        provider_port = server.server_address[1]
+        _EchoHeadersHandler.last_headers = {}
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            init_db(cfg.db_path)  # type: ignore[attr-defined]
+            _seed_consumer(cfg.db_path)  # type: ignore[attr-defined]
+            # Register a single provider for SVC_DATA pointing at the echo server.
+            db = sqlite3.connect(cfg.db_path)  # type: ignore[attr-defined]
+            try:
+                provider_id = new_app_id()
+                db.execute(
+                    """INSERT INTO apps (app_id, name, version, repo_path, local_port, status)
+                       VALUES (?, ?, ?, ?, ?, ?)""",
+                    (provider_id, "data-provider", "0.1.0", "/tmp/data-provider", provider_port, "running"),
+                )
+                db.execute(
+                    "INSERT INTO service_providers_v2 (service_url, app_id, service_version, endpoint) "
+                    "VALUES (?, ?, ?, ?)",
+                    (SVC_DATA, provider_id, "0.1.0", "/api/"),
+                )
+                db.execute("INSERT INTO service_defaults (service_url, app_id) VALUES (?, ?)", (SVC_DATA, provider_id))
+                db.commit()
+            finally:
+                db.close()
+
+            with TestClient(app=_make_proxy_app()) as client:
+                resp = client.get(
+                    "/api/services/v2/call/data/endpoint",
+                    headers=_auth_headers(),  # Authorization: Bearer <consumer app token>
+                )
+            assert resp.status_code == 200
+
+            received = _EchoHeadersHandler.last_headers
+            # The consumer's app token must not reach the provider backend.
+            assert "authorization" not in received
+            assert CONSUMER_TOKEN not in received.get("authorization", "")
+            # ...but the router still identifies the caller to the provider.
+            assert received.get("x-openhost-consumer-id") == CONSUMER_APP_ID
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=5)
+
