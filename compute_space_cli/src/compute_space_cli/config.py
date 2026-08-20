@@ -7,8 +7,14 @@ from typing import Self
 import attr
 import tomli_w
 
-CONFIG_DIR = Path.home() / ".openhost"
+CONFIG_DIR = Path.home() / ".cb"
 CONFIG_FILE = CONFIG_DIR / "compute_space_cli.toml"
+
+# Legacy location used before the CLI was renamed oh -> cb. Still read as a
+# fallback so existing logins keep working; the config migrates forward to
+# CONFIG_FILE on the next save.
+LEGACY_CONFIG_DIR = Path.home() / ".openhost"
+LEGACY_CONFIG_FILE = LEGACY_CONFIG_DIR / "compute_space_cli.toml"
 
 
 class ConfigFileNotFoundError(Exception):
@@ -80,7 +86,16 @@ class MultiConfig:
 
     @classmethod
     def load(cls, path: Path | None = None) -> Self:
-        path = path or CONFIG_FILE
+        # When no explicit path is given, prefer the current config file but
+        # fall back to the legacy ~/.openhost location so users who logged in
+        # before the oh -> cb rename keep working (the next save migrates it).
+        if path is None:
+            if CONFIG_FILE.exists():
+                path = CONFIG_FILE
+            elif LEGACY_CONFIG_FILE.exists():
+                path = LEGACY_CONFIG_FILE
+            else:
+                path = CONFIG_FILE
         try:
             with open(path, "rb") as f:
                 data = tomllib.load(f)
@@ -140,7 +155,7 @@ class MultiConfig:
             if inst.alias == name:
                 return hostname
         raise InstanceNotFoundError(
-            f"Instance '{name}' not found. Run 'oh instance list' to see configured instances."
+            f"Instance '{name}' not found. Run 'cb instance list' to see configured instances."
         )
 
     def get_instance(self, name: str) -> Instance:
@@ -150,21 +165,21 @@ class MultiConfig:
     def resolve(self, instance_name: str | None = None) -> Instance:
         """Resolve which instance to use.
 
-        Priority: explicit name > OH_INSTANCE env var > default_instance.
+        Priority: explicit name > CB_INSTANCE env var > default_instance.
         """
         name = instance_name
         if not name:
-            name = os.environ.get("OH_INSTANCE")
+            name = os.environ.get("CB_INSTANCE")
         if not name:
             name = self.default_instance
 
         if not name:
             if not self.instances:
-                raise InstanceNotFoundError("No instances configured. Run 'oh instance login' first.")
+                raise InstanceNotFoundError("No instances configured. Run 'cb instance login' first.")
             raise InstanceNotFoundError(
                 "No default instance set. Use --instance <name>, or set a default with:\n"
-                "  oh instance set-default <name>\n"
-                "Run 'oh instance list' to see configured instances."
+                "  cb instance set-default <name>\n"
+                "Run 'cb instance list' to see configured instances."
             )
 
         return self.get_instance(name)

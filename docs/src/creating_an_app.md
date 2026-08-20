@@ -182,35 +182,35 @@ this will automatically get updates if you pull new changes from the openhost re
 
 or if not,
 ```bash
-uv tool install "oh @ git+https://github.com/cloud-in-a-bottle/cloud-in-a-bottle.git#subdirectory=compute_space_cli"
+uv tool install "cb @ git+https://github.com/cloud-in-a-bottle/cloud-in-a-bottle.git#subdirectory=compute_space_cli"
 ```
-Run `oh instance login` to login to your compute space.
+Run `cb instance login` to login to your compute space.
 
 ## AI Agent Development
 
-We'd suggest letting your AI agent do the full "fix bugs, commit+push, update and reload, test" loop. The `oh` CLI makes this easy to automate, although the CLI will need to be logged in by the user manually first.
+We'd suggest letting your AI agent do the full "fix bugs, commit+push, update and reload, test" loop. The `cb` CLI makes this easy to automate, although the CLI will need to be logged in by the user manually first.
 
-Here's some example `oh` commands, although you should run `oh --help` to get the most up-to-date command list.
+Here's some example `cb` commands, although you should run `cb --help` to get the most up-to-date command list.
 
 ```bash
-oh status                                    # check if compute space is reachable
+cb status                                    # check if compute space is reachable
 
-oh app list                                  # list apps and status
-oh app deploy https://github.com/you/myapp   # deploy from git repo
-oh app deploy https://github.com/you/myapp --name cool-app --wait
-oh app status cool-app                       # check status
-oh app logs cool-app                         # view logs
-oh app logs cool-app --follow                # tail logs
-oh app reload cool-app                       # rebuild + restart
-oh app reload cool-app --update --wait       # git pull, rebuild, wait
-oh app stop cool-app                         # stop app
-oh app remove cool-app                       # remove app + data
-oh app remove cool-app --keep-data           # remove but keep data
-oh app rename cool-app new-name              # rename app
+cb app list                                  # list apps and status
+cb app deploy https://github.com/you/myapp   # deploy from git repo
+cb app deploy https://github.com/you/myapp --name cool-app --wait
+cb app status cool-app                       # check status
+cb app logs cool-app                         # view logs
+cb app logs cool-app --follow                # tail logs
+cb app reload cool-app                       # rebuild + restart
+cb app reload cool-app --update --wait       # git pull, rebuild, wait
+cb app stop cool-app                         # stop app
+cb app remove cool-app                       # remove app + data
+cb app remove cool-app --keep-data           # remove but keep data
+cb app rename cool-app new-name              # rename app
 
-oh tokens list                               # list API tokens
-oh tokens create --name "ci" --expiry-hours 72
-oh tokens delete 3                           # delete by token ID
+cb tokens list                               # list API tokens
+cb tokens create --name "ci" --expiry-hours 72
+cb tokens delete 3                           # delete by token ID
 ```
 
 Note: cloning a private GitHub repo for the first time requires an OAuth flow in the browser. The CLI will print a link to authorize. After that, subsequent deploys and updates work without browser interaction.

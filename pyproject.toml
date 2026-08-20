@@ -41,7 +41,7 @@ test-harness = [
 
 [project.scripts]
 openhost = "self_host_cli.main:main"
-oh = "compute_space_cli.main:main"
+cb = "compute_space_cli.main:main"
 openhost_system_agent = "openhost_system_agent.cli:main"
 
 [build-system]

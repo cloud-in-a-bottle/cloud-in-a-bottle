@@ -206,11 +206,11 @@ An agent skill that gives an AI coding agent context for deploying and debugging
 npx skills add cloud-in-a-bottle/cloud-in-a-bottle --skill openhost-context
 ```
 
-The skill works best with the `oh` CLI installed and logged in:
+The skill works best with the `cb` CLI installed and logged in:
 
 ```bash
-uv tool install "oh @ git+https://github.com/cloud-in-a-bottle/cloud-in-a-bottle.git#subdirectory=compute_space_cli"
-oh instance login
+uv tool install "cb @ git+https://github.com/cloud-in-a-bottle/cloud-in-a-bottle.git#subdirectory=compute_space_cli"
+cb instance login
 ```
 
 Once set up, ask your coding agent to package any existing project for Cloud in a Bottle and deploy it directly — no manual manifest editing required.

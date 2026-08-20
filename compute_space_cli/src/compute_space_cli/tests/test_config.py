@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 import tomli_w
 
+from compute_space_cli import config as cli_config
 from compute_space_cli.config import ConfigFileNotFoundError
 from compute_space_cli.config import ConfigInvalidError
 from compute_space_cli.config import Instance
@@ -119,6 +120,54 @@ class TestMultiConfigSaveLoad:
         assert loaded.instances["x.com"].hostname == "x.com"
 
 
+class TestLegacyConfigFallback:
+    """Default-path resolution across the ~/.openhost -> ~/.cb (oh -> cb) rename.
+
+    When ``load()`` is called with no explicit path it must prefer the new
+    ``~/.cb`` config file but transparently fall back to the legacy
+    ``~/.openhost`` file so users who logged in before the rename keep working.
+    """
+
+    @pytest.fixture
+    def paths(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path]:
+        new = tmp_path / "cb" / "compute_space_cli.toml"
+        legacy = tmp_path / "openhost" / "compute_space_cli.toml"
+        monkeypatch.setattr(cli_config, "CONFIG_FILE", new)
+        monkeypatch.setattr(cli_config, "LEGACY_CONFIG_FILE", legacy)
+        return new, legacy
+
+    def _write(self, path: Path, hostname: str) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "wb") as f:
+            tomli_w.dump({"instances": {hostname: {"token": "t"}}, "default_instance": hostname}, f)
+
+    def test_prefers_new_path(self, paths: tuple[Path, Path]) -> None:
+        new, legacy = paths
+        self._write(new, "new.com")
+        self._write(legacy, "legacy.com")
+        assert MultiConfig.load().default_instance == "new.com"
+
+    def test_falls_back_to_legacy(self, paths: tuple[Path, Path]) -> None:
+        new, legacy = paths
+        self._write(legacy, "legacy.com")
+        assert not new.exists()
+        assert MultiConfig.load().default_instance == "legacy.com"
+
+    def test_missing_both_raises_pointing_at_new(self, paths: tuple[Path, Path]) -> None:
+        new, _legacy = paths
+        with pytest.raises(ConfigFileNotFoundError, match=str(new)):
+            MultiConfig.load()
+
+    def test_save_migrates_forward_to_new_path(self, paths: tuple[Path, Path]) -> None:
+        """Loading a legacy config then saving writes to the new ~/.cb path."""
+        new, legacy = paths
+        self._write(legacy, "legacy.com")
+        loaded = MultiConfig.load()
+        loaded.save()
+        assert new.exists()
+        assert MultiConfig.load(new).default_instance == "legacy.com"
+
+
 class TestMultiConfigResolve:
     def test_explicit_name(self) -> None:
         multi = _make_multi(
@@ -139,11 +188,11 @@ class TestMultiConfigResolve:
             instances={"a.com": _inst("a.com"), "b.com": _inst("b.com")},
             default="a.com",
         )
-        monkeypatch.setenv("OH_INSTANCE", "b.com")
+        monkeypatch.setenv("CB_INSTANCE", "b.com")
         assert multi.resolve().url == "https://b.com"
 
     def test_default_instance(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.delenv("OH_INSTANCE", raising=False)
+        monkeypatch.delenv("CB_INSTANCE", raising=False)
         multi = _make_multi(
             instances={"a.com": _inst("a.com"), "b.com": _inst("b.com")},
             default="a.com",
@@ -151,7 +200,7 @@ class TestMultiConfigResolve:
         assert multi.resolve().url == "https://a.com"
 
     def test_no_default_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.delenv("OH_INSTANCE", raising=False)
+        monkeypatch.delenv("CB_INSTANCE", raising=False)
         multi = _make_multi(instances={"only.com": _inst("only.com")})
         with pytest.raises(InstanceNotFoundError, match="No default instance set"):
             multi.resolve()
@@ -166,7 +215,7 @@ class TestMultiConfigResolve:
             instances={"a.com": _inst("a.com"), "b.com": _inst("b.com")},
             default="a.com",
         )
-        monkeypatch.setenv("OH_INSTANCE", "a.com")
+        monkeypatch.setenv("CB_INSTANCE", "a.com")
         assert multi.resolve(instance_name="b.com").url == "https://b.com"
 
     def test_env_overrides_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -174,7 +223,7 @@ class TestMultiConfigResolve:
             instances={"a.com": _inst("a.com"), "b.com": _inst("b.com")},
             default="a.com",
         )
-        monkeypatch.setenv("OH_INSTANCE", "b.com")
+        monkeypatch.setenv("CB_INSTANCE", "b.com")
         assert multi.resolve().url == "https://b.com"
 
 
