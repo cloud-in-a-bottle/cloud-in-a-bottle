@@ -139,7 +139,13 @@ class TestLegacyConfigFallback:
     def _write(self, path: Path, hostname: str) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         with open(path, "wb") as f:
-            tomli_w.dump({"instances": {hostname: {"token": "t"}}, "default_instance": hostname}, f)
+            tomli_w.dump({"instances": {hostname: {"token": "tok", "alias": "al"}}, "default_instance": hostname}, f)
+
+    def _write_flat_legacy(self, path: Path, url: str) -> None:
+        """Write the pre-multi-instance flat format (top-level url/token)."""
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "wb") as f:
+            tomli_w.dump({"url": url, "token": "flat-tok"}, f)
 
     def test_prefers_new_path(self, paths: tuple[Path, Path]) -> None:
         new, legacy = paths
@@ -153,19 +159,39 @@ class TestLegacyConfigFallback:
         assert not new.exists()
         assert MultiConfig.load().default_instance == "legacy.com"
 
+    def test_falls_back_to_legacy_flat_format(self, paths: tuple[Path, Path]) -> None:
+        """The real migration case: an original ~/.openhost in the pre-multi-instance
+        flat (url/token) format must load via the default-path fallback."""
+        new, legacy = paths
+        self._write_flat_legacy(legacy, "https://old.com")
+        assert not new.exists()
+        loaded = MultiConfig.load()
+        assert loaded.default_instance == "old.com"
+        assert loaded.instances["old.com"].token == "flat-tok"
+
     def test_missing_both_raises_pointing_at_new(self, paths: tuple[Path, Path]) -> None:
         new, _legacy = paths
         with pytest.raises(ConfigFileNotFoundError, match=str(new)):
             MultiConfig.load()
 
     def test_save_migrates_forward_to_new_path(self, paths: tuple[Path, Path]) -> None:
-        """Loading a legacy config then saving writes to the new ~/.bottle path."""
+        """Loading a legacy config then saving writes to the new ~/.bottle path,
+        preserves instance fields, and leaves the legacy file untouched."""
         new, legacy = paths
         self._write(legacy, "legacy.com")
+        legacy_bytes_before = legacy.read_bytes()
+
         loaded = MultiConfig.load()
         loaded.save()
+
         assert new.exists()
-        assert MultiConfig.load(new).default_instance == "legacy.com"
+        migrated = MultiConfig.load(new)
+        assert migrated.default_instance == "legacy.com"
+        # Instance fields survive the migration round-trip.
+        assert migrated.instances["legacy.com"].token == "tok"
+        assert migrated.instances["legacy.com"].alias == "al"
+        # save() must not touch the legacy file.
+        assert legacy.read_bytes() == legacy_bytes_before
 
 
 class TestMultiConfigResolve:

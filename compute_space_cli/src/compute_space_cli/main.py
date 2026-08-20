@@ -45,11 +45,11 @@ def _load_or_create() -> config.MultiConfig:
         return config.MultiConfig()
 
 
-def resolve_instance(root: Bottle) -> config.Instance:
+def resolve_instance(bottle: Bottle) -> config.Instance:
     """Resolve which instance to target, respecting --instance."""
     multi = _load_or_exit()
     try:
-        return multi.resolve(instance_name=root.instance)
+        return multi.resolve(instance_name=bottle.instance)
     except config.InstanceNotFoundError as e:
         print(str(e), file=sys.stderr)
         raise SystemExit(1) from None

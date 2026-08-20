@@ -10,9 +10,9 @@ import tomli_w
 CONFIG_DIR = Path.home() / ".bottle"
 CONFIG_FILE = CONFIG_DIR / "compute_space_cli.toml"
 
-# Read-only fallback location: when ~/.bottle doesn't exist yet, config is loaded
-# from here (the legacy ~/.openhost path) and migrated forward to CONFIG_FILE
-# on the next save.
+# Legacy config location (pre-``bottle``), used as a migration source: it is
+# read as a fallback when ~/.bottle is absent. The default save path never
+# writes here — the next save() writes to CONFIG_FILE, migrating config forward.
 LEGACY_CONFIG_DIR = Path.home() / ".openhost"
 LEGACY_CONFIG_FILE = LEGACY_CONFIG_DIR / "compute_space_cli.toml"
 
@@ -87,8 +87,8 @@ class MultiConfig:
     @classmethod
     def load(cls, path: Path | None = None) -> Self:
         # When no explicit path is given, prefer the current config file and
-        # otherwise fall back to the legacy ~/.openhost location (read-only) so
-        # a config written there still loads; the next save migrates it forward.
+        # otherwise fall back to the legacy ~/.openhost location so a config
+        # written there still loads; the next save migrates it forward.
         if path is None:
             if CONFIG_FILE.exists():
                 path = CONFIG_FILE
