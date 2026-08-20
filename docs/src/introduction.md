@@ -26,7 +26,7 @@ Cloud in a Bottle identity / permissions / inter-app services machinery.
 
 If you're building an app from scratch, start at [Creating an
 App](./creating_an_app.md).  If you have an existing app and want
-to know which knob in `openhost.toml` controls what, jump to the
+to know which knob in `ciab.toml` controls what, jump to the
 [App Manifest Spec](./manifest_spec.md).
 
 ## How this manual is built and shipped

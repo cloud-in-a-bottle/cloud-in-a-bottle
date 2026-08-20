@@ -29,7 +29,7 @@ def write_consumer_app_dir(
     version: str,
     grants: list[Grant],
 ) -> None:
-    """Write a deployable consumer app (openhost.toml + Dockerfile + server.py) to target_dir."""
+    """Write a deployable consumer app (ciab.toml + Dockerfile + server.py) to target_dir."""
     manifest = {
         "app": {
             "name": name,
@@ -54,6 +54,6 @@ def write_consumer_app_dir(
         },
     }
     target_dir.mkdir(parents=True, exist_ok=True)
-    (target_dir / "openhost.toml").write_text(tomli_w.dumps(manifest))
+    (target_dir / "ciab.toml").write_text(tomli_w.dumps(manifest))
     (target_dir / "Dockerfile").write_text(_DOCKERFILE)
     shutil.copy(_SERVER_TEMPLATE, target_dir / "server.py")

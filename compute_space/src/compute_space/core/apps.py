@@ -43,6 +43,7 @@ from compute_space.core.logging import logger
 from compute_space.core.manifest import AppLink
 from compute_space.core.manifest import AppManifest
 from compute_space.core.manifest import PortMapping
+from compute_space.core.manifest import find_manifest_path
 from compute_space.core.manifest import parse_manifest
 from compute_space.core.oauth import OAuthRequired
 from compute_space.core.oauth import get_oauth_token
@@ -206,7 +207,7 @@ def github_token_git_config(token: str | None) -> list[str]:
 async def clone_and_read_manifest(
     repo_url: str, github_token: str | None = None
 ) -> tuple[AppManifest | None, str | None, str | None]:
-    """Clone a repo to a temp dir and read its openhost.toml.
+    """Clone a repo to a temp dir and read its manifest (``ciab.toml``).
 
     Returns (manifest, clone_dir, error). On success error is None.
     """
@@ -1064,7 +1065,7 @@ def reload_app_background(app_id: str, repo_path: str, config: Config) -> None:
                 source_dir = None  # type: ignore[assignment]
                 for entry in os.listdir(config.apps_dir):
                     candidate = os.path.join(config.apps_dir, entry)
-                    if os.path.isfile(os.path.join(candidate, "openhost.toml")):
+                    if find_manifest_path(candidate) is not None:
                         try:
                             m = parse_manifest(candidate)
                             if m.name == app_name:

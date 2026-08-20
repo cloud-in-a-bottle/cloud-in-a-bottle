@@ -54,7 +54,7 @@ The `authorize_url` points to `oauth-provider.<zone_domain>/device?...` — a pa
 
 ### Permission flow (v2)
 
-Before an app can request OAuth tokens, it needs v2 service permissions. Apps declare the services they consume in their `openhost.toml`:
+Before an app can request OAuth tokens, it needs v2 service permissions. Apps declare the services they consume in their `ciab.toml`:
 
 ```toml
 [[services.v2.consumes]]

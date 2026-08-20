@@ -1,6 +1,6 @@
 # Cloud in a Bottle Manifest Spec (v0.1)
 
-Apps declare how they should be deployed on Cloud in a Bottle by placing an `openhost.toml` file at the root of their repository. For a walkthrough of building an app from scratch, see [Creating an App](creating_an_app.md).
+Apps declare how they should be deployed on Cloud in a Bottle by placing a `ciab.toml` file at the root of their repository. For a walkthrough of building an app from scratch, see [Creating an App](creating_an_app.md).
 
 ## Field Reference
 
