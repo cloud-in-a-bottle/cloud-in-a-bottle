@@ -6,7 +6,7 @@ import hashlib
 import sqlite3
 import threading
 from http.server import BaseHTTPRequestHandler
-from http.server import HTTPServer
+from http.server import ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import AsyncMock
 from unittest.mock import patch
@@ -261,7 +261,9 @@ class TestServiceProxyStripsAuthorization:
 
     def test_service_proxy_strips_authorization(self, cfg: object) -> None:
         # Real backend so we exercise the full proxy_http_request path (no mock).
-        server = HTTPServer(("127.0.0.1", 0), _EchoHeadersHandler)
+        # ThreadingHTTPServer (matching test_multidomain_proxy_integration.py) so
+        # keep-alive / multiple requests can't stall a single-threaded server.
+        server = ThreadingHTTPServer(("127.0.0.1", 0), _EchoHeadersHandler)
         provider_port = server.server_address[1]
         _EchoHeadersHandler.last_headers = {}
         thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -296,9 +298,15 @@ class TestServiceProxyStripsAuthorization:
             assert resp.status_code == 200
 
             received = _EchoHeadersHandler.last_headers
-            # The consumer's app token must not reach the provider backend.
+            # Guard against a false pass: if the proxy errored before reaching
+            # the backend, last_headers would still be {} and the "absent"
+            # assertions below would pass vacuously.  The Host header is always
+            # forwarded, so its presence proves the request actually landed.
+            assert received.get("host"), "echo server was never reached"
+            # The consumer's app token must not reach the provider backend —
+            # neither as an Authorization header nor smuggled into any other one.
             assert "authorization" not in received
-            assert CONSUMER_TOKEN not in received.get("authorization", "")
+            assert all(CONSUMER_TOKEN not in v for v in received.values())
             # ...but the router still identifies the caller to the provider.
             assert received.get("x-openhost-consumer-id") == CONSUMER_APP_ID
         finally:
