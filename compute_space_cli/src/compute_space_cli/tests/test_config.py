@@ -121,11 +121,11 @@ class TestMultiConfigSaveLoad:
 
 
 class TestLegacyConfigFallback:
-    """Default-path resolution across the ~/.openhost -> ~/.cb (oh -> cb) rename.
+    """Default-path resolution prefers ``~/.cb`` and falls back to ``~/.openhost``.
 
-    When ``load()`` is called with no explicit path it must prefer the new
-    ``~/.cb`` config file but transparently fall back to the legacy
-    ``~/.openhost`` file so users who logged in before the rename keep working.
+    When ``load()`` is called with no explicit path it must prefer the ``~/.cb``
+    config file but transparently read the legacy ``~/.openhost`` file when the
+    former is absent, then migrate forward to ``~/.cb`` on the next save.
     """
 
     @pytest.fixture
