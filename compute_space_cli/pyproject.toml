@@ -1,5 +1,5 @@
 [project]
-name = "cb"
+name = "bottle"
 version = "0.1.0"
 description = "Cloud in a Bottle CLI — manage apps on your compute space"
 requires-python = ">=3.12"
@@ -11,7 +11,7 @@ dependencies = [
 ]
 
 [project.scripts]
-cb = "compute_space_cli.main:main"
+bottle = "compute_space_cli.main:main"
 
 [build-system]
 requires = ["hatchling"]

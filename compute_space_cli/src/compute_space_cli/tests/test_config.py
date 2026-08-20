@@ -121,16 +121,16 @@ class TestMultiConfigSaveLoad:
 
 
 class TestLegacyConfigFallback:
-    """Default-path resolution prefers ``~/.cb`` and falls back to ``~/.openhost``.
+    """Default-path resolution prefers ``~/.bottle`` and falls back to ``~/.openhost``.
 
-    When ``load()`` is called with no explicit path it must prefer the ``~/.cb``
+    When ``load()`` is called with no explicit path it must prefer the ``~/.bottle``
     config file but transparently read the legacy ``~/.openhost`` file when the
-    former is absent, then migrate forward to ``~/.cb`` on the next save.
+    former is absent, then migrate forward to ``~/.bottle`` on the next save.
     """
 
     @pytest.fixture
     def paths(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path]:
-        new = tmp_path / "cb" / "compute_space_cli.toml"
+        new = tmp_path / "bottle" / "compute_space_cli.toml"
         legacy = tmp_path / "openhost" / "compute_space_cli.toml"
         monkeypatch.setattr(cli_config, "CONFIG_FILE", new)
         monkeypatch.setattr(cli_config, "LEGACY_CONFIG_FILE", legacy)
@@ -159,7 +159,7 @@ class TestLegacyConfigFallback:
             MultiConfig.load()
 
     def test_save_migrates_forward_to_new_path(self, paths: tuple[Path, Path]) -> None:
-        """Loading a legacy config then saving writes to the new ~/.cb path."""
+        """Loading a legacy config then saving writes to the new ~/.bottle path."""
         new, legacy = paths
         self._write(legacy, "legacy.com")
         loaded = MultiConfig.load()
@@ -188,11 +188,11 @@ class TestMultiConfigResolve:
             instances={"a.com": _inst("a.com"), "b.com": _inst("b.com")},
             default="a.com",
         )
-        monkeypatch.setenv("CB_INSTANCE", "b.com")
+        monkeypatch.setenv("BOTTLE_INSTANCE", "b.com")
         assert multi.resolve().url == "https://b.com"
 
     def test_default_instance(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.delenv("CB_INSTANCE", raising=False)
+        monkeypatch.delenv("BOTTLE_INSTANCE", raising=False)
         multi = _make_multi(
             instances={"a.com": _inst("a.com"), "b.com": _inst("b.com")},
             default="a.com",
@@ -200,7 +200,7 @@ class TestMultiConfigResolve:
         assert multi.resolve().url == "https://a.com"
 
     def test_no_default_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.delenv("CB_INSTANCE", raising=False)
+        monkeypatch.delenv("BOTTLE_INSTANCE", raising=False)
         multi = _make_multi(instances={"only.com": _inst("only.com")})
         with pytest.raises(InstanceNotFoundError, match="No default instance set"):
             multi.resolve()
@@ -215,7 +215,7 @@ class TestMultiConfigResolve:
             instances={"a.com": _inst("a.com"), "b.com": _inst("b.com")},
             default="a.com",
         )
-        monkeypatch.setenv("CB_INSTANCE", "a.com")
+        monkeypatch.setenv("BOTTLE_INSTANCE", "a.com")
         assert multi.resolve(instance_name="b.com").url == "https://b.com"
 
     def test_env_overrides_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -223,16 +223,16 @@ class TestMultiConfigResolve:
             instances={"a.com": _inst("a.com"), "b.com": _inst("b.com")},
             default="a.com",
         )
-        monkeypatch.setenv("CB_INSTANCE", "b.com")
+        monkeypatch.setenv("BOTTLE_INSTANCE", "b.com")
         assert multi.resolve().url == "https://b.com"
 
     def test_legacy_oh_instance_env_is_ignored(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """The pre-rename OH_INSTANCE env var is intentionally no longer honored.
 
-        Only CB_INSTANCE is read; a stale OH_INSTANCE must not silently select an
+        Only BOTTLE_INSTANCE is read; a stale OH_INSTANCE must not silently select an
         instance, so resolution falls through to the configured default.
         """
-        monkeypatch.delenv("CB_INSTANCE", raising=False)
+        monkeypatch.delenv("BOTTLE_INSTANCE", raising=False)
         monkeypatch.setenv("OH_INSTANCE", "b.com")
         multi = _make_multi(
             instances={"a.com": _inst("a.com"), "b.com": _inst("b.com")},

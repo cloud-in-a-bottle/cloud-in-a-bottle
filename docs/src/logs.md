@@ -13,7 +13,7 @@ The router writes to two sinks simultaneously via loguru:
 - Written at INFO level and above.
 - Truncated on each process restart, so it always contains only the current invocation's logs.
 - Rotates automatically at 10 MB mid-run; up to 5 rotated files kept (named `compute_space.YYYY-MM-DD_HH-MM-SS_ffffff.log` alongside the active file). Note: rotation-based retention only fires when the 10 MB limit is actually hit — rotated files from old runs are not pruned until the next mid-run rotation.
-- Access via `cb logs` or `cb logs --instance <name>`.
+- Access via `bottle logs` or `bottle logs --instance <name>`.
 
 **Stderr sink** — journald (via systemd)
 
@@ -38,7 +38,7 @@ Container stdout and stderr are written to a per-app file via podman's `k8s-file
 - Archived (not deleted) at the start of each reload. Both logs have the build time appended: `docker.log.20240101_120000`.
 - Up to 5 archived build logs are kept per app; older ones are deleted when the limit is exceeded.
 - Deleted entirely when the app is removed.
-- Access via `cb app logs <name>` (the current runtime log is appended to the build log).
+- Access via `bottle app logs <name>` (the current runtime log is appended to the build log).
 - Runtime logs do not appear in journald, which is used for Cloud in a Bottle status logs
 
 ---
@@ -59,7 +59,7 @@ journalctl -u openhost-juicefs
 
 - Diagnosing startup failures (before the file sink is initialised)
 - Viewing logs across restarts in one stream
-- Checking recent router activity without `cb` access: `systemctl status openhost` shows the last few lines
+- Checking recent router activity without `bottle` access: `systemctl status openhost` shows the last few lines
 
 `journalctl -u openhost` does **not** contain:
 - App container stdout/stderr (now written to `container.log` via k8s-file)

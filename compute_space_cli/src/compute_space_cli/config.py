@@ -7,10 +7,10 @@ from typing import Self
 import attr
 import tomli_w
 
-CONFIG_DIR = Path.home() / ".cb"
+CONFIG_DIR = Path.home() / ".bottle"
 CONFIG_FILE = CONFIG_DIR / "compute_space_cli.toml"
 
-# Read-only fallback location: when ~/.cb doesn't exist yet, config is loaded
+# Read-only fallback location: when ~/.bottle doesn't exist yet, config is loaded
 # from here (the legacy ~/.openhost path) and migrated forward to CONFIG_FILE
 # on the next save.
 LEGACY_CONFIG_DIR = Path.home() / ".openhost"
@@ -155,7 +155,7 @@ class MultiConfig:
             if inst.alias == name:
                 return hostname
         raise InstanceNotFoundError(
-            f"Instance '{name}' not found. Run 'cb instance list' to see configured instances."
+            f"Instance '{name}' not found. Run 'bottle instance list' to see configured instances."
         )
 
     def get_instance(self, name: str) -> Instance:
@@ -165,21 +165,21 @@ class MultiConfig:
     def resolve(self, instance_name: str | None = None) -> Instance:
         """Resolve which instance to use.
 
-        Priority: explicit name > CB_INSTANCE env var > default_instance.
+        Priority: explicit name > BOTTLE_INSTANCE env var > default_instance.
         """
         name = instance_name
         if not name:
-            name = os.environ.get("CB_INSTANCE")
+            name = os.environ.get("BOTTLE_INSTANCE")
         if not name:
             name = self.default_instance
 
         if not name:
             if not self.instances:
-                raise InstanceNotFoundError("No instances configured. Run 'cb instance login' first.")
+                raise InstanceNotFoundError("No instances configured. Run 'bottle instance login' first.")
             raise InstanceNotFoundError(
                 "No default instance set. Use --instance <name>, or set a default with:\n"
-                "  cb instance set-default <name>\n"
-                "Run 'cb instance list' to see configured instances."
+                "  bottle instance set-default <name>\n"
+                "Run 'bottle instance list' to see configured instances."
             )
 
         return self.get_instance(name)

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""End-to-end test for the cb CLI - runs against a real compute space backend.
+"""End-to-end test for the bottle CLI - runs against a real compute space backend.
 
-Assumes `cb login` has already been done (legacy or multi-instance config).
+Assumes `bottle login` has already been done (legacy or multi-instance config).
 Deploys a test app, exercises all commands, then cleans up.
 
 Usage: python e2e.py
@@ -27,12 +27,12 @@ def _default_instance() -> Instance:
     return get_multi_config().resolve()
 
 
-def cb(*args: str, env: dict[str, str] | None = None) -> str:
-    """Run a cb command and return stdout. Raises on non-zero exit."""
+def bottle(*args: str, env: dict[str, str] | None = None) -> str:
+    """Run a bottle command and return stdout. Raises on non-zero exit."""
     run_env = {**os.environ, **(env or {})}
-    result = subprocess.run(["cb", *args], capture_output=True, text=True, timeout=300, env=run_env)
+    result = subprocess.run(["bottle", *args], capture_output=True, text=True, timeout=300, env=run_env)
     if result.returncode != 0:
-        raise AssertionError(f"cb {' '.join(args)} failed (exit {result.returncode}):\n{result.stderr}")
+        raise AssertionError(f"bottle {' '.join(args)} failed (exit {result.returncode}):\n{result.stderr}")
     return result.stdout
 
 
@@ -40,12 +40,12 @@ def test_legacy_compat() -> None:
     """Existing commands work with legacy single-instance config."""
     print("=== legacy compatibility ===")
 
-    print("--- cb status ---")
-    cb("status")
+    print("--- bottle status ---")
+    bottle("status")
     print("  ok: compute space reachable")
 
-    print("--- cb instance list ---")
-    output = cb("instance", "list")
+    print("--- bottle instance list ---")
+    output = bottle("instance", "list")
     assert "default" in output, f"legacy config should show as 'default': {output}"
     print("  ok: legacy config listed as 'default' instance")
 
@@ -55,15 +55,15 @@ def test_instance_management() -> None:
     print("\n=== instance management ===")
     cfg = _default_instance()
 
-    print("--- cb instance add ---")
-    cb("instance", "add", "test-inst", cfg.url, cfg.token)
-    output = cb("instance", "list")
+    print("--- bottle instance add ---")
+    bottle("instance", "add", "test-inst", cfg.url, cfg.token)
+    output = bottle("instance", "list")
     assert "test-inst" in output, f"test-inst not in list: {output}"
     print("  ok: instance added")
 
-    print("--- cb instance set-default ---")
-    cb("instance", "set-default", "test-inst")
-    output = cb("instance", "list")
+    print("--- bottle instance set-default ---")
+    bottle("instance", "set-default", "test-inst")
+    output = bottle("instance", "list")
     for line in output.splitlines():
         if "test-inst" in line:
             assert "default" in line, f"test-inst not marked default: {line}"
@@ -72,18 +72,18 @@ def test_instance_management() -> None:
         raise AssertionError("test-inst not found in list")
     print("  ok: default instance changed")
 
-    print("--- cb --instance test-inst status ---")
-    cb("--instance", "test-inst", "status")
+    print("--- bottle --instance test-inst status ---")
+    bottle("--instance", "test-inst", "status")
     print("  ok: --instance flag works")
 
-    print("--- CB_INSTANCE=test-inst cb status ---")
-    cb("status", env={"CB_INSTANCE": "test-inst"})
-    print("  ok: CB_INSTANCE env var works")
+    print("--- BOTTLE_INSTANCE=test-inst bottle status ---")
+    bottle("status", env={"BOTTLE_INSTANCE": "test-inst"})
+    print("  ok: BOTTLE_INSTANCE env var works")
 
-    print("--- cb instance remove ---")
-    cb("instance", "set-default", "default")
-    cb("instance", "remove", "test-inst")
-    output = cb("instance", "list")
+    print("--- bottle instance remove ---")
+    bottle("instance", "set-default", "default")
+    bottle("instance", "remove", "test-inst")
+    output = bottle("instance", "list")
     assert "test-inst" not in output, f"test-inst still present: {output}"
     print("  ok: instance removed")
 
@@ -98,25 +98,25 @@ def test_app_lifecycle() -> None:
     print(f"app name: {app_name}")
 
     # ── status ──
-    print("--- cb status ---")
-    cb("status")
+    print("--- bottle status ---")
+    bottle("status")
     print("  ok: compute space reachable")
 
     # ── app deploy (--wait) ──
-    print("--- cb app deploy ---")
-    cb("app", "deploy", REPO_URL, "--name", app_name, "--wait")
+    print("--- bottle app deploy ---")
+    bottle("app", "deploy", REPO_URL, "--name", app_name, "--wait")
     print("  ok: app deployed and running")
 
     try:
         # ── app list ──
-        print("--- cb app list ---")
-        output = cb("app", "list")
+        print("--- bottle app list ---")
+        output = bottle("app", "list")
         assert app_name in output, f"app not in list: {output}"
         print("  ok: app appears in list")
 
         # ── app status ──
-        print("--- cb app status ---")
-        output = cb("app", "status", app_name)
+        print("--- bottle app status ---")
+        output = bottle("app", "status", app_name)
         assert "running" in output, f"app not running: {output}"
         print("  ok: app status is running")
 
@@ -133,8 +133,8 @@ def test_app_lifecycle() -> None:
         print("  ok: app / returned 200")
 
         # ── app logs ──
-        print("--- cb app logs ---")
-        output = cb("app", "logs", app_name)
+        print("--- bottle app logs ---")
+        output = bottle("app", "logs", app_name)
         lines = output.rstrip().split("\n")
         if len(lines) > 10:
             print(f"  ... ({len(lines) - 10} lines truncated)")
@@ -142,53 +142,53 @@ def test_app_lifecycle() -> None:
         print("  ok: app logs returned")
 
         # ── app stop ──
-        print("--- cb app stop ---")
-        cb("app", "stop", app_name)
-        output = cb("app", "status", app_name)
+        print("--- bottle app stop ---")
+        bottle("app", "stop", app_name)
+        output = bottle("app", "status", app_name)
         assert "stopped" in output, f"app not stopped: {output}"
         print("  ok: app stopped")
 
         # ── app reload (--wait) ──
-        print("--- cb app reload ---")
-        cb("app", "reload", app_name, "--wait")
-        output = cb("app", "status", app_name)
+        print("--- bottle app reload ---")
+        bottle("app", "reload", app_name, "--wait")
+        output = bottle("app", "status", app_name)
         assert "running" in output, f"app not running after reload: {output}"
         print("  ok: app reloaded and running")
 
         # ── app rename ──
-        print("--- cb app rename ---")
-        cb("app", "rename", app_name, renamed_app)
-        output = cb("app", "list")
+        print("--- bottle app rename ---")
+        bottle("app", "rename", app_name, renamed_app)
+        output = bottle("app", "list")
         assert renamed_app in output, f"renamed app not in list: {output}"
         print(f"  ok: app renamed to {renamed_app}")
         # from here on, cleanup uses renamed_app
         app_name = renamed_app
 
         # ── tokens create ──
-        print("--- cb tokens create ---")
-        output = cb("tokens", "create", "--name", "test-token", "--expiry-hours", "1")
+        print("--- bottle tokens create ---")
+        output = bottle("tokens", "create", "--name", "test-token", "--expiry-hours", "1")
         assert "Token:" in output, f"token not created: {output}"
         print("  ok: token created")
 
         # ── tokens list ──
-        print("--- cb tokens list ---")
-        output = cb("tokens", "list")
+        print("--- bottle tokens list ---")
+        output = bottle("tokens", "list")
         assert "test-token" in output, f"token not in list: {output}"
         m = re.search(r"\[(\d+)\] test-token", output)
         assert m, f"could not extract token id from: {output}"
         token_id = m.group(1)
         print(f"  ok: token appears in list (id={token_id})")
 
-        print("--- cb tokens delete ---")
-        cb("tokens", "delete", token_id)
+        print("--- bottle tokens delete ---")
+        bottle("tokens", "delete", token_id)
         print("  ok: token deleted")
 
     finally:
         # ── app remove (always clean up) ──
-        print("--- cb app remove ---")
+        print("--- bottle app remove ---")
         try:
-            cb("app", "remove", app_name)
-            output = cb("app", "list")
+            bottle("app", "remove", app_name)
+            output = bottle("app", "list")
             assert app_name not in output, "app still in list after remove"
             print("  ok: app removed")
         except Exception as e:
@@ -196,14 +196,14 @@ def test_app_lifecycle() -> None:
 
 
 def main() -> None:
-    if not shutil.which("cb"):
+    if not shutil.which("bottle"):
         print(
-            "Error: 'cb' command not found.\nInstall it with: cd compute_space_cli && uv tool install --editable .",
+            "Error: 'bottle' command not found.\nInstall it with: cd compute_space_cli && uv tool install --editable .",
             file=sys.stderr,
         )
         sys.exit(1)
 
-    print("=== cb CLI e2e test ===\n")
+    print("=== bottle CLI e2e test ===\n")
 
     test_legacy_compat()
     test_instance_management()

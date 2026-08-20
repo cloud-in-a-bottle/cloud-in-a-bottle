@@ -87,7 +87,7 @@ def wait_for_app_removed(url: str, token: str, app_id: str, app_name: str, timeo
         if time.time() > deadline:
             print(
                 f"Timed out waiting for {app_name} to finish removing after {timeout:.0f}s. "
-                "The server may still be working — re-run 'cb app status' to check.",
+                "The server may still be working — re-run 'bottle app status' to check.",
                 file=sys.stderr,
             )
             raise SystemExit(1)

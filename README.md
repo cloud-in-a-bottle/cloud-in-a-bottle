@@ -200,17 +200,17 @@ The user-facing manual lives in `docs/src/` and is served at `https://<zone>/doc
 
 ## Agent skill
 
-An agent skill that gives an AI coding agent context for deploying and debugging apps on Cloud in a Bottle via the `cb` CLI. Install with:
+An agent skill that gives an AI coding agent context for deploying and debugging apps on Cloud in a Bottle via the `bottle` CLI. Install with:
 
 ```bash
 npx skills add cloud-in-a-bottle/cloud-in-a-bottle --skill openhost-context
 ```
 
-The skill works best with the `cb` CLI installed and logged in:
+The skill works best with the `bottle` CLI installed and logged in:
 
 ```bash
-uv tool install "cb @ git+https://github.com/cloud-in-a-bottle/cloud-in-a-bottle.git#subdirectory=compute_space_cli"
-cb instance login
+uv tool install "bottle @ git+https://github.com/cloud-in-a-bottle/cloud-in-a-bottle.git#subdirectory=compute_space_cli"
+bottle instance login
 ```
 
 Once set up, ask your coding agent to package any existing project for Cloud in a Bottle and deploy it directly — no manual manifest editing required.
