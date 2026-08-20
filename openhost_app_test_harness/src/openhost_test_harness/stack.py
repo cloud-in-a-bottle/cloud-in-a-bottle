@@ -43,6 +43,7 @@ from playwright.sync_api import Page
 
 from compute_space.core.auth.permissions_v2 import Grant
 from compute_space.core.manifest import MANIFEST_FILENAMES
+from compute_space.core.manifest import find_manifest_path
 from compute_space.core.manifest import parse_manifest
 from compute_space.tests.local_stack import LocalStack
 from compute_space.tests.local_stack import complete_setup
@@ -62,7 +63,7 @@ def find_manifest_dir(start: Path | None = None) -> Path:
     """
     cur = (start or Path.cwd()).resolve()
     for candidate in (cur, *cur.parents):
-        if any((candidate / name).exists() for name in MANIFEST_FILENAMES):
+        if find_manifest_path(str(candidate)) is not None:
             return candidate
     raise FileNotFoundError(f"No {MANIFEST_FILENAMES[0]} found walking up from {cur}")
 

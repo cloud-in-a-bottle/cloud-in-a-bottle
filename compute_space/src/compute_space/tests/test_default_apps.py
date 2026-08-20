@@ -17,6 +17,7 @@ from compute_space.core import default_apps as da
 from compute_space.core.app_id import new_app_id
 from compute_space.core.domains import Domain
 from compute_space.core.domains import seed_domains
+from compute_space.core.manifest import find_manifest_path
 from compute_space.core.manifest import parse_manifest
 from compute_space.db.schema import schema_path
 
@@ -45,9 +46,7 @@ def _seed_db(db_path: str) -> None:
         conn.close()
 
 
-def _make_app_dir(
-    apps_dir: Path, dir_name: str, *, manifest_name: str, manifest_filename: str = "openhost.toml"
-) -> None:
+def _make_app_dir(apps_dir: Path, dir_name: str, *, manifest_name: str, manifest_filename: str = "ciab.toml") -> None:
     app_dir = apps_dir / dir_name
     app_dir.mkdir(parents=True)
     (app_dir / manifest_filename).write_text(
@@ -106,6 +105,24 @@ def test_vendored_install_accepts_ciab_toml(tmp_path: Path, monkeypatch):
     apps_dir.mkdir()
     _make_app_dir(apps_dir, "ciab_app", manifest_name="ciab-app", manifest_filename="ciab.toml")
     cfg = _make_cfg(tmp_path, apps_dir=apps_dir, default_apps=["ciab_app"])
+    _seed_db(cfg.db_path)
+    _patch_insert_and_deploy(monkeypatch)
+
+    db = sqlite3.connect(cfg.db_path)
+    try:
+        result = da.deploy_default_apps(cfg, db)
+    finally:
+        db.close()
+
+    assert [o.status for o in result] == ["ok"]
+
+
+def test_vendored_install_accepts_legacy_openhost_toml(tmp_path: Path, monkeypatch):
+    """A vendored builtin still installs via the legacy openhost.toml fallback."""
+    apps_dir = tmp_path / "apps"
+    apps_dir.mkdir()
+    _make_app_dir(apps_dir, "legacy_app", manifest_name="legacy-app", manifest_filename="openhost.toml")
+    cfg = _make_cfg(tmp_path, apps_dir=apps_dir, default_apps=["legacy_app"])
     _seed_db(cfg.db_path)
     _patch_insert_and_deploy(monkeypatch)
 
@@ -384,8 +401,12 @@ def test_mixed_local_and_remote_entries(cfg_with_apps, monkeypatch):
     fake_clone_parent = tempfile.mkdtemp(prefix="openhost-clone-")
     fake_clone_dir = os.path.join(fake_clone_parent, "repo")
     shutil.copytree(src_app_dir, fake_clone_dir)
-    # Rename the manifest so it doesn't collide with the vendored file_browser
-    (Path(fake_clone_dir) / "openhost.toml").write_text(
+    # Overwrite the copied manifest in place (whatever it's named) so this
+    # "remote" app deploys under a distinct name and doesn't collide with the
+    # vendored file_browser.
+    manifest_path = find_manifest_path(fake_clone_dir)
+    assert manifest_path is not None
+    Path(manifest_path).write_text(
         '[app]\nname = "from-remote"\nversion = "0.1"\n[runtime.container]\nimage = "Dockerfile"\nport = 8080\n'
     )
     fake_manifest = parse_manifest(fake_clone_dir)
