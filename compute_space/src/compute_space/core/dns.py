@@ -15,11 +15,11 @@ clear_txt() after the cert is issued.
 from __future__ import annotations
 
 import re
-import socket
 import sqlite3
 import subprocess
 import threading
 import time
+from contextlib import closing
 from pathlib import Path
 
 import attr
@@ -30,8 +30,16 @@ from jinja2 import StrictUndefined
 from compute_space.config import Config
 from compute_space.core.containers import CONTAINER_GATEWAY_IP
 from compute_space.core.domains import effective_domains
+from compute_space.core.domains import is_local_name
 from compute_space.core.domains import primary_domain_or_none
 from compute_space.core.logging import logger
+from compute_space.core.mdns import ensure_mdns_for_domains
+from compute_space.core.mdns import get_active_mdns
+from compute_space.core.util import is_bindable
+from compute_space.core.util import is_reachable
+from compute_space.core.util import private_ip
+from compute_space.core.util import private_ip6
+from compute_space.db import get_db
 
 _TEMPLATES_DIR = Path(__file__).parent / "templates"
 # StrictUndefined so a template referencing a variable/attribute we forgot to pass raises instead
@@ -48,22 +56,6 @@ _SERIAL_RE = re.compile(r"^(\s+)(\d+)(\s+;\s*serial\s*)$", re.MULTILINE)
 # Fallback upstream resolvers for the container-facing DNS view's catch-all
 # forward block, used only if the host's own resolvers can't be discovered.
 _FALLBACK_UPSTREAM_DNS = ("8.8.8.8", "1.1.1.1")
-
-
-def _gateway_ip_is_bindable(gateway_ip: str) -> bool:
-    """True if ``gateway_ip`` is a local address CoreDNS can bind.
-
-    The ``openhost0`` dummy interface (10.200.0.1) only exists on
-    ansible-provisioned hosts; in dev/CI it won't, and binding it would crash
-    CoreDNS.  Probe a UDP bind (CoreDNS serves DNS on UDP) to decide.
-    """
-    try:
-        probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        probe.bind((gateway_ip, 0))
-        probe.close()
-        return True
-    except OSError:
-        return False
 
 
 def _host_upstream_resolvers() -> list[str]:
@@ -89,21 +81,43 @@ def _host_upstream_resolvers() -> list[str]:
     return resolvers or list(_FALLBACK_UPSTREAM_DNS)
 
 
-def _coredns_bind_ip(public_ip: str) -> str:
-    """Return the local address CoreDNS should bind for authoritative DNS.
+def _coredns_bind_ips(private_ip: str | None, private_ip6: str | None, public_ip: str) -> tuple[str, ...]:
+    """Every address CoreDNS binds for authoritative DNS.
 
-    Binding wildcard :53 conflicts with Podman's aardvark-dns on 10.89.0.1:53.
-    Binding the configured public IP works on hosts where that IP is assigned to
-    an interface (for example Hetzner), but fails on AWS/GCP where public IPs are
-    NATed to a private VM address. The default-route source address is the local
-    interface address that receives that NATed traffic.
+    A box can receive queries on more than one of its addresses: the private one carries LAN queries
+    and (behind NAT) forwarded public traffic, while a directly-assigned public address carries the
+    ACME DNS-01 and delegated-NS traffic the private one never sees.  Binding both means neither is
+    a dead end; a multi-homed box no longer answers on only one of its NICs.
+
+    Every bind target must be an address on a local interface, so each candidate is probed and the
+    unbindable ones dropped — a NATed box's configured ``public_ip`` lives on the router, not here.
+    (Binding wildcard :53 conflicts with Podman's aardvark-dns on 10.89.0.1:53, so CoreDNS needs
+    explicit bind addresses rather than a wildcard.)
     """
-    try:
-        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
-            sock.connect(("8.8.8.8", 80))
-            return str(sock.getsockname()[0])
-    except OSError:
-        return public_ip
+    candidates = tuple(ip for ip in (private_ip, public_ip, private_ip6) if ip)
+    bindable = tuple(ip for ip in dict.fromkeys(candidates) if is_bindable(ip))
+    if not bindable:
+        raise RuntimeError(
+            f"CoreDNS has no local address to bind: none of {', '.join(candidates)} is on an interface "
+            "of this host.  Check the configured public_ip."
+        )
+    return bindable
+
+
+# The http edge (Caddy) serves `.local` on plain http; an address it doesn't answer on is one we
+# must not publish.
+_EDGE_HTTP_PORT = 80
+
+
+def publishable_private_ip6() -> str | None:
+    """The box's IPv6 address, but only once the http edge actually answers on it."""
+    ip6 = private_ip6()
+    if ip6 is None:
+        return None
+    if not is_reachable(ip6, _EDGE_HTTP_PORT):
+        logger.info(f"IPv6 {ip6} found but nothing answers on :{_EDGE_HTTP_PORT}; not publishing AAAA")
+        return None
+    return ip6
 
 
 @attr.s(auto_attribs=True, frozen=True)
@@ -120,12 +134,12 @@ class DnsZone:
         return self.zonefile_path.with_name(self.zonefile_path.name + ".container")
 
 
-def public_dns_zones(config: Config, db: sqlite3.Connection) -> tuple[DnsZone, ...]:
-    """The zones CoreDNS is authoritative for: every non-mDNS domain the instance answers on.
+def dns_zones(config: Config, db: sqlite3.Connection) -> tuple[DnsZone, ...]:
+    """Every zone CoreDNS is authoritative for — every domain the instance answers on.
 
-    mDNS ``.local`` domains are served by the wildcard mDNS responder, never CoreDNS/ACME, so
-    they are excluded.  The primary keeps the legacy ``zonefile`` path; additional public domains
-    get a per-domain file under ``zones/`` (see ``Config.coredns_zonefile_path_for``)."""
+    CoreDNS serves public and ``.local`` domains: public names to the public IP and ``.local``
+    names to the box's private IP. ``.local`` served to allow Windows user to use multi-label
+    domains."""
     primary = primary_domain_or_none(db)
     primary_no_port = primary.name_no_port if primary else None
     return tuple(
@@ -134,8 +148,28 @@ def public_dns_zones(config: Config, db: sqlite3.Connection) -> tuple[DnsZone, .
             zonefile_path=config.coredns_zonefile_path_for(d.name_no_port, d.name_no_port == primary_no_port),
         )
         for d in effective_domains(db)
-        if not d.mdns
     )
+
+
+def _publishable_zones(zones: tuple[DnsZone, ...], private_ip: str | None) -> tuple[DnsZone, ...]:
+    """``.local`` zones only mean anything at the private IP, so with none discovered they are dropped
+    rather than published pointing at the public IP (which sends LAN clients off-box)."""
+    if private_ip is not None:
+        return zones
+    dropped = tuple(z.domain for z in zones if is_local_name(z.domain))
+    if dropped:
+        logger.warning(f"No private IP found; CoreDNS will not serve {', '.join(dropped)}")
+    return tuple(z for z in zones if not is_local_name(z.domain))
+
+
+def _existing_txt_lines(zonefile_path: Path) -> list[str]:
+    """TXT records live only in the zone file, so a regeneration must carry them over — an in-flight
+    DNS-01 ``_acme-challenge`` would otherwise vanish mid-validation (``clear_txt`` removes them)."""
+    try:
+        with open(zonefile_path) as f:
+            return [line for line in f.read().splitlines() if "IN TXT" in line]
+    except FileNotFoundError:
+        return []
 
 
 def _write_coredns_config(
@@ -143,19 +177,22 @@ def _write_coredns_config(
     public_ip: str,
     corefile_path: Path,
     container_gateway_ip: str | None,
+    private_ip: str | None = None,
+    private_ip6: str | None = None,
 ) -> None:
     """Render the Corefile + one public (and, when applicable, container) zone file per zone.
 
-    Returns nothing; the caller (start or restart) then spawns/re-spawns CoreDNS against the
-    freshly written Corefile.  CoreDNS auto-reloads zone *file* edits, but picking up a new zone
-    server block needs a restart.
+    ``.local`` zones (and their ``*`` wildcard) resolve to ``private_ip``; public zones to ``public_ip``.
+    The caller then spawns/re-spawns CoreDNS against the fresh Corefile — a new zone server block
+    needs a restart; zone *file* edits auto-reload.
     """
+    zones = _publishable_zones(zones, private_ip)
     bind_serial = int(time.time())
 
     # Only emit the container-facing view when the gateway IP is actually
     # bindable (the openhost0 dummy interface exists in production but not in
     # dev/CI), otherwise CoreDNS would fail to start.
-    if container_gateway_ip and not _gateway_ip_is_bindable(container_gateway_ip):
+    if container_gateway_ip and not is_bindable(container_gateway_ip):
         logger.info("Container gateway %s not bindable; skipping container-facing DNS view", container_gateway_ip)
         container_gateway_ip = None
 
@@ -165,7 +202,8 @@ def _write_coredns_config(
     # container-facing views + catch-all forward when the gateway is bindable).
     corefile = _jinja_env.get_template("Corefile").render(
         zones=zones,
-        bind_ip=_coredns_bind_ip(public_ip),
+        # The v6 address is in here too, so a v6-only client can use us as a conditional forwarder.
+        bind_ips=_coredns_bind_ips(private_ip, private_ip6, public_ip),
         container_gateway_ip=container_gateway_ip,
         upstream_dns=" ".join(_host_upstream_resolvers()),
     )
@@ -174,15 +212,21 @@ def _write_coredns_config(
 
     for zone in zones:
         # Write zone file. this is the actual DNS data. CoreDNS watches for changes and auto-reloads.
+        # `.local` zones point at the private IP so LAN clients reach the box directly, not the public IP.
+        is_local = is_local_name(zone.domain)
+        record_ip = private_ip if (is_local and private_ip) else public_ip
         zone.zonefile_path.parent.mkdir(parents=True, exist_ok=True)
+        txt_lines = _existing_txt_lines(zone.zonefile_path)
         content = _jinja_env.get_template("zonefile").render(
             zone_domain=zone.domain,
-            public_ip=public_ip,
+            record_ip=record_ip,
+            # Only `.local` gets AAAA: public zones resolve to `public_ip`, which has no v6 counterpart.
+            record_ip6=private_ip6 if is_local else None,
             # Current timestamp as initial SOA serial: simple, and always increasing across runs.
             serial=bind_serial,
         )
         with open(zone.zonefile_path, "w") as f:
-            f.write(content)
+            f.write(content + "".join(f"{line}\n" for line in txt_lines))
 
         if container_gateway_ip:
             container_content = _jinja_env.get_template("zonefile_container").render(
@@ -244,16 +288,19 @@ def start_coredns(
     corefile_path: Path,
     container_gateway_ip: str | None = CONTAINER_GATEWAY_IP,
     coredns_bin: str = "coredns",
+    private_ip: str | None = None,
+    private_ip6: str | None = None,
 ) -> CoreDnsProcess:
-    """Write CoreDNS config + zone files for every public domain, start CoreDNS, return the handle.
+    """Write CoreDNS config + zone files for every domain, start CoreDNS, return the handle.
 
-    When ``container_gateway_ip`` is set (the default, and the dummy ``openhost0`` gateway in
+    ``.local`` zones resolve to ``private_ip`` (see ``_write_coredns_config``).  When
+    ``container_gateway_ip`` is set (the default, and the dummy ``openhost0`` gateway in
     production), a second server view per zone is bound there that resolves the zone wildcard to
     the gateway so pasta app containers can reach sibling apps' public HTTPS URLs through Caddy
     (NAT hairpin), with a catch-all forward for everything else.  Pass ``None`` to disable (e.g.
     in environments without the gateway interface).
     """
-    _write_coredns_config(zones, public_ip, corefile_path, container_gateway_ip)
+    _write_coredns_config(zones, public_ip, corefile_path, container_gateway_ip, private_ip, private_ip6)
     logger.info(f"Starting CoreDNS for {', '.join(z.domain for z in zones)}")
     return CoreDnsProcess(
         proc=_spawn_coredns(corefile_path, coredns_bin),
@@ -277,7 +324,9 @@ def get_active_coredns() -> CoreDnsProcess | None:
     return _active_coredns
 
 
-def reload_coredns_for_domains(config: Config, db: sqlite3.Connection) -> bool:
+def reload_coredns_for_domains(
+    config: Config, db: sqlite3.Connection, private_ip: str | None = None, private_ip6: str | None = None
+) -> bool:
     """Regenerate the Corefile + zone files from the config's current public-domain set and restart
     CoreDNS so it becomes authoritative for the new set (a new zone needs a restart; the ``file``
     plugin's ``reload`` only picks up edits to an *already-served* zone file).  No-op (returns
@@ -285,9 +334,71 @@ def reload_coredns_for_domains(config: Config, db: sqlite3.Connection) -> bool:
     coredns = get_active_coredns()
     if coredns is None or not config.public_ip:
         return False
-    _write_coredns_config(public_dns_zones(config, db), config.public_ip, coredns.corefile_path, CONTAINER_GATEWAY_IP)
+    _write_coredns_config(
+        dns_zones(config, db),
+        config.public_ip,
+        coredns.corefile_path,
+        CONTAINER_GATEWAY_IP,
+        private_ip,
+        private_ip6,
+    )
     coredns.restart()
     return True
+
+
+# Serializes republishing: /api/domains (an anyio worker thread) and the private-IP watcher both call
+# reconcile_dns, and the responder registry is a plain global.
+_reconcile_lock = threading.Lock()
+
+
+def private_addresses() -> tuple[str | None, str | None]:
+    """The IPv4 and (reachability-gated) IPv6 addresses we publish for ``.local`` names."""
+    return private_ip(), publishable_private_ip6()
+
+
+def reconcile_dns(
+    config: Config, db: sqlite3.Connection, private_ip: str | None = None, private_ip6: str | None = None
+) -> None:
+    """Republish every name the instance answers on: regenerate the CoreDNS zones, then reconcile the
+    mDNS responder — one address lookup shared by both.  Blocking (CoreDNS restart, socket bind)."""
+    if private_ip is None:
+        private_ip, private_ip6 = private_addresses()
+    with _reconcile_lock:
+        reload_coredns_for_domains(config, db, private_ip=private_ip, private_ip6=private_ip6)
+        domains = effective_domains(db)
+        # Stay out of the mDNS code entirely unless there's a `.local` name — or a responder still
+        # running, which the empty call is what tears down when the last one is deleted.
+        if any(d.is_local for d in domains) or get_active_mdns() is not None:
+            ensure_mdns_for_domains(domains, private_ip=private_ip, private_ip6=private_ip6)
+
+
+_PRIVATE_IP_POLL_SECONDS = 60
+
+
+def start_private_ip_watcher(
+    config: Config, published: tuple[str | None, str | None], poll_seconds: int = _PRIVATE_IP_POLL_SECONDS
+) -> threading.Thread:
+    """Republish whenever the addresses we publish change — a DHCP renewal, wifi→ethernet, a NIC
+    change, or IPv6 becoming reachable (or going away)."""
+
+    def _watch() -> None:
+        current = published
+        while True:
+            time.sleep(poll_seconds)
+            try:
+                latest = private_addresses()
+                if latest[0] is None or latest == current:
+                    continue
+                logger.info(f"Private addresses moved {current} -> {latest}; republishing DNS")
+                current = latest
+                with closing(get_db()) as db:
+                    reconcile_dns(config, db, private_ip=latest[0], private_ip6=latest[1])
+            except Exception:  # noqa: BLE001 — a transient failure must not kill the watcher
+                logger.opt(exception=True).warning("Private IP watcher: republish failed; retrying next poll")
+
+    thread = threading.Thread(target=_watch, name="private-ip-watcher", daemon=True)
+    thread.start()
+    return thread
 
 
 def _bump_serial(content: str) -> str:

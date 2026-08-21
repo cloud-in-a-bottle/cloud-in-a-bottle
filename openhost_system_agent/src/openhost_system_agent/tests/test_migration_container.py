@@ -209,10 +209,9 @@ class TestApplyUpdateWalk:
         before = _host_sh(c, f"{_PIXI} --version")
         assert "0.69.0" in before.stdout, f"unexpected starting pixi: {before.stdout!r}"
 
-        # Run the real entrypoint as root (no /usr/local/bin symlink in the
-        # test image, so resolve the console script from the pixi env).
-        which = _host_sh(c, f"cd {_REPO} && {_PIXI} run -e default which openhost_system_agent")
-        agent = which.stdout.strip().splitlines()[-1]
+        # Run the real entrypoint as root, resolved from the env like _ENV_PYTHON: the
+        # pre-migration pixi refuses `pixi run` under the manifest's requires-pixi pin.
+        agent = f"{_REPO}/.pixi/envs/default/bin/openhost_system_agent"
         # --wait: the walk runs detached as openhost-apply.service, so without it
         # this returns before any work has happened. With it we still get an exit
         # code for the walk itself.

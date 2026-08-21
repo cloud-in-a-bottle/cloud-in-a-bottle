@@ -1,0 +1,12 @@
+---
+# Consolidate derived variables that many tasks share. 
+
+# HTTP-only localhost mode (no TLS / CoreDNS / Caddy): normalizes the raw `-e local_http_only=...`
+# var once instead of repeating `| default(false) | bool` at every call site.
+http_only: "{{ local_http_only | default(false) | bool }}"
+
+# The domain with any `:port` stripped — same normalization as the router's `is_local_name`.
+domain_host: "{{ (domain | default('') | lower).split(':')[0] }}"
+
+# Turn on mDNS mode for .local
+mdns_mode: "{{ domain_host == 'local' or domain_host.endswith('.local') }}"

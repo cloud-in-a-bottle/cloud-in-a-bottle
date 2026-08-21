@@ -1,8 +1,9 @@
-{% set http_only = (local_http_only | default(false)) | bool %}
 {# first_boot.toml: the fresh instance's primary domain + claim token, and (for managed spaces) the
-   shared Imbue credential. These values seed the DB once, then are ignored after. #}
+   shared Imbue credential. These values seed the DB once, then are ignored after.
+   A `.local` domain is downgraded to plain http by the router itself (is_local_name), so only
+   HTTP-only localhost mode has to say so here. #}
 domain = "{{ domain }}"
-tls = {{ 'false' if http_only else 'true' }}
+tls = {{ 'false' if (http_only | bool) else 'true' }}
 claim_token = "{{ effective_claim_token }}"
 {% if imbue_connect_base_url is defined and imbue_connect_base_url %}
 imbue_connect_base_url = "{{ imbue_connect_base_url }}"

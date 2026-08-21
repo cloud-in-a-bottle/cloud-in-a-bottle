@@ -66,5 +66,5 @@
     mode: "0600"
   when:
     - not (host_has_cert_credential | bool) or (overwrite_existing | default(false) | bool)
-    - not (local_http_only | default(false) | bool)
+    - not (http_only | bool)
     - (cert_provider | default('')) != 'cert_api'

@@ -149,7 +149,6 @@ INSERT OR IGNORE INTO archive_backend (id) VALUES (1);
 CREATE TABLE IF NOT EXISTS domains (
     name          TEXT PRIMARY KEY,                 -- lowercased hostname, no port
     tls           INTEGER NOT NULL DEFAULT 0,       -- served over https?
-    mdns          INTEGER NOT NULL DEFAULT 0,       -- published via the wildcard mDNS responder?
     is_primary    INTEGER NOT NULL DEFAULT 0,       -- the canonical domain (exactly one row)
     cert_status   TEXT NOT NULL DEFAULT 'none' CHECK(cert_status IN ('none', 'acquiring', 'active', 'error')),
     error_message TEXT,

@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+import re
 import subprocess
+import tomllib
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
 from openhost_system_agent import pixi
+
+_REPO_ROOT = Path(__file__).resolve().parents[4]
 
 
 def _ok() -> subprocess.CompletedProcess[str]:
@@ -44,3 +49,25 @@ class TestEnsurePixiVersion:
         ):
             with pytest.raises(RuntimeError, match="self-update"):
                 pixi.ensure_pixi_version()
+
+
+def test_pinned_pixi_version_is_consistent_everywhere() -> None:
+    """Every place that installs or requires pixi must name ``PIXI_VERSION``: a lock resolved by one
+    version is rejected by another under ``--locked``, so drift breaks CI or deploy far from its cause."""
+    pinned = pixi.PIXI_VERSION
+    found: dict[str, set[str]] = {}
+
+    # `curl | PIXI_VERSION=vX bash` (host provisioning) and setup-pixi's `pixi-version: vX` (CI).
+    for relative in ("ansible/tasks/pixi.yml", ".github/workflows/ci.yml", ".github/workflows/e2e.yml"):
+        text = (_REPO_ROOT / relative).read_text()
+        found[relative] = set(re.findall(r"(?:PIXI_VERSION=|pixi-version:\s*)v([\d.]+)", text))
+
+    # The manifest guard makes any other pixi fail loudly instead of silently resolving a bad lock.
+    manifest = tomllib.loads((_REPO_ROOT / "pyproject.toml").read_text())
+    requires = manifest["tool"]["pixi"]["workspace"]["requires-pixi"]
+    found["pyproject.toml"] = {requires.lstrip("=")}
+
+    assert all(versions for versions in found.values()), f"no pixi version found in {found}"
+    assert {v for versions in found.values() for v in versions} == {pinned}, (
+        f"pixi version drifted from PIXI_VERSION={pinned}: {found}"
+    )

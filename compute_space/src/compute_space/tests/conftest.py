@@ -17,6 +17,7 @@ from compute_space import OPENHOST_PROJECT_DIR
 from compute_space.config import Config
 from compute_space.config import DefaultConfig
 from compute_space.config import set_active_config
+from compute_space.core import mdns
 from compute_space.core.domains import Domain
 from compute_space.core.domains import primary_domain
 from compute_space.core.domains import seed_domains
@@ -55,6 +56,48 @@ def _resolve_test_zone_to_localhost() -> Iterator[None]:
         yield
     finally:
         socket.getaddrinfo = real_getaddrinfo
+
+
+class FakeMdnsSocket:
+    """Stands in for the multicast socket, capturing sendto()."""
+
+    def __init__(self) -> None:
+        self.sent: list[tuple[bytes, tuple[object, ...]]] = []
+        self.closed = False
+
+    def sendto(self, data: bytes, addr: tuple[object, ...]) -> int:
+        self.sent.append((data, addr))
+        return len(data)
+
+    def close(self) -> None:
+        self.closed = True
+
+
+def fake_mdns_responder(bases: tuple[str, ...], private_ip: str, private_ip6: str | None = None) -> mdns.MdnsResponder:
+    """An unstarted responder over a fake socket — no real socket, no thread, no LAN traffic."""
+    transport = mdns.Transport(sock=FakeMdnsSocket(), group=(mdns._MDNS_GROUP, mdns._MDNS_PORT))  # type: ignore[arg-type]
+    return mdns.MdnsResponder(
+        transports=(transport,),
+        private_ip=private_ip,
+        private_ip_prefix=None,
+        private_ip6=private_ip6,
+        private_ip6_prefix=64,
+        bases=bases,
+    )
+
+
+@pytest.fixture(autouse=True)
+def _no_real_mdns(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """Never bind UDP :5353 or multicast onto the developer's LAN.
+
+    Adding a `.local` domain reconciles the responder for real, which would otherwise join
+    224.0.0.251 and leave a live thread answering LAN queries for the rest of the session.
+    """
+    monkeypatch.setattr(mdns, "start_mdns", fake_mdns_responder)
+    yield
+    if (responder := mdns.get_active_mdns()) is not None:
+        responder.stop()
+        mdns.set_active_mdns(None)
 
 
 def open_db(config: Config) -> sqlite3.Connection:

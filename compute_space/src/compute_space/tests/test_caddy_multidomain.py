@@ -22,7 +22,7 @@ from compute_space.core.domains import Domain
 
 PUBLIC = Domain("host.example.com", tls=True)
 PUBLIC2 = Domain("host.example.org", tls=True)
-LOCAL = Domain("myhost.local", tls=False, mdns=True)
+LOCAL = Domain("myhost.local", tls=False)
 CERT = Path("/data/cert.pem")
 KEY = Path("/data/key.pem")
 

@@ -24,7 +24,7 @@ def _db(domains: tuple[Domain, ...] = ()) -> sqlite3.Connection:
     with open(schema_path()) as f:
         conn.executescript(f.read())
     if domains:
-        seed_domains(conn, domains[0], [DomainRecord(d.name, d.tls, d.mdns) for d in domains[1:]])
+        seed_domains(conn, domains[0], [DomainRecord(d.name, d.tls) for d in domains[1:]])
     return conn
 
 
@@ -60,7 +60,7 @@ def _multi() -> sqlite3.Connection:
     return _db(
         (
             Domain(name="host.example.com", tls=True),
-            Domain(name="myhost.local", tls=False, mdns=True),
+            Domain(name="myhost.local", tls=False),
         )
     )
 
@@ -78,7 +78,7 @@ def test_match_domain_app_subdomain() -> None:
 def test_match_domain_local_subdomain_is_http_mdns() -> None:
     matched = Domain.match(_multi(), "myapp.myhost.local")
     assert matched is not None and matched.name == "myhost.local"
-    assert matched.tls is False and matched.mdns is True and matched.scheme == "http"
+    assert matched.tls is False and matched.is_local is True and matched.scheme == "http"
 
 
 def test_match_domain_ignores_port() -> None:

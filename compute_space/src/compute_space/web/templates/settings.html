@@ -82,19 +82,14 @@
 </table>
 
 <h2 class="section-title">Domains</h2>
-<p class="hint">Hostnames this instance answers on. The primary is set at provisioning. Add a secondary
-  <strong>public</strong> domain (its DNS must be delegated to this instance — it then acquires a TLS
-  certificate automatically) or a local <code>.local</code> name served over plain HTTP. Removing a
-  domain takes effect immediately; the primary can't be removed.</p>
+<p class="hint">Hostnames this instance answers on. The primary is set at provisioning. The name decides
+  how it's served: a <code>.local</code> name is published on the LAN over mDNS and plain HTTP, any other
+  name is a <strong>public</strong> domain (its DNS must be delegated to this instance — it then acquires
+  a TLS certificate automatically). Removing a domain takes effect immediately; the primary can't be
+  removed.</p>
 
 <div class="control-row">
-  <label>Domain <input type="text" id="domain-name" placeholder="host.example.com" style="width: 20em;"></label>
-  <label>Type
-    <select id="domain-type">
-      <option value="public">Public (HTTPS)</option>
-      <option value="mdns">Local mDNS (.local, HTTP)</option>
-    </select>
-  </label>
+  <label>Domain <input type="text" id="domain-name" placeholder="host.example.com or myhost.local" style="width: 24em;"></label>
   <button class="btn btn-primary" id="add-domain-btn" onclick="addDomain()" disabled>Add domain</button>
 </div>
 <p id="domain-msg" style="display:none;"></p>

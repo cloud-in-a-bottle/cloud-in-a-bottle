@@ -24,15 +24,20 @@ from compute_space.core.caddy import set_active_caddy
 from compute_space.core.caddy import start_caddy
 from compute_space.core.caddy import unix_admin_address
 from compute_space.core.dns import CoreDnsProcess
-from compute_space.core.dns import public_dns_zones
+from compute_space.core.dns import dns_zones
+from compute_space.core.dns import private_addresses
+from compute_space.core.dns import reconcile_dns
 from compute_space.core.dns import set_active_coredns
 from compute_space.core.dns import start_coredns
+from compute_space.core.dns import start_private_ip_watcher
 from compute_space.core.domains import Domain
 from compute_space.core.domains import effective_domains
 from compute_space.core.first_boot import owner_exists
 from compute_space.core.first_boot import seed_first_boot
 from compute_space.core.logging import logger
 from compute_space.core.logging import setup_file_logging
+from compute_space.core.mdns import ensure_mdns_for_domains
+from compute_space.core.mdns import get_active_mdns
 from compute_space.core.pinned_binary import get_pinned_binary
 from compute_space.core.pinned_binary import install_pinned_binary
 from compute_space.core.system_agent.client import system_agent_stop_updater_sync
@@ -150,22 +155,33 @@ def main() -> None:
     # the primary + cert/zone paths are read live from it.
     with closing(get_db()) as db:
         domains = effective_domains(db)  # primary first
-        dns_zones = public_dns_zones(config, db)
+        zones = dns_zones(config, db)
         _require_configured_domain(domains)  # fail loud at boot, not late in the first request
 
+        # Shared by the CoreDNS `.local` zones and the mDNS responder.  IPv6 is gated on the http
+        # edge answering, which it can't be doing yet — the post-Caddy reconcile below picks it up.
+        private_ip, private_ip6 = private_addresses()
         if config.coredns_enabled:
             if not config.public_ip:
                 raise RuntimeError("Public IP must be set in config to use CoreDNS")
-            # Authoritative for every public (non-mDNS) domain the instance answers on, so a
-            # secondary domain delegated to this box resolves too — not just the primary.
+            # Authoritative for every domain the instance answers on — public zones at the public IP,
+            # `.local` zones at the private IP — so delegated/conditional-forwarder clients resolve too.
             coredns = start_coredns(
-                dns_zones,
+                zones,
                 config.public_ip,
                 config.coredns_corefile_path,
                 coredns_bin=_ensure_coredns_binary(config),
+                private_ip=private_ip,
+                private_ip6=private_ip6,
             )
             # Register so /api/domains can regenerate zones + restart CoreDNS when a domain is added.
             set_active_coredns(coredns)
+
+        # Start the wildcard mDNS responder if any `.local` domain is configured (zero-config LAN
+        # discovery alongside CoreDNS); reconciled here and by /api/domains, so it toggles at runtime.
+        # Guarded so a public-domain-only instance never enters the mDNS code at all.
+        if any(d.is_local for d in domains):
+            ensure_mdns_for_domains(domains, private_ip=private_ip, private_ip6=private_ip6)
 
         if domains[0].tls:  # primary is a TLS domain
             _ensure_tls_cert(config, db)
@@ -195,6 +211,17 @@ def main() -> None:
             raise RuntimeError(
                 "A TLS domain is configured but start_caddy is False. Caddy is required for TLS termination."
             )
+
+        # The edge is up now, so the IPv6 reachability probe can finally succeed.  Re-read before
+        # arming the watcher, or its first poll reads the pre-Caddy snapshot as a move and restarts.
+        published = private_addresses()
+        if published != (private_ip, private_ip6):
+            # Republish: CoreDNS binds the v6 address for every zone (public and `.local` alike), and
+            # `.local` zones additionally get an AAAA record, so a late-reachable IPv6 address
+            # matters even on a public-only instance, not just one with a `.local` domain.
+            reconcile_dns(config, db, private_ip=published[0], private_ip6=published[1])
+        # The addresses are a snapshot: republish if they later move (DHCP renewal, v6 coming or going).
+        start_private_ip_watcher(config, published=published)
 
     # Finalize the progress log only now that we're actually serving, so the
     # /updating page's "back online" doesn't fire before CoreDNS/cert/Caddy are up.
@@ -233,6 +260,8 @@ def main() -> None:
         setup_completed = asyncio.run(_serve(create_setup_app(config), hypercorn_config))
         if not setup_completed:
             logger.info("Setup interrupted by signal; exiting")
+            if (mdns := get_active_mdns()) is not None:
+                mdns.stop()
             _terminate_children(_all_children())
             time.sleep(0.1)
             os._exit(0)
@@ -243,6 +272,8 @@ def main() -> None:
     restart_requested = asyncio.run(_serve(app, hypercorn_config))
     logger.info(f"hypercorn serve returned, restart_requested={restart_requested}")
 
+    if (mdns := get_active_mdns()) is not None:
+        mdns.stop()
     _terminate_children(_all_children())
 
     if restart_requested:

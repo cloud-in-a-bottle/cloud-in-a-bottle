@@ -41,20 +41,18 @@ def test_records_round_trip_through_db(tmp_path: Path) -> None:
     cfg = _cfg(tmp_path)
     with closing(open_db(cfg)) as db:
         assert load_records(db) == ()
-        upsert_record(db, DomainRecord("myhost.local", tls=False, mdns=True, cert_status=DomainCertStatus.ACTIVE))
-        upsert_record(
-            db, DomainRecord("host.example.org", tls=True, mdns=False, cert_status=DomainCertStatus.ACQUIRING)
-        )
+        upsert_record(db, DomainRecord("myhost.local", tls=False, cert_status=DomainCertStatus.ACTIVE))
+        upsert_record(db, DomainRecord("host.example.org", tls=True, cert_status=DomainCertStatus.ACQUIRING))
         by_name = {r.name: r for r in load_records(db)}
     assert set(by_name) == {"myhost.local", "host.example.org"}
-    assert by_name["myhost.local"].mdns is True and by_name["myhost.local"].tls is False
+    assert by_name["myhost.local"].to_domain().is_local is True and by_name["myhost.local"].tls is False
     assert by_name["host.example.org"].cert_status == DomainCertStatus.ACQUIRING
 
 
 def test_upsert_replaces_same_name(tmp_path: Path) -> None:
     cfg = _cfg(tmp_path)
     with closing(open_db(cfg)) as db:
-        upsert_record(db, DomainRecord("host.example.org", tls=True, mdns=False))
+        upsert_record(db, DomainRecord("host.example.org", tls=True))
         set_record_status(db, "host.example.org", DomainCertStatus.ACTIVE)
         recs = load_records(db)
     assert len(recs) == 1 and recs[0].cert_status == DomainCertStatus.ACTIVE
@@ -63,7 +61,7 @@ def test_upsert_replaces_same_name(tmp_path: Path) -> None:
 def test_remove_record(tmp_path: Path) -> None:
     cfg = _cfg(tmp_path)
     with closing(open_db(cfg)) as db:
-        upsert_record(db, DomainRecord("host.example.org", tls=True, mdns=False))
+        upsert_record(db, DomainRecord("host.example.org", tls=True))
         assert remove_record(db, "host.example.org") is True
         assert remove_record(db, "host.example.org") is False
         assert load_records(db) == ()
@@ -72,7 +70,7 @@ def test_remove_record(tmp_path: Path) -> None:
 def test_get_record_is_case_insensitive(tmp_path: Path) -> None:
     cfg = _cfg(tmp_path)
     with closing(open_db(cfg)) as db:
-        upsert_record(db, DomainRecord("host.example.org", tls=True, mdns=False))
+        upsert_record(db, DomainRecord("host.example.org", tls=True))
         assert get_record(db, "HOST.EXAMPLE.ORG") is not None
         assert get_record(db, "missing.example.org") is None
 
@@ -84,7 +82,7 @@ def test_effective_domains_primary_first(tmp_path: Path) -> None:
     cfg = _cfg(tmp_path)
     with closing(open_db(cfg)) as db:
         seed_domains(db, PRIMARY, [])  # seeds host.example.com as primary
-        upsert_record(db, DomainRecord("myhost.local", tls=False, mdns=True))
+        upsert_record(db, DomainRecord("myhost.local", tls=False))
         eff = effective_domains(db)
     assert [d.name for d in eff] == ["host.example.com", "myhost.local"]  # primary first
 
@@ -93,10 +91,10 @@ def test_primary_domain_and_matching(tmp_path: Path) -> None:
     cfg = _cfg(tmp_path)
     with closing(open_db(cfg)) as db:
         seed_domains(db, PRIMARY, [])
-        upsert_record(db, DomainRecord("myhost.local", tls=False, mdns=True))
+        upsert_record(db, DomainRecord("myhost.local", tls=False))
         # the .local domain is routable via the DB-backed resolver
         matched = Domain.match(db, "app.myhost.local")
-        assert matched is not None and matched.mdns is True
+        assert matched is not None and matched.is_local is True
         # the primary is read live from the DB
         assert primary_domain(db).name == "host.example.com"
 
@@ -120,7 +118,7 @@ def test_seed_populates_primary_once(tmp_path: Path) -> None:
         recs = load_records(db)
         assert len(recs) == 1 and recs[0].name == "host.example.com" and recs[0].is_primary is True
         # idempotent: a second call must not duplicate or overwrite
-        upsert_record(db, DomainRecord("myhost.local", tls=False, mdns=True))
+        upsert_record(db, DomainRecord("myhost.local", tls=False))
         seed_domains(db, PRIMARY, [])
         assert {r.name for r in load_records(db)} == {"host.example.com", "myhost.local"}
 
@@ -133,7 +131,7 @@ def test_ensure_cert_for_noop_on_mdns(tmp_path: Path, monkeypatch) -> None:  # t
     monkeypatch.setattr(domain_certs, "acquire_cert_for_domain", lambda *a, **k: called.append(a))
     cfg = _cfg(tmp_path)
     with closing(open_db(cfg)) as db:
-        domain_certs.ensure_cert_for(cfg, Domain("myhost.local", tls=False, mdns=True), db)
+        domain_certs.ensure_cert_for(cfg, Domain("myhost.local", tls=False), db)
     assert called == []  # mDNS never touches ACME
 
 

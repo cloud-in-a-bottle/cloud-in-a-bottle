@@ -22,6 +22,14 @@ repos:
         language: system
         pass_filenames: false
         types: [python]
+      # The pin lives in pyproject.toml's `requires-pixi`, which makes a wrong local pixi fail here
+      # rather than silently resolve a lock that CI/deploy's pinned pixi rejects under `--locked`.
+      - id: pixi-lock
+        name: "pixi lock (pinned)"
+        entry: pixi lock
+        language: system
+        files: ^(pyproject\.toml|pixi\.lock)$
+        pass_filenames: false
   - repo: https://github.com/gitleaks/gitleaks
     rev: v8.24.2
     hooks:

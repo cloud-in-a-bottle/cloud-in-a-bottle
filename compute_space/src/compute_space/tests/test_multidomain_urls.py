@@ -16,7 +16,7 @@ from compute_space.web.auth.cookies import clear_session_cookie
 from compute_space.web.routes.pages.login import _validated_next
 
 PUBLIC = Domain("host.example.com", tls=True)
-LOCAL = Domain("myhost.local", tls=False, mdns=True)
+LOCAL = Domain("myhost.local", tls=False)
 
 
 # --- build_login_url: redirect stays on the arriving domain ------------------------
@@ -42,7 +42,7 @@ def _db() -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     with open(schema_path()) as f:
         conn.executescript(f.read())
-    seed_domains(conn, PUBLIC, [DomainRecord(LOCAL.name, LOCAL.tls, LOCAL.mdns)])
+    seed_domains(conn, PUBLIC, [DomainRecord(LOCAL.name, LOCAL.tls)])
     return conn
 
 

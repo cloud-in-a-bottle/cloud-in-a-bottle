@@ -80,7 +80,6 @@ INSERT INTO "archive_backend" VALUES(1,'local',NULL,NULL,NULL,NULL,NULL,NULL,'op
 CREATE TABLE domains (
     name          TEXT PRIMARY KEY,
     tls           INTEGER NOT NULL DEFAULT 0,
-    mdns          INTEGER NOT NULL DEFAULT 0,
     is_primary    INTEGER NOT NULL DEFAULT 0,
     cert_status   TEXT NOT NULL DEFAULT 'none' CHECK(cert_status IN ('none', 'acquiring', 'active', 'error')),
     error_message TEXT,
@@ -99,7 +98,7 @@ CREATE TABLE schema_version (
     id INTEGER PRIMARY KEY CHECK (id = 1),
     version INTEGER NOT NULL
 );
-INSERT INTO "schema_version" VALUES(1,13);
+INSERT INTO "schema_version" VALUES(1,14);
 CREATE TABLE "service_defaults" (
                 service_url TEXT PRIMARY KEY,
                 app_id TEXT NOT NULL,

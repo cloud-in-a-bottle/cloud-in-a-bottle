@@ -47,7 +47,7 @@ def test_fresh_init_creates_domains_and_settings(tmp_path: Path) -> None:
     db = sqlite3.connect(db_path)
     try:
         assert {"domains", "settings"} <= _tables(db)
-        assert read_version(db) == 13
+        assert read_version(db) == 14
     finally:
         db.close()
 
@@ -67,7 +67,7 @@ def test_v12_db_upgrades_to_domains_and_settings(tmp_path: Path) -> None:
     db = sqlite3.connect(db_path)
     try:
         assert {"domains", "settings"} <= _tables(db)
-        assert read_version(db) == 13
+        assert read_version(db) == 14
     finally:
         db.close()
 
@@ -103,13 +103,23 @@ def test_settings_is_key_value(tmp_path: Path) -> None:
         db.close()
 
 
-def test_domains_ddl_identical_across_all_three_sources() -> None:
-    """schema.sql, the v13 migration, and the frozen system-agent _SCHEMA are three hand-maintained
-    copies of the domains/settings DDL — they must define these objects identically."""
-    fresh = _ddl_fingerprint(Path(schema_path()).read_text())
+def test_frozen_v13_schema_identical_across_projects() -> None:
+    """The router's v13 migration and the system-agent's frozen v13 _SCHEMA are the same DDL kept in
+    two projects; they must stay byte-identical so the agent's CREATE-IF-NOT-EXISTS is a no-op at v13."""
     v13 = _ddl_fingerprint(Migration0013DomainsAndSettings()._load_sql())
     agent = _ddl_fingerprint(_AGENT_SCHEMA)
 
+    assert set(v13) == set(_DDL_OBJECTS), "the v13 migration is missing a domains/settings object"
+    assert v13 == agent, "the v13 migration and system-agent v0007 _SCHEMA diverged"
+
+
+def test_head_schema_is_v13_minus_dropped_mdns() -> None:
+    """db/schema.sql is the live head: v14 dropped domains.mdns, so its domains DDL differs from the
+    frozen v13 copy, but settings + the primary index are untouched and must still match."""
+    fresh = _ddl_fingerprint(Path(schema_path()).read_text())
+    v13 = _ddl_fingerprint(Migration0013DomainsAndSettings()._load_sql())
+
     assert set(fresh) == set(_DDL_OBJECTS), "db/schema.sql is missing a domains/settings object"
-    assert fresh == v13, "db/schema.sql and the v13 migration DDL diverged"
-    assert fresh == agent, "db/schema.sql and the system-agent v0007 _SCHEMA diverged"
+    assert fresh["settings"] == v13["settings"]
+    assert fresh["idx_domains_one_primary"] == v13["idx_domains_one_primary"]
+    assert "mdns" in v13["domains"] and "mdns" not in fresh["domains"]

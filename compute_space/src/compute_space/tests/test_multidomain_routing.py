@@ -25,14 +25,14 @@ from compute_space.web.helpers.zone import ZONE_SCOPE_KEY
 from compute_space.web.helpers.zone import zone_for_request
 
 PRIMARY = Domain(name="host.example.com", tls=True)
-LOCAL = Domain(name="myhost.local", tls=False, mdns=True)
+LOCAL = Domain(name="myhost.local", tls=False)
 
 
 def _seed(cfg: DefaultConfig, *domains: Domain) -> DefaultConfig:
     """Migrate the config's DB and seed ``domains`` (primary first) so the DB-backed resolvers see them."""
     init_db(cfg.db_path)
     with closing(open_db(cfg)) as db:
-        seed_domains(db, domains[0], [DomainRecord(d.name, d.tls, d.mdns) for d in domains[1:]])
+        seed_domains(db, domains[0], [DomainRecord(d.name, d.tls) for d in domains[1:]])
     return cfg
 
 

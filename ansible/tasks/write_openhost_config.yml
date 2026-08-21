@@ -67,6 +67,10 @@
   when: (overwrite_existing | default(false) | bool) or not existing_first_boot.stat.exists
 
 - name: Show claim URL
+  vars:
+    claim_base_url: >-
+      {{ ('http://' + domain + ':8080') if (http_only | bool)
+         else (('http://' + domain) if (mdns_mode | bool) else ('https://' + domain)) }}
   debug:
-    msg: "Claim URL: {{ ('http://' + domain + ':8080') if (local_http_only | default(false) | bool) else ('https://' + domain) }}/setup?claim={{ effective_claim_token }}"
+    msg: "Claim URL: {{ claim_base_url }}/setup?claim={{ effective_claim_token }}"
   when: (overwrite_existing | default(false) | bool) or not existing_first_boot.stat.exists

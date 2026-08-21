@@ -52,7 +52,7 @@
   tasks:
     - import_tasks: tasks/pixi.yml
     - import_tasks: tasks/coredns.yml
-      when: not (local_http_only | default(false) | bool)
+      when: not (http_only | bool)
     - import_tasks: tasks/write_openhost_config.yml
     - import_tasks: tasks/install_openhost_units.yml
     - import_tasks: tasks/restart_openhost_service.yml

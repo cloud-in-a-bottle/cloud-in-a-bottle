@@ -8,7 +8,11 @@ $TTL 300
     60    ; minimum
 )
 @   IN NS   ns.{{ zone_domain }}.
-ns  IN A    {{ public_ip }}
-@   IN A    {{ public_ip }}
-*   IN A    {{ public_ip }}
-
+ns  IN A    {{ record_ip }}
+@   IN A    {{ record_ip }}
+*   IN A    {{ record_ip }}
+{% if record_ip6 %}
+ns  IN AAAA {{ record_ip6 }}
+@   IN AAAA {{ record_ip6 }}
+*   IN AAAA {{ record_ip6 }}
+{% endif %}

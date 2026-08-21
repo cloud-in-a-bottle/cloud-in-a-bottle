@@ -31,12 +31,13 @@ from litestar.params import FromPath
 from compute_space.config import Config
 from compute_space.config import get_config
 from compute_space.core.caddy import reload_caddy_for_domains
-from compute_space.core.dns import reload_coredns_for_domains
+from compute_space.core.dns import reconcile_dns
 from compute_space.core.domains import Domain
 from compute_space.core.domains import DomainCertStatus
 from compute_space.core.domains import DomainRecord
 from compute_space.core.domains import effective_domains
 from compute_space.core.domains import get_record
+from compute_space.core.domains import is_local_name
 from compute_space.core.domains import load_records
 from compute_space.core.domains import primary_domain
 from compute_space.core.domains import remove_record
@@ -53,13 +54,6 @@ from compute_space.web.auth.auth import require_owner_auth
 # name is one-or-more labels joined by dots (so it has at least one dot: `foo.local`, not `foo`).
 _LABEL = r"[a-z0-9]([a-z0-9-]*[a-z0-9])?"
 _DOMAIN_RE = re.compile(rf"^{_LABEL}(\.{_LABEL})+$")
-
-
-@attr.s(auto_attribs=True, frozen=True)
-class AddDomainRequest:
-    name: str
-    tls: bool = False
-    mdns: bool = False
 
 
 @attr.s(auto_attribs=True, frozen=True)
@@ -106,7 +100,7 @@ def _domain_info(config: Config, domain: Domain, record: DomainRecord | None) ->
     return DomainInfo(
         name=name,
         tls=domain.tls,
-        mdns=domain.mdns,
+        mdns=domain.is_local,
         scheme=domain.scheme,
         cert_status=cert_status,
         error_message=error,
@@ -157,13 +151,11 @@ async def _reload_caddy_after_response() -> None:
     await anyio.to_thread.run_sync(_reload)
 
 
-def _validate_new_domain(config: Config, name: str, tls: bool, mdns: bool, db: sqlite3.Connection) -> str | None:
+def _validate_new_domain(name: str, db: sqlite3.Connection) -> str | None:
     if not name:
         return "domain name is required"
     if not _DOMAIN_RE.match(name):
         return "invalid domain name"
-    if mdns and tls:
-        return "mDNS (.local) domains are served over http; set tls=false"
     if any(d.name_no_port == name for d in effective_domains(db)):
         return "domain is already configured"
     return None
@@ -176,34 +168,34 @@ async def list_domains(config: NamedDependency[Config], db: NamedDependency[sqli
 
 @post("/api/domains", status_code=202, guards=[require_owner_auth], raises=[ValidationException])
 async def add_domain(
-    data: AddDomainRequest,
+    data: str,
     config: NamedDependency[Config],
     db: NamedDependency[sqlite3.Connection],
 ) -> Response[DomainListResponse]:
-    name = data.name.strip().lower()
-    error = _validate_new_domain(config, name, data.tls, data.mdns, db)
+    # `.local` means mDNS over http, anything else a public HTTPS domain (`is_local_name` decides).
+    name = data.strip().lower()
+    error = _validate_new_domain(name, db)
     if error is not None:
         raise ValidationException(detail=error)
 
-    domain = Domain(name=name, tls=data.tls, mdns=data.mdns)
+    tls = not is_local_name(name)  # a `.local` name can never get a public cert
+    domain = Domain(name=name, tls=tls)
     # TLS domains start as `acquiring` (served via `tls internal` until the real cert lands);
     # non-TLS (.local) domains are immediately active over http.
     upsert_record(
         db,
         DomainRecord(
             name=name,
-            tls=data.tls,
-            mdns=data.mdns,
-            cert_status=DomainCertStatus.ACQUIRING if data.tls else DomainCertStatus.ACTIVE,
+            tls=tls,
+            cert_status=DomainCertStatus.ACQUIRING if tls else DomainCertStatus.ACTIVE,
         ),
     )
-    if not data.mdns:
-        # Make CoreDNS authoritative for the new public zone *before* acquisition: DNS-01 writes the
-        # _acme-challenge TXT into this domain's zone file, which only resolves once CoreDNS serves
-        # the zone.  Run off the event loop — the restart does a blocking terminate+wait(3s) — but
-        # await it so ordering before acquisition holds.  (mDNS domains never touch CoreDNS.)
-        await anyio.to_thread.run_sync(reload_coredns_for_domains, config, db)
-    if data.tls:
+    # Make CoreDNS authoritative for the new zone + start/refresh the mDNS responder *before* any
+    # acquisition: DNS-01 writes the _acme-challenge TXT into this domain's zone file, which only
+    # resolves once CoreDNS serves the zone.  Off the event loop (CoreDNS restart, socket bind +
+    # conflict probe all block) but awaited so ordering before acquisition holds.
+    await anyio.to_thread.run_sync(reconcile_dns, config, db)
+    if tls:
         _spawn_acquisition(config, domain)
     # Return the full updated list so the client repaints the table without a follow-up GET, and
     # regenerate Caddy (serving the new site) only after this response has been sent — see
@@ -233,10 +225,10 @@ async def remove_domain(
     removed = get_record(db, name)
     if not remove_record(db, name):
         raise NotFoundException(detail="domain not found")
-    if removed is not None and not removed.mdns:
-        # Drop the zone from CoreDNS so it stops answering for the removed public domain.  Off the
-        # event loop — the restart blocks on a terminate+wait(3s).
-        await anyio.to_thread.run_sync(reload_coredns_for_domains, config, db)
+    if removed is not None:
+        # Drop the zone from CoreDNS and stop the responder if that was the last `.local` domain.
+        # Off the event loop — the CoreDNS restart and the responder's thread-join (up to 2s) block.
+        await anyio.to_thread.run_sync(reconcile_dns, config, db)
     # Regenerate Caddy only after this response has been sent — see _reload_caddy_after_response.
     return Response(
         DomainListResponse(domains=_domain_list(config, db)),
