@@ -2,10 +2,15 @@
 
 from typing import Any
 
+import pytest
 from litestar.connection import ASGIConnection
 from litestar.datastructures import Headers
 
 from compute_space.core.auth.auth import SESSION_COOKIE_NAME
+from compute_space.core.auth.auth import AuthenticatedAPIKey
+from compute_space.core.auth.auth import AuthenticatedApp
+from compute_space.web.auth import auth as web_auth
+from compute_space.web.auth.auth import bearer_is_openhost_credential
 from compute_space.web.helpers.proxy import _HTTP_REQUEST_EXCLUDED_HEADERS
 from compute_space.web.helpers.proxy import _build_forwarded_request_headers
 from compute_space.web.helpers.proxy import _sanitize_forwarded_headers
@@ -111,3 +116,56 @@ def test_build_forwarded_request_headers_keeps_authorization_by_default() -> Non
     inbound = Headers({"authorization": "Bearer app-own-jwt", "x-custom": "v"})
     built = _build_forwarded_request_headers(inbound, _HTTP_REQUEST_EXCLUDED_HEADERS, [], strip_authorization=False)
     assert ("authorization", "Bearer app-own-jwt") in [(k.lower(), v) for k, v in built]
+
+
+# --- bearer_is_openhost_credential (drives the strip decision) ---
+
+
+def _conn_with_auth(value: str | None) -> ASGIConnection[Any, Any, Any, Any]:
+    headers = [(b"authorization", value.encode())] if value is not None else []
+    scope = {"type": "http", "method": "GET", "path": "/", "raw_path": b"/", "query_string": b"", "headers": headers}
+    return ASGIConnection(scope)  # type: ignore[arg-type]
+
+
+def test_bearer_credential_no_header_is_false() -> None:
+    # No bearer means nothing to strip and no DB touch.
+    assert bearer_is_openhost_credential(_conn_with_auth(None)) is False
+    assert bearer_is_openhost_credential(_conn_with_auth("Basic abc")) is False
+
+
+def test_bearer_credential_true_for_api_token(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(web_auth, "get_db", lambda: _NullDB())
+    monkeypatch.setattr(web_auth, "validate_api_token", lambda _t, _db: AuthenticatedAPIKey())
+    monkeypatch.setattr(web_auth, "validate_app_token", lambda _t, _db: None)
+    assert bearer_is_openhost_credential(_conn_with_auth("Bearer owner-api-token")) is True
+
+
+def test_bearer_credential_true_for_app_token(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(web_auth, "get_db", lambda: _NullDB())
+    monkeypatch.setattr(web_auth, "validate_api_token", lambda _t, _db: None)
+    monkeypatch.setattr(web_auth, "validate_app_token", lambda _t, _db: AuthenticatedApp(app_id="a1"))
+    assert bearer_is_openhost_credential(_conn_with_auth("Bearer app-token")) is True
+
+
+def test_bearer_credential_false_for_unrecognized_token(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A bearer the router doesn't recognise (an app's own JWT) is not ours.
+    monkeypatch.setattr(web_auth, "get_db", lambda: _NullDB())
+    monkeypatch.setattr(web_auth, "validate_api_token", lambda _t, _db: None)
+    monkeypatch.setattr(web_auth, "validate_app_token", lambda _t, _db: None)
+    assert bearer_is_openhost_credential(_conn_with_auth("Bearer app-own-jwt")) is False
+
+
+def test_bearer_credential_fails_safe_on_db_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A DB failure must not 500 the proxied request; answer "not ours" (don't strip).
+    def _boom() -> None:
+        raise RuntimeError("db down")
+
+    monkeypatch.setattr(web_auth, "get_db", _boom)
+    assert bearer_is_openhost_credential(_conn_with_auth("Bearer whatever")) is False
+
+
+class _NullDB:
+    """Minimal context-manager stand-in for a DB handle (validators are monkeypatched)."""
+
+    def close(self) -> None:
+        pass
