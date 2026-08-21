@@ -69,7 +69,7 @@ def _write_manifest(repo: Path, **kw: Any) -> None:
     }
     defaults.update(kw)
     repo.mkdir(parents=True, exist_ok=True)
-    (repo / "openhost.toml").write_text(_MANIFEST.format(**defaults))
+    (repo / "cloudinabottle.toml").write_text(_MANIFEST.format(**defaults))
 
 
 def _seed_app(cfg: Any, repo_path: str, *, cpu_cores: float, memory_mb: int) -> str:
@@ -222,7 +222,7 @@ def test_reload_with_millicores_manifest_updates_db(cfg: Any, tmp_path: Path) ->
     bug report)."""
     repo = tmp_path / "repo"
     repo.mkdir()
-    (repo / "openhost.toml").write_text(
+    (repo / "cloudinabottle.toml").write_text(
         "[app]\n"
         'name = "reload-app"\n'
         'version = "1.0.0"\n'
@@ -249,7 +249,7 @@ def test_reload_defaults_when_resources_omitted(cfg: Any, tmp_path: Path) -> Non
     whatever stale values the row held, not leave the old values in place."""
     repo = tmp_path / "repo"
     repo.mkdir()
-    (repo / "openhost.toml").write_text(
+    (repo / "cloudinabottle.toml").write_text(
         '[app]\nname = "reload-app"\nversion = "1.0.0"\n[runtime.container]\nimage = "Dockerfile"\nport = 5000\n'
     )
     # Seed with non-default limits so a no-op reload would be detectable.
@@ -267,7 +267,7 @@ def test_reload_syncs_public_paths_and_links(cfg: Any, tmp_path: Path) -> None:
     """public_paths and links are serialized to JSON and re-synced on reload."""
     repo = tmp_path / "repo"
     repo.mkdir()
-    (repo / "openhost.toml").write_text(
+    (repo / "cloudinabottle.toml").write_text(
         "[app]\n"
         'name = "reload-app"\n'
         'version = "1.0.0"\n'
@@ -298,7 +298,7 @@ def test_reload_with_unparseable_manifest_leaves_columns_unchanged(cfg: Any, tmp
     prior values rather than being wiped or half-written."""
     repo = tmp_path / "repo"
     repo.mkdir()
-    (repo / "openhost.toml").write_text("this is = not [ valid toml")
+    (repo / "cloudinabottle.toml").write_text("this is = not [ valid toml")
     app_id = _seed_app(cfg, str(repo), cpu_cores=0.1, memory_mb=64)
     before = _row(cfg, app_id)
 
