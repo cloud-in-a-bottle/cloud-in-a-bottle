@@ -34,6 +34,7 @@ from compute_space.core.image_pruner import start_image_pruner
 from compute_space.core.logging import logger
 from compute_space.core.memory_guard import ensure_memory_guard
 from compute_space.core.org_rename import reconcile_app_repo_urls
+from compute_space.core.process_stream import cleanup_all as cleanup_process_streams
 from compute_space.core.startup import check_app_status
 from compute_space.core.startup import retry_pending_default_apps
 from compute_space.core.storage import start_storage_guard
@@ -243,6 +244,7 @@ def create_app(config: Config) -> ASGIApp:
     static_router = create_static_files_router(path="/static", directories=[static_dir])
 
     atexit.register(cleanup_terminal)
+    atexit.register(cleanup_process_streams)
 
     litestar_app = Litestar(
         route_handlers=[

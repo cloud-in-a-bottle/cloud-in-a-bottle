@@ -11,6 +11,7 @@ from pathlib import Path
 import tomli_w
 
 from compute_space.core.auth.permissions_v2 import Grant
+from compute_space.core.manifest import MANIFEST_FILENAMES
 
 _SERVER_TEMPLATE = Path(__file__).parent / "consumer_server.py"
 
@@ -29,7 +30,7 @@ def write_consumer_app_dir(
     version: str,
     grants: list[Grant],
 ) -> None:
-    """Write a deployable consumer app (openhost.toml + Dockerfile + server.py) to target_dir."""
+    """Write a deployable consumer app (cloudinabottle.toml + Dockerfile + server.py) to target_dir."""
     manifest = {
         "app": {
             "name": name,
@@ -54,6 +55,6 @@ def write_consumer_app_dir(
         },
     }
     target_dir.mkdir(parents=True, exist_ok=True)
-    (target_dir / "openhost.toml").write_text(tomli_w.dumps(manifest))
+    (target_dir / MANIFEST_FILENAMES[0]).write_text(tomli_w.dumps(manifest))
     (target_dir / "Dockerfile").write_text(_DOCKERFILE)
     shutil.copy(_SERVER_TEMPLATE, target_dir / "server.py")

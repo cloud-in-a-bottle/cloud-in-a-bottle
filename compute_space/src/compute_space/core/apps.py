@@ -1,4 +1,3 @@
-import asyncio
 import hashlib
 import json
 import os
@@ -8,7 +7,6 @@ import subprocess
 import tempfile
 import threading
 import time
-import urllib.parse
 from collections.abc import Callable
 
 import attr
@@ -21,8 +19,6 @@ from compute_space.core.app_id import is_valid_app_name
 from compute_space.core.app_id import new_app_id
 from compute_space.core.auth.auth import DEFAULT_OWNER_USERNAME
 from compute_space.core.auth.auth import read_owner_username
-from compute_space.core.auth.permissions_v2 import Grant
-from compute_space.core.auth.permissions_v2 import PermissionRecord
 from compute_space.core.auth.permissions_v2 import grant_permission_v2
 from compute_space.core.containers import BUILD_CACHE_CORRUPT_MARKER
 from compute_space.core.containers import build_image
@@ -38,13 +34,19 @@ from compute_space.core.data import rmtree_with_sudo_fallback
 from compute_space.core.data import wipe_data_preserving_repo
 from compute_space.core.domains import Domain
 from compute_space.core.domains import primary_domain
+from compute_space.core.git_ops import CloneFailed
+from compute_space.core.git_ops import clone_repo
+from compute_space.core.git_ops import github_token_git_config
+from compute_space.core.git_ops import inject_github_token_in_url
 from compute_space.core.git_ops import is_github_repo_url
 from compute_space.core.git_ops import is_ssh_url
 from compute_space.core.git_ops import parse_repo_url
 from compute_space.core.logging import logger
 from compute_space.core.manifest import AppLink
 from compute_space.core.manifest import AppManifest
+from compute_space.core.manifest import PermissionGrant
 from compute_space.core.manifest import PortMapping
+from compute_space.core.manifest import find_manifest_path
 from compute_space.core.manifest import parse_manifest
 from compute_space.core.oauth import OAuthRequired
 from compute_space.core.oauth import get_oauth_token
@@ -52,15 +54,6 @@ from compute_space.core.ports import allocate_port
 from compute_space.core.ports import resolve_port_mappings
 from compute_space.core.services_v2 import register_v2_service_providers
 from compute_space.db import get_db
-
-
-@attr.s(auto_attribs=True, frozen=True)
-class PermissionGrant:
-    """A single permission grant: which service and what payload."""
-
-    service_url: str
-    grant: Grant
-
 
 RESERVED_PATHS = {
     "/",
@@ -188,33 +181,22 @@ def find_app_by_id(app_id: str) -> App | None:
     return App.from_row(row) if row else None
 
 
-def inject_github_token_in_url(url: str, token: str) -> str:
-    """Inject a GitHub OAuth token into an HTTP(S) URL for authentication."""
-    parsed = urllib.parse.urlparse(url)
-    if parsed.scheme in ("http", "https") and parsed.hostname:
-        host_port = parsed.hostname
-        if parsed.port:
-            host_port = f"{parsed.hostname}:{parsed.port}"
-        return parsed._replace(netloc=f"{token}@{host_port}").geturl()
-    return url
-
-
-def github_token_git_config(token: str | None) -> list[str]:
-    """Ephemeral ``git -c`` args that authenticate GitHub HTTPS fetches.
-
-    Rides in GIT_CONFIG_PARAMETERS, which git propagates to child processes —
-    including recursive submodule clones/fetches — so private submodules
-    authenticate without the token ever being written to a git config file.
-    """
-    if not token:
-        return []
-    return ["-c", f"url.https://{token}@github.com/.insteadOf=https://github.com/"]
+def _plain_dir_to_copy(base_url: str) -> str | None:
+    """The directory a ``file://`` URL points at when it holds no git repo — git
+    can't clone one, so it is copied instead. None when the URL should be cloned."""
+    if not base_url.startswith("file://"):
+        return None
+    local_path = base_url[len("file://") :]
+    if not os.path.isdir(local_path):
+        raise CloneFailed(f"Local path does not exist: {local_path}")
+    is_git = os.path.isdir(os.path.join(local_path, ".git")) or os.path.isfile(os.path.join(local_path, "HEAD"))
+    return None if is_git else local_path
 
 
 async def clone_and_read_manifest(
     repo_url: str, github_token: str | None = None
 ) -> tuple[AppManifest | None, str | None, str | None]:
-    """Clone a repo to a temp dir and read its openhost.toml.
+    """Clone a repo to a temp dir and read its manifest (``cloudinabottle.toml``).
 
     Returns (manifest, clone_dir, error). On success error is None.
     """
@@ -222,83 +204,27 @@ async def clone_and_read_manifest(
         base_url, ref = parse_repo_url(repo_url)
     except ValueError as e:
         return None, None, str(e)
-    clone_url = base_url
-
-    # For file:// URLs, copy the directory if it's not a git repo
-    if base_url.startswith("file://"):
-        local_path = base_url[len("file://") :]
-        if not os.path.isdir(local_path):
-            return None, None, f"Local path does not exist: {local_path}"
-        is_git = os.path.isdir(os.path.join(local_path, ".git")) or os.path.isfile(os.path.join(local_path, "HEAD"))
-        if not is_git:
-            tmp_parent = tempfile.mkdtemp(prefix="openhost-clone-")
-            clone_dir = os.path.join(tmp_parent, "repo")
-            try:
-                shutil.copytree(local_path, clone_dir)
-                manifest = parse_manifest(clone_dir)
-                return manifest, clone_dir, None
-            except ValueError as e:
-                rmtree_with_sudo_fallback(tmp_parent, raise_on_failure=False)
-                return None, None, str(e)
-            except Exception as e:
-                rmtree_with_sudo_fallback(tmp_parent, raise_on_failure=False)
-                return None, None, f"Copy failed: {e}"
-
-    if github_token:
-        clone_url = inject_github_token_in_url(base_url, github_token)
 
     tmp_parent = tempfile.mkdtemp(prefix="openhost-clone-")
     clone_dir = os.path.join(tmp_parent, "repo")
     try:
-        clone_cmd = [
-            "git",
-            *github_token_git_config(github_token),
-            "clone",
-            "--recurse-submodules",
-            "--shallow-submodules",
-        ]
-        if ref:
-            clone_cmd.extend(["--branch", ref])
-        clone_cmd.extend([clone_url, clone_dir])
-        result = await asyncio.to_thread(subprocess.run, clone_cmd, capture_output=True, text=True, timeout=120)
-        if result.returncode != 0:
-            rmtree_with_sudo_fallback(tmp_parent, raise_on_failure=False)
-            stderr = result.stderr.strip()
-            if github_token:
-                stderr = stderr.replace(github_token, "***")
-            return None, None, f"Git clone failed: {stderr}"
-        # If we cloned with a token, reset the remote URL so the token isn't persisted
-        if github_token and clone_url != base_url:
-            await asyncio.to_thread(
-                subprocess.run,
-                ["git", "remote", "set-url", "origin", base_url],
-                cwd=clone_dir,
-                capture_output=True,
-                timeout=10,
-            )
-            # Relative .gitmodules URLs resolved against the token-bearing clone
-            # URL, so the recorded submodule URLs may embed the token; re-sync
-            # them against the now-clean origin.
-            if os.path.exists(os.path.join(clone_dir, ".gitmodules")):
-                await asyncio.to_thread(
-                    subprocess.run,
-                    ["git", "submodule", "sync", "--recursive"],
-                    cwd=clone_dir,
-                    capture_output=True,
-                    timeout=30,
-                )
-        try:
-            manifest = parse_manifest(clone_dir)
-        except ValueError as e:
-            rmtree_with_sudo_fallback(tmp_parent, raise_on_failure=False)
-            return None, None, str(e)
-        return manifest, clone_dir, None
+        plain_dir = _plain_dir_to_copy(base_url)
+        if plain_dir is None:
+            await clone_repo(clone_dir, base_url, ref, github_token)
+        else:
+            try:
+                shutil.copytree(plain_dir, clone_dir)
+            except OSError as e:
+                raise CloneFailed(f"Copy failed: {e}") from e
+        return parse_manifest(clone_dir), clone_dir, None
+    except (CloneFailed, ValueError) as e:  # ValueError: unparseable manifest
+        error = str(e)
     except subprocess.TimeoutExpired:
-        rmtree_with_sudo_fallback(tmp_parent, raise_on_failure=False)
-        return None, None, "Git clone timed out"
+        error = "Git clone timed out"
     except Exception as e:
-        rmtree_with_sudo_fallback(tmp_parent, raise_on_failure=False)
-        return None, None, f"Clone failed: {e}"
+        error = f"Clone failed: {e}"
+    rmtree_with_sudo_fallback(tmp_parent, raise_on_failure=False)
+    return None, None, error
 
 
 def move_clone_to_app_temp_dir(clone_dir: str, app_name: str, config: Config) -> str:
@@ -371,53 +297,6 @@ def _mint_unique_app_id(db: sqlite3.Connection) -> str:
         candidate = new_app_id()
         if not db.execute("SELECT 1 FROM apps WHERE app_id = ?", (candidate,)).fetchone():
             return candidate
-
-
-def all_manifest_permissions_v2(manifest: AppManifest) -> list[PermissionGrant]:
-    """Build a permissions_v2_grants list that approves every permission declared in the manifest."""
-    grants: list[PermissionGrant] = []
-    for perm in manifest.consumes_services_v2:
-        for grant_payload in perm.grants:
-            grants.append(PermissionGrant(service_url=perm.service, grant=grant_payload))
-    return grants
-
-
-def _permission_key(service_url: str, grant_payload: Grant) -> tuple[str, str]:
-    """Normalized identity for a (service, grant) pair.
-
-    Uses the same ``json.dumps(..., sort_keys=True)`` serialization that
-    :func:`grant_permission_v2` stores, so a declared grant and a stored grant
-    compare equal regardless of dict key order.
-    """
-    return (service_url, json.dumps(grant_payload, sort_keys=True))
-
-
-def manifest_ungranted_permissions_v2(
-    manifest: AppManifest,
-    granted: list[PermissionRecord],
-) -> list[PermissionGrant]:
-    """The permissions a manifest declares that are NOT already granted.
-
-    Single source of truth for the "which manifest permissions still need owner
-    approval" diff, shared by the app-detail page (post-install display) and the
-    update/reload gate (so an app update can't silently pick up newly declared
-    permissions). ``granted`` is the app's current ``permissions_v2`` rows
-    (e.g. from :func:`get_all_permissions_v2`).
-
-    Duplicate manifest declarations collapse to a single entry, and each new
-    permission is returned only once even if declared multiple times.
-    """
-    granted_keys = {_permission_key(rec.service_url, rec.grant) for rec in granted}
-    ungranted: list[PermissionGrant] = []
-    seen: set[tuple[str, str]] = set(granted_keys)
-    for perm in manifest.consumes_services_v2:
-        for grant_payload in perm.grants:
-            key = _permission_key(perm.service, grant_payload)
-            if key in seen:
-                continue
-            seen.add(key)
-            ungranted.append(PermissionGrant(service_url=perm.service, grant=grant_payload))
-    return ungranted
 
 
 def insert_and_deploy(
@@ -1072,7 +951,7 @@ def reload_app_background(app_id: str, repo_path: str, config: Config) -> None:
                 source_dir = None  # type: ignore[assignment]
                 for entry in os.listdir(config.apps_dir):
                     candidate = os.path.join(config.apps_dir, entry)
-                    if os.path.isfile(os.path.join(candidate, "openhost.toml")):
+                    if find_manifest_path(candidate) is not None:
                         try:
                             m = parse_manifest(candidate)
                             if m.name == app_name:

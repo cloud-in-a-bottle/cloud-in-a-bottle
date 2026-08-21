@@ -7,8 +7,14 @@ from typing import Self
 import attr
 import tomli_w
 
-CONFIG_DIR = Path.home() / ".openhost"
+CONFIG_DIR = Path.home() / ".cloud_in_a_bottle_cli"
 CONFIG_FILE = CONFIG_DIR / "compute_space_cli.toml"
+
+# Legacy config location, used as a migration source: it is read as a fallback
+# when ~/.cloud_in_a_bottle_cli is absent. The default save path never writes
+# here — the next save() writes to CONFIG_FILE, migrating config forward.
+LEGACY_CONFIG_DIR = Path.home() / ".openhost"
+LEGACY_CONFIG_FILE = LEGACY_CONFIG_DIR / "compute_space_cli.toml"
 
 
 class ConfigFileNotFoundError(Exception):
@@ -80,7 +86,16 @@ class MultiConfig:
 
     @classmethod
     def load(cls, path: Path | None = None) -> Self:
-        path = path or CONFIG_FILE
+        # When no explicit path is given, prefer the current config file and
+        # otherwise fall back to the legacy ~/.openhost location so a config
+        # written there still loads; the next save migrates it forward.
+        if path is None:
+            if CONFIG_FILE.exists():
+                path = CONFIG_FILE
+            elif LEGACY_CONFIG_FILE.exists():
+                path = LEGACY_CONFIG_FILE
+            else:
+                path = CONFIG_FILE
         try:
             with open(path, "rb") as f:
                 data = tomllib.load(f)
@@ -140,7 +155,7 @@ class MultiConfig:
             if inst.alias == name:
                 return hostname
         raise InstanceNotFoundError(
-            f"Instance '{name}' not found. Run 'oh instance list' to see configured instances."
+            f"Instance '{name}' not found. Run 'bottle instance list' to see configured instances."
         )
 
     def get_instance(self, name: str) -> Instance:
@@ -150,21 +165,21 @@ class MultiConfig:
     def resolve(self, instance_name: str | None = None) -> Instance:
         """Resolve which instance to use.
 
-        Priority: explicit name > OH_INSTANCE env var > default_instance.
+        Priority: explicit name > BOTTLE_INSTANCE env var > default_instance.
         """
         name = instance_name
         if not name:
-            name = os.environ.get("OH_INSTANCE")
+            name = os.environ.get("BOTTLE_INSTANCE")
         if not name:
             name = self.default_instance
 
         if not name:
             if not self.instances:
-                raise InstanceNotFoundError("No instances configured. Run 'oh instance login' first.")
+                raise InstanceNotFoundError("No instances configured. Run 'bottle instance login' first.")
             raise InstanceNotFoundError(
                 "No default instance set. Use --instance <name>, or set a default with:\n"
-                "  oh instance set-default <name>\n"
-                "Run 'oh instance list' to see configured instances."
+                "  bottle instance set-default <name>\n"
+                "Run 'bottle instance list' to see configured instances."
             )
 
         return self.get_instance(name)
