@@ -38,6 +38,20 @@ def _get_bearer_token_if_set(connection: AnyConnection) -> str | None:
     return None
 
 
+def authorization_is_openhost_credential(connection: AnyConnection) -> bool:
+    """True iff the Authorization bearer is a valid OpenHost API token or app token.
+
+    Such a token is a credential the router consumes, so it must be stripped before forwarding — an
+    owner API token grants full API access and could be replayed by the app. A bearer the router
+    doesn't recognise (e.g. a JWT an app issued to its own SPA) is the app's own and is left alone.
+    """
+    token = _get_bearer_token_if_set(connection)
+    if not token:
+        return False
+    with closing(get_db()) as db:
+        return validate_api_token(token, db) is not None or validate_app_token(token, db) is not None
+
+
 def get_connection_origin(connection: AnyConnection) -> str | None:
     """gets and formats the origin header as "sub.example.com" or "sub.example.com:1234", no protocol or path, if set.
     port is included if non-default.

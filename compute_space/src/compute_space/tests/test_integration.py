@@ -726,15 +726,16 @@ class TestContainerE2E:
             if token_id is not None:
                 admin_session.delete(f"{base}/api/tokens/{token_id}")
 
-    def test_proxy_strips_arbitrary_authorization_header(self, admin_session, config):
-        """Even an Authorization value the router doesn't recognise is stripped, not forwarded."""
+    def test_proxy_forwards_app_owned_authorization_header(self, admin_session, config):
+        """A bearer the router doesn't recognise is the app's own credential (e.g. a JWT an app
+        issued to its SPA) and must be forwarded — stripping it would break the app's own auth."""
         r = admin_session.get(
             f"{_app_url(config, 'test-app')}/echo-headers",
-            headers={"Authorization": "Bearer some-client-supplied-token"},
+            headers={"Authorization": "Bearer app-issued-jwt-not-an-openhost-token"},
         )
         assert r.status_code == 200
         headers_ci = {k.lower(): v for k, v in r.json()["headers"].items()}
-        assert "authorization" not in headers_ci
+        assert headers_ci.get("authorization") == "Bearer app-issued-jwt-not-an-openhost-token"
 
     def test_proxy_404(self, admin_session, config):
         """Unknown paths within the app return the app's 404."""

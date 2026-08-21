@@ -3,7 +3,8 @@
 Used in both proxying inbound requests to apps, and proxying requests between apps on the service interface.
 
 This also strips openhost/auth-relevant headers from forwarded requests: X-OpenHost-* identity
-headers, the owner's session cookie, and the Authorization credential the router authenticated against.
+headers, the owner's session cookie, and — when the caller passes ``strip_authorization`` — the
+Authorization credential the router itself authenticated against.
 """
 
 import asyncio
@@ -41,17 +42,17 @@ _STRIPPED_COOKIES = frozenset({SESSION_COOKIE_NAME})
 # Any inbound value would let a client spoof identity to the backend app.
 _OPENHOST_HEADER_PREFIX = "x-openhost-"
 
-# The router consumes the Authorization credential itself (owner API token or app token); an owner
-# API token grants full API access, so a forwarded copy could be captured and replayed by the app.
-_STRIPPED_AUTH_HEADERS = frozenset({"authorization", "proxy-authorization"})
 
-
-def _sanitize_forwarded_headers(headers: Iterable[tuple[str, str]]) -> list[tuple[str, str]]:
+def _sanitize_forwarded_headers(
+    headers: Iterable[tuple[str, str]], *, strip_authorization: bool
+) -> list[tuple[str, str]]:
     """Filter inbound headers before forwarding to a backend app.
 
-    Drops X-OpenHost-* headers, the Authorization/Proxy-Authorization credential, and zone auth
-    cookies from the Cookie header. Protocol-level filtering (Host, Connection, etc.) is left to
-    each caller.
+    Always drops X-OpenHost-* headers and the zone session cookie. Drops the Authorization header
+    only when ``strip_authorization`` is set — i.e. when it carried an OpenHost credential the router
+    consumed (an owner API token or app token), which the app must not receive and replay. An app's
+    own bearer (e.g. a JWT it issued to its SPA) is not ours, so it is forwarded untouched.
+    Protocol-level filtering (Host, Connection, etc.) is left to each caller.
     """
     cookie_prefixes = tuple(f"{name}=" for name in _STRIPPED_COOKIES)
     sanitized: list[tuple[str, str]] = []
@@ -59,7 +60,7 @@ def _sanitize_forwarded_headers(headers: Iterable[tuple[str, str]]) -> list[tupl
         lower = key.lower()
         if lower.startswith(_OPENHOST_HEADER_PREFIX):
             continue
-        if lower in _STRIPPED_AUTH_HEADERS:
+        if strip_authorization and lower == "authorization":
             continue
         if lower == "cookie":
             value = "; ".join(
@@ -72,9 +73,13 @@ def _sanitize_forwarded_headers(headers: Iterable[tuple[str, str]]) -> list[tupl
 
 
 def _build_forwarded_request_headers(
-    headers: Headers, proto_excluded_headers: Set[str], extra_headers: Iterable[tuple[str, str]]
+    headers: Headers,
+    proto_excluded_headers: Set[str],
+    extra_headers: Iterable[tuple[str, str]],
+    *,
+    strip_authorization: bool,
 ) -> list[tuple[str, str]]:
-    new_headers = _sanitize_forwarded_headers(headers.multi_items())
+    new_headers = _sanitize_forwarded_headers(headers.multi_items(), strip_authorization=strip_authorization)
     new_headers = [(k, v) for k, v in new_headers if k.lower() not in proto_excluded_headers]
     new_headers.extend(extra_headers)
     return new_headers
@@ -136,6 +141,7 @@ async def proxy_http_request(
     extra_headers: Iterable[tuple[str, str]] = (),
     timeout: float = 30,
     read_timeout: float | None = None,
+    strip_authorization: bool = False,
 ) -> ASGIResponse:
     """Forward an HTTP request to a local port and return the response.
 
@@ -159,7 +165,7 @@ async def proxy_http_request(
     """
     target_url = _format_proxy_request_url(request.scope, target_port, override_path)
     new_request_headers = _build_forwarded_request_headers(
-        request.headers, _HTTP_REQUEST_EXCLUDED_HEADERS, extra_headers
+        request.headers, _HTTP_REQUEST_EXCLUDED_HEADERS, extra_headers, strip_authorization=strip_authorization
     )
 
     # Read the inbound body eagerly so we fully consume the ASGI receive
@@ -294,6 +300,7 @@ async def proxy_websocket_request(
     target_port: int,
     extra_headers: Iterable[tuple[str, str]] = (),
     override_path: str | None = None,
+    strip_authorization: bool = False,
 ) -> None:
     """Bidirectionally proxy a WebSocket connection to a backend app.
 
@@ -308,7 +315,7 @@ async def proxy_websocket_request(
         subprotocols = None
 
     new_request_headers = _build_forwarded_request_headers(
-        connection.headers, _WS_REQUEST_EXCLUDED_HEADERS, extra_headers
+        connection.headers, _WS_REQUEST_EXCLUDED_HEADERS, extra_headers, strip_authorization=strip_authorization
     )
 
     try:

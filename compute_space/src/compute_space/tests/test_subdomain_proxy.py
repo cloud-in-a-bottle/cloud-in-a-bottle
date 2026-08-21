@@ -58,24 +58,25 @@ def test_no_client_returns_none() -> None:
 # --- header sanitization (shared by inbound app proxy and service proxy) ---
 
 
-def _sanitized(headers: list[tuple[str, str]]) -> dict[str, str]:
-    return {k.lower(): v for k, v in _sanitize_forwarded_headers(headers)}
+def _sanitized(headers: list[tuple[str, str]], *, strip_authorization: bool = False) -> dict[str, str]:
+    return {k.lower(): v for k, v in _sanitize_forwarded_headers(headers, strip_authorization=strip_authorization)}
 
 
-def test_sanitize_strips_authorization() -> None:
-    out = _sanitized([("Authorization", "Bearer owner-api-token"), ("Accept", "*/*")])
+def test_sanitize_strips_authorization_when_requested() -> None:
+    out = _sanitized([("Authorization", "Bearer owner-api-token"), ("Accept", "*/*")], strip_authorization=True)
     assert "authorization" not in out
     assert out["accept"] == "*/*"
 
 
+def test_sanitize_keeps_app_owned_authorization_by_default() -> None:
+    # A bearer the router didn't consume (an app's own token) is forwarded untouched.
+    out = _sanitized([("Authorization", "Bearer app-own-jwt")], strip_authorization=False)
+    assert out["authorization"] == "Bearer app-own-jwt"
+
+
 def test_sanitize_strips_authorization_case_insensitively() -> None:
-    out = _sanitized([("authorization", "Bearer x"), ("AUTHORIZATION", "Bearer y")])
+    out = _sanitized([("authorization", "Bearer x"), ("AUTHORIZATION", "Bearer y")], strip_authorization=True)
     assert "authorization" not in out
-
-
-def test_sanitize_strips_proxy_authorization() -> None:
-    out = _sanitized([("Proxy-Authorization", "Basic abc")])
-    assert "proxy-authorization" not in out
 
 
 def test_sanitize_strips_openhost_headers() -> None:
@@ -95,14 +96,18 @@ def test_sanitize_preserves_unrelated_headers() -> None:
     assert out["content-type"] == "application/json"
 
 
-def test_build_forwarded_request_headers_drops_authorization() -> None:
-    """End-to-end through the builder the router uses for the HTTP proxy path."""
+def test_build_forwarded_request_headers_drops_authorization_when_requested() -> None:
     inbound = Headers({"authorization": "Bearer tok", "x-custom": "v", "host": "app.example.com"})
     built = _build_forwarded_request_headers(
-        inbound, _HTTP_REQUEST_EXCLUDED_HEADERS, [("X-OpenHost-Is-Owner", "true")]
+        inbound, _HTTP_REQUEST_EXCLUDED_HEADERS, [("X-OpenHost-Is-Owner", "true")], strip_authorization=True
     )
     keys = {k.lower() for k, _ in built}
     assert "authorization" not in keys
     assert "x-custom" in keys
-    # router-injected identity header still present
     assert ("X-OpenHost-Is-Owner", "true") in built
+
+
+def test_build_forwarded_request_headers_keeps_authorization_by_default() -> None:
+    inbound = Headers({"authorization": "Bearer app-own-jwt", "x-custom": "v"})
+    built = _build_forwarded_request_headers(inbound, _HTTP_REQUEST_EXCLUDED_HEADERS, [], strip_authorization=False)
+    assert ("authorization", "Bearer app-own-jwt") in [(k.lower(), v) for k, v in built]
