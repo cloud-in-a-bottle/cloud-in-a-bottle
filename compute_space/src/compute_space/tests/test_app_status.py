@@ -1,4 +1,5 @@
-"""Tests for the ``/api/app_status/<app_name>`` endpoint's error-kind logic.
+"""Tests for ``/api/app_status/<app_id>`` error-kind logic and the
+``/app_status_stream/<app_id>`` WebSocket that pushes the same payload on change.
 
 In particular the legacy ``[CACHE_CORRUPT]`` marker still needs to map to
 ``error_kind = "build_cache_corrupt"`` so the dashboard's 'drop cache
@@ -8,6 +9,7 @@ column was written before the marker rename.
 
 from __future__ import annotations
 
+import asyncio
 import sqlite3
 from collections.abc import Iterator
 from pathlib import Path
@@ -15,15 +17,18 @@ from typing import Any
 
 import pytest
 from litestar import Litestar
+from litestar.exceptions import WebSocketDisconnect
 from litestar.testing import TestClient
 
 import compute_space.web.routes.api.apps as apps_routes
 from compute_space.config import get_config
 from compute_space.core.app_id import new_app_id
 from compute_space.core.containers import BUILD_CACHE_CORRUPT_MARKER
+from compute_space.core.updates import initialize_shutdown_event
 from compute_space.db.connection import init_db
 from compute_space.tests._litestar_helpers import auth_cookie
 from compute_space.tests._litestar_helpers import make_test_app
+from compute_space.tests._litestar_helpers import ws_cookie_header
 from compute_space.tests.conftest import _make_test_config
 from compute_space.web.routes.api.apps import api_apps_routes
 
@@ -111,6 +116,74 @@ def test_unrelated_error_message_has_no_error_kind(
     assert payload["error_kind"] is None
 
 
+def _set_app(cfg: Any, app_id: str, **cols: Any) -> None:
+    db = sqlite3.connect(cfg.db_path)
+    try:
+        assignments = ", ".join(f"{col} = ?" for col in cols)
+        db.execute(f"UPDATE apps SET {assignments} WHERE app_id = ?", (*cols.values(), app_id))
+        db.commit()
+    finally:
+        db.close()
+
+
+def test_status_stream_requires_auth(cfg: Any, client: TestClient[Litestar]) -> None:
+    with pytest.raises(WebSocketDisconnect) as exc:
+        with client.websocket_connect(f"/app_status_stream/{new_app_id()}") as ws:  # no cookie
+            ws.receive_json()
+    assert exc.value.code == 4401
+
+
+def test_status_stream_pushes_changes_and_closes_when_row_vanishes(
+    cfg: Any, client: TestClient[Litestar], cookies: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One connect covers: initial frame, plain-error push, cache-corrupt
+    classification, and the 4404 close after the row is deleted."""
+    # The handler races its pump against wait_for_shutdown(), which is an instant
+    # no-op unless the app-startup event is wired — the stream would die immediately.
+    initialize_shutdown_event(asyncio.Event())
+    monkeypatch.setattr(apps_routes, "STATUS_STREAM_POLL_SECONDS", 0.01)
+    app_id = new_app_id()
+    db = sqlite3.connect(cfg.db_path)
+    try:
+        db.execute(
+            """INSERT INTO apps (app_id, name, version, repo_path, local_port, status)
+               VALUES (?, 'notes', '1.0', '/repo/notes', 20113, 'building')""",
+            (app_id,),
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    with pytest.raises(WebSocketDisconnect) as exc:
+        with client.websocket_connect(f"/app_status_stream/{app_id}", headers=ws_cookie_header(cookies)) as ws:
+            assert ws.receive_json() == {
+                "status": "building",
+                "error": None,
+                "error_kind": None,
+                "container_id": None,
+            }
+
+            _set_app(cfg, app_id, status="error", error_message="Container build failed (exit code 1):\n...tail")
+            frame = ws.receive_json()
+            assert frame["status"] == "error"
+            assert frame["error"] == "Container build failed (exit code 1):\n...tail"
+            assert frame["error_kind"] is None
+
+            _set_app(cfg, app_id, error_message=f"{BUILD_CACHE_CORRUPT_MARKER} boom")
+            frame = ws.receive_json()
+            assert frame["error"] == "Container build cache is corrupted."
+            assert frame["error_kind"] == "build_cache_corrupt"
+
+            db = sqlite3.connect(cfg.db_path)
+            try:
+                db.execute("DELETE FROM apps WHERE app_id = ?", (app_id,))
+                db.commit()
+            finally:
+                db.close()
+            ws.receive_json()  # the watcher notices the missing row and closes
+    assert exc.value.code == 4404
+
+
 def test_app_status_returns_repo_url(cfg: Any, client: TestClient[Litestar], cookies: dict[str, str]) -> None:
     """app_status response includes the git repo_url with branch/ref pin."""
     app_id = new_app_id()
@@ -118,7 +191,7 @@ def test_app_status_returns_repo_url(cfg: Any, client: TestClient[Litestar], coo
     try:
         db.execute(
             """INSERT INTO apps (app_id, name, version, repo_path, repo_url, local_port, status)
-               VALUES (?, 'myapp', '1.0', '/repo/myapp', 'https://github.com/owner/repo@main', 20113, 'running')""",
+               VALUES (?, 'myapp', '1.0', '/repo/myapp', 'https://github.com/owner/repo@main', 20114, 'running')""",
             (app_id,),
         )
         db.commit()
@@ -136,7 +209,7 @@ def test_app_status_repo_url_none_when_unset(cfg: Any, client: TestClient[Litest
     try:
         db.execute(
             """INSERT INTO apps (app_id, name, version, repo_path, repo_url, local_port, status)
-               VALUES (?, 'builtin', '1.0', '/repo/builtin', NULL, 20114, 'running')""",
+               VALUES (?, 'builtin', '1.0', '/repo/builtin', NULL, 20115, 'running')""",
             (app_id,),
         )
         db.commit()
