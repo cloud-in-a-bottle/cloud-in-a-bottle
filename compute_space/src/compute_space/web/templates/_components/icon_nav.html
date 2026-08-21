@@ -1,0 +1,21 @@
+{#- The compute space's whole navigation, in four icons. Replaces the old tab
+    strip; rendered on every page by layout.html (and by the docs route's
+    standalone template) so wherever you are, you can get anywhere.
+
+    The GitHub link is the exact branch/fork this instance runs, using GitHub's
+    official (unmodified) Invertocat mark. It also serves the AGPL source offer
+    to network users, so it is only omitted when there is no source URL at all
+    (tarball deploy, detached HEAD, non-GitHub remote). -#}
+{% from "_components/icon.html" import icon %}
+
+{% macro icon_nav(source_url=None) -%}
+<div class="icon-nav">
+  <a class="icon-btn" href="/terminal/" title="Terminal">{{ icon("code", 16, alt="Terminal") }}</a>
+  <a class="icon-btn" href="/system/" title="System info">{{ icon("box", 15, alt="System info") }}</a>
+  <a class="icon-btn" href="/settings" title="Settings">{{ icon("gear", 12, alt="Settings") }}</a>
+  {%- if source_url %}
+  <a class="icon-btn" href="{{ source_url }}" target="_blank" rel="noopener"
+     title="View this branch on GitHub">{{ icon("github", 14, alt="View source on GitHub") }}</a>
+  {%- endif %}
+</div>
+{%- endmacro %}
