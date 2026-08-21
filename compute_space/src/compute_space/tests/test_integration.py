@@ -701,30 +701,23 @@ class TestContainerE2E:
         assert headers.get("X-OpenHost-Identity") != "spoofed"
 
     def test_proxy_strips_authorization_header(self, admin_session, config):
-        """An owner API token in Authorization must not reach the backend app.
-
-        The token grants full access to the OpenHost API, so an app that
-        received it could capture and replay it (OH-231).  The router
-        authenticates it, sets X-OpenHost-Is-Owner, and drops the raw
-        credential before forwarding.
-        """
+        """An owner API token in Authorization must not reach the backend app: it grants full API
+        access, so a forwarded copy could be captured and replayed. The router authenticates it,
+        sets X-OpenHost-Is-Owner, and drops it."""
         base = _zone_url(config)
         r = admin_session.post(f"{base}/api/tokens", json={"name": "leak-probe", "expiry_hours": "1"})
         assert r.status_code == 200
         raw_token = r.json()["token"]
         try:
-            # Use ONLY the token (no owner cookie) so the request authenticates
-            # purely via the Authorization header the app must not see.
+            # No cookie, so the request authenticates purely via the Authorization header.
             r = requests.get(
                 f"{_app_url(config, 'test-app')}/echo-headers",
                 headers={"Authorization": f"Bearer {raw_token}"},
             )
             assert r.status_code == 200
             headers_ci = {k.lower(): v for k, v in r.json()["headers"].items()}
-            # The credential is stripped entirely — the app sees no Authorization.
             assert "authorization" not in headers_ci
             assert raw_token not in r.text
-            # The router still tells the app the owner is authenticated.
             assert headers_ci.get("x-openhost-is-owner") == "true"
         finally:
             resp = admin_session.get(f"{base}/api/tokens")
@@ -734,9 +727,7 @@ class TestContainerE2E:
                 admin_session.delete(f"{base}/api/tokens/{token_id}")
 
     def test_proxy_strips_arbitrary_authorization_header(self, admin_session, config):
-        """Any client-supplied Authorization header is stripped before forwarding,
-        even a value the router doesn't recognise — apps get identity via
-        X-OpenHost-* headers, never a forwarded bearer."""
+        """Even an Authorization value the router doesn't recognise is stripped, not forwarded."""
         r = admin_session.get(
             f"{_app_url(config, 'test-app')}/echo-headers",
             headers={"Authorization": "Bearer some-client-supplied-token"},

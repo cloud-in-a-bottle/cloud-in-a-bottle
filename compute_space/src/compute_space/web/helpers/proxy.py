@@ -2,10 +2,8 @@
 
 Used in both proxying inbound requests to apps, and proxying requests between apps on the service interface.
 
-This also takes care of stripping openhost/auth relevant headers and cookies
-from forwarded requests: X-OpenHost-* identity headers, the owner's session
-cookie, and the Authorization/Proxy-Authorization credential the router itself
-authenticated against.
+This also strips openhost/auth-relevant headers from forwarded requests: X-OpenHost-* identity
+headers, the owner's session cookie, and the Authorization credential the router authenticated against.
 """
 
 import asyncio
@@ -43,25 +41,17 @@ _STRIPPED_COOKIES = frozenset({SESSION_COOKIE_NAME})
 # Any inbound value would let a client spoof identity to the backend app.
 _OPENHOST_HEADER_PREFIX = "x-openhost-"
 
-# The Authorization header carries the credential the router itself
-# authenticates against (an owner session-less API token, or an app's
-# OPENHOST_APP_TOKEN on the service interface).  It must never reach a backend
-# app: an owner API token grants full access to the OpenHost API, so an app
-# that received it could capture and replay it.  The router tells apps who the
-# caller is via X-OpenHost-Is-Owner / X-OpenHost-Consumer-* instead, so no app
-# needs the raw credential.  Proxy-Authorization is stripped for the same
-# reason.  (This mirrors the session-cookie stripping below.)
+# The router consumes the Authorization credential itself (owner API token or app token); an owner
+# API token grants full API access, so a forwarded copy could be captured and replayed by the app.
 _STRIPPED_AUTH_HEADERS = frozenset({"authorization", "proxy-authorization"})
 
 
 def _sanitize_forwarded_headers(headers: Iterable[tuple[str, str]]) -> list[tuple[str, str]]:
     """Filter inbound headers before forwarding to a backend app.
 
-    Drops X-OpenHost-* headers (the router is their sole authority), the
-    Authorization/Proxy-Authorization credential (the router consumes it; apps
-    must not see or replay it), and strips zone auth cookies from the Cookie
-    header (apps must not see or replay the owner's session).  Protocol-level
-    filtering (Host, Connection, etc.) is left to each caller.
+    Drops X-OpenHost-* headers, the Authorization/Proxy-Authorization credential, and zone auth
+    cookies from the Cookie header. Protocol-level filtering (Host, Connection, etc.) is left to
+    each caller.
     """
     cookie_prefixes = tuple(f"{name}=" for name in _STRIPPED_COOKIES)
     sanitized: list[tuple[str, str]] = []

@@ -63,8 +63,6 @@ def _sanitized(headers: list[tuple[str, str]]) -> dict[str, str]:
 
 
 def test_sanitize_strips_authorization() -> None:
-    """The Authorization credential the router authenticated against must not
-    reach the backend app (OH-231)."""
     out = _sanitized([("Authorization", "Bearer owner-api-token"), ("Accept", "*/*")])
     assert "authorization" not in out
     assert out["accept"] == "*/*"

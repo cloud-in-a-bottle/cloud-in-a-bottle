@@ -232,7 +232,7 @@ class TestDiscoverProvidersAppAuth:
 
 
 # ---------------------------------------------------------------------------
-# Authorization stripping on the cross-app service proxy path (OH-231)
+# Authorization stripping on the cross-app service proxy path
 # ---------------------------------------------------------------------------
 
 
@@ -254,15 +254,12 @@ class _EchoHeadersHandler(BaseHTTPRequestHandler):
 
 
 class TestServiceProxyStripsAuthorization:
-    """The consumer authenticates to the router with Authorization: Bearer
-    <app token>; the router must consume it and NOT forward it to the provider
-    (OH-231).  The provider is told the caller's identity via X-OpenHost-*.
-    """
+    """The consumer authenticates to the router with Authorization: Bearer <app token>; the router
+    consumes it and must not forward it to the provider, which learns the caller via X-OpenHost-*."""
 
     def test_service_proxy_strips_authorization(self, cfg: object) -> None:
-        # Real backend so we exercise the full proxy_http_request path (no mock).
-        # ThreadingHTTPServer (matching test_multidomain_proxy_integration.py) so
-        # keep-alive / multiple requests can't stall a single-threaded server.
+        # Real backend (no mock) so the full proxy_http_request path runs. ThreadingHTTPServer
+        # matches test_multidomain_proxy_integration.py and avoids single-threaded stalls.
         server = ThreadingHTTPServer(("127.0.0.1", 0), _EchoHeadersHandler)
         provider_port = server.server_address[1]
         _EchoHeadersHandler.last_headers = {}
@@ -271,7 +268,7 @@ class TestServiceProxyStripsAuthorization:
         try:
             init_db(cfg.db_path)  # type: ignore[attr-defined]
             _seed_consumer(cfg.db_path)  # type: ignore[attr-defined]
-            # Register a single provider for SVC_DATA pointing at the echo server.
+            # A single provider for SVC_DATA pointing at the echo server.
             db = sqlite3.connect(cfg.db_path)  # type: ignore[attr-defined]
             try:
                 provider_id = new_app_id()
@@ -291,23 +288,16 @@ class TestServiceProxyStripsAuthorization:
                 db.close()
 
             with TestClient(app=_make_proxy_app()) as client:
-                resp = client.get(
-                    "/api/services/v2/call/data/endpoint",
-                    headers=_auth_headers(),  # Authorization: Bearer <consumer app token>
-                )
+                resp = client.get("/api/services/v2/call/data/endpoint", headers=_auth_headers())
             assert resp.status_code == 200
 
             received = _EchoHeadersHandler.last_headers
-            # Guard against a false pass: if the proxy errored before reaching
-            # the backend, last_headers would still be {} and the "absent"
-            # assertions below would pass vacuously.  The Host header is always
-            # forwarded, so its presence proves the request actually landed.
+            # Host is always forwarded, so its presence proves the request reached the backend and the
+            # "absent" assertions below aren't passing vacuously (e.g. if the proxy had errored early).
             assert received.get("host"), "echo server was never reached"
-            # The consumer's app token must not reach the provider backend —
-            # neither as an Authorization header nor smuggled into any other one.
+            # The app token must not reach the provider — not as Authorization nor in any other header.
             assert "authorization" not in received
             assert all(CONSUMER_TOKEN not in v for v in received.values())
-            # ...but the router still identifies the caller to the provider.
             assert received.get("x-openhost-consumer-id") == CONSUMER_APP_ID
         finally:
             server.shutdown()
