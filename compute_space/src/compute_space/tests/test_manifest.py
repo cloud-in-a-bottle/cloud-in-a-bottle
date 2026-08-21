@@ -1,13 +1,16 @@
-"""Unit tests for the openhost.toml manifest parser."""
+"""Unit tests for the cloudinabottle.toml manifest parser."""
 
 import json
 
 import attr
 import pytest
 
+from compute_space.core.manifest import MANIFEST_FILENAMES
 from compute_space.core.manifest import SAFE_CAPABILITIES
 from compute_space.core.manifest import SAFE_DEVICE_PATHS
 from compute_space.core.manifest import UNPRIVILEGED_PORT_FLOOR
+from compute_space.core.manifest import find_manifest_path
+from compute_space.core.manifest import parse_manifest
 from compute_space.core.manifest import parse_manifest_from_string
 
 MINIMAL = """\
@@ -810,3 +813,60 @@ class TestShmMb:
         toml = MINIMAL + 'shm_mb = "big"\n'
         with pytest.raises(ValueError, match="shm_mb"):
             parse_manifest_from_string(toml)
+
+
+class TestManifestFileResolution:
+    """``cloudinabottle.toml`` is the canonical manifest name; ``openhost.toml`` is
+    still accepted as a silent fallback so existing app repos keep working.
+
+    These tests pin the on-disk resolution contract used by
+    ``find_manifest_path`` and ``parse_manifest``.
+    """
+
+    def test_canonical_name_is_cloudinabottle_toml(self):
+        """The preferred/canonical filename must be cloudinabottle.toml."""
+        assert MANIFEST_FILENAMES[0] == "cloudinabottle.toml"
+
+    def test_legacy_name_still_accepted(self):
+        """openhost.toml must remain in the fallback list for compatibility."""
+        assert "openhost.toml" in MANIFEST_FILENAMES
+
+    def test_find_returns_cloudinabottle_toml(self, tmp_path):
+        (tmp_path / "cloudinabottle.toml").write_text(MINIMAL)
+        assert find_manifest_path(str(tmp_path)) == str(tmp_path / "cloudinabottle.toml")
+
+    def test_find_falls_back_to_openhost_toml(self, tmp_path):
+        (tmp_path / "openhost.toml").write_text(MINIMAL)
+        assert find_manifest_path(str(tmp_path)) == str(tmp_path / "openhost.toml")
+
+    def test_find_prefers_cloudinabottle_when_both_present(self, tmp_path):
+        (tmp_path / "cloudinabottle.toml").write_text(MINIMAL)
+        (tmp_path / "openhost.toml").write_text(MINIMAL)
+        assert find_manifest_path(str(tmp_path)) == str(tmp_path / "cloudinabottle.toml")
+
+    def test_find_returns_none_when_absent(self, tmp_path):
+        assert find_manifest_path(str(tmp_path)) is None
+
+    def test_parse_reads_cloudinabottle_toml(self, tmp_path):
+        (tmp_path / "cloudinabottle.toml").write_text(MINIMAL)
+        manifest = parse_manifest(str(tmp_path))
+        assert manifest.name == "test-app"
+
+    def test_parse_reads_openhost_toml_fallback(self, tmp_path):
+        (tmp_path / "openhost.toml").write_text(MINIMAL)
+        manifest = parse_manifest(str(tmp_path))
+        assert manifest.name == "test-app"
+
+    def test_parse_prefers_cloudinabottle_over_openhost(self, tmp_path):
+        """When both files exist, cloudinabottle.toml is the one that gets parsed."""
+        canonical = MINIMAL.replace("test-app", "from-cloudinabottle")
+        legacy = MINIMAL.replace("test-app", "from-openhost")
+        (tmp_path / "cloudinabottle.toml").write_text(canonical)
+        (tmp_path / "openhost.toml").write_text(legacy)
+        manifest = parse_manifest(str(tmp_path))
+        assert manifest.name == "from-cloudinabottle"
+
+    def test_parse_missing_manifest_raises_referencing_cloudinabottle(self, tmp_path):
+        """The not-found error should point users at the canonical name."""
+        with pytest.raises(ValueError, match="cloudinabottle.toml"):
+            parse_manifest(str(tmp_path))

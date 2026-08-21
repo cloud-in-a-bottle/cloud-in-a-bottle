@@ -1,6 +1,6 @@
 -- v10: add ``apps.links`` column.
 --
--- Stores the app's user-facing [[links]] from its openhost.toml as a JSON
+-- Stores the app's user-facing [[links]] from its cloudinabottle.toml as a JSON
 -- array of {"name", "path"} objects. These are advertised to the user on
 -- the dashboard so they can discover interesting paths on the app (e.g. an
 -- admin console at /_openhost/admin) that aren't the bare app root.

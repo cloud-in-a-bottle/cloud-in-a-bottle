@@ -101,4 +101,8 @@ function removeDomain(name) {
     });
 }
 
+document.getElementById('domain-name').addEventListener('input', function(e) {
+  document.getElementById('add-domain-btn').disabled = e.target.value.trim() === '';
+});
+
 loadDomains();
