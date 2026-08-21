@@ -6,14 +6,14 @@ This guide walks through building an app that runs on Cloud in a Bottle.
 
 From the dashboard, click "Deploy New App" and provide a git repo URL (public or private - private GitHub repos will prompt for auth).
 
-The router reads `openhost.toml`, builds the container image from your `Dockerfile` using rootless podman, and starts routing requests to it. Apps are accessible at `https://{app_name}.{zone_domain}/` (e.g., `https://my-app.user.host.imbue.com/`).
+The router reads `cloudinabottle.toml`, builds the container image from your `Dockerfile` using rootless podman, and starts routing requests to it. Apps are accessible at `https://{app_name}.{zone_domain}/` (e.g., `https://my-app.user.host.imbue.com/`).
 
 
 ## Writing an app to run on Cloud in a Bottle
 
 Apps can be anything that can run in an OCI container, and accessed via HTTP(s). Cloud in a Bottle runs every app under rootless podman, so container-root maps to an unprivileged subuid on the host rather than real root.
 
-An `openhost.toml` manifest must be placed at the root of your repo, to indicate to Cloud in a Bottle how to run your app. See the [manifest spec](manifest_spec.md) for the full field reference.
+A `cloudinabottle.toml` manifest must be placed at the root of your repo, to indicate to Cloud in a Bottle how to run your app. See the [manifest spec](manifest_spec.md) for the full field reference.
 
 ## App template
 
@@ -38,14 +38,14 @@ Here's an example of a simple app:
 
 ```
 my-app/
-├── openhost.toml
+├── cloudinabottle.toml
 ├── Dockerfile
 ├── pyproject.toml          # or package.json, go.mod, etc.
 ├── app.py                  # your app code
 └── entrypoint.sh           # optional startup script
 ```
 
-### openhost.toml
+### cloudinabottle.toml
 
 ```toml
 [app]
