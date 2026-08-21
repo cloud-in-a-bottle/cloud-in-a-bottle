@@ -74,10 +74,10 @@
       <div class="field-row">
         <input type="text" id="remote-url" aria-describedby="remote-hint remote-msg"
                placeholder="Loading…" disabled>
-        {{ button("Save remote", variant="primary", id="set-remote-btn", onclick="setRemote()", disabled=true) }}
+        {{ button("Save & update", variant="primary", id="set-remote-btn", onclick="setRemote()", disabled=true) }}
       </div>
-      <p class="hint" id="remote-hint">Repository this instance updates from. Saving pins the target;
-        use Update below to apply it.</p>
+      <p class="hint" id="remote-hint">Repository this instance updates from. Saving pins the target
+        and, if it points at different code than what's running, starts the update immediately.</p>
       <p id="remote-msg" class="msg" hidden></p>
     </div>
 
@@ -113,7 +113,7 @@
           <option value="mdns">Local mDNS (.local, HTTP)</option>
         </select>
       </label>
-      {{ button("Add domain", variant="primary", onclick="addDomain()") }}
+      {{ button("Add domain", variant="primary", id="add-domain-btn", onclick="addDomain()", disabled=true) }}
     </div>
     <p id="domain-msg" class="msg" hidden></p>
 
@@ -188,6 +188,18 @@
 </section>
 
 <section class="section">
+  {% call section_head("Services") %}{% endcall %}
+  <div class="panel">
+    <p class="hint">When more than one installed app provides the same service, choose which one is
+      used by default. Consumer apps that don't pin a specific provider get the default; with no
+      default set, the highest version wins.</p>
+    <div id="services-status">
+      <div class="muted">Loading&hellip;</div>
+    </div>
+  </div>
+</section>
+
+<section class="section">
   {% call section_head("Maintenance") %}{% endcall %}
   <div class="panel">
     <div class="field">
@@ -225,8 +237,11 @@
 </section>
 
 <script src="{{ static_url('js/dom.js') }}"></script>
+<script src="{{ static_url('js/http-errors.js') }}"></script>
 <script src="{{ static_url('js/username-validation.js') }}"></script>
 <script src="{{ static_url('js/tokens.js') }}"></script>
 <script src="{{ static_url('js/domains.js') }}"></script>
 <script src="{{ static_url('js/settings.js') }}"></script>
+<script src="{{ static_url('js/services.js') }}"></script>
+<script src="{{ static_url('js/services.js') }}"></script>
 {% endblock %}

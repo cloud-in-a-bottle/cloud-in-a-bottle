@@ -37,12 +37,10 @@ jobs:
       AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
       AWS_DEFAULT_REGION: us-east-1
       SKIP_APT_UPGRADE: "1"
-      # Deploy the same commit the test code is checked out from (github.sha):
-      # the PR merge commit on pull_request, the pushed commit otherwise. The
-      # merge commit only lives on refs/pull/N/merge, so pass that as a refspec
-      # for the VM's clone to fetch it.
+      # Deploy the same commit the test code is checked out from (github.sha), fetched
+      # by SHA: refs/pull/N/merge gets rebuilt as base moves, orphaning the trigger-time SHA.
       OPENHOST_COMMIT: ${{ github.sha }}
-      OPENHOST_REFSPEC: ${{ github.event.pull_request.number && format('refs/pull/{0}/merge', github.event.pull_request.number) || '' }}
+      OPENHOST_REFSPEC: ${{ github.sha }}
       # GCP-specific
       GCP_PROJECT: ${{ secrets.GCP_PROJECT_ID }}
       GCP_ZONE: ${{ vars.GCP_ZONE || 'us-central1-a' }}

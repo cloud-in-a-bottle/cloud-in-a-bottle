@@ -32,7 +32,7 @@
 <span class="info-value" id="remote-edit" hidden>
   <input type="text" id="remote-input" value="{{ app.repo_url }}"
          placeholder="https://github.com/owner/repo@branch">
-  {{ button("Save & update", variant="primary", onclick="saveRemote()") }}
+  {{ button("Save & update", variant="primary", onclick="saveRemote()", id="save-remote-btn", disabled=true) }}
   {{ button("Cancel", onclick="cancelRemote()") }}
   <p class="hint">Append <code>@branch</code> (or a tag/commit) to change the ref. Saving
     re-points the upstream and pulls the latest code.</p>
@@ -157,14 +157,18 @@
 {% if granted_permissions or ungranted_permissions %}
 {% call section_head("Service Permissions", level=3) %}{% endcall %}
 {% if granted_permissions %}
+<script id="granted-perms-data" type="application/json">{{ granted_permissions | tojson }}</script>
 <div class="table-scroll">
   <table>
-    <tr><th>Service</th><th>Grant</th><th>Scope</th></tr>
+    <tr><th>Service</th><th>Grant</th><th>Scope</th><th>Actions</th></tr>
     {% for p in granted_permissions %}
     <tr>
       <td><code>{{ p.service_url }}</code></td>
       <td><code>{{ p.grant | tojson }}</code></td>
       <td>{{ p.scope }}</td>
+      <td><button class="btn btn--danger"
+        data-perm-idx="{{ loop.index0 }}"
+        onclick="revokePermission(this)">Revoke</button></td>
     </tr>
     {% endfor %}
   </table>
@@ -191,7 +195,7 @@
 {% endif %}
 
 {% call section_head("Logs", level=3) %}{% endcall %}
-<pre class="log-output" id="app-logs">{{ logs or "No log output available." }}</pre>
+<pre class="log-output" id="app-logs">Connecting to log stream…</pre>
 
 {% call section_head("Actions", level=3) %}{% endcall %}
 {% call info_table("Action", "", id="app-action-buttons", class_="action-table") %}
@@ -247,13 +251,45 @@ async function grantPermission(btn) {
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({app_id: appId, service_url: serviceUrl, grant: grant}),
     });
-    if (!resp.ok) throw new Error(await resp.text());
+    if (!resp.ok) {
+      const data = await resp.json().catch(function() { return null; });
+      throw new Error(responseErrorMessage(data, 'HTTP ' + resp.status));
+    }
     btn.textContent = 'Granted';
     btn.closest('tr').style.opacity = '0.5';
   } catch (e) {
     btn.textContent = 'Error';
     btn.disabled = false;
     alert('Failed to grant: ' + e.message);
+  }
+}
+
+async function revokePermission(btn) {
+  const perms = JSON.parse(document.getElementById('granted-perms-data').textContent);
+  const perm = perms[parseInt(btn.dataset.permIdx, 10)];
+  if (!confirm('Revoke ' + perm.service_url + ' permission from {{ app.name }}?')) return;
+  const appId = '{{ app.app_id }}';
+  btn.disabled = true;
+  btn.textContent = 'Revoking…';
+  try {
+    const resp = await fetch('/api/permissions/v2/revoke', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        app_id: appId,
+        service_url: perm.service_url,
+        grant: perm.grant,
+        scope: perm.scope,
+        provider_app_id: perm.provider_app_id,
+      }),
+    });
+    if (!resp.ok) throw new Error(await resp.text());
+    btn.textContent = 'Revoked';
+    btn.closest('tr').style.opacity = '0.5';
+  } catch (e) {
+    btn.textContent = 'Error';
+    btn.disabled = false;
+    alert('Failed to revoke: ' + e.message);
   }
 }
 
@@ -297,14 +333,17 @@ async function copyAppDiagnostics(btn) {
 {
   "renameAppUrl": "/rename_app/{{ app.app_id }}",
   "appDetailUrl": "/app_detail/{{ app.name }}",
-  "appLogsUrl": "/app_logs/{{ app.app_id }}",
+  "appLogsStreamUrl": "/app_logs_stream/{{ app.app_id }}",
   "appStatusUrl": "/api/app_status/{{ app.app_id }}",
   "appStatus": {{ app.status | tojson }},
   "nextUrl": {{ next_url | default("", true) | tojson }},
   "reloadAppUrl": "/reload_app/{{ app.app_id }}",
+  "updateReviewUrl": "/update_review/{{ app.name }}",
+  "appId": {{ app.app_id | tojson }},
   "setAppRemoteUrl": "/set_app_remote/{{ app.app_id }}",
   "dropBuildCacheUrl": "/api/drop-docker-cache"
 }
 </script>
+<script src="{{ static_url('js/http-errors.js') }}"></script>
 <script src="{{ static_url('js/app-detail.js') }}"></script>
 {% endblock %}

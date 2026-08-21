@@ -1,4 +1,7 @@
+import asyncio
+import os
 import re
+import subprocess
 import urllib.parse
 from pathlib import Path
 
@@ -8,22 +11,8 @@ from compute_space import OPENHOST_PROJECT_DIR
 from compute_space.core.util import async_wrap
 
 
-class RemoteNotSetError(Exception):
-    pass
-
-
-class NoRemoteBranchForLocalBranch(Exception):
-    pass
-
-
-class UnsupportedRepoUrlError(ValueError):
-    """A repo URL whose transport we recognise but deliberately don't support.
-
-    Currently only SSH (``ssh://`` and SCP-style ``git@host:path``) — clones
-    over SSH would need a deploy key, known_hosts, and an SSH agent that the
-    compute_space process doesn't have, so we reject them up front with a clear
-    message rather than letting ``git clone`` fail cryptically.
-    """
+class CloneFailed(Exception):
+    """Aborts an in-progress clone; the message is what the caller gets back."""
 
 
 _KNOWN_SCHEMES = {"http", "https", "ssh", "git", "file"}
@@ -75,20 +64,101 @@ def is_github_repo_url(repo_url: str) -> bool:
     return host == "github.com" or host.endswith(".github.com")
 
 
+def github_token_git_config(token: str | None) -> list[str]:
+    """Ephemeral ``git -c`` args that authenticate GitHub HTTPS fetches.
+
+    Rides in GIT_CONFIG_PARAMETERS, which git propagates to child processes —
+    including recursive submodule clones/fetches — so private submodules
+    authenticate without the token ever being written to a git config file.
+    """
+    if not token:
+        return []
+    return ["-c", f"url.https://{token}@github.com/.insteadOf=https://github.com/"]
+
+
+def inject_github_token_in_url(url: str, token: str) -> str:
+    """Inject a GitHub OAuth token into an HTTP(S) URL for authentication."""
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme in ("http", "https") and parsed.hostname:
+        host_port = parsed.hostname
+        if parsed.port:
+            host_port = f"{parsed.hostname}:{parsed.port}"
+        return parsed._replace(netloc=f"{token}@{host_port}").geturl()
+    return url
+
+
+async def run_git(args: list[str], timeout: int, cwd: str | None = None) -> subprocess.CompletedProcess[str]:
+    return await asyncio.to_thread(
+        subprocess.run, ["git", *args], cwd=cwd, capture_output=True, text=True, timeout=timeout
+    )
+
+
+async def _remote_ref_is_commit(clone_url: str, ref: str, github_token: str | None) -> bool:
+    """Whether ``ref`` must be checked out as a commit rather than passed to
+    ``git clone --branch`` (which only accepts a branch or tag). Asks the remote
+    whether ``ref`` names a branch or tag; if it doesn't, it's a commit. A failed
+    probe defaults to the branch/tag path so clone can surface the real error."""
+    result = await run_git(
+        [*github_token_git_config(github_token), "ls-remote", "--heads", "--tags", clone_url, ref], timeout=30
+    )
+    if result.returncode != 0:
+        return False
+    return not result.stdout.strip()
+
+
+async def clone_repo(clone_dir: str, base_url: str, ref: str | None, github_token: str | None) -> None:
+    """Clone ``base_url`` at ``ref`` into ``clone_dir``, submodules included."""
+
+    def _redact(msg: str) -> str:
+        return msg.replace(github_token, "***") if github_token else msg
+
+    clone_url = inject_github_token_in_url(base_url, github_token) if github_token else base_url
+    # `git clone --branch` accepts a branch or tag but NOT a bare commit hash, so
+    # a commit ref clones the default branch and is checked out below.
+    ref_is_commit = ref is not None and await _remote_ref_is_commit(clone_url, ref, github_token)
+
+    clone_cmd = [*github_token_git_config(github_token), "clone", "--recurse-submodules", "--shallow-submodules"]
+    if ref and not ref_is_commit:
+        clone_cmd.extend(["--branch", ref])
+    result = await run_git([*clone_cmd, clone_url, clone_dir], timeout=120)
+    if result.returncode != 0:
+        raise CloneFailed(f"Git clone failed: {_redact(result.stderr.strip())}")
+
+    if clone_url != base_url:
+        # Drop the token from the clone's remote so it isn't persisted. Relative
+        # .gitmodules URLs resolved against the token-bearing clone URL, so the
+        # recorded submodule URLs may embed it too; re-sync against clean origin.
+        await set_remote_url(Path(clone_dir), base_url)
+        if os.path.exists(os.path.join(clone_dir, ".gitmodules")):
+            await run_git(["submodule", "sync", "--recursive"], cwd=clone_dir, timeout=30)
+
+    if ref_is_commit:
+        assert ref is not None
+        checkout = await run_git(["checkout", "--force", ref], cwd=clone_dir, timeout=60)
+        if checkout.returncode != 0:
+            raise CloneFailed(f"Git checkout of {ref} failed: {_redact(checkout.stderr.strip())}")
+        if os.path.exists(os.path.join(clone_dir, ".gitmodules")):
+            await run_git(
+                [*github_token_git_config(github_token), "submodule", "update", "--init", "--recursive"],
+                cwd=clone_dir,
+                timeout=120,
+            )
+
+
 def parse_repo_url(repo_url: str) -> tuple[str, str | None]:
     """Parse a repo URL with optional @ref suffix (pip-style).
 
     Returns (base_url, ref) where ref is a branch, tag, or commit hash, or None.
 
     Raises:
-        UnsupportedRepoUrlError: if the URL uses the SSH transport.
+        ValueError: if the URL uses the SSH transport.
     """
     # Reject SSH URLs before the bare-hostname fallback below: an SCP-style
     # URL like "git@github.com:user/repo.git" has no scheme, so it would
     # otherwise be rewritten to a malformed "https://git@github.com:user/..."
     # (git reads "user" as a port) and fail cryptically.
     if is_ssh_url(repo_url):
-        raise UnsupportedRepoUrlError(_SSH_URL_ERROR)
+        raise ValueError(_SSH_URL_ERROR)
     # Allow bare hostnames like "github.com/user/repo" without a scheme.
     # urlparse misidentifies credentials (e.g. "oauth2:TOKEN@host") as a scheme,
     # so we only trust schemes we actually recognise.
@@ -108,7 +178,7 @@ def _get_remote(repo: git.Repo) -> git.Remote:
     try:
         return repo.remote("origin")
     except (AttributeError, ValueError) as e:
-        raise RemoteNotSetError("remote 'origin' is not set") from e
+        raise LookupError("remote 'origin' is not set") from e
 
 
 @async_wrap
@@ -177,7 +247,7 @@ def get_remote_url(repo_path: Path) -> str | None:
     Raises:
         git.InvalidGitRepositoryError: if the path is not a git repository
         git.NoSuchPathError: if the path does not exist
-        RemoteNotSetError: if the repository has no 'origin' remote
+        LookupError: if the repository has no 'origin' remote
     """
     repo = git.Repo(repo_path)
     url = _get_remote(repo).url
@@ -200,7 +270,7 @@ def fetch(repo_path: Path) -> None:
     Raises:
         git.InvalidGitRepositoryError: if the path is not a git repository
         git.NoSuchPathError: if the path does not exist
-        RemoteNotSetError: if the repository has no 'origin' remote
+        LookupError: if the repository has no 'origin' remote
     """
     repo = git.Repo(repo_path)
     _get_remote(repo).fetch()
@@ -213,7 +283,7 @@ def count_commits_vs_remote(repo_path: Path) -> tuple[int, int]:
     Raises:
         git.InvalidGitRepositoryError: if the path is not a git repository
         git.NoSuchPathError: if the path does not exist
-        RemoteNotSetError: if the repository has no 'origin' remote or no tracking branch is set
+        LookupError: if the repository has no 'origin' remote or no tracking branch is set
     """
     repo = git.Repo(repo_path)
     try:
@@ -224,7 +294,7 @@ def count_commits_vs_remote(repo_path: Path) -> tuple[int, int]:
     tracking = branch.tracking_branch()
 
     if tracking is None:
-        raise NoRemoteBranchForLocalBranch(f"{branch.name} has no tracking branch set")
+        raise ValueError(f"{branch.name} has no tracking branch set")
 
     behind = int(repo.git.rev_list("--count", f"{branch}..{tracking}"))
     ahead = int(repo.git.rev_list("--count", f"{tracking}..{branch}"))
@@ -247,7 +317,7 @@ def set_remote_url(repo_path: Path, url: str) -> None:
     try:
         with _get_remote(repo).config_writer as cw:
             cw.set("url", url)
-    except RemoteNotSetError:
+    except LookupError:
         repo.create_remote("origin", url)
 
 
@@ -314,7 +384,7 @@ def github_web_url_from_local_repo(repo_path: Path) -> str | None:
         branch = None
     try:
         remote_url = _get_remote(repo).url
-    except RemoteNotSetError:
+    except LookupError:
         return None
     if not remote_url:
         return None

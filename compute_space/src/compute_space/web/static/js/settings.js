@@ -15,6 +15,8 @@ function showError(msg) {
 function clearError() { document.getElementById('error').hidden = true; }
 function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
 
+// Returns the fetched update state ({state, error}) so callers like setRemote
+// can react to it, or null when the check itself failed.
 async function checkForUpdates() {
   clearError();
   const el = document.getElementById('update-status');
@@ -24,10 +26,11 @@ async function checkForUpdates() {
     const resp = await fetch('/api/settings/update');
     if (!resp.ok) {
       const err = await resp.json();
+      const detail = responseErrorMessage(err, '');
       el.innerHTML = '<p class="msg msg--error">Repo is in an invalid state for updating (no .git perhaps?)</p>'
-        + (err.detail ? '<div class="error-inline">' + esc(err.detail) + '</div>' : '')
+        + (detail ? '<div class="error-inline">' + esc(detail) + '</div>' : '')
         + '<div class="actions"><button onclick="checkForUpdates()" class="btn">Retry</button></div>';
-      return;
+      return null;
     }
     const data = await resp.json();
 
@@ -48,9 +51,11 @@ async function checkForUpdates() {
         + '<div class="error-inline">' + esc(data.error || 'Unknown error') + '</div>'
         + '<div class="actions">' + checkAgainBtn + '</div>';
     }
+    return data;
   } catch (e) {
     showError('Failed to check for updates: ' + e.message);
     el.innerHTML = '<div class="actions"><button onclick="checkForUpdates()" class="btn">Retry</button></div>';
+    return null;
   }
 }
 
@@ -67,7 +72,7 @@ async function applyUpdate() {
     const resp = await fetch('/api/settings/update', {method: 'POST'});
     if (!resp.ok) {
       const err = await resp.json();
-      el.innerHTML = '<p class="msg msg--error">' + esc(err.detail || '') + '</p>'
+      el.innerHTML = '<p class="msg msg--error">' + esc(responseErrorMessage(err, '')) + '</p>'
         + '<div class="actions"><button onclick="checkForUpdates()" class="btn">Retry</button></div>';
       return;
     }
@@ -164,16 +169,24 @@ async function setRemote() {
     });
     if (!resp.ok) {
       const err = await resp.json();
-      throw new Error(err.detail || 'failed to set remote');
+      throw new Error(responseErrorMessage(err, 'failed to set remote'));
     }
-    // Only records the pin — it deliberately does NOT restart. Moving to the new
-    // ref is the update walk's job (checkout+migrate+install+restart, in order),
-    // so surface it as an available update instead of rebooting onto unmigrated code.
+    // Re-baseline from the normalized RemoteInfo so the button stays greyed
+    // out until the operator edits again (mirrors loadRemote's url@ref shape).
+    const saved = await resp.json();
+    savedRemote = (saved.url || '') + (saved.pinned && saved.ref ? '@' + saved.ref : '');
+    input.value = savedRemote;
     msg.textContent = 'Remote saved.';
     msg.className = 'msg';
     msg.hidden = false;
-    btn.disabled = false;
-    await checkForUpdates();
+    // set-remote only records the pin; moving to it is the update walk's job
+    // (checkout+migrate+install+restart, in order). Kick the walk off now when
+    // the pin resolves to different code than HEAD — but not on a dirty tree
+    // (surfaced as UPDATE_AVAILABLE with a notice), which the walk refuses.
+    const status = await checkForUpdates();
+    if (status && status.state === 'UPDATE_AVAILABLE' && !status.error) {
+      await applyUpdate();
+    }
   } catch (e) {
     msg.textContent = e.message;
     msg.className = 'msg msg--error';
@@ -207,7 +220,7 @@ async function changePassword() {
     });
     if (!resp.ok) {
       const err = await resp.json();
-      throw new Error(err.detail || 'failed to change password');
+      throw new Error(responseErrorMessage(err, 'failed to change password'));
     }
     msg.textContent = 'Password changed successfully';
     msg.className = 'msg';
@@ -241,7 +254,7 @@ async function loadOwnerUsername() {
     const resp = await fetch('/api/settings/owner_username');
     if (!resp.ok) {
       const err = await resp.json();
-      throw new Error(err.detail || 'failed to load');
+      throw new Error(responseErrorMessage(err, 'failed to load'));
     }
     const data = await resp.json();
     savedUsername = data.username || '';
@@ -305,7 +318,7 @@ async function setOwnerUsername() {
     });
     if (!resp.ok) {
       const err = await resp.json();
-      throw new Error(err.detail || 'failed to save');
+      throw new Error(responseErrorMessage(err, 'failed to save'));
     }
     const data = await resp.json();
     savedUsername = data.username;
@@ -350,13 +363,14 @@ function dropBuildCache() {
   msg.textContent = 'Dropping cache…';
 
   fetch('/api/drop-docker-cache', {method: 'POST', credentials: 'same-origin'})
-    .then(function(r) { return r.json(); })
-    .then(function(data) {
-      if (data.error) {
+    .then(readJsonResponse)
+    .then(function(res) {
+      if (!res.ok) {
         msg.className = 'msg msg--error';
-        msg.textContent = 'Drop failed: ' + data.error;
+        msg.textContent = 'Drop failed: ' + responseErrorMessage(res.data, 'unknown error');
         return;
       }
+      var data = res.data;
       var reclaimed = '';
       if (data.output) {
         var match = data.output.match(/Total reclaimed space:\s*(.+)/i);
@@ -583,11 +597,11 @@ function testArchiveConnection() {
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify(_archiveBackendBody()),
   })
-    .then(function(r) { return r.json().then(function(b) { return [r.status, b]; }); })
-    .then(function(pair) {
-      var ok = pair[0] === 200 && pair[1].ok;
-      msg.className = ok ? 'msg msg--ok' : 'msg msg--error';
-      msg.textContent = ok ? 'Bucket reachable' : ('Failed: ' + (pair[1].error || ''));
+    .then(readJsonResponse)
+    .then(function(res) {
+      msg.className = res.ok ? 'msg msg--ok' : 'msg msg--error';
+      if (res.ok) { msg.textContent = 'Bucket reachable'; return; }
+      msg.textContent = 'Failed: ' + responseErrorMessage(res.data, '');
     })
     .catch(function(err) {
       msg.className = 'msg msg--error';
@@ -611,13 +625,13 @@ function submitConfigure() {
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify(_archiveBackendBody()),
   })
-    .then(function(r) { return r.json().then(function(b) { return [r.status, b]; }); })
-    .then(function(pair) {
-      if (pair[0] === 200) {
+    .then(readJsonResponse)
+    .then(function(res) {
+      if (res.ok) {
         loadArchiveBackend();
       } else {
         msg.className = 'msg msg--error';
-        msg.textContent = 'Failed: ' + (pair[1].error || pair[1]);
+        msg.textContent = 'Failed: ' + responseErrorMessage(res.data, '');
         document.getElementById('ab-submit-btn').disabled = false;
       }
     })
@@ -684,7 +698,7 @@ async function connectImbue() {
     const resp = await fetch('/api/settings/connect-imbue/start', { method: 'POST' });
     if (!resp.ok) {
       const err = await resp.json();
-      throw new Error(err.detail || 'failed to start');
+      throw new Error(responseErrorMessage(err, 'failed to start'));
     }
     const data = await resp.json();
     // Hand off to Imbue to authorize; it returns to this instance's callback,

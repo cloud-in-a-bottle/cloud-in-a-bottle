@@ -23,7 +23,6 @@ import pytest
 
 from compute_space.core import apps as apps_mod
 from compute_space.core import archive_backend
-from compute_space.core.archive_backend import BackendConfigureError
 from compute_space.core.archive_backend import configure_backend
 from compute_space.core.archive_backend import juicefs_mount_dir
 from compute_space.core.archive_backend import read_state
@@ -265,7 +264,7 @@ def test_configure_refuses_unknown_backend(db, cfg):
         state_message=None,
     )
     with mock.patch.object(archive_backend, "read_state", return_value=bad):
-        with pytest.raises(BackendConfigureError, match="cannot configure"):
+        with pytest.raises(RuntimeError, match="cannot configure"):
             configure_backend(
                 cfg,
                 db,
@@ -756,7 +755,7 @@ def test_sync_s3_to_s3_embeds_both_creds_and_raises_on_failure(cfg):
 
 def test_s3_to_s3_no_source_creds_refused(db, cfg):
     _seed_s3(db, s3_access_key_id=None)
-    with pytest.raises(BackendConfigureError, match="missing its bucket/credentials"):
+    with pytest.raises(RuntimeError, match="missing its bucket/credentials"):
         configure_backend(
             cfg,
             db,

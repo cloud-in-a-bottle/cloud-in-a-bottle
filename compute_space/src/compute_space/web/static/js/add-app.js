@@ -4,8 +4,14 @@ const nextUrl = config.nextUrl;
 let cloneDir = null;
 let repoUrl = null;
 
+document.getElementById('repo-url').addEventListener('input', function(e) {
+  document.getElementById('deploy-btn').disabled = e.target.value.trim() === '';
+});
+
 if (initialRepo) {
+  // Programmatic value set doesn't fire 'input', so sync the button here.
   document.getElementById('repo-url').value = initialRepo;
+  document.getElementById('deploy-btn').disabled = false;
   cloneApp(initialRepo);
 }
 
@@ -25,7 +31,7 @@ function hide(id) { document.getElementById(id).hidden = true; }
 async function cloneApp(url) {
   clearError();
   repoUrl = url || document.getElementById('repo-url').value.trim();
-  if (!repoUrl) { showError('No repository URL provided'); return; }
+  if (!repoUrl) { return; }
 
   hide('clone-form');
   hide('confirm-section');
@@ -48,13 +54,13 @@ async function cloneApp(url) {
   const data = await resp.json();
   hide('cloning-status');
 
-  if (data.authorize_url) {
-    window.location = data.authorize_url;
+  if (resp.status === 401) {
+    window.location = data && data.extra && data.extra.authorize_url;
     return;
   }
 
-  if (data.error) {
-    showError(data.error);
+  if (!resp.ok) {
+    showError(responseErrorMessage(data, 'Clone failed'));
     show('clone-form');
     return;
   }
@@ -334,14 +340,14 @@ async function deployApp() {
 
   const data = await resp.json();
 
-  if (data.authorize_url) {
-    window.location = data.authorize_url;
+  if (resp.status === 401) {
+    window.location = data && data.extra && data.extra.authorize_url;
     return;
   }
 
-  if (data.error) {
+  if (!resp.ok) {
     hide('installing-status');
-    showError(data.error);
+    showError(responseErrorMessage(data, 'Install failed'));
     show('confirm-section');
     return;
   }

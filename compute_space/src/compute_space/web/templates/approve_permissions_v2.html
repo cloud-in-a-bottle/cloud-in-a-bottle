@@ -19,6 +19,7 @@
   <div class="actions">
     <button type="button" class="btn btn--primary" id="grant-btn">Grant</button>
   </div>
+<script src="{{ static_url('js/http-errors.js') }}"></script>
 <script>
 document.getElementById("grant-btn").addEventListener("click", async () => {
   const btn = document.getElementById("grant-btn");
@@ -34,7 +35,10 @@ document.getElementById("grant-btn").addEventListener("click", async () => {
         grant: {{ grant | tojson }},
       }),
     });
-    if (!resp.ok) throw new Error(await resp.text());
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => null);
+      throw new Error(responseErrorMessage(err, "Request failed"));
+    }
     const returnTo = {{ (redirect_url or '') | tojson }};
     if (returnTo) {
       window.location.href = returnTo;

@@ -222,12 +222,16 @@ def managed_router(config: Config, startup_timeout: int = 30) -> Generator[subpr
         yield proc
     finally:
         try:
-            kill_tree(proc, signal.SIGTERM)
-            try:
-                proc.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                kill_tree(proc)
-                proc.wait()
+            # A caller may have already stopped this exact process (e.g. to simulate an
+            # engine restart) and started a replacement of its own -- .poll() avoids
+            # signalling a since-recycled PID, mirroring _kill_router's own guard above.
+            if proc.poll() is None:
+                kill_tree(proc, signal.SIGTERM)
+                try:
+                    proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    kill_tree(proc)
+                    proc.wait()
         finally:
             _router_proc = None
             log_file.close()

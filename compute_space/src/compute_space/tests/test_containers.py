@@ -75,9 +75,9 @@ def test_build_image_applies_memory_limit(monkeypatch: pytest.MonkeyPatch) -> No
     _patch_subprocess_run(monkeypatch, fake_run)
 
     build_image("myapp", "/tmp/repo", "Dockerfile", temp_data_dir=None, memory_mb=512)
-    # --memory caps build RAM; --memory-swap=-1 allows unlimited swap so a
-    # build that needs more spills to swap instead of OOMing. Both go to
-    # `podman build`, before the build context path.
+    # --memory caps build RAM; --memory-swap set equal to --memory gives the
+    # build zero swap (the combined memory+swap ceiling == the memory limit).
+    # Both go to `podman build`, before the build context path.
     assert calls[0] == [
         "podman",
         "build",
@@ -86,7 +86,7 @@ def test_build_image_applies_memory_limit(monkeypatch: pytest.MonkeyPatch) -> No
         "-f",
         "/tmp/repo/Dockerfile",
         "--memory=512m",
-        "--memory-swap=-1",
+        "--memory-swap=512m",
         "/tmp/repo",
     ]
 

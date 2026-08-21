@@ -111,4 +111,8 @@ def test_drop_docker_cache_endpoint_failure(
     client.cookies.update(cookies)
     resp = client.post("/api/drop-docker-cache")
     assert resp.status_code == 500
-    assert resp.json() == {"error": "podman engine error"}
+    # Litestar's default 500 handler masks `detail`, but `extra` passes through
+    # unmasked, so the real podman output is carried there instead.
+    body = resp.json()
+    assert body["detail"] == "Internal Server Error"
+    assert body["extra"] == {"output": "podman engine error"}
