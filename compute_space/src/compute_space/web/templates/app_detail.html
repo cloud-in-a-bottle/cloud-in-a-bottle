@@ -46,7 +46,7 @@
   <tr><th>Repo Path</th><td>{{ app.repo_path }}</td></tr>
   <tr><th>Created</th><td>{{ app.created_at }}</td></tr>
   {% if app.error_message %}
-  <tr><th>Error</th><td class="error">{{ app.error_message }}</td></tr>
+  <tr><th>Error</th><td class="error" style="white-space: pre-wrap;">{{ app.error_message }}</td></tr>
   {% endif %}
   {% if app.container_id %}
   <tr><th>Container ID</th><td><code>{{ app.container_id[:12] }}</code></td></tr>

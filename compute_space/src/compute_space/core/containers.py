@@ -224,13 +224,15 @@ def build_image(
                 raise
         if proc.returncode != 0:
             _raise_if_build_cache_corrupt(build_output)
-            raise RuntimeError(f"Container build failed (exit code {proc.returncode})")
+            tail = build_output[-100:] if len(build_output) > 100 else build_output
+            raise RuntimeError(f"Container build failed (exit code {proc.returncode}):\n{tail}")
     else:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
         if result.returncode != 0:
             combined = result.stdout + result.stderr
             _raise_if_build_cache_corrupt(combined)
-            raise RuntimeError(f"Container build failed (exit code {result.returncode})")
+            tail = combined[-100:] if len(combined) > 100 else combined
+            raise RuntimeError(f"Container build failed (exit code {result.returncode}):\n{tail}")
 
     if temp_data_dir:
         _append_log(app_name, temp_data_dir, "=== Build complete ===\n\n")
