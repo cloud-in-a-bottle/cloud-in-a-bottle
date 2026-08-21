@@ -55,6 +55,40 @@ def _seed_app(db_path: str, name: str, status: str = "running") -> str:
     return app_id
 
 
+def test_wipe_data_restart_returns_202_and_marks_building(
+    cfg: Any, client: TestClient[Litestar], cookies: dict[str, str]
+) -> None:
+    app_id = _seed_app(cfg.db_path, "myapp")
+
+    with patch("compute_space.web.routes.api.apps.Thread") as Thread:
+        client.cookies.update(cookies)
+        resp = client.post(f"/wipe_data_restart/{app_id}")
+
+    assert resp.status_code == 202
+    assert resp.json() == {"ok": True}
+    Thread.assert_called_once()
+    Thread.return_value.start.assert_called_once()
+    db = sqlite3.connect(cfg.db_path)
+    try:
+        row = db.execute("SELECT status FROM apps WHERE app_id = ?", (app_id,)).fetchone()
+    finally:
+        db.close()
+    assert row == ("building",)
+
+
+@pytest.mark.parametrize("status", ["building", "starting"])
+def test_wipe_data_restart_refuses_while_restart_in_flight(
+    cfg: Any, client: TestClient[Litestar], cookies: dict[str, str], status: str
+) -> None:
+    app_id = _seed_app(cfg.db_path, "myapp", status=status)
+    with patch("compute_space.web.routes.api.apps.Thread") as Thread:
+        client.cookies.update(cookies)
+        resp = client.post(f"/wipe_data_restart/{app_id}")
+    assert resp.status_code == 409
+    assert "already restarting" in resp.json()["detail"]
+    Thread.assert_not_called()
+
+
 def test_remove_returns_202_and_marks_removing(
     cfg: Any, client: TestClient[Litestar], cookies: dict[str, str]
 ) -> None:

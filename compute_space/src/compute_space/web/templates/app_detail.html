@@ -164,8 +164,8 @@
   #app-action-buttons #app-action-msg { flex: 0 0 auto; }
 </style>
 <div id="app-action-buttons">
-  <button class="btn" onclick="appAction('/stop_app/{{ app.app_id }}', null, {label: 'Stopping'})">Stop App</button>
-  <button class="btn" onclick="appAction('/reload_app/{{ app.app_id }}', null, {label: 'Reloading'})">Reload App</button>
+  <button class="btn" onclick="appAction('/stop_app/{{ app.app_id }}', null, {label: 'Stopping'})">Stop</button>
+  <button class="btn" onclick="appAction('/reload_app/{{ app.app_id }}', null, {label: 'Reloading'})">Reload</button>
   <button class="btn" onclick="appAction('/reload_app/{{ app.app_id }}', {update: true}, {label: 'Updating &amp; reloading'})">Update &amp; Reload</button>
   <button class="btn" id="copy-diagnostics-btn" onclick="copyAppDiagnostics(this)">Copy Diagnostics</button>
   {% if edit_app %}
@@ -176,10 +176,11 @@
         <button class="btn" type="submit">Edit App</button>
       </form>
     {% else %}
-      <a href="{{ edit_app.href }}" class="btn" target="_blank" rel="noopener">Edit App</a>
+      <a href="{{ edit_app.href }}" class="btn" target="_blank" rel="noopener">Edit</a>
     {% endif %}
   {% endif %}
   <button class="btn" onclick="if(confirm('Remove {{ app.name }} but keep its databases and files? You can re-deploy later to the same app name to reuse the data.')) appAction('/remove_app/{{ app.app_id }}', {keep_data: true}, {isRemove: true, label: 'Removing (keeping data)'})">Remove (Keep Data)</button>
+  <button class="btn btn-danger" onclick="if(confirm('Wipe all data for {{ app.name }} and restart it? This deletes permanent, temporary, and archive data, while retaining the checked-out source for rebuilding.')) appAction('/wipe_data_restart/{{ app.app_id }}', {}, {label: 'Wiping data &amp; restarting'})">Wipe Data &amp; Restart</button>
   <button class="btn btn-danger" onclick="if(confirm('Remove {{ app.name }}? This deletes all app data permanently.')) appAction('/remove_app/{{ app.app_id }}', {}, {isRemove: true, label: 'Removing'})">Remove App &amp; Data</button>
   <span id="app-action-msg" style="margin-left:0.5em;"></span>
 </div>

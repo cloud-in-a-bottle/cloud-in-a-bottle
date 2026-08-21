@@ -220,7 +220,7 @@ def storage_status(config: Config) -> dict[str, object]:
 def _stop_app_process_safe(row: sqlite3.Row) -> None:
     """Call stop_app_process, catching errors."""
     try:
-        stop_app_process(row)
+        stop_app_process(row["name"], row["container_id"])
     except Exception:
         logger.exception("Failed to stop app %s", row["name"])
 

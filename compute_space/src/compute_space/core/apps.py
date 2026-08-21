@@ -26,10 +26,12 @@ from compute_space.core.containers import is_container_running
 from compute_space.core.containers import remove_image
 from compute_space.core.containers import run_container
 from compute_space.core.containers import stop_app_process
+from compute_space.core.containers import stop_container
 from compute_space.core.data import deprovision_data
 from compute_space.core.data import deprovision_temp_data
 from compute_space.core.data import provision_data
 from compute_space.core.data import rmtree_with_sudo_fallback
+from compute_space.core.data import wipe_data_preserving_repo
 from compute_space.core.domains import Domain
 from compute_space.core.domains import primary_domain
 from compute_space.core.git_ops import CloneFailed
@@ -62,6 +64,7 @@ RESERVED_PATHS = {
     "/remove_app",
     "/stop_app",
     "/reload_app",
+    "/wipe_data_restart",
     "/api",
     "/health",
     "/app",
@@ -170,6 +173,11 @@ class App:
 
 def find_app_by_name(name: str) -> App | None:
     row = get_db().execute("SELECT * FROM apps WHERE name = ?", (name,)).fetchone()
+    return App.from_row(row) if row else None
+
+
+def find_app_by_id(app_id: str) -> App | None:
+    row = get_db().execute("SELECT * FROM apps WHERE app_id = ?", (app_id,)).fetchone()
     return App.from_row(row) if row else None
 
 
@@ -617,7 +625,7 @@ def stop_running_archive_apps(
             continue
         logger.info("stopping archive-using app %s before archive migration", row["name"])
         try:
-            stop_app_process(row)
+            stop_app_process(row["name"], row["container_id"])
         except Exception:
             logger.exception("failed to stop app %s before archive migration", row["name"])
         recorded.append(row["app_id"])
@@ -1003,6 +1011,46 @@ def reload_app_background(app_id: str, repo_path: str, config: Config) -> None:
         db.close()
 
 
+def wipe_data_restart_background(app_id: str, config: Config) -> None:
+    """Stop an app, remove its data, and rebuild it from its checked-out source."""
+    db = sqlite3.connect(config.db_path, check_same_thread=False)
+    db.row_factory = sqlite3.Row
+    db.execute("PRAGMA journal_mode=WAL")
+    try:
+        app = find_app_by_id(app_id)
+        if app is None:
+            return
+        try:
+            if app.container_id:
+                stop_container(app.container_id)
+                if is_container_running(app.container_id):
+                    raise RuntimeError("App container is still running after stop; refusing to wipe data")
+
+            # The old container ID has served its purpose for the stop safety
+            # check. Clear it before wiping or rebuilding so status/log polling
+            # cannot ask Podman for a container that was just removed.
+            db.execute("UPDATE apps SET container_id = NULL WHERE app_id = ?", (app_id,))
+            db.commit()
+            remove_image(app.name)
+            wipe_data_preserving_repo(
+                app.name,
+                config.persistent_data_dir,
+                config.temporary_data_dir,
+                archive_backend.effective_archive_dir(config, db),
+                app.repo_path,
+            )
+            reload_app_background(app_id, app.repo_path, config)
+        except Exception as exc:
+            logger.exception("Failed to wipe and restart %s", app.name)
+            db.execute(
+                "UPDATE apps SET status = 'error', error_message = ? WHERE app_id = ?",
+                (f"Wipe and restart failed: {exc}", app_id),
+            )
+            db.commit()
+    finally:
+        db.close()
+
+
 def remove_app_background(app_id: str, keep_data: bool, config: Config) -> None:
     """Tear an app down in a background thread.
 
@@ -1026,7 +1074,7 @@ def remove_app_background(app_id: str, keep_data: bool, config: Config) -> None:
         app_name = app_row["name"]
 
         try:
-            stop_app_process(app_row)
+            stop_app_process(app_name, app_row["container_id"])
         except Exception:
             logger.exception("stop_app_process failed during remove of %s", app_name)
         try:

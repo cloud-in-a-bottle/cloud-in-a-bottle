@@ -194,3 +194,29 @@ def deprovision_data(
     rmtree_with_sudo_fallback(os.path.join(data_dir, "app_data", app_name))
     rmtree_with_sudo_fallback(os.path.join(archive_dir, app_name))
     deprovision_temp_data(app_name, temp_data_dir)
+
+
+def wipe_data_preserving_repo(
+    app_name: str,
+    data_dir: str,
+    temp_data_dir: str,
+    archive_dir: str,
+    repo_path: str,
+) -> None:
+    """Remove an app's data while retaining its checked-out source repository.
+
+    The repository lives inside the app's temporary-data directory, but is needed
+    to rebuild the app after the wipe. All other persistent, archive, and
+    temporary data is removed.
+    """
+    rmtree_with_sudo_fallback(os.path.join(data_dir, "app_data", app_name), raise_on_failure=True)
+    rmtree_with_sudo_fallback(os.path.join(archive_dir, app_name), raise_on_failure=True)
+
+    temp_app_dir = os.path.join(temp_data_dir, "app_temp_data", app_name)
+    if not os.path.isdir(temp_app_dir):
+        return
+    repo_path = os.path.abspath(repo_path)
+    for entry in os.scandir(temp_app_dir):
+        if os.path.abspath(entry.path) == repo_path:
+            continue
+        rmtree_with_sudo_fallback(entry.path, raise_on_failure=True)
