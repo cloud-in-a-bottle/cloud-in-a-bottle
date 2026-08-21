@@ -15,6 +15,8 @@ function showError(msg) {
 function clearError() { document.getElementById('error').style.display = 'none'; }
 function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
 
+// Returns the fetched update state ({state, error}) so callers like setRemote
+// can react to it, or null when the check itself failed.
 async function checkForUpdates() {
   clearError();
   const el = document.getElementById('update-status');
@@ -27,7 +29,7 @@ async function checkForUpdates() {
       el.innerHTML = '<p class="error">Repo is in an invalid state for updating (no .git perhaps?)</p>'
         + (responseErrorMessage(err, '') ? '<div class="error-inline">' + esc(responseErrorMessage(err, '')) + '</div>' : '')
         + '<button onclick="checkForUpdates()" class="btn" style="margin-top:0.5em;">Retry</button>';
-      return;
+      return null;
     }
     const data = await resp.json();
 
@@ -46,9 +48,11 @@ async function checkForUpdates() {
         + '<div class="error-inline">' + esc(data.error || 'Unknown error') + '</div>'
         + checkAgainBtn;
     }
+    return data;
   } catch (e) {
     showError('Failed to check for updates: ' + e.message);
     el.innerHTML = '<button onclick="checkForUpdates()" class="btn">Retry</button>';
+    return null;
   }
 }
 
@@ -164,14 +168,22 @@ async function setRemote() {
       const err = await resp.json();
       throw new Error(responseErrorMessage(err, 'failed to set remote'));
     }
-    // Only records the pin — it deliberately does NOT restart. Moving to the new
-    // ref is the update walk's job (checkout+migrate+install+restart, in order),
-    // so surface it as an available update instead of rebooting onto unmigrated code.
+    // Re-baseline from the normalized RemoteInfo so the button stays greyed
+    // out until the operator edits again (mirrors loadRemote's url@ref shape).
+    const saved = await resp.json();
+    savedRemote = (saved.url || '') + (saved.pinned && saved.ref ? '@' + saved.ref : '');
+    input.value = savedRemote;
     msg.textContent = 'Remote saved.';
     msg.className = '';
     msg.style.display = '';
-    btn.disabled = false;
-    await checkForUpdates();
+    // set-remote only records the pin; moving to it is the update walk's job
+    // (checkout+migrate+install+restart, in order). Kick the walk off now when
+    // the pin resolves to different code than HEAD — but not on a dirty tree
+    // (surfaced as UPDATE_AVAILABLE with a notice), which the walk refuses.
+    const status = await checkForUpdates();
+    if (status && status.state === 'UPDATE_AVAILABLE' && !status.error) {
+      await applyUpdate();
+    }
   } catch (e) {
     msg.textContent = e.message;
     msg.className = 'error';
