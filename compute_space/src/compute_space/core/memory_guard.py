@@ -1,9 +1,23 @@
 """Memory guard: warn the owner about memory pressure and OOM kills.
 
-A daemon thread (mirroring the storage guard) that each tick warns when an app
-nears its memory limit, when an app's container is OOM-killed (per-app, from
-``podman events``), or when the host runs out of memory and the kernel OOM killer
-reaps any process (from the system journal via ``journalctl``).
+A daemon thread (mirroring the storage guard) that warns when an app nears its
+memory limit, when an app's container is OOM-killed (per-app, from ``podman
+events``), or when the host runs out of memory and the kernel OOM killer reaps any
+process (from the system journal via ``journalctl``).
+
+The two OOM detectors each *follow a subprocess for log lines*, which is the same
+job the app-log stream does with ``podman logs --follow``; they share the
+:func:`compute_space.core.process_stream.stream_process_lines` primitive. Here we
+wrap it in :func:`_follow_lines`, which reconnects when a stream ends and treats a
+missing binary (no podman/journalctl on a dev host) as an expected "detector off"
+state rather than an error.
+
+The guard runs its own asyncio event loop on its own daemon thread — deliberately
+*not* the loop hypercorn serves requests on. It does its blocking work (``podman
+stats`` via ``collect_app_resources``, sqlite) inline on that loop: on a loop that
+serves nothing else this is fine — a slow pressure check just pushes out its own next
+tick and briefly holds off the OOM followers (whose output buffers in the pipe
+meanwhile). It only mustn't share hypercorn's loop, where it would stall requests.
 
 The "notification" is only a log line today; the ``TODO:`` markers are where the
 real notification system will hook in once it exists.
@@ -11,19 +25,22 @@ real notification system will hook in once it exists.
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import json
-import os
 import re
 import sqlite3
-import subprocess
 import threading
 import time
+from collections import deque
+from collections.abc import AsyncIterator
 
 import attr
 
 from compute_space.config import Config
 from compute_space.core.diagnostics import collect_app_resources
 from compute_space.core.logging import logger
+from compute_space.core.process_stream import stream_process_lines
 from compute_space.core.storage import format_bytes
 
 _MEMORY_GUARD_INTERVAL_SECONDS = 60
@@ -31,9 +48,14 @@ _MEMORY_GUARD_INTERVAL_SECONDS = 60
 _MEMORY_WARN_PERCENT = 90.0
 _MEMORY_CLEAR_PERCENT = 80.0
 
-_STREAM_READ_BYTES = 65536
+# After a follow stream ends (or its binary is missing) wait this long before
+# (re)connecting, so a persistent failure retries steadily instead of spinning.
+_STREAM_RECONNECT_SECONDS = 5
 
-# The two OOM detectors each stream a subprocess that emits newline-delimited JSON.
+# How many trailing stderr lines to keep from a follow, to name the reason it ended.
+_STDERR_TAIL_LINES = 5
+
+# The two OOM detectors each follow a subprocess that emits newline-delimited JSON.
 # journalctl reads the kernel log from the system journal (needs the systemd-journal
 # group, granted via the unit's SupplementaryGroups=, not CAP_SYSLOG); --lines=0 so
 # --follow reports only kills that happen while we run, not stale ones from the boot.
@@ -66,88 +88,41 @@ class _ContainerOomKill:
     container_name: str
 
 
-def _read_stream_chunk(fd: int) -> bytes | None:
-    """Return the next chunk of a streaming subprocess's stdout, or None if it would block.
+async def _follow_lines(argv: list[str], detector: str) -> AsyncIterator[bytes]:
+    """Follow a long-lived streaming command forever, yielding its non-blank lines.
 
-    The stdout is a raw byte stream, so a chunk may hold part of a line, several
-    lines, or a line split across reads — the caller reassembles on newlines. Empty
-    bytes means EOF (the process exited); None means nothing is available right now.
+    Reconnects when the stream ends (the daemon restarted, the journal rotated).
+    A **missing binary** — no podman/journalctl, e.g. a macOS dev host — is an
+    *expected* state: it's caught, warned once, and retried, so the detector just
+    stays off rather than crashing the guard. Anything else (a read/permission
+    error) propagates to the guard's top-level handler; we don't paper it over as
+    a silent no-op.
     """
-    try:
-        return os.read(fd, _STREAM_READ_BYTES)  # b"" at EOF
-    except BlockingIOError:
-        return None
-
-
-class _JsonEventStream:
-    """A long-lived command whose stdout is drained as complete lines each tick.
-
-    Both OOM detectors read newline-delimited JSON from a streaming subprocess —
-    ``journalctl`` for the host, ``podman events`` per app — so this owns the shared
-    plumbing: a non-blocking read, partial-line buffering across ticks, and
-    reconnect-on-EOF. Owned by the one guard-loop thread, so it needs no locking. If
-    the command can't start (binary missing) it stays off and ``drain_lines`` retries
-    the start on a later tick; if the stream ends it reconnects on the next drain
-    (lines during that brief gap are missed — acceptable for a rare outage).
-    """
-
-    def __init__(self, argv: list[str], detector: str) -> None:
-        self._argv = argv
-        self._detector = detector  # human label for log lines, e.g. "Host OOM detection"
-        self._proc: subprocess.Popen[bytes] | None = None
-        self._buf = b""
-        # Suppress repeated "cannot start" warnings while the binary stays absent.
-        self._start_warned = False
-        self._start()
-
-    def _start(self) -> None:
-        """(Re)start the stream; leaves ``_proc`` None on failure."""
+    warned_missing = False
+    while True:
+        # Divert stderr (not into the parsed JSON) so an abnormal end — e.g. the
+        # journal grant not taking effect, so journalctl exits "permission denied" —
+        # surfaces its real reason below instead of a bare "stream ended".
+        recent_stderr: deque[bytes] = deque(maxlen=_STDERR_TAIL_LINES)
         try:
-            proc = subprocess.Popen(self._argv, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
-        except OSError as e:
-            if not self._start_warned:
-                logger.warning("Cannot start `%s` for %s: %s", self._argv[0], self._detector, e)
-                self._start_warned = True
-            self._proc = None
-            return
-        assert proc.stdout is not None
-        # Non-blocking so ``drain_lines`` reads whatever is available and returns
-        # rather than blocking the guard loop until the next line arrives.
-        os.set_blocking(proc.stdout.fileno(), False)
-        self._proc = proc
-        self._buf = b""
-        self._start_warned = False
-        logger.info("%s active (streaming `%s`)", self._detector, " ".join(self._argv[:2]))
-
-    def _reconnect(self) -> None:
-        """Reap the ended stream and start a fresh one."""
-        if self._proc is not None:
-            if self._proc.stdout is not None:
-                self._proc.stdout.close()
-            self._proc.wait()  # Already exited (we hit EOF); reap the zombie.
-            self._proc = None
-        logger.warning("`%s` stream ended; reconnecting for %s", self._argv[0], self._detector)
-        self._start()
-
-    def drain_lines(self) -> list[bytes]:
-        """Return the complete lines seen since the last drain; reconnect if the stream ended."""
-        if self._proc is None:
-            self._start()
-            if self._proc is None:
-                return []
-        assert self._proc.stdout is not None
-        fd = self._proc.stdout.fileno()
-
-        while chunk := _read_stream_chunk(fd):
-            self._buf += chunk
-
-        # Last line may be partial. Leave it in the buffer until we see a trailing newline.
-        *complete_lines, self._buf = self._buf.split(b"\n")
-
-        # On a falsy read, b"" is EOF so we have to reconnect; None is just "nothing right now".
-        if chunk == b"":
-            self._reconnect()
-        return [line for line in complete_lines if line.strip()]
+            async for line in stream_process_lines(argv, merge_stderr=False, stderr_sink=recent_stderr.append):
+                if line.strip():
+                    yield line
+        except FileNotFoundError:
+            if not warned_missing:
+                logger.warning("Cannot start `%s` for %s: not installed; detection disabled", argv[0], detector)
+                warned_missing = True
+            await asyncio.sleep(_STREAM_RECONNECT_SECONDS)
+            continue
+        # Clean EOF: the stream ended. It had connected, so re-arm the missing
+        # warning and reconnect after a pause, naming any stderr it left behind.
+        warned_missing = False
+        reason = b" / ".join(recent_stderr).decode("utf-8", "replace").strip()
+        if reason:
+            logger.warning("`%s` stream ended for %s (%s); reconnecting", argv[0], detector, reason)
+        else:
+            logger.warning("`%s` stream ended; reconnecting for %s", argv[0], detector)
+        await asyncio.sleep(_STREAM_RECONNECT_SECONDS)
 
 
 def _parse_journal_oom(line: bytes) -> _HostOomKill | None:
@@ -172,31 +147,6 @@ def _parse_journal_oom(line: bytes) -> _HostOomKill | None:
     return _HostOomKill(pid=int(match.group(1)), comm=match.group(2))
 
 
-class _HostOomReader:
-    """Reports host-level (global) OOM kills from the kernel log, via ``journalctl``.
-
-    Reads kernel messages from the system journal rather than /dev/kmsg, so the unit
-    needs only membership in the ``systemd-journal`` group (``SupplementaryGroups=``),
-    not CAP_SYSLOG. Most kernel lines aren't OOM kills, so it filters for the ones
-    that are.
-    """
-
-    def __init__(self) -> None:
-        self._stream = _JsonEventStream(_JOURNALCTL_KERNEL_FOLLOW, "Host OOM detection")
-
-    def check(self) -> None:
-        """Report any host OOM kills seen since the last check."""
-        for line in self._stream.drain_lines():
-            kill = _parse_journal_oom(line)
-            if kill is not None:
-                logger.warning(
-                    "TODO: make this a notification — the host OOM killer killed process %d (%s); "
-                    "the machine is out of memory",
-                    kill.pid,
-                    kill.comm,
-                )
-
-
 def _parse_podman_event(line: bytes) -> _ContainerOomKill:
     """Parse one ``podman events --format json`` line into a container OOM kill.
 
@@ -215,56 +165,76 @@ def _parse_podman_event(line: bytes) -> _ContainerOomKill:
         raise ValueError(f"unrecognized `podman events` line {line[:300]!r}") from e
 
 
-class _PodmanOomReader:
-    """Streams per-app (cgroup-limit) OOM kills from a long-lived ``podman events``.
-
-    We stream events rather than poll ``podman inspect`` because ``--restart`` resets
-    ``OOMKilled`` to false on the restarted run, so a poll races the restart and can
-    miss the kill; the event is emitted the instant the kill happens and delivered
-    exactly once.
-    """
-
-    def __init__(self) -> None:
-        self._stream = _JsonEventStream(_PODMAN_OOM_EVENTS, "Per-app OOM detection")
-
-    def drain(self) -> list[_ContainerOomKill]:
-        """Return per-app OOM kills seen since the last drain.
-
-        Every line is (by our ``--filter``) an OOM event, and ``_parse_podman_event``
-        raises on an unrecognized shape rather than silently dropping the kill.
-        """
-        return [_parse_podman_event(line) for line in self._stream.drain_lines()]
+def _query_container_rows(config: Config) -> list[sqlite3.Row]:
+    """Rows for every app that currently has a container (the guard's unit of work)."""
+    with contextlib.closing(sqlite3.connect(config.db_path)) as db:
+        db.row_factory = sqlite3.Row
+        return db.execute(
+            "SELECT app_id, name, container_id, cpu_cores, memory_mb FROM apps WHERE container_id IS NOT NULL"
+        ).fetchall()
 
 
 class _MemoryGuard:
-    """One guard loop's state and checks: OOM readers plus per-app pressure debounce.
+    """The guard's detectors and per-app pressure debounce state.
 
-    Everything here is owned by the one loop thread, so none of it needs locking.
-    ``_pressure_notified`` is the debounce state (see ``_check_memory_pressure``);
-    OOM kills need no such state, as each ``podman events`` event arrives once.
+    ``run`` drives three concurrent detectors on the guard's own loop, each doing its
+    blocking work (podman stats, sqlite) inline since the loop serves nothing else.
+    ``_pressure_notified`` (the debounce state) is touched only by the pressure loop,
+    so it needs no locking.
     """
 
     def __init__(self) -> None:
-        self._host_oom = _HostOomReader()
-        self._podman_oom = _PodmanOomReader()
         self._pressure_notified: set[str] = set()
 
-    def check_once(self, config: Config) -> None:
-        """Run one pass: host OOM + per-app OOM (events) + per-app memory pressure."""
-        self._host_oom.check()
-        container_ooms = self._podman_oom.drain()
+    async def run(self, config: Config) -> None:
+        """Run host-OOM, per-app-OOM, and memory-pressure detectors until cancelled."""
+        await asyncio.gather(
+            self._run_host_oom(),
+            self._run_podman_oom(config),
+            self._run_pressure_loop(config),
+        )
 
-        db = sqlite3.connect(config.db_path)
-        db.row_factory = sqlite3.Row
-        try:
-            rows = db.execute(
-                "SELECT app_id, name, container_id, cpu_cores, memory_mb FROM apps WHERE container_id IS NOT NULL"
-            ).fetchall()
-        finally:
-            db.close()
+    async def _run_host_oom(self) -> None:
+        """Warn on each host-level (global) OOM kill seen on the kernel journal."""
+        async for line in _follow_lines(_JOURNALCTL_KERNEL_FOLLOW, "Host OOM detection"):
+            kill = _parse_journal_oom(line)
+            if kill is not None:
+                logger.warning(
+                    "TODO: make this a notification — the host OOM killer killed process %d (%s); "
+                    "the machine is out of memory",
+                    kill.pid,
+                    kill.comm,
+                )
 
-        self._report_container_ooms(container_ooms, rows)
-        for row in rows:
+    async def _run_podman_oom(self, config: Config) -> None:
+        """Report each per-app OOM kill, naming the owning app when we can map it.
+
+        A malformed event line is logged and skipped, not propagated: letting the
+        ``ValueError`` escape would fail ``run``'s gather and tear down the sibling
+        host-OOM and pressure detectors, losing far more than the one dropped kill.
+        """
+        async for line in _follow_lines(_PODMAN_OOM_EVENTS, "Per-app OOM detection"):
+            try:
+                kill = _parse_podman_event(line)
+            except ValueError:
+                logger.exception("Skipping unparseable podman OOM event")
+                continue
+            rows = _query_container_rows(config)
+            self._report_container_ooms([kill], rows)
+
+    async def _run_pressure_loop(self, config: Config) -> None:
+        """Every ``_MEMORY_GUARD_INTERVAL_SECONDS``, check each app's memory pressure.
+
+        The check runs inline, so ``podman stats`` blocks the loop for the seconds it
+        takes; that just pushes out the next tick (the interval is a floor, not a
+        guarantee) and briefly delays the OOM followers, which is fine here.
+        """
+        while True:
+            self._check_pressure_once(config)
+            await asyncio.sleep(_MEMORY_GUARD_INTERVAL_SECONDS)
+
+    def _check_pressure_once(self, config: Config) -> None:
+        for row in _query_container_rows(config):
             self._check_memory_pressure(row)
 
     def _report_container_ooms(self, kills: list[_ContainerOomKill], rows: list[sqlite3.Row]) -> None:
@@ -321,16 +291,18 @@ class _MemoryGuard:
 
 
 def _memory_guard_loop(config: Config) -> None:
-    guard = _MemoryGuard()
+    """Run the guard's asyncio loop on this dedicated daemon thread.
+
+    A *separate* event loop from the one hypercorn serves requests on (see the module
+    docstring). ``_MemoryGuard.run`` only returns by raising — a detector hit an
+    unexpected error — so we log it and restart, mirroring the old per-tick handler.
+    """
     while True:
         try:
-            guard.check_once(config)
+            asyncio.run(_MemoryGuard().run(config))
         except Exception:
-            logger.exception(
-                "Memory guard tick failed; skipping this cycle and retrying in %ds",
-                _MEMORY_GUARD_INTERVAL_SECONDS,
-            )
-        time.sleep(_MEMORY_GUARD_INTERVAL_SECONDS)
+            logger.exception("Memory guard crashed; restarting in %ds", _STREAM_RECONNECT_SECONDS)
+            time.sleep(_STREAM_RECONNECT_SECONDS)
 
 
 def ensure_memory_guard(config: Config) -> None:

@@ -18,7 +18,7 @@ import pytest
 
 from compute_space.core.apps import clone_and_read_manifest
 from compute_space.core.apps import git_pull
-from compute_space.core.apps import github_token_git_config
+from compute_space.core.git_ops import github_token_git_config
 
 MANIFEST = '[app]\nname = "myapp"\nversion = "0.1.0"\n[runtime.container]\nimage = "Dockerfile"\nport = 8080\n'
 
