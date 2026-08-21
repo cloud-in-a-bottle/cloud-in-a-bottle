@@ -162,11 +162,13 @@ a.banner__text:hover {
   position: absolute;
   top: var(--space-4);
   left: var(--layout-gutter);
-  z-index: 1;
+  /* Above .layout, which is also positioned: on the full-width pages (terminal,
+     logs) the content column reaches the gutter and swallowed the clicks. */
+  z-index: 2;
   display: flex;
   width: max-content;
   align-items: center;
-  gap: var(--space-4);
+  gap: var(--space-2);
   font-family: var(--font-mono);
   font-size: var(--text-xs);
   line-height: var(--leading-loose);
@@ -177,6 +179,13 @@ a.banner__text:hover {
      there is no base.css anchor colour to fall back to. */
   color: var(--color-text);
   opacity: 0.8;
+}
+
+/* The arrow is 7px tall inside a 36px line box, so centring it lands the 1px
+   shaft on a half pixel and it renders as two grey rows. The nudge puts the
+   shaft back on the pixel grid, level with the middle of the capitals. */
+.nav-back .icon {
+  margin-top: -1px;
 }
 
 .nav-back:hover {
@@ -502,7 +511,7 @@ h2.section-title {
 
 /* Status words, still rendered as text on the detail page. */
 .status-running {
-  color: #2a8c00;
+  color: var(--color-ok-text);
   font-weight: var(--weight-semibold);
 }
 
@@ -518,7 +527,7 @@ h2.section-title {
 .status-building,
 .status-starting,
 .status-removing {
-  color: #a4700a;
+  color: var(--color-warn-text);
 }
 
 /* ── Search ─────────────────────────────────────────────────────────── */
@@ -1349,15 +1358,14 @@ select {
 }
 
 /* ── App detail ─────────────────────────────────────────────────────────
-   The status is the one fact the page exists to report, so its row is banded
-   and set a size larger than the rows around it. The actions table pairs each
-   button with a plain-language note about what it does. */
+   The status is the one fact the page exists to report, so it is set a size
+   larger than the rows around it. The actions table pairs each button with a
+   plain-language note about what it does. */
 
 .info-table tr.status-row th[scope="row"],
 .info-table tr.status-row td {
   padding-top: var(--space-3);
   padding-bottom: var(--space-3);
-  background: var(--color-sky);
 }
 
 .status-row td {
@@ -1366,9 +1374,19 @@ select {
   text-transform: uppercase;
 }
 
-.status-row .status-dot {
-  width: 8px;
-  height: 8px;
+/* The dot is drawn on the status word itself, so it takes the word's colour
+   rather than the brighter swatch the dashboard list uses at 5px. */
+.status-value {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.status-value::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  background: currentColor;
 }
 
 /* The hint under the git URL input is a sentence, not another inline control,

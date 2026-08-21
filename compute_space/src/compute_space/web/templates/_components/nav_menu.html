@@ -6,7 +6,7 @@
     its own subdomain, else the page that installs it. -#}
 {% from "_components/icon.html" import icon %}
 
-{% macro nav_menu(source_url=None, catalog_app_name=None, catalog_installed=False) -%}
+{% macro nav_menu(catalog_app_name=None, catalog_installed=False) -%}
 <div class="nav-menu">
   <button class="nav-menu__toggle" type="button" aria-expanded="false"
           aria-controls="nav-menu-panel" aria-label="Menu">{{ icon("menu", 16) }}</button>
@@ -23,10 +23,6 @@
       <li><a href="/terminal/">Terminal</a></li>
       <li><a href="/system/">System</a></li>
       <li><a href="/settings">Settings</a></li>
-      {%- if source_url %}
-      <li><a href="{{ source_url }}" target="_blank" rel="noopener">
-        Source <span class="nav-menu__ext" aria-hidden="true">&#8599;</span></a></li>
-      {%- endif %}
     </ul>
   </div>
 </div>

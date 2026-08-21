@@ -639,7 +639,7 @@ _TEMPLATE = """{% from "_components/icon_nav.html" import icon_nav %}{% from "_c
   {{ nav_back() }}
   <header class="space-header">
     <h1 class="space-title"><a href="/dashboard" title="Back to the dashboard">{% if display_name %}{{ display_name }}'s personal compute space{% else %}Cloud in a Bottle{% endif %}</a></h1>
-    {{ icon_nav(source_url) }}
+    {{ icon_nav() }}
   </header>
   <svg width="0" height="0" style="position: absolute" aria-hidden="true" focusable="false">
     <symbol id="i-copy" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"

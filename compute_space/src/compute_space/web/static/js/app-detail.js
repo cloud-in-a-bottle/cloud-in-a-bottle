@@ -335,10 +335,7 @@ function clearCacheAndReload() {
                 if (data.status !== appStatus) {
                     appStatus = data.status;
                     statusEl.textContent = appStatus;
-                    statusEl.className = 'status-' + appStatus;
-                    // The enclosing row's data-status drives the dot colour.
-                    var statusRow = statusEl.closest('[data-status]');
-                    if (statusRow) statusRow.dataset.status = appStatus;
+                    statusEl.className = 'status-value status-' + appStatus;
                 }
                 // Adopt the first container_id silently; reset only on a later change.
                 if (data.container_id && data.container_id !== streamContainerId) {

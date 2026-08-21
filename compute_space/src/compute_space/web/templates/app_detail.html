@@ -64,16 +64,11 @@
   {% endif %}
 
   {% call info_table() %}
-    {#- Hand-rolled so the whole row can carry data-status, which colours the
-        dot; app-detail.js keeps the attribute in step as the status changes. -#}
-    <tr class="status-row" data-status="{{ app.status }}">
+    {#- Hand-rolled so the row carries `status-row`, which sizes the status
+        word and its dot; app-detail.js keeps the classes in step. -#}
+    <tr class="status-row">
       <th scope="row">Status</th>
-      <td>
-        <span class="info-value">
-          <span class="status-dot"></span>
-          <span class="status-{{ app.status }}" id="app-status">{{ app.status }}</span>
-        </span>
-      </td>
+      <td><span class="status-value status-{{ app.status }}" id="app-status">{{ app.status }}</span></td>
     </tr>
     {{ info_row("Version", app.version) }}
     {{ info_row("Description", app.description or "---") }}

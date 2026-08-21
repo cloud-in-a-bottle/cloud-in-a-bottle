@@ -1,6 +1,9 @@
-{% macro icon(name, size=16, alt="", class_="") -%}
+{#- `height` is for the icons whose artwork isn't square (the back arrow):
+    passing size alone would letterbox them inside a square box and land their
+    pixel grid on half pixels. -#}
+{% macro icon(name, size=16, alt="", class_="", height=none) -%}
 <img class="icon{% if class_ %} {{ class_ }}{% endif %}"
      src="{{ static_url('img/icons/' ~ name ~ '.svg') }}"
-     width="{{ size }}" height="{{ size }}" alt="{{ alt }}"
+     width="{{ size }}" height="{{ height or size }}" alt="{{ alt }}"
      {%- if not alt %} aria-hidden="true"{% endif %}>
 {%- endmacro %}

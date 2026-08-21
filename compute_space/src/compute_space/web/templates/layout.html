@@ -47,7 +47,7 @@
     </h1>
     {#- The catalog vars come from the dashboard route and are undefined (falsy) elsewhere;
         only the dashboard renders the menu that reads them. -#}
-    {{ icon_nav(source_url, on_dashboard=on_dashboard,
+    {{ icon_nav(on_dashboard=on_dashboard,
                 catalog_app_name=catalog_app_name, catalog_installed=catalog_installed) }}
     {% block content %}{% endblock %}
   </div>
