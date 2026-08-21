@@ -412,8 +412,8 @@ async def oauth_callback_proxy_v2(request: Request[Any, Any, Any]) -> ASGIRespon
             detail=f"App '{app_name}' is not running", extra={"code": "service_not_available"}
         )
 
-    # External OAuth providers redirect here with no OpenHost credential, but strip defensively so
-    # an OpenHost bearer can never be forwarded to the app on this unauthenticated endpoint.
+    # OAuth-provider redirects carry no OpenHost credential; still, strip one if present (defence in
+    # depth) so this unauthenticated endpoint can't forward an OpenHost bearer to the app.
     return await proxy_http_request(
         request,
         target_port=app_row.local_port,
