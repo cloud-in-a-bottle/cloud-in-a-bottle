@@ -69,15 +69,18 @@
   --shadow-card: 2px 2px 0 rgba(0, 0, 0, 0.1);
 
   /* Layout */
-  --layout-width: 640px;
-  --layout-width-wide: 960px;
+  /* One content width for every page. Terminal and logs opt out entirely via
+     .layout--full: they are viewers, and want the whole window. */
+  --layout-width: 800px;
   --layout-width-narrow: 420px;
   --layout-gutter: 16px;
   --grass-height: 24px;
+  --cloud-band-height: clamp(230px, 56vh, 520px);
 }
 
 @media (max-width: 640px) {
   :root {
+    --cloud-band-height: clamp(140px, 30vh, 220px);
     --layout-gutter: 12px;
     --grass-height: 16px;
   }

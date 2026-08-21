@@ -1,6 +1,6 @@
-"""Tests for the "view source" provenance link in the shared nav.
+"""Tests for the "view source" provenance link in the shared icon nav.
 
-The nav header (``_nav_header.html``, included by both ``layout.html`` and the
+The icon nav (``_components/icon_nav.html``, used by both ``layout.html`` and the
 standalone docs template) surfaces a GitHub icon linking to the exact branch/fork
 of Cloud in a Bottle the instance is running. The link is built from the running checkout's
 origin remote + current branch via ``github_web_url_from_local_repo`` and exposed to
@@ -96,7 +96,7 @@ def _build_dashboard_app(cfg: Any) -> Litestar:
 
 
 def test_nav_shows_source_icon(cfg: Any, monkeypatch: pytest.MonkeyPatch) -> None:
-    """When a source URL resolves, the nav renders a GitHub link to that branch."""
+    """When a source URL resolves, the icon nav renders a GitHub link to that branch."""
     set_active_config(cfg)
     monkeypatch.setattr(web_app, "SOURCE_URL", "https://github.com/owner/repo/tree/feature")
     cookie = auth_cookie(cfg, username="owner")
@@ -106,11 +106,11 @@ def test_nav_shows_source_icon(cfg: Any, monkeypatch: pytest.MonkeyPatch) -> Non
         resp = client.get("/dashboard")
 
     assert resp.status_code == 200
-    assert 'class="nav-source"' in resp.text
     assert 'href="https://github.com/owner/repo/tree/feature"' in resp.text
-    # Opens in a new tab, per the app-link convention, and carries the a11y label.
+    # Opens in a new tab, per the app-link convention. The <img>'s alt names the
+    # link for assistive tech, so no separate aria-label is needed.
     assert 'target="_blank"' in resp.text
-    assert 'aria-label="View source on GitHub"' in resp.text
+    assert 'alt="View source on GitHub"' in resp.text
 
 
 def test_nav_hides_source_icon_when_unresolved(cfg: Any, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -124,7 +124,7 @@ def test_nav_hides_source_icon_when_unresolved(cfg: Any, monkeypatch: pytest.Mon
         resp = client.get("/dashboard")
 
     assert resp.status_code == 200
-    # The always-present nav <style> block references ``.nav-source``; assert the
-    # anchor element itself is absent rather than the bare class name.
-    assert 'class="nav-source"' not in resp.text
     assert "github.com" not in resp.text
+    assert "View source on GitHub" not in resp.text
+    # The other three icons are unconditional; only the provenance one drops out.
+    assert resp.text.count('class="icon-btn"') == 3

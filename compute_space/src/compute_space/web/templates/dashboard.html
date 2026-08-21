@@ -8,11 +8,7 @@
 
 {% block content %}
 <section class="section">
-  {% call section_head("Dashboard") %}
-    <a class="icon-btn" href="/terminal/" title="Terminal">{{ icon("code", 16, alt="Terminal") }}</a>
-    <a class="icon-btn" href="/system/" title="System info">{{ icon("box", 15, alt="System info") }}</a>
-    <a class="icon-btn" href="/settings" title="Settings">{{ icon("gear", 12, alt="Settings") }}</a>
-  {% endcall %}
+  {% call section_head("Dashboard") %}{% endcall %}
 
   <div class="card-grid">
     {{ card("Browse the catalog", "One-click install ready-made apps.", "Explore catalog",

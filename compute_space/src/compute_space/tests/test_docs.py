@@ -175,27 +175,27 @@ def test_active_sidebar_link_marked(client_with_docs: TestClient[Litestar]) -> N
     assert 'href="/docs/manifest_spec"' in body and "active" in body
 
 
-def test_page_carries_space_nav_header(client_with_docs: TestClient[Litestar]) -> None:
-    """The docs page must render the shared compute-space nav header
-    (Dashboard / Docs / Deploy App / ...) so the manual reads as an
-    in-space page rather than a standalone site."""
+def test_page_carries_space_icon_nav(client_with_docs: TestClient[Litestar]) -> None:
+    """The docs page must render the shared compute-space icon nav, and the title
+    must link home, so the manual reads as an in-space page rather than a
+    standalone site."""
     resp = client_with_docs.get("/docs/")
     body = resp.text
-    assert 'id="main-nav"' in body
+    assert 'class="icon-nav"' in body
     assert 'href="/dashboard"' in body
-    assert 'href="/add_app"' in body
+    assert 'href="/terminal/"' in body
+    assert 'href="/system/"' in body
     assert 'href="/settings"' in body
 
 
-def test_docs_nav_link_stays_in_same_tab(client_with_docs: TestClient[Litestar]) -> None:
-    """The nav *tabs* must not open in a new tab — no ``target="_blank"`` on any
-    ``nav-tab`` anchor. (The separate provenance "view source" link deliberately
-    does open a new tab, so we assert on the tabs specifically, not the whole nav.)
-    """
+def test_docs_in_space_nav_links_stay_in_same_tab(client_with_docs: TestClient[Litestar]) -> None:
+    """In-space icons must not open a new tab. (The provenance "view source" link
+    deliberately does, so assert on the same-origin icons specifically.)"""
     resp = client_with_docs.get("/docs/")
-    tab_anchors = re.findall(r'<a[^>]*class="nav-tab"[^>]*>', resp.text)
-    assert tab_anchors, "expected nav tabs in the rendered docs header"
-    assert all('target="_blank"' not in anchor for anchor in tab_anchors)
+    anchors = re.findall(r'<a[^>]*class="icon-btn"[^>]*>', resp.text)
+    in_space = [a for a in anchors if 'href="/' in a]
+    assert len(in_space) == 3, f"expected the three in-space icons, got {anchors}"
+    assert all('target="_blank"' not in anchor for anchor in in_space)
 
 
 def test_internal_md_links_rewritten(client_with_docs: TestClient[Litestar]) -> None:

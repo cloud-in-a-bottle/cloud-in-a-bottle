@@ -1,6 +1,10 @@
 {#- Owner username (if set) takes precedence over the zone subdomain for the
    instance name shown in the title + banner. Computed once and reused below. -#}
 {%- set display_name = owner_name() or zone_name() -%}
+{#- The banner doubles as the way home now that the tab strip is gone, so it is
+   a link everywhere except on the dashboard itself. -#}
+{%- set on_dashboard = request.url.path.rstrip('/') in ('', '/dashboard') -%}
+{% from "_components/icon_nav.html" import icon_nav %}
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -24,14 +28,21 @@
     <span class="cloud cloud--4"></span>
     <span class="cloud cloud--5"></span>
     <span class="cloud cloud--6"></span>
+    <span class="cloud cloud--7"></span>
+    <span class="cloud cloud--8"></span>
   </div>
   <div class="deco-grass" aria-hidden="true"></div>
 
   <div class="layout {% block layout_class %}{% endblock %}">
     <h1 class="banner">
-      <span class="banner__text">{% if display_name %}{{ display_name }}'s personal compute space{% else %}Cloud in a Bottle{% endif %}</span>
+      {%- set banner_text %}{% if display_name %}{{ display_name }}'s personal compute space{% else %}Cloud in a Bottle{% endif %}{% endset -%}
+      {% if on_dashboard %}
+      <span class="banner__text">{{ banner_text }}</span>
+      {% else %}
+      <a class="banner__text" href="/dashboard" title="Back to the dashboard">{{ banner_text }}</a>
+      {% endif %}
     </h1>
-    {% include "_nav_header.html" %}
+    {{ icon_nav(source_url) }}
     {% block content %}{% endblock %}
   </div>
 </body>

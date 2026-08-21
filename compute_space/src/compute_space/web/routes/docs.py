@@ -9,7 +9,7 @@ The rendered page carries the same top navigation header as the rest
 of the compute space (Dashboard / Docs / Deploy App / ...), so the
 manual reads as an in-space page rather than a standalone site — the
 Docs nav link stays in the same tab.  The nav tab list + active-tab
-highlighter are shared with ``layout.html`` via the ``_nav_header.html``
+icons are shared with ``layout.html`` via the ``_components/icon_nav.html``
 partial (this route's inline template ``{% include %}``s it through a
 Jinja ``Environment`` whose loader points at the templates dir), so the
 nav can't drift from the rest of the UI.  The docs page's own
@@ -419,7 +419,7 @@ def _resolve_doc_path(slug: str) -> Path:
 # separate file so the docs feature is self-contained: one .py file
 # is the entire serving surface.  The CSS matches the dashboard's
 # system-font stack, #36c accent, #ddd borders, #f5f5f5 muted bg.
-_TEMPLATE = """<!DOCTYPE html>
+_TEMPLATE = """{% from "_components/icon_nav.html" import icon_nav %}<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
@@ -452,13 +452,13 @@ _TEMPLATE = """<!DOCTYPE html>
       margin: 0;
     }
     /* The docs layout is pinned to the same centred column as every other
-       in-space page (layout.html uses max-width:960px + 1em side padding),
-       so navigating between Dashboard and Docs doesn't jump the header
-       wider or shift it sideways.  The sidebar's left edge lines up with
-       the nav header / title above it. */
+       in-space page (--layout-width, shared with layout.html), so navigating
+       between Dashboard and Docs doesn't jump the header wider or shift it
+       sideways.  The sidebar's left edge lines up with the icon nav / title
+       above it. */
     .layout {
       display: flex;
-      max-width: 960px;
+      max-width: var(--layout-width);
       margin: 0 auto;
       padding: 0 1em;
     }
@@ -618,21 +618,23 @@ _TEMPLATE = """<!DOCTYPE html>
       font-size: 0.9em;
     }
     .footer-nav a { color: #36c; text-decoration: none; }
-    /* Space navigation header.  The tab strip itself is styled by the shared
+    /* Space navigation header.  The icon row itself is styled by the shared
        components.css linked above, so the docs nav can't drift from the rest
        of the compute space; only the header's own geometry lives here. */
-    .space-header { max-width: 960px; margin: 0 auto; padding: 2em 1em 0; }
+    .space-header { max-width: var(--layout-width); margin: 0 auto; padding: 2em 1em 0; }
     .space-header h1.space-title {
       font-family: var(--font-mono); font-size: 1.15em; font-weight: 500;
-      letter-spacing: var(--tracking-title); text-transform: uppercase; margin: 0 0 1em;
+      letter-spacing: var(--tracking-title); text-transform: uppercase; margin: 0 0 0.5em;
     }
+    .space-header h1.space-title a { color: inherit; text-decoration: none; }
+    .space-header h1.space-title a:hover { text-decoration: underline; }
     {{ pygments_css }}
   </style>
 </head>
 <body>
   <header class="space-header">
-    <h1 class="space-title">{% if display_name %}{{ display_name }}'s personal compute space{% else %}Cloud in a Bottle{% endif %}</h1>
-    {% include "_nav_header.html" %}
+    <h1 class="space-title"><a href="/dashboard" title="Back to the dashboard">{% if display_name %}{{ display_name }}'s personal compute space{% else %}Cloud in a Bottle{% endif %}</a></h1>
+    {{ icon_nav(source_url) }}
   </header>
   <svg width="0" height="0" style="position: absolute" aria-hidden="true" focusable="false">
     <symbol id="i-copy" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"
@@ -708,11 +710,11 @@ _TEMPLATE = """<!DOCTYPE html>
 
 
 # Build the docs template through a Jinja Environment whose loader points at
-# the shared templates directory, so ``{% include "_nav_header.html" %}`` pulls
-# in the same nav partial the rest of the compute space uses (rather than
-# duplicating the tab list + highlighter here).  The docs page's HTML body
-# itself is still an inline string — only the shared partial is loaded from
-# disk — keeping the route's serving surface self-contained.
+# the shared templates directory, so ``{% from "_components/icon_nav.html" %}``
+# pulls in the same nav the rest of the compute space uses (rather than
+# duplicating the icon list here).  The docs page's HTML body itself is still an
+# inline string — only the shared partial is loaded from disk — keeping the
+# route's serving surface self-contained.
 _TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "templates"
 _JINJA_ENV = Environment(loader=FileSystemLoader(str(_TEMPLATES_DIR)), autoescape=True)
 _JINJA_ENV.globals["static_url"] = make_static_url(STATIC_DIR)

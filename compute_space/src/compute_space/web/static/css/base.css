@@ -41,32 +41,55 @@ body {
   z-index: 0;
 }
 
+/* The band clips: clouds drift out past both edges, and without `overflow`
+   that travel widens the document and puts a scrollbar on every page. */
 .deco-clouds {
   position: absolute;
-  top: 28px;
-  left: -4%;
-  right: -4%;
-  height: 76px;
+  top: 20px;
+  left: 0;
+  right: 0;
+  height: var(--cloud-band-height);
+  overflow: hidden;
 }
 
-/* One sprite, six placements. Each cloud is its own element rather than a
-   single background strip so any of them can be positioned or animated
-   independently. */
+/* One sprite, six placements. Sizes, heights and opacities are all different,
+   and the drift periods share no common multiple, so the sky never resolves
+   into a repeating pattern. Lower clouds are smaller and fainter, which reads
+   as distance. */
 .cloud {
   position: absolute;
   left: var(--cloud-x);
   top: var(--cloud-y);
-  width: 6.83%;
+  width: var(--cloud-w);
   aspect-ratio: 2.671;
   background: url("../img/deco/cloud.svg") no-repeat center / 100% 100%;
+  opacity: var(--cloud-opacity);
+  will-change: transform;
 }
 
-.cloud--1 { --cloud-x: 0%; --cloud-y: 0%; }
-.cloud--2 { --cloud-x: 37.76%; --cloud-y: 0%; }
-.cloud--3 { --cloud-x: 75.54%; --cloud-y: 0%; }
-.cloud--4 { --cloud-x: 17.63%; --cloud-y: 53.43%; }
-.cloud--5 { --cloud-x: 55.4%; --cloud-y: 53.43%; }
-.cloud--6 { --cloud-x: 93.18%; --cloud-y: 53.43%; }
+/* Leaves fully off the left edge and arrives fully off the right, so the
+   restart is never visible. A negative delay drops each cloud in partway
+   through its own cycle, spreading them across the sky on first paint. */
+@keyframes cloud-drift {
+  from { transform: translateX(calc(-1 * (var(--cloud-x) + var(--cloud-w)))); }
+  to { transform: translateX(calc(100vw - var(--cloud-x))); }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .cloud {
+    animation: cloud-drift var(--cloud-duration) linear infinite;
+    animation-delay: var(--cloud-delay);
+  }
+}
+
+.cloud--1 { --cloud-x: 4vw; --cloud-y: 1%; --cloud-w: clamp(58px, 7.4vw, 104px); --cloud-opacity: 0.95; --cloud-duration: 168s; --cloud-delay: -18s; }
+.cloud--2 { --cloud-x: 61vw; --cloud-y: 13%; --cloud-w: clamp(44px, 5.4vw, 76px); --cloud-opacity: 0.85; --cloud-duration: 131s; --cloud-delay: -96s; }
+.cloud--3 { --cloud-x: 30vw; --cloud-y: 7%; --cloud-w: clamp(70px, 9vw, 126px); --cloud-opacity: 1; --cloud-duration: 206s; --cloud-delay: -143s; }
+.cloud--4 { --cloud-x: 86vw; --cloud-y: 27%; --cloud-w: clamp(38px, 4.6vw, 64px); --cloud-opacity: 0.72; --cloud-duration: 117s; --cloud-delay: -52s; }
+.cloud--5 { --cloud-x: 15vw; --cloud-y: 36%; --cloud-w: clamp(62px, 8vw, 112px); --cloud-opacity: 0.78; --cloud-duration: 187s; --cloud-delay: -171s; }
+.cloud--6 { --cloud-x: 49vw; --cloud-y: 51%; --cloud-w: clamp(50px, 6.2vw, 88px); --cloud-opacity: 0.62; --cloud-duration: 149s; --cloud-delay: -110s; }
+.cloud--7 { --cloud-x: 73vw; --cloud-y: 68%; --cloud-w: clamp(54px, 6.8vw, 96px); --cloud-opacity: 0.5; --cloud-duration: 223s; --cloud-delay: -35s; }
+.cloud--8 { --cloud-x: 22vw; --cloud-y: 84%; --cloud-w: clamp(34px, 4vw, 58px); --cloud-opacity: 0.4; --cloud-duration: 97s; --cloud-delay: -71s; }
 
 .deco-grass {
   position: fixed;
@@ -93,8 +116,9 @@ body {
   padding-top: var(--space-8);
 }
 
-.layout--wide {
-  max-width: var(--layout-width-wide);
+/* Terminal and logs are viewers -- they want the window, not the column. */
+.layout--full {
+  max-width: none;
 }
 
 .layout--narrow {
@@ -104,6 +128,16 @@ body {
 @media (max-width: 640px) {
   .layout {
     padding-top: var(--space-6);
+  }
+}
+
+/* Fewer clouds on a phone, where the band is short and the content column
+   fills the width. */
+@media (max-width: 640px) {
+  .cloud--4,
+  .cloud--6,
+  .cloud--8 {
+    display: none;
   }
 }
 

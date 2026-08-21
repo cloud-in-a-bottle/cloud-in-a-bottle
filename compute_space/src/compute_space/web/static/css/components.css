@@ -26,64 +26,24 @@
 
 .banner__text {
   text-align: center;
+  color: inherit;
+  text-decoration: none;
 }
 
-/* ── Nav ────────────────────────────────────────────────────────────── */
+a.banner__text:hover {
+  text-decoration: underline;
+}
 
-.nav {
+/* ── Icon nav ───────────────────────────────────────────────────────────
+   The entire compute-space navigation, sitting under the banner on every
+   page. Right-aligned so it reads as a toolbar rather than a tab strip. */
+
+.icon-nav {
   display: flex;
-  align-items: stretch;
-  gap: var(--space-1);
-  margin-bottom: var(--space-6);
-  border-bottom: var(--border-w) solid var(--color-border);
-  overflow-x: auto;
-  scrollbar-width: none;
-  overscroll-behavior-x: contain;
-}
-
-.nav::-webkit-scrollbar {
-  display: none;
-}
-
-.nav-tab {
-  flex: none;
-  display: inline-flex;
   align-items: center;
-  padding: var(--space-2);
-  color: var(--color-text);
-  font-family: var(--font-mono);
-  font-size: var(--text-xs);
-  letter-spacing: var(--tracking-label);
-  text-transform: uppercase;
-  text-decoration: none;
-  white-space: nowrap;
-  opacity: 0.7;
-  border-bottom: 2px solid transparent;
-}
-
-.nav-tab:hover {
-  opacity: 1;
-  background: rgba(255, 255, 255, 0.55);
-}
-
-.nav-tab.active {
-  opacity: 1;
-  font-weight: var(--weight-semibold);
-  border-bottom-color: var(--color-text);
-}
-
-.nav-source {
-  flex: none;
-  margin-left: auto;
-  display: inline-flex;
-  align-items: center;
-  padding: var(--space-2);
-  color: var(--color-text-muted);
-  text-decoration: none;
-}
-
-.nav-source:hover {
-  color: var(--color-text);
+  justify-content: flex-end;
+  gap: var(--space-2);
+  margin-bottom: var(--space-5);
 }
 
 /* ── Section header ─────────────────────────────────────────────────── */

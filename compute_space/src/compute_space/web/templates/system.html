@@ -1,6 +1,5 @@
 {% extends "layout.html" %}
 {% block title_suffix %} - System Info{% endblock %}
-{% block layout_class %}layout--wide{% endblock %}
 {% block content %}
 {% from "_components/section.html" import section_head %}
 {% call section_head("Resource Usage") %}{% endcall %}
@@ -35,6 +34,12 @@
   <thead><tr><th>Port</th><th>Address</th><th>Detail</th></tr></thead>
   <tbody id="ports-body"></tbody>
 </table>
+</div>
+
+{% call section_head("Diagnostics") %}{% endcall %}
+<div class="action-bar">
+  <a class="btn" href="/diagnostics/">See detailed diagnostics</a>
+  <span class="hint">Detailed diagnostic info for debugging, or for sharing in a bug report.</span>
 </div>
 
 {% call section_head("Logs") %}{% endcall %}
