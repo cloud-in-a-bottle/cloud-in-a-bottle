@@ -901,7 +901,7 @@ def test_container_image_storage_bytes_parses_images_row(monkeypatch: pytest.Mon
         ]
     )
     _patch_subprocess_run(monkeypatch, lambda *a, **k: _FakeCompleted(stdout=df_json))
-    assert containers.container_image_storage_bytes() == 4567
+    assert containers.container_image_storage_bytes() == (4567, 100)
 
 
 def test_container_image_storage_bytes_none_on_nonzero_exit(monkeypatch: pytest.MonkeyPatch) -> None:

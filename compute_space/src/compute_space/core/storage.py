@@ -196,6 +196,8 @@ def storage_status(config: Config) -> dict[str, object]:
     # again — these trees are large enough that a second pass is noticeable.
     per_app = per_app_usage(config)
 
+    image_storage = container_image_storage_bytes()
+
     return {
         "disk": {
             "total_bytes": disk.total,
@@ -204,7 +206,8 @@ def storage_status(config: Config) -> dict[str, object]:
         },
         "openhost_data_used_bytes": openhost_data_usage_bytes(config),
         "app_data_used_bytes": sum(per_app.values()) + _app_data_loose_file_bytes(config),
-        "build_cache_bytes": container_image_storage_bytes(),
+        "build_cache_bytes": None if image_storage is None else image_storage[0],
+        "build_cache_reclaimable_bytes": None if image_storage is None else image_storage[1],
         "per_app": per_app,
         "storage_min_free_bytes": min_free,
         "storage_low": storage_low(config),

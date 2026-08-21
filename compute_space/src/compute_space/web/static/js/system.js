@@ -83,10 +83,10 @@ function renderListeningPorts(data) {
 // table (and thus the message span) whenever storage data is re-fetched.
 var cleanCacheMsg = {cls: 'muted', text: ''};
 var cleanCacheInFlight = false;
-var buildCacheBytes = null;
+var cleanCacheFreeBytes = null;
 
 function cleanBuildCache() {
-  var freed = (buildCacheBytes == null) ? '' : '\nThis will free up to ' + formatBytes(buildCacheBytes) + '.';
+  var freed = (cleanCacheFreeBytes == null) ? '' : '\nThis will free about ' + formatBytes(cleanCacheFreeBytes) + '.';
   if (!confirm(
     'Clean the app build cache?\n\n' +
     'The next rebuild for each app will be slower. Running apps are not stopped.' + freed
@@ -188,15 +188,24 @@ function renderStorageStatus(data) {
   var freeCls = (hasMinFree && isLow) ? ' class="status-error"' : '';
   rows += '<tr><th>Disk free</th><td' + freeCls + '>' + escHtml(freeText) + '</td></tr>';
   rows += '<tr><th>Cloud in a Bottle data</th><td>' + escHtml(formatBytes(data.openhost_data_used_bytes || 0)) + '</td></tr>';
-  buildCacheBytes = data.build_cache_bytes;
-  var buildCache = (data.build_cache_bytes == null)
+  // The cache figure is the reclaimable portion — what Clean Cache can actually
+  // remove; images pinned by running containers get their own row below.
+  var totalImageBytes = data.build_cache_bytes;
+  var reclaimable = data.build_cache_reclaimable_bytes;
+  cleanCacheFreeBytes = (reclaimable != null) ? reclaimable : totalImageBytes;
+  var buildCache = (cleanCacheFreeBytes == null)
     ? '<span class="muted">unavailable</span>'
-    : escHtml(formatBytes(data.build_cache_bytes));
+    : escHtml(formatBytes(cleanCacheFreeBytes));
   rows += '<tr><th>App Build Cache</th><td>' + buildCache
-    + ' <button class="btn btn-danger" id="clean-cache-btn" onclick="cleanBuildCache()"'
+    + '<span style="float: right">'
+    + '<span id="clean-cache-msg" class="' + cleanCacheMsg.cls + '">' + escHtml(cleanCacheMsg.text) + '</span> '
+    + '<button class="btn btn-danger" id="clean-cache-btn" onclick="cleanBuildCache()"'
     + (cleanCacheInFlight ? ' disabled' : '') + '>Clean Cache</button>'
-    + ' <span id="clean-cache-msg" class="' + cleanCacheMsg.cls + '">' + escHtml(cleanCacheMsg.text) + '</span>'
-    + '</td></tr>';
+    + '</span></td></tr>';
+  if (totalImageBytes != null && reclaimable != null) {
+    var inUse = Math.max(0, totalImageBytes - reclaimable);
+    rows += '<tr><th>Images in use</th><td>' + escHtml(formatBytes(inUse)) + '</td></tr>';
+  }
 
   if (hasMinFree) {
     var guardText = guardPaused ? 'Paused' : (isLow ? 'Active (low storage)' : 'Active');
