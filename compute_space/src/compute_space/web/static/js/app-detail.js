@@ -247,6 +247,12 @@ function clearCacheAndReload() {
         }
     }
 
+    // A 4401 close means the session is gone; reconnecting would just loop through
+    // handshake/close every 2s, so go re-authenticate and come back here.
+    function redirectToLogin() {
+        window.location.href = '/login?next=' + encodeURIComponent(window.location.pathname);
+    }
+
     // Tracked so a reset can tell the old socket's onclose not to reconnect.
     var currentWs = null;
 
@@ -265,8 +271,9 @@ function clearCacheAndReload() {
             }
             appendLog(e.data + '\n');
         };
-        ws.onclose = function() {
+        ws.onclose = function(e) {
             if (ws !== currentWs) return;  // superseded by a reset
+            if (e.code === 4401) { redirectToLogin(); return; }
             // The server holds the socket open past end-of-log, so a close is a real
             // drop — reconnect (which re-primes to replay the tail).
             logPrimed = false;
@@ -350,7 +357,9 @@ function clearCacheAndReload() {
         var ws = new WebSocket(proto + '//' + window.location.host + config.appStatusStreamUrl);
         ws.onmessage = function(e) { handleStatus(JSON.parse(e.data)); };
         ws.onclose = function(e) {
-            // 4404 means the app row is gone (removed); anything else is a drop — reconnect.
+            // 4401 means the session expired; 4404 means the app row is gone (removed);
+            // anything else is a drop — reconnect.
+            if (e.code === 4401) { redirectToLogin(); return; }
             if (e.code === 4404) { window.location.href = '/dashboard'; return; }
             setTimeout(startStatusStream, 2000);
         };
