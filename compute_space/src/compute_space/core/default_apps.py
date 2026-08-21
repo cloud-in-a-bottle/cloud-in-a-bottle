@@ -30,8 +30,10 @@ from compute_space.core.apps import insert_and_deploy
 from compute_space.core.apps import move_clone_to_app_temp_dir
 from compute_space.core.apps import validate_manifest
 from compute_space.core.logging import logger
+from compute_space.core.manifest import MANIFEST_FILENAMES
 from compute_space.core.manifest import AppManifest
 from compute_space.core.manifest import all_manifest_permissions_v2
+from compute_space.core.manifest import find_manifest_path
 from compute_space.core.manifest import parse_manifest
 
 MAX_RETRY_ATTEMPTS = 3
@@ -90,8 +92,8 @@ def _write_sentinel(path: str, state: dict[str, dict[str, Any]]) -> None:
 def _install_vendored(dir_name: str, config: Config, db: sqlite3.Connection) -> tuple[str, str | None]:
     """Install a vendored builtin app by its dirname under ``config.apps_dir``."""
     app_dir = os.path.join(config.apps_dir, dir_name)
-    if not os.path.isdir(app_dir) or not os.path.isfile(os.path.join(app_dir, "openhost.toml")):
-        return "failed", f"builtin app dir or openhost.toml missing: {app_dir}"
+    if not os.path.isdir(app_dir) or find_manifest_path(app_dir) is None:
+        return "failed", f"builtin app dir or {MANIFEST_FILENAMES[0]} missing: {app_dir}"
 
     tmp_parent = tempfile.mkdtemp(prefix="openhost-clone-")
     clone_dir = os.path.join(tmp_parent, "repo")

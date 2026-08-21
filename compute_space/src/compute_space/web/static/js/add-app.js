@@ -4,8 +4,14 @@ const nextUrl = config.nextUrl;
 let cloneDir = null;
 let repoUrl = null;
 
+document.getElementById('repo-url').addEventListener('input', function(e) {
+  document.getElementById('deploy-btn').disabled = e.target.value.trim() === '';
+});
+
 if (initialRepo) {
+  // Programmatic value set doesn't fire 'input', so sync the button here.
   document.getElementById('repo-url').value = initialRepo;
+  document.getElementById('deploy-btn').disabled = false;
   cloneApp(initialRepo);
 }
 
@@ -25,7 +31,7 @@ function hide(id) { document.getElementById(id).style.display = 'none'; }
 async function cloneApp(url) {
   clearError();
   repoUrl = url || document.getElementById('repo-url').value.trim();
-  if (!repoUrl) { showError('No repository URL provided'); return; }
+  if (!repoUrl) { return; }
 
   hide('clone-form');
   hide('confirm-section');

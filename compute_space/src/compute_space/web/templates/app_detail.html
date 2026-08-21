@@ -36,7 +36,7 @@
     </span>
     <span id="remote-edit" style="display:none;">
       <input type="text" id="remote-input" value="{{ app.repo_url }}" style="font-family:monospace;width:28em;" placeholder="https://github.com/owner/repo@branch">
-      <button class="btn btn-primary" onclick="saveRemote()">Save &amp; update</button>
+      <button class="btn btn-primary" id="save-remote-btn" onclick="saveRemote()" disabled>Save &amp; update</button>
       <button class="btn" onclick="cancelRemote()">Cancel</button>
       <div class="hint" style="margin-top:0.25em;">Append <code>@branch</code> (or a tag/commit) to change the ref. Saving re-points the upstream and pulls the latest code.</div>
       <span id="remote-error" class="field-error"></span>

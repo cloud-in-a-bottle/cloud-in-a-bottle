@@ -145,14 +145,11 @@ class AppStatusResponse:
     status: str
     error: str | None
     error_kind: str | None
-    # Git info for the app's checked-out repo. All None when the app has no
-    # git repo on disk (e.g. builtin apps copied from the apps/ directory)
-    # or when the .git read fails for any reason. ``git_branch`` is None when
-    # HEAD is detached even if ``git_sha`` is populated.
     git_branch: str | None = None
     git_sha: str | None = None
     git_dirty: bool | None = None
     container_id: str | None = None
+    repo_url: str | None = None
 
 
 @attr.s(auto_attribs=True, frozen=True)
@@ -481,7 +478,7 @@ async def app_status(app_id: FromPath[str], db: NamedDependency[sqlite3.Connecti
     if not is_valid_app_id(app_id):
         raise ValidationException(detail="Invalid app_id")
     app_row = db.execute(
-        "SELECT status, error_message, repo_path, container_id FROM apps WHERE app_id = ?", (app_id,)
+        "SELECT status, error_message, repo_path, repo_url, container_id FROM apps WHERE app_id = ?", (app_id,)
     ).fetchone()
     if not app_row:
         raise NotFoundException(detail="App not found")
@@ -496,6 +493,7 @@ async def app_status(app_id: FromPath[str], db: NamedDependency[sqlite3.Connecti
             git_sha=git_sha,
             git_dirty=git_dirty,
             container_id=app_row["container_id"],
+            repo_url=app_row["repo_url"],
         ),
         status_code=200,
         media_type=MediaType.JSON,

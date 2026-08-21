@@ -184,6 +184,43 @@ def test_status_stream_pushes_changes_and_closes_when_row_vanishes(
     assert exc.value.code == 4404
 
 
+def test_app_status_returns_repo_url(cfg: Any, client: TestClient[Litestar], cookies: dict[str, str]) -> None:
+    """app_status response includes the git repo_url with branch/ref pin."""
+    app_id = new_app_id()
+    db = sqlite3.connect(cfg.db_path)
+    try:
+        db.execute(
+            """INSERT INTO apps (app_id, name, version, repo_path, repo_url, local_port, status)
+               VALUES (?, 'myapp', '1.0', '/repo/myapp', 'https://github.com/owner/repo@main', 20114, 'running')""",
+            (app_id,),
+        )
+        db.commit()
+    finally:
+        db.close()
+    client.cookies.update(cookies)
+    resp = client.get(f"/api/app_status/{app_id}")
+    assert resp.status_code == 200
+    assert resp.json()["repo_url"] == "https://github.com/owner/repo@main"
+
+
+def test_app_status_repo_url_none_when_unset(cfg: Any, client: TestClient[Litestar], cookies: dict[str, str]) -> None:
+    app_id = new_app_id()
+    db = sqlite3.connect(cfg.db_path)
+    try:
+        db.execute(
+            """INSERT INTO apps (app_id, name, version, repo_path, repo_url, local_port, status)
+               VALUES (?, 'builtin', '1.0', '/repo/builtin', NULL, 20115, 'running')""",
+            (app_id,),
+        )
+        db.commit()
+    finally:
+        db.close()
+    client.cookies.update(cookies)
+    resp = client.get(f"/api/app_status/{app_id}")
+    assert resp.status_code == 200
+    assert resp.json()["repo_url"] is None
+
+
 def test_import_wiring() -> None:
     """Make sure the module under test is still importing BUILD_CACHE_CORRUPT_MARKER
     the way app_status expects; a rename in core/containers.py that

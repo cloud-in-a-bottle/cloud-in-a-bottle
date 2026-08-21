@@ -18,6 +18,12 @@ from compute_space.core.auth.permissions_v2 import Grant
 from compute_space.core.auth.permissions_v2 import PermissionRecord
 from compute_space.core.logging import logger
 
+# App manifest filenames, in the order they are looked for inside a repo.
+# ``cloudinabottle.toml`` is the canonical name; ``openhost.toml`` is the legacy name
+# and is still accepted as a silent fallback so existing app repos keep
+# working without changes.
+MANIFEST_FILENAMES: tuple[str, ...] = ("cloudinabottle.toml", "openhost.toml")
+
 _SHORTNAME_RE = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
 
 # Must match net.ipv4.ip_unprivileged_port_start from ansible/tasks/containers.yml.
@@ -428,7 +434,7 @@ def _parse_services_v2_consumes(data: dict[str, Any]) -> list[ServiceConsumes]:
 
 
 def parse_manifest_from_string(raw_text: str) -> AppManifest:
-    """Parse an openhost.toml manifest from its string content."""
+    """Parse an app manifest (``cloudinabottle.toml``) from its string content."""
     data = tomllib.loads(raw_text)
 
     app_section = data.get("app", {})
@@ -502,10 +508,24 @@ def parse_manifest_from_string(raw_text: str) -> AppManifest:
     )
 
 
+def find_manifest_path(repo_path: str) -> str | None:
+    """Return the path to the app manifest inside ``repo_path``, or ``None``.
+
+    Looks for the canonical ``cloudinabottle.toml`` first and falls back to the legacy
+    ``openhost.toml`` (see ``MANIFEST_FILENAMES``). When both exist,
+    ``cloudinabottle.toml`` wins.
+    """
+    for name in MANIFEST_FILENAMES:
+        candidate = os.path.join(repo_path, name)
+        if os.path.exists(candidate):
+            return candidate
+    return None
+
+
 def parse_manifest(repo_path: str) -> AppManifest:
-    manifest_path = os.path.join(repo_path, "openhost.toml")
-    if not os.path.exists(manifest_path):
-        raise ValueError(f"No openhost.toml found at {manifest_path}")
+    manifest_path = find_manifest_path(repo_path)
+    if manifest_path is None:
+        raise ValueError(f"No {MANIFEST_FILENAMES[0]} found at {os.path.join(repo_path, MANIFEST_FILENAMES[0])}")
 
     with open(manifest_path, "rb") as f:
         raw_bytes = f.read()

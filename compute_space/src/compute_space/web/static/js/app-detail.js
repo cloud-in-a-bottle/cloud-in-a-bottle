@@ -33,11 +33,20 @@ function saveName() {
 
 // ─── Edit git upstream ───
 
+function updateSaveRemoteState() {
+  var input = document.getElementById('remote-input');
+  document.getElementById('save-remote-btn').disabled = input.value === input.defaultValue;
+}
+
 function editRemote() {
   document.getElementById('remote-display').style.display = 'none';
   document.getElementById('remote-edit').style.display = '';
-  document.getElementById('remote-input').focus();
+  var input = document.getElementById('remote-input');
+  // Reopen from the saved upstream so Save starts disabled until edited.
+  input.value = input.defaultValue;
   document.getElementById('remote-error').textContent = '';
+  updateSaveRemoteState();
+  input.focus();
 }
 
 function cancelRemote() {
@@ -61,7 +70,12 @@ function saveRemote() {
         errEl.textContent = responseErrorMessage(res.data, 'Failed to save');
         return;
       }
-      // Reuse the oauth-aware update flow, which may redirect for github auth.
+      // Upstream is saved: collapse the edit form back to the read-only view,
+      // then reuse the oauth-aware update flow (may redirect for github auth).
+      var displayCode = document.querySelector('#remote-display code');
+      if (displayCode) displayCode.textContent = res.data.repo_url;
+      input.defaultValue = res.data.repo_url;
+      cancelRemote();
       appAction(config.reloadAppUrl, {update: true}, {label: 'Updating & reloading'});
     })
     .catch(function() { errEl.textContent = 'Failed to save'; });
@@ -379,3 +393,7 @@ function clearCacheAndReload() {
     // sync immediately without waiting for a page reload.
     startStatusStream();
 })();
+
+// Grey out Save until the git upstream input actually differs from what's saved.
+var remoteInput = document.getElementById('remote-input');
+if (remoteInput) remoteInput.addEventListener('input', updateSaveRemoteState);

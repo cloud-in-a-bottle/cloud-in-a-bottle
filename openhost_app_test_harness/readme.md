@@ -43,7 +43,7 @@ from openhost_test_harness import OpenhostStack
 
 @pytest.fixture(scope="session")
 def stack():
-    with OpenhostStack() as s:  # app_dir found by walking up from the cwd to the nearest openhost.toml
+    with OpenhostStack() as s:  # app_dir found by walking up from the cwd to the nearest cloudinabottle.toml
         yield s
 ```
 
