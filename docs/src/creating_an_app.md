@@ -172,7 +172,7 @@ then point them at that checkout and tell them to read this doc.
 
 ## CLI
 
-There is a CLI interface, `oh`, that can be used for interacting with your compute space, if you prefer that style of workflow.
+There is a CLI interface, `bottle`, that can be used for interacting with your compute space, if you prefer that style of workflow.
 
 If you have a local clone, do
 ```bash
@@ -182,35 +182,35 @@ this will automatically get updates if you pull new changes from the openhost re
 
 or if not,
 ```bash
-uv tool install "oh @ git+https://github.com/cloud-in-a-bottle/cloud-in-a-bottle.git#subdirectory=compute_space_cli"
+uv tool install "cloud-in-a-bottle-cli @ git+https://github.com/cloud-in-a-bottle/cloud-in-a-bottle.git#subdirectory=compute_space_cli"
 ```
-Run `oh instance login` to login to your compute space.
+Run `bottle instance login` to login to your compute space.
 
 ## AI Agent Development
 
-We'd suggest letting your AI agent do the full "fix bugs, commit+push, update and reload, test" loop. The `oh` CLI makes this easy to automate, although the CLI will need to be logged in by the user manually first.
+We'd suggest letting your AI agent do the full "fix bugs, commit+push, update and reload, test" loop. The `bottle` CLI makes this easy to automate, although the CLI will need to be logged in by the user manually first.
 
-Here's some example `oh` commands, although you should run `oh --help` to get the most up-to-date command list.
+Here's some example `bottle` commands, although you should run `bottle --help` to get the most up-to-date command list.
 
 ```bash
-oh status                                    # check if compute space is reachable
+bottle status                                    # check if compute space is reachable
 
-oh app list                                  # list apps and status
-oh app deploy https://github.com/you/myapp   # deploy from git repo
-oh app deploy https://github.com/you/myapp --name cool-app --wait
-oh app status cool-app                       # check status
-oh app logs cool-app                         # view logs
-oh app logs cool-app --follow                # tail logs
-oh app reload cool-app                       # rebuild + restart
-oh app reload cool-app --update --wait       # git pull, rebuild, wait
-oh app stop cool-app                         # stop app
-oh app remove cool-app                       # remove app + data
-oh app remove cool-app --keep-data           # remove but keep data
-oh app rename cool-app new-name              # rename app
+bottle app list                                  # list apps and status
+bottle app deploy https://github.com/you/myapp   # deploy from git repo
+bottle app deploy https://github.com/you/myapp --name cool-app --wait
+bottle app status cool-app                       # check status
+bottle app logs cool-app                         # view logs
+bottle app logs cool-app --follow                # tail logs
+bottle app reload cool-app                       # rebuild + restart
+bottle app reload cool-app --update --wait       # git pull, rebuild, wait
+bottle app stop cool-app                         # stop app
+bottle app remove cool-app                       # remove app + data
+bottle app remove cool-app --keep-data           # remove but keep data
+bottle app rename cool-app new-name              # rename app
 
-oh tokens list                               # list API tokens
-oh tokens create --name "ci" --expiry-hours 72
-oh tokens delete 3                           # delete by token ID
+bottle tokens list                               # list API tokens
+bottle tokens create --name "ci" --expiry-hours 72
+bottle tokens delete 3                           # delete by token ID
 ```
 
 Note: cloning a private GitHub repo for the first time requires an OAuth flow in the browser. The CLI will print a link to authorize. After that, subsequent deploys and updates work without browser interaction.

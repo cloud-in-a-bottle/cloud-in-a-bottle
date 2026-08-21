@@ -27,7 +27,7 @@ def _load_or_exit() -> config.MultiConfig:
     try:
         return config.get_multi_config()
     except config.ConfigFileNotFoundError:
-        print("No config file. Run 'oh instance login' first.", file=sys.stderr)
+        print("No config file. Run 'bottle instance login' first.", file=sys.stderr)
         raise SystemExit(1) from None
     except config.ConfigInvalidError as e:
         print(f"Invalid config file: {e}", file=sys.stderr)
@@ -45,11 +45,11 @@ def _load_or_create() -> config.MultiConfig:
         return config.MultiConfig()
 
 
-def resolve_instance(oh: Oh) -> config.Instance:
+def resolve_instance(bottle: Bottle) -> config.Instance:
     """Resolve which instance to target, respecting --instance."""
     multi = _load_or_exit()
     try:
-        return multi.resolve(instance_name=oh.instance)
+        return multi.resolve(instance_name=bottle.instance)
     except config.InstanceNotFoundError as e:
         print(str(e), file=sys.stderr)
         raise SystemExit(1) from None
@@ -432,9 +432,9 @@ class InstanceCmd:
                 _load_or_exit().evolve(default_instance=hostname).save()
                 print(f"Default instance set to '{display_name}'")
             else:
-                print(f"Use with: oh --instance {display_name} <command>")
+                print(f"Use with: bottle --instance {display_name} <command>")
         else:
-            print(f"Use with: oh --instance {display_name} <command>")
+            print(f"Use with: bottle --instance {display_name} <command>")
 
     @cappa.command(name="list")
     def list_instances(self) -> None:
@@ -630,9 +630,9 @@ class Curl:
         raise SystemExit(subprocess.call(cmd))
 
 
-@cappa.command(name="oh", help="Cloud in a Bottle compute space CLI — manage things in your compute space.")
+@cappa.command(name="bottle", help="Cloud in a Bottle compute space CLI — manage things in your compute space.")
 @attrs.define
-class Oh:
+class Bottle:
     subcommand: cappa.Subcommands[Status | AppCmd | TokensCmd | LogsCmd | InstanceCmd | Curl | Version | Diagnostics]
     instance: Annotated[
         str | None,
@@ -643,4 +643,4 @@ class Oh:
 def main() -> None:
     if len(sys.argv) == 1:
         sys.argv.append("--help")
-    cappa.invoke(Oh, color=False)
+    cappa.invoke(Bottle, color=False)
