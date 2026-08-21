@@ -106,10 +106,15 @@ async def app_detail(
         app_row["repo_url"], app_row["repo_path"], db, config, zone_for_request(request)
     )
 
+    app_data = dict(app_row)
+    if error := app_data.get("error_message"):
+        first_line = error.splitlines()[0]
+        app_data["error_message"] = f"{first_line[:100]}..." if len(first_line) > 100 else first_line
+
     return Template(
         template_name="app_detail.html",
         context={
-            "app": app_row,
+            "app": app_data,
             "links": links,
             "databases": databases,
             "port_mappings": port_mappings,

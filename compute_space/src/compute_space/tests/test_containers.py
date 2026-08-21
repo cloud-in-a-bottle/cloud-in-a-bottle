@@ -206,7 +206,7 @@ def test_build_image_generic_failure_does_not_use_cache_marker(
         build_image("myapp", "/tmp/repo", "Dockerfile", temp_data_dir=None)
     msg = str(exc_info.value)
     assert containers.BUILD_CACHE_CORRUPT_MARKER not in msg
-    assert "Dockerfile not found" in msg
+    assert msg == "Container build failed (exit code 1)"
 
 
 def test_build_image_non_streaming_path_inspects_stdout_too(monkeypatch: pytest.MonkeyPatch) -> None:
