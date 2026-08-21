@@ -550,7 +550,7 @@ async def stop_app(app_id: FromPath[str], db: NamedDependency[sqlite3.Connection
     if _is_removing(app_row):
         raise ConflictException(detail="App is being removed")
 
-    stop_app_process(app_row)
+    stop_app_process(app_row["name"], app_row["container_id"])
     stop_container(f"openhost-{app_row['name']}")
     db.execute(
         "UPDATE apps SET status = 'stopped', container_id = NULL WHERE app_id = ?",
@@ -792,7 +792,7 @@ async def _reload_app_impl(
     if cursor.rowcount == 0 and not continue_oauth:
         raise ConflictException(detail="App is already reloading")
 
-    await asyncio.to_thread(stop_app_process, app_row)
+    await asyncio.to_thread(stop_app_process, app_row["name"], app_row["container_id"])
 
     Thread(
         target=reload_app_background,
@@ -1085,7 +1085,7 @@ async def rename_app(
     prior_status = app_row["status"]
     prior_container_id = app_row["container_id"]
     was_running = prior_status in ("running", "starting", "building")
-    stop_app_process(app_row)
+    stop_app_process(app_row["name"], prior_container_id)
     db.execute(
         "UPDATE apps SET status = 'stopped', container_id = NULL WHERE app_id = ?",
         (app_id,),

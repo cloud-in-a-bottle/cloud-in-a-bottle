@@ -746,7 +746,7 @@ def stop_running_archive_apps(
             continue
         logger.info("stopping archive-using app %s before archive migration", row["name"])
         try:
-            stop_app_process(row)
+            stop_app_process(row["name"], row["container_id"])
         except Exception:
             logger.exception("failed to stop app %s before archive migration", row["name"])
         recorded.append(row["app_id"])
@@ -1195,7 +1195,7 @@ def remove_app_background(app_id: str, keep_data: bool, config: Config) -> None:
         app_name = app_row["name"]
 
         try:
-            stop_app_process(app_row)
+            stop_app_process(app_name, app_row["container_id"])
         except Exception:
             logger.exception("stop_app_process failed during remove of %s", app_name)
         try:
