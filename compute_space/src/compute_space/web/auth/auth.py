@@ -39,7 +39,7 @@ def _get_bearer_token_if_set(connection: AnyConnection) -> str | None:
     return None
 
 
-def authorization_is_openhost_credential(connection: AnyConnection) -> bool:
+def bearer_is_openhost_credential(connection: AnyConnection) -> bool:
     """True iff the Authorization bearer is a valid OpenHost API token or app token.
 
     Such a token is a credential the router consumes, so it must be stripped before forwarding — an
@@ -56,7 +56,7 @@ def authorization_is_openhost_credential(connection: AnyConnection) -> bool:
         with closing(get_db()) as db:
             return validate_api_token(token, db) is not None or validate_app_token(token, db) is not None
     except Exception:
-        logger.exception("authorization_is_openhost_credential: token check failed; not stripping")
+        logger.exception("bearer_is_openhost_credential: token check failed; not stripping")
         return False
 
 

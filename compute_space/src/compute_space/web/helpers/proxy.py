@@ -162,6 +162,10 @@ async def proxy_http_request(
     inter-chunk gaps -- are not killed by a blanket read deadline.  Callers that
     want to bound how long they'll wait on a backend (e.g. internal service
     calls) can pass an explicit ``read_timeout``.
+
+    ``strip_authorization`` removes the Authorization header before forwarding; set it when the
+    header carried an OpenHost credential the router consumed, so it can't reach (and be replayed by)
+    the backend app.
     """
     target_url = _format_proxy_request_url(request.scope, target_port, override_path)
     new_request_headers = _build_forwarded_request_headers(
@@ -305,6 +309,8 @@ async def proxy_websocket_request(
     """Bidirectionally proxy a WebSocket connection to a backend app.
 
     If ``override_path`` is set, use it instead of the client path.
+    ``strip_authorization`` drops the Authorization header before forwarding (set it when the header
+    carried an OpenHost credential the router consumed).
     """
     target_url = _format_proxy_request_url(connection.scope, target_port, override_path)
 
