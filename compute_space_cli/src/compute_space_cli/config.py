@@ -7,12 +7,12 @@ from typing import Self
 import attr
 import tomli_w
 
-CONFIG_DIR = Path.home() / ".bottle"
+CONFIG_DIR = Path.home() / ".cloud_in_a_bottle_cli"
 CONFIG_FILE = CONFIG_DIR / "compute_space_cli.toml"
 
-# Legacy config location (pre-``bottle``), used as a migration source: it is
-# read as a fallback when ~/.bottle is absent. The default save path never
-# writes here — the next save() writes to CONFIG_FILE, migrating config forward.
+# Legacy config location, used as a migration source: it is read as a fallback
+# when ~/.cloud_in_a_bottle_cli is absent. The default save path never writes
+# here — the next save() writes to CONFIG_FILE, migrating config forward.
 LEGACY_CONFIG_DIR = Path.home() / ".openhost"
 LEGACY_CONFIG_FILE = LEGACY_CONFIG_DIR / "compute_space_cli.toml"
 

@@ -209,7 +209,7 @@ npx skills add cloud-in-a-bottle/cloud-in-a-bottle --skill openhost-context
 The skill works best with the `bottle` CLI installed and logged in:
 
 ```bash
-uv tool install "bottle @ git+https://github.com/cloud-in-a-bottle/cloud-in-a-bottle.git#subdirectory=compute_space_cli"
+uv tool install "cloud-in-a-bottle-cli @ git+https://github.com/cloud-in-a-bottle/cloud-in-a-bottle.git#subdirectory=compute_space_cli"
 bottle instance login
 ```
 

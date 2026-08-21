@@ -182,7 +182,7 @@ this will automatically get updates if you pull new changes from the openhost re
 
 or if not,
 ```bash
-uv tool install "bottle @ git+https://github.com/cloud-in-a-bottle/cloud-in-a-bottle.git#subdirectory=compute_space_cli"
+uv tool install "cloud-in-a-bottle-cli @ git+https://github.com/cloud-in-a-bottle/cloud-in-a-bottle.git#subdirectory=compute_space_cli"
 ```
 Run `bottle instance login` to login to your compute space.
 

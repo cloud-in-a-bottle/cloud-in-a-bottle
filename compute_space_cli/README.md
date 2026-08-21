@@ -6,11 +6,11 @@ Command-line tool for managing apps on your Cloud in a Bottle compute space.
 
 HTTPS:
 ```bash
-uv tool install "bottle @ git+https://github.com/cloud-in-a-bottle/cloud-in-a-bottle.git#subdirectory=compute_space_cli"
+uv tool install "cloud-in-a-bottle-cli @ git+https://github.com/cloud-in-a-bottle/cloud-in-a-bottle.git#subdirectory=compute_space_cli"
 ```
 SSH:
 ```bash
-uv tool install "bottle @ git+ssh://git@github.com/cloud-in-a-bottle/cloud-in-a-bottle.git#subdirectory=compute_space_cli"
+uv tool install "cloud-in-a-bottle-cli @ git+ssh://git@github.com/cloud-in-a-bottle/cloud-in-a-bottle.git#subdirectory=compute_space_cli"
 ```
 
 ## Setup
@@ -20,7 +20,7 @@ bottle instance login                    # add an instance interactively
 bottle instance set-default x.host.com   # set it as default
 ```
 
-This will prompt you for your compute space URL and walk you through creating an API token. The instance is saved under its domain name (e.g. `x.host.com`) to `~/.bottle/compute_space_cli.toml`.
+This will prompt you for your compute space URL and walk you through creating an API token. The instance is saved under its domain name (e.g. `x.host.com`) to `~/.cloud_in_a_bottle_cli/compute_space_cli.toml`.
 
 For development, use an editable install so changes take effect immediately:
 
@@ -119,5 +119,5 @@ bottle curl -X POST https://myzone.example.com/api/...   # any curl args work
 ## Update
 
 ```bash
-uv tool upgrade bottle
+uv tool upgrade cloud-in-a-bottle-cli
 ```

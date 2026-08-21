@@ -121,16 +121,16 @@ class TestMultiConfigSaveLoad:
 
 
 class TestLegacyConfigFallback:
-    """Default-path resolution prefers ``~/.bottle`` and falls back to ``~/.openhost``.
+    """Default-path resolution prefers ``~/.cloud_in_a_bottle_cli`` and falls back to ``~/.openhost``.
 
-    When ``load()`` is called with no explicit path it must prefer the ``~/.bottle``
-    config file but transparently read the legacy ``~/.openhost`` file when the
-    former is absent, then migrate forward to ``~/.bottle`` on the next save.
+    When ``load()`` is called with no explicit path it must prefer the
+    ``~/.cloud_in_a_bottle_cli`` config file but transparently read the legacy
+    ``~/.openhost`` file when the former is absent, then migrate forward on the next save.
     """
 
     @pytest.fixture
     def paths(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path]:
-        new = tmp_path / "bottle" / "compute_space_cli.toml"
+        new = tmp_path / "new" / "compute_space_cli.toml"
         legacy = tmp_path / "openhost" / "compute_space_cli.toml"
         monkeypatch.setattr(cli_config, "CONFIG_FILE", new)
         monkeypatch.setattr(cli_config, "LEGACY_CONFIG_FILE", legacy)
@@ -175,7 +175,7 @@ class TestLegacyConfigFallback:
             MultiConfig.load()
 
     def test_save_migrates_forward_to_new_path(self, paths: tuple[Path, Path]) -> None:
-        """Loading a legacy config then saving writes to the new ~/.bottle path,
+        """Loading a legacy config then saving writes to the new ~/.cloud_in_a_bottle_cli path,
         preserves instance fields, and leaves the legacy file untouched."""
         new, legacy = paths
         self._write(legacy, "legacy.com")

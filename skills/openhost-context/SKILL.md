@@ -17,7 +17,7 @@ Prefer `bottle` over raw HTTP requests so you never have to handle tokens by han
 If `bottle` isn't installed:
 
 ```bash
-uv tool install "bottle @ git+https://github.com/cloud-in-a-bottle/cloud-in-a-bottle.git#subdirectory=compute_space_cli"
+uv tool install "cloud-in-a-bottle-cli @ git+https://github.com/cloud-in-a-bottle/cloud-in-a-bottle.git#subdirectory=compute_space_cli"
 ```
 
 Then the **user** logs in (this is interactive — ask them to run it):
