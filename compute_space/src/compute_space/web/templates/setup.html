@@ -1,4 +1,5 @@
 {% extends "_layout_narrow.html" %}
+{% from "_components/info_tip.html" import info_tip %}
 {% block title_suffix %} - Setup{% endblock %}
 
 {% block content %}
@@ -9,25 +10,24 @@
 <form method="post" id="setup-form">
   {% if claim %}<input type="hidden" name="claim" value="{{ claim }}">{% endif %}
 
-  <label class="field">
-    <span>Username (optional)</span>
+  <div class="field">
+    <div class="field__head">
+      <label for="username">Username (optional)</label>
+      {%- call info_tip("username-hint", "What the username is for") %}
+      <p>Used by apps you install (PeerTube, Mastodon, etc.) as your account name. Leave
+        blank to use the default <code>owner</code>; you can change this later from the
+        Settings page. Sign-in only requires the password.</p>
+      <p>Allowed: lowercase letters, digits, and <code>.</code> <code>_</code>
+        <code>-</code>; must start with a letter or digit; max&nbsp;30 characters. No
+        <code>@</code>, spaces, or uppercase.</p>
+      {%- endcall %}
+    </div>
     <input type="text" name="username" id="username" autocomplete="username"
            value="{{ username or '' }}"
            pattern="[a-z0-9][a-z0-9._\-]{0,29}" maxlength="30"
-           aria-describedby="username-hint username-error">
-  </label>
-  <p class="field-error" id="username-error" hidden></p>
-  <p class="hint" id="username-hint">
-    Used by apps you install (PeerTube, Mastodon, etc.) as your
-    account name. Leave blank to use the default
-    <code>owner</code>; you can change this later from the
-    Settings page. Sign-in only requires the password.
-    <br>
-    Allowed: lowercase letters, digits, and <code>.</code>
-    <code>_</code> <code>-</code>; must start with a letter or
-    digit; max&nbsp;30 characters. No <code>@</code>, spaces, or
-    uppercase.
-  </p>
+           aria-describedby="username-error">
+    <p class="field-error" id="username-error" hidden></p>
+  </div>
 
   <label class="field">
     <span>Password</span>

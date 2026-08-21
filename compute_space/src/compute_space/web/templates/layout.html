@@ -14,10 +14,11 @@
   <title>{% if display_name %}{{ display_name }}'s personal compute space{% else %}Cloud in a Bottle{% endif %}{% block title_suffix %}{% endblock %}</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible+Mono:wght@500;600&display=swap">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible+Mono:wght@500;600;700&display=swap">
   <link rel="stylesheet" href="{{ static_url('css/tokens.css') }}">
   <link rel="stylesheet" href="{{ static_url('css/base.css') }}">
   <link rel="stylesheet" href="{{ static_url('css/components.css') }}">
+  <script src="{{ static_url('js/info-tip.js') }}" defer></script>
   {% block head %}{% endblock %}
 </head>
 <body>
@@ -42,7 +43,7 @@
       <a class="banner__text" href="/dashboard" title="Back to the dashboard">{{ banner_text }}</a>
       {% endif %}
     </h1>
-    {{ icon_nav(source_url) }}
+    {{ icon_nav(source_url, show_back=not on_dashboard) }}
     {% block content %}{% endblock %}
   </div>
 </body>

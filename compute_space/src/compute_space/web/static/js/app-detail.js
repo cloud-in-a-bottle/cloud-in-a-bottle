@@ -253,6 +253,9 @@ function clearCacheAndReload() {
                     appStatus = data.status;
                     statusEl.textContent = appStatus;
                     statusEl.className = 'status-' + appStatus;
+                    // The enclosing row's data-status drives the dot colour.
+                    var statusRow = statusEl.closest('[data-status]');
+                    if (statusRow) statusRow.dataset.status = appStatus;
                 }
                 if (appStatus === 'removing') {
                     applyRemovingChrome();

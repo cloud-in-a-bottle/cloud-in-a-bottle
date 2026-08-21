@@ -210,7 +210,7 @@ tr:last-child td {
 th {
   background: var(--color-surface-raised);
   font-size: var(--text-xs);
-  font-weight: var(--weight-medium);
+  font-weight: var(--weight-semibold);
   letter-spacing: var(--tracking-label);
   text-transform: uppercase;
   white-space: nowrap;
@@ -278,10 +278,13 @@ label {
   font-size: var(--text-xs);
 }
 
+/* Explanatory prose under a control. One step up the scale from the smallest
+   text, with the roomier leading, because these are sentences to be read
+   rather than labels to be scanned. */
 .hint {
   color: var(--color-text-subtle);
-  font-size: var(--text-xs);
-  line-height: var(--leading-tight);
+  font-size: var(--text-sm);
+  line-height: var(--leading-snug);
 }
 
 .error {
@@ -320,10 +323,6 @@ label {
   align-items: center;
   flex-wrap: wrap;
   margin: var(--space-4) 0;
-}
-
-.label-col {
-  width: 14em;
 }
 
 .visually-hidden {

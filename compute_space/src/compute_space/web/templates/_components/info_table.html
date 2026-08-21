@@ -1,0 +1,15 @@
+{#- The one key/value table for the whole compute space: system info, app
+    detail, settings. Labels are uppercase row headers on the left, values are
+    right-aligned, and every table carries a header row. Multi-column list
+    tables (app list, ports, domains) are a different thing and keep the plain
+    <table> styling. -#}
+{% macro info_table(label_head="Property", value_head="Value", id=none, class_="") -%}
+<table class="info-table{% if class_ %} {{ class_ }}{% endif %}"{% if id %} id="{{ id }}"{% endif %}>
+  <thead><tr><th>{{ label_head }}</th><th>{{ value_head }}</th></tr></thead>
+  <tbody>{{ caller() }}</tbody>
+</table>
+{%- endmacro %}
+
+{% macro info_row(label, value, class_="") -%}
+<tr><th scope="row">{{ label }}</th><td{% if class_ %} class="{{ class_ }}"{% endif %}>{{ value }}</td></tr>
+{%- endmacro %}

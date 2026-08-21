@@ -1,6 +1,7 @@
 {% extends "layout.html" %}
 {% block title_suffix %} - Deploy App{% endblock %}
 {% from "_components/section.html" import section_head %}
+{% from "_components/icon.html" import icon %}
 {% block content %}
 
 {% call section_head("Deploy New App") %}{% endcall %}
@@ -10,8 +11,8 @@
 <div id="clone-form">
 
   <div class="catalog-callout">
-    <span class="callout-icon">🧭</span>
-    <div>
+    {{ icon("grid", 24, class_="callout-icon") }}
+    <div class="callout-text">
       <h3>Explore the App Catalog</h3>
       <p>Discover new apps for your compute space and install them with a click.</p>
     </div>
@@ -28,7 +29,7 @@
   GitHub account if needed.</p>
   <div class="repo-url-row">
     <input type="text" id="repo-url" required placeholder="https://github.com/user/my-app@branch">
-    <button onclick="cloneApp()" class="btn btn--primary">Deploy</button>
+    <button onclick="cloneApp()" class="btn btn--success">Deploy</button>
   </div>
   <details class="url-help">
     <summary>URL format examples</summary>
@@ -70,7 +71,7 @@
   <label>App name: </label>
   <input type="text" id="app-name" style="font-family:monospace; width:12em; display:inline-block;">
   <br><br>
-  <button onclick="deployApp()" class="btn btn--primary">Authorize &amp; Deploy</button>
+  <button onclick="deployApp()" class="btn btn--success">Authorize &amp; Deploy</button>
   <button onclick="cancelDeploy()" class="btn" style="margin-left:0.5em;">Cancel</button>
 </div>
 

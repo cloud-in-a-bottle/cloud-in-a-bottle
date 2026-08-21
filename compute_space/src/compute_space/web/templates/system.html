@@ -2,6 +2,7 @@
 {% block title_suffix %} - System Info{% endblock %}
 {% block content %}
 {% from "_components/section.html" import section_head %}
+{% from "_components/info_tip.html" import info_tip %}
 {% call section_head("Resource Usage") %}{% endcall %}
 <div class="usage-charts">
   <div class="usage-chart">
@@ -17,13 +18,20 @@
     <div id="mem-usage-chart"><span class="muted">Loading&hellip;</span></div>
   </div>
   <div class="usage-chart">
-    <h3>Swap <span class="info-tip" tabindex="0" role="note" aria-label="What is swap?" title="Swap is like memory, but much slower. You shouldn't be using much of it unless your memory is nearly full — heavy swap use often means this box needs more RAM.">&#9432;</span></h3>
+    <h3>Swap
+      {%- call info_tip("swap-hint", "What swap is", align="end") %}
+      <p>Swap is like memory, but much slower. You shouldn't be using much of it unless
+        your memory is nearly full &mdash; heavy swap use often means this box needs more
+        RAM.</p>
+      {%- endcall %}
+    </h3>
     <div id="swap-usage-chart"><span class="muted">Loading&hellip;</span></div>
   </div>
 </div>
 
 {% call section_head("Storage") %}{% endcall %}
-<table id="storage-table" class="form-table">
+<table id="storage-table" class="info-table">
+  <thead><tr><th>Property</th><th>Value</th></tr></thead>
   <tbody id="storage-body"></tbody>
 </table>
 <div id="storage-guard-row"></div>

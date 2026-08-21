@@ -2,14 +2,20 @@
     strip; rendered on every page by layout.html (and by the docs route's
     standalone template) so wherever you are, you can get anywhere.
 
+    Pages other than the dashboard also get a back link on the left of the row,
+    so the way home is a target rather than a guess at what the banner does.
+
     The GitHub link is the exact branch/fork this instance runs, using GitHub's
     official (unmodified) Invertocat mark. It also serves the AGPL source offer
     to network users, so it is only omitted when there is no source URL at all
     (tarball deploy, detached HEAD, non-GitHub remote). -#}
 {% from "_components/icon.html" import icon %}
 
-{% macro icon_nav(source_url=None) -%}
+{% macro icon_nav(source_url=None, show_back=True) -%}
 <div class="icon-nav">
+  {%- if show_back %}
+  <a class="nav-back" href="/dashboard">{{ icon("arrow-left", 11) }}Dashboard</a>
+  {%- endif %}
   <a class="icon-btn" href="/terminal/" title="Terminal">{{ icon("code", 16, alt="Terminal") }}</a>
   <a class="icon-btn" href="/system/" title="System info">{{ icon("box", 15, alt="System info") }}</a>
   <a class="icon-btn" href="/settings" title="Settings">{{ icon("gear", 12, alt="Settings") }}</a>

@@ -5,7 +5,7 @@
 
 var DOMAINS_URL = '/api/domains';
 
-var CERT_BADGES = {
+var CERT_STATUS = {
   active: {label: 'Active', variant: 'ok'},
   acquiring: {label: 'Acquiring', variant: 'warn'},
   error: {label: 'Error', variant: 'error'},
@@ -13,8 +13,20 @@ var CERT_BADGES = {
 
 function domainCertCell(d) {
   if (!d.tls) return dom.el('span', {class: 'muted', text: '—'});
-  var spec = CERT_BADGES[d.cert_status] || {label: 'None', variant: null};
-  return dom.badge(spec.label, spec.variant, d.error_message);
+  var spec = CERT_STATUS[d.cert_status] || {label: 'None', variant: 'muted'};
+  return dom.el('span', {
+    class: 'status-text status-text--' + spec.variant,
+    text: spec.label,
+    title: d.error_message || null,
+  });
+}
+
+function removeDomainButton(name) {
+  var label = 'Remove ' + name;
+  return dom.el('button', {class: 'icon-btn', type: 'button', title: label, 'aria-label': label,
+                           onclick: function() { removeDomain(name); }},
+    dom.el('img', {class: 'icon', src: '/static/img/icons/trash.svg',
+                   width: '14', height: '14', alt: '', 'aria-hidden': 'true'}));
 }
 
 // Repaint the table from a domain list (as returned by GET/POST/DELETE /api/domains).
@@ -41,13 +53,9 @@ function renderDomains(domains) {
       dom.el('td', {text: d.scheme}),
       dom.el('td', {text: d.mdns ? 'mDNS (.local)' : 'Public DNS'}),
       dom.el('td', null, domainCertCell(d)),
-      dom.el('td', null, d.is_primary
+      dom.el('td', {class: 'col-actions'}, d.is_primary
         ? dom.el('span', {class: 'muted', text: '—'})
-        : dom.el('button', {
-            class: 'btn btn--danger',
-            text: 'Remove',
-            onclick: function() { removeDomain(d.name); },
-          })),
+        : removeDomainButton(d.name)),
     ]);
   }));
   // A cert acquisition (DNS-01) runs in the background; poll until it settles.

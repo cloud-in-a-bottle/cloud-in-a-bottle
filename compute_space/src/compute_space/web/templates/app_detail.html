@@ -1,15 +1,59 @@
 {% extends "layout.html" %}
 {% from "_components/button.html" import button %}
+{% from "_components/icon.html" import icon %}
+{% from "_components/info_table.html" import info_table, info_row %}
 {% from "_components/section.html" import section_head %}
-{% from "_components/spec.html" import spec_list, spec_row %}
+
+{% macro edit_button(label, onclick) -%}
+<button class="icon-btn" type="button" title="{{ label }}" aria-label="{{ label }}"
+        onclick="{{ onclick }}">{{ icon("pencil", 14) }}</button>
+{%- endmacro %}
+
+{#- Name and git upstream are edited in place: a display span and an edit span
+    that app-detail.js swaps by toggling `hidden`. -#}
+{% macro url_value() -%}
+<span class="info-value" id="name-display">
+  <a href="{{ app_url(app.name) }}" class="app-link" target="_blank" rel="noopener">{{ app_url(app.name) }}</a>
+  {{ edit_button("Edit app name", "editName()") }}
+</span>
+<span class="info-value" id="name-edit" hidden>
+  <input type="text" id="name-input" value="{{ app.name }}" style="max-width:15em;">
+  {{ button("Save", variant="primary", onclick="saveName()") }}
+  {{ button("Cancel", onclick="cancelName()") }}
+  <span id="name-error" class="field-error"></span>
+</span>
+{%- endmacro %}
+
+{% macro remote_value() -%}
+<span class="info-value" id="remote-display">
+  <code>{{ app.repo_url }}</code>
+  {{ edit_button("Edit git URL", "editRemote()") }}
+</span>
+<span class="info-value" id="remote-edit" hidden>
+  <input type="text" id="remote-input" value="{{ app.repo_url }}"
+         placeholder="https://github.com/owner/repo@branch">
+  {{ button("Save & update", variant="primary", onclick="saveRemote()") }}
+  {{ button("Cancel", onclick="cancelRemote()") }}
+  <p class="hint">Append <code>@branch</code> (or a tag/commit) to change the ref. Saving
+    re-points the upstream and pulls the latest code.</p>
+  <span id="remote-error" class="field-error"></span>
+</span>
+{%- endmacro %}
+
+{% macro code_value(text) -%}
+<code>{{ text }}</code>
+{%- endmacro %}
+
+{#- Action rows pair the button with a one-line explanation of what it does. -#}
+{% macro action_label(name, note, danger=false) -%}
+{{ name }}<span class="action-note{% if danger %} action-note--danger{% endif %}">{{ note }}</span>
+{%- endmacro %}
 
 {% block title_suffix %} - {{ app.name }}{% endblock %}
 
 {% block content %}
 <section class="section">
-  {% call section_head(app.name) %}
-    <span class="status-{{ app.status }}" id="app-status">{{ app.status }}</span>
-  {% endcall %}
+  {{ section_head(app.name) }}
 
   {% if app.manifest_name and app.manifest_name != app.name %}
   <p class="muted">Manifest name: {{ app.manifest_name }}</p>
@@ -19,51 +63,35 @@
   <p class="notice">Waiting for app to finish deploying. You'll be redirected automatically once it's ready.</p>
   {% endif %}
 
-  {% call spec_list() %}
-    {{ spec_row("Version", app.version) }}
-    {{ spec_row("Description", app.description or "---") }}
-    <dt>URL</dt>
-    <dd>
-      <span id="name-display">
-        <a href="{{ app_url(app.name) }}" class="app-link" target="_blank" rel="noopener">{{ app_url(app.name) }}</a>
-        {{ button("Edit", onclick="editName()") }}
-      </span>
-      <span id="name-edit" hidden>
-        <input type="text" id="name-input" value="{{ app.name }}" style="max-width:15em;">
-        {{ button("Save", variant="primary", onclick="saveName()") }}
-        {{ button("Cancel", onclick="cancelName()") }}
-        <span id="name-error" class="field-error"></span>
-      </span>
-    </dd>
-    {{ spec_row("Local port", app.local_port) }}
-    {{ spec_row("Health check", app.health_check or "---") }}
-    {{ spec_row("Memory", app.memory_mb ~ " MB") }}
-    {{ spec_row("CPU", app.cpu_cores ~ " cores") }}
+  {% call info_table() %}
+    {#- Hand-rolled so the whole row can carry data-status, which colours the
+        dot; app-detail.js keeps the attribute in step as the status changes. -#}
+    <tr class="status-row" data-status="{{ app.status }}">
+      <th scope="row">Status</th>
+      <td>
+        <span class="info-value">
+          <span class="status-dot"></span>
+          <span class="status-{{ app.status }}" id="app-status">{{ app.status }}</span>
+        </span>
+      </td>
+    </tr>
+    {{ info_row("Version", app.version) }}
+    {{ info_row("Description", app.description or "---") }}
+    {{ info_row("URL", url_value()) }}
+    {{ info_row("Local port", app.local_port) }}
+    {{ info_row("Health check", app.health_check or "---") }}
+    {{ info_row("Memory", app.memory_mb ~ " MB") }}
+    {{ info_row("CPU", app.cpu_cores ~ " cores") }}
     {% if app.repo_url %}
-    <dt>Git URL</dt>
-    <dd>
-      <span id="remote-display">
-        <code>{{ app.repo_url }}</code>
-        {{ button("Edit", onclick="editRemote()") }}
-      </span>
-      <span id="remote-edit" hidden>
-        <input type="text" id="remote-input" value="{{ app.repo_url }}"
-               placeholder="https://github.com/owner/repo@branch">
-        {{ button("Save & update", variant="primary", onclick="saveRemote()") }}
-        {{ button("Cancel", onclick="cancelRemote()") }}
-        <p class="hint">Append <code>@branch</code> (or a tag/commit) to change the ref. Saving
-          re-points the upstream and pulls the latest code.</p>
-        <span id="remote-error" class="field-error"></span>
-      </span>
-    </dd>
+    {{ info_row("Git URL", remote_value()) }}
     {% endif %}
-    {{ spec_row("Repo path", app.repo_path) }}
-    {{ spec_row("Created", app.created_at) }}
+    {{ info_row("Repo path", app.repo_path) }}
+    {{ info_row("Created", app.created_at) }}
     {% if app.error_message %}
-    <dt>Error</dt><dd class="error">{{ app.error_message }}</dd>
+    {{ info_row("Error", app.error_message, class_="error") }}
     {% endif %}
     {% if app.container_id %}
-    <dt>Container ID</dt><dd><code>{{ app.container_id[:12] }}</code></dd>
+    {{ info_row("Container ID", code_value(app.container_id[:12])) }}
     {% endif %}
   {% endcall %}
 </section>
@@ -166,26 +194,43 @@
 <pre class="log-output" id="app-logs">{{ logs or "No log output available." }}</pre>
 
 {% call section_head("Actions", level=3) %}{% endcall %}
-<div id="app-action-buttons" class="action-bar">
-  <button class="btn" onclick="appAction('/stop_app/{{ app.app_id }}', null, {label: 'Stopping'})">Stop App</button>
-  <button class="btn" onclick="appAction('/reload_app/{{ app.app_id }}', null, {label: 'Reloading'})">Reload App</button>
-  <button class="btn" onclick="appAction('/reload_app/{{ app.app_id }}', {update: true}, {label: 'Updating &amp; reloading'})">Update &amp; Reload</button>
-  <button class="btn" id="copy-diagnostics-btn" onclick="copyAppDiagnostics(this)">Copy Diagnostics</button>
+{% call info_table("Action", "", id="app-action-buttons", class_="action-table") %}
+  {{ info_row(
+       action_label("Stop app", "Shuts the container down. Data and images are kept."),
+       button("Stop App", onclick="appAction('/stop_app/" ~ app.app_id ~ "', null, {label: 'Stopping'})")) }}
+  {{ info_row(
+       action_label("Reload app", "Restarts the container from the code already on disk."),
+       button("Reload App", onclick="appAction('/reload_app/" ~ app.app_id ~ "', null, {label: 'Reloading'})")) }}
+  {{ info_row(
+       action_label("Update & reload", "Pulls the latest code from the upstream, rebuilds, then restarts."),
+       button("Update & Reload", onclick="appAction('/reload_app/" ~ app.app_id ~ "', {update: true}, {label: 'Updating & reloading'})")) }}
+  {{ info_row(
+       action_label("Diagnostics", "Copies this app's diagnostic bundle to the clipboard for a bug report."),
+       button("Copy Diagnostics", id="copy-diagnostics-btn", onclick="copyAppDiagnostics(this)")) }}
   {% if edit_app %}
-    {% if edit_app.mode == 'service' %}
+  <tr>
+    <th scope="row">{{ action_label("Edit app", "Opens the app's source in an editor, in a new tab.") }}</th>
+    <td>
+      {% if edit_app.mode == 'service' %}
       <form method="POST" action="{{ edit_app.action }}" target="_blank" style="display:contents;">
         <input type="hidden" name="repo" value="{{ edit_app.repo }}">
         <input type="hidden" name="ref" value="{{ edit_app.ref }}">
         <button class="btn" type="submit">Edit App</button>
       </form>
-    {% else %}
+      {% else %}
       <a href="{{ edit_app.href }}" class="btn" target="_blank" rel="noopener">Edit App</a>
-    {% endif %}
+      {% endif %}
+    </td>
+  </tr>
   {% endif %}
-  <button class="btn" onclick="if(confirm('Remove {{ app.name }} but keep its databases and files? You can re-deploy later to the same app name to reuse the data.')) appAction('/remove_app/{{ app.app_id }}', {keep_data: true}, {isRemove: true, label: 'Removing (keeping data)'})">Remove (Keep Data)</button>
-  <button class="btn btn--danger" onclick="if(confirm('Remove {{ app.name }}? This deletes all app data permanently.')) appAction('/remove_app/{{ app.app_id }}', {}, {isRemove: true, label: 'Removing'})">Remove App &amp; Data</button>
-  <span id="app-action-msg"></span>
-</div>
+  {{ info_row(
+       action_label("Remove, keep data", "Removes the app but leaves its databases and files in place. Re-deploying to the same app name picks them up again."),
+       button("Remove (Keep Data)", onclick="if(confirm('Remove " ~ app.name ~ " but keep its databases and files? You can re-deploy later to the same app name to reuse the data.')) appAction('/remove_app/" ~ app.app_id ~ "', {keep_data: true}, {isRemove: true, label: 'Removing (keeping data)'})")) }}
+  {{ info_row(
+       action_label("Remove app & data", "Deletes the app together with every database and file it owns. This cannot be undone.", danger=true),
+       button("Remove App & Data", variant="danger", onclick="if(confirm('Remove " ~ app.name ~ "? This deletes all app data permanently.')) appAction('/remove_app/" ~ app.app_id ~ "', {}, {isRemove: true, label: 'Removing'})")) }}
+{% endcall %}
+<p class="action-msg" id="app-action-msg"></p>
 
 <script>
 async function grantPermission(btn) {

@@ -2,6 +2,14 @@
 
 var TOKENS_URL = '/api/tokens';
 
+function deleteTokenButton(t) {
+  var label = 'Delete token ' + t.name;
+  return dom.el('button', {class: 'icon-btn', type: 'button', title: label, 'aria-label': label,
+                           onclick: function() { deleteToken(t.id); }},
+    dom.el('img', {class: 'icon', src: '/static/img/icons/trash.svg',
+                   width: '14', height: '14', alt: '', 'aria-hidden': 'true'}));
+}
+
 function loadTokens() {
   fetch(TOKENS_URL, {credentials: 'same-origin'})
     .then(function(r) { return r.json(); })
@@ -17,13 +25,11 @@ function loadTokens() {
           dom.el('td', {text: t.name}),
           dom.el('td', {text: t.created_at}),
           dom.el('td', null, t.expires_at
-            ? (t.expired ? dom.badge('Expired', 'error', t.expires_at) : t.expires_at)
-            : dom.badge('Never', null)),
-          dom.el('td', null, dom.el('button', {
-            class: 'btn btn--danger',
-            text: 'Delete',
-            onclick: function() { deleteToken(t.id); },
-          })),
+            ? (t.expired
+                ? dom.el('span', {class: 'status-text status-text--error', text: 'Expired', title: t.expires_at})
+                : t.expires_at)
+            : dom.el('span', {class: 'status-text status-text--muted', text: 'Never'})),
+          dom.el('td', {class: 'col-actions'}, deleteTokenButton(t)),
         ]);
       }));
     });

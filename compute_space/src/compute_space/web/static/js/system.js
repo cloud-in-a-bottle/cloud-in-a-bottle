@@ -8,9 +8,12 @@ function messageRow(colspan, text, cls) {
   return dom.el('tr', null, dom.el('td', {colspan: colspan, class: cls, text: text}));
 }
 
-// One <th>label</th><td>value</td> row of a key/value table.
+// One <th>label</th><td>value</td> row of an .info-table.
 function specRow(label, value, cls) {
-  return dom.el('tr', null, [dom.el('th', {text: label}), dom.el('td', {class: cls}, value)]);
+  return dom.el('tr', null, [
+    dom.el('th', {scope: 'row', text: label}),
+    dom.el('td', {class: cls}, value),
+  ]);
 }
 
 function showMuted(el, text) {
@@ -258,9 +261,9 @@ function memUsage(apps, pressure) {
 }
 
 // Swap is separate from RAM (a slower, disk-backed overflow), so it gets its own
-// donut rather than a slice of the memory ring. "Used" is drawn in the mid-grey
-// "System" tone so a busy swap reads as notable-but-not-app; free swap uses the
-// same light "Unused" grey as the other charts.
+// donut rather than a slice of the memory ring. "Used" is drawn in the deep
+// "System" blue so a busy swap reads as notable; free swap uses the same pale
+// "Unused" blue as the other charts.
 function swapUsage(pressure) {
   var total = pressure && pressure.swap_total_bytes;
   if (!total) return null;

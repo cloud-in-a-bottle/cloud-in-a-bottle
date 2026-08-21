@@ -10,17 +10,17 @@
 <section class="section">
   {% call section_head("Account") %}{% endcall %}
   <div class="panel">
-    <label class="field" for="username-input">
-      <span>Owner username</span>
+    <div class="field">
+      <label for="username-input">Owner username</label>
       <div class="field-row">
         <input type="text" id="username-input"
                pattern="[a-z0-9][a-z0-9._\-]{0,29}" maxlength="30"
-               aria-describedby="username-msg" placeholder="Loading…" disabled>
+               aria-describedby="username-hint username-msg" placeholder="Loading…" disabled>
         {{ button("Save", variant="primary", id="set-username-btn", onclick="setOwnerUsername()", disabled=true) }}
       </div>
-    </label>
-    <p class="hint">Used as your account name inside installed apps.</p>
-    <p id="username-msg" hidden></p>
+      <p class="hint" id="username-hint">Used as your account name inside installed apps.</p>
+      <p class="msg" id="username-msg" hidden></p>
+    </div>
 
     <hr class="rule">
 
@@ -28,14 +28,14 @@
       <span>Password</span>
       {{ button("Change password", id="show-pw-form-btn",
                 onclick="this.hidden = true; document.getElementById('pw-form').hidden = false;") }}
-      <div id="pw-form" hidden>
+      <div id="pw-form" class="field-stack" hidden>
         <input type="password" id="current-pw" placeholder="Current password" autocomplete="current-password">
         <input type="password" id="new-pw" placeholder="New password" autocomplete="new-password">
         <input type="password" id="confirm-pw" placeholder="Confirm new password" autocomplete="new-password">
         <div class="actions">
           {{ button("Change password", variant="primary", onclick="changePassword()") }}
         </div>
-        <span id="pw-msg" hidden></span>
+        <span id="pw-msg" class="msg" hidden></span>
       </div>
     </div>
 
@@ -43,7 +43,7 @@
 
     <div class="field">
       <span>Session</span>
-      <form method="post" action="/logout">
+      <form class="actions" method="post" action="/logout">
         {{ button("Log out", variant="danger", type="submit") }}
       </form>
     </div>
@@ -53,35 +53,41 @@
 <section class="section" id="connect-imbue-section" hidden>
   {% call section_head("Imbue account") %}{% endcall %}
   <div class="panel">
-    <p id="connect-imbue-state" class="muted">Checking&hellip;</p>
-    {{ button("Connect to Imbue", variant="primary", id="connect-imbue-btn", onclick="connectImbue()") }}
-    <p class="hint">Connect this instance to your Imbue account to enable Imbue services. Managed
-      instances are connected automatically; use this if yours isn't, or to reconnect.</p>
-    <p id="connect-imbue-msg" hidden></p>
+    <div class="field">
+      <span>Connection</span>
+      <div class="actions">
+        {{ button("Connect to Imbue", variant="primary", id="connect-imbue-btn", onclick="connectImbue()") }}
+        <span id="connect-imbue-state" class="muted">Checking&hellip;</span>
+      </div>
+      <p class="hint">Connect this instance to your Imbue account to enable Imbue services. Managed
+        instances are connected automatically; use this if yours isn't, or to reconnect.</p>
+      <p id="connect-imbue-msg" class="msg" hidden></p>
+    </div>
   </div>
 </section>
 
 <section class="section">
   {% call section_head("Software updates") %}{% endcall %}
   <div class="panel">
-    <label class="field" for="remote-url">
-      <span>Git remote</span>
+    <div class="field">
+      <label for="remote-url">Git remote</label>
       <div class="field-row">
-        <input type="text" id="remote-url" placeholder="Loading…" disabled>
+        <input type="text" id="remote-url" aria-describedby="remote-hint remote-msg"
+               placeholder="Loading…" disabled>
         {{ button("Save remote", variant="primary", id="set-remote-btn", onclick="setRemote()", disabled=true) }}
       </div>
-    </label>
-    <p class="hint">Repository this instance updates from. Saving pins the target; use Update
-      below to apply it.</p>
-    <p id="remote-msg" hidden></p>
+      <p class="hint" id="remote-hint">Repository this instance updates from. Saving pins the target;
+        use Update below to apply it.</p>
+      <p id="remote-msg" class="msg" hidden></p>
+    </div>
 
     <hr class="rule">
 
     <div class="field">
       <span>Status</span>
-      <div id="update-status"><p>Checking for updates&hellip;</p></div>
+      <div id="update-status"><p class="msg">Checking for updates&hellip;</p></div>
       <div id="restart-overlay" hidden>
-        <p id="restart-status"><strong>Waiting for shutdown&hellip;</strong></p>
+        <p id="restart-status" class="msg"><strong>Waiting for shutdown&hellip;</strong></p>
       </div>
     </div>
   </div>
@@ -89,84 +95,95 @@
 
 <section class="section">
   {% call section_head("Domains") %}{% endcall %}
-  <p class="hint">Hostnames this instance answers on. The primary is set at provisioning. Add a
-    secondary <strong>public</strong> domain (its DNS must be delegated to this instance — it then
-    acquires a TLS certificate automatically) or a local <code>.local</code> name served over plain
-    HTTP. Removing a domain takes effect immediately; the primary can't be removed.</p>
+  <div class="panel">
+    <p class="hint">Hostnames this instance answers on. The primary is set at provisioning. Add a
+      secondary <strong>public</strong> domain (its DNS must be delegated to this instance — it then
+      acquires a TLS certificate automatically) or a local <code>.local</code> name served over plain
+      HTTP. Removing a domain takes effect immediately; the primary can't be removed.</p>
 
-  <div class="field-row">
-    <label class="field">
-      <span>Domain</span>
-      <input type="text" id="domain-name" placeholder="host.example.com">
-    </label>
-    <label class="field">
-      <span>Type</span>
-      <select id="domain-type">
-        <option value="public">Public (HTTPS)</option>
-        <option value="mdns">Local mDNS (.local, HTTP)</option>
-      </select>
-    </label>
-    {{ button("Add domain", variant="primary", onclick="addDomain()") }}
-  </div>
-  <p id="domain-msg" hidden></p>
+    <div class="field-row field-row--add">
+      <label class="field" for="domain-name">
+        <span>Domain</span>
+        <input type="text" id="domain-name" placeholder="host.example.com">
+      </label>
+      <label class="field" for="domain-type">
+        <span>Type</span>
+        <select id="domain-type">
+          <option value="public">Public (HTTPS)</option>
+          <option value="mdns">Local mDNS (.local, HTTP)</option>
+        </select>
+      </label>
+      {{ button("Add domain", variant="primary", onclick="addDomain()") }}
+    </div>
+    <p id="domain-msg" class="msg" hidden></p>
 
-  <div class="table-scroll" id="domains-table-wrap" hidden>
-    <table>
-      <thead><tr><th>Domain</th><th>Scheme</th><th>Discovery</th><th>Certificate</th><th>Actions</th></tr></thead>
-      <tbody id="domains-body"></tbody>
-    </table>
+    <div class="table-scroll" id="domains-table-wrap" hidden>
+      <table>
+        <thead><tr>
+          <th>Domain</th><th>Scheme</th><th>Discovery</th><th>Certificate</th>
+          <th class="col-actions">Actions</th>
+        </tr></thead>
+        <tbody id="domains-body"></tbody>
+      </table>
+    </div>
+    <p id="no-domains" class="empty">Loading&hellip;</p>
   </div>
-  <p id="no-domains" class="empty">Loading&hellip;</p>
 </section>
 
 <section class="section">
   {% call section_head("API tokens") %}{% endcall %}
-  <p class="hint">Bearer tokens for programmatic access (e.g. AI agents). Each token grants
-    owner-level access until it expires.</p>
+  <div class="panel">
+    <p class="hint">Bearer tokens for programmatic access (e.g. AI agents). Each token grants
+      owner-level access until it expires.</p>
 
-  <div class="field-row">
-    <label class="field">
-      <span>Name</span>
-      <input type="text" id="token-name">
-    </label>
-    <label class="field">
-      <span>Expires in (hours)</span>
-      <input type="number" id="token-expiry" value="8" min="0.1" step="any" disabled>
-    </label>
-    <label class="field field--check">
-      <input type="checkbox" id="token-no-expiry" checked
-             onchange="document.getElementById('token-expiry').disabled = this.checked;">
-      <span>Never expires</span>
-    </label>
-    {{ button("Create token", variant="primary", onclick="createToken()") }}
-  </div>
-
-  <div id="token-created" class="notice notice--ok" hidden>
-    <strong>Token created.</strong> Copy it now — it won't be shown again.
-    <div class="copy-field">
-      <code id="token-value"></code>
-      {{ button("Copy", onclick="navigator.clipboard.writeText(document.getElementById('token-value').textContent)") }}
+    <div class="field-row field-row--add">
+      <label class="field" for="token-name">
+        <span>Name</span>
+        <input type="text" id="token-name">
+      </label>
+      <label class="field" for="token-expiry">
+        <span>Expires in (hours)</span>
+        <input type="number" id="token-expiry" value="8" min="0.1" step="any" disabled>
+      </label>
+      <label class="field field--check">
+        <input type="checkbox" id="token-no-expiry" checked
+               onchange="document.getElementById('token-expiry').disabled = this.checked;">
+        <span>Never expires</span>
+      </label>
+      {{ button("Create token", variant="primary", onclick="createToken()") }}
     </div>
-  </div>
 
-  <div class="table-scroll" id="tokens-table-wrap" hidden>
-    <table>
-      <thead><tr><th>Name</th><th>Created</th><th>Expires</th><th>Actions</th></tr></thead>
-      <tbody id="tokens-body"></tbody>
-    </table>
+    <div id="token-created" class="notice notice--ok" hidden>
+      <strong>Token created.</strong> Copy it now — it won't be shown again.
+      <div class="copy-field">
+        <code id="token-value"></code>
+        {{ button("Copy", onclick="navigator.clipboard.writeText(document.getElementById('token-value').textContent)") }}
+      </div>
+    </div>
+
+    <div class="table-scroll" id="tokens-table-wrap" hidden>
+      <table>
+        <thead><tr>
+          <th>Name</th><th>Created</th><th>Expires</th><th class="col-actions">Actions</th>
+        </tr></thead>
+        <tbody id="tokens-body"></tbody>
+      </table>
+    </div>
+    <p id="no-tokens" class="empty">No API tokens.</p>
   </div>
-  <p id="no-tokens" class="empty">No API tokens.</p>
 </section>
 
 <section class="section">
   {% call section_head("Archive backend") %}{% endcall %}
-  <p class="hint">The archive data tier (<code>app_archive</code>) is used by apps that store large
-    amounts of bulk data (e.g. file uploads, media). It is always available: by default it is backed
-    by <strong>local disk</strong> on this instance. Configure an <strong>S3</strong> backend for
-    durable, elastic object storage &mdash; any existing local archive data is migrated into the
-    bucket when you do.</p>
-  <div id="archive-backend-status">
-    <div class="muted">Loading&hellip;</div>
+  <div class="panel">
+    <p class="hint">The archive data tier (<code>app_archive</code>) is used by apps that store large
+      amounts of bulk data (e.g. file uploads, media). It is always available: by default it is backed
+      by <strong>local disk</strong> on this instance. Configure an <strong>S3</strong> backend for
+      durable, elastic object storage &mdash; any existing local archive data is migrated into the
+      bucket when you do.</p>
+    <div id="archive-backend-status">
+      <div class="muted">Loading&hellip;</div>
+    </div>
   </div>
 </section>
 
@@ -177,7 +194,7 @@
       <span>Restart compute space</span>
       <div class="actions">
         {{ button("Restart compute space", variant="danger", onclick="restartComputeSpace()") }}
-        <span id="restart-msg" class="muted"></span>
+        <span id="restart-msg" class="msg"></span>
       </div>
       <p class="hint">Restarts the router process; running apps are not interrupted.</p>
     </div>
@@ -188,7 +205,7 @@
       <span>Build cache</span>
       <div class="actions">
         {{ button("Drop build cache", variant="danger", id="drop-build-cache-btn", onclick="dropBuildCache()") }}
-        <span id="drop-build-cache-msg" class="muted"></span>
+        <span id="drop-build-cache-msg" class="msg"></span>
       </div>
       <p class="hint">Removes images for stopped apps; they are rebuilt on next deploy.</p>
     </div>
@@ -199,8 +216,10 @@
       <span>SSH</span>
       <div class="actions">
         {{ button("SSH", id="ssh-btn", onclick="toggleSsh()", disabled=true) }}
-        <span id="ssh-status" class="muted"></span>
+        <span id="ssh-status" class="msg"></span>
       </div>
+      <p class="hint">Shell access to this instance over SSH. Leave it off unless you are
+        debugging.</p>
     </div>
   </div>
 </section>

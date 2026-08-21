@@ -26,7 +26,7 @@ function renderSummary(data) {
   var disk = (data.storage && data.storage.disk) || {};
   var rows = '';
   function row(label, value) {
-    rows += '<tr><th class="label-col">' + escHtml(label) + '</th><td>' + value + '</td></tr>';
+    rows += '<tr><th scope="row">' + escHtml(label) + '</th><td>' + value + '</td></tr>';
   }
   row('Generated at', escHtml(data.generated_at));
   row('Zone domain', escHtml(data.zone_domain));
@@ -43,7 +43,7 @@ function renderSummary(data) {
     ? ('podman ' + escHtml(rt.version || '?') + (rt.rootless === true ? ', rootless' : (rt.rootless === false ? ', ROOTFUL' : '')))
     : ('unavailable' + (rt.error ? ' (' + escHtml(rt.error) + ')' : ''));
   var rtCls = (rt.available && rt.rootless !== false) ? '' : ' class="status-error"';
-  rows += '<tr><th class="label-col">Container runtime</th><td' + rtCls + '>' + rtText + '</td></tr>';
+  rows += '<tr><th scope="row">Container runtime</th><td' + rtCls + '>' + rtText + '</td></tr>';
   if (disk.total_bytes != null) {
     row('Disk', formatBytes(disk.free_bytes) + ' free / ' + formatBytes(disk.total_bytes));
   }
@@ -62,13 +62,13 @@ function renderSummary(data) {
       + ' / ' + formatBytes(rp.memory_total_bytes)
       + (rp.memory_used_percent != null ? ' (' + rp.memory_used_percent + '%)' : '');
     var memCls = (rp.memory_used_percent != null && rp.memory_used_percent >= 90) ? ' class="status-error"' : '';
-    rows += '<tr><th class="label-col">Memory used</th><td' + memCls + '>' + escHtml(memText) + '</td></tr>';
+    rows += '<tr><th scope="row">Memory used</th><td' + memCls + '>' + escHtml(memText) + '</td></tr>';
   }
   if (rp.load_avg_1m != null) {
     var loadText = rp.load_avg_1m + ' / ' + rp.load_avg_5m + ' / ' + rp.load_avg_15m
       + (rp.cpu_count != null ? '  (over ' + rp.cpu_count + ' CPUs)' : '');
     var loadCls = (rp.cpu_count && rp.load_avg_1m > rp.cpu_count) ? ' class="status-error"' : '';
-    rows += '<tr><th class="label-col">Load avg (1/5/15m)</th><td' + loadCls + '>' + escHtml(loadText) + '</td></tr>';
+    rows += '<tr><th scope="row">Load avg (1/5/15m)</th><td' + loadCls + '>' + escHtml(loadText) + '</td></tr>';
   }
 
   document.getElementById('summary-body').innerHTML = rows;

@@ -12,19 +12,24 @@ function escAttr(s) {
   return escHtml(s).replace(/"/g, '&quot;');
 }
 
-// Golden-angle hue steps keep adjacent app slices distinct at any app count;
-// fixed low saturation keeps the palette muted. Shared by every app-colored
-// donut so the same app gets a consistent hue slot across charts.
-// Golden-angle hue rotation so adjacent apps stay distinguishable, pitched at
-// the lightness/saturation of the brand pastels (#a2d9ff, #d4ffbc) so the
-// charts read as part of the same palette rather than a separate one.
+// Golden-angle hue rotation so adjacent app slices stay distinguishable at any
+// app count, pitched at the lightness/saturation of the brand pastels
+// (#a2d9ff, #d4ffbc) so the charts read as part of the same palette. Shared by
+// every app-colored donut so the same app gets a consistent hue slot across
+// charts. Starts on the green pastel, not the blue one: the non-app slices
+// below are both blue, and a blue first slice sits directly against "Unused"
+// at 12 o'clock.
 function appColor(i) {
-  return 'hsl(' + ((205 + i * 137.5) % 360).toFixed(1) + ', 72%, 78%)';
+  return 'hsl(' + ((97 + i * 137.5) % 360).toFixed(1) + ', 72%, 78%)';
 }
 
-// Neutral greys for the non-app slices of a usage donut.
-var COLOR_UNUSED = '#ececec';   // free headroom on the box
-var COLOR_OTHER = '#c4c4c4';    // used by the host but not attributed to an app
+function cssToken(name) {
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+}
+
+// The non-app slices of a usage donut, from the shared tokens.
+var COLOR_UNUSED = cssToken('--color-chart-unused');  // free headroom on the box
+var COLOR_OTHER = cssToken('--color-chart-system');   // used by the host but not attributed to an app
 
 // Generic donut chart. `segments` is [{name, value, valueText, color}] drawn in
 // order from 12 o'clock; hovering a slice shows its name + valueText in the

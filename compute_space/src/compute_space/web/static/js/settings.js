@@ -18,15 +18,15 @@ function esc(s) { const d = document.createElement('div'); d.textContent = s; re
 async function checkForUpdates() {
   clearError();
   const el = document.getElementById('update-status');
-  el.innerHTML = '<p>Checking for updates&hellip;</p>';
+  el.innerHTML = '<p class="msg">Checking for updates&hellip;</p>';
 
   try {
     const resp = await fetch('/api/settings/update');
     if (!resp.ok) {
       const err = await resp.json();
-      el.innerHTML = '<p class="error">Repo is in an invalid state for updating (no .git perhaps?)</p>'
+      el.innerHTML = '<p class="msg msg--error">Repo is in an invalid state for updating (no .git perhaps?)</p>'
         + (err.detail ? '<div class="error-inline">' + esc(err.detail) + '</div>' : '')
-        + '<button onclick="checkForUpdates()" class="btn">Retry</button>';
+        + '<div class="actions"><button onclick="checkForUpdates()" class="btn">Retry</button></div>';
       return;
     }
     const data = await resp.json();
@@ -34,28 +34,30 @@ async function checkForUpdates() {
     const checkAgainBtn = '<button onclick="checkForUpdates()" class="btn">Check again</button>';
 
     if (data.state === 'UP_TO_DATE') {
-      el.innerHTML = '<p class="notice notice--ok">Up to date.</p>' + checkAgainBtn;
+      el.innerHTML = '<p class="msg msg--ok">Up to date.</p>'
+        + '<div class="actions">' + checkAgainBtn + '</div>';
     } else if (data.state === 'UPDATE_AVAILABLE') {
       const notice = data.error ? '<div class="error-inline">' + esc(data.error) + '</div>' : '';
-      el.innerHTML = '<p class="notice">Updates available.</p>'
+      el.innerHTML = '<p class="msg">Updates available.</p>'
         + notice
-        + '<button onclick="applyUpdate()" class="btn btn--primary">Update &amp; restart</button> '
-        + checkAgainBtn;
+        + '<div class="actions">'
+        + '<button onclick="applyUpdate()" class="btn btn--primary">Update &amp; restart</button>'
+        + checkAgainBtn + '</div>';
     } else if (data.state === 'ERROR') {
-      el.innerHTML = '<p class="notice notice--error">Update check failed.</p>'
+      el.innerHTML = '<p class="msg msg--error">Update check failed.</p>'
         + '<div class="error-inline">' + esc(data.error || 'Unknown error') + '</div>'
-        + checkAgainBtn;
+        + '<div class="actions">' + checkAgainBtn + '</div>';
     }
   } catch (e) {
     showError('Failed to check for updates: ' + e.message);
-    el.innerHTML = '<button onclick="checkForUpdates()" class="btn">Retry</button>';
+    el.innerHTML = '<div class="actions"><button onclick="checkForUpdates()" class="btn">Retry</button></div>';
   }
 }
 
 async function applyUpdate() {
   clearError();
   const el = document.getElementById('update-status');
-  el.innerHTML = '<p>Starting update&hellip;</p>';
+  el.innerHTML = '<p class="msg">Starting update&hellip;</p>';
 
   let token;
   try {
@@ -65,15 +67,15 @@ async function applyUpdate() {
     const resp = await fetch('/api/settings/update', {method: 'POST'});
     if (!resp.ok) {
       const err = await resp.json();
-      el.innerHTML = '<p class="error">' + esc(err.detail || '') + '</p>'
-        + '<button onclick="checkForUpdates()" class="btn">Retry</button>';
+      el.innerHTML = '<p class="msg msg--error">' + esc(err.detail || '') + '</p>'
+        + '<div class="actions"><button onclick="checkForUpdates()" class="btn">Retry</button></div>';
       return;
     }
     const data = await resp.json();
     token = data.token;
   } catch (e) {
-    el.innerHTML = '<p class="error">Update failed: ' + esc(e.message) + '</p>'
-      + '<button onclick="checkForUpdates()" class="btn">Retry</button>';
+    el.innerHTML = '<p class="msg msg--error">Update failed: ' + esc(e.message) + '</p>'
+      + '<div class="actions"><button onclick="checkForUpdates()" class="btn">Retry</button></div>';
     return;
   }
 
@@ -344,8 +346,8 @@ function dropBuildCache() {
   var btn = document.getElementById('drop-build-cache-btn');
   var msg = document.getElementById('drop-build-cache-msg');
   btn.disabled = true;
-  msg.className = 'muted';
-  msg.textContent = 'Dropping cache...';
+  msg.className = 'msg';
+  msg.textContent = 'Dropping cache…';
 
   fetch('/api/drop-docker-cache', {method: 'POST', credentials: 'same-origin'})
     .then(function(r) { return r.json(); })
@@ -387,12 +389,12 @@ function updateSshStatus() {
         btn.textContent = 'Disable SSH';
         btn.className = 'btn btn--danger';
         status.textContent = 'SSH active';
-        status.className = 'status-error';
+        status.className = 'status-text status-text--error';
       } else {
         btn.textContent = 'Enable SSH';
         btn.className = 'btn';
         status.textContent = 'SSH disabled';
-        status.className = 'muted';
+        status.className = 'status-text status-text--muted';
       }
     });
 }
@@ -415,7 +417,7 @@ function renderArchiveBackend(state) {
   var rows = '';
   if (state.backend === 's3') {
     rows += '<tr><th>Backend</th>'
-      + '<td><span class="badge badge--ok">S3 (JuiceFS)</span>'
+      + '<td><span class="status-text status-text--ok">S3 (JuiceFS)</span>'
       + (state.state_message ? ' <span class="error">' + escSettingsHtml(state.state_message) + '</span>' : '')
       + '</td></tr>';
     var bucketLine = escSettingsHtml(state.s3_bucket || '?')
@@ -446,13 +448,13 @@ function renderArchiveBackend(state) {
     rows += '<tr><th>Latest meta dump</th><td>' + dumpLine + '</td></tr>';
   } else if (state.backend === 'local') {
     rows += '<tr><th>Backend</th>'
-      + '<td><span class="badge">Local disk (JuiceFS)</span>'
+      + '<td><span class="status-text">Local disk (JuiceFS)</span>'
       + (state.state_message ? ' <span class="error">' + escSettingsHtml(state.state_message) + '</span>' : '')
       + '</td></tr>';
     if (state.archive_dir) {
       rows += '<tr><th>Host path</th><td><code>' + escSettingsHtml(state.archive_dir) + '</code></td></tr>';
     }
-    rows += '<tr><th>Durability</th><td><span class="badge badge--warn">Local disk only</span> '
+    rows += '<tr><th>Durability</th><td><span class="status-text status-text--warn">Local disk only</span> '
       + 'The archive is a JuiceFS volume whose objects live on this instance\u2019s local disk '
       + '(included in backups) but NOT on durable object storage. Configure S3 below for elastic, durable storage.</td></tr>';
     var apps = state.local_archive_apps || [];
@@ -464,7 +466,7 @@ function renderArchiveBackend(state) {
   } else {
     // Legacy pre-v12 'disabled' state (no archive tier).
     rows += '<tr><th>Backend</th>'
-      + '<td><span class="status-stopped">not configured</span></td></tr>';
+      + '<td><span class="status-text status-text--muted">Not configured</span></td></tr>';
   }
 
   var experimentalNote = '';
