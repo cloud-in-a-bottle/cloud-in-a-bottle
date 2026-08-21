@@ -110,7 +110,6 @@ def test_wipe_data_restart_preserves_repo_and_reloads(tmp_path: Path) -> None:
     (Path(cfg.temporary_data_dir) / "app_temp_data" / "myapp" / "container.log").write_text("old")
 
     with (
-        patch("compute_space.core.apps.stop_app_process"),
         patch("compute_space.core.apps.remove_image"),
         patch("compute_space.core.apps.reload_app_background") as reload_app,
     ):
@@ -145,7 +144,7 @@ def test_wipe_refuses_data_deletion_when_container_still_running(tmp_path: Path)
         db.close()
 
     with (
-        patch("compute_space.core.apps.stop_app_process"),
+        patch("compute_space.core.apps.stop_container") as stop_container,
         patch("compute_space.core.apps.is_container_running", return_value=True),
         patch("compute_space.core.apps.remove_image") as remove_image,
         patch("compute_space.core.apps.wipe_data_preserving_repo") as wipe_data,
@@ -153,6 +152,7 @@ def test_wipe_refuses_data_deletion_when_container_still_running(tmp_path: Path)
     ):
         wipe_data_restart_background(app_id, cfg)
 
+    stop_container.assert_called_once_with("container-1")
     remove_image.assert_not_called()
     wipe_data.assert_not_called()
     reload_app.assert_not_called()
