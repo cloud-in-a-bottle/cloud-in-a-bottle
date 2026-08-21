@@ -700,6 +700,43 @@ class TestContainerE2E:
         # X-OpenHost-Identity value must not be passed through.
         assert headers.get("X-OpenHost-Identity") != "spoofed"
 
+    def test_proxy_strips_authorization_header(self, admin_session, config):
+        """An owner API token in Authorization must not reach the backend app: it grants full API
+        access, so a forwarded copy could be captured and replayed. The router authenticates it,
+        sets X-OpenHost-Is-Owner, and drops it."""
+        base = _zone_url(config)
+        r = admin_session.post(f"{base}/api/tokens", json={"name": "leak-probe", "expiry_hours": "1"})
+        assert r.status_code == 200
+        raw_token = r.json()["token"]
+        try:
+            # No cookie, so the request authenticates purely via the Authorization header.
+            r = requests.get(
+                f"{_app_url(config, 'test-app')}/echo-headers",
+                headers={"Authorization": f"Bearer {raw_token}"},
+            )
+            assert r.status_code == 200
+            headers_ci = {k.lower(): v for k, v in r.json()["headers"].items()}
+            assert "authorization" not in headers_ci
+            assert raw_token not in r.text
+            assert headers_ci.get("x-openhost-is-owner") == "true"
+        finally:
+            resp = admin_session.get(f"{base}/api/tokens")
+            tokens = resp.json() if resp.status_code == 200 else []
+            token_id = next((t["id"] for t in tokens if t.get("name") == "leak-probe"), None)
+            if token_id is not None:
+                admin_session.delete(f"{base}/api/tokens/{token_id}")
+
+    def test_proxy_forwards_app_owned_authorization_header(self, admin_session, config):
+        """A bearer the router doesn't recognise is the app's own credential (e.g. a JWT an app
+        issued to its SPA) and must be forwarded — stripping it would break the app's own auth."""
+        r = admin_session.get(
+            f"{_app_url(config, 'test-app')}/echo-headers",
+            headers={"Authorization": "Bearer app-issued-jwt-not-an-openhost-token"},
+        )
+        assert r.status_code == 200
+        headers_ci = {k.lower(): v for k, v in r.json()["headers"].items()}
+        assert headers_ci.get("authorization") == "Bearer app-issued-jwt-not-an-openhost-token"
+
     def test_proxy_404(self, admin_session, config):
         """Unknown paths within the app return the app's 404."""
         r = admin_session.get(f"{_app_url(config, 'test-app')}/no-such-path")

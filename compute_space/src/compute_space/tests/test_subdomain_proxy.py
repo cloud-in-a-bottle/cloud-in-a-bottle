@@ -2,8 +2,18 @@
 
 from typing import Any
 
+import pytest
 from litestar.connection import ASGIConnection
+from litestar.datastructures import Headers
 
+from compute_space.core.auth.auth import SESSION_COOKIE_NAME
+from compute_space.core.auth.auth import AuthenticatedAPIKey
+from compute_space.core.auth.auth import AuthenticatedApp
+from compute_space.web.auth import auth as web_auth
+from compute_space.web.auth.auth import bearer_is_openhost_credential
+from compute_space.web.helpers.proxy import _HTTP_REQUEST_EXCLUDED_HEADERS
+from compute_space.web.helpers.proxy import _build_forwarded_request_headers
+from compute_space.web.helpers.proxy import _sanitize_forwarded_headers
 from compute_space.web.middleware.subdomain_proxy import _resolve_forwarded_for
 
 
@@ -48,3 +58,114 @@ def test_ipv6_loopback_peer_trusts_inbound_xff() -> None:
 def test_no_client_returns_none() -> None:
     conn = _connection(None)
     assert _resolve_forwarded_for(conn) is None
+
+
+# --- header sanitization (shared by inbound app proxy and service proxy) ---
+
+
+def _sanitized(headers: list[tuple[str, str]], *, strip_authorization: bool = False) -> dict[str, str]:
+    return {k.lower(): v for k, v in _sanitize_forwarded_headers(headers, strip_authorization=strip_authorization)}
+
+
+def test_sanitize_strips_authorization_when_requested() -> None:
+    out = _sanitized([("Authorization", "Bearer owner-api-token"), ("Accept", "*/*")], strip_authorization=True)
+    assert "authorization" not in out
+    assert out["accept"] == "*/*"
+
+
+def test_sanitize_keeps_app_owned_authorization_by_default() -> None:
+    # A bearer the router didn't consume (an app's own token) is forwarded untouched.
+    out = _sanitized([("Authorization", "Bearer app-own-jwt")], strip_authorization=False)
+    assert out["authorization"] == "Bearer app-own-jwt"
+
+
+def test_sanitize_strips_authorization_case_insensitively() -> None:
+    out = _sanitized([("authorization", "Bearer x"), ("AUTHORIZATION", "Bearer y")], strip_authorization=True)
+    assert "authorization" not in out
+
+
+def test_sanitize_strips_openhost_headers() -> None:
+    out = _sanitized([("X-OpenHost-Is-Owner", "true"), ("X-OpenHost-Identity", "spoofed")])
+    assert not any(k.startswith("x-openhost-") for k in out)
+
+
+def test_sanitize_strips_session_cookie_but_keeps_others() -> None:
+    out = _sanitized([("Cookie", f"{SESSION_COOKIE_NAME}=secret; keep=1")])
+    assert SESSION_COOKIE_NAME not in out.get("cookie", "")
+    assert "keep=1" in out["cookie"]
+
+
+def test_sanitize_preserves_unrelated_headers() -> None:
+    out = _sanitized([("X-Custom", "keep"), ("Content-Type", "application/json")])
+    assert out["x-custom"] == "keep"
+    assert out["content-type"] == "application/json"
+
+
+def test_build_forwarded_request_headers_drops_authorization_when_requested() -> None:
+    inbound = Headers({"authorization": "Bearer tok", "x-custom": "v", "host": "app.example.com"})
+    built = _build_forwarded_request_headers(
+        inbound, _HTTP_REQUEST_EXCLUDED_HEADERS, [("X-OpenHost-Is-Owner", "true")], strip_authorization=True
+    )
+    keys = {k.lower() for k, _ in built}
+    assert "authorization" not in keys
+    assert "x-custom" in keys
+    assert ("X-OpenHost-Is-Owner", "true") in built
+
+
+def test_build_forwarded_request_headers_keeps_authorization_by_default() -> None:
+    inbound = Headers({"authorization": "Bearer app-own-jwt", "x-custom": "v"})
+    built = _build_forwarded_request_headers(inbound, _HTTP_REQUEST_EXCLUDED_HEADERS, [], strip_authorization=False)
+    assert ("authorization", "Bearer app-own-jwt") in [(k.lower(), v) for k, v in built]
+
+
+# --- bearer_is_openhost_credential (drives the strip decision) ---
+
+
+def _conn_with_auth(value: str | None) -> ASGIConnection[Any, Any, Any, Any]:
+    headers = [(b"authorization", value.encode())] if value is not None else []
+    scope = {"type": "http", "method": "GET", "path": "/", "raw_path": b"/", "query_string": b"", "headers": headers}
+    return ASGIConnection(scope)  # type: ignore[arg-type]
+
+
+def test_bearer_credential_no_header_is_false() -> None:
+    # No bearer means nothing to strip and no DB touch.
+    assert bearer_is_openhost_credential(_conn_with_auth(None)) is False
+    assert bearer_is_openhost_credential(_conn_with_auth("Basic abc")) is False
+
+
+def test_bearer_credential_true_for_api_token(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(web_auth, "get_db", lambda: _NullDB())
+    monkeypatch.setattr(web_auth, "validate_api_token", lambda _t, _db: AuthenticatedAPIKey())
+    monkeypatch.setattr(web_auth, "validate_app_token", lambda _t, _db: None)
+    assert bearer_is_openhost_credential(_conn_with_auth("Bearer owner-api-token")) is True
+
+
+def test_bearer_credential_true_for_app_token(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(web_auth, "get_db", lambda: _NullDB())
+    monkeypatch.setattr(web_auth, "validate_api_token", lambda _t, _db: None)
+    monkeypatch.setattr(web_auth, "validate_app_token", lambda _t, _db: AuthenticatedApp(app_id="a1"))
+    assert bearer_is_openhost_credential(_conn_with_auth("Bearer app-token")) is True
+
+
+def test_bearer_credential_false_for_unrecognized_token(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A bearer the router doesn't recognise (an app's own JWT) is not ours.
+    monkeypatch.setattr(web_auth, "get_db", lambda: _NullDB())
+    monkeypatch.setattr(web_auth, "validate_api_token", lambda _t, _db: None)
+    monkeypatch.setattr(web_auth, "validate_app_token", lambda _t, _db: None)
+    assert bearer_is_openhost_credential(_conn_with_auth("Bearer app-own-jwt")) is False
+
+
+def test_bearer_credential_fails_safe_on_db_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A DB failure must not 500 the proxied request; answer "not ours" (don't strip).
+    def _boom() -> None:
+        raise RuntimeError("db down")
+
+    monkeypatch.setattr(web_auth, "get_db", _boom)
+    assert bearer_is_openhost_credential(_conn_with_auth("Bearer whatever")) is False
+
+
+class _NullDB:
+    """Minimal context-manager stand-in for a DB handle (validators are monkeypatched)."""
+
+    def close(self) -> None:
+        pass

@@ -66,6 +66,7 @@ from compute_space.core.manifest import parse_manifest_from_string
 from compute_space.core.oauth import OAuthRequired
 from compute_space.core.services_v2 import lookup_shortname
 from compute_space.core.services_v2 import resolve_provider
+from compute_space.web.auth.auth import bearer_is_openhost_credential
 from compute_space.web.auth.auth import require_app_auth
 from compute_space.web.auth.auth import verify_app_auth
 from compute_space.web.helpers.proxy import proxy_http_request
@@ -309,6 +310,9 @@ async def service_call(
         target_port=resolved.provider_port,
         override_path=resolved.target_path,
         extra_headers=resolved.extra_headers,
+        # The consumer authenticates to us with its OPENHOST_APP_TOKEN; strip it so the provider
+        # (identified via X-OpenHost-Consumer-*) never receives another app's token.
+        strip_authorization=bearer_is_openhost_credential(request),
     )
 
     if response.status_code == 403:
@@ -357,6 +361,7 @@ async def service_call_ws(
         target_port=resolved.provider_port,
         override_path=resolved.target_path,
         extra_headers=resolved.extra_headers,
+        strip_authorization=bearer_is_openhost_credential(socket),
     )
 
 
@@ -407,7 +412,14 @@ async def oauth_callback_proxy_v2(request: Request[Any, Any, Any]) -> ASGIRespon
             detail=f"App '{app_name}' is not running", extra={"code": "service_not_available"}
         )
 
-    return await proxy_http_request(request, target_port=app_row.local_port, override_path="/callback")
+    # OAuth-provider redirects carry no OpenHost credential; still, strip one if present (defence in
+    # depth) so this unauthenticated endpoint can't forward an OpenHost bearer to the app.
+    return await proxy_http_request(
+        request,
+        target_port=app_row.local_port,
+        override_path="/callback",
+        strip_authorization=bearer_is_openhost_credential(request),
+    )
 
 
 # ─── Installer (router-internal v2 service) ─────────────────────────────────

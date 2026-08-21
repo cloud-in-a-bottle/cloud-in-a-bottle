@@ -21,6 +21,7 @@ from compute_space.core.containers import ROUTER_INTERNAL_HOSTS
 from compute_space.core.domains import Domain
 from compute_space.core.logging import logger
 from compute_space.db import get_db
+from compute_space.web.auth.auth import bearer_is_openhost_credential
 from compute_space.web.auth.auth import login_required_redirect
 from compute_space.web.auth.auth import verify_owner_auth
 from compute_space.web.helpers.proxy import proxy_http_request
@@ -214,6 +215,11 @@ class SubdomainProxyMiddleware:
                     )
                 return
 
+        # Strip the Authorization header only when it carried an OpenHost credential the router
+        # consumed (owner API token / app token) — never forward that to the app. A bearer the app
+        # issued to its own SPA is left in place so the app's own auth keeps working.
+        strip_authorization = bearer_is_openhost_credential(connection)
+
         if scope["type"] == ScopeType.HTTP:
             # Rewrite Host to the public hostname (instead of the 127.0.0.1:<port>
             # httpx would synthesize) so apps that only read Host, not
@@ -228,6 +234,7 @@ class SubdomainProxyMiddleware:
                 Request(scope, receive, send),
                 target_port=app.local_port,
                 extra_headers=[*extra_headers, ("Host", netloc)],
+                strip_authorization=strip_authorization,
             )
             await proxied(scope, receive, send)
         else:
@@ -236,4 +243,5 @@ class SubdomainProxyMiddleware:
                 WebSocket(scope, receive, send),
                 target_port=app.local_port,
                 extra_headers=extra_headers,
+                strip_authorization=strip_authorization,
             )

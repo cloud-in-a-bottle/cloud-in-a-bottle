@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import hashlib
 import sqlite3
+import threading
+from http.server import BaseHTTPRequestHandler
+from http.server import ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import AsyncMock
 from unittest.mock import patch
@@ -226,3 +229,77 @@ class TestDiscoverProvidersAppAuth:
                 params={"service": SVC_DATA},
             )
             assert resp.status_code == 401
+
+
+# ---------------------------------------------------------------------------
+# Authorization stripping on the cross-app service proxy path
+# ---------------------------------------------------------------------------
+
+
+class _EchoHeadersHandler(BaseHTTPRequestHandler):
+    """Records the headers of the last request it received."""
+
+    last_headers: dict[str, str] = {}
+
+    def do_GET(self) -> None:  # noqa: N802
+        type(self).last_headers = {k.lower(): v for k, v in self.headers.items()}
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", "2")
+        self.end_headers()
+        self.wfile.write(b"{}")
+
+    def log_message(self, *_args: object) -> None:  # silence stderr noise
+        pass
+
+
+class TestServiceProxyStripsAuthorization:
+    """The consumer authenticates to the router with Authorization: Bearer <app token>; the router
+    consumes it and must not forward it to the provider, which learns the caller via X-OpenHost-*."""
+
+    def test_service_proxy_strips_authorization(self, cfg: object) -> None:
+        # Real backend (no mock) so the full proxy_http_request path runs. ThreadingHTTPServer
+        # matches test_multidomain_proxy_integration.py and avoids single-threaded stalls.
+        server = ThreadingHTTPServer(("127.0.0.1", 0), _EchoHeadersHandler)
+        provider_port = server.server_address[1]
+        _EchoHeadersHandler.last_headers = {}
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            init_db(cfg.db_path)  # type: ignore[attr-defined]
+            _seed_consumer(cfg.db_path)  # type: ignore[attr-defined]
+            # A single provider for SVC_DATA pointing at the echo server.
+            db = sqlite3.connect(cfg.db_path)  # type: ignore[attr-defined]
+            try:
+                provider_id = new_app_id()
+                db.execute(
+                    """INSERT INTO apps (app_id, name, version, repo_path, local_port, status)
+                       VALUES (?, ?, ?, ?, ?, ?)""",
+                    (provider_id, "data-provider", "0.1.0", "/tmp/data-provider", provider_port, "running"),
+                )
+                db.execute(
+                    "INSERT INTO service_providers_v2 (service_url, app_id, service_version, endpoint) "
+                    "VALUES (?, ?, ?, ?)",
+                    (SVC_DATA, provider_id, "0.1.0", "/api/"),
+                )
+                db.execute("INSERT INTO service_defaults (service_url, app_id) VALUES (?, ?)", (SVC_DATA, provider_id))
+                db.commit()
+            finally:
+                db.close()
+
+            with TestClient(app=_make_proxy_app()) as client:
+                resp = client.get("/api/services/v2/call/data/endpoint", headers=_auth_headers())
+            assert resp.status_code == 200
+
+            received = _EchoHeadersHandler.last_headers
+            # Host is always forwarded, so its presence proves the request reached the backend and the
+            # "absent" assertions below aren't passing vacuously (e.g. if the proxy had errored early).
+            assert received.get("host"), "echo server was never reached"
+            # The app token must not reach the provider — not as Authorization nor in any other header.
+            assert "authorization" not in received
+            assert all(CONSUMER_TOKEN not in v for v in received.values())
+            assert received.get("x-openhost-consumer-id") == CONSUMER_APP_ID
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=5)
