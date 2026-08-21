@@ -307,50 +307,54 @@ function clearCacheAndReload() {
         clearRemovingChrome = null;
     }
 
-    function pollStatus() {
-        fetch(config.appStatusUrl)
-            .then(function(r) {
-                if (r.status === 404) {
-                    window.location.href = '/dashboard';
-                    return null;
-                }
-                return r.json();
-            })
-            .then(function(data) {
-                if (!data) return;
-                if (data.status !== appStatus) {
-                    appStatus = data.status;
-                    statusEl.textContent = appStatus;
-                    statusEl.className = 'status-' + appStatus;
-                }
-                // Adopt the first container_id silently; reset only on a later change.
-                if (data.container_id && data.container_id !== streamContainerId) {
-                    if (streamContainerId !== null) resetLogStream();
-                    streamContainerId = data.container_id;
-                }
-                if (appStatus === 'removing') {
-                    applyRemovingChrome();
-                } else {
-                    clearRemovingChromeIfApplied(
-                        appStatus === 'error' ? (data.error || 'Removal failed') : null
-                    );
-                }
-                if (appStatus === 'running' && nextUrl) {
-                    window.location.href = nextUrl;
-                }
-                if (appStatus === 'error' && data.error_kind === 'build_cache_corrupt') {
-                    showCacheCorruptToast();
-                }
-            });
+    function handleStatus(data) {
+        if (!data) return;
+        if (data.status !== appStatus) {
+            appStatus = data.status;
+            statusEl.textContent = appStatus;
+            statusEl.className = 'status-' + appStatus;
+        }
+        // Adopt the first container_id silently; reset only on a later change.
+        if (data.container_id && data.container_id !== streamContainerId) {
+            if (streamContainerId !== null) resetLogStream();
+            streamContainerId = data.container_id;
+        }
+        if (appStatus === 'removing') {
+            applyRemovingChrome();
+        } else {
+            clearRemovingChromeIfApplied(
+                appStatus === 'error' ? (data.error || 'Removal failed') : null
+            );
+        }
+        if (appStatus === 'running' && nextUrl) {
+            window.location.href = nextUrl;
+        }
+        if (appStatus === 'error' && data.error_kind === 'build_cache_corrupt') {
+            showCacheCorruptToast();
+        }
+        var errorRow = document.getElementById('app-error-row');
+        var errorCell = document.getElementById('app-error-cell');
+        if (errorRow && errorCell) {
+            if (appStatus === 'error' && data.error) {
+                errorCell.textContent = data.error;
+                errorRow.style.display = '';
+            } else {
+                errorRow.style.display = 'none';
+                errorCell.textContent = '';
+            }
+        }
     }
 
-    // Check on initial load too (for when you navigate to an already-errored app)
-    if (appStatus === 'error') {
-        fetch(config.appStatusUrl)
-            .then(function(r) { return r.json(); })
-            .then(function(data) {
-                if (data.error_kind === 'build_cache_corrupt') showCacheCorruptToast();
-            });
+    function startStatusStream() {
+        var proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        var ws = new WebSocket(proto + '//' + window.location.host + config.appStatusStreamUrl);
+        ws.onmessage = function(e) { handleStatus(JSON.parse(e.data)); };
+        ws.onclose = function(e) {
+            // 4404 means the app row is gone (removed); anything else is a drop — reconnect.
+            if (e.code === 4404) { window.location.href = '/dashboard'; return; }
+            setTimeout(startStatusStream, 2000);
+        };
+        ws.onerror = function() { ws.close(); };
     }
 
     if (appStatus === 'removing') {
@@ -362,14 +366,7 @@ function clearCacheAndReload() {
     // Stream regardless of status: a stopped/errored app still has a build log to replay.
     startLogStream();
 
-    // 'removing' polls so the page learns when the row vanishes (404).
-    if (
-        appStatus === 'running' ||
-        appStatus === 'starting' ||
-        appStatus === 'building' ||
-        appStatus === 'removing'
-    ) {
-        var interval = (appStatus === 'building') ? 1000 : 3000;
-        setInterval(pollStatus, interval);
-    }
+    // Stream status unconditionally so runtime errors and initial state changes
+    // sync immediately without waiting for a page reload.
+    startStatusStream();
 })();

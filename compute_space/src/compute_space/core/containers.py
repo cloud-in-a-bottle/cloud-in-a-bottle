@@ -26,6 +26,7 @@ import sqlite3
 import subprocess
 from datetime import UTC
 from datetime import datetime
+from typing import NoReturn
 
 import attr
 
@@ -169,6 +170,15 @@ def _raise_if_build_cache_corrupt(output: str) -> None:
         raise RuntimeError(f"{BUILD_CACHE_CORRUPT_MARKER} Container build cache is corrupted.")
 
 
+def _raise_build_failed(output: str, returncode: int) -> NoReturn:
+    """Raise a tagged RuntimeError for corrupt cache or a truncated build failure."""
+    _raise_if_build_cache_corrupt(output)
+    lines = [line for line in output.splitlines() if line]
+    tail = lines[-1] if lines else ""
+    tail = "..." + tail[-150:] if len(tail) > 150 else tail
+    raise RuntimeError(f"Container build failed (exit code {returncode}):\n{tail}")
+
+
 def build_image(
     app_name: str,
     repo_path: str,
@@ -223,16 +233,12 @@ def build_image(
                     logger.warning("Build process %d did not exit within 5s of SIGKILL", proc.pid)
                 raise
         if proc.returncode != 0:
-            _raise_if_build_cache_corrupt(build_output)
-            tail = build_output[-100:] if len(build_output) > 100 else build_output
-            raise RuntimeError(f"Container build failed (exit code {proc.returncode}):\n{tail}")
+            _raise_build_failed(build_output, proc.returncode)
     else:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
         if result.returncode != 0:
             combined = result.stdout + result.stderr
-            _raise_if_build_cache_corrupt(combined)
-            tail = combined[-100:] if len(combined) > 100 else combined
-            raise RuntimeError(f"Container build failed (exit code {result.returncode}):\n{tail}")
+            _raise_build_failed(combined, result.returncode)
 
     if temp_data_dir:
         _append_log(app_name, temp_data_dir, "=== Build complete ===\n\n")

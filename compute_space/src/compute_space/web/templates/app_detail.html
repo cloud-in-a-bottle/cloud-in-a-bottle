@@ -45,9 +45,10 @@
   {% endif %}
   <tr><th>Repo Path</th><td>{{ app.repo_path }}</td></tr>
   <tr><th>Created</th><td>{{ app.created_at }}</td></tr>
-  {% if app.error_message %}
-  <tr><th>Error</th><td class="error" style="white-space: pre-wrap;">{{ app.error_message }}</td></tr>
-  {% endif %}
+  <tr id="app-error-row"{% if not app.error_message %} style="display:none;"{% endif %}>
+    <th>Error</th>
+    <td class="error" id="app-error-cell" style="white-space: pre-wrap;">{{ app.error_message or "" }}</td>
+  </tr>
   {% if app.container_id %}
   <tr><th>Container ID</th><td><code>{{ app.container_id[:12] }}</code></td></tr>
   {% endif %}
@@ -282,6 +283,7 @@ async function copyAppDiagnostics(btn) {
   "renameAppUrl": "/rename_app/{{ app.app_id }}",
   "appDetailUrl": "/app_detail/{{ app.name }}",
   "appLogsStreamUrl": "/app_logs_stream/{{ app.app_id }}",
+  "appStatusStreamUrl": "/app_status_stream/{{ app.app_id }}",
   "appStatusUrl": "/api/app_status/{{ app.app_id }}",
   "appStatus": {{ app.status | tojson }},
   "nextUrl": {{ next_url | default("", true) | tojson }},

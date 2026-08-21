@@ -74,9 +74,10 @@ def test_app_detail_renders_error_row(cfg: Any) -> None:
 
         resp_err = client.get("/app_detail/errored-app")
         assert resp_err.status_code == 200
+        assert '<tr id="app-error-row">' in resp_err.text
         assert "Container build failed (exit code 1):\n" in resp_err.text
         assert ("x" * 100) in resp_err.text
 
         resp_ok = client.get("/app_detail/ok-app")
         assert resp_ok.status_code == 200
-        assert "<th>Error</th>" not in resp_ok.text
+        assert '<tr id="app-error-row" style="display:none;">' in resp_ok.text

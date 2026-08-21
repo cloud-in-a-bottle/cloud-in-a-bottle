@@ -468,6 +468,14 @@ async def _read_app_git_info(repo_path: str | None) -> tuple[str | None, str | N
     return branch, sha, dirty
 
 
+def _classify_error(error_msg: str | None) -> tuple[str | None, str | None]:
+    """Map apps.error_message to (display message, error_kind). Both the current
+    BUILD_CACHE_CORRUPT_MARKER and the legacy [CACHE_CORRUPT] trigger the rebuild toast."""
+    if error_msg and (BUILD_CACHE_CORRUPT_MARKER in error_msg or "[CACHE_CORRUPT]" in error_msg):
+        return "Container build cache is corrupted.", "build_cache_corrupt"
+    return error_msg, None
+
+
 @get("/api/app_status/{app_id:str}", guards=[require_owner_auth], raises=[ValidationException, NotFoundException])
 async def app_status(app_id: FromPath[str], db: NamedDependency[sqlite3.Connection]) -> Response[AppStatusResponse]:
     if not is_valid_app_id(app_id):
@@ -477,14 +485,7 @@ async def app_status(app_id: FromPath[str], db: NamedDependency[sqlite3.Connecti
     ).fetchone()
     if not app_row:
         raise NotFoundException(detail="App not found")
-    error_msg = app_row["error_message"]
-    error_kind = None
-    # error_message may carry either the current BUILD_CACHE_CORRUPT_MARKER
-    # or the legacy ``[CACHE_CORRUPT]`` marker; both trigger the same
-    # 'drop cache and rebuild' remediation in the UI.
-    if error_msg and (BUILD_CACHE_CORRUPT_MARKER in error_msg or "[CACHE_CORRUPT]" in error_msg):
-        error_kind = "build_cache_corrupt"
-        error_msg = "Container build cache is corrupted."
+    error_msg, error_kind = _classify_error(app_row["error_message"])
     git_branch, git_sha, git_dirty = await _read_app_git_info(app_row["repo_path"])
     return Response(
         content=AppStatusResponse(
@@ -612,6 +613,76 @@ async def app_logs_stream(
             t.cancel()
         # Let the cancellations propagate into stream_app_logs' finally blocks so
         # the podman follow subprocess is terminated before we return.
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+
+# How often the status stream re-reads the app row; module-level so tests can shrink it.
+STATUS_STREAM_POLL_SECONDS = 1.0
+
+
+@websocket("/app_status_stream/{app_id:str}")
+async def app_status_stream(socket: WebSocket[Any, Any, Any], app_id: FromPath[str]) -> None:
+    """Watch the app's DB row (the source of truth for every writer, including background
+    reload/remove threads) and push a status frame on connect and on each change."""
+    if not await verify_owner_ws(socket):
+        return
+    if not is_valid_app_id(app_id):
+        await socket.accept()
+        await socket.close(code=4404, reason="App not found")
+        return
+
+    def read_row() -> tuple[str, str | None, str | None, str | None] | None:
+        with contextlib.closing(get_db()) as conn:
+            row = conn.execute(
+                "SELECT status, error_message, container_id FROM apps WHERE app_id = ?", (app_id,)
+            ).fetchone()
+        if row is None:
+            return None
+        error, error_kind = _classify_error(row["error_message"])
+        return row["status"], error, error_kind, row["container_id"]
+
+    await socket.accept()
+
+    async def pump() -> None:
+        last: tuple[str, str | None, str | None, str | None] | None = None
+        try:
+            while True:
+                current = await asyncio.to_thread(read_row)
+                if current is None:
+                    # Row vanished (app removed): an application close code tells the
+                    # client to leave for the dashboard instead of reconnecting.
+                    await socket.close(code=4404, reason="App not found")
+                    return
+                if current != last:
+                    last = current
+                    status, error, error_kind, container_id = current
+                    await socket.send_json(
+                        {"status": status, "error": error, "error_kind": error_kind, "container_id": container_id}
+                    )
+                await asyncio.sleep(STATUS_STREAM_POLL_SECONDS)
+        except WebSocketDisconnect:
+            return
+        except Exception:
+            # Without this, a failed read/send would end the handler with the socket
+            # left open and the client hung; log and close so the client reconnects.
+            logger.exception("Status stream for app %s failed", app_id)
+            with contextlib.suppress(Exception):
+                await socket.close(code=1011, reason="Status stream failed")
+            return
+
+    async def watch_close() -> None:
+        # Send-only stream: any inbound frame — or, more usually, a disconnect —
+        # means the client is gone, so stop the row watch promptly.
+        with contextlib.suppress(WebSocketDisconnect):
+            while True:
+                await socket.receive()
+
+    tasks = [asyncio.create_task(t) for t in (pump(), watch_close(), wait_for_shutdown())]
+    try:
+        await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+    finally:
+        for t in tasks:
+            t.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
 
 
@@ -1234,6 +1305,7 @@ api_apps_routes = Router(
         app_diagnostics,
         app_logs,
         app_logs_stream,
+        app_status_stream,
         stop_app,
         reload_app,
         reload_app_after_oauth,
