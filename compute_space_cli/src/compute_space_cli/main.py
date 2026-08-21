@@ -141,11 +141,14 @@ class AppCmd:
         print(f"{app_name}: {result.get('status', 'unknown')}")
         if result.get("error"):
             print(f"  error: {result['error']}")
+        repo_url = result.get("repo_url")
+        if repo_url:
+            print(f"  git url: {repo_url}")
         sha = result.get("git_sha")
         if sha:
             branch = result.get("git_branch") or "(detached HEAD)"
             dirty = " (dirty)" if result.get("git_dirty") else ""
-            print(f"  git: {branch} @ {sha}{dirty}")
+            print(f"  git commit: {branch} @ {sha}{dirty}")
 
     @cappa.command(name="logs")
     def logs(
