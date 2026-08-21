@@ -24,6 +24,7 @@ from compute_space.core.auth.auth import validate_api_token
 from compute_space.core.auth.auth import validate_app_token
 from compute_space.core.auth.auth import validate_session_token
 from compute_space.core.domains import Domain
+from compute_space.core.logging import logger
 from compute_space.db import get_db
 from compute_space.web.helpers.zone import zone_for_request
 
@@ -44,12 +45,19 @@ def authorization_is_openhost_credential(connection: AnyConnection) -> bool:
     Such a token is a credential the router consumes, so it must be stripped before forwarding — an
     owner API token grants full API access and could be replayed by the app. A bearer the router
     doesn't recognise (e.g. a JWT an app issued to its own SPA) is the app's own and is left alone.
+
+    Fails safe: any DB error answers "not ours" (don't strip) rather than 500-ing the proxied
+    request. The check only touches the DB when a bearer is actually present.
     """
     token = _get_bearer_token_if_set(connection)
     if not token:
         return False
-    with closing(get_db()) as db:
-        return validate_api_token(token, db) is not None or validate_app_token(token, db) is not None
+    try:
+        with closing(get_db()) as db:
+            return validate_api_token(token, db) is not None or validate_app_token(token, db) is not None
+    except Exception:
+        logger.exception("authorization_is_openhost_credential: token check failed; not stripping")
+        return False
 
 
 def get_connection_origin(connection: AnyConnection) -> str | None:
