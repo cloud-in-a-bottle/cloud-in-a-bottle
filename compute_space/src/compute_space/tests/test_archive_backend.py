@@ -478,6 +478,7 @@ def test_attach_on_startup_local_formats_and_mounts(cfg, db):
     """Fresh DB defaults to local: attach must format the local file volume
     (first boot) and start the mount, clearing state_message."""
     with (
+        mock.patch.object(archive_backend, "is_linux_host", return_value=True),
         mock.patch.object(archive_backend, "is_juicefs_installed", return_value=True),
         mock.patch.object(archive_backend, "_local_volume_formatted", return_value=False),
         mock.patch.object(archive_backend, "format_local_volume") as fmt,
@@ -493,6 +494,7 @@ def test_attach_on_startup_local_skips_format_when_already_formatted(cfg, db):
     """If the local volume was already formatted (meta.db present), attach
     just mounts — it must not re-format."""
     with (
+        mock.patch.object(archive_backend, "is_linux_host", return_value=True),
         mock.patch.object(archive_backend, "is_juicefs_installed", return_value=True),
         mock.patch.object(archive_backend, "_local_volume_formatted", return_value=True),
         mock.patch.object(archive_backend, "format_local_volume") as fmt,
@@ -520,6 +522,7 @@ def test_attach_on_startup_local_selfheals_unformatted_metadb(cfg, db):
     db.execute("UPDATE archive_backend SET juicefs_volume_name='openhost' WHERE id=1")
     db.commit()
     with (
+        mock.patch.object(archive_backend, "is_linux_host", return_value=True),
         mock.patch.object(archive_backend, "is_juicefs_installed", return_value=True),
         mock.patch.object(archive_backend, "format_local_volume") as fmt,
         mock.patch.object(archive_backend, "mount") as mnt,
@@ -541,6 +544,7 @@ def test_attach_on_startup_local_records_error_on_failure(cfg, db):
     """A failure bringing up the local mount is recorded in state_message and
     doesn't crash boot."""
     with (
+        mock.patch.object(archive_backend, "is_linux_host", return_value=True),
         mock.patch.object(archive_backend, "is_juicefs_installed", return_value=True),
         mock.patch.object(archive_backend, "_local_volume_formatted", return_value=True),
         mock.patch.object(archive_backend, "mount", side_effect=RuntimeError("mount boom")),
@@ -557,7 +561,10 @@ def test_attach_on_startup_s3_happy_path(cfg, db):
         "s3_access_key_id='ak', s3_secret_access_key='sk' WHERE id=1"
     )
     db.commit()
-    with mock.patch.object(archive_backend, "is_juicefs_installed", return_value=True):
+    with (
+        mock.patch.object(archive_backend, "is_juicefs_installed", return_value=True),
+        mock.patch.object(archive_backend, "is_linux_host", return_value=True),
+    ):
         with mock.patch.object(archive_backend, "mount") as mnt:
             archive_backend.attach_on_startup(cfg, db)
     mnt.assert_called_once()
@@ -567,10 +574,40 @@ def test_attach_on_startup_s3_happy_path(cfg, db):
 def test_attach_on_startup_s3_missing_creds_records_error(cfg, db):
     db.execute("UPDATE archive_backend SET backend='s3', s3_bucket='b' WHERE id=1")
     db.commit()
-    archive_backend.attach_on_startup(cfg, db)
+    with (
+        mock.patch.object(archive_backend, "is_juicefs_installed", return_value=True),
+        mock.patch.object(archive_backend, "is_linux_host", return_value=True),
+    ):
+        archive_backend.attach_on_startup(cfg, db)
     state = read_state(db)
     assert state.state_message is not None
     assert "credentials" in state.state_message.lower()
+
+
+def test_attach_on_startup_skips_when_host_has_no_juicefs_build(cfg, db):
+    """Off Linux (dev on macOS) there's no JuiceFS build, so attach must record why and skip
+    rather than exec'ing a Linux binary and raising 'Exec format error' on every boot."""
+    with (
+        mock.patch.object(archive_backend, "is_linux_host", return_value=False),
+        mock.patch.object(archive_backend, "install_juicefs") as inst,
+        mock.patch.object(archive_backend, "format_local_volume") as fmt,
+        mock.patch.object(archive_backend, "mount") as mnt,
+    ):
+        archive_backend.attach_on_startup(cfg, db)
+    inst.assert_not_called()
+    fmt.assert_not_called()
+    mnt.assert_not_called()
+    assert "no juicefs build" in (read_state(db).state_message or "").lower()
+
+
+def test_attach_on_startup_disabled_backend_stays_quiet_off_linux(cfg, db):
+    """A disabled backend has nothing to bring up, so the host-OS gate must not
+    invent a state_message for it."""
+    db.execute("UPDATE archive_backend SET backend='disabled' WHERE id=1")
+    db.commit()
+    with mock.patch.object(archive_backend, "is_linux_host", return_value=False):
+        archive_backend.attach_on_startup(cfg, db)
+    assert read_state(db).state_message is None
 
 
 # --- effective_archive_dir -------------------------------------------------
