@@ -1,6 +1,7 @@
 {% extends "layout.html" %}
 {% block title_suffix %} - Diagnostics{% endblock %}
 {% from "_components/section.html" import section_head %}
+{% from "_components/info_table.html" import info_table %}
 {% block content %}
 {% call section_head("Diagnostics") %}{% endcall %}
 <p class="hint">A snapshot of this instance for debugging: Cloud in a Bottle version, host system
@@ -15,12 +16,9 @@ installed app. Copy or download it and include it in a bug report.</p>
 </div>
 
 {% call section_head("Summary") %}{% endcall %}
-<table id="summary-table" class="info-table">
-  <thead><tr><th>Property</th><th>Value</th></tr></thead>
-  <tbody id="summary-body">
-    <tr><td colspan="2" class="muted">Loading&hellip;</td></tr>
-  </tbody>
-</table>
+{% call info_table(id="summary-table", body_id="summary-body") %}
+  <tr><td colspan="2" class="muted">Loading&hellip;</td></tr>
+{% endcall %}
 
 {% call section_head("Installed Apps") %}{% endcall %}
 <p class="hint">Click a column header to sort.</p>
@@ -59,7 +57,6 @@ installed app. Copy or download it and include it in a bug report.</p>
   "diagnosticsUrl": "/api/diagnostics"
 }
 </script>
-<script src="{{ static_url('js/chart.js') }}"></script>
 <script src="{{ static_url('js/dom.js') }}"></script>
 <script src="{{ static_url('js/diagnostics.js') }}"></script>
 {% endblock %}

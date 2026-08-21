@@ -6,8 +6,11 @@
 
 {% block title_suffix %} - Dashboard{% endblock %}
 
+{#- The hamburger is the dashboard's phone nav; no other page renders one. -#}
+{% block head %}<script src="{{ static_url('js/nav-menu.js') }}" defer></script>{% endblock %}
+
 {% block content %}
-<section class="section">
+<section class="section section--tiles">
   {% call section_head("Dashboard") %}{% endcall %}
 
   <div class="card-grid">

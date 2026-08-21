@@ -52,6 +52,16 @@
     return node;
   }
 
+  // One row of an .info-table: a <th scope="row"> label and its value cell.
+  // Mirrors the info_row() Jinja macro so the server- and client-rendered rows
+  // of the same table can't drift apart.
+  function infoRow(label, value, cls) {
+    return el('tr', null, [
+      el('th', {scope: 'row', text: label}),
+      el('td', {class: cls || null}, value),
+    ]);
+  }
+
   function badge(label, variant, title) {
     return el('span', {
       class: 'badge' + (variant ? ' badge--' + variant : ''),
@@ -60,5 +70,5 @@
     });
   }
 
-  global.dom = {el: el, clear: clear, replace: replace, badge: badge};
+  global.dom = {el: el, clear: clear, replace: replace, badge: badge, infoRow: infoRow};
 })(window);

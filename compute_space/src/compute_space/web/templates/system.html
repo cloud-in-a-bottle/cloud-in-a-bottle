@@ -3,6 +3,7 @@
 {% block content %}
 {% from "_components/section.html" import section_head %}
 {% from "_components/info_tip.html" import info_tip %}
+{% from "_components/info_table.html" import info_table %}
 {% call section_head("Resource Usage") %}{% endcall %}
 <div class="usage-charts">
   <div class="usage-chart">
@@ -30,10 +31,7 @@
 </div>
 
 {% call section_head("Storage") %}{% endcall %}
-<table id="storage-table" class="info-table">
-  <thead><tr><th>Property</th><th>Value</th></tr></thead>
-  <tbody id="storage-body"></tbody>
-</table>
+{% call info_table(id="storage-table", body_id="storage-body") %}{% endcall %}
 <div id="storage-guard-row"></div>
 
 {% call section_head("Externally Open Ports") %}{% endcall %}

@@ -8,14 +8,6 @@ function messageRow(colspan, text, cls) {
   return dom.el('tr', null, dom.el('td', {colspan: colspan, class: cls, text: text}));
 }
 
-// One <th>label</th><td>value</td> row of an .info-table.
-function specRow(label, value, cls) {
-  return dom.el('tr', null, [
-    dom.el('th', {scope: 'row', text: label}),
-    dom.el('td', {class: cls}, value),
-  ]);
-}
-
 function showMuted(el, text) {
   dom.replace(el, dom.el('span', {class: 'muted', text: text}));
 }
@@ -158,13 +150,13 @@ function renderStorageStatus(data) {
     ? dom.el('span', {class: 'muted', text: 'unavailable'})
     : formatBytes(data.build_cache_bytes);
   var rows = [
-    specRow('Disk free', freeText, (hasMinFree && isLow) ? 'status-error' : null),
-    specRow('Cloud in a Bottle data', formatBytes(data.openhost_data_used_bytes || 0)),
-    specRow('App Build Cache', buildCache),
+    dom.infoRow('Disk free', freeText, (hasMinFree && isLow) ? 'status-error' : null),
+    dom.infoRow('Cloud in a Bottle data', formatBytes(data.openhost_data_used_bytes || 0)),
+    dom.infoRow('App Build Cache', buildCache),
   ];
   if (hasMinFree) {
     var guardText = guardPaused ? 'Paused' : (isLow ? 'Active (low storage)' : 'Active');
-    rows.push(specRow('Storage guard', guardText, (guardPaused || isLow) ? 'status-error' : null));
+    rows.push(dom.infoRow('Storage guard', guardText, (guardPaused || isLow) ? 'status-error' : null));
   }
   dom.replace(document.getElementById('storage-body'), rows);
 

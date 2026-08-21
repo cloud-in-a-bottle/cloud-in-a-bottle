@@ -1,12 +1,15 @@
 {#- The one key/value table for the whole compute space: system info, app
-    detail, settings. Labels are uppercase row headers on the left, values are
-    right-aligned, and every table carries a header row. Multi-column list
+    detail, settings. Labels are uppercase row headers, values sit on their own
+    scan edge beside them, and every table carries a header row. Multi-column list
     tables (app list, ports, domains) are a different thing and keep the plain
-    <table> styling. -#}
-{% macro info_table(label_head="Property", value_head="Value", id=none, class_="") -%}
+    <table> styling.
+
+    Rows filled in by a page script come from `dom.infoRow` in static/js/dom.js,
+    which builds the same markup as `info_row` below. -#}
+{% macro info_table(label_head="Property", value_head="Value", id=none, class_="", body_id=none) -%}
 <table class="info-table{% if class_ %} {{ class_ }}{% endif %}"{% if id %} id="{{ id }}"{% endif %}>
   <thead><tr><th>{{ label_head }}</th><th>{{ value_head }}</th></tr></thead>
-  <tbody>{{ caller() }}</tbody>
+  <tbody{% if body_id %} id="{{ body_id }}"{% endif %}>{{ caller() }}</tbody>
 </table>
 {%- endmacro %}
 

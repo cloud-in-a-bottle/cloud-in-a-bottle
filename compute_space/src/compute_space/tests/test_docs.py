@@ -181,7 +181,7 @@ def test_page_carries_space_icon_nav(client_with_docs: TestClient[Litestar]) -> 
     standalone site."""
     resp = client_with_docs.get("/docs/")
     body = resp.text
-    assert 'class="icon-nav"' in body
+    assert 'class="icon-nav' in body
     assert 'href="/dashboard"' in body
     assert 'href="/terminal/"' in body
     assert 'href="/system/"' in body

@@ -125,12 +125,6 @@ body {
   max-width: var(--layout-width-narrow);
 }
 
-@media (max-width: 640px) {
-  .layout {
-    padding-top: var(--space-6);
-  }
-}
-
 /* Fewer clouds on a phone, where the band is short and the content column
    fills the width. */
 @media (max-width: 640px) {

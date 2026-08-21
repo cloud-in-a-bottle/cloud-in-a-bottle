@@ -46,18 +46,136 @@ a.banner__text:hover {
   margin-bottom: var(--space-5);
 }
 
-/* Pushed hard left so the nav row reads as "back on one side, tools on the
-   other" without the icon cluster giving up its right edge. */
-.nav-back {
-  display: inline-flex;
+.icon-nav__icons {
+  display: flex;
   align-items: center;
   gap: var(--space-2);
-  margin-right: auto;
-  padding-right: var(--space-4);
+}
+
+/* Pushed hard left so the row reads as "where you are on one side, the way
+   elsewhere on the other". Outweighs the `margin: 0` .section-label sets
+   further down the file, hence the compound selector. */
+.icon-nav .icon-nav__label {
+  display: none;
+  margin: 0 auto 0 0;
+}
+
+/* ── Nav menu (phone) ───────────────────────────────────────────────────
+   The dashboard's phone nav: below the layout breakpoint the icon row and the
+   tiles are both hidden, leaving this list as the way through the space. The
+   panel is absolutely positioned so opening it doesn't shove the page down
+   under the reader's thumb. */
+
+.nav-menu {
+  display: none;
+  position: relative;
+}
+
+.nav-menu__toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  opacity: 0.8;
+}
+
+.nav-menu__toggle[aria-expanded="true"] {
+  opacity: 1;
+}
+
+.nav-menu__panel {
+  position: absolute;
+  top: calc(100% + var(--space-2));
+  right: 0;
+  z-index: 2;
+  min-width: 190px;
+  background: var(--color-surface-raised);
+  border: var(--border-w) solid var(--color-border);
+  box-shadow: var(--shadow-card);
+}
+
+.nav-menu__list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.nav-menu__list a {
+  display: block;
+  padding: var(--space-4);
+  border-bottom: var(--border-w) solid var(--color-border);
+  /* Named for the same reason as .nav-back: the docs page links no base.css. */
+  color: var(--color-text);
+  font-family: var(--font-mono);
   font-size: var(--text-xs);
   letter-spacing: var(--tracking-label);
   text-transform: uppercase;
   text-decoration: none;
+  white-space: nowrap;
+}
+
+.nav-menu__list li:last-child a {
+  border-bottom: 0;
+}
+
+.nav-menu__list a:active {
+  background: var(--color-surface-sunken);
+}
+
+.nav-menu__ext {
+  opacity: 0.5;
+}
+
+@media (max-width: 640px) {
+  .icon-nav__icons {
+    display: none;
+  }
+
+  .icon-nav .icon-nav__label,
+  .nav-menu {
+    display: block;
+  }
+
+  /* Off the dashboard the row has nothing left once the icons go, and the back
+     link is the whole phone nav. Hide the row rather than leave its gap. */
+  .icon-nav--icons-only {
+    display: none;
+  }
+}
+
+/* ── Back link ──────────────────────────────────────────────────────────
+   Sits in the page's top-left corner, above and outside the content column,
+   so leaving the page is the first thing on it rather than one more item
+   competing for attention in the nav row.
+
+   Out of flow on purpose: the column reserves the same top padding on every
+   page, and the link drops into that reserved band. In flow it would push the
+   banner down only on the pages that have one, so the header would jump as you
+   navigated. `top` + its 36px line box exactly fill `.layout`'s padding-top. */
+
+.nav-back {
+  position: absolute;
+  top: var(--space-4);
+  left: var(--layout-gutter);
+  z-index: 1;
+  display: flex;
+  width: max-content;
+  align-items: center;
+  gap: var(--space-4);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: var(--leading-loose);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+  text-decoration: none;
+  /* Named rather than inherited: the docs page links only components.css, so
+     there is no base.css anchor colour to fall back to. */
+  color: var(--color-text);
   opacity: 0.8;
 }
 
@@ -267,25 +385,12 @@ h2.section-title {
   padding: 0 var(--space-3) var(--space-3);
 }
 
-/* On a phone the tiles are a single swipeable row instead of a tall stack.
-   The negative margin bleeds the row out to the page gutter; the matching
-   padding keeps the first card aligned with the content column and leaves
-   room for the card shadow inside the scroll box. */
+/* The tiles are navigation, and on a phone the nav is the hamburger menu --
+   which carries all three destinations. Hiding the whole section takes its
+   heading with it rather than leaving a labelled void. */
 @media (max-width: 640px) {
-  .card-grid {
-    grid-template-columns: none;
-    grid-auto-flow: column;
-    grid-auto-columns: 200px;
-    margin: 0 calc(-1 * var(--layout-gutter));
-    padding: 0 var(--layout-gutter) var(--space-1);
-    overflow-x: auto;
-    overscroll-behavior-x: contain;
-    -webkit-overflow-scrolling: touch;
-    scroll-snap-type: x proximity;
-  }
-
-  .card-grid > .card {
-    scroll-snap-align: start;
+  .section--tiles {
+    display: none;
   }
 }
 
@@ -453,17 +558,23 @@ input.search__input:not(:placeholder-shown) {
 
 /* ── Info table ─────────────────────────────────────────────────────── */
 /* Every key/value table in the space (system info, app detail, settings).
-   Label column left, value column right, so a column of numbers lines up on
-   its last digit instead of drifting with the label width. */
+   Both columns left-aligned: the values down one of these are unrelated to each
+   other (a size, a percentage, a path), so there is no column of like numbers
+   to line up, and flushing them right would only strand each value half a table
+   away from the label it belongs to. Fixed label width gives them a shared scan
+   edge instead. Right-alignment is for repeated measures in list tables. */
 
 .info-table {
   table-layout: fixed;
 }
 
 /* `table-layout: fixed` takes the column widths from the first row, which is
-   the header -- a width on the row headers below would never apply. */
+   the header -- a width on the row headers below would never apply. Sized to
+   the longest label the space uses rather than to a share of the table, so the
+   value starts just past it; row headers wrap (white-space: normal) if one ever
+   outgrows it. */
 .info-table thead th:first-child {
-  width: 40%;
+  width: 32%;
 }
 
 .info-table th[scope="row"] {
@@ -475,28 +586,20 @@ input.search__input:not(:placeholder-shown) {
 }
 
 .info-table td {
-  text-align: right;
   overflow-wrap: anywhere;
 }
 
-/* A full-span cell is a loading / empty / error message, not a value. */
-.info-table td[colspan] {
-  text-align: left;
-}
-
-/* Controls inside a value cell (edit affordances, inputs) still read
-   left-to-right; only the plain text values are flushed right. */
+/* A value cell that pairs text with a control (edit affordance, input). */
 .info-table td .info-value {
   display: flex;
   align-items: center;
-  justify-content: flex-end;
   gap: var(--space-2);
   flex-wrap: wrap;
 }
 
 @media (max-width: 640px) {
   .info-table thead th:first-child {
-    width: 45%;
+    width: 40%;
   }
 }
 
@@ -1273,7 +1376,6 @@ select {
 .info-table td .info-value .hint {
   flex-basis: 100%;
   margin: 0;
-  text-align: left;
 }
 
 /* table-layout: fixed sizes the columns from the header row, so the width

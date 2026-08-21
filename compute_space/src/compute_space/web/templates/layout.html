@@ -5,6 +5,7 @@
    a link everywhere except on the dashboard itself. -#}
 {%- set on_dashboard = request.url.path.rstrip('/') in ('', '/dashboard') -%}
 {% from "_components/icon_nav.html" import icon_nav %}
+{% from "_components/nav_back.html" import nav_back %}
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -34,6 +35,7 @@
   </div>
   <div class="deco-grass" aria-hidden="true"></div>
 
+  {% if not on_dashboard %}{{ nav_back() }}{% endif %}
   <div class="layout {% block layout_class %}{% endblock %}">
     <h1 class="banner">
       {%- set banner_text %}{% if display_name %}{{ display_name }}'s personal compute space{% else %}Cloud in a Bottle{% endif %}{% endset -%}
@@ -43,7 +45,10 @@
       <a class="banner__text" href="/dashboard" title="Back to the dashboard">{{ banner_text }}</a>
       {% endif %}
     </h1>
-    {{ icon_nav(source_url, show_back=not on_dashboard) }}
+    {#- The catalog vars come from the dashboard route and are undefined (falsy) elsewhere;
+        only the dashboard renders the menu that reads them. -#}
+    {{ icon_nav(source_url, on_dashboard=on_dashboard,
+                catalog_app_name=catalog_app_name, catalog_installed=catalog_installed) }}
     {% block content %}{% endblock %}
   </div>
 </body>
