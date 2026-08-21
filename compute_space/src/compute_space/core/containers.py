@@ -192,13 +192,13 @@ def build_image(
         dockerfile_path,
     ]
     if memory_mb is not None:
-        # Cap build RAM at the app's declared limit for isolation. We pass only
-        # --memory and leave --memory-swap unset, so podman applies its default
-        # of memory-swap == 2*memory: swap is bounded to the same size as the
-        # memory limit rather than being unlimited. A build that needs more
-        # than memory_mb can spill up to memory_mb into swap before OOMing,
-        # without letting a "small" app hog unbounded host swap.
+        # Cap build RAM at the app's declared limit for isolation. --memory-swap
+        # is the combined memory+swap ceiling; setting it equal to --memory
+        # gives the build zero swap, so it stays within memory_mb or OOMs rather
+        # than spilling onto host swap. (Left unset, podman would default it to
+        # 2*memory, allowing memory_mb of swap.)
         cmd.append(f"--memory={memory_mb}m")
+        cmd.append(f"--memory-swap={memory_mb}m")
     cmd.append(repo_path)
     logger.info("Building container image: %s", " ".join(cmd))
 
