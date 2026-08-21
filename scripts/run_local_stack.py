@@ -5,10 +5,11 @@ resolver send any ``*.localhost`` name to loopback, so no DNS or /etc/hosts setu
 needed.  Apps run in rootless podman containers exactly as on a real server.
 
 Usage:
-    pixi run -e dev python scripts/run_local_stack.py [--fresh] [--port 8080] [--default-apps]
+    pixi run -e dev python scripts/run_local_stack.py [--fresh] [--port N] [--default-apps]
 
-Then open http://home.localhost:8080/ in a browser.  On first run, /setup asks you to
-pick an owner password.  Deployed apps are served at http://<app>.home.localhost:8080/.
+A random port is picked unless --port says otherwise; the URLs to open are printed at startup.  On
+first run, /setup asks you to pick an owner password.  Deployed apps are served at
+http://<app>.home.localhost:<port>/.
 
 Data persists in --data-dir across restarts; use --fresh to start over.  App containers
 are not children of the router and keep running after it exits (the router re-adopts them
@@ -16,6 +17,7 @@ on restart); use ``podman ps`` / ``podman rm -f openhost-<app>`` to stop them ma
 """
 
 import argparse
+import random
 import shutil
 import subprocess
 import sys
@@ -33,7 +35,7 @@ from compute_space.tests.utils import write_first_boot_beside
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--port", type=int, default=8080)
+    parser.add_argument("--port", type=int, default=None, help="default: a random port in [20000, 40000)")
     parser.add_argument("--zone-name", default="home", help="zone is <zone-name>.localhost:<port>")
     parser.add_argument("--data-dir", default="~/.openhost-local-stack")
     parser.add_argument("--fresh", action="store_true", help="wipe the data dir before starting")
@@ -43,6 +45,7 @@ def main() -> int:
         help="deploy the standard default apps (secrets, filestash, catalog, oauth, backup) at setup",
     )
     args = parser.parse_args()
+    port = args.port if args.port is not None else random.randrange(20000, 40000)
 
     # resolve() so symlinked paths like /tmp -> /private/tmp become the real path:
     # podman machine on macOS only shares resolved paths (/Users, /private, /var/folders)
@@ -54,7 +57,7 @@ def main() -> int:
 
     config = make_local_stack_config(
         data_root_dir=str(data_dir),
-        port=args.port,
+        port=port,
         zone_name=args.zone_name,
         default_apps=None if args.default_apps else [],
         # vendored builtins (e.g. file_browser in default_apps) live in the repo's apps/
