@@ -120,3 +120,36 @@ def test_client_close_code_reaches_backend() -> None:
             assert backend_saw == [4001]
 
     asyncio.run(run())
+
+
+def _headers_backend_sees(client_headers: dict[str, str], *, strip_authorization: bool) -> dict[str, str]:
+    """Run one proxied WS handshake and return the (lowercased) headers the backend received."""
+
+    async def run() -> dict[str, str]:
+        _init_shutdown_event()
+        seen: dict[str, str] = {}
+
+        async def handler(ws: ServerConnection) -> None:
+            seen.update({k.lower(): v for k, v in ws.request.headers.items()})
+            await ws.close()
+
+        async with serve(handler, "127.0.0.1", 0) as server:
+            port = server.sockets[0].getsockname()[1]
+            client = FakeClientWebSocket()
+            client.headers = Headers(client_headers)
+            await proxy_websocket_request(
+                cast(WebSocket[Any, Any, Any], client), port, strip_authorization=strip_authorization
+            )
+            return seen
+
+    return asyncio.run(run())
+
+
+def test_ws_strips_authorization_when_requested() -> None:
+    seen = _headers_backend_sees({"Authorization": "Bearer owner-api-token"}, strip_authorization=True)
+    assert "authorization" not in seen
+
+
+def test_ws_forwards_app_owned_authorization_by_default() -> None:
+    seen = _headers_backend_sees({"Authorization": "Bearer app-own-jwt"}, strip_authorization=False)
+    assert seen.get("authorization") == "Bearer app-own-jwt"

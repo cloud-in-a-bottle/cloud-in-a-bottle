@@ -2,9 +2,7 @@
 
 Used in both proxying inbound requests to apps, and proxying requests between apps on the service interface.
 
-This also strips openhost/auth-relevant headers from forwarded requests: X-OpenHost-* identity
-headers, the owner's session cookie, and — when the caller passes ``strip_authorization`` — the
-Authorization credential the router itself authenticated against.
+This also takes care of stripping openhost/auth relevant headers and cookies from forwarded requests.
 """
 
 import asyncio
