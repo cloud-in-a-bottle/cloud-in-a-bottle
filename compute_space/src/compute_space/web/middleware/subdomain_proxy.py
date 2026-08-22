@@ -21,7 +21,7 @@ from compute_space.core.containers import ROUTER_INTERNAL_HOSTS
 from compute_space.core.domains import Domain
 from compute_space.core.logging import logger
 from compute_space.db import get_db
-from compute_space.web.auth.auth import login_required_redirect
+from compute_space.web.auth.auth import auth_required_response
 from compute_space.web.auth.auth import verify_owner_auth
 from compute_space.web.helpers.proxy import proxy_http_request
 from compute_space.web.helpers.proxy import proxy_websocket_request
@@ -201,12 +201,13 @@ class SubdomainProxyMiddleware:
             if not is_public_path(app, scope["path"]):
                 # We're outer ASGI middleware — a raised NotAuthorizedException
                 # wouldn't reach Litestar's exception handlers, so produce the
-                # equivalent response ourselves.  HTTP: same /login redirect the
-                # exception handler would emit, dispatched via Litestar's
-                # Redirect→ASGI machinery.  WS: refuse the handshake.
+                # equivalent response ourselves.  HTTP: the same auth response the
+                # exception handler would emit — a /login redirect for navigational
+                # GET/HEAD, or a 403 for unsafe methods (a 302→/login there would be
+                # followed as a bodyless GET and 405 at the app).  WS: refuse the handshake.
                 if scope["type"] == ScopeType.HTTP:
                     request: Request[Any, Any, Any] = Request(scope, receive, send)
-                    response: Response[Any] = login_required_redirect(request)
+                    response: Response[Any] = auth_required_response(request)
                     await response.to_asgi_response(None, request=request)(scope, receive, send)
                 else:
                     await send(

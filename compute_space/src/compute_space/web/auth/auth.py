@@ -10,6 +10,7 @@ from litestar import Request
 from litestar import Response
 from litestar import WebSocket
 from litestar.connection import ASGIConnection
+from litestar.enums import MediaType
 from litestar.exceptions import NotAuthorizedException
 from litestar.handlers.base import BaseRouteHandler
 from litestar.response import Redirect
@@ -38,6 +39,11 @@ def _get_bearer_token_if_set(connection: AnyConnection) -> str | None:
     return None
 
 
+# The opaque-origin token get_connection_origin returns for a present-but-hostless Origin (notably
+# ``Origin: null``).  Never equals a real host[:port], so origin-match checks fail closed on it.
+_OPAQUE_ORIGIN_TOKEN = "null"
+
+
 def get_connection_origin(connection: AnyConnection) -> str | None:
     """gets and formats the origin header as "sub.example.com" or "sub.example.com:1234", no protocol or path, if set.
     port is included if non-default.
@@ -63,28 +69,30 @@ def get_connection_origin(connection: AnyConnection) -> str | None:
     host, port = parsed.hostname, parsed.port
     if not host:
         # present but opaque/unparseable (e.g. "null"): return a non-matching token, not None.
-        return raw.strip().lower() or "null"
+        return raw.strip().lower() or _OPAQUE_ORIGIN_TOKEN
     return f"{host}:{port}" if port else host
 
 
-def verify_same_origin(connection: AnyConnection) -> None:
-    """Reject cross-origin requests to unauthenticated state-changing endpoints (e.g. /logout).
+def is_same_origin_request(connection: AnyConnection) -> bool:
+    """Whether a browser request is same-origin with its target. The canonical check, used for owner
+    (session-cookie) auth and to guard unauthenticated state-changing endpoints (e.g. /logout) against CSRF.
 
-    The ``Origin`` header is set by browsers on all cross-origin requests (including from subdomains
-    and from sandboxed/opaque contexts, which send ``Origin: null``) and cannot be forged by js. So
-    if an Origin header is present at all, it must match the target host; otherwise the request is
-    cross-site and is rejected. This stops a hostile page (including a sandboxed iframe sending
-    ``Origin: null``) from cross-site POSTing to endpoints like /logout, which has no owner-auth
-    guard of its own (it must work for any session state).
+    The ``Origin`` header is the primary signal: browsers set it on cross-origin requests and JS can't
+    spoof it. A matching Origin is same-origin; a concrete Origin for another host is rejected. An absent
+    Origin is same-origin (browsers omit it on ordinary same-origin GET navigations).
 
-    A genuinely same-origin top-level form post either omits Origin or sends the matching host, so
-    legitimate logout still works.
-
-    raises NotAuthorizedException on a cross-origin request.
+    ``Origin: null`` is ambiguous: some legitimate same-origin form POSTs send it (a referrer policy or
+    redirect can opaque-ify the Origin while the request stays same-origin with its SameSite=Lax cookie),
+    but so does a hostile opaque context (e.g. a sandboxed iframe). We disambiguate via ``Sec-Fetch-Site``,
+    a forbidden header the browser sets from the true initiator: only ``same-origin`` is honored. Very old
+    browsers that omit it keep failing closed on a null Origin.
     """
     origin = get_connection_origin(connection)
-    if origin is not None and origin != connection.base_url.netloc:
-        raise NotAuthorizedException(detail="cross-origin request not allowed")
+    if origin is None or origin == connection.base_url.netloc:
+        return True
+    if origin == _OPAQUE_ORIGIN_TOKEN:
+        return connection.headers.get("Sec-Fetch-Site") == "same-origin"
+    return False
 
 
 def authenticate(connection: AnyConnection, db: sqlite3.Connection) -> AuthenticatedAccessor | None:
@@ -117,16 +125,13 @@ def verify_owner_auth(connection: AnyConnection) -> None:
     returns if authed; raises NotAuthorizedException if not authenticated.
     """
     accessor = authenticate(connection, db=get_db())
-    origin = get_connection_origin(connection)
 
     if isinstance(accessor, AuthenticatedUser):
-        if origin is not None and origin != connection.base_url.netloc:
-            # if origin is set (it is set on all browser cross-origin requests and cannot be forged by js),
-            # it must match the target URL. either router-to-router or same-app-origin is fine.
-            # in theory router->app is also fine but idk if this happens in practice.
-            # we never allow cross-origin requests with user auth, even from other subdomains, as these could be forged by untrusted app js.
+        # User (session-cookie) auth is only valid for same-origin requests: we never trust a
+        # cross-origin request bearing the owner's cookie, since it could be forged by untrusted app js.
+        # See is_same_origin_request for how Origin + Fetch-Metadata decide this (incl. Origin: null).
+        if not is_same_origin_request(connection):
             raise NotAuthorizedException(detail="user authentication only valid for router-origin requests")
-        # origin is not set on normal same-origin GETs, for example, so we allow these.
         return
     if isinstance(accessor, AuthenticatedAPIKey):
         # API key requests won't come from untrusted JS, so can be trusted regardless of origin.
@@ -191,9 +196,14 @@ def require_owner_or_app_auth(connection: AnyConnection, _route_handler: BaseRou
 
 
 def require_same_origin(connection: AnyConnection, _route_handler: BaseRouteHandler) -> None:
-    """Adapt verify_same_origin to be used as a route guard (for unauthenticated state-changing
-    endpoints like /logout that still need cross-origin/CSRF protection)."""
-    verify_same_origin(connection)
+    """Guard for unauthenticated state-changing endpoints (e.g. /logout) that have no owner-auth of
+    their own (they must work for any session state) but still need CSRF protection: reject unless the
+    request is same-origin with its target.  An ``Origin: null`` is honored only when
+    ``Sec-Fetch-Site: same-origin`` corroborates it, so a sandboxed-iframe forced-logout forgery — which
+    reports cross-site — stays blocked.  See is_same_origin_request.
+    """
+    if not is_same_origin_request(connection):
+        raise NotAuthorizedException(detail="cross-origin request not allowed")
 
 
 def build_login_url(zone: Domain, netloc: str, path: str, query: str) -> str:
@@ -225,3 +235,25 @@ def login_required_redirect(request: Request[Any, Any, Any]) -> Response[Any]:
     """
     zone = zone_for_request(request)
     return Redirect(path=build_login_url(zone, request.url.netloc, request.url.path, request.url.query))
+
+
+# Methods a browser re-issues as a plain navigation when it follows a 302. For unsafe methods a
+# login redirect is lossy — the browser drops the method/body and re-requests as a bodyless GET —
+# so we only send the redirect for these, and give unsafe methods an honest 403.
+_LOGIN_REDIRECTABLE_METHODS = frozenset({"GET", "HEAD"})
+
+
+def is_login_redirectable_method(method: str) -> bool:
+    """True iff redirecting an unauthenticated request with this method to /login is non-lossy."""
+    return method.upper() in _LOGIN_REDIRECTABLE_METHODS
+
+
+def auth_required_response(request: Request[Any, Any, Any]) -> Response[Any]:
+    """Response for an unauthenticated non-API HTTP request to a protected path.
+
+    GET/HEAD redirect to /login (and back to ``next`` after signing in). Unsafe methods get a 403
+    instead, since a login redirect would be re-issued as a bodyless GET and rejected with 405.
+    """
+    if is_login_redirectable_method(request.method):
+        return login_required_redirect(request)
+    return Response(content="Authentication required", status_code=403, media_type=MediaType.TEXT)
