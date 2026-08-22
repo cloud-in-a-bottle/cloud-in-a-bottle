@@ -1,0 +1,8 @@
+{#- The way home, in the page's top-left corner. Lives outside the content
+    column (and outside .icon-nav) so it reads as leaving the page rather than
+    as one more tool on the nav row. -#}
+{% from "_components/icon.html" import icon %}
+
+{% macro nav_back() -%}
+<a class="nav-back" href="/dashboard">{{ icon("arrow-left", 10, height=7) }}Dashboard</a>
+{%- endmacro %}

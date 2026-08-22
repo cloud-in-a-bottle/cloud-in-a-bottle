@@ -1,0 +1,19 @@
+{#- Renders an <a> when href is given, a <button> otherwise. Variants:
+    default | primary | accent | danger. -#}
+{% macro button(label, href=none, variant="default", onclick=none, block=false,
+                type="button", id=none, new_tab=false, disabled=false) -%}
+{%- set classes = ["btn"]
+      + (["btn--" ~ variant] if variant != "default" else [])
+      + (["btn--block"] if block else []) -%}
+{%- if href -%}
+<a class="{{ classes|join(' ') }}" href="{{ href }}"
+   {%- if id %} id="{{ id }}"{% endif %}
+   {%- if new_tab %} target="_blank" rel="noopener"{% endif %}
+   {%- if onclick %} onclick="{{ onclick }}"{% endif %}>{{ label }}</a>
+{%- else -%}
+<button class="{{ classes|join(' ') }}" type="{{ type }}"
+   {%- if id %} id="{{ id }}"{% endif %}
+   {%- if disabled %} disabled{% endif %}
+   {%- if onclick %} onclick="{{ onclick }}"{% endif %}>{{ label }}</button>
+{%- endif -%}
+{%- endmacro %}

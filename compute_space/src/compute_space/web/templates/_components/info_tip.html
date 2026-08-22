@@ -1,0 +1,19 @@
+{#- An explanation parked behind an info icon, so it costs nothing until it is
+    wanted. Pointer users get it on hover; the button opens it for everyone
+    else. ``label`` names the button for screen readers -- say what the
+    explanation is about, not "info". ``id`` must be unique on the page.
+
+    {% call info_tip("about-username", "About the username") %}
+      <p>...</p>
+    {% endcall %}
+
+    Needs js/info-tip.js, which layout.html and _layout_narrow.html load. -#}
+{% from "_components/icon.html" import icon %}
+
+{% macro info_tip(id, label, align="start") -%}
+<span class="info-tip">
+  <button class="info-tip__toggle" type="button" aria-expanded="false"
+          aria-controls="{{ id }}" aria-label="{{ label }}">{{ icon("info", 13) }}</button>
+  <span class="info-tip__body info-tip__body--{{ align }}" id="{{ id }}" role="note">{{ caller() }}</span>
+</span>
+{%- endmacro %}

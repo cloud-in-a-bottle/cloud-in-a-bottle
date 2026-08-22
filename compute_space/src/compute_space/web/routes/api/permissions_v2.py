@@ -16,6 +16,7 @@ from litestar.exceptions import NotFoundException
 from litestar.exceptions import PermissionDeniedException
 from litestar.exceptions import ValidationException
 from litestar.params import Body
+from litestar.params import FromQuery
 
 from compute_space.core.apps import find_app_by_name
 from compute_space.core.auth.permissions_v2 import get_all_permissions_v2
@@ -27,7 +28,7 @@ from compute_space.web.auth.auth import verify_app_auth
 
 
 @get("/api/permissions/v2", guards=[require_owner_auth], sync_to_thread=False)
-def list_permissions_v2(app_id: str | None = None) -> list[dict[str, Any]]:
+def list_permissions_v2(app_id: FromQuery[str | None] = None) -> list[dict[str, Any]]:
     """List all V2 permissions, optionally filtered by app_id."""
     return [attr.asdict(p) for p in get_all_permissions_v2(app_id)]
 

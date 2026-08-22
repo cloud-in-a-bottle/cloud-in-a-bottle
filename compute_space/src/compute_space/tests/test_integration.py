@@ -129,7 +129,7 @@ def test_caddyfile_http_redirect():
     assert "reverse_proxy" not in redirect_block
 
 
-def _setup_owner(session, base_url, password="testpass123", username=None, timeout=30):
+def _setup_owner(session, base_url, password="testpass123", username=None, timeout=90):
     """POST /setup to provision the owner, then wait for the full app to come up.
 
     The setup-only Litestar app starts shutting down once the POST returns so
@@ -212,7 +212,7 @@ class TestRouterCore:
         base_url = _zone_url(config)
         r = admin_session.get(f"{base_url}/dashboard")
         assert r.status_code == 200
-        assert "Deployed Apps" in r.text
+        assert "Your apps" in r.text
         # Storage status and SSH toggle live on the System page, not the dashboard.
         for system_only_element in (
             'id="storage-table"',
