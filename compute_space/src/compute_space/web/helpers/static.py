@@ -28,7 +28,7 @@ def make_static_url(static_dir: Path) -> Callable[[str], str]:
             # -- an un-versioned URL can be served from a cache populated before
             # the file went missing, hiding the breakage entirely.
             logger.warning("static_url({!r}): no such static file at {} ({})", filename, path, exc)
-            return f"/static/{filename}?v={int(time.time())}"
+            mtime = int(time.time())
         return f"/static/{filename}?v={mtime}"
 
     return static_url

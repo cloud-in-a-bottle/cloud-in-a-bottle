@@ -42,7 +42,7 @@ NAV_DESTINATIONS = (
     ("Deploy app", "/add_app"),
     ("Docs", "/docs/"),
     ("Terminal", "/terminal/"),
-    ("System", "/system/"),
+    ("System info", "/system/"),
     ("Settings", "/settings"),
 )
 
