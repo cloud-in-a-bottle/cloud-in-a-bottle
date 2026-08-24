@@ -22,6 +22,16 @@ def resolve_app_id_by_name(url: str, token: str, app_name: str) -> str:
     return app_id
 
 
+def authorization_url(body: object) -> str | None:
+    """Extract an OAuth URL from current or legacy API error envelopes."""
+    if not isinstance(body, dict):
+        return None
+    extra = body.get("extra")
+    candidate = extra.get("authorize_url") if isinstance(extra, dict) else None
+    candidate = candidate or body.get("authorize_url")
+    return candidate if isinstance(candidate, str) else None
+
+
 def make_api_request(
     domain: str,
     token: str,
@@ -45,12 +55,7 @@ def make_api_request(
         follow_redirects=False,
     )
     if not raw and resp.status_code >= 300:
-        try:
-            body = resp.json()
-            msg = body.get("error", body.get("message", resp.text))
-        except Exception:
-            msg = resp.text
-        print(f"Error ({resp.status_code}): {msg}", file=sys.stderr)
+        print(f"Error ({resp.status_code}): {resp.text}", file=sys.stderr)
         raise SystemExit(1)
     return resp
 
@@ -82,7 +87,7 @@ def wait_for_app_removed(url: str, token: str, app_id: str, app_name: str, timeo
         if time.time() > deadline:
             print(
                 f"Timed out waiting for {app_name} to finish removing after {timeout:.0f}s. "
-                "The server may still be working — re-run 'oh app status' to check.",
+                "The server may still be working — re-run 'bottle app status' to check.",
                 file=sys.stderr,
             )
             raise SystemExit(1)

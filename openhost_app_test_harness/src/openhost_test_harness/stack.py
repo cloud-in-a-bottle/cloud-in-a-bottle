@@ -8,7 +8,7 @@ Typical use in an app repo's ``conftest.py``::
     @pytest.fixture(scope="session")
     def stack():
         # app_dir is discovered by walking up from the cwd to the nearest
-        # openhost.toml; pass app_dir=... explicitly to override.
+        # cloudinabottle.toml; pass app_dir=... explicitly to override.
         with OpenhostStack() as s:
             yield s
 
@@ -42,6 +42,8 @@ import requests
 from playwright.sync_api import Page
 
 from compute_space.core.auth.permissions_v2 import Grant
+from compute_space.core.manifest import MANIFEST_FILENAMES
+from compute_space.core.manifest import find_manifest_path
 from compute_space.core.manifest import parse_manifest
 from compute_space.tests.local_stack import LocalStack
 from compute_space.tests.local_stack import complete_setup
@@ -54,12 +56,16 @@ logger = logging.getLogger(__name__)
 
 
 def find_manifest_dir(start: Path | None = None) -> Path:
-    """Walk up from ``start`` (default: cwd) to the nearest directory containing openhost.toml."""
+    """Walk up from ``start`` (default: cwd) to the nearest directory containing an app manifest.
+
+    Looks for the canonical ``cloudinabottle.toml`` first and falls back to the legacy
+    ``openhost.toml`` (see ``MANIFEST_FILENAMES``).
+    """
     cur = (start or Path.cwd()).resolve()
     for candidate in (cur, *cur.parents):
-        if (candidate / "openhost.toml").exists():
+        if find_manifest_path(str(candidate)) is not None:
             return candidate
-    raise FileNotFoundError(f"No openhost.toml found walking up from {cur}")
+    raise FileNotFoundError(f"No {MANIFEST_FILENAMES[0]} found walking up from {cur}")
 
 
 def _resolve_app_dir(value: Path | str | None) -> Path:
@@ -186,8 +192,8 @@ class ServiceConsumer:
 class OpenhostStack:
     """Build, deploy, and front a Cloud in a Bottle app on a real local router for tests.
 
-    Use as a context manager.  ``app_dir`` defaults to the nearest directory containing an
-    ``openhost.toml``, found by walking up from the current working directory.
+    Use as a context manager.  ``app_dir`` defaults to the nearest directory containing a
+    ``cloudinabottle.toml``, found by walking up from the current working directory.
 
     - ``stack.url`` — the app through the router (subdomain routing, real auth)
     - ``stack.owner_session`` — a requests.Session authenticated as the zone owner; its
@@ -199,7 +205,7 @@ class OpenhostStack:
 
     app_dir: Path = attr.field(default=None, converter=_resolve_app_dir)
     app_name: str | None = None
-    """Deploy under this name; defaults to the openhost.toml [app].name."""
+    """Deploy under this name; defaults to the cloudinabottle.toml [app].name."""
     grant_manifest_permissions: bool = True
     """Auto-grant the grants declared in the app's [[services.v2.consumes]] at install."""
     pre_deploy: Callable[["OpenhostStack"], None] | None = None
@@ -287,7 +293,9 @@ class OpenhostStack:
         """
         page.goto(f"{self.router_url}/login")
         page.fill("input[name=password]", self.local_stack.owner_password)
-        page.click("input[type=submit]")
+        # Match either element: the login form's submit control has been both an
+        # <input type=submit> and a <button type=submit>.
+        page.click("input[type=submit], button[type=submit]")
         page.wait_for_url(lambda url: "/login" not in url)
         return page
 

@@ -1,4 +1,4 @@
-"""Tests for the ``oh diagnostics`` and ``oh app diagnostics`` CLI commands."""
+"""Tests for the ``bottle diagnostics`` and ``bottle app diagnostics`` CLI commands."""
 
 from __future__ import annotations
 

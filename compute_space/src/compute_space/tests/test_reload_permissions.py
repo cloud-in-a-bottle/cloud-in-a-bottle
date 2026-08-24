@@ -4,7 +4,7 @@ explicit owner approval, mirroring the approval required at install time.
 Before this, ``reload_app_background`` re-synced manifest-derived columns but
 silently left newly declared permissions ungranted — the update proceeded and
 the new permissions only showed up passively on the app detail page. Now
-``_reload_app_impl`` refuses the reload (via ``_gate_new_permissions``) until
+``_reload_app_impl`` refuses the reload (via ``_gate_update_review``) until
 the owner approves, and the app keeps running its current version meanwhile.
 """
 
@@ -23,15 +23,18 @@ from litestar import Litestar
 from litestar.testing import TestClient
 
 from compute_space.core.app_id import new_app_id
-from compute_space.core.apps import manifest_ungranted_permissions_v2
 from compute_space.core.auth.permissions_v2 import PermissionRecord
 from compute_space.core.auth.permissions_v2 import get_all_permissions_v2
 from compute_space.core.auth.permissions_v2 import grant_permission_v2
+from compute_space.core.manifest import manifest_newly_declared_permissions_v2
+from compute_space.core.manifest import manifest_settings_changes
+from compute_space.core.manifest import manifest_ungranted_permissions_v2
 from compute_space.core.manifest import parse_manifest
+from compute_space.core.manifest import parse_manifest_from_string
 from compute_space.db.connection import init_db
 from compute_space.tests._litestar_helpers import auth_cookie
 from compute_space.tests._litestar_helpers import make_test_app
-from compute_space.web.routes.api.apps import _gate_new_permissions
+from compute_space.web.routes.api.apps import _gate_update_review
 from compute_space.web.routes.api.apps import api_apps_routes
 
 from .conftest import _make_test_config
@@ -51,7 +54,7 @@ port = 5000
 
 def _manifest_with_consumes(repo: Path, consumes: str) -> Any:
     repo.mkdir(parents=True, exist_ok=True)
-    (repo / "openhost.toml").write_text(_CONSUMES.format(consumes=consumes))
+    (repo / "cloudinabottle.toml").write_text(_CONSUMES.format(consumes=consumes))
     return parse_manifest(str(repo))
 
 
@@ -253,7 +256,7 @@ def test_gate_returns_none_when_no_new_permissions(cfg: Any, tmp_path: Path) -> 
     _manifest_with_consumes(repo, "")  # no consumes
     app_id = _seed_perm_app(cfg, str(repo))
 
-    assert _gate_new_permissions(app_id, str(repo), approve_new_permissions=False) is None
+    assert _gate_update_review(app_id, str(repo), approve_new_permissions=False) is None
 
 
 def test_gate_refuses_new_permission_without_approval(cfg: Any, tmp_path: Path) -> None:
@@ -261,7 +264,7 @@ def test_gate_refuses_new_permission_without_approval(cfg: Any, tmp_path: Path) 
     _manifest_with_consumes(repo, _consume_block("github.com/x/secrets", "secrets", '{ key = "API_KEY" }'))
     app_id = _seed_perm_app(cfg, str(repo))
 
-    result = _gate_new_permissions(app_id, str(repo), approve_new_permissions=False)
+    result = _gate_update_review(app_id, str(repo), approve_new_permissions=False)
     assert result is not None
     assert result.ok is False
     assert len(result.permissions_required) == 1
@@ -276,7 +279,7 @@ def test_gate_grants_and_proceeds_when_approved(cfg: Any, tmp_path: Path) -> Non
     _manifest_with_consumes(repo, _consume_block("github.com/x/secrets", "secrets", '{ key = "API_KEY" }'))
     app_id = _seed_perm_app(cfg, str(repo))
 
-    result = _gate_new_permissions(app_id, str(repo), approve_new_permissions=True)
+    result = _gate_update_review(app_id, str(repo), approve_new_permissions=True)
     assert result is None
     granted = get_all_permissions_v2(consumer_app_id=app_id)
     assert len(granted) == 1
@@ -291,17 +294,96 @@ def test_gate_ignores_already_granted_permission(cfg: Any, tmp_path: Path) -> No
     grant_permission_v2(consumer_app_id=app_id, service_url="github.com/x/secrets", grant_payload={"key": "API_KEY"})
 
     # Already held -> not "new" -> gate passes without prompting.
-    assert _gate_new_permissions(app_id, str(repo), approve_new_permissions=False) is None
+    assert _gate_update_review(app_id, str(repo), approve_new_permissions=False) is None
 
 
 def test_gate_returns_none_for_unparseable_manifest(cfg: Any, tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
-    (repo / "openhost.toml").write_text("not = valid [ toml")
+    (repo / "cloudinabottle.toml").write_text("not = valid [ toml")
     app_id = _seed_perm_app(cfg, str(repo))
 
     # A broken manifest isn't the gate's problem; the reload path surfaces it.
-    assert _gate_new_permissions(app_id, str(repo), approve_new_permissions=False) is None
+    assert _gate_update_review(app_id, str(repo), approve_new_permissions=False) is None
+
+
+# ─── the update delta: gate only author-added permissions ─────────────────────
+
+
+def test_newly_declared_empty_when_previous_manifest_also_declared_it(tmp_path: Path) -> None:
+    """Revoke survives update: a permission declared by BOTH the previous and the
+    new manifest, but not granted (revoked), is NOT part of the delta."""
+    consumes = _consume_block("github.com/x/secrets", "secrets", '{ key = "API_KEY" }')
+    new_manifest = _manifest_with_consumes(tmp_path / "new", consumes)
+    prev_raw = _CONSUMES.format(consumes=consumes)  # previous manifest declared the same perm
+    assert manifest_newly_declared_permissions_v2(new_manifest, [], prev_raw) == []
+
+
+def test_newly_declared_lists_author_added_permission(tmp_path: Path) -> None:
+    """A permission the new manifest declares that the previous manifest did not is in the delta."""
+    prev_consumes = _consume_block("github.com/x/a", "a", '{ key = "OLD" }')
+    new_consumes = prev_consumes + _consume_block("github.com/x/b", "b", '{ key = "NEW" }')
+    new_manifest = _manifest_with_consumes(tmp_path / "new", new_consumes)
+    prev_raw = _CONSUMES.format(consumes=prev_consumes)
+    new = manifest_newly_declared_permissions_v2(new_manifest, [], prev_raw)
+    assert len(new) == 1
+    assert new[0].service_url == "github.com/x/b"
+    assert new[0].grant == {"key": "NEW"}
+
+
+def test_newly_declared_excludes_already_granted(tmp_path: Path) -> None:
+    """Even a newly-declared permission isn't re-listed if it's somehow already granted."""
+    consumes = _consume_block("github.com/x/b", "b", '{ key = "NEW" }')
+    new_manifest = _manifest_with_consumes(tmp_path / "new", consumes)
+    prev_raw = _CONSUMES.format(consumes="")  # previous declared nothing
+    granted = [
+        PermissionRecord(
+            consumer_app_id="a1",
+            service_url="github.com/x/b",
+            grant={"key": "NEW"},
+            scope="global",
+            provider_app_id=None,
+        )
+    ]
+    assert manifest_newly_declared_permissions_v2(new_manifest, granted, prev_raw) == []
+
+
+def test_newly_declared_falls_back_to_ungranted_without_previous_manifest(tmp_path: Path) -> None:
+    """No previous manifest (None / legacy row): fall back to the full grant-state diff."""
+    consumes = _consume_block("github.com/x/secrets", "secrets", '{ key = "API_KEY" }')
+    m = _manifest_with_consumes(tmp_path / "m", consumes)
+    fallback = manifest_newly_declared_permissions_v2(m, [], None)
+    assert len(fallback) == 1
+    assert fallback[0].service_url == "github.com/x/secrets"
+
+
+def test_gate_does_not_reprompt_revoked_permission_on_update(cfg: Any, tmp_path: Path) -> None:
+    """End-to-end gate: a revoked permission still declared in the (unchanged) manifest
+    is not gated on update, because the previous manifest declared it too."""
+    repo = tmp_path / "repo"
+    consumes = _consume_block("github.com/x/secrets", "secrets", '{ key = "API_KEY" }')
+    _manifest_with_consumes(repo, consumes)
+    app_id = _seed_perm_app(cfg, str(repo))
+    prev_raw = _CONSUMES.format(consumes=consumes)
+    # No permissions_v2 row for it (owner revoked, or never granted).
+    assert (
+        _gate_update_review(app_id, str(repo), approve_new_permissions=False, previous_manifest_raw=prev_raw) is None
+    )
+
+
+def test_gate_prompts_for_author_added_permission_on_update(cfg: Any, tmp_path: Path) -> None:
+    """End-to-end gate: a permission the update newly declares (not in the previous
+    manifest) is still gated for approval."""
+    repo = tmp_path / "repo"
+    prev_consumes = _consume_block("github.com/x/a", "a", '{ key = "OLD" }')
+    new_consumes = prev_consumes + _consume_block("github.com/x/b", "b", '{ key = "NEW" }')
+    _manifest_with_consumes(repo, new_consumes)
+    app_id = _seed_perm_app(cfg, str(repo))
+    prev_raw = _CONSUMES.format(consumes=prev_consumes)
+    result = _gate_update_review(app_id, str(repo), approve_new_permissions=False, previous_manifest_raw=prev_raw)
+    assert result is not None
+    assert result.ok is False
+    assert [p["service_url"] for p in result.permissions_required] == ["github.com/x/b"]
 
 
 # ─── the /reload_app route end-to-end ─────────────────────────────────────────
@@ -533,12 +615,12 @@ def _init_two_commit_repo(tmp_path: Path) -> tuple[Path, Path, str, str]:
     subprocess.run(["git", "-C", str(origin), "init", "-q", "-b", "main"], check=True)
     subprocess.run(["git", "-C", str(origin), "config", "user.email", "t@t"], check=True)
     subprocess.run(["git", "-C", str(origin), "config", "user.name", "t"], check=True)
-    (origin / "openhost.toml").write_text(_CONSUMES.format(consumes=""))
+    (origin / "cloudinabottle.toml").write_text(_CONSUMES.format(consumes=""))
     _git(origin, "add", "-A")
     _git(origin, "commit", "-qm", "v1 no consumes")
     v1 = _git(origin, "rev-parse", "HEAD")
     # v2 adds a new consume
-    (origin / "openhost.toml").write_text(
+    (origin / "cloudinabottle.toml").write_text(
         _CONSUMES.format(consumes=_consume_block("github.com/x/secrets", "secrets", '{ key = "API_KEY" }'))
     )
     _git(origin, "add", "-A")
@@ -601,4 +683,123 @@ def test_refused_update_rolls_back_working_tree(
     # The working tree must be rolled back to v1 — NOT left on the pulled v2 — so
     # a subsequent plain (ungated) reload can't deploy the unapproved version.
     assert _git(clone, "rev-parse", "HEAD") == v1
-    assert "consumes" not in (clone / "openhost.toml").read_text()
+    assert "consumes" not in (clone / "cloudinabottle.toml").read_text()
+
+
+# ─── the settings diff: gate on ANY changed manifest setting ──────────────────
+
+_BASE = """\
+[app]
+name = "perm-app"
+version = "{version}"
+
+[runtime.container]
+image = "Dockerfile"
+port = 5000
+
+[resources]
+memory_mb = {memory}
+"""
+
+
+def test_settings_changes_empty_without_previous() -> None:
+    m = parse_manifest_from_string(_BASE.format(version="1.0.0", memory=128))
+    assert manifest_settings_changes(m, None) == []
+
+
+def test_settings_changes_empty_when_identical() -> None:
+    raw = _BASE.format(version="1.0.0", memory=128)
+    assert manifest_settings_changes(parse_manifest_from_string(raw), raw) == []
+
+
+def test_settings_changes_unparseable_previous_is_empty() -> None:
+    m = parse_manifest_from_string(_BASE.format(version="1.0.0", memory=128))
+    assert manifest_settings_changes(m, "not = valid [ toml") == []
+
+
+def test_settings_changes_detects_version_and_memory() -> None:
+    prev = _BASE.format(version="1.0.0", memory=128)
+    new = parse_manifest_from_string(_BASE.format(version="2.0.0", memory=256))
+    changes = {c.label: (c.old, c.new) for c in manifest_settings_changes(new, prev)}
+    assert changes["Version"] == ("1.0.0", "2.0.0")
+    assert changes["Memory (MB)"] == ("128", "256")
+
+
+def test_gate_refuses_settings_change_without_approval(cfg: Any, tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "openhost.toml").write_text(_BASE.format(version="2.0.0", memory=256))
+    app_id = _seed_perm_app(cfg, str(repo))
+    prev_raw = _BASE.format(version="1.0.0", memory=128)
+
+    result = _gate_update_review(app_id, str(repo), approve_new_permissions=False, previous_manifest_raw=prev_raw)
+    assert result is not None
+    assert result.ok is False
+    assert result.review_required is True
+    assert result.permissions_required == []
+    labels = {c["label"] for c in result.settings_changed}
+    assert {"Version", "Memory (MB)"} <= labels
+
+
+def test_gate_proceeds_on_settings_change_when_approved(cfg: Any, tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "openhost.toml").write_text(_BASE.format(version="2.0.0", memory=256))
+    app_id = _seed_perm_app(cfg, str(repo))
+    prev_raw = _BASE.format(version="1.0.0", memory=128)
+
+    # No permissions involved, so approval simply lets the update proceed.
+    assert _gate_update_review(app_id, str(repo), approve_new_permissions=True, previous_manifest_raw=prev_raw) is None
+
+
+def test_gate_passes_when_manifest_unchanged(cfg: Any, tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    raw = _BASE.format(version="1.0.0", memory=128)
+    (repo / "openhost.toml").write_text(raw)
+    app_id = _seed_perm_app(cfg, str(repo))
+
+    assert _gate_update_review(app_id, str(repo), approve_new_permissions=False, previous_manifest_raw=raw) is None
+
+
+def _seed_git_app_with_manifest_raw(cfg: Any, repo: Path, on_disk_toml: str, manifest_raw: str) -> str:
+    """Seed a running git-backed app whose on-disk manifest differs from the
+    stored (running) manifest_raw, so an update gates on the settings diff."""
+    repo.mkdir(parents=True, exist_ok=True)
+    (repo / "openhost.toml").write_text(on_disk_toml)
+    (repo / ".git").mkdir()
+    app_id = new_app_id()
+    db = sqlite3.connect(cfg.db_path)
+    try:
+        db.execute(
+            "INSERT INTO apps (app_id, name, version, repo_path, repo_url, manifest_raw, local_port, status) "
+            "VALUES (?, 'perm-app', '1.0', ?, 'https://github.com/x/perm-app', ?, 20901, 'running')",
+            (app_id, str(repo), manifest_raw),
+        )
+        db.commit()
+    finally:
+        db.close()
+    return app_id
+
+
+def test_reload_route_gates_on_settings_change(
+    cfg: Any, client: TestClient[Litestar], cookies: dict[str, str], tmp_path: Path
+) -> None:
+    repo = tmp_path / "repo"
+    app_id = _seed_git_app_with_manifest_raw(
+        cfg, repo, _BASE.format(version="2.0.0", memory=256), _BASE.format(version="1.0.0", memory=128)
+    )
+
+    client.cookies.update(cookies)
+    with _mocked_reload_side_effects() as m:
+        resp = client.post(f"/reload_app/{app_id}", json={"update": True})
+    body = resp.json()
+    assert body["ok"] is False
+    assert body["review_required"] is True
+    assert {c["label"] for c in body["settings_changed"]} >= {"Version", "Memory (MB)"}
+    m["thread"].assert_not_called()
+
+    with _mocked_reload_side_effects() as m:
+        resp = client.post(f"/reload_app/{app_id}", json={"update": True, "approve_new_permissions": True})
+    assert resp.json() == {"ok": True}
+    m["thread"].assert_called_once()

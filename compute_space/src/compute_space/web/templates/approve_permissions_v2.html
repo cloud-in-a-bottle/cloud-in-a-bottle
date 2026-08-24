@@ -1,16 +1,25 @@
 {% extends "layout.html" %}
 {% block title_suffix %} — Approve Permission{% endblock %}
+{% from "_components/section.html" import section_head %}
+{% from "_components/spec.html" import spec_list, spec_row %}
 {% block content %}
-<h2>{{ app_name }} is requesting a permission</h2>
+{% call section_head("Permission request") %}{% endcall %}
 
-<p>Service: <code>{{ service_url }}</code></p>
+<div class="panel">
+  <p><strong>{{ app_name }}</strong> is requesting a permission.</p>
+
+  {% call spec_list() %}
+    {{ spec_row("Service", service_url) }}
+    {% if not already_granted %}<dt>Grant</dt><dd><code>{{ grant | tojson }}</code></dd>{% endif %}
+  {% endcall %}
 
 {% if already_granted %}
-<p>This permission is already granted.</p>
+  <p class="notice notice--ok">This permission is already granted.</p>
 {% else %}
-<p>Grant: <code>{{ grant | tojson }}</code></p>
-
-<button type="button" class="btn btn-primary" id="grant-btn">Grant</button>
+  <div class="actions">
+    <button type="button" class="btn btn--primary" id="grant-btn">Grant</button>
+  </div>
+<script src="{{ static_url('js/http-errors.js') }}"></script>
 <script>
 document.getElementById("grant-btn").addEventListener("click", async () => {
   const btn = document.getElementById("grant-btn");
@@ -26,7 +35,10 @@ document.getElementById("grant-btn").addEventListener("click", async () => {
         grant: {{ grant | tojson }},
       }),
     });
-    if (!resp.ok) throw new Error(await resp.text());
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => null);
+      throw new Error(responseErrorMessage(err, "Request failed"));
+    }
     const returnTo = {{ (redirect_url or '') | tojson }};
     if (returnTo) {
       window.location.href = returnTo;
@@ -41,4 +53,5 @@ document.getElementById("grant-btn").addEventListener("click", async () => {
 });
 </script>
 {% endif %}
+</div>
 {% endblock %}

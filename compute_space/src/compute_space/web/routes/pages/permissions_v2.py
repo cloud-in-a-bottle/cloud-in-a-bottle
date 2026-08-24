@@ -4,14 +4,19 @@ import sqlite3
 from litestar import Router
 from litestar import get
 from litestar.di import NamedDependency
-from litestar.exceptions import HTTPException
+from litestar.exceptions import NotFoundException
+from litestar.exceptions import ValidationException
 from litestar.response import Template
 
 from compute_space.core.auth.permissions_v2 import get_granted_permissions_v2
 from compute_space.web.auth.auth import require_owner_auth
 
 
-@get("/approve-permissions-v2", guards=[require_owner_auth])
+@get(
+    "/approve-permissions-v2",
+    guards=[require_owner_auth],
+    raises=[ValidationException, NotFoundException],
+)
 async def approve_permissions_v2(
     db: NamedDependency[sqlite3.Connection],
     app: str,
@@ -22,12 +27,12 @@ async def approve_permissions_v2(
     """Owner-facing page: grant or deny a V2 permission request."""
     row = db.execute("SELECT name FROM apps WHERE app_id = ?", (app,)).fetchone()
     if not row:
-        raise HTTPException(detail="App not found", status_code=404)
+        raise NotFoundException(detail="App not found")
 
     try:
         grant_parsed = json.loads(grant)
     except json.JSONDecodeError as e:
-        raise HTTPException(detail="Invalid grant JSON", status_code=400) from e
+        raise ValidationException(detail="Invalid grant JSON") from e
 
     existing = get_granted_permissions_v2(app, service)
     already_granted = any(g.grant == grant_parsed and g.scope == "global" for g in existing)

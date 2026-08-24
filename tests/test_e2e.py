@@ -135,7 +135,7 @@ class TestSelfHost:
         )
         r = session.get(f"{router_url}/dashboard", timeout=10)
         assert r.status_code == 200
-        assert "Deployed Apps" in r.text
+        assert "Your apps" in r.text
 
     # -- 3. Dashboard access -----------------------------------------------
 
@@ -153,7 +153,7 @@ class TestSelfHost:
         """Authenticated session can access /dashboard."""
         r = session.get(f"{router_url}/dashboard", timeout=10)
         assert r.status_code == 200
-        assert "Deployed Apps" in r.text
+        assert "Your apps" in r.text
 
     # -- 4. Deploy test-app ------------------------------------------------
 
@@ -418,7 +418,7 @@ class TestSelfHost:
         login_session.cookies.update(r.cookies)
         r = login_session.get(f"{router_url}/dashboard", timeout=10)
         assert r.status_code == 200
-        assert "Deployed Apps" in r.text
+        assert "Your apps" in r.text
 
     def test_11c_logout(self, router_url):
         """Logout clears the session."""

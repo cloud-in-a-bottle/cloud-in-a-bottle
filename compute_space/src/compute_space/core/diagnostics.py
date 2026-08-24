@@ -711,6 +711,20 @@ def _app_resources_from_batch(
     )
 
 
+def collect_app_resources(
+    container_id: str | None, cpu_cores_limit: float | None, memory_mb_limit: int | None
+) -> AppResourceUsage:
+    """Live resource usage for a single app, collected on its own (one
+    ``podman ps`` + one ``podman stats``) and parsed through the same batch
+    machinery the fleet report uses. Public so callers outside the diagnostics
+    report -- e.g. the memory guard -- can reuse the exact same collection and
+    parsing instead of duplicating podman-stats handling. The fleet report
+    (:func:`_collect_apps`) shares one batch across all apps; this wrapper is
+    the single-container convenience path.
+    """
+    return _app_resources_from_batch(_collect_container_stats_batch(), container_id, cpu_cores_limit, memory_mb_limit)
+
+
 # ─── health checks ───────────────────────────────────────────────────────────
 
 

@@ -6,7 +6,6 @@ from typing import Any
 from jinja2 import pass_context
 from jinja2.runtime import Context
 from litestar import Litestar
-from litestar import MediaType
 from litestar import Request
 from litestar import Response
 from litestar import get
@@ -14,6 +13,7 @@ from litestar import post
 from litestar.di import Provide
 from litestar.exceptions import HTTPException
 from litestar.exceptions import NotAuthorizedException
+from litestar.exceptions import PermissionDeniedException
 from litestar.exceptions.responses import create_exception_response
 from litestar.plugins.jinja import JinjaTemplateEngine
 from litestar.response import Redirect
@@ -32,7 +32,9 @@ from compute_space.core.first_boot import seed_first_boot
 from compute_space.core.git_ops import SOURCE_URL
 from compute_space.core.image_pruner import start_image_pruner
 from compute_space.core.logging import logger
+from compute_space.core.memory_guard import ensure_memory_guard
 from compute_space.core.org_rename import reconcile_app_repo_urls
+from compute_space.core.process_stream import cleanup_all as cleanup_process_streams
 from compute_space.core.startup import check_app_status
 from compute_space.core.startup import retry_pending_default_apps
 from compute_space.core.storage import start_storage_guard
@@ -40,6 +42,7 @@ from compute_space.core.terminal import cleanup_all as cleanup_terminal
 from compute_space.db import get_db
 from compute_space.db import provide_db
 from compute_space.web.auth.auth import login_required_redirect
+from compute_space.web.helpers.static import make_static_url
 from compute_space.web.helpers.zone import ZONE_SCOPE_KEY
 from compute_space.web.middleware.subdomain_proxy import SubdomainProxyMiddleware
 from compute_space.web.routes.api.apps import api_apps_routes
@@ -57,25 +60,6 @@ from compute_space.web.routes.pages.permissions_v2 import pages_permissions_v2_r
 from compute_space.web.routes.pages.settings import pages_settings_routes
 from compute_space.web.routes.pages.system import pages_system_routes
 from compute_space.web.routes.services_v2 import services_v2_routes
-
-
-def _make_static_url(static_dir: Path) -> Any:
-    """Build a Jinja ``static_url`` global that appends ``?v=<mtime>`` for cache-busting.
-
-    Browsers aggressively cache static JS/CSS, so a deploy that ships a new
-    template + JS would otherwise leave returning visitors running stale JS
-    against new HTML.  Appending the file's mtime forces a fresh fetch.
-    """
-
-    def static_url(filename: str) -> str:
-        base = f"/static/{filename}"
-        try:
-            mtime = int((static_dir / filename).stat().st_mtime)
-        except OSError:
-            return base
-        return f"{base}?v={mtime}"
-
-    return static_url
 
 
 def _template_globals(config: Config, static_dir: Path) -> dict[str, Any]:
@@ -125,7 +109,7 @@ def _template_globals(config: Config, static_dir: Path) -> dict[str, Any]:
         "zone_domain": zone_domain,
         "app_url": app_url,
         "owner_name": owner_name,
-        "static_url": _make_static_url(static_dir),
+        "static_url": make_static_url(static_dir),
         "source_url": SOURCE_URL,
     }
 
@@ -150,6 +134,7 @@ def _full_app_bootstrap(config: Config) -> None:
     load_identity_keys(config.persistent_data_dir)
     start_storage_guard(config)
     start_image_pruner(config)
+    ensure_memory_guard(config)
     retry_pending_default_apps(config)
     # The DB `domains` table is the source of truth.  Seed it once (+ claim token) from
     # first_boot.toml; everything reads the primary live from the DB thereafter.
@@ -158,18 +143,14 @@ def _full_app_bootstrap(config: Config) -> None:
 
 @get("/setup", sync_to_thread=False)
 def setup_already_done_get() -> Response[None]:
-    """The claim link (``/setup?claim=...``) printed by ``openhost up`` should keep working
-    after setup — send it to /login rather than a dead-end 403."""
+    """The claim link (``/setup?claim=...``) printed by ``openhost up`` should keep working after setup,
+    so redirect instead of 403 — the dashboard guard bounces to /login unless the owner is signed in."""
     return Redirect(path="/")
 
 
-@post("/setup", status_code=403, sync_to_thread=False)
-def setup_already_done_post() -> Response[str]:
-    return Response(
-        content="This instance has already been set up.",
-        status_code=403,
-        media_type=MediaType.TEXT,
-    )
+@post("/setup", sync_to_thread=False, raises=[PermissionDeniedException])
+def setup_already_done_post() -> None:
+    raise PermissionDeniedException(detail="This instance has already been set up.")
 
 
 def _login_required_redirect(request: Request[Any, Any, Any], exc: NotAuthorizedException) -> Response[Any]:
@@ -177,8 +158,11 @@ def _login_required_redirect(request: Request[Any, Any, Any], exc: NotAuthorized
 
     websocket-type requests should never get here - they start as HTTP requests with `Upgrade: websocket`, and should fail then.
     """
-    if "application/json" in request.headers.get("Accept", ""):
-        return Response(content={"error": exc.detail}, status_code=401)
+    if "application/json" in request.headers.get("Accept", "") or (exc.extra and "authorize_url" in exc.extra):
+        content: dict[str, Any] = {"error": exc.detail}
+        if exc.extra:
+            content["extra"] = exc.extra
+        return Response(content=content, status_code=401)
 
     return login_required_redirect(request)
 
@@ -236,12 +220,16 @@ def create_app(config: Config) -> ASGIApp:
 
     def _install_template_globals(app: Litestar) -> None:
         engine = app.template_engine
-        if isinstance(engine, JinjaTemplateEngine):
-            engine.engine.globals.update(_template_globals(config, static_dir))
+        # Same reasoning as setup_app: the engine is the one configured below,
+        # and skipping the globals would 500 on the first template render
+        # rather than here.
+        assert isinstance(engine, JinjaTemplateEngine), f"expected a Jinja engine, got {type(engine)}"
+        engine.engine.globals.update(_template_globals(config, static_dir))
 
     static_router = create_static_files_router(path="/static", directories=[static_dir])
 
     atexit.register(cleanup_terminal)
+    atexit.register(cleanup_process_streams)
 
     litestar_app = Litestar(
         route_handlers=[

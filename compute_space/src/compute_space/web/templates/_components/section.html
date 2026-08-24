@@ -1,0 +1,12 @@
+{#- Section label plus an optional right-hand action cluster, supplied by
+    wrapping the call in {% call section_head("...") %}...{% endcall %}.
+    The label is a real heading so the page keeps a navigable outline; the
+    Figma's small uppercase treatment is styling, not a demotion to <span>. -#}
+{% macro section_head(label, level=2) -%}
+<div class="section-head">
+  <h{{ level }} class="section-label">{{ label }}</h{{ level }}>
+  {%- if caller %}
+  <div class="section-actions">{{ caller() }}</div>
+  {%- endif %}
+</div>
+{%- endmacro %}

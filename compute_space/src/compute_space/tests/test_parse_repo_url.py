@@ -8,7 +8,6 @@ is not a real URL scheme and prepending https://.
 import pytest
 
 from compute_space.core.apps import parse_repo_url
-from compute_space.core.git_ops import UnsupportedRepoUrlError
 from compute_space.core.git_ops import is_github_repo_url
 from compute_space.core.git_ops import is_ssh_url
 
@@ -73,11 +72,11 @@ class TestParseRepoUrlSshRejected:
         ],
     )
     def test_ssh_urls_raise(self, ssh_url):
-        with pytest.raises(UnsupportedRepoUrlError):
+        with pytest.raises(ValueError):
             parse_repo_url(ssh_url)
 
     def test_error_message_points_to_https(self):
-        with pytest.raises(UnsupportedRepoUrlError) as excinfo:
+        with pytest.raises(ValueError) as excinfo:
             parse_repo_url("git@github.com:user/repo.git")
         assert "HTTPS" in str(excinfo.value)
 

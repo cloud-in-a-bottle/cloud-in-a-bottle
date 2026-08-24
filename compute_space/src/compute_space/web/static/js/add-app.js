@@ -4,28 +4,34 @@ const nextUrl = config.nextUrl;
 let cloneDir = null;
 let repoUrl = null;
 
+document.getElementById('repo-url').addEventListener('input', function(e) {
+  document.getElementById('deploy-btn').disabled = e.target.value.trim() === '';
+});
+
 if (initialRepo) {
+  // Programmatic value set doesn't fire 'input', so sync the button here.
   document.getElementById('repo-url').value = initialRepo;
+  document.getElementById('deploy-btn').disabled = false;
   cloneApp(initialRepo);
 }
 
 function showError(msg) {
   const el = document.getElementById('error');
   el.textContent = msg;
-  el.style.display = '';
+  el.hidden = false;
 }
 
 function clearError() {
-  document.getElementById('error').style.display = 'none';
+  document.getElementById('error').hidden = true;
 }
 
-function show(id) { document.getElementById(id).style.display = ''; }
-function hide(id) { document.getElementById(id).style.display = 'none'; }
+function show(id) { document.getElementById(id).hidden = false; }
+function hide(id) { document.getElementById(id).hidden = true; }
 
 async function cloneApp(url) {
   clearError();
   repoUrl = url || document.getElementById('repo-url').value.trim();
-  if (!repoUrl) { showError('No repository URL provided'); return; }
+  if (!repoUrl) { return; }
 
   hide('clone-form');
   hide('confirm-section');
@@ -48,13 +54,13 @@ async function cloneApp(url) {
   const data = await resp.json();
   hide('cloning-status');
 
-  if (data.authorize_url) {
-    window.location = data.authorize_url;
+  if (resp.status === 401) {
+    window.location = data && data.extra && data.extra.authorize_url;
     return;
   }
 
-  if (data.error) {
-    showError(data.error);
+  if (!resp.ok) {
+    showError(responseErrorMessage(data, 'Clone failed'));
     show('clone-form');
     return;
   }
@@ -188,8 +194,8 @@ let portDebounceTimers = {};
 function renderPortMappings(mappings) {
   const section = document.getElementById('port-mappings-section');
   const body = document.getElementById('port-mappings-body');
-  if (!mappings.length) { section.style.display = 'none'; return; }
-  section.style.display = '';
+  if (!mappings.length) { section.hidden = true; return; }
+  section.hidden = false;
   portConflicts.clear();
   let html = '';
   for (const pm of mappings) {
@@ -227,22 +233,22 @@ function onPortInput(el) {
   const statusEl = document.querySelector(`.port-status[data-label="${label}"]`);
 
   if (isNaN(val) || val === 0) {
-    statusEl.innerHTML = '<span style="color:#888">auto-assign</span>';
+    dom.replace(statusEl, dom.badge('Auto-assign'));
     portConflicts.delete(label);
     updateDeployButton();
     return;
   }
 
   // Debounce: check after 400ms of no typing
-  statusEl.innerHTML = '<span style="color:#888">checking…</span>';
+  dom.replace(statusEl, dom.badge('Checking…'));
   if (portDebounceTimers[label]) clearTimeout(portDebounceTimers[label]);
   portDebounceTimers[label] = setTimeout(() => checkPortAvailability(label, val), 400);
 }
 
 function formatUsedBy(usedBy) {
   if (!usedBy) return 'unknown';
-  if (usedBy.type === 'main_port') return `${esc(usedBy.app_name)} (main port)`;
-  if (usedBy.type === 'port_mapping') return `${esc(usedBy.app_name)} (port '${esc(usedBy.label)}')`;
+  if (usedBy.type === 'main_port') return `${usedBy.app_name} (main port)`;
+  if (usedBy.type === 'port_mapping') return `${usedBy.app_name} (port '${usedBy.label}')`;
   return 'host-level service';
 }
 
@@ -252,14 +258,14 @@ async function checkPortAvailability(label, port) {
     const resp = await fetch(`/api/check_port?port=${port}`);
     const data = await resp.json();
     if (data.available) {
-      statusEl.innerHTML = '<span style="color:green">✓ available</span>';
+      dom.replace(statusEl, dom.badge('Available', 'ok'));
       portConflicts.delete(label);
     } else {
-      statusEl.innerHTML = `<span style="color:red">✗ in use by ${formatUsedBy(data.used_by)}</span>`;
+      dom.replace(statusEl, dom.badge('In use', 'error', 'In use by ' + formatUsedBy(data.used_by)));
       portConflicts.add(label);
     }
   } catch (e) {
-    statusEl.innerHTML = '<span style="color:orange">check failed</span>';
+    dom.replace(statusEl, dom.badge('Check failed', 'warn'));
     portConflicts.delete(label);
   }
   updateDeployButton();
@@ -279,7 +285,7 @@ async function recheckAllPorts() {
 }
 
 function updateDeployButton() {
-  const btn = document.querySelector('#confirm-section .btn-primary');
+  const btn = document.querySelector('#confirm-section .btn--primary');
   if (btn) btn.disabled = portConflicts.size > 0;
 }
 
@@ -334,14 +340,14 @@ async function deployApp() {
 
   const data = await resp.json();
 
-  if (data.authorize_url) {
-    window.location = data.authorize_url;
+  if (resp.status === 401) {
+    window.location = data && data.extra && data.extra.authorize_url;
     return;
   }
 
-  if (data.error) {
+  if (!resp.ok) {
     hide('installing-status');
-    showError(data.error);
+    showError(responseErrorMessage(data, 'Install failed'));
     show('confirm-section');
     return;
   }

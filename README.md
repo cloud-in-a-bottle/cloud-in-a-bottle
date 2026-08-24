@@ -21,7 +21,7 @@ Cloud in a Bottle is the project our team needed and couldn't find: a corner of 
 - Personal tools — AI-generated apps, scripts, and utilities with nowhere useful to host them
 - Open source software — Matrix, Minecraft servers, notes apps, project management tools
 - Dev and creative tools — coding agents, image-making software, anything you built and want to share with a real URL
-- Anything Docker-compatible — add an `openhost.toml` manifest to any repo and it's deployable
+- Anything Docker-compatible — add a `cloudinabottle.toml` manifest to any repo and it's deployable
 
 ## Managed hosting
 
@@ -72,7 +72,7 @@ See `ansible/readme.md` for prerequisites and full details.
 
 ## How it works
 
-The router is a Python app that provides a web dashboard for deploying and managing apps. It reads `openhost.toml` manifests from app repos, builds container images from each app's `Dockerfile`, runs each app in its own isolated container, and proxies inbound HTTP requests to the right app by subdomain.
+The router is a Python app that provides a web dashboard for deploying and managing apps. It reads `cloudinabottle.toml` manifests from app repos, builds container images from each app's `Dockerfile`, runs each app in its own isolated container, and proxies inbound HTTP requests to the right app by subdomain.
 
 ### Server mode
 
@@ -187,7 +187,7 @@ The user-facing manual lives in `docs/src/` and is served at `https://<zone>/doc
 
 - `docs/src/introduction.md` — introduction + table of contents
 - `docs/src/creating_an_app.md` — guide to building apps
-- `docs/src/manifest_spec.md` — `openhost.toml` app manifest specification
+- `docs/src/manifest_spec.md` — `cloudinabottle.toml` app manifest specification
 - `docs/src/routing.md` — subdomain + path routing model
 - `docs/src/data.md` — persistent + archive data tiers
 - `docs/src/user_identity.md` — identity / login flow for apps
@@ -200,17 +200,17 @@ The user-facing manual lives in `docs/src/` and is served at `https://<zone>/doc
 
 ## Agent skill
 
-An agent skill that gives an AI coding agent context for deploying and debugging apps on Cloud in a Bottle via the `oh` CLI. Install with:
+An agent skill that gives an AI coding agent context for deploying and debugging apps on Cloud in a Bottle via the `bottle` CLI. Install with:
 
 ```bash
 npx skills add cloud-in-a-bottle/cloud-in-a-bottle --skill openhost-context
 ```
 
-The skill works best with the `oh` CLI installed and logged in:
+The skill works best with the `bottle` CLI installed and logged in:
 
 ```bash
-uv tool install "oh @ git+https://github.com/cloud-in-a-bottle/cloud-in-a-bottle.git#subdirectory=compute_space_cli"
-oh instance login
+uv tool install "cloud-in-a-bottle-cli @ git+https://github.com/cloud-in-a-bottle/cloud-in-a-bottle.git#subdirectory=compute_space_cli"
+bottle instance login
 ```
 
 Once set up, ask your coding agent to package any existing project for Cloud in a Bottle and deploy it directly — no manual manifest editing required.

@@ -9,6 +9,8 @@ All owner requests must go through the zone domain (not 127.0.0.1) so the sessio
 scoped to the zone domain — is accepted by the client and sent to app subdomains.
 """
 
+import os
+import shutil
 import sqlite3
 import subprocess
 from contextlib import closing
@@ -27,6 +29,44 @@ from compute_space.tests.utils import poll
 from compute_space.tests.utils import wait_app_running
 
 OWNER_PASSWORD = "localstackpass123"
+
+
+def create_bare_git_repo(source_dir: str, bare_repo_path: str) -> str:
+    """Create a bare git repo from a source directory, for tests that need a real
+    file:// git remote (as opposed to shutil.copytree's non-git fallback path).
+
+    Initialises a bare repo, commits all files from source_dir, and pushes
+    to the bare repo so it can be cloned via file:// URL.
+    """
+    subprocess.run(["git", "init", "--bare", bare_repo_path], check=True, capture_output=True)
+    # Point HEAD to main so 'git show HEAD:...' works after pushing to main
+    subprocess.run(
+        ["git", "symbolic-ref", "HEAD", "refs/heads/main"], cwd=bare_repo_path, check=True, capture_output=True
+    )
+
+    # Create a temporary working copy, commit, and push
+    work_dir = bare_repo_path + "_work"
+    try:
+        shutil.copytree(source_dir, work_dir)
+        env = os.environ.copy()
+        env["GIT_AUTHOR_NAME"] = "test"
+        env["GIT_AUTHOR_EMAIL"] = "test@test"
+        env["GIT_COMMITTER_NAME"] = "test"
+        env["GIT_COMMITTER_EMAIL"] = "test@test"
+        subprocess.run(["git", "init"], cwd=work_dir, check=True, capture_output=True)
+        subprocess.run(["git", "branch", "-m", "main"], cwd=work_dir, check=True, capture_output=True)
+        subprocess.run(["git", "add", "."], cwd=work_dir, check=True, capture_output=True)
+        subprocess.run(
+            ["git", "commit", "-m", "initial commit"], cwd=work_dir, env=env, check=True, capture_output=True
+        )
+        subprocess.run(
+            ["git", "remote", "add", "origin", bare_repo_path], cwd=work_dir, check=True, capture_output=True
+        )
+        subprocess.run(["git", "push", "origin", "main"], cwd=work_dir, env=env, check=True, capture_output=True)
+    finally:
+        # Clean up the working copy even if git commands fail
+        shutil.rmtree(work_dir, ignore_errors=True)
+    return bare_repo_path
 
 
 def make_local_stack_config(
@@ -121,20 +161,39 @@ def complete_setup(stack: LocalStack, timeout: float = 60) -> requests.Session:
     return session
 
 
+def clone_and_get_app_info(session: requests.Session, stack: LocalStack, repo_url: str) -> tuple[str, str]:
+    """Preview an app via /api/clone_and_get_app_info. Returns (clone_dir, app_name).
+
+    The clone_dir can be passed into deploy_app to skip re-cloning, matching the real
+    dashboard flow: preview the manifest first, then confirm the deploy.
+    """
+    r = session.post(f"{stack.router_url}/api/clone_and_get_app_info", json={"repo_url": repo_url}, timeout=60)
+    assert r.status_code == 200, f"clone_and_get_app_info({repo_url}) failed: {r.status_code}: {r.text[:500]}"
+    body = r.json()
+    return str(body["clone_dir"]), str(body["app_name"])
+
+
 def deploy_app(
     session: requests.Session,
     stack: LocalStack,
     repo_url: str,
     app_name: str | None = None,
     grant_manifest_permissions: bool = False,
+    clone_dir: str | None = None,
     timeout: float = 300,
 ) -> str:
-    """Deploy an app via /api/add_app and wait until it is running.  Returns the app_id."""
+    """Deploy an app via /api/add_app and wait until it is running.  Returns the app_id.
+
+    ``clone_dir``, if given (e.g. from a prior clone_and_get_app_info call), is reused
+    instead of add_app re-cloning the repo itself.
+    """
     payload: dict[str, str | bool] = {"repo_url": repo_url}
     if app_name is not None:
         payload["app_name"] = app_name
     if grant_manifest_permissions:
         payload["grant_permissions_v2"] = True
+    if clone_dir is not None:
+        payload["clone_dir"] = clone_dir
     r = session.post(f"{stack.router_url}/api/add_app", json=payload, timeout=120)
     assert r.status_code == 200, f"add_app({repo_url}) failed: {r.status_code}: {r.text[:500]}"
     body = r.json()

@@ -1,46 +1,35 @@
 {% extends "layout.html" %}
 {% block title_suffix %} - Deploy App{% endblock %}
+{% from "_components/section.html" import section_head %}
+{% from "_components/icon.html" import icon %}
 {% block content %}
-<style>
-  .catalog-callout { display: flex; align-items: center; gap: 1.2em; border: 1px solid #cfdcf5; background: #f5f8fe; border-radius: 8px; padding: 1.1em 1.4em; margin: 1.2em 0 2em; }
-  .catalog-callout .callout-icon { font-size: 2.1em; line-height: 1; }
-  .catalog-callout h3 { margin: 0 0 0.25em; }
-  .catalog-callout p { margin: 0; color: #555; }
-  .catalog-callout .callout-action { margin-left: auto; white-space: nowrap; }
-  .repo-url-row { display: flex; gap: 0.5em; margin-top: 0.6em; }
-  .repo-url-row input { flex: 1; }
-  .repo-url-row .btn { white-space: nowrap; }
-  details.url-help { margin-top: 0.8em; color: #555; font-size: 0.9em; }
-  details.url-help summary { cursor: pointer; color: #36c; }
-  details.url-help ul { margin: 0.5em 0 0; }
-</style>
 
-<h2>Deploy New App</h2>
+{% call section_head("Deploy New App") %}{% endcall %}
 
-<p id="error" class="error" style="display:none;"></p>
+<p id="error" class="notice notice--error" hidden></p>
 
 <div id="clone-form">
 
   <div class="catalog-callout">
-    <span class="callout-icon">🧭</span>
-    <div>
+    {{ icon("grid", 24, class_="callout-icon") }}
+    <div class="callout-text">
       <h3>Explore the App Catalog</h3>
       <p>Discover new apps for your compute space and install them with a click.</p>
     </div>
     {% if catalog_installed %}
-    <a class="btn btn-primary callout-action" href="{{ app_url(catalog_app_name) }}" target="_blank" rel="noopener">Browse the catalog</a>
+    <a class="btn btn--primary callout-action" href="{{ app_url(catalog_app_name) }}" target="_blank" rel="noopener">Browse the catalog</a>
     {% else %}
-    <button class="btn btn-primary callout-action" onclick="cloneApp('{{ catalog_repo_url }}')">Install the catalog</button>
+    <button class="btn btn--primary callout-action" onclick="cloneApp('{{ catalog_repo_url }}')">Install the catalog</button>
     {% endif %}
   </div>
 
-  <h3>Deploy from Git URL</h3>
-  <p>Clone a git repository containing an <code>openhost.toml</code> manifest file.
+  {% call section_head("Deploy from Git URL", level=3) %}{% endcall %}
+  <p class="hint">Clone a git repository containing a <code>cloudinabottle.toml</code> manifest file.
   Private GitHub repos are supported automatically &mdash; you'll be prompted to connect your
   GitHub account if needed.</p>
   <div class="repo-url-row">
     <input type="text" id="repo-url" required placeholder="https://github.com/user/my-app@branch">
-    <button onclick="cloneApp()" class="btn btn-primary">Deploy</button>
+    <button onclick="cloneApp()" class="btn btn--success" id="deploy-btn" disabled>Deploy</button>
   </div>
   <details class="url-help">
     <summary>URL format examples</summary>
@@ -54,22 +43,22 @@
   </details>
 </div>
 
-<div id="cloning-status" style="display:none;">
+<div id="cloning-status" hidden>
   <p>Cloning repository&hellip;</p>
 </div>
 
-<div id="installing-status" style="display:none;">
+<div id="installing-status" hidden>
   <p>Installing&hellip;</p>
 </div>
 
-<div id="confirm-section" style="display:none;">
+<div id="confirm-section" hidden>
   <div id="confirm-header"></div>
 
   <table id="manifest-table"></table>
 
-  <div id="port-mappings-section" style="display:none; margin-top:1em;">
-    <h3>Port Mappings</h3>
-    <p>This app declares extra port mappings. You can set specific host ports or leave them as 0 for auto-assignment.</p>
+  <div id="port-mappings-section" class="port-mappings" hidden>
+    {% call section_head("Port Mappings", level=3) %}{% endcall %}
+    <p class="hint">This app declares extra port mappings. You can set specific host ports or leave them as 0 for auto-assignment.</p>
     <table>
       <thead>
         <tr><th>Label</th><th>Container Port</th><th>Host Port</th><th>Status</th></tr>
@@ -82,7 +71,7 @@
   <label>App name: </label>
   <input type="text" id="app-name" style="font-family:monospace; width:12em; display:inline-block;">
   <br><br>
-  <button onclick="deployApp()" class="btn btn-primary">Authorize &amp; Deploy</button>
+  <button onclick="deployApp()" class="btn btn--success">Authorize &amp; Deploy</button>
   <button onclick="cancelDeploy()" class="btn" style="margin-left:0.5em;">Cancel</button>
 </div>
 
@@ -93,5 +82,7 @@
   "nextUrl": {{ next_url | tojson }}
 }
 </script>
+<script src="{{ static_url('js/dom.js') }}"></script>
+<script src="{{ static_url('js/http-errors.js') }}"></script>
 <script src="{{ static_url('js/add-app.js') }}"></script>
 {% endblock %}

@@ -1,0 +1,37 @@
+<svg width="15" height="15" viewBox="0 0 15 15" fill="none" xmlns="http://www.w3.org/2000/svg">
+<rect width="15" height="15" fill="#F5F5F5"/>
+<g id="CIAB-Product Styling-Review 3">
+<path d="M-1048 -722.5C-1048 -723.604 -1047.1 -724.5 -1046 -724.5H4063C4064.1 -724.5 4065 -723.605 4065 -722.5V2825.5C4065 2826.6 4064.1 2827.5 4063 2827.5H-1046C-1047.1 2827.5 -1048 2826.6 -1048 2825.5V-722.5Z" fill="#F9F9F9"/>
+<path d="M-1046 -724.5V-723.5H4063V-724.5V-725.5H-1046V-724.5ZM4065 -722.5H4064V2825.5H4065H4066V-722.5H4065ZM4063 2827.5V2826.5H-1046V2827.5V2828.5H4063V2827.5ZM-1048 2825.5H-1047V-722.5H-1048H-1049V2825.5H-1048ZM-1046 2827.5V2826.5C-1046.55 2826.5 -1047 2826.05 -1047 2825.5H-1048H-1049C-1049 2827.16 -1047.66 2828.5 -1046 2828.5V2827.5ZM4065 2825.5H4064C4064 2826.05 4063.55 2826.5 4063 2826.5V2827.5V2828.5C4064.66 2828.5 4066 2827.16 4066 2825.5H4065ZM4063 -724.5V-723.5C4063.55 -723.5 4064 -723.052 4064 -722.5H4065H4066C4066 -724.157 4064.66 -725.5 4063 -725.5V-724.5ZM-1046 -724.5V-725.5C-1047.66 -725.5 -1049 -724.157 -1049 -722.5H-1048H-1047C-1047 -723.052 -1046.55 -723.5 -1046 -723.5V-724.5Z" fill="black" fill-opacity="0.1"/>
+<g id="Openhost-populated">
+<rect width="1280" height="832" transform="translate(-915 -134.5)" fill="url(#paint0_linear_1512_280)"/>
+<g id="Frame 22">
+<g id="Frame 1618872430">
+<g id="Frame 22_2">
+<g id="Frame 1618872423">
+<g id="Component 1" opacity="0.8">
+<rect id="Rectangle 12592" x="3.125" y="4.375" width="8.75" height="1.25" fill="black"/>
+<rect id="Rectangle 12593" x="3.125" y="11.875" width="8.75" height="1.25" fill="black"/>
+<rect id="Rectangle 12594" x="1.875" y="5.625" width="1.25" height="6.25" fill="black"/>
+<rect id="Rectangle 12595" x="11.875" y="5.625" width="1.25" height="6.25" fill="black"/>
+<rect id="Rectangle 12596" x="0.625" y="8.125" width="1.25" height="1.25" fill="black"/>
+<rect id="Rectangle 12597" x="13.125" y="8.125" width="1.25" height="1.25" fill="black"/>
+<rect id="Rectangle 12598" x="6.875" y="3.125" width="1.25" height="1.25" fill="black"/>
+<rect id="Rectangle 12599" x="4.375" y="1.875" width="2.5" height="1.25" fill="black"/>
+<rect id="Rectangle 12600" x="5" y="7.5" width="1.25" height="2.5" fill="black"/>
+<rect id="Rectangle 12601" x="8.75" y="7.5" width="1.25" height="2.5" fill="black"/>
+</g>
+</g>
+</g>
+</g>
+</g>
+</g>
+</g>
+<defs>
+<linearGradient id="paint0_linear_1512_280" x1="640" y1="0" x2="640" y2="832" gradientUnits="userSpaceOnUse">
+<stop stop-color="#EEF8FF"/>
+<stop offset="0.802896" stop-color="#EEF8FF"/>
+<stop offset="1" stop-color="#ECFFE1"/>
+</linearGradient>
+</defs>
+</svg>

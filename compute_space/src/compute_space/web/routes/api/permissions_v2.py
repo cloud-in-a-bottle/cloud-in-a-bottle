@@ -12,7 +12,11 @@ from litestar import Router
 from litestar import get
 from litestar import post
 from litestar.di import NamedDependency
+from litestar.exceptions import NotFoundException
+from litestar.exceptions import PermissionDeniedException
+from litestar.exceptions import ValidationException
 from litestar.params import Body
+from litestar.params import FromQuery
 
 from compute_space.core.apps import find_app_by_name
 from compute_space.core.auth.permissions_v2 import get_all_permissions_v2
@@ -23,12 +27,8 @@ from compute_space.web.auth.auth import require_owner_auth
 from compute_space.web.auth.auth import verify_app_auth
 
 
-def _json_error(message: str, status: int) -> Response[dict[str, str]]:
-    return Response(content={"error": message}, status_code=status, media_type=MediaType.JSON)
-
-
 @get("/api/permissions/v2", guards=[require_owner_auth], sync_to_thread=False)
-def list_permissions_v2(app_id: str | None = None) -> list[dict[str, Any]]:
+def list_permissions_v2(app_id: FromQuery[str | None] = None) -> list[dict[str, Any]]:
     """List all V2 permissions, optionally filtered by app_id."""
     return [attr.asdict(p) for p in get_all_permissions_v2(app_id)]
 
@@ -38,6 +38,7 @@ def list_permissions_v2(app_id: str | None = None) -> list[dict[str, Any]]:
     guards=[require_owner_auth],
     status_code=200,
     sync_to_thread=False,
+    raises=[ValidationException],
 )
 def grant_global_scoped(
     data: Annotated[dict[str, Any], Body(media_type=MediaType.JSON)],
@@ -47,7 +48,7 @@ def grant_global_scoped(
     service_url = data.get("service_url")
     grant_payload = data.get("grant")
     if not app_id or not service_url or grant_payload is None:
-        return _json_error("app_id, service_url, and grant are required", 400)
+        raise ValidationException(detail="app_id, service_url, and grant are required")
 
     grant_permission_v2(
         consumer_app_id=app_id,
@@ -63,6 +64,7 @@ def grant_global_scoped(
     guards=[require_owner_auth],
     status_code=200,
     sync_to_thread=False,
+    raises=[ValidationException, NotFoundException],
 )
 def revoke_v2(
     data: Annotated[dict[str, Any], Body(media_type=MediaType.JSON)],
@@ -72,7 +74,7 @@ def revoke_v2(
     service_url = data.get("service_url")
     grant_payload = data.get("grant")
     if not app_id or not service_url or grant_payload is None:
-        return _json_error("app_id, service_url, and grant are required", 400)
+        raise ValidationException(detail="app_id, service_url, and grant are required")
 
     revoked = revoke_permission_v2(
         consumer_app_id=app_id,
@@ -82,7 +84,7 @@ def revoke_v2(
         provider_app_id=data.get("provider_app_id"),
     )
     if not revoked:
-        return _json_error("Permission not found", 404)
+        raise NotFoundException(detail="Permission not found")
     return Response(content={"ok": True})
 
 
@@ -91,6 +93,7 @@ def revoke_v2(
     guards=[require_app_auth],
     status_code=200,
     sync_to_thread=False,
+    raises=[ValidationException, NotFoundException, PermissionDeniedException],
 )
 def grant_app_scoped(
     request: Request[Any, Any, Any],
@@ -123,13 +126,13 @@ def grant_app_scoped(
     if consumer_app_name:
         consumer_app = find_app_by_name(consumer_app_name)
         if consumer_app is None:
-            return _json_error(f"No app named '{consumer_app_name}'", 404)
+            raise NotFoundException(detail=f"No app named '{consumer_app_name}'")
         consumer_app_id = consumer_app.app_id
     else:
         consumer_app_id = data.get("consumer_app_id")
 
     if not consumer_app_id or not service_url or grant_payload is None:
-        return _json_error("consumer_app_name (or consumer_app_id), service_url, and grant are required", 400)
+        raise ValidationException(detail="consumer_app_name (or consumer_app_id), service_url, and grant are required")
 
     # Verify the calling app is actually a registered provider for this
     # service.  Without this check any app with a token could grant
@@ -139,7 +142,7 @@ def grant_app_scoped(
         (service_url, provider_app_id),
     ).fetchone()
     if not is_provider:
-        return _json_error(f"App {provider_app_id} is not a registered provider for {service_url}", 403)
+        raise PermissionDeniedException(detail=f"App {provider_app_id} is not a registered provider for {service_url}")
 
     grant_permission_v2(
         consumer_app_id=consumer_app_id,

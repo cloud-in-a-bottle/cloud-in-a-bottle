@@ -7,7 +7,8 @@ from litestar import Request
 from litestar import Router
 from litestar import get
 from litestar.di import NamedDependency
-from litestar.exceptions import HTTPException
+from litestar.exceptions import NotFoundException
+from litestar.exceptions import ValidationException
 from litestar.params import FromPath
 from litestar.params import FromQuery
 from litestar.response import Template
@@ -15,17 +16,14 @@ from litestar.response import Template
 from compute_space.config import Config
 from compute_space.core.app_id import is_valid_app_name
 from compute_space.core.apps import deserialize_links
-from compute_space.core.apps import manifest_ungranted_permissions_v2
 from compute_space.core.auth.permissions_v2 import get_all_permissions_v2
-from compute_space.core.containers import get_docker_logs
 from compute_space.core.domains import Domain
-from compute_space.core.git_ops import UnsupportedRepoUrlError
 from compute_space.core.git_ops import get_head_sha
 from compute_space.core.git_ops import get_remote_url
 from compute_space.core.git_ops import parse_repo_url
 from compute_space.core.logging import logger
+from compute_space.core.manifest import manifest_ungranted_permissions_v2
 from compute_space.core.manifest import parse_manifest_from_string
-from compute_space.core.services_v2 import ServiceNotAvailable
 from compute_space.core.services_v2 import resolve_provider
 from compute_space.web.auth.auth import require_owner_auth
 from compute_space.web.helpers.zone import zone_for_request
@@ -42,10 +40,22 @@ CATALOG_REPO_URL = "https://github.com/cloud-in-a-bottle/app-catalog"
 @get(["/", "/dashboard"], guards=[require_owner_auth])
 async def dashboard(db: NamedDependency[sqlite3.Connection]) -> Template:
     apps_list = db.execute("SELECT * FROM apps ORDER BY name").fetchall()
-    return Template(template_name="dashboard.html", context={"apps": apps_list})
+    catalog_installed = db.execute("SELECT 1 FROM apps WHERE name = ?", (CATALOG_APP_NAME,)).fetchone() is not None
+    return Template(
+        template_name="dashboard.html",
+        context={
+            "apps": apps_list,
+            "catalog_installed": catalog_installed,
+            "catalog_app_name": CATALOG_APP_NAME,
+        },
+    )
 
 
-@get("/app_detail/{app_name:str}", guards=[require_owner_auth])
+@get(
+    "/app_detail/{app_name:str}",
+    guards=[require_owner_auth],
+    raises=[ValidationException, NotFoundException],
+)
 async def app_detail(
     request: Request[Any, Any, Any],
     app_name: FromPath[str],
@@ -54,10 +64,10 @@ async def app_detail(
     next: FromQuery[str] = "",
 ) -> Template:
     if not is_valid_app_name(app_name):
-        raise HTTPException(detail="Invalid app name", status_code=400)
+        raise ValidationException(detail="Invalid app name")
     app_row = db.execute("SELECT * FROM apps WHERE name = ?", (app_name,)).fetchone()
     if not app_row:
-        raise HTTPException(detail="App not found", status_code=404)
+        raise NotFoundException(detail="App not found")
     app_id = app_row["app_id"]
     databases = db.execute("SELECT * FROM app_databases WHERE app_id = ?", (app_id,)).fetchall()
     port_mappings = db.execute(
@@ -68,7 +78,8 @@ async def app_detail(
         "SELECT service_url, service_version FROM service_providers_v2 WHERE app_id = ? ORDER BY service_url",
         (app_id,),
     ).fetchall()
-    logs = get_docker_logs(app_name, config.temporary_data_dir, app_row["container_id"])
+    # Logs are streamed to the page over a WebSocket (see /app_logs_stream), so
+    # the initial render no longer reads the whole (possibly huge) log up front.
 
     # User-facing links the app advertised in its manifest's [[links]].
     links = deserialize_links(app_row["links"])
@@ -78,7 +89,10 @@ async def app_detail(
     # so the "needs approval" set the owner sees here matches what an update
     # would refuse to apply.
     granted_records = get_all_permissions_v2(consumer_app_id=app_id)
-    granted_perms = [{"service_url": p.service_url, "grant": p.grant, "scope": p.scope} for p in granted_records]
+    granted_perms = [
+        {"service_url": p.service_url, "grant": p.grant, "scope": p.scope, "provider_app_id": p.provider_app_id}
+        for p in granted_records
+    ]
     ungranted_perms: list[dict[str, object]] = []
     manifest_raw = app_row["manifest_raw"]
     if manifest_raw:
@@ -108,7 +122,6 @@ async def app_detail(
             "databases": databases,
             "port_mappings": port_mappings,
             "services_provided": services_provided,
-            "logs": logs,
             "next_url": next,
             "granted_permissions": granted_perms,
             "ungranted_permissions": ungranted_perms,
@@ -152,7 +165,7 @@ async def _resolve_edit_app(
         repo_path = str(config.openhost_repo_path)
     try:
         base_url, ref_from_url = parse_repo_url(repo_url)
-    except UnsupportedRepoUrlError:
+    except ValueError:
         # Legacy SSH upstream (set_app_remote rejects these now): fall back to a
         # plain link to the raw URL rather than failing the detail page render.
         return {"mode": "repo", "href": repo_url}
@@ -166,7 +179,7 @@ async def _resolve_edit_app(
 
     try:
         provider_app_id, _, _, endpoint = resolve_provider(EDIT_APP_SERVICE_URL, EDIT_APP_VERSION_SPEC, db)
-    except ServiceNotAvailable:
+    except RuntimeError:
         return repo_link_fallback
 
     if not ref:
@@ -206,7 +219,27 @@ async def add_app(
     )
 
 
+@get(
+    "/update_review/{app_name:str}",
+    guards=[require_owner_auth],
+    raises=[ValidationException, NotFoundException],
+)
+async def update_review(app_name: FromPath[str], db: NamedDependency[sqlite3.Connection]) -> Template:
+    """Full-page review of the settings an update changes, mirroring the deploy
+    page. The diff itself is produced by the reload gate and handed to this page
+    by the browser (sessionStorage); the page validates the app exists."""
+    if not is_valid_app_name(app_name):
+        raise ValidationException(detail="Invalid app name")
+    app_row = db.execute("SELECT app_id, name FROM apps WHERE name = ?", (app_name,)).fetchone()
+    if not app_row:
+        raise NotFoundException(detail="App not found")
+    return Template(
+        template_name="update_review.html",
+        context={"app": {"app_id": app_row["app_id"], "name": app_row["name"]}},
+    )
+
+
 pages_apps_routes = Router(
     path="/",
-    route_handlers=[dashboard, app_detail, add_app],
+    route_handlers=[dashboard, app_detail, add_app, update_review],
 )

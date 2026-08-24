@@ -3,15 +3,15 @@ var config = JSON.parse(document.getElementById('page-config').textContent);
 // ─── Rename ───
 
 function editName() {
-  document.getElementById('name-display').style.display = 'none';
-  document.getElementById('name-edit').style.display = '';
+  document.getElementById('name-display').hidden = true;
+  document.getElementById('name-edit').hidden = false;
   document.getElementById('name-input').focus();
   document.getElementById('name-error').textContent = '';
 }
 
 function cancelName() {
-  document.getElementById('name-edit').style.display = 'none';
-  document.getElementById('name-display').style.display = '';
+  document.getElementById('name-edit').hidden = true;
+  document.getElementById('name-display').hidden = false;
 }
 
 function saveName() {
@@ -25,7 +25,7 @@ function saveName() {
   })
     .then(function(r) { return r.json().then(function(d) { return {ok: r.ok, data: d}; }); })
     .then(function(res) {
-      if (!res.ok) { errEl.textContent = res.data.error; return; }
+      if (!res.ok) { errEl.textContent = responseErrorMessage(res.data, 'Failed to rename app'); return; }
       // The detail URL is keyed by name, so a rename changes it.
       window.location.href = '/app_detail/' + encodeURIComponent(res.data.name);
     });
@@ -33,16 +33,25 @@ function saveName() {
 
 // ─── Edit git upstream ───
 
+function updateSaveRemoteState() {
+  var input = document.getElementById('remote-input');
+  document.getElementById('save-remote-btn').disabled = input.value === input.defaultValue;
+}
+
 function editRemote() {
-  document.getElementById('remote-display').style.display = 'none';
-  document.getElementById('remote-edit').style.display = '';
-  document.getElementById('remote-input').focus();
+  document.getElementById('remote-display').hidden = true;
+  document.getElementById('remote-edit').hidden = false;
+  var input = document.getElementById('remote-input');
+  // Reopen from the saved upstream so Save starts disabled until edited.
+  input.value = input.defaultValue;
   document.getElementById('remote-error').textContent = '';
+  updateSaveRemoteState();
+  input.focus();
 }
 
 function cancelRemote() {
-  document.getElementById('remote-edit').style.display = 'none';
-  document.getElementById('remote-display').style.display = '';
+  document.getElementById('remote-edit').hidden = true;
+  document.getElementById('remote-display').hidden = false;
 }
 
 function saveRemote() {
@@ -57,12 +66,16 @@ function saveRemote() {
   })
     .then(function(r) { return r.json().then(function(d) { return {ok: r.ok, data: d}; }); })
     .then(function(res) {
-      if (!res.ok || (res.data && res.data.error)) {
-        errEl.textContent = (res.data && res.data.error) || 'Failed to save';
+      if (!res.ok) {
+        errEl.textContent = responseErrorMessage(res.data, 'Failed to save');
         return;
       }
-      // Upstream persisted; now pull the new ref and rebuild. Reuses the
-      // oauth-aware /reload_app?update flow (it may redirect for github auth).
+      // Upstream is saved: collapse the edit form back to the read-only view,
+      // then reuse the oauth-aware update flow (may redirect for github auth).
+      var displayCode = document.querySelector('#remote-display code');
+      if (displayCode) displayCode.textContent = res.data.repo_url;
+      input.defaultValue = res.data.repo_url;
+      cancelRemote();
       appAction(config.reloadAppUrl, {update: true}, {label: 'Updating & reloading'});
     })
     .catch(function() { errEl.textContent = 'Failed to save'; });
@@ -94,9 +107,8 @@ function setActionsBusy(label) {
 }
 
 function appAction(url, data, opts) {
-  // opts: { isRemove?: bool, label?: string }. isRemove navigates to
-  // /dashboard on success; otherwise location.reload(). label is the
-  // text shown next to the action buttons while the request is in flight.
+  // opts: { isRemove?: bool, label?: string }. isRemove navigates to /dashboard
+  // on success rather than reloading the (now-gone) detail page.
   opts = opts || {};
   var label = opts.label || (opts.isRemove ? 'Removing' : 'Working');
   var clear = setActionsBusy(label);
@@ -108,20 +120,21 @@ function appAction(url, data, opts) {
   })
     .then(function(r) { return r.json().then(function(d) { return {ok: r.ok, data: d}; }); })
     .then(function(res) {
-      // An update whose manifest declares new service permissions is refused
-      // until the owner explicitly approves them (mirrors install-time
-      // approval). Prompt, and on confirmation re-issue the request with
-      // approve_new_permissions so the grants are written before the reload.
-      if (res.ok && res.data && res.data.permissions_required) {
+      // Hand off to full-page review when manifest changes require approval;
+      // re-issues reload with approve_new_permissions once approved.
+      if (res.ok && res.data && res.data.review_required) {
         if (clear) clear();
-        if (confirmNewPermissions(res.data.permissions_required)) {
-          var approved = Object.assign({}, data || {}, {approve_new_permissions: true});
-          appAction(url, approved, opts);
-        }
+        try {
+          sessionStorage.setItem('openhost.updateReview.' + config.appId, JSON.stringify({
+            settings_changed: res.data.settings_changed || [],
+            permissions_required: res.data.permissions_required || [],
+          }));
+        } catch (e) { /* sessionStorage unavailable; review page shows a fallback */ }
+        window.location.href = config.updateReviewUrl;
         return;
       }
-      if (!res.ok || (res.data && res.data.error)) {
-        var msg = (res.data && res.data.error) || 'Request failed';
+      if (!res.ok) {
+        var msg = responseErrorMessage(res.data, 'Request failed');
         if (clear) clear(msg);
         alert(msg);
         return;
@@ -133,20 +146,6 @@ function appAction(url, data, opts) {
       if (clear) clear('Request failed');
       alert('Request failed');
     });
-}
-
-// Show the owner exactly which new permissions an update wants and get an
-// explicit yes/no. Returns true if the owner approved.
-function confirmNewPermissions(perms) {
-  var lines = perms.map(function(p) {
-    var label = p.shortname ? (p.shortname + ' (' + p.service_url + ')') : p.service_url;
-    return '\u2022 ' + label + ': ' + JSON.stringify(p.grant);
-  });
-  return confirm(
-    'This update requests new service permissions:\n\n' +
-    lines.join('\n') +
-    '\n\nApprove these and continue updating?'
-  );
 }
 
 // ─── Toast ───
@@ -163,7 +162,7 @@ function showToast(message, actions) {
     actionsDiv.className = 'toast-actions';
     actions.forEach(function(a) {
         var btn = document.createElement('button');
-        btn.className = 'btn' + (a.primary ? ' btn-primary' : '');
+        btn.className = 'btn' + (a.primary ? ' btn--primary' : '');
         btn.textContent = a.label;
         btn.onclick = function() { toast.remove(); a.onClick(); };
         actionsDiv.appendChild(btn);
@@ -176,9 +175,13 @@ function showToast(message, actions) {
 function clearCacheAndReload() {
     showToast('Clearing build cache...', []);
     fetch(config.dropBuildCacheUrl, {method: 'POST', credentials: 'same-origin'})
-        .then(function(r) { return r.json(); })
-        .then(function(data) {
-            if (!data.ok) { alert('Failed to clear cache: ' + (data.error || 'unknown error')); return; }
+        .then(readJsonResponse)
+        .then(function(res) {
+            if (!res.ok) {
+                var data = res.data;
+                alert('Failed to clear cache: ' + responseErrorMessage(data, 'unknown error'));
+                return;
+            }
             appAction(config.reloadAppUrl, null, {label: 'Reloading'});
         })
         .catch(function() { alert('Failed to clear cache'); });
@@ -193,22 +196,104 @@ function clearCacheAndReload() {
     var nextUrl = config.nextUrl;
     var toastKey = 'cache-toast-shown-' + config.appStatusUrl;
 
+    // The container the stream follows; when it changes we reset to the new logs.
+    var streamContainerId = null;
+
+    var MAX_LOG_CHARS = 2 * 1024 * 1024;
+    var logPrimed = false;
+    // Set when a (re)connect's first message arrives; the next flush replaces the pane's
+    // contents in one paint rather than blanking it first (which flashed the scroll to top).
+    var needsReset = false;
+
+    // Buffer incoming lines and flush once per animation frame: the backlog arrives
+    // one WebSocket message per line, so batching avoids reflowing the <pre> each line.
+    var pending = [];
+    var pendingLen = 0;
+    var flushQueued = false;
+    var logLen = 0;
+
     function isNearBottom(el) {
         return el.scrollHeight - el.scrollTop - el.clientHeight < 50;
     }
 
-    function updateLog(el, text) {
+    function hasSelectionIn(el) {
         var sel = window.getSelection();
-        if (sel && !sel.isCollapsed && el.contains(sel.anchorNode)) return;
-        var wasAtBottom = isNearBottom(el);
-        el.textContent = text || 'No log output available.';
-        if (wasAtBottom) el.scrollTop = el.scrollHeight;
+        return !!(sel && !sel.isCollapsed && el.contains(sel.anchorNode));
     }
 
-    function fetchLogs() {
-        fetch(config.appLogsUrl)
-            .then(function(r) { return r.text(); })
-            .then(function(text) { updateLog(logEl, text); });
+    function flushLog() {
+        flushQueued = false;
+        if (!pending.length) return;
+        var wasAtBottom = isNearBottom(logEl);
+        var text = pending.join('');
+        pending = [];
+        pendingLen = 0;
+        if (needsReset) {
+            // Replace the stale contents in the same flush that refills them, so the
+            // emptied <pre> never paints on its own and jerks the scroll to the top.
+            needsReset = false;
+            logEl.textContent = text;
+            logLen = text.length;
+        } else {
+            // A text node leaves existing content and any active selection intact.
+            logEl.appendChild(document.createTextNode(text));
+            logLen += text.length;
+        }
+        if (logLen > MAX_LOG_CHARS && !hasSelectionIn(logEl)) {
+            var trimmed = logEl.textContent.slice(-MAX_LOG_CHARS);
+            logEl.textContent = trimmed;
+            logLen = trimmed.length;
+        }
+        if (wasAtBottom) logEl.scrollTop = logEl.scrollHeight;
+    }
+
+    function appendLog(text) {
+        if (!text) return;
+        pending.push(text);
+        pendingLen += text.length;
+        // If frames are paused (backgrounded tab) drop all but the most recent MAX_LOG_CHARS.
+        while (pending.length > 1 && pendingLen - pending[0].length > MAX_LOG_CHARS) {
+            pendingLen -= pending.shift().length;
+        }
+        if (!flushQueued) {
+            flushQueued = true;
+            requestAnimationFrame(flushLog);
+        }
+    }
+
+    // Tracked so a reset can tell the old socket's onclose not to reconnect.
+    var currentWs = null;
+
+    function startLogStream() {
+        var proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        var ws = new WebSocket(proto + '//' + window.location.host + config.appLogsStreamUrl);
+        currentWs = ws;
+        ws.onmessage = function(e) {
+            if (ws !== currentWs) return;  // superseded by a reset; don't consume the reprime
+            // First message of a (re)connect replays the tail: drop anything buffered from
+            // the old socket and let the next flush swap in the fresh contents atomically.
+            if (!logPrimed) {
+                logPrimed = true;
+                needsReset = true;
+                pending = []; pendingLen = 0;
+            }
+            appendLog(e.data + '\n');
+        };
+        ws.onclose = function() {
+            if (ws !== currentWs) return;  // superseded by a reset
+            // The server holds the socket open past end-of-log, so a close is a real
+            // drop — reconnect (which re-primes to replay the tail).
+            logPrimed = false;
+            setTimeout(startLogStream, 2000);
+        };
+        ws.onerror = function() { ws.close(); };
+    }
+
+    function resetLogStream() {
+        var old = currentWs;
+        logPrimed = false;
+        startLogStream();  // reassigns currentWs
+        if (old && old !== currentWs) old.close();
     }
 
     function showCacheCorruptToast() {
@@ -223,10 +308,8 @@ function clearCacheAndReload() {
         );
     }
 
-    // While status='removing', disable the action buttons and show
-    // "Removing…". Re-enable on transition to 'error' (failed teardown);
-    // a successful teardown deletes the row and we redirect via the
-    // 404 branch in pollStatus.
+    // Disables the action buttons while removing; re-enabled only if teardown
+    // fails (status 'error'). A successful teardown 404s and redirects instead.
     var clearRemovingChrome = null;
     function applyRemovingChrome() {
         if (clearRemovingChrome) return;
@@ -252,7 +335,12 @@ function clearCacheAndReload() {
                 if (data.status !== appStatus) {
                     appStatus = data.status;
                     statusEl.textContent = appStatus;
-                    statusEl.className = 'status-' + appStatus;
+                    statusEl.className = 'status-value status-' + appStatus;
+                }
+                // Adopt the first container_id silently; reset only on a later change.
+                if (data.container_id && data.container_id !== streamContainerId) {
+                    if (streamContainerId !== null) resetLogStream();
+                    streamContainerId = data.container_id;
                 }
                 if (appStatus === 'removing') {
                     applyRemovingChrome();
@@ -279,13 +367,14 @@ function clearCacheAndReload() {
             });
     }
 
-    // If the page loads with the app already in 'removing', reflect
-    // that before the first poll fires.
     if (appStatus === 'removing') {
         applyRemovingChrome();
     }
 
     logEl.scrollTop = logEl.scrollHeight;
+
+    // Stream regardless of status: a stopped/errored app still has a build log to replay.
+    startLogStream();
 
     // 'removing' polls so the page learns when the row vanishes (404).
     if (
@@ -295,7 +384,10 @@ function clearCacheAndReload() {
         appStatus === 'removing'
     ) {
         var interval = (appStatus === 'building') ? 1000 : 3000;
-        setInterval(fetchLogs, interval);
         setInterval(pollStatus, interval);
     }
 })();
+
+// Grey out Save until the git upstream input actually differs from what's saved.
+var remoteInput = document.getElementById('remote-input');
+if (remoteInput) remoteInput.addEventListener('input', updateSaveRemoteState);
