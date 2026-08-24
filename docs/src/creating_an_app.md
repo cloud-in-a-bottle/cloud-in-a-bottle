@@ -111,6 +111,8 @@ if __name__ == "__main__":
 - For apps that implement their own auth, routes can be set as public, and requests that have been authenticated by the router will bear a `X-OpenHost-Is-Owner=true` header.
 - To surface interesting paths on your app (e.g. an admin console) to the user on the dashboard, declare them in `[[links]]` (each with a `name` and `path`). See the [manifest spec](manifest_spec.md).
 
+### Environment variables
+
 The router injects these environment variables into your app:
 
 | Variable | Example | Description                                                                                                     |

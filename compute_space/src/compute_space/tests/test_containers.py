@@ -76,9 +76,9 @@ def test_build_image_applies_memory_limit(monkeypatch: pytest.MonkeyPatch) -> No
     _patch_subprocess_run(monkeypatch, fake_run)
 
     build_image("myapp", "/tmp/repo", "Dockerfile", temp_data_dir=None, memory_mb=512)
-    # --memory caps build RAM; --memory-swap=-1 allows unlimited swap so a
-    # build that needs more spills to swap instead of OOMing. Both go to
-    # `podman build`, before the build context path.
+    # --memory caps build RAM; --memory-swap set equal to --memory gives the
+    # build zero swap (the combined memory+swap ceiling == the memory limit).
+    # Both go to `podman build`, before the build context path.
     assert calls[0] == [
         "podman",
         "build",
@@ -87,7 +87,7 @@ def test_build_image_applies_memory_limit(monkeypatch: pytest.MonkeyPatch) -> No
         "-f",
         "/tmp/repo/Dockerfile",
         "--memory=512m",
-        "--memory-swap=-1",
+        "--memory-swap=512m",
         "/tmp/repo",
     ]
 
@@ -929,17 +929,29 @@ def test_container_image_storage_bytes_parses_images_row(monkeypatch: pytest.Mon
         ]
     )
     _patch_subprocess_run(monkeypatch, lambda *a, **k: _FakeCompleted(stdout=df_json))
-    assert containers.container_image_storage_bytes() == 4567
+    assert containers.container_image_storage_bytes() == (4567, 100)
 
 
-def test_container_image_storage_bytes_none_on_nonzero_exit(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_container_image_storage_bytes_returns_none_values_on_nonzero_exit(monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_subprocess_run(monkeypatch, lambda *a, **k: _FakeCompleted(returncode=1))
-    assert containers.container_image_storage_bytes() is None
+    assert containers.container_image_storage_bytes() == (None, None)
 
 
-def test_container_image_storage_bytes_none_when_podman_missing(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_container_image_storage_bytes_handles_missing_values_independently(monkeypatch: pytest.MonkeyPatch) -> None:
+    df_json = json.dumps([{"Type": "Images", "RawReclaimable": 100}])
+    _patch_subprocess_run(monkeypatch, lambda *a, **k: _FakeCompleted(stdout=df_json))
+    assert containers.container_image_storage_bytes() == (None, 100)
+
+    df_json = json.dumps([{"Type": "Images", "RawSize": 4567}])
+    _patch_subprocess_run(monkeypatch, lambda *a, **k: _FakeCompleted(stdout=df_json))
+    assert containers.container_image_storage_bytes() == (4567, None)
+
+
+def test_container_image_storage_bytes_returns_none_values_when_podman_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     def _raise(*a, **k):
         raise FileNotFoundError("podman")
 
     _patch_subprocess_run(monkeypatch, _raise)
-    assert containers.container_image_storage_bytes() is None
+    assert containers.container_image_storage_bytes() == (None, None)

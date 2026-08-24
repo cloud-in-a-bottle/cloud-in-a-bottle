@@ -1,0 +1,331 @@
+/* Element-level defaults and the sky/grass page frame. Component classes live
+   in components.css. */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  scrollbar-gutter: stable;
+  -webkit-text-size-adjust: 100%;
+}
+
+/* A class-level `display` beats the UA stylesheet's `[hidden] { display: none }`,
+   which silently breaks any JS that toggles the attribute (the dashboard filter
+   and its poll loop both do). */
+[hidden] {
+  display: none !important;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  padding: 0 var(--layout-gutter) calc(var(--grass-height) + var(--space-7));
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  line-height: var(--leading-snug);
+  color: var(--color-text);
+  background: linear-gradient(180deg, var(--color-sky) 0%, var(--color-sky) 80%, var(--color-meadow) 100%) fixed;
+}
+
+/* Decorative bands. The clouds scroll with the document, the grass stays
+   pinned to the bottom of the viewport so the frame reads the same on a short
+   dashboard and a long settings page. */
+.deco-clouds,
+.deco-grass {
+  pointer-events: none;
+  user-select: none;
+  z-index: 0;
+}
+
+/* The band clips: clouds drift out past both edges, and without `overflow`
+   that travel widens the document and puts a scrollbar on every page. */
+.deco-clouds {
+  position: absolute;
+  top: 20px;
+  left: 0;
+  right: 0;
+  height: var(--cloud-band-height);
+  overflow: hidden;
+}
+
+/* One sprite, six placements. Sizes, heights and opacities are all different,
+   and the drift periods share no common multiple, so the sky never resolves
+   into a repeating pattern. Lower clouds are smaller and fainter, which reads
+   as distance. */
+.cloud {
+  position: absolute;
+  left: var(--cloud-x);
+  top: var(--cloud-y);
+  width: var(--cloud-w);
+  aspect-ratio: 2.671;
+  background: url("../img/deco/cloud.svg") no-repeat center / 100% 100%;
+  opacity: var(--cloud-opacity);
+  will-change: transform;
+}
+
+/* Leaves fully off the left edge and arrives fully off the right, so the
+   restart is never visible. A negative delay drops each cloud in partway
+   through its own cycle, spreading them across the sky on first paint. */
+@keyframes cloud-drift {
+  from { transform: translateX(calc(-1 * (var(--cloud-x) + var(--cloud-w)))); }
+  to { transform: translateX(calc(100vw - var(--cloud-x))); }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .cloud {
+    animation: cloud-drift var(--cloud-duration) linear infinite;
+    animation-delay: var(--cloud-delay);
+  }
+}
+
+.cloud--1 { --cloud-x: 4vw; --cloud-y: 1%; --cloud-w: clamp(58px, 7.4vw, 104px); --cloud-opacity: 0.95; --cloud-duration: 168s; --cloud-delay: -18s; }
+.cloud--2 { --cloud-x: 61vw; --cloud-y: 13%; --cloud-w: clamp(44px, 5.4vw, 76px); --cloud-opacity: 0.85; --cloud-duration: 131s; --cloud-delay: -96s; }
+.cloud--3 { --cloud-x: 30vw; --cloud-y: 7%; --cloud-w: clamp(70px, 9vw, 126px); --cloud-opacity: 1; --cloud-duration: 206s; --cloud-delay: -143s; }
+.cloud--4 { --cloud-x: 86vw; --cloud-y: 27%; --cloud-w: clamp(38px, 4.6vw, 64px); --cloud-opacity: 0.72; --cloud-duration: 117s; --cloud-delay: -52s; }
+.cloud--5 { --cloud-x: 15vw; --cloud-y: 36%; --cloud-w: clamp(62px, 8vw, 112px); --cloud-opacity: 0.78; --cloud-duration: 187s; --cloud-delay: -171s; }
+.cloud--6 { --cloud-x: 49vw; --cloud-y: 51%; --cloud-w: clamp(50px, 6.2vw, 88px); --cloud-opacity: 0.62; --cloud-duration: 149s; --cloud-delay: -110s; }
+.cloud--7 { --cloud-x: 73vw; --cloud-y: 68%; --cloud-w: clamp(54px, 6.8vw, 96px); --cloud-opacity: 0.5; --cloud-duration: 223s; --cloud-delay: -35s; }
+.cloud--8 { --cloud-x: 22vw; --cloud-y: 84%; --cloud-w: clamp(34px, 4vw, 58px); --cloud-opacity: 0.4; --cloud-duration: 97s; --cloud-delay: -71s; }
+
+.deco-grass {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: var(--grass-height);
+  background: url("../img/deco/grass.svg") repeat-x bottom / auto 100%;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  html {
+    scroll-behavior: smooth;
+  }
+}
+
+/* Content sits above the decorations. */
+.layout {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  max-width: var(--layout-width);
+  margin: 0 auto;
+  padding-top: var(--space-8);
+}
+
+/* Terminal and logs are viewers -- they want the window, not the column. */
+.layout--full {
+  max-width: none;
+}
+
+.layout--narrow {
+  max-width: var(--layout-width-narrow);
+}
+
+/* Fewer clouds on a phone, where the band is short and the content column
+   fills the width. */
+@media (max-width: 640px) {
+  .cloud--4,
+  .cloud--6,
+  .cloud--8 {
+    display: none;
+  }
+}
+
+h1,
+h2,
+h3,
+h4 {
+  font-weight: var(--weight-semibold);
+  line-height: var(--leading-tight);
+  letter-spacing: var(--tracking-heading);
+  margin: 0;
+}
+
+h2 {
+  font-size: var(--text-md);
+  margin-top: var(--space-7);
+  margin-bottom: var(--space-3);
+}
+
+h3 {
+  font-size: var(--text-sm);
+  margin-top: var(--space-6);
+  margin-bottom: var(--space-2);
+}
+
+p {
+  margin: 0 0 var(--space-3);
+}
+
+a {
+  color: var(--color-text);
+  text-underline-offset: 2px;
+}
+
+a:hover {
+  text-decoration-thickness: 2px;
+}
+
+code,
+pre {
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+}
+
+/* Tables share the app list's vocabulary: horizontal rules only, so columns are
+   carried by mono alignment rather than a grid of borders. Wide tables scroll
+   inside .table-scroll rather than forcing the page wide; .spec-list is the
+   responsive replacement for key/value tables. */
+table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: var(--space-4) 0;
+  background: var(--color-surface);
+  border: var(--border-w) solid var(--color-border);
+  font-size: var(--text-xs);
+}
+
+th,
+td {
+  padding: var(--space-2) var(--space-4);
+  border-bottom: var(--border-w) solid var(--color-border);
+  text-align: left;
+  vertical-align: top;
+}
+
+tr:last-child td {
+  border-bottom: 0;
+}
+
+th {
+  background: var(--color-surface-raised);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+  white-space: nowrap;
+  opacity: 0.8;
+}
+
+.table-scroll {
+  margin: var(--space-4) 0;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  box-shadow: var(--shadow-card);
+}
+
+.table-scroll table {
+  margin: 0;
+}
+
+/* Forms */
+input,
+select,
+textarea,
+button {
+  font: inherit;
+  color: inherit;
+}
+
+input[type="text"],
+input[type="password"],
+input[type="number"],
+input[type="search"],
+input[type="url"],
+input[type="email"],
+select,
+textarea {
+  width: 100%;
+  padding: var(--space-1) var(--space-2);
+  background: var(--color-surface-raised);
+  border: var(--border-w) solid var(--color-border);
+  border-radius: var(--radius-none);
+  font-size: var(--text-xs);
+}
+
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+button:focus-visible,
+a:focus-visible,
+[tabindex]:focus-visible {
+  outline: 2px solid var(--color-text);
+  outline-offset: 1px;
+}
+
+input.invalid {
+  border-color: var(--color-danger-text);
+}
+
+label {
+  font-size: var(--text-xs);
+}
+
+/* Utilities carried over from the previous stylesheet so existing pages keep
+   working while they are migrated. */
+.muted {
+  color: var(--color-text-muted);
+  font-size: var(--text-xs);
+}
+
+/* Explanatory prose under a control. One step up the scale from the smallest
+   text, with the roomier leading, because these are sentences to be read
+   rather than labels to be scanned. */
+.hint {
+  color: var(--color-text-subtle);
+  font-size: var(--text-sm);
+  line-height: var(--leading-snug);
+}
+
+.error {
+  color: var(--color-danger-text);
+}
+
+.field-error {
+  color: var(--color-danger-text);
+  font-size: var(--text-xs);
+}
+
+.error-inline {
+  background: var(--color-danger-bg);
+  border: var(--border-w) solid var(--color-danger-border);
+  padding: var(--space-2);
+  margin-top: var(--space-1);
+  font-size: var(--text-xs);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 12em;
+  overflow-y: auto;
+}
+
+.log-output {
+  background: #1e1e1e;
+  color: #d4d4d4;
+  padding: var(--space-4);
+  font-size: var(--text-xs);
+  overflow: auto;
+  max-height: 30em;
+}
+
+.control-row {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  flex-wrap: wrap;
+  margin: var(--space-4) 0;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}

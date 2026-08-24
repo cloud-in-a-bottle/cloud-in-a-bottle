@@ -280,7 +280,7 @@ async def _collect_git_info(repo_path: Path | None) -> GitInfo | None:
         sha = await get_head_sha(repo_path)
         dirty = await is_dirty(repo_path)
     except Exception:
-        logger.opt(exception=True).warning("Failed to read git info for %s", repo_path)
+        logger.opt(exception=True).warning("Failed to read git info for {}", repo_path)
         return None
     remote_url: str | None
     try:

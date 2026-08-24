@@ -160,6 +160,10 @@ openhost = { path = ".", editable = true }
 default = { solve-group = "default" }
 dev = { features = ["dev"], solve-group = "default" }
 
+[tool.pixi.feature.dev.dependencies]
+# `just` runs the recipes in ./justfile; keep it in the env so a fresh clone has it.
+just = "*"
+
 [tool.pixi.feature.dev.pypi-dependencies]
 pytest = ">=8.0"
 requests = ">=2.31"

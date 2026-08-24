@@ -202,7 +202,9 @@ def admin_session(router_process: subprocess.Popen[bytes], config: Config) -> re
     assert r.status_code == 200, f"Router setup failed: {r.status_code}"
 
     # /login lives only on the full app; use it as a "full app is up" probe.
-    deadline = time.time() + 30
+    # Generous ceiling: this is a poll, so it returns the moment the app is up.
+    # The handoff has timed out at 30s on a loaded CI runner mid-container-suite.
+    deadline = time.time() + 90
     while time.time() < deadline:
         try:
             probe = requests.get(f"{base_url}/login", timeout=1, allow_redirects=False)

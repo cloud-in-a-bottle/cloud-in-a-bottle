@@ -80,4 +80,4 @@ def test_app_detail_renders_error_row(cfg: Any) -> None:
 
         resp_ok = client.get("/app_detail/ok-app")
         assert resp_ok.status_code == 200
-        assert '<tr id="app-error-row" style="display:none;">' in resp_ok.text
+        assert '<tr id="app-error-row" hidden>' in resp_ok.text

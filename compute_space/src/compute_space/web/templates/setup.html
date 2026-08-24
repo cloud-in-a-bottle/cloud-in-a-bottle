@@ -1,93 +1,94 @@
-<!DOCTYPE html>
-<html>
-<head>
-  <meta name="robots" content="noindex">
-  <title>Cloud in a Bottle - Setup</title>
-  <style>
-    body { font-family: -apple-system, system-ui, sans-serif; max-width: 400px; margin: 4em auto; padding: 0 1em; }
-    input { display: block; margin: 0.5em 0; padding: 0.4em; width: 100%; box-sizing: border-box; }
-    .error { color: #c00; }
-    .hint { font-size: 0.85em; color: #666; margin: 0.25em 0 0.5em; }
-    .field-error { color: #c00; font-size: 0.85em; margin: 0.25em 0 0.5em; display: none; }
-    input.invalid { border-color: #c00; outline-color: #c00; }
-  </style>
-</head>
-<body>
-  <h2>Cloud in a Bottle Setup</h2>
-  <p>Set a password for this Cloud in a Bottle instance.</p>
-  {% if error %}<p class="error">{{ error }}</p>{% endif %}
-  <form method="post" id="setup-form">
-    {% if claim %}<input type="hidden" name="claim" value="{{ claim }}">{% endif %}
-    <label>Username (optional)</label>
+{% extends "_layout_narrow.html" %}
+{% from "_components/info_tip.html" import info_tip %}
+{% block title_suffix %} - Setup{% endblock %}
+
+{% block content %}
+<h2>Set up this compute space</h2>
+<p class="hint">Choose a password for this Cloud in a Bottle instance.</p>
+{% if error %}<p class="error">{{ error }}</p>{% endif %}
+
+<form method="post" id="setup-form">
+  {% if claim %}<input type="hidden" name="claim" value="{{ claim }}">{% endif %}
+
+  <div class="field">
+    <div class="field__head">
+      <label for="username">Username (optional)</label>
+      {%- call info_tip("username-hint", "What the username is for") %}
+      <p>Used by apps you install (PeerTube, Mastodon, etc.) as your account name. Leave
+        blank to use the default <code>owner</code>; you can change this later from the
+        Settings page. Sign-in only requires the password.</p>
+      <p>Allowed: lowercase letters, digits, and <code>.</code> <code>_</code>
+        <code>-</code>; must start with a letter or digit; max&nbsp;30 characters. No
+        <code>@</code>, spaces, or uppercase.</p>
+      {%- endcall %}
+    </div>
     <input type="text" name="username" id="username" autocomplete="username"
            value="{{ username or '' }}"
            pattern="[a-z0-9][a-z0-9._\-]{0,29}" maxlength="30"
-           aria-describedby="username-hint username-error">
-    <p class="field-error" id="username-error"></p>
-    <p class="hint" id="username-hint">
-      Used by apps you install (PeerTube, Mastodon, etc.) as your
-      account name. Leave blank to use the default
-      <code>owner</code>; you can change this later from the
-      Settings page. Sign-in only requires the password.
-      <br>
-      Allowed: lowercase letters, digits, and <code>.</code>
-      <code>_</code> <code>-</code>; must start with a letter or
-      digit; max&nbsp;30 characters. No <code>@</code>, spaces, or
-      uppercase.
-    </p>
-    <label>Password</label>
-    <input type="password" name="password" required>
-    <label>Confirm Password</label>
-    <input type="password" name="confirm_password" required>
-    <input type="submit" id="submit-btn" value="Set Password">
-  </form>
-  <script src="/static/js/username-validation.js"></script>
-  <script>
-    // Live client-side username validation lives in the shared
-    // /static/js/username-validation.js (mirrors the server-side
-    // validate_owner_username rule). The field is optional here, so an
-    // empty value is acceptable and falls back to the default 'owner'.
-    var usernameError = window.OpenHostUsername.usernameError;
+           aria-describedby="username-error">
+    <p class="field-error" id="username-error" hidden></p>
+  </div>
 
-    var usernameInput = document.getElementById('username');
-    var usernameErrorEl = document.getElementById('username-error');
+  <label class="field">
+    <span>Password</span>
+    <input type="password" name="password" autocomplete="new-password" required>
+  </label>
+  <label class="field">
+    <span>Confirm password</span>
+    <input type="password" name="confirm_password" autocomplete="new-password" required>
+  </label>
 
-    function validateUsername() {
-      var err = usernameError(usernameInput.value.trim());
-      if (err) {
-        usernameErrorEl.textContent = err;
-        usernameErrorEl.style.display = 'block';
-        usernameInput.classList.add('invalid');
-        usernameInput.setCustomValidity(err);
-      } else {
-        usernameErrorEl.textContent = '';
-        usernameErrorEl.style.display = 'none';
-        usernameInput.classList.remove('invalid');
-        usernameInput.setCustomValidity('');
-      }
-      return !err;
+  <div class="actions">
+    <input type="submit" id="submit-btn" class="btn btn--primary" value="Set password">
+  </div>
+</form>
+
+<script src="{{ static_url('js/username-validation.js') }}"></script>
+<script>
+  // Live client-side username validation lives in the shared
+  // /static/js/username-validation.js (mirrors the server-side
+  // validate_owner_username rule). The field is optional here, so an
+  // empty value is acceptable and falls back to the default 'owner'.
+  var usernameError = window.OpenHostUsername.usernameError;
+
+  var usernameInput = document.getElementById('username');
+  var usernameErrorEl = document.getElementById('username-error');
+
+  function validateUsername() {
+    var err = usernameError(usernameInput.value.trim());
+    if (err) {
+      usernameErrorEl.textContent = err;
+      usernameErrorEl.hidden = false;
+      usernameInput.classList.add('invalid');
+      usernameInput.setCustomValidity(err);
+    } else {
+      usernameErrorEl.textContent = '';
+      usernameErrorEl.hidden = true;
+      usernameInput.classList.remove('invalid');
+      usernameInput.setCustomValidity('');
     }
+    return !err;
+  }
 
-    usernameInput.addEventListener('input', validateUsername);
+  usernameInput.addEventListener('input', validateUsername);
 
-    // Guard against double-submit: provisioning the owner is a one-time,
-    // non-idempotent POST, so a double-click would fire a second /setup
-    // request that races the first. Disable the button once the form is
-    // actually submitting. Using the 'submit' event (not 'click') means a
-    // failed HTML5 validation pass never disables the button, and because
-    // the button has no 'name' it's never part of the posted form data.
-    document.getElementById('setup-form').addEventListener('submit', function (e) {
-      if (!validateUsername()) {
-        // Block submit and surface the message; setCustomValidity already
-        // wired the field into the browser's native validation pass.
-        e.preventDefault();
-        usernameInput.reportValidity();
-        return;
-      }
-      var btn = document.getElementById('submit-btn');
-      btn.disabled = true;
-      btn.value = 'Setting up\u2026';
-    });
-  </script>
-</body>
-</html>
+  // Guard against double-submit: provisioning the owner is a one-time,
+  // non-idempotent POST, so a double-click would fire a second /setup
+  // request that races the first. Disable the button once the form is
+  // actually submitting. Using the 'submit' event (not 'click') means a
+  // failed HTML5 validation pass never disables the button, and because
+  // the button has no 'name' it's never part of the posted form data.
+  document.getElementById('setup-form').addEventListener('submit', function (e) {
+    if (!validateUsername()) {
+      // Block submit and surface the message; setCustomValidity already
+      // wired the field into the browser's native validation pass.
+      e.preventDefault();
+      usernameInput.reportValidity();
+      return;
+    }
+    var btn = document.getElementById('submit-btn');
+    btn.disabled = true;
+    btn.value = 'Setting up…';
+  });
+</script>
+{% endblock %}

@@ -3,15 +3,15 @@ var config = JSON.parse(document.getElementById('page-config').textContent);
 // ─── Rename ───
 
 function editName() {
-  document.getElementById('name-display').style.display = 'none';
-  document.getElementById('name-edit').style.display = '';
+  document.getElementById('name-display').hidden = true;
+  document.getElementById('name-edit').hidden = false;
   document.getElementById('name-input').focus();
   document.getElementById('name-error').textContent = '';
 }
 
 function cancelName() {
-  document.getElementById('name-edit').style.display = 'none';
-  document.getElementById('name-display').style.display = '';
+  document.getElementById('name-edit').hidden = true;
+  document.getElementById('name-display').hidden = false;
 }
 
 function saveName() {
@@ -39,8 +39,8 @@ function updateSaveRemoteState() {
 }
 
 function editRemote() {
-  document.getElementById('remote-display').style.display = 'none';
-  document.getElementById('remote-edit').style.display = '';
+  document.getElementById('remote-display').hidden = true;
+  document.getElementById('remote-edit').hidden = false;
   var input = document.getElementById('remote-input');
   // Reopen from the saved upstream so Save starts disabled until edited.
   input.value = input.defaultValue;
@@ -50,8 +50,8 @@ function editRemote() {
 }
 
 function cancelRemote() {
-  document.getElementById('remote-edit').style.display = 'none';
-  document.getElementById('remote-display').style.display = '';
+  document.getElementById('remote-edit').hidden = true;
+  document.getElementById('remote-display').hidden = false;
 }
 
 function saveRemote() {
@@ -162,7 +162,7 @@ function showToast(message, actions) {
     actionsDiv.className = 'toast-actions';
     actions.forEach(function(a) {
         var btn = document.createElement('button');
-        btn.className = 'btn' + (a.primary ? ' btn-primary' : '');
+        btn.className = 'btn' + (a.primary ? ' btn--primary' : '');
         btn.textContent = a.label;
         btn.onclick = function() { toast.remove(); a.onClick(); };
         actionsDiv.appendChild(btn);
@@ -333,7 +333,7 @@ function clearCacheAndReload() {
         if (data.status !== appStatus) {
             appStatus = data.status;
             statusEl.textContent = appStatus;
-            statusEl.className = 'status-' + appStatus;
+            statusEl.className = 'status-value status-' + appStatus;
         }
         // Adopt the first container_id silently; reset only on a later change.
         if (data.container_id && data.container_id !== streamContainerId) {
@@ -358,9 +358,9 @@ function clearCacheAndReload() {
         if (errorRow && errorCell) {
             if (appStatus === 'error' && data.error) {
                 errorCell.textContent = data.error;
-                errorRow.style.display = '';
+                errorRow.hidden = false;
             } else {
-                errorRow.style.display = 'none';
+                errorRow.hidden = true;
                 errorCell.textContent = '';
             }
         }

@@ -24,27 +24,26 @@
     try { sessionStorage.removeItem('openhost_update_token'); } catch (e) { /* ignore */ }
   }
 
-  function esc(s) {
-    var d = document.createElement('div');
-    d.textContent = (s == null) ? '' : String(s);
-    return d.innerHTML;
-  }
-
+  // Built node-by-node rather than via innerHTML: this file is also inlined
+  // into the updater's standalone page, where dom.js is not available.
   function render(entries) {
     if (!entries || !entries.length) return;
-    logEl.innerHTML = '';
+    while (logEl.firstChild) logEl.removeChild(logEl.firstChild);
     entries.forEach(function (e) {
       var li = document.createElement('li');
       if (e.phase === 'done') li.className = 'done';
       if (e.phase === 'failed') li.className = 'failed';
-      var ts = (e.ts || '').substr(11, 8);
-      li.innerHTML = '<span class="ts">' + esc(ts) + '</span>' + esc(e.message || e.phase || '');
+      var ts = document.createElement('span');
+      ts.className = 'ts';
+      ts.textContent = (e.ts || '').substr(11, 8);
+      li.appendChild(ts);
+      li.appendChild(document.createTextNode(e.message || e.phase || ''));
       logEl.appendChild(li);
     });
   }
 
   function finish() {
-    if (spEl) spEl.style.display = 'none';
+    if (spEl) spEl.hidden = true;
     clearToken();
     window.location.href = '/settings';
   }
@@ -86,7 +85,7 @@
 
   function handleTerminal(d) {
     terminalSeen = true;
-    if (spEl) spEl.style.display = 'none';
+    if (spEl) spEl.hidden = true;
     var last = d.entries && d.entries.length ? d.entries[d.entries.length - 1] : null;
     var failed = last && last.phase === 'failed';
     if (failed && failedShownAt === null) {

@@ -293,7 +293,9 @@ class OpenhostStack:
         """
         page.goto(f"{self.router_url}/login")
         page.fill("input[name=password]", self.local_stack.owner_password)
-        page.click("input[type=submit]")
+        # Match either element: the login form's submit control has been both an
+        # <input type=submit> and a <button type=submit>.
+        page.click("input[type=submit], button[type=submit]")
         page.wait_for_url(lambda url: "/login" not in url)
         return page
 

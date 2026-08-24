@@ -1,72 +1,55 @@
 {#- Owner username (if set) takes precedence over the zone subdomain for the
-   instance name shown in the title + heading. Computed once and reused below. -#}
+   instance name shown in the title + banner. Computed once and reused below. -#}
 {%- set display_name = owner_name() or zone_name() -%}
+{#- The banner doubles as the way home now that the tab strip is gone, so it is
+   a link everywhere except on the dashboard itself. -#}
+{%- set on_dashboard = request.url.path.rstrip('/') in ('', '/dashboard') -%}
+{% from "_components/icon_nav.html" import icon_nav %}
+{% from "_components/nav_back.html" import nav_back %}
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="robots" content="noindex">
   <title>{% if display_name %}{{ display_name }}'s personal compute space{% else %}Cloud in a Bottle{% endif %}{% block title_suffix %}{% endblock %}</title>
-  <style>
-    /* Always reserve the vertical scrollbar gutter so the centred body doesn't
-       shift sideways when navigating between pages that scroll and pages that
-       don't (a short page loses the scrollbar, widening the viewport and
-       re-centring the column). Ignored by browsers that lack support, so it's a
-       no-regression progressive enhancement. */
-    html { scrollbar-gutter: stable; }
-    body { font-family: -apple-system, system-ui, sans-serif; max-width: 960px; margin: 2em auto; padding: 0 1em; color: #222; }
-    table { border-collapse: collapse; width: 100%; margin: 1em 0; }
-    th, td { border: 1px solid #ddd; padding: 0.5em 0.8em; text-align: left; }
-    th { background: #f5f5f5; }
-    input[type="text"], input[type="password"] { padding: 0.4em; width: 100%; box-sizing: border-box; }
-    button, input[type="submit"], .btn { padding: 0.4em 1em; cursor: pointer; border: 1px solid #ccc; background: #f9f9f9; text-decoration: none; color: #222; display: inline-block; font: inherit; font-size: 0.875em; }
-    .btn-danger { background: #fee; border-color: #c00; color: #c00; }
-    .btn-primary { background: #e8f0fe; border-color: #36c; color: #36c; }
-    .btn:disabled { background: #eee; border-color: #ddd; color: #999; cursor: not-allowed; }
-    nav { display: flex; align-items: flex-end; gap: 0.25em; border-bottom: 1px solid #e8e8e8; }
-    nav .nav-user { color: #888; font-size: 0.9em; margin-right: 0.5em; align-self: center; }
-    .nav-tab { display: inline-block; padding: 0.4em 1em; border: 1px solid transparent; border-bottom: none; border-radius: 4px 4px 0 0; text-decoration: none; color: #444; background: transparent; }
-    .nav-tab:hover { background: #f0f0f0; color: #222; border-color: #ddd; }
-    .nav-tab.active { background: #fff; border-color: #ddd; color: #222; margin-bottom: -1px; padding-bottom: calc(0.4em + 1px); }
-    .error { color: #c00; }
-    .field-error { color: #c00; font-size: 0.85em; }
-    .status-running { color: #080; font-weight: bold; }
-    .status-error { color: #c00; font-weight: bold; }
-    .status-stopped { color: #888; }
-    .status-building, .status-starting, .status-removing { color: #c80; }
-    .error-inline { background: #fff0f0; border: 1px solid #fcc; padding: 0.5em; margin-top: 0.3em; font-size: 0.85em; white-space: pre-wrap; word-break: break-word; max-height: 6em; overflow-y: auto; }
-    .log-output { background: #1e1e1e; color: #d4d4d4; padding: 1em; font-size: 0.85em; overflow-x: auto; max-height: 30em; overflow-y: auto; border-radius: 4px; }
-    .toast { position: fixed; bottom: 1.5em; right: 1.5em; background: #fff; border: 1px solid #ddd; border-left: 4px solid #c80; border-radius: 4px; padding: 1em 1.2em; box-shadow: 0 2px 8px rgba(0,0,0,0.15); max-width: 28em; z-index: 1000; }
-    .toast p { margin: 0 0 0.75em 0; }
-    .toast .toast-actions { display: flex; gap: 0.5em; }
-    h2 { margin-top: 2em; }
-    h2.section-title { border-bottom: 1px solid #eee; padding-bottom: 0.3em; }
-    .app-link { color: #36c; text-decoration: none; font-weight: bold; }
-    .app-link:visited { color: #36c; }
-    .app-link:hover { text-decoration: underline; }
-    .muted { color: #888; font-size: 0.9em; }
-    .hint { color: #666; font-size: 0.9em; }
-    .label-col { width: 14em; }
-    .control-row { display: flex; gap: 0.5em; align-items: center; flex-wrap: wrap; margin: 1em 0; }
-    table.form-table th { font-weight: normal; width: 12em; vertical-align: top; }
-    table.form-table input[type="text"], table.form-table input[type="password"] { width: 24em; max-width: 100%; }
-    table.form-table td p { margin: 0.4em 0 0; }
-    table.form-table td p:first-child { margin-top: 0; }
-    .pie-slice { stroke: #fff; stroke-width: 1.5; }
-    .pie-slice:hover { filter: brightness(0.88); }
-    .pie-center-name { font-size: 14px; font-weight: 600; fill: #222; text-anchor: middle; }
-    .pie-center-size { font-size: 12px; fill: #666; text-anchor: middle; }
-    th.sortable { cursor: pointer; user-select: none; white-space: nowrap; }
-    th.sortable:hover { background: #f0f0f0; }
-    .usage-charts { display: flex; gap: 2.5em; flex-wrap: wrap; align-items: flex-start; margin: 0.5em 0; }
-    .usage-chart { text-align: center; }
-    .usage-chart h3 { margin: 0 0 0.2em; font-size: 1em; font-weight: 600; }
-    .info-tip { cursor: help; color: #999; font-weight: normal; font-size: 0.9em; }
-    .info-tip:hover, .info-tip:focus { color: #36c; }
-  </style>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible+Mono:wght@500;600;700&display=swap">
+  <link rel="stylesheet" href="{{ static_url('css/tokens.css') }}">
+  <link rel="stylesheet" href="{{ static_url('css/base.css') }}">
+  <link rel="stylesheet" href="{{ static_url('css/components.css') }}">
+  <script src="{{ static_url('js/info-tip.js') }}" defer></script>
+  {% block head %}{% endblock %}
 </head>
 <body>
-  <h1>{% if display_name %}{{ display_name }}'s personal compute space{% else %}Cloud in a Bottle{% endif %}</h1>
-  {% include "_nav_header.html" %}
-  {% block content %}{% endblock %}
+  <div class="deco-clouds" aria-hidden="true">
+    <span class="cloud cloud--1"></span>
+    <span class="cloud cloud--2"></span>
+    <span class="cloud cloud--3"></span>
+    <span class="cloud cloud--4"></span>
+    <span class="cloud cloud--5"></span>
+    <span class="cloud cloud--6"></span>
+    <span class="cloud cloud--7"></span>
+    <span class="cloud cloud--8"></span>
+  </div>
+  <div class="deco-grass" aria-hidden="true"></div>
+
+  {% if not on_dashboard %}{{ nav_back() }}{% endif %}
+  <div class="layout {% block layout_class %}{% endblock %}">
+    <h1 class="banner">
+      {%- set banner_text %}{% if display_name %}{{ display_name }}'s personal compute space{% else %}Cloud in a Bottle{% endif %}{% endset -%}
+      {% if on_dashboard %}
+      <span class="banner__text">{{ banner_text }}</span>
+      {% else %}
+      <a class="banner__text" href="/dashboard" title="Back to the dashboard">{{ banner_text }}</a>
+      {% endif %}
+    </h1>
+    {#- The catalog vars come from the dashboard route and are undefined (falsy) elsewhere;
+        only the dashboard renders the menu that reads them. -#}
+    {{ icon_nav(on_dashboard=on_dashboard,
+                catalog_app_name=catalog_app_name, catalog_installed=catalog_installed) }}
+    {% block content %}{% endblock %}
+  </div>
 </body>
 </html>
