@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "statusMessage": "Checking for full-suite test run...",
+            "command": "cmd=$(jq -r '.tool_input.command // \"\"'); echo \"$cmd\" | grep -Eq 'pytest' || exit 0; echo \"$cmd\" | grep -q 'FULL_SUITE_OK' && exit 0; if echo \"$cmd\" | grep -Eq -- '--run-containers|--run-tls' || ! echo \"$cmd\" | grep -Eq '(\\.py|::)'; then printf '%s' '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"REMINDER TO THE AGENT (this is a note to you, not a user prompt): CLAUDE.md says do NOT run the full/expensive test suite locally — CI handles that. Run only individual fast tests (a single .py file or a ::node id). If the user has EXPLICITLY asked for a full local run in this conversation, that is fine: re-issue the exact same command with the token FULL_SUITE_OK to acknowledge, e.g. prefix it as an env var: FULL_SUITE_OK=1 pixi run -e dev pytest -x. Otherwise, do not run it.\"}}'; fi"
+          }
+        ]
+      }
+    ]
+  }
+}
