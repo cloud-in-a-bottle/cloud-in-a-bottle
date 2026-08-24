@@ -35,7 +35,7 @@ def test_storage_status_includes_disk_totals(tmp_path, monkeypatch):
         return usage(total=10 * 1024**3, used=4 * 1024**3, free=6 * 1024**3)
 
     monkeypatch.setattr(storage.shutil, "disk_usage", fake_disk_usage)
-    monkeypatch.setattr(storage, "container_image_storage_bytes", lambda: 7 * 1024**3)
+    monkeypatch.setattr(storage, "container_image_storage_bytes", lambda: (7 * 1024**3, 3 * 1024**3))
 
     status = cast(dict[str, Any], storage.storage_status(config))
 
@@ -48,6 +48,7 @@ def test_storage_status_includes_disk_totals(tmp_path, monkeypatch):
     assert status["openhost_data_used_bytes"] > 0
     assert status["app_data_used_bytes"] > 0
     assert status["build_cache_bytes"] == 7 * 1024**3
+    assert status["build_cache_reclaimable_bytes"] == 3 * 1024**3
     assert status["storage_min_free_bytes"] is None
     assert status["storage_low"] is False
     assert status["guard_paused"] is False
@@ -64,7 +65,7 @@ def test_storage_status_with_min_free(tmp_path, monkeypatch):
         return usage(total=10 * 1024**3, used=4 * 1024**3, free=6 * 1024**3)
 
     monkeypatch.setattr(storage.shutil, "disk_usage", fake_disk_usage)
-    monkeypatch.setattr(storage, "container_image_storage_bytes", lambda: None)
+    monkeypatch.setattr(storage, "container_image_storage_bytes", lambda: (None, None))
 
     status = cast(dict[str, Any], storage.storage_status(config))
 
@@ -73,6 +74,7 @@ def test_storage_status_with_min_free(tmp_path, monkeypatch):
     assert status["storage_low"] is False  # 6 GiB free > 1000 MiB required
     # Podman unavailable → the category degrades to None rather than failing the endpoint.
     assert status["build_cache_bytes"] is None
+    assert status["build_cache_reclaimable_bytes"] is None
 
 
 def test_app_data_total_combines_per_app_and_loose_files(tmp_path, monkeypatch):
@@ -85,7 +87,7 @@ def test_app_data_total_combines_per_app_and_loose_files(tmp_path, monkeypatch):
         f.write(b"x" * (300 * 1024))
     with open(os.path.join(app_data, "loose.bin"), "wb") as f:
         f.write(b"x" * (200 * 1024))
-    monkeypatch.setattr(storage, "container_image_storage_bytes", lambda: None)
+    monkeypatch.setattr(storage, "container_image_storage_bytes", lambda: (None, None))
 
     status = cast(dict[str, Any], storage.storage_status(config))
 
