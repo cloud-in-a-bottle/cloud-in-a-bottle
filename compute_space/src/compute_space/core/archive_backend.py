@@ -49,6 +49,7 @@ from compute_space.core.domains import primary_domain_or_none
 from compute_space.core.logging import logger
 from compute_space.core.pinned_binary import get_pinned_binary
 from compute_space.core.pinned_binary import install_pinned_binary
+from compute_space.core.pinned_binary import is_linux_host
 
 # Name of the systemd unit that manages the JuiceFS FUSE mount.
 # Installed by ansible (disabled); enabled by compute_space when the
@@ -655,6 +656,17 @@ def attach_on_startup(config: Config, db: sqlite3.Connection) -> None:
     so the archive tier is available with zero operator configuration.
     """
     state = read_state(db)
+    if state.backend in ("local", "s3") and not is_linux_host():
+        # JuiceFS is pinned as a Linux release only, so the archive tier can't run here (local
+        # dev on macOS).  Everything else works; say so once instead of raising on every boot.
+        host_os = os.uname().sysname
+        logger.warning(
+            "Archive tier unavailable: JuiceFS has no {} build, so the '{}' backend can't be brought up.",
+            host_os,
+            state.backend,
+        )
+        _set_state_message(db, f"Archive tier unavailable: no JuiceFS build for {host_os}.")
+        return
     if state.backend == "local":
         try:
             if not is_juicefs_installed(config):

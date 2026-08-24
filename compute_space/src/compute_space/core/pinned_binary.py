@@ -85,12 +85,20 @@ _MANIFEST: dict[str, PinnedBinary] = {
 }
 
 
+class UnsupportedHostPlatformError(RuntimeError):
+    """No pinned build exists for this host OS (every pin below is a Linux release)."""
+
+
 def host_arch() -> str:
     """Return the release-asset arch string ("amd64" / "arm64") for this host."""
     machine = os.uname().machine
     if machine in ("aarch64", "arm64"):
         return "arm64"
     return "amd64"
+
+
+def is_linux_host() -> bool:
+    return os.uname().sysname == "Linux"
 
 
 def get_pinned_binary(name: str) -> PinnedBinary:
@@ -102,6 +110,12 @@ def get_pinned_binary(name: str) -> PinnedBinary:
 
 def install_pinned_binary(binary: PinnedBinary, dest_path: str) -> None:
     """Download + verify sha256 + extract ``binary`` to ``dest_path``.  Idempotent."""
+    if not is_linux_host():
+        # Checked before the "already installed" shortcut: a Linux binary left on disk by an
+        # earlier run looks installed but dies with "Exec format error" when run.
+        raise UnsupportedHostPlatformError(
+            f"{binary.name} is only pinned as a Linux release; this host is {os.uname().sysname}."
+        )
     if os.path.isfile(dest_path) and os.access(dest_path, os.X_OK):
         return
     os.makedirs(os.path.dirname(dest_path), exist_ok=True)
