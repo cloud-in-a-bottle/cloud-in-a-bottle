@@ -113,17 +113,17 @@ def _recover_cache_corrupt_apps(db: sqlite3.Connection) -> list[str]:
         return []
 
     logger.warning(
-        "containers-storage cache corruption in %d app(s); dropping build cache and rebuilding serially: %s",
+        "containers-storage cache corruption in {} app(s); dropping build cache and rebuilding serially: {}",
         len(corrupt),
         corrupt,
     )
     try:
         output = drop_docker_build_cache()
-        logger.info("dropped build cache before serial rebuild: %s", output)
+        logger.info("dropped build cache before serial rebuild: {}", output)
     except Exception as e:
         # Rebuild anyway — a partial prune plus a fresh serial build often
         # still recovers.
-        logger.error("failed to drop build cache during corruption recovery: %s", e)
+        logger.error("failed to drop build cache during corruption recovery: {}", e)
 
     for app_id in corrupt:
         db.execute(
@@ -142,9 +142,9 @@ def _restart_apps_sequential(app_ids: list[str], config: Config) -> None:
         for app_id in app_ids:
             try:
                 start_app_process(app_id, db, config)
-                logger.info("Rebuilt and restarted app %s", app_id)
+                logger.info("Rebuilt and restarted app {}", app_id)
             except Exception as e:
-                logger.exception("Failed to rebuild app %s", app_id)
+                logger.exception("Failed to rebuild app {}", app_id)
                 db.execute(
                     "UPDATE apps SET status = 'error', error_message = ? WHERE app_id = ?",
                     (str(e), app_id),
@@ -161,6 +161,6 @@ def retry_pending_default_apps(config: Config) -> None:
         try:
             deploy_default_apps(config, db)
         except Exception as exc:
-            logger.error("default_apps retry on startup raised: %s", exc)
+            logger.error("default_apps retry on startup raised: {}", exc)
     finally:
         db.close()

@@ -104,7 +104,7 @@ def sweep_orphaned_images(config: Config, now_epoch: float) -> list[str]:
             # DB row hasn't landed yet).  Leave it for a future sweep.
             continue
         logger.info(
-            "Removing orphaned image %s (app '%s' no longer exists, age %.0fs)",
+            "Removing orphaned image {} (app '{}' no longer exists, age {:.0f}s)",
             image.image_id,
             image.app_name,
             age,
@@ -119,14 +119,14 @@ def _run_prune_once(config: Config) -> None:
     try:
         output = prune_dangling_images()
         if output:
-            logger.info("Periodic image prune: %s", output)
+            logger.info("Periodic image prune: {}", output)
     except Exception:
         logger.exception("Periodic image prune failed")
 
     try:
         removed = sweep_orphaned_images(config, time.time())
         if removed:
-            logger.info("Orphaned-image sweep removed %d image(s)", len(removed))
+            logger.info("Orphaned-image sweep removed {} image(s)", len(removed))
     except Exception:
         logger.exception("Orphaned-image sweep failed")
 
@@ -152,5 +152,5 @@ def start_image_pruner(config: Config) -> None:
         if db_key in _pruner_db_paths:
             return
         _pruner_db_paths.add(db_key)
-    logger.info("Starting periodic image pruner (every %ds)", interval)
+    logger.info("Starting periodic image pruner (every {}s)", interval)
     threading.Thread(target=_image_pruner_loop, args=(config, interval), daemon=True).start()

@@ -44,7 +44,7 @@ def rmtree_with_sudo_fallback(path: str, *, raise_on_failure: bool = False) -> N
         return
     except OSError as rmtree_err:
         logger.warning(
-            "rmtree failed on %s (%s), falling back to sudo rm -rf",
+            "rmtree failed on {} ({}), falling back to sudo rm -rf",
             path,
             rmtree_err,
         )
@@ -61,7 +61,7 @@ def rmtree_with_sudo_fallback(path: str, *, raise_on_failure: bool = False) -> N
         # is required' etc. without re-running the command by hand.
         stderr = (sudo_err.stderr or b"").decode("utf-8", errors="replace").strip()
         logger.warning(
-            "Failed to clean data dir %s via sudo (exit %d): %s",
+            "Failed to clean data dir {} via sudo (exit {}): {}",
             path,
             sudo_err.returncode,
             stderr or "<no stderr>",
@@ -69,7 +69,7 @@ def rmtree_with_sudo_fallback(path: str, *, raise_on_failure: bool = False) -> N
         if raise_on_failure:
             raise
     except (subprocess.TimeoutExpired, OSError) as sudo_err:
-        logger.warning("Failed to clean data dir %s via sudo: %s", path, sudo_err)
+        logger.warning("Failed to clean data dir {} via sudo: {}", path, sudo_err)
         if raise_on_failure:
             raise
 
