@@ -485,13 +485,8 @@ def remove_image(app_name: str) -> None:
     subprocess.run(["podman", "rmi", image_tag], capture_output=True, timeout=30)
 
 
-def container_image_storage_bytes() -> tuple[int, int] | None:
-    """``(total, reclaimable)`` bytes of podman image storage, from ``podman system df``.
-
-    Reclaimable is what ``podman image prune --all`` could free — total minus
-    images in use by existing containers.  None when podman is unavailable or
-    the output can't be parsed, so status reporting degrades instead of failing.
-    """
+def container_image_storage_bytes() -> tuple[int | None, int | None]:
+    """Return ``(total, reclaimable)`` bytes from ``podman system df``; either value may be ``None``."""
     try:
         result = subprocess.run(
             ["podman", "system", "df", "--format", "json"],
@@ -500,14 +495,22 @@ def container_image_storage_bytes() -> tuple[int, int] | None:
             timeout=30,
         )
         if result.returncode != 0:
-            return None
+            return None, None
         for row in json.loads(result.stdout):
             if row.get("Type") == "Images":
-                return int(row["RawSize"]), int(row["RawReclaimable"])
-        return None
+                try:
+                    total = int(row["RawSize"])
+                except (KeyError, TypeError, ValueError):
+                    total = None
+                try:
+                    reclaimable = int(row["RawReclaimable"])
+                except (KeyError, TypeError, ValueError):
+                    reclaimable = None
+                return total, reclaimable
+        return None, None
     except Exception as e:
         logger.warning("Could not query podman image storage size: %s", e)
-        return None
+        return None, None
 
 
 def drop_docker_build_cache() -> str:

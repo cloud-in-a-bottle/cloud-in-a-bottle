@@ -65,7 +65,7 @@ def test_storage_status_with_min_free(tmp_path, monkeypatch):
         return usage(total=10 * 1024**3, used=4 * 1024**3, free=6 * 1024**3)
 
     monkeypatch.setattr(storage.shutil, "disk_usage", fake_disk_usage)
-    monkeypatch.setattr(storage, "container_image_storage_bytes", lambda: None)
+    monkeypatch.setattr(storage, "container_image_storage_bytes", lambda: (None, None))
 
     status = cast(dict[str, Any], storage.storage_status(config))
 
@@ -87,7 +87,7 @@ def test_app_data_total_combines_per_app_and_loose_files(tmp_path, monkeypatch):
         f.write(b"x" * (300 * 1024))
     with open(os.path.join(app_data, "loose.bin"), "wb") as f:
         f.write(b"x" * (200 * 1024))
-    monkeypatch.setattr(storage, "container_image_storage_bytes", lambda: None)
+    monkeypatch.setattr(storage, "container_image_storage_bytes", lambda: (None, None))
 
     status = cast(dict[str, Any], storage.storage_status(config))
 
