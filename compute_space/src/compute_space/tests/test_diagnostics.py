@@ -26,12 +26,12 @@ from compute_space.core.app_id import new_app_id
 from compute_space.core.diagnostics import DIAGNOSTICS_SCHEMA_VERSION
 from compute_space.core.diagnostics import AppHealth
 from compute_space.core.diagnostics import GitInfo
+from compute_space.core.diagnostics import app_diagnostics_filename
 from compute_space.db.connection import init_db
 from compute_space.tests._litestar_helpers import auth_cookie
 from compute_space.tests._litestar_helpers import make_test_app
 from compute_space.tests.conftest import _make_test_config
 from compute_space.tests.conftest import primary_of
-from compute_space.web.routes.api.apps import _app_diagnostics_filename
 from compute_space.web.routes.api.apps import api_apps_routes
 from compute_space.web.routes.api.system import _diagnostics_filename
 from compute_space.web.routes.api.system import system_routes
@@ -515,7 +515,7 @@ def test_platform_filename_handles_empty_zone() -> None:
 
 
 def test_app_filename_sanitizes_path_traversal() -> None:
-    name = _app_diagnostics_filename("../../etc/passwd")
+    name = app_diagnostics_filename("../../etc/passwd")
     # Slashes and dot-dot must not survive into the download filename.
     assert "/" not in name
     assert name.startswith("openhost-app-diagnostics-")
@@ -523,7 +523,7 @@ def test_app_filename_sanitizes_path_traversal() -> None:
 
 
 def test_app_filename_handles_weird_name() -> None:
-    name = _app_diagnostics_filename('bad";name\x00')
+    name = app_diagnostics_filename('bad";name\x00')
     assert '"' not in name
     assert "\x00" not in name
     assert name.endswith(".json")

@@ -2,7 +2,7 @@
 
 Spamming the "Reload" button used to spawn several ``reload_app_background``
 threads that raced to create the same ``openhost-<name>`` container and failed
-with "container name is already in use" (OH-104). ``_reload_app_impl`` now
+with "container name is already in use" (OH-104). ``compute_space.core.apps.reload_app`` now
 atomically claims the reload — flipping the row to 'building' only if it isn't
 already in a transient state — so a second concurrent reload is refused with a
 409 instead of spawning a competing worker.
@@ -79,8 +79,8 @@ def test_plain_reload_claims_building_and_spawns_worker(
     app_id = _seed_app(cfg.db_path, "myapp")
 
     with (
-        patch("compute_space.web.routes.api.apps.Thread") as Thread,
-        patch("compute_space.web.routes.api.apps.stop_app_process") as stop,
+        patch("compute_space.core.apps.Thread") as Thread,
+        patch("compute_space.core.apps.stop_app_process") as stop,
     ):
         client.cookies.update(cookies)
         resp = client.post(f"/reload_app/{app_id}")
@@ -103,8 +103,8 @@ def test_reload_refused_while_transient(
     app_id = _seed_app(cfg.db_path, "busyapp", status=busy_status)
 
     with (
-        patch("compute_space.web.routes.api.apps.Thread") as Thread,
-        patch("compute_space.web.routes.api.apps.stop_app_process") as stop,
+        patch("compute_space.core.apps.Thread") as Thread,
+        patch("compute_space.core.apps.stop_app_process") as stop,
     ):
         client.cookies.update(cookies)
         resp = client.post(f"/reload_app/{app_id}")
@@ -123,8 +123,8 @@ def test_reload_refused_while_removing(cfg: Any, client: TestClient[Litestar], c
     app_id = _seed_app(cfg.db_path, "goingaway", status="removing")
 
     with (
-        patch("compute_space.web.routes.api.apps.Thread") as Thread,
-        patch("compute_space.web.routes.api.apps.stop_app_process") as stop,
+        patch("compute_space.core.apps.Thread") as Thread,
+        patch("compute_space.core.apps.stop_app_process") as stop,
     ):
         client.cookies.update(cookies)
         resp = client.post(f"/reload_app/{app_id}")
@@ -143,8 +143,8 @@ def test_reload_allowed_from_settled_states(
     app_id = _seed_app(cfg.db_path, "settled", status=reloadable_status)
 
     with (
-        patch("compute_space.web.routes.api.apps.Thread") as Thread,
-        patch("compute_space.web.routes.api.apps.stop_app_process"),
+        patch("compute_space.core.apps.Thread") as Thread,
+        patch("compute_space.core.apps.stop_app_process"),
     ):
         client.cookies.update(cookies)
         resp = client.post(f"/reload_app/{app_id}")

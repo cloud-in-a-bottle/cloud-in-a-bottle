@@ -60,7 +60,7 @@ def test_wipe_data_restart_returns_202_and_marks_building(
 ) -> None:
     app_id = _seed_app(cfg.db_path, "myapp")
 
-    with patch("compute_space.web.routes.api.apps.Thread") as Thread:
+    with patch("compute_space.core.apps.Thread") as Thread:
         client.cookies.update(cookies)
         resp = client.post(f"/wipe_data_restart/{app_id}")
 
@@ -81,7 +81,7 @@ def test_wipe_data_restart_refuses_while_restart_in_flight(
     cfg: Any, client: TestClient[Litestar], cookies: dict[str, str], status: str
 ) -> None:
     app_id = _seed_app(cfg.db_path, "myapp", status=status)
-    with patch("compute_space.web.routes.api.apps.Thread") as Thread:
+    with patch("compute_space.core.apps.Thread") as Thread:
         client.cookies.update(cookies)
         resp = client.post(f"/wipe_data_restart/{app_id}")
     assert resp.status_code == 409
