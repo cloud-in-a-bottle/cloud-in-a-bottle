@@ -110,7 +110,7 @@ async def _follow_lines(argv: list[str], detector: str) -> AsyncIterator[bytes]:
                     yield line
         except FileNotFoundError:
             if not warned_missing:
-                logger.warning("Cannot start `%s` for %s: not installed; detection disabled", argv[0], detector)
+                logger.warning("Cannot start `{}` for {}: not installed; detection disabled", argv[0], detector)
                 warned_missing = True
             await asyncio.sleep(_STREAM_RECONNECT_SECONDS)
             continue
@@ -119,9 +119,9 @@ async def _follow_lines(argv: list[str], detector: str) -> AsyncIterator[bytes]:
         warned_missing = False
         reason = b" / ".join(recent_stderr).decode("utf-8", "replace").strip()
         if reason:
-            logger.warning("`%s` stream ended for %s (%s); reconnecting", argv[0], detector, reason)
+            logger.warning("`{}` stream ended for {} ({}); reconnecting", argv[0], detector, reason)
         else:
-            logger.warning("`%s` stream ended; reconnecting for %s", argv[0], detector)
+            logger.warning("`{}` stream ended; reconnecting for {}", argv[0], detector)
         await asyncio.sleep(_STREAM_RECONNECT_SECONDS)
 
 
@@ -301,7 +301,7 @@ def _memory_guard_loop(config: Config) -> None:
         try:
             asyncio.run(_MemoryGuard().run(config))
         except Exception:
-            logger.exception("Memory guard crashed; restarting in %ds", _STREAM_RECONNECT_SECONDS)
+            logger.exception("Memory guard crashed; restarting in {}s", _STREAM_RECONNECT_SECONDS)
             time.sleep(_STREAM_RECONNECT_SECONDS)
 
 

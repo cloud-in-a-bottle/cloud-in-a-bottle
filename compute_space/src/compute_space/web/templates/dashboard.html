@@ -1,40 +1,55 @@
 {% extends "layout.html" %}
-{% block title_suffix %} - Dashboard{% endblock %}
-{% block content %}
-<h2>Deployed Apps</h2>
+{% from "_components/app_row.html" import app_row %}
+{% from "_components/card.html" import card %}
+{% from "_components/icon.html" import icon %}
+{% from "_components/section.html" import section_head %}
 
-{% if apps %}
-<table>
-  <tr>
-    <th>Name</th>
-    <th>Status</th>
-    <th>Actions</th>
-  </tr>
-  {% for app in apps %}
-  <tr data-app-id="{{ app.app_id }}">
-    <td><a href="{{ app_url(app.name) }}" class="app-link" target="_blank" rel="noopener">{{ app.name }}{% if app.manifest_name and app.manifest_name != app.name %} <span style="color:#666;font-size:0.85em;">({{ app.manifest_name }})</span>{% endif %}</a></td>
-    <td class="app-status status-{{ app.status }}">{{ app.status }}</td>
-    {# Action buttons rendered server-side and never re-rendered by
-       the polling loop; server-side guards (409 on stop/reload/rename
-       of a removing row) make stray clicks safe no-ops. #}
-    <td class="app-actions">
-      <a href="/app_detail/{{ app.name }}" class="btn">View Details</a>
-      <button class="btn" onclick="appAction('{{ app.app_id }}', 'reload_app')">Reload</button>
-      <button class="btn" onclick="reloadAndUpdate('{{ app.app_id }}')">Reload &amp; Update</button>
-      <button class="btn btn-danger" onclick="if(confirm('Remove {{ app.name }} and delete all data permanently?')) appAction('{{ app.app_id }}', 'remove_app')">Remove</button>
-    </td>
-  </tr>
-  {% endfor %}
-</table>
-{% else %}
-<p>No apps deployed yet. <a href="/add_app">Deploy one now.</a></p>
-{% endif %}
+{% block title_suffix %} - Dashboard{% endblock %}
+
+{#- The hamburger is the dashboard's phone nav; no other page renders one. -#}
+{% block head %}<script src="{{ static_url('js/nav-menu.js') }}" defer></script>{% endblock %}
+
+{% block content %}
+<section class="section section--tiles">
+  {% call section_head("Dashboard") %}{% endcall %}
+
+  <div class="card-grid">
+    {{ card("Browse the catalog", "One-click install ready-made apps.", "Explore catalog",
+            cta_href=app_url(catalog_app_name) if catalog_installed else "/add_app",
+            cta_new_tab=catalog_installed) }}
+    {{ card("Deploy your app", "From GitHub, or ask Claude to build it.", "Deploy app",
+            cta_href="/add_app") }}
+    {{ card("Docs and setup", "Guides and GitHub repo.", "View docs",
+            cta_href="/docs/") }}
+  </div>
+</section>
+
+<section class="section">
+  {% call section_head("Your apps") %}
+    {% if apps %}
+    <div class="search">
+      {{ icon("search", 14, class_="search__icon") }}
+      <input type="search" id="app-filter" class="search__input" placeholder=" "
+             autocomplete="off" aria-label="Filter apps by name">
+    </div>
+    {% endif %}
+    <a class="btn btn--accent" href="/add_app">+ New</a>
+  {% endcall %}
+
+  {% if apps %}
+  <div class="app-list" id="app-list">
+    {% for app in apps %}{{ app_row(app) }}{% endfor %}
+  </div>
+  <p class="empty" id="no-matches" hidden>No apps match that filter.</p>
+  {% else %}
+  <p class="empty">No apps deployed yet. <a href="/add_app">Deploy one now.</a></p>
+  {% endif %}
+</section>
 
 <script id="page-config" type="application/json">
 {
   "apiAppsUrl": {% if apps %}"/api/apps"{% else %}null{% endif %}
 }
 </script>
-<script src="{{ static_url('js/http-errors.js') }}"></script>
 <script src="{{ static_url('js/dashboard.js') }}"></script>
 {% endblock %}

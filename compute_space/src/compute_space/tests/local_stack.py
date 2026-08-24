@@ -98,9 +98,14 @@ def make_local_stack_config(
         config = config.evolve(default_apps=default_apps)
     config.make_all_dirs()
     init_db(config.db_path)
+    zone_domain = f"{zone_name}.localhost:{port}"
     with closing(sqlite3.connect(config.db_path)) as db:
         db.row_factory = sqlite3.Row
-        seed_domains(db, Domain(name=f"{zone_name}.localhost:{port}", tls=False), [])
+        if not seed_domains(db, Domain(name=zone_domain, tls=False), []):
+            # a reused data dir: the DB is authoritative once seeded, so move the primary to the
+            # port we actually bind this run, or every outbound link points at the old one.
+            db.execute("UPDATE domains SET name = ? WHERE is_primary = 1", (zone_domain,))
+            db.commit()
     return config
 
 

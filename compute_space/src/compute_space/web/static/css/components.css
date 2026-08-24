@@ -1,0 +1,1555 @@
+/* Component vocabulary. Each block here is the style contract for one Jinja
+   macro in templates/_components/. */
+
+/* ── Banner ─────────────────────────────────────────────────────────── */
+
+.banner {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  margin: 0 0 var(--space-6);
+  font-size: clamp(var(--text-xs), 2.2vw, var(--text-md));
+  font-weight: var(--weight-medium);
+  line-height: var(--leading-loose);
+  letter-spacing: var(--tracking-title);
+  text-transform: uppercase;
+}
+
+.banner::before,
+.banner::after {
+  content: "";
+  flex: 1 1 0;
+  min-width: 12px;
+  height: 2px;
+  background: repeating-linear-gradient(to right, currentColor 0 9px, transparent 9px 15px);
+}
+
+.banner__text {
+  text-align: center;
+  color: inherit;
+  text-decoration: none;
+}
+
+a.banner__text:hover {
+  text-decoration: underline;
+}
+
+/* ── Icon nav ───────────────────────────────────────────────────────────
+   The entire compute-space navigation, sitting under the banner on every
+   page. Right-aligned so it reads as a toolbar rather than a tab strip. */
+
+.icon-nav {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  margin-bottom: var(--space-5);
+}
+
+.icon-nav__icons {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+/* Pushed hard left so the row reads as "where you are on one side, the way
+   elsewhere on the other". Outweighs the `margin: 0` .section-label sets
+   further down the file, hence the compound selector. */
+.icon-nav .icon-nav__label {
+  display: none;
+  margin: 0 auto 0 0;
+}
+
+/* ── Nav menu (phone) ───────────────────────────────────────────────────
+   The dashboard's phone nav: below the layout breakpoint the icon row and the
+   tiles are both hidden, leaving this list as the way through the space. The
+   panel is absolutely positioned so opening it doesn't shove the page down
+   under the reader's thumb. */
+
+.nav-menu {
+  display: none;
+  position: relative;
+}
+
+.nav-menu__toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  opacity: 0.8;
+}
+
+.nav-menu__toggle[aria-expanded="true"] {
+  opacity: 1;
+}
+
+.nav-menu__panel {
+  position: absolute;
+  top: calc(100% + var(--space-2));
+  right: 0;
+  z-index: 2;
+  min-width: 190px;
+  background: var(--color-surface-raised);
+  border: var(--border-w) solid var(--color-border);
+  box-shadow: var(--shadow-card);
+}
+
+.nav-menu__list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.nav-menu__list a {
+  display: block;
+  padding: var(--space-4);
+  border-bottom: var(--border-w) solid var(--color-border);
+  /* Named for the same reason as .nav-back: the docs page links no base.css. */
+  color: var(--color-text);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.nav-menu__list li:last-child a {
+  border-bottom: 0;
+}
+
+.nav-menu__list a:active {
+  background: var(--color-surface-sunken);
+}
+
+.nav-menu__ext {
+  opacity: 0.5;
+}
+
+@media (max-width: 640px) {
+  .icon-nav__icons {
+    display: none;
+  }
+
+  .icon-nav .icon-nav__label,
+  .nav-menu {
+    display: block;
+  }
+
+  /* Off the dashboard the row has nothing left once the icons go, and the back
+     link is the whole phone nav. Hide the row rather than leave its gap. */
+  .icon-nav--icons-only {
+    display: none;
+  }
+}
+
+/* ── Back link ──────────────────────────────────────────────────────────
+   Sits in the page's top-left corner, above and outside the content column,
+   so leaving the page is the first thing on it rather than one more item
+   competing for attention in the nav row.
+
+   Out of flow on purpose: the column reserves the same top padding on every
+   page, and the link drops into that reserved band. In flow it would push the
+   banner down only on the pages that have one, so the header would jump as you
+   navigated. `top` + its 36px line box exactly fill `.layout`'s padding-top. */
+
+.nav-back {
+  position: absolute;
+  top: var(--space-4);
+  left: var(--layout-gutter);
+  /* Above .layout, which is also positioned: on the full-width pages (terminal,
+     logs) the content column reaches the gutter and swallowed the clicks. */
+  z-index: 2;
+  display: flex;
+  width: max-content;
+  align-items: center;
+  gap: var(--space-2);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: var(--leading-loose);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+  text-decoration: none;
+  /* Named rather than inherited: the docs page links only components.css, so
+     there is no base.css anchor colour to fall back to. */
+  color: var(--color-text);
+  opacity: 0.8;
+}
+
+/* The arrow is 7px tall inside a 36px line box, so centring it lands the 1px
+   shaft on a half pixel and it renders as two grey rows. The nudge puts the
+   shaft back on the pixel grid, level with the middle of the capitals. */
+.nav-back .icon {
+  margin-top: -1px;
+}
+
+.nav-back:hover {
+  opacity: 1;
+  text-decoration: underline;
+}
+
+/* ── Section header ─────────────────────────────────────────────────── */
+
+.section {
+  margin-bottom: var(--space-6);
+}
+
+.section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  margin-bottom: var(--space-2);
+}
+
+.section-label {
+  margin: 0;
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  line-height: var(--leading-tight);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+  opacity: 0.8;
+}
+
+.section-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+}
+
+/* Legacy heading style still used by settings/system/diagnostics. */
+h2.section-title {
+  border-bottom: var(--border-w) solid var(--color-border);
+  padding-bottom: var(--space-1);
+}
+
+/* ── Icons ──────────────────────────────────────────────────────────── */
+
+.icon {
+  display: block;
+  flex: none;
+  object-fit: contain;
+}
+
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  opacity: 0.8;
+}
+
+.icon-btn:hover {
+  opacity: 1;
+}
+
+@media (hover: none) {
+  .icon-btn {
+    width: 36px;
+    height: 36px;
+  }
+}
+
+/* ── Buttons ────────────────────────────────────────────────────────── */
+
+.btn,
+.btn-primary,
+.btn-danger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  min-height: 28px;
+  padding: 3px var(--space-3);
+  font-size: var(--text-xs);
+  line-height: var(--leading-tight);
+  letter-spacing: var(--tracking-body);
+  color: var(--color-text);
+  background: var(--color-surface-raised);
+  border: var(--border-w) solid var(--color-border);
+  border-radius: var(--radius-none);
+  text-decoration: none;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.btn:hover {
+  background: #f0f0f0;
+}
+
+.btn:disabled,
+.btn[aria-disabled="true"] {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.btn--primary,
+.btn-primary {
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+}
+
+.btn--primary:hover,
+.btn-primary:hover {
+  background: var(--color-accent-hover);
+}
+
+.btn--accent {
+  background: var(--color-accent-alt);
+  border-color: var(--color-accent-alt);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-label);
+}
+
+.btn--accent:hover {
+  background: var(--color-accent-alt-hover);
+}
+
+.btn--success {
+  background: var(--color-accent-alt);
+  border-color: var(--color-accent-alt);
+}
+
+.btn--success:hover {
+  background: var(--color-accent-alt-hover);
+}
+
+.btn--danger,
+.btn-danger {
+  background: var(--color-danger-bg);
+  border-color: var(--color-danger-border);
+  color: var(--color-danger-text);
+}
+
+.btn--danger:hover,
+.btn-danger:hover {
+  background: var(--color-danger-hover);
+}
+
+.btn--block {
+  width: 100%;
+}
+
+@media (hover: none) {
+  .btn,
+  .btn-primary,
+  .btn-danger {
+    min-height: 36px;
+  }
+}
+
+/* ── Card ───────────────────────────────────────────────────────────── */
+
+.card-grid {
+  display: grid;
+  gap: var(--space-3);
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+}
+
+.card {
+  display: flex;
+  flex-direction: column;
+  background: var(--color-surface);
+  border: var(--border-w) solid var(--color-border);
+  box-shadow: var(--shadow-card);
+}
+
+.card__body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-height: 64px;
+  padding: var(--space-3);
+}
+
+.card__title {
+  margin: 0;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-bold);
+  line-height: var(--leading-tight);
+  letter-spacing: var(--tracking-heading);
+}
+
+.card__desc {
+  margin: 0;
+  font-size: var(--text-xs);
+  line-height: var(--leading-tight);
+  letter-spacing: var(--tracking-body);
+}
+
+.card__footer {
+  display: flex;
+  padding: 0 var(--space-3) var(--space-3);
+}
+
+/* The tiles are navigation, and on a phone the nav is the hamburger menu --
+   which carries all three destinations. Hiding the whole section takes its
+   heading with it rather than leaving a labelled void. */
+@media (max-width: 640px) {
+  .section--tiles {
+    display: none;
+  }
+}
+
+/* ── App list ───────────────────────────────────────────────────────── */
+
+.app-list {
+  box-shadow: var(--shadow-card);
+}
+
+.app-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 40px;
+  padding: var(--space-2) var(--space-4);
+  background: var(--color-surface);
+  border: var(--border-w) solid var(--color-border);
+  margin-bottom: -1px;
+}
+
+.app-row:last-child {
+  margin-bottom: 0;
+}
+
+/* Icon, name and status travel together; the actions cluster is the only
+   thing allowed to break onto its own line in a narrow container. */
+.app-row__main {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.app-row__name {
+  /* A flex item won't shrink below its content width without min-width:0, so
+     without this the ellipsis never engages and long names push the row wide. */
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  font-size: var(--text-sm);
+  line-height: var(--leading-snug);
+  letter-spacing: var(--tracking-name);
+  text-overflow: ellipsis;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.app-row__name:hover {
+  text-decoration: underline;
+}
+
+.app-row__alias {
+  color: var(--color-text-muted);
+  font-size: var(--text-xs);
+}
+
+.app-row__details {
+  margin-left: auto;
+  padding-left: var(--space-4);
+  color: var(--color-text-muted);
+  font-size: var(--text-xs);
+  letter-spacing: var(--tracking-body);
+  text-decoration: none;
+}
+
+.app-row__details:hover {
+  color: var(--color-text);
+  text-decoration: underline;
+}
+
+/* Pointer users only see the link on the row they are pointing at. It stays
+   in flow so the row's geometry never changes, and focus brings it back for
+   keyboard users -- opacity alone would leave a clickable invisible target. */
+@media (hover: hover) and (pointer: fine) {
+  .app-row__details {
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.15s ease;
+  }
+
+  .app-row:hover .app-row__details,
+  .app-row:focus-within .app-row__details {
+    opacity: 1;
+    pointer-events: auto;
+  }
+}
+
+.status-dot {
+  flex: none;
+  width: 5px;
+  height: 5px;
+  background: var(--color-status-stopped);
+}
+
+[data-status="running"] .status-dot {
+  background: var(--color-status-running);
+}
+
+[data-status="error"] .status-dot {
+  background: var(--color-status-error);
+}
+
+[data-status="building"] .status-dot,
+[data-status="starting"] .status-dot,
+[data-status="removing"] .status-dot {
+  background: var(--color-status-pending);
+}
+
+/* Status words, still rendered as text on the detail page. */
+.status-running {
+  color: var(--color-ok-text);
+  font-weight: var(--weight-semibold);
+}
+
+.status-error {
+  color: var(--color-danger-text);
+  font-weight: var(--weight-semibold);
+}
+
+.status-stopped {
+  color: var(--color-text-muted);
+}
+
+.status-building,
+.status-starting,
+.status-removing {
+  color: var(--color-warn-text);
+}
+
+/* ── Search ─────────────────────────────────────────────────────────── */
+
+.search {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.search__icon {
+  position: absolute;
+  left: 6px;
+  width: 14px;
+  height: 14px;
+  opacity: 0.8;
+  pointer-events: none;
+}
+
+input.search__input {
+  width: 26px;
+  max-width: 50vw;
+  padding-left: 26px;
+  background: transparent;
+  border-color: transparent;
+  cursor: pointer;
+  transition: width 0.15s ease, background-color 0.15s ease, border-color 0.15s ease;
+}
+
+input.search__input:focus,
+input.search__input:not(:placeholder-shown) {
+  width: 200px;
+  background: var(--color-surface-raised);
+  border-color: var(--color-border);
+  cursor: text;
+}
+
+/* ── Info table ─────────────────────────────────────────────────────── */
+/* Every key/value table in the space (system info, app detail, settings).
+   Both columns left-aligned: the values down one of these are unrelated to each
+   other (a size, a percentage, a path), so there is no column of like numbers
+   to line up, and flushing them right would only strand each value half a table
+   away from the label it belongs to. Fixed label width gives them a shared scan
+   edge instead. Right-alignment is for repeated measures in list tables. */
+
+.info-table {
+  table-layout: fixed;
+}
+
+/* `table-layout: fixed` takes the column widths from the first row, which is
+   the header -- a width on the row headers below would never apply. Sized to
+   the longest label the space uses rather than to a share of the table, so the
+   value starts just past it; row headers wrap (white-space: normal) if one ever
+   outgrows it. */
+.info-table thead th:first-child {
+  width: 32%;
+}
+
+.info-table th[scope="row"] {
+  background: transparent;
+  color: var(--color-text-subtle);
+  font-weight: var(--weight-semibold);
+  opacity: 1;
+  white-space: normal;
+}
+
+.info-table td {
+  overflow-wrap: anywhere;
+}
+
+/* A value cell that pairs text with a control (edit affordance, input). */
+.info-table td .info-value {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+@media (max-width: 640px) {
+  .info-table thead th:first-child {
+    width: 40%;
+  }
+}
+
+/* ── Spec list (responsive replacement for key/value tables) ────────── */
+
+.spec {
+  container-type: inline-size;
+  margin: var(--space-4) 0;
+}
+
+.spec-list {
+  display: grid;
+  grid-template-columns: minmax(8rem, 13rem) 1fr;
+  gap: var(--space-2) var(--space-4);
+  margin: 0;
+  font-size: var(--text-xs);
+}
+
+.spec-list dt {
+  color: var(--color-text-subtle);
+}
+
+.spec-list dd {
+  margin: 0;
+  word-break: break-word;
+}
+
+@container (max-width: 34rem) {
+  .spec-list {
+    grid-template-columns: 1fr;
+    gap: var(--space-1);
+  }
+
+  .spec-list dd {
+    margin-bottom: var(--space-3);
+  }
+}
+
+/* ── Misc ───────────────────────────────────────────────────────────── */
+
+.empty {
+  padding: var(--space-6);
+  background: var(--color-surface);
+  border: var(--border-w) solid var(--color-border);
+  box-shadow: var(--shadow-card);
+  font-size: var(--text-xs);
+  text-align: center;
+}
+
+.app-link {
+  font-weight: var(--weight-semibold);
+  text-decoration: none;
+}
+
+.app-link:hover {
+  text-decoration: underline;
+}
+
+.toast {
+  position: fixed;
+  bottom: calc(var(--grass-height) + var(--space-4));
+  right: var(--space-4);
+  max-width: 28em;
+  padding: var(--space-4);
+  background: var(--color-surface-raised);
+  border: var(--border-w) solid var(--color-border);
+  border-left: 4px solid var(--color-status-pending);
+  box-shadow: var(--shadow-card);
+  font-size: var(--text-xs);
+  z-index: 1000;
+}
+
+.toast p {
+  margin: 0 0 var(--space-3);
+}
+
+.toast .toast-actions {
+  display: flex;
+  gap: var(--space-2);
+}
+
+@media (max-width: 640px) {
+  .toast {
+    left: var(--space-4);
+    right: var(--space-4);
+    max-width: none;
+  }
+}
+
+.pie-slice {
+  stroke: var(--color-surface-raised);
+  stroke-width: 1.5;
+}
+
+.pie-slice:hover {
+  filter: brightness(0.88);
+}
+
+.pie-center-name {
+  font-size: 14px;
+  font-weight: var(--weight-semibold);
+  fill: var(--color-text);
+  text-anchor: middle;
+}
+
+.pie-center-size {
+  font-size: 12px;
+  fill: var(--color-text-subtle);
+  text-anchor: middle;
+}
+
+/* The archive-backend table still uses a form-table: its values are prose, so
+   the info table's right-aligned value column would read worse. The label
+   column stays plain -- the uppercase tracked treatment on `th` is for data
+   tables, where the header names a column. Stacks on narrow screens so the
+   label does not squeeze the control into a sliver. */
+table.form-table th {
+  width: 12em;
+  background: var(--color-surface-raised);
+  font-weight: var(--weight-medium);
+  letter-spacing: normal;
+  text-transform: none;
+  opacity: 1;
+}
+
+table.form-table input[type="text"],
+table.form-table input[type="password"] {
+  max-width: 24em;
+}
+
+@media (max-width: 640px) {
+  table.form-table,
+  table.form-table tbody,
+  table.form-table tr,
+  table.form-table th,
+  table.form-table td {
+    display: block;
+    width: auto;
+  }
+
+  table.form-table th {
+    border-bottom: 0;
+    font-weight: var(--weight-semibold);
+  }
+
+  table.form-table td {
+    border-top: 0;
+  }
+}
+
+/* ── Panel (single-purpose pages: login, setup, approvals) ──────────── */
+
+.panel {
+  padding: var(--space-6);
+  background: var(--color-surface);
+  border: var(--border-w) solid var(--color-border);
+  box-shadow: var(--shadow-card);
+}
+
+.panel h2 {
+  margin-top: 0;
+}
+
+/* The panel's padding is the only gap at its edges. */
+.panel > :first-child {
+  margin-top: 0;
+}
+
+.panel > :last-child {
+  margin-bottom: 0;
+}
+
+.field {
+  display: block;
+  margin-bottom: var(--space-5);
+}
+
+.field > span,
+.field > label,
+.field__head > label {
+  display: block;
+  margin-bottom: var(--space-1);
+  font-size: var(--text-xs);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+  opacity: 0.8;
+}
+
+/* Carries whatever sits beside the label -- an info tip, a badge. The dimming
+   stays on the label itself: `opacity` on this row would group the tip's
+   popover into it and render it translucent. */
+.field__head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  margin-bottom: var(--space-1);
+}
+
+.field__head > label {
+  margin-bottom: 0;
+}
+
+/* Label, control, explainer are one unit. Whatever the control is -- an input,
+   a button row, a block a script paints -- the label's own margin is the only
+   gap under it, so every field opens on the same rhythm. */
+.field > span + *,
+.field > label + *,
+.field > .field__head + * {
+  margin-top: 0;
+}
+
+.field > .hint,
+.field > .msg,
+.field > .field-error {
+  margin-top: var(--space-2);
+  margin-bottom: 0;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-5);
+}
+
+/* ── Action bar ─────────────────────────────────────────────────────── */
+
+.action-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin: var(--space-4) 0;
+}
+
+/* ── Deploy page ────────────────────────────────────────────────────── */
+
+.port-mappings {
+  margin-top: var(--space-4);
+}
+
+.catalog-callout {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-5) var(--space-4);
+  margin: var(--space-4) 0 var(--space-7);
+  padding: var(--space-5);
+  background: var(--color-surface);
+  border: var(--border-w) solid var(--color-border);
+  box-shadow: var(--shadow-card);
+}
+
+/* Nudged down so the icon's top edge sits on the h3 cap-height rather than
+   centring against the whole two-line text block. */
+.catalog-callout .callout-icon {
+  align-self: flex-start;
+  margin-top: var(--space-1);
+}
+
+/* Grows to absorb the free space so the button stays pinned right, and can
+   shrink so the paragraph wraps before the icon is orphaned onto its own row. */
+.catalog-callout .callout-text {
+  flex: 1 1 12rem;
+}
+
+.catalog-callout h3 {
+  margin: 0 0 var(--space-1);
+}
+
+.catalog-callout p {
+  margin: 0;
+  color: var(--color-text-subtle);
+  font-size: var(--text-xs);
+}
+
+.catalog-callout .callout-action {
+  margin-left: auto;
+}
+
+.repo-url-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+}
+
+.repo-url-row input {
+  flex: 1 1 16rem;
+}
+
+details.url-help {
+  margin-top: var(--space-3);
+  color: var(--color-text-subtle);
+  font-size: var(--text-xs);
+}
+
+details.url-help summary {
+  cursor: pointer;
+}
+
+details.url-help ul {
+  margin: var(--space-2) 0 0;
+}
+
+/* ── Sortable table headers (diagnostics) ───────────────────────────── */
+
+th.sortable {
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+
+th.sortable:hover {
+  background: #ececec;
+}
+
+/* ── Usage charts (system info) ─────────────────────────────────────── */
+
+.usage-charts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: var(--space-7);
+  margin: var(--space-2) 0;
+}
+
+.usage-chart {
+  text-align: center;
+}
+
+.usage-chart h3 {
+  margin: 0 0 var(--space-1);
+  font-size: var(--text-sm);
+}
+
+/* ── Info tip ───────────────────────────────────────────────────────── */
+/* An explanation parked behind an icon. Pointer users get it on hover; the
+   button pins it open for touch and keyboard. The body resets the inherited
+   type, because a tip usually sits inside an uppercase tracked label. */
+
+.info-tip {
+  position: relative;
+  display: inline-flex;
+  vertical-align: middle;
+}
+
+.info-tip__toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: help;
+  opacity: 0.6;
+}
+
+.info-tip__toggle:hover,
+.info-tip__toggle[aria-expanded="true"] {
+  opacity: 1;
+}
+
+@media (hover: none) {
+  .info-tip__toggle {
+    width: 32px;
+    height: 32px;
+    margin: -6px;
+  }
+}
+
+.info-tip__body {
+  position: absolute;
+  top: calc(100% + var(--space-1));
+  z-index: 20;
+  width: max-content;
+  max-width: min(300px, 72vw);
+  padding: var(--space-3) var(--space-4);
+  background: var(--color-surface-raised);
+  border: var(--border-w) solid var(--color-border-strong);
+  box-shadow: var(--shadow-card);
+  color: var(--color-text-subtle);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  line-height: var(--leading-snug);
+  letter-spacing: normal;
+  text-align: left;
+  text-transform: none;
+  visibility: hidden;
+  opacity: 0;
+  transition: opacity 0.12s ease, visibility 0.12s;
+}
+
+/* Where the tip hangs before js measures it against the viewport. */
+.info-tip__body--start { left: 0; }
+.info-tip__body--end { right: 0; }
+
+.info-tip__body > :last-child {
+  margin-bottom: 0;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .info-tip:hover .info-tip__body {
+    visibility: visible;
+    opacity: 1;
+  }
+}
+
+.info-tip__toggle[aria-expanded="true"] + .info-tip__body {
+  visibility: visible;
+  opacity: 1;
+}
+
+/* ── Badge ──────────────────────────────────────────────────────────────
+   Square status chip, derived from the "+ NEW" button in the Figma: flat
+   pastel fill, 1px border, uppercase and tracked. Replaces the ad-hoc
+   coloured <span>s the page scripts used to emit. */
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 1px var(--space-2);
+  border: var(--border-w) solid var(--color-border);
+  background: #efefef;
+  color: var(--color-text-subtle);
+  font-size: var(--text-xs);
+  line-height: var(--leading-tight);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.badge--ok {
+  background: var(--color-accent-alt);
+  border-color: #9fdd7a;
+  color: var(--color-ok-text);
+}
+
+.badge--info {
+  background: var(--color-accent);
+  border-color: #6fbdf0;
+  color: #073b5c;
+}
+
+.badge--warn {
+  background: #fff0c2;
+  border-color: #e8c860;
+  color: var(--color-warn-text);
+}
+
+.badge--error {
+  background: var(--color-danger-bg);
+  border-color: var(--color-danger-border);
+  color: var(--color-danger-text);
+}
+
+/* ── Notices ────────────────────────────────────────────────────────────
+   Same tints as the badges at panel scale, with a 3px bar carrying the
+   status so the message itself stays plain text. */
+
+.notice {
+  padding: var(--space-3) var(--space-4);
+  margin: var(--space-3) 0;
+  background: #e6f2ff;
+  border: var(--border-w) solid #b8d8f5;
+  border-left-width: 3px;
+  font-size: var(--text-xs);
+}
+
+.notice--ok {
+  background: #f2ffe9;
+  border-color: #9fdd7a;
+}
+
+.notice--warn {
+  background: #fff8e6;
+  border-color: #e8c860;
+}
+
+.notice--error {
+  background: var(--color-danger-bg);
+  border-color: var(--color-danger-border);
+  color: var(--color-danger-text);
+}
+
+/* ── Meter ──────────────────────────────────────────────────────────────
+   Blocky progress bar. The segmented fill echoes the pixel-art clouds and
+   grass rather than reading as a smooth modern progress bar. */
+
+.meter {
+  height: 12px;
+  margin: var(--space-2) 0;
+  background: var(--color-surface-raised);
+  border: var(--border-w) solid var(--color-border);
+  overflow: hidden;
+}
+
+.meter__fill {
+  height: 100%;
+  background: repeating-linear-gradient(to right,
+    var(--color-accent) 0 10px, transparent 10px 14px);
+}
+
+.meter__fill--ok { background: repeating-linear-gradient(to right, var(--color-status-running) 0 10px, transparent 10px 14px); }
+.meter__fill--warn { background: repeating-linear-gradient(to right, var(--color-status-pending) 0 10px, transparent 10px 14px); }
+.meter__fill--error { background: repeating-linear-gradient(to right, var(--color-status-error) 0 10px, transparent 10px 14px); }
+
+/* ── Form controls ──────────────────────────────────────────────────────
+   Native checkboxes and selects arrive rounded and OS-tinted, which fights
+   the sharp-cornered flat treatment everywhere else. */
+
+input[type="checkbox"],
+input[type="radio"] {
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  flex: none;
+  background: var(--color-surface-raised);
+  border: var(--border-w) solid var(--color-border-strong);
+  display: inline-grid;
+  place-content: center;
+  cursor: pointer;
+}
+
+input[type="checkbox"]:checked,
+input[type="radio"]:checked {
+  background: var(--color-accent);
+  border-color: #6fbdf0;
+}
+
+input[type="checkbox"]:checked::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  background: var(--color-text);
+}
+
+input[type="radio"]:checked::before {
+  content: "";
+  width: 4px;
+  height: 4px;
+  background: var(--color-text);
+}
+
+select {
+  appearance: none;
+  padding-right: var(--space-6);
+  background-image: linear-gradient(45deg, transparent 50%, var(--color-text) 50%),
+                    linear-gradient(135deg, var(--color-text) 50%, transparent 50%);
+  background-position: right 12px top 55%, right 7px top 55%;
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+}
+
+/* ── Field rows ─────────────────────────────────────────────────────────
+   .field stacks a tracked uppercase label over its control; .field-row is
+   the inline variant used by the "add domain" / "create token" bars. */
+
+.field-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--space-3);
+  margin: var(--space-4) 0;
+}
+
+.field-row .field {
+  flex: 0 1 auto;
+  min-width: 0;
+  margin-bottom: 0;
+}
+
+/* Inputs default to width:100%, which in a field-row consumed the whole line
+   and pushed the adjacent button onto its own row. */
+.field-row > input,
+.field-row > select {
+  flex: 1 1 16rem;
+  width: auto;
+  min-width: 0;
+  max-width: 26rem;
+}
+
+/* A number is a handful of digits; the 20-character default made it as wide as
+   the free-text field beside it. */
+.field-row .field > input[type="number"] {
+  width: 7rem;
+}
+
+/* An "add a thing" bar: the free-text field takes the slack and the submit
+   sits at the right edge, clear of the inputs it acts on. */
+.field-row--add > .field:first-child {
+  flex: 1 1 14rem;
+}
+
+.field-row--add > .btn {
+  margin-left: auto;
+}
+
+/* A checkbox has no label above it, so bottom-aligning it in the row leaves it
+   sitting below the neighbouring inputs' text. */
+.field-row > .field--check {
+  padding-bottom: var(--space-1);
+}
+
+.field > input,
+.field > select,
+.field > .field-row {
+  max-width: 32rem;
+}
+
+.field--check {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-xs);
+}
+
+.field--check > span {
+  margin: 0;
+  letter-spacing: normal;
+  text-transform: none;
+  opacity: 1;
+}
+
+/* ── Copyable value ─────────────────────────────────────────────────────
+   One-time secrets (API tokens) shown for copying. */
+
+.copy-field {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+
+.copy-field code {
+  flex: 1 1 20rem;
+  min-width: 0;
+  padding: var(--space-1) var(--space-2);
+  background: var(--color-surface-raised);
+  border: var(--border-w) solid var(--color-border);
+  user-select: all;
+  word-break: break-all;
+}
+
+/* ── Charts (system info) ───────────────────────────────────────────────
+   Donuts stay for multi-segment breakdowns, where proportion between parts
+   is the point; single values use .meter instead. Flat fills, no gradients. */
+
+.chart-legend {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--space-1) var(--space-3);
+  margin-top: var(--space-2);
+  font-size: var(--text-xs);
+}
+
+.chart-legend__swatch {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: var(--space-1);
+}
+
+/* ── Log list (update progress) ─────────────────────────────────────────── */
+
+.log-list {
+  margin: 0;
+  padding: var(--space-3);
+  list-style: none;
+  background: #1e1e1e;
+  color: #d4d4d4;
+  font-size: var(--text-xs);
+  max-height: 30em;
+  overflow-y: auto;
+}
+
+.log-list li {
+  display: flex;
+  gap: var(--space-3);
+  padding: 1px 0;
+}
+
+.log-list .ts {
+  flex: none;
+  color: #7f7f7f;
+}
+
+.is-expired td {
+  color: var(--color-text-muted);
+}
+
+/* ── Inline status messages ─────────────────────────────────────────────
+   The one-line feedback beside a control. Page scripts used to set a raw
+   hex on style.color for these; they set a variant class now. */
+
+.msg {
+  font-size: var(--text-xs);
+}
+
+.msg--ok { color: var(--color-ok-text); }
+.msg--warn { color: var(--color-warn-text); }
+.msg--error { color: var(--color-danger-text); }
+
+.rule {
+  height: 0;
+  margin: var(--space-6) 0;
+  border: 0;
+  border-top: var(--border-w) solid var(--color-border);
+}
+
+.panel .field:last-child {
+  margin-bottom: 0;
+}
+
+.log-output--tall {
+  max-height: 120em;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+/* ── Terminal ───────────────────────────────────────────────────────────
+   Breaks out of the content column to the full viewport width; sharp
+   corners, matching the log-output surface. */
+
+.terminal-frame {
+  width: calc(100vw - 2 * var(--layout-gutter));
+  margin-left: calc((100% - 100vw) / 2 + var(--layout-gutter));
+  height: calc(100vh - 220px);
+  min-height: 20em;
+  padding: var(--space-2);
+  background: #1e1e1e;
+  border: var(--border-w) solid var(--color-border);
+  box-shadow: var(--shadow-card);
+  overflow: hidden;
+}
+
+.terminal-frame > #terminal {
+  width: 100%;
+  height: 100%;
+}
+
+/* ── App detail ─────────────────────────────────────────────────────────
+   The status is the one fact the page exists to report, so it is set a size
+   larger than the rows around it. The actions table pairs each button with a
+   plain-language note about what it does. */
+
+.info-table tr.status-row th[scope="row"],
+.info-table tr.status-row td {
+  padding-top: var(--space-3);
+  padding-bottom: var(--space-3);
+}
+
+.status-row td {
+  font-size: var(--text-md);
+  letter-spacing: var(--tracking-title);
+  text-transform: uppercase;
+}
+
+/* The dot is drawn on the status word itself, so it takes the word's colour
+   rather than the brighter swatch the dashboard list uses at 5px. */
+.status-value {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.status-value::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  background: currentColor;
+}
+
+/* The hint under the git URL input is a sentence, not another inline control,
+   so it takes the full row of the flex value cell. */
+.info-table td .info-value .hint {
+  flex-basis: 100%;
+  margin: 0;
+}
+
+/* table-layout: fixed sizes the columns from the header row, so the width
+   belongs on the <thead> cell rather than the row headers. */
+.action-table thead th:first-child {
+  width: 62%;
+}
+
+.action-table th[scope="row"] {
+  white-space: normal;
+}
+
+.action-note {
+  display: block;
+  margin-top: var(--space-1);
+  color: var(--color-text-muted);
+  font-weight: var(--weight-medium);
+  letter-spacing: var(--tracking-body);
+  text-transform: none;
+}
+
+.action-note--danger {
+  color: var(--color-danger-text);
+}
+
+.action-msg {
+  margin: var(--space-2) 0 0;
+  font-size: var(--text-xs);
+}
+
+/* Two columns on a phone squeeze the notes into a sliver, so each action
+   stacks instead: label, note, then the button on its own line. */
+@media (max-width: 640px) {
+  .action-table,
+  .action-table tbody,
+  .action-table tbody tr,
+  .action-table tbody th[scope="row"],
+  .action-table tbody td {
+    display: block;
+    width: auto;
+  }
+
+  .action-table thead {
+    display: none;
+  }
+
+  .action-table tbody tr {
+    border-bottom: var(--border-w) solid var(--color-border);
+  }
+
+  .action-table tbody tr:last-child {
+    border-bottom: 0;
+  }
+
+  .action-table tbody th[scope="row"],
+  .action-table tbody td {
+    border-bottom: 0;
+  }
+
+  .action-table tbody td {
+    padding-top: var(--space-2);
+  }
+}
+
+/* ── Settings ───────────────────────────────────────────────────────────
+   Every section on the settings page is a panel of stacked fields. The
+   panel is the page's surface, so tables and inline forms inside one drop
+   a shade to separate from it. */
+
+.panel table {
+  background: var(--color-surface-sunken);
+}
+
+.panel .table-scroll {
+  box-shadow: none;
+}
+
+/* An explainer inside a cell annotates 12px table text; at the prose size it
+   outweighs the value it belongs to. */
+.panel table .hint {
+  font-size: var(--text-xs);
+}
+
+/* An "empty" placeholder inside a panel is a line of prose, not a second box. */
+.panel .empty {
+  padding: 0;
+  background: none;
+  border: 0;
+  box-shadow: none;
+  color: var(--color-text-muted);
+  text-align: left;
+}
+
+/* A disclosed sub-form: stacked inputs share one width so the column of
+   fields has a single right edge. */
+.field-stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  max-width: 26rem;
+}
+
+.field > .field-stack {
+  margin-top: var(--space-2);
+}
+
+.field-stack > .actions {
+  margin-top: var(--space-2);
+}
+
+/* Row actions are one icon wide and hang off the right edge of the table. */
+.col-actions {
+  width: 1%;
+  white-space: nowrap;
+  text-align: right;
+}
+
+/* An inline-flex button sits on the text baseline, which leaves a descender's
+   worth of dead space under it and grows the row. */
+td.col-actions,
+td.col-actions .icon-btn {
+  vertical-align: middle;
+}
+
+/* Status words are read, not clicked. A filled chip beside a real button
+   reads as a second button, so these carry colour and weight only. */
+.status-text {
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
+  white-space: nowrap;
+}
+
+.status-text--ok { color: var(--color-ok-text); }
+.status-text--warn { color: var(--color-warn-text); }
+.status-text--error { color: var(--color-danger-text); }
+.status-text--muted { color: var(--color-text-muted); }
+
+@media (max-width: 640px) {
+  /* The gutter is doing most of the framing on a phone; a 24px inset on top of
+     it leaves the tables almost no width. */
+  .panel {
+    padding: var(--space-5) var(--space-4);
+  }
+
+  /* Stacked, the controls in an add-a-thing bar each want the full width;
+     the submit stays right-aligned on its own line. */
+  .field-row--add {
+    row-gap: var(--space-4);
+  }
+
+  .field-row--add > .field {
+    flex: 1 1 100%;
+  }
+
+  .field-row--add > .field > input,
+  .field-row--add > .field > select {
+    max-width: none;
+  }
+}

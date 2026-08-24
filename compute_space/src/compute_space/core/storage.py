@@ -46,7 +46,7 @@ def set_guard_paused(paused: bool) -> None:
         global _guard_paused
         _guard_paused = paused
     state = "paused" if paused else "resumed"
-    logger.info("Storage guard %s", state)
+    logger.info("Storage guard {}", state)
 
 
 # ---------------------------------------------------------------------------
@@ -225,7 +225,7 @@ def _stop_app_process_safe(row: sqlite3.Row) -> None:
     try:
         stop_app_process(row)
     except Exception:
-        logger.exception("Failed to stop app %s", row["name"])
+        logger.exception("Failed to stop app {}", row["name"])
 
 
 def enforce_storage_guard(config: Config) -> None:
@@ -240,7 +240,7 @@ def enforce_storage_guard(config: Config) -> None:
 
     free, min_free = result
     logger.warning(
-        "Storage low (%s free, %s required)",
+        "Storage low ({} free, {} required)",
         format_bytes(free),
         format_bytes(min_free),
     )
@@ -258,7 +258,7 @@ def enforce_storage_guard(config: Config) -> None:
 
         for row in rows:
             detail = "Storage too low. Free space by removing app data or resizing disks."
-            logger.warning("Stopping app %s due to low storage", row["name"])
+            logger.warning("Stopping app {} due to low storage", row["name"])
             _stop_app_process_safe(row)
             db.execute(
                 "UPDATE apps SET status = 'error', error_message = ?, container_id = NULL WHERE app_id = ?",

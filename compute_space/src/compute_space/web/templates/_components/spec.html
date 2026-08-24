@@ -1,0 +1,10 @@
+{#- Key/value list that collapses to stacked rows in narrow containers. -#}
+{% macro spec_list() -%}
+<div class="spec">
+  <dl class="spec-list">{{ caller() }}</dl>
+</div>
+{%- endmacro %}
+
+{% macro spec_row(label, value) -%}
+<dt>{{ label }}</dt><dd>{{ value }}</dd>
+{%- endmacro %}

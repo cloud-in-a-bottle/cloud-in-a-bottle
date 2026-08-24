@@ -55,7 +55,7 @@ def load_identity_keys(data_dir: str) -> None:
         if priv_path.exists() and pub_path.exists():
             _identity_private_key = priv_path.read_text()
             _identity_public_key = pub_path.read_text()
-            logger.info("Loaded persistent identity keys from %s", keys_dir)
+            logger.info("Loaded persistent identity keys from {}", keys_dir)
         else:
             keys_dir.mkdir(parents=True, exist_ok=True)
             private_key = rsa.generate_private_key(
@@ -77,9 +77,9 @@ def load_identity_keys(data_dir: str) -> None:
             )
             write_restricted(priv_path, _identity_private_key)
             pub_path.write_text(_identity_public_key)
-            logger.info("Generated new persistent identity keys at %s", keys_dir)
+            logger.info("Generated new persistent identity keys at {}", keys_dir)
     except (OSError, PermissionError, ValueError) as e:
-        logger.warning("Could not load/generate identity keys: %s", e)
+        logger.warning("Could not load/generate identity keys: {}", e)
 
 
 def _zone_domain_name(db: sqlite3.Connection) -> str:

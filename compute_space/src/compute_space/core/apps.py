@@ -122,7 +122,7 @@ def deserialize_links(raw: str | None) -> list[AppLink]:
     try:
         entries = json.loads(raw or "[]")
     except (json.JSONDecodeError, TypeError):
-        logger.warning("Failed to parse apps.links JSON; treating as empty: %r", raw)
+        logger.warning("Failed to parse apps.links JSON; treating as empty: {!r}", raw)
         return []
     links: list[AppLink] = []
     for entry in entries:
@@ -450,7 +450,7 @@ def deploy_app_background(
                 if attempt == max_build_attempts:
                     raise
                 logger.warning(
-                    "Container build attempt %d/%d for %s failed, retrying in %ds",
+                    "Container build attempt {}/{} for {} failed, retrying in {}s",
                     attempt,
                     max_build_attempts,
                     app_name,
@@ -491,7 +491,7 @@ def deploy_app_background(
             )
         db.commit()
     except Exception as e:
-        logger.exception("Failed to deploy %s", app_name)
+        logger.exception("Failed to deploy {}", app_name)
         db.execute(
             "UPDATE apps SET status = 'error', error_message = ? WHERE app_id = ?",
             (str(e), app_id),
@@ -615,11 +615,11 @@ def stop_running_archive_apps(
             continue
         if not archive_backend.manifest_uses_archive(row["manifest_raw"] or ""):
             continue
-        logger.info("stopping archive-using app %s before archive migration", row["name"])
+        logger.info("stopping archive-using app {} before archive migration", row["name"])
         try:
             stop_app_process(row)
         except Exception:
-            logger.exception("failed to stop app %s before archive migration", row["name"])
+            logger.exception("failed to stop app {} before archive migration", row["name"])
         recorded.append(row["app_id"])
         # Verify against the real container state (stop_app_process is
         # best-effort and doesn't touch the DB).
@@ -642,7 +642,7 @@ def start_apps_by_id(app_ids: list[str], db: sqlite3.Connection, config: Config)
         try:
             start_app_process(app_id, db, config)
         except Exception:
-            logger.exception("failed to restart app %s after archive migration remount", app_id)
+            logger.exception("failed to restart app {} after archive migration remount", app_id)
 
 
 def start_app_process(app_id: str, db: sqlite3.Connection, config: Config) -> None:
@@ -777,7 +777,7 @@ def git_pull(
 
     def _log(msg: str) -> None:
         msg = _redact(msg)
-        logger.info("%s: %s", app_name, msg)
+        logger.info("{}: {}", app_name, msg)
         if log_file:
             with open(log_file, "a") as f:
                 f.write(msg + "\n")
@@ -931,7 +931,7 @@ def reload_app_background(app_id: str, repo_path: str, config: Config) -> None:
     try:
         app_row = db.execute("SELECT name FROM apps WHERE app_id = ?", (app_id,)).fetchone()
         if app_row is None:
-            logger.error("reload_app_background: no app with id %s", app_id)
+            logger.error("reload_app_background: no app with id {}", app_id)
             return
         app_name = app_row["name"]
 
@@ -957,7 +957,7 @@ def reload_app_background(app_id: str, repo_path: str, config: Config) -> None:
                     # shutil.rmtree refuses; fall back to sudo rm -rf.
                     rmtree_with_sudo_fallback(repo_path, raise_on_failure=True)
                 shutil.copytree(source_dir, repo_path)
-                logger.info("Re-copied %s from %s", app_name, source_dir)
+                logger.info("Re-copied {} from {}", app_name, source_dir)
 
         manifest = None
         if repo_path and os.path.isdir(repo_path):
@@ -984,7 +984,7 @@ def reload_app_background(app_id: str, repo_path: str, config: Config) -> None:
 
                 db.commit()
             except ValueError:
-                logger.warning("Failed to re-read manifest for %s during reload", app_id)
+                logger.warning("Failed to re-read manifest for {} during reload", app_id)
             # Permissions are not touched here. New permissions declared in an
             # updated manifest are gated before this background reload even
             # starts: _reload_app_impl refuses to rebuild until the owner has
@@ -993,7 +993,7 @@ def reload_app_background(app_id: str, repo_path: str, config: Config) -> None:
 
         start_app_process(app_id, db, config)
     except Exception as e:
-        logger.exception("Failed to reload %s", app_id)
+        logger.exception("Failed to reload {}", app_id)
         db.execute(
             "UPDATE apps SET status = 'error', error_message = ? WHERE app_id = ?",
             (str(e), app_id),
@@ -1028,11 +1028,11 @@ def remove_app_background(app_id: str, keep_data: bool, config: Config) -> None:
         try:
             stop_app_process(app_row)
         except Exception:
-            logger.exception("stop_app_process failed during remove of %s", app_name)
+            logger.exception("stop_app_process failed during remove of {}", app_name)
         try:
             remove_image(app_name)
         except Exception:
-            logger.exception("remove_image failed during remove of %s", app_name)
+            logger.exception("remove_image failed during remove of {}", app_name)
         try:
             if keep_data:
                 deprovision_temp_data(app_name, config.temporary_data_dir)
@@ -1044,13 +1044,13 @@ def remove_app_background(app_id: str, keep_data: bool, config: Config) -> None:
                     archive_backend.effective_archive_dir(config, db),
                 )
         except Exception:
-            logger.exception("Failed to deprovision data for %s", app_name)
+            logger.exception("Failed to deprovision data for {}", app_name)
 
         db.execute("DELETE FROM apps WHERE app_id = ?", (app_id,))
         db.commit()
-        logger.info("Removed app %s (keep_data=%s)", app_name, keep_data)
+        logger.info("Removed app {} (keep_data={})", app_name, keep_data)
     except Exception:
-        logger.exception("remove_app_background failed for %s", app_id)
+        logger.exception("remove_app_background failed for {}", app_id)
         try:
             db.execute(
                 "UPDATE apps SET status = 'error', error_message = ? WHERE app_id = ?",
@@ -1058,7 +1058,7 @@ def remove_app_background(app_id: str, keep_data: bool, config: Config) -> None:
             )
             db.commit()
         except sqlite3.Error:
-            logger.exception("Could not record removal failure for %s", app_id)
+            logger.exception("Could not record removal failure for {}", app_id)
     finally:
         db.close()
 

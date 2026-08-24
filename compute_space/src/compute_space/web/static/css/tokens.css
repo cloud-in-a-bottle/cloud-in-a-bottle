@@ -1,0 +1,96 @@
+/* Design tokens, mirroring the Figma "Product Branding" variables. Everything
+   else references these, so a palette or scale change happens here only. */
+
+:root {
+  /* Palette */
+  --color-sky: #eef8ff;
+  --color-meadow: #ecffe1;
+  --color-surface: #fcfcfc;
+  --color-surface-raised: #ffffff;
+  --color-surface-sunken: #f2f2f2;
+  --color-border: #dadada;
+  --color-border-strong: #b4b4b4;
+
+  --color-text: #000000;
+  --color-text-muted: #8b8b8b;
+  --color-text-subtle: #5c5c5c;
+
+  --color-accent: #a2d9ff;
+  --color-accent-hover: #8bcdfb;
+  --color-accent-alt: #d4ffbc;
+  --color-accent-alt-hover: #c1f7a2;
+  --color-danger-bg: #ffe4e4;
+  --color-danger-hover: #ffd0d0;
+  --color-danger-border: #f0a9a9;
+  --color-danger-text: #a11212;
+  --color-ok-text: #1d5c00;
+  --color-warn-text: #6b4c00;
+
+  /* Donut neutrals. Free headroom reads as a pale wash, host-but-not-app as a
+     deep blue, so neither competes with the pastel per-app slices. */
+  --color-chart-unused: #d9ecfa;
+  --color-chart-system: #3f6f9c;
+
+  --color-status-running: #76ff2d;
+  --color-status-stopped: #c4c4c4;
+  --color-status-error: #ff4d4d;
+  --color-status-pending: #ffc02d;
+
+  /* Type */
+  --font-mono: "Atkinson Hyperlegible Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  --text-xs: 12px;
+  --text-sm: 14px;
+  --text-md: 16px;
+  --text-lg: 20px;
+
+  --leading-tight: 16px;
+  --leading-snug: 20px;
+  --leading-loose: 36px;
+
+  --tracking-label: 0.72px;
+  --tracking-title: 0.48px;
+  --tracking-heading: 0.07px;
+  --tracking-body: 0.12px;
+  --tracking-name: -0.28px;
+
+  --weight-medium: 500;
+  --weight-semibold: 600;
+  --weight-bold: 700;
+
+  /* Space */
+  --space-0: 0;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 10px;
+  --space-4: 12px;
+  --space-5: 18px;
+  --space-6: 24px;
+  --space-7: 32px;
+  --space-8: 48px;
+
+  /* Shape */
+  --radius-none: 0;
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 10px;
+  --border-w: 1px;
+  --shadow-card: 2px 2px 0 rgba(0, 0, 0, 0.1);
+
+  /* Layout */
+  /* One content width for every page. Terminal and logs opt out entirely via
+     .layout--full: they are viewers, and want the whole window. */
+  --layout-width: 800px;
+  --layout-width-narrow: 420px;
+  --layout-gutter: 16px;
+  --grass-height: 24px;
+  --cloud-band-height: clamp(230px, 56vh, 520px);
+}
+
+@media (max-width: 640px) {
+  :root {
+    --cloud-band-height: clamp(140px, 30vh, 220px);
+    --layout-gutter: 12px;
+    --grass-height: 16px;
+  }
+}
