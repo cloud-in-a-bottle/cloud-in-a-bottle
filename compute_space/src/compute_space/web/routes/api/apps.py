@@ -10,7 +10,6 @@ from typing import Any
 
 import attr
 from litestar import MediaType
-from litestar import Request
 from litestar import Response
 from litestar import Router
 from litestar import WebSocket
@@ -18,6 +17,7 @@ from litestar import get
 from litestar import post
 from litestar import websocket
 from litestar.di import NamedDependency
+from litestar.exceptions import HTTPException
 from litestar.exceptions import InternalServerException
 from litestar.exceptions import NotAuthorizedException
 from litestar.exceptions import NotFoundException
@@ -211,23 +211,17 @@ class SetAppRemoteResponse:
 # ─── helpers ───────────────────────────────────────────────────────────────
 
 
-_APP_ERROR_STATUS: dict[type[AppError], int] = {
-    AppInputError: 400,
-    AppNotFoundError: 404,
-    AppConflictError: 409,
-    AppUnavailableError: 503,
+_APP_ERROR_HTTP: dict[type[AppError], type[HTTPException]] = {
+    AppInputError: ValidationException,
+    AppNotFoundError: NotFoundException,
+    AppConflictError: ConflictException,
+    AppUnavailableError: ServiceUnavailableException,
 }
 
 
-def _app_error_response(request: Request[Any, Any, Any], exc: AppError) -> Response[dict[str, Any]]:
-    """Map core AppError subclasses onto the same JSON shape litestar's
-    HTTPException handler renders, so clients see no difference."""
-    status = _APP_ERROR_STATUS[type(exc)]
-    return Response(
-        content={"status_code": status, "detail": str(exc)},
-        status_code=status,
-        media_type=MediaType.JSON,
-    )
+def _to_http_error(exc: AppError) -> HTTPException:
+    """Translate a core AppError into the litestar HTTPException the route surfaces."""
+    return _APP_ERROR_HTTP[type(exc)](detail=str(exc))
 
 
 # ─── routes ────────────────────────────────────────────────────────────────
@@ -468,7 +462,10 @@ async def app_diagnostics(
     ``?download=1`` adds a Content-Disposition header so browsers save the JSON
     to a timestamped file instead of rendering it inline.
     """
-    app_row = resolve_app(app_id, db)
+    try:
+        app_row = resolve_app(app_id, db)
+    except AppError as exc:
+        raise _to_http_error(exc) from exc
     diagnostics = await collect_app_diagnostics(app_row, config, db)
     headers = None
     if download:
@@ -487,7 +484,10 @@ async def app_logs(
     db: NamedDependency[sqlite3.Connection],
     config: NamedDependency[Config],
 ) -> Response[str]:
-    app_row = resolve_app(app_id, db)
+    try:
+        app_row = resolve_app(app_id, db)
+    except AppError as exc:
+        raise _to_http_error(exc) from exc
     logs = get_docker_logs(app_row["name"], config.temporary_data_dir, app_row["container_id"])
     return Response(content=logs, status_code=200, media_type=MediaType.TEXT)
 
@@ -564,7 +564,10 @@ async def app_logs_stream(
     raises=[ValidationException, NotFoundException, ConflictException],
 )
 async def stop_app(app_id: FromPath[str], db: NamedDependency[sqlite3.Connection]) -> Response[OkResponse]:
-    app_row = resolve_app(app_id, db)
+    try:
+        app_row = resolve_app(app_id, db)
+    except AppError as exc:
+        raise _to_http_error(exc) from exc
     if is_removing(app_row):
         raise ConflictException(detail="App is being removed")
 
@@ -623,14 +626,17 @@ async def reload_app(
     data: ReloadAppRequest = ReloadAppRequest(),  # noqa: B008 — Litestar resolves this at dependency-injection time
 ) -> Response[OkResponse] | Response[UpdateReviewRequiredResponse] | Redirect:
     """User-initiated reload, optionally pulling latest code via ``update``."""
-    outcome = await core_reload_app(
-        app_id,
-        update=data.update,
-        continue_oauth=False,
-        approve_new_permissions=data.approve_new_permissions,
-        db=db,
-        config=config,
-    )
+    try:
+        outcome = await core_reload_app(
+            app_id,
+            update=data.update,
+            continue_oauth=False,
+            approve_new_permissions=data.approve_new_permissions,
+            db=db,
+            config=config,
+        )
+    except AppError as exc:
+        raise _to_http_error(exc) from exc
     return _reload_outcome_to_response(outcome, continue_oauth=False)
 
 
@@ -654,14 +660,17 @@ async def reload_app_after_oauth(
         if not row:
             return Redirect(path="/dashboard")
         return Redirect(path=f"/app_detail/{row['name']}")
-    outcome = await core_reload_app(
-        app_id,
-        update=True,
-        continue_oauth=True,
-        approve_new_permissions=False,
-        db=db,
-        config=config,
-    )
+    try:
+        outcome = await core_reload_app(
+            app_id,
+            update=True,
+            continue_oauth=True,
+            approve_new_permissions=False,
+            db=db,
+            config=config,
+        )
+    except AppError as exc:
+        raise _to_http_error(exc) from exc
     return _reload_outcome_to_response(outcome, continue_oauth=True)
 
 
@@ -677,7 +686,10 @@ async def wipe_data_restart(
     config: NamedDependency[Config],
 ) -> Response[OkResponse]:
     """Wipe all app data, including archive data, then rebuild the app in place."""
-    core_wipe_data_restart(app_id, db, config)
+    try:
+        core_wipe_data_restart(app_id, db, config)
+    except AppError as exc:
+        raise _to_http_error(exc) from exc
     return Response(content=OkResponse(ok=True), status_code=202, media_type=MediaType.JSON)
 
 
@@ -700,7 +712,10 @@ async def remove_app(
     so reloading the page or opening a second tab still shows the
     in-flight state.
     """
-    app_row = resolve_app(app_id, db)
+    try:
+        app_row = resolve_app(app_id, db)
+    except AppError as exc:
+        raise _to_http_error(exc) from exc
 
     keep_data = data.keep_data
 
@@ -783,7 +798,10 @@ async def rename_app(
     if f"/{new_name}" in RESERVED_PATHS:
         raise ValidationException(detail=f"Name '{new_name}' conflicts with a reserved path")
 
-    app_row = resolve_app(app_id, db)
+    try:
+        app_row = resolve_app(app_id, db)
+    except AppError as exc:
+        raise _to_http_error(exc) from exc
     if is_removing(app_row):
         raise ConflictException(detail="App is being removed")
     old_name = app_row["name"]
@@ -906,7 +924,10 @@ async def set_app_remote(
     if not repo_url:
         raise ValidationException(detail="Repo URL is required")
 
-    app_row = resolve_app(app_id, db)
+    try:
+        app_row = resolve_app(app_id, db)
+    except AppError as exc:
+        raise _to_http_error(exc) from exc
     if is_removing(app_row):
         raise ConflictException(detail="App is being removed")
 
@@ -933,7 +954,6 @@ async def set_app_remote(
 
 api_apps_routes = Router(
     path="/",
-    exception_handlers={AppError: _app_error_response},
     route_handlers=[
         clone_and_get_app_info,
         check_port,
