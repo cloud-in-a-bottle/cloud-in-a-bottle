@@ -331,7 +331,6 @@ async function copyAppDiagnostics(btn) {
   "renameAppUrl": "/rename_app/{{ app.app_id }}",
   "appDetailUrl": "/app_detail/{{ app.name }}",
   "appLogsStreamUrl": "/app_logs_stream/{{ app.app_id }}",
-  "appStatusStreamUrl": "/app_status_stream/{{ app.app_id }}",
   "appStatusUrl": "/api/app_status/{{ app.app_id }}",
   "appStatus": {{ app.status | tojson }},
   "nextUrl": {{ next_url | default("", true) | tojson }},

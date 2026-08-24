@@ -614,76 +614,6 @@ async def app_logs_stream(
         await asyncio.gather(*tasks, return_exceptions=True)
 
 
-# How often the status stream re-reads the app row; module-level so tests can shrink it.
-STATUS_STREAM_POLL_SECONDS = 1.0
-
-
-@websocket("/app_status_stream/{app_id:str}")
-async def app_status_stream(socket: WebSocket[Any, Any, Any], app_id: FromPath[str]) -> None:
-    """Watch the app's DB row (the source of truth for every writer, including background
-    reload/remove threads) and push a status frame on connect and on each change."""
-    if not await verify_owner_ws(socket):
-        return
-    if not is_valid_app_id(app_id):
-        await socket.accept()
-        await socket.close(code=4404, reason="App not found")
-        return
-
-    def read_row() -> tuple[str, str | None, str | None, str | None] | None:
-        with contextlib.closing(get_db()) as conn:
-            row = conn.execute(
-                "SELECT status, error_message, container_id FROM apps WHERE app_id = ?", (app_id,)
-            ).fetchone()
-        if row is None:
-            return None
-        error, error_kind = _classify_error(row["error_message"])
-        return row["status"], error, error_kind, row["container_id"]
-
-    await socket.accept()
-
-    async def pump() -> None:
-        last: tuple[str, str | None, str | None, str | None] | None = None
-        try:
-            while True:
-                current = await asyncio.to_thread(read_row)
-                if current is None:
-                    # Row vanished (app removed): an application close code tells the
-                    # client to leave for the dashboard instead of reconnecting.
-                    await socket.close(code=4404, reason="App not found")
-                    return
-                if current != last:
-                    last = current
-                    status, error, error_kind, container_id = current
-                    await socket.send_json(
-                        {"status": status, "error": error, "error_kind": error_kind, "container_id": container_id}
-                    )
-                await asyncio.sleep(STATUS_STREAM_POLL_SECONDS)
-        except WebSocketDisconnect:
-            return
-        except Exception:
-            # Without this, a failed read/send would end the handler with the socket
-            # left open and the client hung; log and close so the client reconnects.
-            logger.exception("Status stream for app %s failed", app_id)
-            with contextlib.suppress(Exception):
-                await socket.close(code=1011, reason="Status stream failed")
-            return
-
-    async def watch_close() -> None:
-        # Send-only stream: any inbound frame — or, more usually, a disconnect —
-        # means the client is gone, so stop the row watch promptly.
-        with contextlib.suppress(WebSocketDisconnect):
-            while True:
-                await socket.receive()
-
-    tasks = [asyncio.create_task(t) for t in (pump(), watch_close(), wait_for_shutdown())]
-    try:
-        await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
-    finally:
-        for t in tasks:
-            t.cancel()
-        await asyncio.gather(*tasks, return_exceptions=True)
-
-
 @post(
     "/stop_app/{app_id:str}",
     status_code=200,
@@ -1303,7 +1233,6 @@ api_apps_routes = Router(
         app_diagnostics,
         app_logs,
         app_logs_stream,
-        app_status_stream,
         stop_app,
         reload_app,
         reload_app_after_oauth,

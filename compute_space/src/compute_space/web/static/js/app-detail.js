@@ -366,18 +366,19 @@ function clearCacheAndReload() {
         }
     }
 
-    function startStatusStream() {
-        var proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        var ws = new WebSocket(proto + '//' + window.location.host + config.appStatusStreamUrl);
-        ws.onmessage = function(e) { handleStatus(JSON.parse(e.data)); };
-        ws.onclose = function(e) {
-            // 4401 means the session expired; 4404 means the app row is gone (removed);
-            // anything else is a drop — reconnect.
-            if (e.code === 4401) { redirectToLogin(); return; }
-            if (e.code === 4404) { window.location.href = '/dashboard'; return; }
-            setTimeout(startStatusStream, 2000);
-        };
-        ws.onerror = function() { ws.close(); };
+    function pollStatus() {
+        if (!config.appStatusUrl) return;
+        fetch(config.appStatusUrl, { credentials: 'same-origin' })
+            .then(function(r) {
+                if (r.status === 401) { redirectToLogin(); return null; }
+                if (r.status === 404) { window.location.href = '/dashboard'; return null; }
+                if (!r.ok) return null;
+                return r.json();
+            })
+            .then(function(data) {
+                if (data) handleStatus(data);
+            })
+            .catch(function() {});
     }
 
     if (appStatus === 'removing') {
@@ -389,9 +390,8 @@ function clearCacheAndReload() {
     // Stream regardless of status: a stopped/errored app still has a build log to replay.
     startLogStream();
 
-    // Stream status unconditionally so runtime errors and initial state changes
-    // sync immediately without waiting for a page reload.
-    startStatusStream();
+    pollStatus();
+    setInterval(pollStatus, 1000);
 })();
 
 // Grey out Save until the git upstream input actually differs from what's saved.

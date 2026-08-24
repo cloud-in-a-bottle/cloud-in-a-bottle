@@ -1,15 +1,7 @@
-"""Tests for ``/api/app_status/<app_id>`` error-kind logic and the
-``/app_status_stream/<app_id>`` WebSocket that pushes the same payload on change.
-
-In particular the legacy ``[CACHE_CORRUPT]`` marker still needs to map to
-``error_kind = "build_cache_corrupt"`` so the dashboard's 'drop cache
-and rebuild' toast keeps firing against rows whose ``error_message``
-column was written before the marker rename.
-"""
+"""Tests for /api/app_status/<app_id> status and error-kind responses."""
 
 from __future__ import annotations
 
-import asyncio
 import sqlite3
 from collections.abc import Iterator
 from pathlib import Path
@@ -17,18 +9,15 @@ from typing import Any
 
 import pytest
 from litestar import Litestar
-from litestar.exceptions import WebSocketDisconnect
 from litestar.testing import TestClient
 
 import compute_space.web.routes.api.apps as apps_routes
 from compute_space.config import get_config
 from compute_space.core.app_id import new_app_id
 from compute_space.core.containers import BUILD_CACHE_CORRUPT_MARKER
-from compute_space.core.updates import initialize_shutdown_event
 from compute_space.db.connection import init_db
 from compute_space.tests._litestar_helpers import auth_cookie
 from compute_space.tests._litestar_helpers import make_test_app
-from compute_space.tests._litestar_helpers import ws_cookie_header
 from compute_space.tests.conftest import _make_test_config
 from compute_space.web.routes.api.apps import api_apps_routes
 
@@ -86,8 +75,6 @@ def test_current_marker_maps_to_build_cache_corrupt_error_kind(
 def test_legacy_marker_still_maps_to_build_cache_corrupt_error_kind(
     cfg: Any, client: TestClient[Litestar], cookies: dict[str, str]
 ) -> None:
-    """Rows whose error_message was written before the marker rename
-    must still trigger the 'drop cache' remediation toast in the UI."""
     app_id = _seed_app_with_error(
         cfg,
         error_message="[CACHE_CORRUPT] Docker build cache is corrupted.",
@@ -126,22 +113,15 @@ def _set_app(cfg: Any, app_id: str, **cols: Any) -> None:
         db.close()
 
 
-def test_status_stream_requires_auth(cfg: Any, client: TestClient[Litestar]) -> None:
-    with pytest.raises(WebSocketDisconnect) as exc:
-        with client.websocket_connect(f"/app_status_stream/{new_app_id()}") as ws:  # no cookie
-            ws.receive_json()
-    assert exc.value.code == 4401
+def test_app_status_requires_auth(cfg: Any, client: TestClient[Litestar]) -> None:
+    resp = client.get(f"/api/app_status/{new_app_id()}")
+    assert resp.status_code == 401
 
 
-def test_status_stream_pushes_changes_and_closes_when_row_vanishes(
-    cfg: Any, client: TestClient[Litestar], cookies: dict[str, str], monkeypatch: pytest.MonkeyPatch
+def test_app_status_reflects_changes_and_returns_404_when_removed(
+    cfg: Any, client: TestClient[Litestar], cookies: dict[str, str]
 ) -> None:
-    """One connect covers: initial frame, plain-error push, cache-corrupt
-    classification, and the 4404 close after the row is deleted."""
-    # The handler races its pump against wait_for_shutdown(), which is an instant
-    # no-op unless the app-startup event is wired — the stream would die immediately.
-    initialize_shutdown_event(asyncio.Event())
-    monkeypatch.setattr(apps_routes, "STATUS_STREAM_POLL_SECONDS", 0.01)
+    client.cookies.update(cookies)
     app_id = new_app_id()
     db = sqlite3.connect(cfg.db_path)
     try:
@@ -154,34 +134,25 @@ def test_status_stream_pushes_changes_and_closes_when_row_vanishes(
     finally:
         db.close()
 
-    with pytest.raises(WebSocketDisconnect) as exc:
-        with client.websocket_connect(f"/app_status_stream/{app_id}", headers=ws_cookie_header(cookies)) as ws:
-            assert ws.receive_json() == {
-                "status": "building",
-                "error": None,
-                "error_kind": None,
-                "container_id": None,
-            }
+    resp = client.get(f"/api/app_status/{app_id}")
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "building"
 
-            _set_app(cfg, app_id, status="error", error_message="Container build failed (exit code 1):\n...tail")
-            frame = ws.receive_json()
-            assert frame["status"] == "error"
-            assert frame["error"] == "Container build failed (exit code 1):\n...tail"
-            assert frame["error_kind"] is None
+    _set_app(cfg, app_id, status="error", error_message="Container build failed (exit code 1):\n...tail")
+    resp = client.get(f"/api/app_status/{app_id}")
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "error"
+    assert resp.json()["error"] == "Container build failed (exit code 1):\n...tail"
 
-            _set_app(cfg, app_id, error_message=f"{BUILD_CACHE_CORRUPT_MARKER} boom")
-            frame = ws.receive_json()
-            assert frame["error"] == "Container build cache is corrupted."
-            assert frame["error_kind"] == "build_cache_corrupt"
+    db = sqlite3.connect(cfg.db_path)
+    try:
+        db.execute("DELETE FROM apps WHERE app_id = ?", (app_id,))
+        db.commit()
+    finally:
+        db.close()
 
-            db = sqlite3.connect(cfg.db_path)
-            try:
-                db.execute("DELETE FROM apps WHERE app_id = ?", (app_id,))
-                db.commit()
-            finally:
-                db.close()
-            ws.receive_json()  # the watcher notices the missing row and closes
-    assert exc.value.code == 4404
+    resp = client.get(f"/api/app_status/{app_id}")
+    assert resp.status_code == 404
 
 
 def test_app_status_returns_repo_url(cfg: Any, client: TestClient[Litestar], cookies: dict[str, str]) -> None:
@@ -222,12 +193,8 @@ def test_app_status_repo_url_none_when_unset(cfg: Any, client: TestClient[Litest
 
 
 def test_import_wiring() -> None:
-    """Make sure the module under test is still importing BUILD_CACHE_CORRUPT_MARKER
-    the way app_status expects; a rename in core/containers.py that
-    forgot the route handler would otherwise pass all other checks."""
     assert apps_routes.BUILD_CACHE_CORRUPT_MARKER == BUILD_CACHE_CORRUPT_MARKER
 
 
 def test_get_config_is_present_for_router_tests() -> None:
-    """Sanity: get_config() shouldn't raise at import time."""
     assert callable(get_config)
