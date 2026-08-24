@@ -659,12 +659,13 @@ def attach_on_startup(config: Config, db: sqlite3.Connection) -> None:
     if state.backend in ("local", "s3") and not is_linux_host():
         # JuiceFS is pinned as a Linux release only, so the archive tier can't run here (local
         # dev on macOS).  Everything else works; say so once instead of raising on every boot.
+        host_os = os.uname().sysname
         logger.warning(
-            "Archive tier disabled: JuiceFS has no {} build, so the '{}' backend can't be brought up.",
-            os.uname().sysname,
+            "Archive tier unavailable: JuiceFS has no {} build, so the '{}' backend can't be brought up.",
+            host_os,
             state.backend,
         )
-        _set_state_message(db, f"Archive tier unavailable: no JuiceFS build for {os.uname().sysname}.")
+        _set_state_message(db, f"Archive tier unavailable: no JuiceFS build for {host_os}.")
         return
     if state.backend == "local":
         try:

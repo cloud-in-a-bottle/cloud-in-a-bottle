@@ -1,7 +1,10 @@
+# `just` ships in the dev environment: `pixi run -e dev just <recipe>`.
+# (Or install it yourself and run `just <recipe>` directly.)
+
 _default:
     @just --list
 
-# run a local compute space on a random port (extra args pass through, eg --port 8080 --default-apps)
+# run a local compute space on a random port (extra args pass through, eg --port 3000 --default-apps)
 local-stack *args:
     pixi run -e dev python scripts/run_local_stack.py {{args}}
 
