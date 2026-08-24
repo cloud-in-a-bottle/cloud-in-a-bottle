@@ -83,10 +83,10 @@ function renderListeningPorts(data) {
 // table (and thus the message span) whenever storage data is re-fetched.
 var cleanCacheMsg = {cls: 'muted', text: ''};
 var cleanCacheInFlight = false;
-var cleanCacheFreeBytes = null;
+var cleanCacheReclaimableBytes = null;
 
 function cleanBuildCache() {
-  var freed = (cleanCacheFreeBytes == null) ? '' : '\nThis will free about ' + formatBytes(cleanCacheFreeBytes) + '.';
+  var freed = (cleanCacheReclaimableBytes == null) ? '' : '\nThis will free about ' + formatBytes(cleanCacheReclaimableBytes) + '.';
   if (!confirm(
     'Clean the app build cache?\n\n' +
     'The next rebuild for each app will be slower. Running apps are not stopped.' + freed
@@ -192,10 +192,10 @@ function renderStorageStatus(data) {
   // remove; images pinned by running containers get their own row below.
   var totalImageBytes = data.build_cache_bytes;
   var reclaimable = data.build_cache_reclaimable_bytes;
-  cleanCacheFreeBytes = (reclaimable != null) ? reclaimable : totalImageBytes;
-  var buildCache = (cleanCacheFreeBytes == null)
+  cleanCacheReclaimableBytes = (reclaimable != null) ? reclaimable : totalImageBytes;
+  var buildCache = (cleanCacheReclaimableBytes == null)
     ? '<span class="muted">unavailable</span>'
-    : escHtml(formatBytes(cleanCacheFreeBytes));
+    : escHtml(formatBytes(cleanCacheReclaimableBytes));
   rows += '<tr><th>App Build Cache</th><td>' + buildCache
     + '<span style="float: right">'
     + '<span id="clean-cache-msg" class="' + cleanCacheMsg.cls + '">' + escHtml(cleanCacheMsg.text) + '</span> '
