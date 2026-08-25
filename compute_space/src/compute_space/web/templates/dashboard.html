@@ -17,9 +17,9 @@
     {{ card("Browse the catalog", "One-click install ready-made apps.", "Explore catalog",
             cta_href=app_url(catalog_app_name) if catalog_installed else "/add_app",
             cta_new_tab=catalog_installed) }}
-    {{ card("Deploy your app", "From GitHub, or ask Claude to build it.", "Deploy app",
+    {{ card("Deploy your app", "From your own repo.", "Deploy app",
             cta_href="/add_app") }}
-    {{ card("Docs and setup", "Guides and GitHub repo.", "View docs",
+    {{ card("Docs and setup", "Learn about your space and creating new apps.", "View docs",
             cta_href="/docs/") }}
   </div>
 </section>
