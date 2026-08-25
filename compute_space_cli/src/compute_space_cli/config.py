@@ -165,11 +165,13 @@ class MultiConfig:
     def resolve(self, instance_name: str | None = None) -> Instance:
         """Resolve which instance to use.
 
-        Priority: explicit name > BOTTLE_INSTANCE env var > default_instance.
+        Priority: explicit name > BOTTLE_INSTANCE / OH_INSTANCE env var > default_instance.
+
+        BOTTLE_INSTANCE is the new name; OH_INSTANCE is kept for compat.
         """
         name = instance_name
         if not name:
-            name = os.environ.get("BOTTLE_INSTANCE")
+            name = os.environ.get("BOTTLE_INSTANCE") or os.environ.get("OH_INSTANCE")
         if not name:
             name = self.default_instance
 

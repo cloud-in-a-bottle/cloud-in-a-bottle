@@ -30,6 +30,7 @@ from typing import NoReturn
 
 import attr
 
+from compute_space.core.data import add_bottle_env_aliases
 from compute_space.core.logging import logger
 from compute_space.core.manifest import AppManifest
 from compute_space.core.manifest import PortMapping
@@ -424,6 +425,11 @@ def run_container(
         # conflicts with other host services, so it should bind on this
         # allocated port instead.
         container_env["OPENHOST_LOCAL_PORT"] = str(local_port)
+
+    # Expose every var under both the legacy OPENHOST_ name and the new
+    # BOTTLE_ name.  Done here (after host->container path translation and
+    # after LOCAL_PORT is set) so the twins carry the final container values.
+    container_env = add_bottle_env_aliases(container_env)
 
     for key, value in container_env.items():
         cmd.extend(["-e", f"{key}={value}"])

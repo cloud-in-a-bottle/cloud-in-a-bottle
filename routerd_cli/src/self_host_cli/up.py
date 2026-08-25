@@ -183,6 +183,8 @@ def run_up(args: argparse.Namespace) -> None:
     )
 
     env = os.environ.copy()
+    # New BOTTLE_ name plus the legacy OPENHOST_ name for backward compat.
+    env["BOTTLE_ROUTER_CONFIG"] = config_path
     env["OPENHOST_ROUTER_CONFIG"] = config_path
 
     cmd = [

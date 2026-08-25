@@ -11,6 +11,28 @@ from compute_space.core.containers import ROUTER_LOOPBACK_HOST
 from compute_space.core.logging import logger
 from compute_space.core.manifest import AppManifest
 
+# Env-var naming contract.  The project was renamed OpenHost -> Cloud in a
+# Bottle; every OPENHOST_* variable is now also exposed under BOTTLE_*.  The
+# legacy names are kept indefinitely for backward compatibility.
+LEGACY_ENV_PREFIX = "OPENHOST_"
+ENV_PREFIX = "BOTTLE_"
+
+
+def add_bottle_env_aliases(env: dict[str, str]) -> dict[str, str]:
+    """Return ``env`` with a ``BOTTLE_``-prefixed twin for every ``OPENHOST_`` var.
+
+    The rename from OpenHost to Cloud in a Bottle keeps the legacy
+    ``OPENHOST_*`` names for compatibility while exposing the same values
+    under ``BOTTLE_*``.  An already-present ``BOTTLE_*`` entry is never
+    clobbered, so an explicit new-style value wins over the auto-alias.
+    """
+    aliased = dict(env)
+    for key, value in env.items():
+        if key.startswith(LEGACY_ENV_PREFIX):
+            twin = ENV_PREFIX + key[len(LEGACY_ENV_PREFIX) :]
+            aliased.setdefault(twin, value)
+    return aliased
+
 
 def rmtree_with_sudo_fallback(path: str, *, raise_on_failure: bool = False) -> None:
     """Remove a directory tree, falling back to ``sudo -n rm -rf``.
