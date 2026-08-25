@@ -30,7 +30,7 @@ from typing import NoReturn
 
 import attr
 
-from compute_space.core.data import add_bottle_env_aliases
+from compute_space.core.env_aliases import add_bottle_env_aliases
 from compute_space.core.logging import logger
 from compute_space.core.manifest import AppManifest
 from compute_space.core.manifest import PortMapping

@@ -43,9 +43,6 @@ def test_alias_is_pure() -> None:
 
 
 def test_load_config_prefers_bottle_over_openhost(monkeypatch: pytest.MonkeyPatch) -> None:
-    # zone_domain is required and has no default; supply it via the legacy name.
-    monkeypatch.setenv("OPENHOST_ZONE_DOMAIN", "example.com")
-
     monkeypatch.setenv("OPENHOST_PORT", "9001")
     assert load_config().port == 9001, "legacy OPENHOST_ override still works"
 
@@ -53,6 +50,6 @@ def test_load_config_prefers_bottle_over_openhost(monkeypatch: pytest.MonkeyPatc
     assert load_config().port == 9002, "BOTTLE_ wins when both are set"
 
 
-def test_load_config_reads_required_field_from_bottle_prefix(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("BOTTLE_ZONE_DOMAIN", "bottle.example")
-    assert load_config().zone_domain == "bottle.example"
+def test_load_config_reads_field_from_bottle_prefix(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("BOTTLE_MY_OPENHOST_REDIRECT_DOMAIN", "bottle.example")
+    assert load_config().my_openhost_redirect_domain == "bottle.example"
