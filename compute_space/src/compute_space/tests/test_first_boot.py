@@ -41,7 +41,23 @@ def _point_config_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
 def test_read_first_boot_none_without_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("OPENHOST_ROUTER_CONFIG", raising=False)
     monkeypatch.delenv("OPENHOST_CONFIG", raising=False)
+    monkeypatch.delenv("BOTTLE_ROUTER_CONFIG", raising=False)
     assert read_first_boot() is None
+
+
+def test_read_first_boot_honors_bottle_router_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # OpenHost -> Cloud in a Bottle rename: first_boot resolves the config dir from
+    # BOTTLE_ROUTER_CONFIG too, not only the legacy OPENHOST_ names.
+    monkeypatch.delenv("OPENHOST_ROUTER_CONFIG", raising=False)
+    monkeypatch.delenv("OPENHOST_CONFIG", raising=False)
+    config_toml = tmp_path / "config.toml"
+    config_toml.write_text("")  # only its directory matters
+    monkeypatch.setenv("BOTTLE_ROUTER_CONFIG", str(config_toml))
+    (tmp_path / "first_boot.toml").write_text('domain = "bottle.example.com"\n')
+
+    first_boot = read_first_boot()
+    assert first_boot is not None
+    assert first_boot.domain == "bottle.example.com"
 
 
 def test_seed_prefers_first_boot(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

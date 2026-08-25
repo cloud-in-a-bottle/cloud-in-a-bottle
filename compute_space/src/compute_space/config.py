@@ -358,6 +358,21 @@ class DefaultConfig(Config):
     )
 
 
+def router_config_path_from_env() -> str | None:
+    """Explicit router-config file path from the environment, or None if unset.
+
+    OpenHost -> Cloud in a Bottle rename: prefers the new ``BOTTLE_ROUTER_CONFIG``
+    and falls back to the legacy ``OPENHOST_ROUTER_CONFIG`` then ``OPENHOST_CONFIG``,
+    which are kept for backward compatibility.  Shared so every reader of the
+    config-file path (``load_config`` and ``first_boot``) agrees on precedence.
+    """
+    return (
+        os.environ.get("BOTTLE_ROUTER_CONFIG")
+        or os.environ.get("OPENHOST_ROUTER_CONFIG")
+        or os.environ.get("OPENHOST_CONFIG")
+    )
+
+
 def load_config() -> Config:
     """Load config from prefixed env vars, an env-selected TOML file, or the default config, in that order.
 
@@ -368,11 +383,7 @@ def load_config() -> Config:
     The explicit config-file path prefers ``BOTTLE_ROUTER_CONFIG`` and falls
     back to ``OPENHOST_ROUTER_CONFIG`` then ``OPENHOST_CONFIG``.
     """
-    path = (
-        os.environ.get("BOTTLE_ROUTER_CONFIG")
-        or os.environ.get("OPENHOST_ROUTER_CONFIG")
-        or os.environ.get("OPENHOST_CONFIG")
-    )
+    path = router_config_path_from_env()
     config_files = [path] if path else []
     # default_loaders gives [FileLoader, EnvLoader("OPENHOST_")].  Append a
     # BOTTLE_ env loader last so BOTTLE_<FIELD> overrides OPENHOST_<FIELD>.

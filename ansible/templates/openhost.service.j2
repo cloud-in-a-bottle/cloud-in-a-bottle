@@ -24,7 +24,11 @@ Type=simple
 User=host
 WorkingDirectory=/home/host/openhost
 Environment=PATH=/home/host/.pixi/bin:/home/host/openhost/.pixi/envs/default/bin:/usr/local/bin:/usr/bin:/bin
+# OpenHost -> Cloud in a Bottle rename: the router reads BOTTLE_ROUTER_CONFIG
+# (preferred) and OPENHOST_ROUTER_CONFIG (legacy). Set both, kept in sync with
+# build_openhost_service_unit (a test enforces the directives match).
 Environment=OPENHOST_ROUTER_CONFIG=/home/host/.openhost/local_compute_space/config.toml
+Environment=BOTTLE_ROUTER_CONFIG=/home/host/.openhost/local_compute_space/config.toml
 # Rootless podman needs to reach the host user's systemd manager +
 # session DBus so it can create transient scope units for each
 # container's cgroup. Without these, podman falls back to cgroupfs

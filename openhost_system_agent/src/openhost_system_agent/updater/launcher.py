@@ -4,7 +4,6 @@
 
 from __future__ import annotations
 
-import os
 import shutil
 import subprocess
 import sys
@@ -12,7 +11,8 @@ import time
 
 from loguru import logger
 
-from openhost_system_agent.updater.paths import DATA_DIR_ENV
+from openhost_system_agent.updater.paths import data_dir_env_value
+from openhost_system_agent.updater.paths import data_dir_setenv_pairs
 from openhost_system_agent.updater.paths import ready_marker_path
 
 _UPDATER_UNIT = "openhost-updater.service"
@@ -73,10 +73,10 @@ def launch_updater() -> bool:
         "--property=RestartSec=1",
     ]
     # The updater must resolve the same on-disk paths (token, progress, certs) as
-    # this process; forward the data-dir override when one is in effect.
-    data_dir = os.environ.get(DATA_DIR_ENV)
+    # this process; forward the data-dir override (both env names) when one is in effect.
+    data_dir = data_dir_env_value()
     if data_dir:
-        cmd.append(f"--setenv={DATA_DIR_ENV}={data_dir}")
+        cmd += [f"--setenv={pair}" for pair in data_dir_setenv_pairs(data_dir)]
     cmd += [
         sys.executable,
         # `-c` rather than `-m`: under -m the module loads as __main__ and cappa's

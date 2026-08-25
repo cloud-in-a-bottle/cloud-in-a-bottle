@@ -67,6 +67,17 @@ class TestOpenhostServiceUnit:
         # rewrite the unit stay byte-identical with the baseline.
         assert RECLAIM_EXEC_START_PRE in build_openhost_service_unit(1234)
 
+    def test_sets_both_router_config_env_names(self) -> None:
+        # OpenHost -> Cloud in a Bottle rename: the unit must set the config path
+        # under both the new BOTTLE_ name and the legacy OPENHOST_ name so the
+        # router resolves it whichever it reads (works across a version-skewed
+        # self-update). The ansible template carries the same pair (enforced by
+        # test_ansible_template_and_builder_agree_on_directives).
+        unit = build_openhost_service_unit(1001)
+        cfg = "/home/host/.openhost/local_compute_space/config.toml"
+        assert f"Environment=BOTTLE_ROUTER_CONFIG={cfg}\n" in unit
+        assert f"Environment=OPENHOST_ROUTER_CONFIG={cfg}\n" in unit
+
     def test_host_uid_is_substituted(self) -> None:
         unit = build_openhost_service_unit(4242)
         assert "XDG_RUNTIME_DIR=/run/user/4242" in unit
