@@ -252,24 +252,19 @@ class TestMultiConfigResolve:
         monkeypatch.setenv("BOTTLE_INSTANCE", "b.com")
         assert multi.resolve().url == "https://b.com"
 
-    def test_bottle_env_var(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        # The new BOTTLE_INSTANCE name works like the legacy OH_INSTANCE.
-        multi = _make_multi(
-            instances={"a.com": _inst("a.com"), "b.com": _inst("b.com")},
-            default="a.com",
-        )
-        monkeypatch.delenv("OH_INSTANCE", raising=False)
-        monkeypatch.setenv("BOTTLE_INSTANCE", "b.com")
-        assert multi.resolve().url == "https://b.com"
+    def test_legacy_oh_instance_env_is_ignored(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The pre-rename OH_INSTANCE env var is intentionally no longer honored.
 
-    def test_bottle_env_var_wins_over_legacy(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        Only BOTTLE_INSTANCE is read; a stale OH_INSTANCE must not silently select an
+        instance, so resolution falls through to the configured default.
+        """
+        monkeypatch.delenv("BOTTLE_INSTANCE", raising=False)
+        monkeypatch.setenv("OH_INSTANCE", "b.com")
         multi = _make_multi(
             instances={"a.com": _inst("a.com"), "b.com": _inst("b.com")},
             default="a.com",
         )
-        monkeypatch.setenv("OH_INSTANCE", "a.com")
-        monkeypatch.setenv("BOTTLE_INSTANCE", "b.com")
-        assert multi.resolve().url == "https://b.com"
+        assert multi.resolve().url == "https://a.com"
 
 
 class TestUpsertInstance:
