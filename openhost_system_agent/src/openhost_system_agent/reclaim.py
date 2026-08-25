@@ -50,8 +50,14 @@ def reclaim_host_ownership() -> None:
         # -R to cover the whole tree; -h so symlinks are chowned in place
         # rather than followed. check=True: a failure here means a tree may
         # still be broken, so surface it rather than silently continuing.
+        #
+        # timeout: this chown -R walks (and rewrites) every inode under the
+        # host trees -- the repo, its .git, and the .pixi env, easily 100k+
+        # files. On slower hosts that legitimately approaches the old 120s cap,
+        # which was flaking CI. Raised to 300s as a stopgap; the real fix is to
+        # walk fewer files (e.g. only chown misowned ones), tracked separately.
         subprocess.run(
             ["chown", "-Rh", f"{HOST_USER}:{HOST_USER}", path],
             check=True,
-            timeout=120,
+            timeout=300,
         )
