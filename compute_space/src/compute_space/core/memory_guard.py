@@ -200,7 +200,7 @@ class _MemoryGuard:
             kill = _parse_journal_oom(line)
             if kill is not None:
                 logger.warning(
-                    "TODO: make this a notification — the host OOM killer killed process %d (%s); "
+                    "TODO: make this a notification — the host OOM killer killed process {} ({}); "
                     "the machine is out of memory",
                     kill.pid,
                     kill.comm,
@@ -244,8 +244,8 @@ class _MemoryGuard:
             row = by_container.get(kill.container_id)
             if row is not None:
                 logger.warning(
-                    "TODO: make this a notification — app %s was killed by the OOM killer "
-                    "(exceeded its %sMB memory limit)",
+                    "TODO: make this a notification — app {} was killed by the OOM killer "
+                    "(exceeded its {}MB memory limit)",
                     row["name"],
                     row["memory_mb"],
                 )
@@ -254,7 +254,7 @@ class _MemoryGuard:
                 # back to the container name from the event so the kill still
                 # surfaces rather than being dropped.
                 logger.warning(
-                    "TODO: make this a notification — container %s was killed by the OOM killer (out of memory)",
+                    "TODO: make this a notification — container {} was killed by the OOM killer (out of memory)",
                     kill.container_name,
                 )
 
@@ -281,8 +281,8 @@ class _MemoryGuard:
             self._pressure_notified.add(app_id)
             usage = format_bytes(resources.memory_usage_bytes) if resources.memory_usage_bytes is not None else "?"
             logger.warning(
-                "TODO: make this a notification — app %s is at %.0f%% of its memory limit "
-                "(%s of %sMB); it may be OOM-killed if usage keeps climbing",
+                "TODO: make this a notification — app {} is at {:.0f}% of its memory limit "
+                "({} of {}MB); it may be OOM-killed if usage keeps climbing",
                 row["name"],
                 percent,
                 usage,
