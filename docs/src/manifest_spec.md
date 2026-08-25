@@ -1,6 +1,6 @@
 # Cloud in a Bottle Manifest Spec
 
-Apps declare how they should be deployed on Cloud in a Bottle by placing a `cloudinabottle.toml` file at the root of their git repository. This file defines the spec of the manifest in detail; for a more general walkthrough of building an app from scratch, see [Creating an App](creating_an_app.md).
+Apps declare how they should be deployed on Cloud in a Bottle by placing a `cloudinabottle.toml` file at the root of their git repository. This file defines the spec of the manifest in detail; for a more general walkthrough of creating an app, see [Creating an App](creating_an_app.md).
 
 ## Basic Example
 
