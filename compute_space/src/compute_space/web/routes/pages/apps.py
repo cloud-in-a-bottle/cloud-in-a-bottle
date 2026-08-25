@@ -40,7 +40,15 @@ CATALOG_REPO_URL = "https://github.com/cloud-in-a-bottle/app-catalog"
 @get(["/", "/dashboard"], guards=[require_owner_auth])
 async def dashboard(db: NamedDependency[sqlite3.Connection]) -> Template:
     apps_list = db.execute("SELECT * FROM apps ORDER BY name").fetchall()
-    return Template(template_name="dashboard.html", context={"apps": apps_list})
+    catalog_installed = db.execute("SELECT 1 FROM apps WHERE name = ?", (CATALOG_APP_NAME,)).fetchone() is not None
+    return Template(
+        template_name="dashboard.html",
+        context={
+            "apps": apps_list,
+            "catalog_installed": catalog_installed,
+            "catalog_app_name": CATALOG_APP_NAME,
+        },
+    )
 
 
 @get(
@@ -100,7 +108,7 @@ async def app_detail(
                     }
                 )
         except Exception:
-            logger.opt(exception=True).warning("Failed to parse manifest for permission display (app %s)", app_id)
+            logger.opt(exception=True).warning("Failed to parse manifest for permission display (app {})", app_id)
 
     edit_app = await _resolve_edit_app(
         app_row["repo_url"], app_row["repo_path"], db, config, zone_for_request(request)
@@ -167,7 +175,7 @@ async def _resolve_edit_app(
         try:
             ref = await get_head_sha(Path(repo_path))
         except Exception:
-            logger.opt(exception=True).warning("Failed to read HEAD sha for %s", repo_path)
+            logger.opt(exception=True).warning("Failed to read HEAD sha for {}", repo_path)
 
     try:
         provider_app_id, _, _, endpoint = resolve_provider(EDIT_APP_SERVICE_URL, EDIT_APP_VERSION_SPEC, db)
@@ -179,7 +187,7 @@ async def _resolve_edit_app(
 
     provider_row = db.execute("SELECT name FROM apps WHERE app_id = ?", (provider_app_id,)).fetchone()
     if not provider_row:
-        logger.warning("resolve_provider returned unknown app_id %s", provider_app_id)
+        logger.warning("resolve_provider returned unknown app_id {}", provider_app_id)
         return repo_link_fallback
 
     # Pass repo+ref in the query string too: the Cloud in a Bottle router 302's

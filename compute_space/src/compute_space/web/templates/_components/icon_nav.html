@@ -1,0 +1,32 @@
+{#- The compute space's whole navigation, rendered on every page by layout.html
+    (and by the docs route's standalone template) so wherever you are, you can
+    get anywhere.
+
+    On a wide screen this is three icons on every page. Below the layout
+    breakpoint the icons are hidden and only the dashboard keeps a nav: the
+    hamburger, standing in for the tiles and the icon row, which are both hidden
+    at that width. Every other page's phone nav is the back link alone — one way
+    out, to the page that has the rest.
+
+    `on_dashboard` also puts the tiles' "Dashboard" heading back on the phone
+    row, since hiding them takes their section heading with them.
+
+    The way home is not here — see _components/nav_back.html. -#}
+{% from "_components/icon.html" import icon %}
+{% from "_components/nav_menu.html" import nav_menu %}
+
+{% macro icon_nav(on_dashboard=False, catalog_app_name=None, catalog_installed=False) -%}
+<div class="icon-nav{% if not on_dashboard %} icon-nav--icons-only{% endif %}">
+  {%- if on_dashboard %}
+  <h2 class="section-label icon-nav__label">Dashboard</h2>
+  {%- endif %}
+  <div class="icon-nav__icons">
+    <a class="icon-btn" href="/terminal/" title="Terminal">{{ icon("code", 16, alt="Terminal") }}</a>
+    <a class="icon-btn" href="/system/" title="System info">{{ icon("box", 15, alt="System info") }}</a>
+    <a class="icon-btn" href="/settings" title="Settings">{{ icon("gear", 12, alt="Settings") }}</a>
+  </div>
+  {%- if on_dashboard %}
+  {{ nav_menu(catalog_app_name, catalog_installed) }}
+  {%- endif %}
+</div>
+{%- endmacro %}

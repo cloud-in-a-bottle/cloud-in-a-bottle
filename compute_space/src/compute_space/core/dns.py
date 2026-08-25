@@ -156,7 +156,7 @@ def _write_coredns_config(
     # bindable (the openhost0 dummy interface exists in production but not in
     # dev/CI), otherwise CoreDNS would fail to start.
     if container_gateway_ip and not _gateway_ip_is_bindable(container_gateway_ip):
-        logger.info("Container gateway %s not bindable; skipping container-facing DNS view", container_gateway_ip)
+        logger.info("Container gateway {} not bindable; skipping container-facing DNS view", container_gateway_ip)
         container_gateway_ip = None
 
     corefile_path.parent.mkdir(parents=True, exist_ok=True)

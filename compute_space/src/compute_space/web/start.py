@@ -114,21 +114,10 @@ def _ensure_tls_cert(config: Config, db: sqlite3.Connection) -> None:
 
 
 def _ensure_coredns_binary(config: Config) -> str:
-    """Return the CoreDNS binary to launch, self-healing a missing one.
-
-    Provisioning installs CoreDNS at /usr/local/bin/coredns (on the service
-    PATH).  Hosts upgraded in place can lose it -- it used to come from pixi,
-    which no longer ships it -- leaving ``coredns`` on no PATH directory and
-    crashing startup.  When that happens, download the pinned release (same
-    version as ansible/tasks/coredns.yml) into the data dir and launch it by
-    absolute path.  Binding :53 works without setcap thanks to the provisioned
-    net.ipv4.ip_unprivileged_port_start=25 sysctl.
-    """
-    found = shutil.which("coredns")
-    if found:
+    """Return the CoreDNS binary to launch, self-healing a missing one."""
+    if found := shutil.which("coredns"):
         return found
     dest = str(config.openhost_data_path / "coredns")
-    logger.warning(f"coredns not found on PATH; installing pinned release to {dest}")
     install_pinned_binary(get_pinned_binary("coredns"), dest)
     return dest
 

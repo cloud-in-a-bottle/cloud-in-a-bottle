@@ -199,7 +199,7 @@ def build_image(
         cmd.append(f"--memory={memory_mb}m")
         cmd.append(f"--memory-swap={memory_mb}m")
     cmd.append(repo_path)
-    logger.info("Building container image: %s", " ".join(cmd))
+    logger.info("Building container image: {}", " ".join(cmd))
 
     if temp_data_dir:
         _append_log(app_name, temp_data_dir, f"=== Building image: {image_tag} ===\n")
@@ -219,7 +219,7 @@ def build_image(
                 try:
                     proc.wait(timeout=5)
                 except subprocess.TimeoutExpired:
-                    logger.warning("Build process %d did not exit within 5s of SIGKILL", proc.pid)
+                    logger.warning("Build process {} did not exit within 5s of SIGKILL", proc.pid)
                 raise
         if proc.returncode != 0:
             _raise_if_build_cache_corrupt(build_output)
@@ -311,7 +311,7 @@ def run_container(
         #
         # WARNING: this disables ALL network isolation.  The container can
         # reach any port on the host including other apps' loopback ports.
-        logger.warning("App %s uses network_host — all network isolation is disabled", app_name)
+        logger.warning("App {} uses network_host — all network isolation is disabled", app_name)
         cmd.append("--network=host")
     else:
         cmd.extend(
@@ -426,7 +426,7 @@ def run_container(
     else:
         cmd.append(image_tag)
 
-    logger.info("Running container: %s", " ".join(cmd))
+    logger.info("Running container: {}", " ".join(cmd))
     _append_log(app_name, temp_data_dir, f"=== Starting container: {container_name} ===\n")
 
     # Remove any stale container with the same name so podman run doesn't
@@ -461,10 +461,10 @@ def stop_container(container_id: str) -> None:
             timeout=20,
         )
         if result.returncode != 0:
-            logger.warning("podman stop %s exited %d, escalating to kill", container_id, result.returncode)
+            logger.warning("podman stop {} exited {}, escalating to kill", container_id, result.returncode)
             subprocess.run(["podman", "kill", container_id], capture_output=True, timeout=10)
     except subprocess.TimeoutExpired:
-        logger.warning("podman stop %s timed out, escalating to kill", container_id)
+        logger.warning("podman stop {} timed out, escalating to kill", container_id)
         subprocess.run(["podman", "kill", container_id], capture_output=True, timeout=10)
     subprocess.run(["podman", "rm", "-f", container_id], capture_output=True, timeout=30)
 
@@ -475,7 +475,7 @@ def stop_app_process(app_name: str, container_id: str | None) -> None:
         if container_id:
             stop_container(container_id)
     except Exception as e:
-        logger.warning("Error stopping app %s: %s", app_name, e)
+        logger.warning("Error stopping app {}: {}", app_name, e)
 
 
 def remove_image(app_name: str) -> None:
@@ -484,12 +484,8 @@ def remove_image(app_name: str) -> None:
     subprocess.run(["podman", "rmi", image_tag], capture_output=True, timeout=30)
 
 
-def container_image_storage_bytes() -> int | None:
-    """Total bytes podman uses for image storage (the build cache), from ``podman system df``.
-
-    Returns None when podman is unavailable or the output can't be parsed,
-    so status reporting degrades instead of failing the whole endpoint.
-    """
+def container_image_storage_bytes() -> tuple[int | None, int | None]:
+    """Return ``(total, reclaimable)`` bytes from ``podman system df``; either value may be ``None``."""
     try:
         result = subprocess.run(
             ["podman", "system", "df", "--format", "json"],
@@ -498,14 +494,22 @@ def container_image_storage_bytes() -> int | None:
             timeout=30,
         )
         if result.returncode != 0:
-            return None
+            return None, None
         for row in json.loads(result.stdout):
             if row.get("Type") == "Images":
-                return int(row["RawSize"])
-        return None
+                try:
+                    total = int(row["RawSize"])
+                except (KeyError, TypeError, ValueError):
+                    total = None
+                try:
+                    reclaimable = int(row["RawReclaimable"])
+                except (KeyError, TypeError, ValueError):
+                    reclaimable = None
+                return total, reclaimable
+        return None, None
     except Exception as e:
-        logger.warning("Could not query podman image storage size: %s", e)
-        return None
+        logger.warning("Could not query podman image storage size: {}", e)
+        return None, None
 
 
 def drop_docker_build_cache() -> str:
@@ -518,7 +522,7 @@ def drop_docker_build_cache() -> str:
     for external API compatibility.
     """
     cmd = ["podman", "image", "prune", "--all", "--force"]
-    logger.info("Dropping container build cache: %s", " ".join(cmd))
+    logger.info("Dropping container build cache: {}", " ".join(cmd))
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
     output = (result.stdout + result.stderr).strip()
     if result.returncode != 0:
@@ -540,7 +544,7 @@ def prune_dangling_images() -> str:
     podman error never kills the loop.
     """
     cmd = ["podman", "image", "prune", "--force"]
-    logger.info("Pruning dangling container images: %s", " ".join(cmd))
+    logger.info("Pruning dangling container images: {}", " ".join(cmd))
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
     output = (result.stdout + result.stderr).strip()
     if result.returncode != 0:
@@ -593,11 +597,11 @@ def list_openhost_images() -> list[OpenHostImage]:
             timeout=30,
         )
         if result.returncode != 0:
-            logger.warning("podman images failed (exit %d): %s", result.returncode, result.stderr.strip())
+            logger.warning("podman images failed (exit {}): {}", result.returncode, result.stderr.strip())
             return []
         rows = json.loads(result.stdout) or []
     except Exception as e:
-        logger.warning("Could not list podman images: %s", e)
+        logger.warning("Could not list podman images: {}", e)
         return []
 
     images: list[OpenHostImage] = []
@@ -633,7 +637,7 @@ def remove_image_by_id(image_id: str) -> bool:
     """
     result = subprocess.run(["podman", "rmi", "--force", image_id], capture_output=True, text=True, timeout=30)
     if result.returncode != 0:
-        logger.warning("Failed to remove image %s: %s", image_id, (result.stdout + result.stderr).strip())
+        logger.warning("Failed to remove image {}: {}", image_id, (result.stdout + result.stderr).strip())
         return False
     return True
 
@@ -654,10 +658,10 @@ def is_container_running(container_id: str) -> bool:
     except FileNotFoundError:
         return False
     except subprocess.TimeoutExpired:
-        logger.warning("podman inspect timed out after 10s for %s", container_id)
+        logger.warning("podman inspect timed out after 10s for {}", container_id)
         return False
     except OSError as e:
-        logger.warning("podman inspect failed for %s with OSError: %s", container_id, e)
+        logger.warning("podman inspect failed for {} with OSError: {}", container_id, e)
         return False
     if result.returncode != 0:
         return False
@@ -679,7 +683,7 @@ def get_docker_logs(
             with open(log_file) as f:
                 parts.append(f.read())
         except OSError as e:
-            logger.warning("Could not read build log %s: %s", log_file, e)
+            logger.warning("Could not read build log {}: {}", log_file, e)
 
     if container_id:
         try:
@@ -694,8 +698,8 @@ def get_docker_logs(
                 combined = _ANSI_RE.sub("", combined)
                 parts.append("=== Container logs ===\n" + combined)
         except subprocess.TimeoutExpired:
-            logger.warning("podman logs timed out after 10s for %s", container_id)
+            logger.warning("podman logs timed out after 10s for {}", container_id)
         except OSError as e:
-            logger.warning("podman logs failed for %s with OSError: %s", container_id, e)
+            logger.warning("podman logs failed for {} with OSError: {}", container_id, e)
 
     return "\n".join(parts) if parts else ""

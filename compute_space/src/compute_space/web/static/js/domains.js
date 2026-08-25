@@ -5,54 +5,61 @@
 
 var DOMAINS_URL = '/api/domains';
 
-// Self-contained HTML/attribute escape (don't depend on settings.js load order).
-function dEsc(s) {
-  return String(s == null ? '' : s).replace(/[&<>"']/g, function(c) {
-    return {'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c];
+var CERT_STATUS = {
+  active: {label: 'Active', variant: 'ok'},
+  acquiring: {label: 'Acquiring', variant: 'warn'},
+  error: {label: 'Error', variant: 'error'},
+};
+
+function domainCertCell(d) {
+  if (!d.tls) return dom.el('span', {class: 'muted', text: '—'});
+  var spec = CERT_STATUS[d.cert_status] || {label: 'None', variant: 'muted'};
+  return dom.el('span', {
+    class: 'status-text status-text--' + spec.variant,
+    text: spec.label,
+    title: d.error_message || null,
   });
 }
 
-function domainCertBadge(d) {
-  if (!d.tls) { return '<span class="muted">—</span>'; }
-  var color = d.cert_status === 'active' ? '#28a745'
-    : d.cert_status === 'acquiring' ? '#d08700'
-    : d.cert_status === 'error' ? '#c00' : '#888';
-  var label = d.cert_status === 'active' ? 'Active'
-    : d.cert_status === 'acquiring' ? 'Acquiring…'
-    : d.cert_status === 'error' ? 'Error' : 'None';
-  var title = d.error_message ? ' title="' + dEsc(d.error_message) + '"' : '';
-  return '<span style="color:' + color + ';"' + title + '>' + label + '</span>';
+function removeDomainButton(name) {
+  var label = 'Remove ' + name;
+  return dom.el('button', {class: 'icon-btn', type: 'button', title: label, 'aria-label': label,
+                           onclick: function() { removeDomain(name); }},
+    dom.el('img', {class: 'icon', src: '/static/img/icons/trash.svg',
+                   width: '14', height: '14', alt: '', 'aria-hidden': 'true'}));
 }
 
 // Repaint the table from a domain list (as returned by GET/POST/DELETE /api/domains).
 function renderDomains(domains) {
   var tbody = document.getElementById('domains-body');
-  var table = document.getElementById('domains-table');
+  var wrap = document.getElementById('domains-table-wrap');
   var none = document.getElementById('no-domains');
   if (!domains.length) {
-    table.style.display = 'none';
-    none.style.display = '';
+    wrap.hidden = true;
+    none.hidden = false;
     none.textContent = 'No domains.';
     return;
   }
-  table.style.display = '';
-  none.style.display = 'none';
+  wrap.hidden = false;
+  none.hidden = true;
   var anyAcquiring = false;
-  tbody.innerHTML = domains.map(function(d) {
-    if (d.tls && d.cert_status === 'acquiring') { anyAcquiring = true; }
-    var name = dEsc(d.name) + (d.is_primary ? ' <span class="muted">(primary)</span>' : '');
-    var discovery = d.mdns ? 'mDNS (.local)' : 'Public DNS';
-    var actions = d.is_primary
-      ? '<span class="muted">—</span>'
-      : '<button class="btn btn-danger" onclick="removeDomain(\'' + dEsc(d.name) + '\')">Remove</button>';
-    return '<tr><td>' + name + '</td>'
-      + '<td>' + dEsc(d.scheme) + '</td>'
-      + '<td>' + discovery + '</td>'
-      + '<td>' + domainCertBadge(d) + '</td>'
-      + '<td>' + actions + '</td></tr>';
-  }).join('');
+  dom.replace(tbody, domains.map(function(d) {
+    if (d.tls && d.cert_status === 'acquiring') anyAcquiring = true;
+    return dom.el('tr', null, [
+      dom.el('td', null, [
+        d.name,
+        d.is_primary ? dom.el('span', {class: 'muted', text: ' (primary)'}) : null,
+      ]),
+      dom.el('td', {text: d.scheme}),
+      dom.el('td', {text: d.mdns ? 'mDNS (.local)' : 'Public DNS'}),
+      dom.el('td', null, domainCertCell(d)),
+      dom.el('td', {class: 'col-actions'}, d.is_primary
+        ? dom.el('span', {class: 'muted', text: '—'})
+        : removeDomainButton(d.name)),
+    ]);
+  }));
   // A cert acquisition (DNS-01) runs in the background; poll until it settles.
-  if (anyAcquiring) { setTimeout(loadDomains, 4000); }
+  if (anyAcquiring) setTimeout(loadDomains, 4000);
 }
 
 function loadDomains() {
@@ -83,8 +90,8 @@ function addDomain() {
       if (body.tls) {
         msg.textContent = 'Added. Acquiring a TLS certificate in the background — '
           + 'its DNS must be delegated to this instance for acquisition to succeed.';
-        msg.className = 'hint';
-        msg.style.display = '';
+        msg.className = 'notice';
+        msg.hidden = false;
       }
       // Repaint from the POST response (the full list) — no follow-up GET to race the Caddy restart.
       renderDomains((data && data.domains) || []);

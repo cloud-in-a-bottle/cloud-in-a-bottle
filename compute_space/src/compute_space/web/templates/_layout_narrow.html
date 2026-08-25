@@ -1,0 +1,39 @@
+{#- Base for the single-purpose pages that render outside the authenticated
+    shell (login, first-boot setup, identity approval). Same tokens and
+    components as layout.html, but no nav — there is nowhere to navigate to
+    yet — and a narrower column. -#}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex">
+  <title>Cloud in a Bottle{% block title_suffix %}{% endblock %}</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible+Mono:wght@500;600;700&display=swap">
+  <link rel="stylesheet" href="{{ static_url('css/tokens.css') }}">
+  <link rel="stylesheet" href="{{ static_url('css/base.css') }}">
+  <link rel="stylesheet" href="{{ static_url('css/components.css') }}">
+  <script src="{{ static_url('js/info-tip.js') }}" defer></script>
+  {% block head %}{% endblock %}
+</head>
+<body>
+  <div class="deco-clouds" aria-hidden="true">
+    <span class="cloud cloud--1"></span>
+    <span class="cloud cloud--2"></span>
+    <span class="cloud cloud--3"></span>
+    <span class="cloud cloud--4"></span>
+    <span class="cloud cloud--5"></span>
+    <span class="cloud cloud--6"></span>
+  </div>
+  <div class="deco-grass" aria-hidden="true"></div>
+
+  <div class="layout layout--narrow">
+    <h1 class="banner"><span class="banner__text">{% block heading %}Cloud in a Bottle{% endblock %}</span></h1>
+    <div class="panel">
+      {% block content %}{% endblock %}
+    </div>
+  </div>
+</body>
+</html>

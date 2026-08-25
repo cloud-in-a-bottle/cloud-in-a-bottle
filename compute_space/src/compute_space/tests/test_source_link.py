@@ -1,11 +1,8 @@
-"""Tests for the "view source" provenance link in the shared nav.
+"""Tests for the source URL this instance reports for its own checkout.
 
-The nav header (``_nav_header.html``, included by both ``layout.html`` and the
-standalone docs template) surfaces a GitHub icon linking to the exact branch/fork
-of Cloud in a Bottle the instance is running. The link is built from the running checkout's
-origin remote + current branch via ``github_web_url_from_local_repo`` and exposed to
-templates as the ``source_url`` global; it is hidden entirely when that is None
-(tarball deploy, detached HEAD with no branch, non-GitHub remote, ...).
+``SOURCE_URL`` is built from the running checkout's origin remote + current branch via
+``github_web_url_from_local_repo`` and exposed to templates as the ``source_url`` global.
+The nav no longer renders it; the docs route still uses it for the markdown source line.
 """
 
 from __future__ import annotations
@@ -95,8 +92,8 @@ def _build_dashboard_app(cfg: Any) -> Litestar:
     )
 
 
-def test_nav_shows_source_icon(cfg: Any, monkeypatch: pytest.MonkeyPatch) -> None:
-    """When a source URL resolves, the nav renders a GitHub link to that branch."""
+def test_nav_has_no_source_icon(cfg: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The nav links the three destinations and no longer carries a source link."""
     set_active_config(cfg)
     monkeypatch.setattr(web_app, "SOURCE_URL", "https://github.com/owner/repo/tree/feature")
     cookie = auth_cookie(cfg, username="owner")
@@ -106,25 +103,5 @@ def test_nav_shows_source_icon(cfg: Any, monkeypatch: pytest.MonkeyPatch) -> Non
         resp = client.get("/dashboard")
 
     assert resp.status_code == 200
-    assert 'class="nav-source"' in resp.text
-    assert 'href="https://github.com/owner/repo/tree/feature"' in resp.text
-    # Opens in a new tab, per the app-link convention, and carries the a11y label.
-    assert 'target="_blank"' in resp.text
-    assert 'aria-label="View source on GitHub"' in resp.text
-
-
-def test_nav_hides_source_icon_when_unresolved(cfg: Any, monkeypatch: pytest.MonkeyPatch) -> None:
-    """A tarball deploy (no resolvable source) renders no source link at all."""
-    set_active_config(cfg)
-    monkeypatch.setattr(web_app, "SOURCE_URL", None)
-    cookie = auth_cookie(cfg, username="owner")
-
-    with TestClient(app=_build_dashboard_app(cfg)) as client:
-        client.cookies.update(cookie)
-        resp = client.get("/dashboard")
-
-    assert resp.status_code == 200
-    # The always-present nav <style> block references ``.nav-source``; assert the
-    # anchor element itself is absent rather than the bare class name.
-    assert 'class="nav-source"' not in resp.text
     assert "github.com" not in resp.text
+    assert resp.text.count('class="icon-btn"') == 3

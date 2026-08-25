@@ -46,7 +46,7 @@ def set_guard_paused(paused: bool) -> None:
         global _guard_paused
         _guard_paused = paused
     state = "paused" if paused else "resumed"
-    logger.info("Storage guard %s", state)
+    logger.info("Storage guard {}", state)
 
 
 # ---------------------------------------------------------------------------
@@ -196,6 +196,8 @@ def storage_status(config: Config) -> dict[str, object]:
     # again — these trees are large enough that a second pass is noticeable.
     per_app = per_app_usage(config)
 
+    image_storage = container_image_storage_bytes()
+
     return {
         "disk": {
             "total_bytes": disk.total,
@@ -204,7 +206,8 @@ def storage_status(config: Config) -> dict[str, object]:
         },
         "openhost_data_used_bytes": openhost_data_usage_bytes(config),
         "app_data_used_bytes": sum(per_app.values()) + _app_data_loose_file_bytes(config),
-        "build_cache_bytes": container_image_storage_bytes(),
+        "build_cache_bytes": image_storage[0],
+        "build_cache_reclaimable_bytes": image_storage[1],
         "per_app": per_app,
         "storage_min_free_bytes": min_free,
         "storage_low": storage_low(config),
@@ -222,7 +225,7 @@ def _stop_app_process_safe(row: sqlite3.Row) -> None:
     try:
         stop_app_process(row["name"], row["container_id"])
     except Exception:
-        logger.exception("Failed to stop app %s", row["name"])
+        logger.exception("Failed to stop app {}", row["name"])
 
 
 def enforce_storage_guard(config: Config) -> None:
@@ -237,7 +240,7 @@ def enforce_storage_guard(config: Config) -> None:
 
     free, min_free = result
     logger.warning(
-        "Storage low (%s free, %s required)",
+        "Storage low ({} free, {} required)",
         format_bytes(free),
         format_bytes(min_free),
     )
@@ -255,7 +258,7 @@ def enforce_storage_guard(config: Config) -> None:
 
         for row in rows:
             detail = "Storage too low. Free space by removing app data or resizing disks."
-            logger.warning("Stopping app %s due to low storage", row["name"])
+            logger.warning("Stopping app {} due to low storage", row["name"])
             _stop_app_process_safe(row)
             db.execute(
                 "UPDATE apps SET status = 'error', error_message = ?, container_id = NULL WHERE app_id = ?",

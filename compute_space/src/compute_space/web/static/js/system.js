@@ -1,7 +1,16 @@
 var config = JSON.parse(document.getElementById('page-config').textContent);
 
-// escHtml/escAttr, appColor, COLOR_* and donutHtml/wireDonut come from chart.js,
-// loaded before this file.
+// appColor, COLOR_* and donutHtml/wireDonut come from chart.js; el/replace/clear
+// from dom.js. Both are loaded before this file.
+
+// A single full-width <tr> carrying a loading / empty / error message.
+function messageRow(colspan, text, cls) {
+  return dom.el('tr', null, dom.el('td', {colspan: colspan, class: cls, text: text}));
+}
+
+function showMuted(el, text) {
+  dom.replace(el, dom.el('span', {class: 'muted', text: text}));
+}
 
 function formatBytes(bytes) {
   if (bytes >= 1099511627776) return (bytes / 1099511627776).toFixed(1) + ' TiB';
@@ -32,9 +41,9 @@ function paintAllSections() {
   if (firstPaintDone) return;
   firstPaintDone = true;
   if (sectionRenderers.ports) sectionRenderers.ports();
-  else document.getElementById('ports-body').innerHTML = '<tr><td colspan="3" class="muted">Loading&hellip;</td></tr>';
+  else dom.replace(document.getElementById('ports-body'), messageRow(3, 'Loading\u2026', 'muted'));
   if (sectionRenderers.storage) sectionRenderers.storage();
-  else document.getElementById('storage-body').innerHTML = '<tr><td colspan="2" class="muted">Loading&hellip;</td></tr>';
+  else dom.replace(document.getElementById('storage-body'), messageRow(2, 'Loading\u2026', 'muted'));
   if (sectionRenderers.logs) sectionRenderers.logs();
   else document.getElementById('cs-logs').textContent = 'Loading...';
 }
@@ -54,30 +63,69 @@ function updateListeningPorts() {
 function renderListeningPorts(data) {
   var body = document.getElementById('ports-body');
   if (!data || data.enumeration_failed) {
-    body.innerHTML = '<tr><td colspan="3" class="error">Could not enumerate listening ports.</td></tr>';
+    dom.replace(body, messageRow(3, 'Could not enumerate listening ports.', 'error'));
     return;
   }
   var ports = data.ports || [];
   if (!ports.length) {
-    body.innerHTML = '<tr><td colspan="3" class="muted">No externally exposed ports.</td></tr>';
+    dom.replace(body, messageRow(3, 'No externally exposed ports.', 'muted'));
     return;
   }
-  body.innerHTML = ports.map(function(p) {
-    var cls = '';
-    var label = escHtml(p.label);
-    if (p.classification === 'unexpected') {
-      cls = ' class="status-error"';
-      label = '<strong>' + label + '</strong>';
-    } else if (p.classification === 'secure') {
-      cls = ' class="status-running"';
-    }
-    return '<tr><td><code>' + escHtml(p.port) + '</code></td>'
-      + '<td><code>' + escHtml(p.address) + '</code></td>'
-      + '<td' + cls + '>' + label + '</td></tr>';
-  }).join('');
+  dom.replace(body, ports.map(function(p) {
+    var unexpected = p.classification === 'unexpected';
+    var cls = unexpected ? 'status-error' : (p.classification === 'secure' ? 'status-running' : null);
+    return dom.el('tr', null, [
+      dom.el('td', null, dom.el('code', {text: p.port})),
+      dom.el('td', null, dom.el('code', {text: p.address})),
+      dom.el('td', {class: cls}, unexpected ? dom.el('strong', {text: p.label}) : p.label),
+    ]);
+  }));
 }
 
 // ─── Storage Status ───
+
+// Message state lives outside the DOM because renderStorageStatus rebuilds the
+// table (and thus the message span) whenever storage data is re-fetched.
+var cleanCacheMsg = {cls: 'muted', text: ''};
+var cleanCacheInFlight = false;
+var cleanCacheReclaimableBytes = null;
+
+function cleanBuildCache() {
+  var freed = (cleanCacheReclaimableBytes == null) ? '' : '\nThis will free about ' + formatBytes(cleanCacheReclaimableBytes) + '.';
+  if (!confirm(
+    'Clean the app build cache?\n\n' +
+    'The next rebuild for each app will be slower. Running apps are not stopped.' + freed
+  )) return;
+
+  cleanCacheInFlight = true;
+  cleanCacheMsg = {cls: 'muted', text: 'Cleaning cache...'};
+  var btn = document.getElementById('clean-cache-btn');
+  var msg = document.getElementById('clean-cache-msg');
+  if (btn) btn.disabled = true;
+  if (msg) { msg.className = cleanCacheMsg.cls; msg.textContent = cleanCacheMsg.text; }
+
+  fetch(config.dropBuildCacheUrl, {method: 'POST', credentials: 'same-origin'})
+    .then(readJsonResponse)
+    .then(function(res) {
+      if (!res.ok) {
+        cleanCacheMsg = {cls: 'error', text: 'Clean failed: ' + responseErrorMessage(res.data, 'unknown error')};
+        return;
+      }
+      var reclaimed = '';
+      if (res.data && res.data.output) {
+        var match = res.data.output.match(/Total reclaimed space:\s*(.+)/i);
+        if (match && match[1]) reclaimed = ' Freed ' + match[1] + '.';
+      }
+      cleanCacheMsg = {cls: 'status-running', text: 'Build cache cleaned.' + reclaimed};
+    })
+    .catch(function() {
+      cleanCacheMsg = {cls: 'error', text: 'Clean failed: request error'};
+    })
+    .then(function() {
+      cleanCacheInFlight = false;
+      updateStorageStatus();
+    });
+}
 
 function toggleStorageGuard(pause) {
   fetch(config.toggleStorageGuardUrl, {
@@ -100,7 +148,7 @@ function renderStorageDonut(data) {
   var disk = data.disk || {};
   var names = Object.keys(perApp).sort(function(a, b) { return perApp[b] - perApp[a]; });
   if (!names.length && !disk.total_bytes) {
-    el.innerHTML = '<span class="muted">No app data yet.</span>';
+    showMuted(el, 'No app data yet.');
     return;
   }
   var appSum = 0;
@@ -137,25 +185,40 @@ function renderStorageStatus(data) {
   var isLow = !!data.storage_low;
   var guardPaused = !!data.guard_paused;
 
-  var rows = '';
   var freeText = formatBytes(disk.free_bytes || 0) + ' / ' + formatBytes(disk.total_bytes || 0);
   if (hasMinFree) {
     freeText += ' (min ' + formatBytes(data.storage_min_free_bytes) + ' required)';
   }
-  var freeCls = (hasMinFree && isLow) ? ' class="status-error"' : '';
-  rows += '<tr><th>Disk free</th><td' + freeCls + '>' + escHtml(freeText) + '</td></tr>';
-  rows += '<tr><th>Cloud in a Bottle data</th><td>' + escHtml(formatBytes(data.openhost_data_used_bytes || 0)) + '</td></tr>';
-  var buildCache = (data.build_cache_bytes == null)
-    ? '<span class="muted">unavailable</span>'
-    : escHtml(formatBytes(data.build_cache_bytes));
-  rows += '<tr><th>App Build Cache</th><td>' + buildCache + '</td></tr>';
-
+  var reclaimable = data.build_cache_reclaimable_bytes;
+  cleanCacheReclaimableBytes = reclaimable;
+  var buildCache = (reclaimable == null)
+    ? dom.el('span', {class: 'muted', text: 'unavailable'})
+    : formatBytes(reclaimable);
+  var cleanCacheButton = dom.el('button', {
+    class: 'btn btn-danger',
+    id: 'clean-cache-btn',
+    disabled: cleanCacheInFlight,
+    onclick: cleanBuildCache,
+    text: 'Clean Cache',
+  });
+  var cleanCacheControls = dom.el('span', {style: 'float: right'}, [
+    dom.el('span', {id: 'clean-cache-msg', class: cleanCacheMsg.cls, text: cleanCacheMsg.text}),
+    ' ',
+    cleanCacheButton,
+  ]);
+  var rows = [
+    dom.infoRow('Disk free', freeText, (hasMinFree && isLow) ? 'status-error' : null),
+    dom.infoRow('Cloud in a Bottle data', formatBytes(data.openhost_data_used_bytes || 0)),
+    dom.infoRow('App Build Cache', [buildCache, cleanCacheControls]),
+  ];
+  if (data.build_cache_bytes != null && reclaimable != null) {
+    rows.push(dom.infoRow('Images in use', formatBytes(Math.max(0, data.build_cache_bytes - reclaimable))));
+  }
   if (hasMinFree) {
     var guardText = guardPaused ? 'Paused' : (isLow ? 'Active (low storage)' : 'Active');
-    var guardCls = (guardPaused || isLow) ? ' class="status-error"' : '';
-    rows += '<tr><th>Storage guard</th><td' + guardCls + '>' + escHtml(guardText) + '</td></tr>';
+    rows.push(dom.infoRow('Storage guard', guardText, (guardPaused || isLow) ? 'status-error' : null));
   }
-  document.getElementById('storage-body').innerHTML = rows;
+  dom.replace(document.getElementById('storage-body'), rows);
 
   // The disk donut lives up in the Resource Usage section alongside the
   // CPU/memory donuts, not in this table.
@@ -164,14 +227,19 @@ function renderStorageStatus(data) {
   // Guard toggle button (separate row below the table for clarity)
   var guardRow = document.getElementById('storage-guard-row');
   if (hasMinFree && guardPaused) {
-    guardRow.innerHTML = '<div class="control-row"><button class="btn" onclick="toggleStorageGuard(false)">Resume Guard</button>'
-      + '<span class="hint">Apps will not be stopped while paused.</span></div>';
+    dom.replace(guardRow, guardToggle(false, 'Resume Guard', 'Apps will not be stopped while paused.'));
   } else if (hasMinFree && isLow) {
-    guardRow.innerHTML = '<div class="control-row"><button class="btn" onclick="toggleStorageGuard(true)">Pause Guard</button>'
-      + '<span class="hint">Pause to start an app for cleanup.</span></div>';
+    dom.replace(guardRow, guardToggle(true, 'Pause Guard', 'Pause to start an app for cleanup.'));
   } else {
-    guardRow.innerHTML = '';
+    dom.clear(guardRow);
   }
+}
+
+function guardToggle(pause, label, hint) {
+  return dom.el('div', {class: 'action-bar'}, [
+    dom.el('button', {class: 'btn', text: label, onclick: function() { toggleStorageGuard(pause); }}),
+    dom.el('span', {class: 'hint', text: hint}),
+  ]);
 }
 
 // ─── App Resource Usage (CPU + memory donuts) ───
@@ -245,9 +313,9 @@ function memUsage(apps, pressure) {
 }
 
 // Swap is separate from RAM (a slower, disk-backed overflow), so it gets its own
-// donut rather than a slice of the memory ring. "Used" is drawn in the mid-grey
-// "System" tone so a busy swap reads as notable-but-not-app; free swap uses the
-// same light "Unused" grey as the other charts.
+// donut rather than a slice of the memory ring. "Used" is drawn in the deep
+// "System" blue so a busy swap reads as notable; free swap uses the same pale
+// "Unused" blue as the other charts.
 function swapUsage(pressure) {
   var total = pressure && pressure.swap_total_bytes;
   if (!total) return null;
@@ -263,7 +331,7 @@ function swapUsage(pressure) {
 function renderUsageChart(elId, pieId, usage, emptyMsg) {
   var el = document.getElementById(elId);
   if (!usage.hasApps && usage.segments.length === 0) {
-    el.innerHTML = '<span class="muted">' + emptyMsg + '</span>';
+    showMuted(el, emptyMsg);
     return;
   }
   el.innerHTML = donutHtml(pieId, usage.segments, usage.centerName, usage.centerText);
@@ -275,7 +343,7 @@ function renderSwapChart(pressure) {
   if (!el) return;
   var usage = swapUsage(pressure);
   if (!usage) {
-    el.innerHTML = '<span class="muted">No swap configured.</span>';
+    showMuted(el, 'No swap configured.');
     return;
   }
   el.innerHTML = donutHtml('swap-usage-pie', usage.segments, usage.centerName, usage.centerText);
@@ -297,7 +365,7 @@ function updateResourceUsage() {
     })
     .catch(function() {
       ['cpu-usage-chart', 'mem-usage-chart', 'swap-usage-chart'].forEach(function(id) {
-        document.getElementById(id).innerHTML = '<span class="muted">Unavailable.</span>';
+        showMuted(document.getElementById(id), 'Unavailable.');
       });
     });
 }

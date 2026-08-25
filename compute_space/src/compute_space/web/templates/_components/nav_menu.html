@@ -1,0 +1,29 @@
+{#- The dashboard's phone nav. At that width the icon row and the tiles are both
+    hidden, so this list stands in for both and has to carry every destination
+    they did.
+
+    The catalog entry mirrors the tile in dashboard.html: the installed app on
+    its own subdomain, else the page that installs it. -#}
+{% from "_components/icon.html" import icon %}
+
+{% macro nav_menu(catalog_app_name=None, catalog_installed=False) -%}
+<div class="nav-menu">
+  <button class="nav-menu__toggle" type="button" aria-expanded="false"
+          aria-controls="nav-menu-panel" aria-label="Menu">{{ icon("menu", 16) }}</button>
+  <div class="nav-menu__panel" id="nav-menu-panel" hidden>
+    <ul class="nav-menu__list">
+      {%- if catalog_installed %}
+      <li><a href="{{ app_url(catalog_app_name) }}" target="_blank" rel="noopener">
+        Catalog <span class="nav-menu__ext" aria-hidden="true">&#8599;</span></a></li>
+      {%- else %}
+      <li><a href="/add_app">Catalog</a></li>
+      {%- endif %}
+      <li><a href="/add_app">Deploy app</a></li>
+      <li><a href="/docs/">Docs</a></li>
+      <li><a href="/terminal/">Terminal</a></li>
+      <li><a href="/system/">System info</a></li>
+      <li><a href="/settings">Settings</a></li>
+    </ul>
+  </div>
+</div>
+{%- endmacro %}
