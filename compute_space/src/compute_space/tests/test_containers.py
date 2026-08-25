@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -195,10 +196,11 @@ def test_build_image_streaming_path_detects_cache_corrupt(
 
 
 def test_build_image_generic_failure_does_not_use_cache_marker(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     def fake_run(cmd, capture_output, text, timeout):  # type: ignore[no-untyped-def]
-        return _FakeCompleted(1, stderr="Dockerfile not found")
+        long_line = "x" * 200
+        return _FakeCompleted(1, stderr=f"Step 1/2\n{long_line}\n\n")
 
     _patch_subprocess_run(monkeypatch, fake_run)
 
@@ -206,7 +208,33 @@ def test_build_image_generic_failure_does_not_use_cache_marker(
         build_image("myapp", "/tmp/repo", "Dockerfile", temp_data_dir=None)
     msg = str(exc_info.value)
     assert containers.BUILD_CACHE_CORRUPT_MARKER not in msg
-    assert "Dockerfile not found" in msg
+    assert msg == f"Container build failed (exit code 1):\n...{'x' * 150}"
+
+    class _FakePopen:
+        def __init__(self, *a, **_kw):  # type: ignore[no-untyped-def]
+            self.stdout = iter(["step 1\n", "step 2\n", "syntax error on line 5\n"])
+            self.returncode = 2
+            self.pid = 12345
+
+        def wait(self, timeout: int | None = None) -> int:
+            return self.returncode
+
+        def kill(self) -> None:
+            pass
+
+        def __enter__(self):  # type: ignore[no-untyped-def]
+            return self
+
+        def __exit__(self, *_exc):  # type: ignore[no-untyped-def]
+            return False
+
+    monkeypatch.setattr("compute_space.core.containers.subprocess.Popen", _FakePopen)
+    temp_data_dir = str(tmp_path / "temp")
+    os.makedirs(os.path.join(temp_data_dir, "app_temp_data", "myapp"), exist_ok=True)
+
+    with pytest.raises(RuntimeError) as exc_info:
+        build_image("myapp", "/tmp/repo", "Dockerfile", temp_data_dir=temp_data_dir)
+    assert str(exc_info.value) == "Container build failed (exit code 2):\nsyntax error on line 5"
 
 
 def test_build_image_non_streaming_path_inspects_stdout_too(monkeypatch: pytest.MonkeyPatch) -> None:

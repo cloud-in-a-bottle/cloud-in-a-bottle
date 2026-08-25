@@ -1,10 +1,4 @@
-"""Tests for the ``/api/app_status/<app_name>`` endpoint's error-kind logic.
-
-In particular the legacy ``[CACHE_CORRUPT]`` marker still needs to map to
-``error_kind = "build_cache_corrupt"`` so the dashboard's 'drop cache
-and rebuild' toast keeps firing against rows whose ``error_message``
-column was written before the marker rename.
-"""
+"""Tests for /api/app_status/<app_id> status and error-kind responses."""
 
 from __future__ import annotations
 
@@ -81,8 +75,6 @@ def test_current_marker_maps_to_build_cache_corrupt_error_kind(
 def test_legacy_marker_still_maps_to_build_cache_corrupt_error_kind(
     cfg: Any, client: TestClient[Litestar], cookies: dict[str, str]
 ) -> None:
-    """Rows whose error_message was written before the marker rename
-    must still trigger the 'drop cache' remediation toast in the UI."""
     app_id = _seed_app_with_error(
         cfg,
         error_message="[CACHE_CORRUPT] Docker build cache is corrupted.",
@@ -111,6 +103,58 @@ def test_unrelated_error_message_has_no_error_kind(
     assert payload["error_kind"] is None
 
 
+def _set_app(cfg: Any, app_id: str, **cols: Any) -> None:
+    db = sqlite3.connect(cfg.db_path)
+    try:
+        assignments = ", ".join(f"{col} = ?" for col in cols)
+        db.execute(f"UPDATE apps SET {assignments} WHERE app_id = ?", (*cols.values(), app_id))
+        db.commit()
+    finally:
+        db.close()
+
+
+def test_app_status_requires_auth(cfg: Any, client: TestClient[Litestar]) -> None:
+    resp = client.get(f"/api/app_status/{new_app_id()}")
+    assert resp.status_code == 401
+
+
+def test_app_status_reflects_changes_and_returns_404_when_removed(
+    cfg: Any, client: TestClient[Litestar], cookies: dict[str, str]
+) -> None:
+    client.cookies.update(cookies)
+    app_id = new_app_id()
+    db = sqlite3.connect(cfg.db_path)
+    try:
+        db.execute(
+            """INSERT INTO apps (app_id, name, version, repo_path, local_port, status)
+               VALUES (?, 'notes', '1.0', '/repo/notes', 20113, 'building')""",
+            (app_id,),
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    resp = client.get(f"/api/app_status/{app_id}")
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "building"
+
+    _set_app(cfg, app_id, status="error", error_message="Container build failed (exit code 1):\n...tail")
+    resp = client.get(f"/api/app_status/{app_id}")
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "error"
+    assert resp.json()["error"] == "Container build failed (exit code 1):\n...tail"
+
+    db = sqlite3.connect(cfg.db_path)
+    try:
+        db.execute("DELETE FROM apps WHERE app_id = ?", (app_id,))
+        db.commit()
+    finally:
+        db.close()
+
+    resp = client.get(f"/api/app_status/{app_id}")
+    assert resp.status_code == 404
+
+
 def test_app_status_returns_repo_url(cfg: Any, client: TestClient[Litestar], cookies: dict[str, str]) -> None:
     """app_status response includes the git repo_url with branch/ref pin."""
     app_id = new_app_id()
@@ -118,7 +162,7 @@ def test_app_status_returns_repo_url(cfg: Any, client: TestClient[Litestar], coo
     try:
         db.execute(
             """INSERT INTO apps (app_id, name, version, repo_path, repo_url, local_port, status)
-               VALUES (?, 'myapp', '1.0', '/repo/myapp', 'https://github.com/owner/repo@main', 20113, 'running')""",
+               VALUES (?, 'myapp', '1.0', '/repo/myapp', 'https://github.com/owner/repo@main', 20114, 'running')""",
             (app_id,),
         )
         db.commit()
@@ -136,7 +180,7 @@ def test_app_status_repo_url_none_when_unset(cfg: Any, client: TestClient[Litest
     try:
         db.execute(
             """INSERT INTO apps (app_id, name, version, repo_path, repo_url, local_port, status)
-               VALUES (?, 'builtin', '1.0', '/repo/builtin', NULL, 20114, 'running')""",
+               VALUES (?, 'builtin', '1.0', '/repo/builtin', NULL, 20115, 'running')""",
             (app_id,),
         )
         db.commit()
@@ -149,12 +193,8 @@ def test_app_status_repo_url_none_when_unset(cfg: Any, client: TestClient[Litest
 
 
 def test_import_wiring() -> None:
-    """Make sure the module under test is still importing BUILD_CACHE_CORRUPT_MARKER
-    the way app_status expects; a rename in core/containers.py that
-    forgot the route handler would otherwise pass all other checks."""
     assert apps_routes.BUILD_CACHE_CORRUPT_MARKER == BUILD_CACHE_CORRUPT_MARKER
 
 
 def test_get_config_is_present_for_router_tests() -> None:
-    """Sanity: get_config() shouldn't raise at import time."""
     assert callable(get_config)

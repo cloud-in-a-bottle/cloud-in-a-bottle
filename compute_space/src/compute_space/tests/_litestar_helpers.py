@@ -76,6 +76,12 @@ def auth_cookie(cfg: Any, username: str = "owner") -> dict[str, str]:
     return {SESSION_COOKIE_NAME: token}
 
 
+def ws_cookie_header(cookies: dict[str, str]) -> dict[str, str]:
+    """A WebSocket handshake is a plain HTTP GET, so the session cookie rides in
+    a Cookie header just like a normal request."""
+    return {"cookie": "; ".join(f"{k}={v}" for k, v in cookies.items())}
+
+
 def make_test_app(*route_handlers: Any) -> Litestar:
     """Build a Litestar app from the given route handlers + standard DI.
 

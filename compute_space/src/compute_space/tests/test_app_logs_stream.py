@@ -23,6 +23,7 @@ from compute_space.core.app_id import new_app_id
 from compute_space.db.connection import init_db
 from compute_space.tests._litestar_helpers import auth_cookie
 from compute_space.tests._litestar_helpers import make_test_app
+from compute_space.tests._litestar_helpers import ws_cookie_header
 from compute_space.tests.conftest import _make_test_config
 from compute_space.web.routes.api import apps
 from compute_space.web.routes.api.apps import api_apps_routes
@@ -44,12 +45,6 @@ def client(cfg: Any) -> Iterator[TestClient[Litestar]]:
 @pytest.fixture
 def cookies(cfg: Any) -> dict[str, str]:
     return auth_cookie(cfg)
-
-
-def _cookie_header(cookies: dict[str, str]) -> dict[str, str]:
-    # The WebSocket handshake is a plain HTTP GET, so the session cookie rides in
-    # a Cookie header just like a normal request.
-    return {"cookie": "; ".join(f"{k}={v}" for k, v in cookies.items())}
 
 
 def _seed_running_app(cfg: Any, name: str, container_id: str | None, port: int) -> str:
@@ -85,7 +80,7 @@ def test_stream_requires_auth(cfg: Any, client: TestClient[Litestar]) -> None:
 
 def test_stream_unknown_app_closes(cfg: Any, client: TestClient[Litestar], cookies: dict[str, str]) -> None:
     with pytest.raises(WebSocketDisconnect) as exc:
-        with client.websocket_connect(f"/app_logs_stream/{new_app_id()}", headers=_cookie_header(cookies)) as ws:
+        with client.websocket_connect(f"/app_logs_stream/{new_app_id()}", headers=ws_cookie_header(cookies)) as ws:
             ws.receive_text()
     assert exc.value.code == 4404
 
@@ -98,7 +93,7 @@ def test_stream_forwards_chunks_over_the_socket(
     app_id = _seed_running_app(cfg, "notes", "cid1", 20211)
 
     msgs = []
-    with client.websocket_connect(f"/app_logs_stream/{app_id}", headers=_cookie_header(cookies)) as ws:
+    with client.websocket_connect(f"/app_logs_stream/{app_id}", headers=ws_cookie_header(cookies)) as ws:
         for _ in range(len(chunks)):
             msgs.append(ws.receive_text())
 
@@ -113,5 +108,5 @@ def test_stream_holds_socket_open_after_the_log_ends(
     _fake_stream_app_logs(["only a build log"], monkeypatch)
     app_id = _seed_running_app(cfg, "notes", None, 20212)  # no container
 
-    with client.websocket_connect(f"/app_logs_stream/{app_id}", headers=_cookie_header(cookies)) as ws:
+    with client.websocket_connect(f"/app_logs_stream/{app_id}", headers=ws_cookie_header(cookies)) as ws:
         assert ws.receive_text() == "only a build log"

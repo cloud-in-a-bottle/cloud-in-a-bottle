@@ -465,6 +465,14 @@ async def _read_app_git_info(repo_path: str | None) -> tuple[str | None, str | N
     return branch, sha, dirty
 
 
+def _classify_error(error_msg: str | None) -> tuple[str | None, str | None]:
+    """Map apps.error_message to (display message, error_kind). Both the current
+    BUILD_CACHE_CORRUPT_MARKER and the legacy [CACHE_CORRUPT] trigger the rebuild toast."""
+    if error_msg and (BUILD_CACHE_CORRUPT_MARKER in error_msg or "[CACHE_CORRUPT]" in error_msg):
+        return "Container build cache is corrupted.", "build_cache_corrupt"
+    return error_msg, None
+
+
 @get("/api/app_status/{app_id:str}", guards=[require_owner_auth], raises=[ValidationException, NotFoundException])
 async def app_status(app_id: FromPath[str], db: NamedDependency[sqlite3.Connection]) -> Response[AppStatusResponse]:
     if not is_valid_app_id(app_id):
@@ -474,14 +482,7 @@ async def app_status(app_id: FromPath[str], db: NamedDependency[sqlite3.Connecti
     ).fetchone()
     if not app_row:
         raise NotFoundException(detail="App not found")
-    error_msg = app_row["error_message"]
-    error_kind = None
-    # error_message may carry either the current BUILD_CACHE_CORRUPT_MARKER
-    # or the legacy ``[CACHE_CORRUPT]`` marker; both trigger the same
-    # 'drop cache and rebuild' remediation in the UI.
-    if error_msg and (BUILD_CACHE_CORRUPT_MARKER in error_msg or "[CACHE_CORRUPT]" in error_msg):
-        error_kind = "build_cache_corrupt"
-        error_msg = "Container build cache is corrupted."
+    error_msg, error_kind = _classify_error(app_row["error_message"])
     git_branch, git_sha, git_dirty = await _read_app_git_info(app_row["repo_path"])
     return Response(
         content=AppStatusResponse(
