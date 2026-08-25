@@ -75,12 +75,7 @@ def build_openhost_service_unit(host_uid: int) -> str:
         "WorkingDirectory=/home/host/openhost\n"
         "Environment=PATH=/home/host/.pixi/bin:/home/host/openhost/.pixi/envs/default/bin:"
         "/usr/local/bin:/usr/bin:/bin\n"
-        # OpenHost -> Cloud in a Bottle rename: the router reads BOTTLE_ROUTER_CONFIG
-        # (preferred) and OPENHOST_ROUTER_CONFIG (legacy); set both so the unit works
-        # across a version-skewed self-update either way. Kept in sync with the
-        # ansible template (a test enforces the directives match).
         "Environment=OPENHOST_ROUTER_CONFIG=/home/host/.openhost/local_compute_space/config.toml\n"
-        "Environment=BOTTLE_ROUTER_CONFIG=/home/host/.openhost/local_compute_space/config.toml\n"
         f"Environment=XDG_RUNTIME_DIR=/run/user/{host_uid}\n"
         f"Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/{host_uid}/bus\n"
         + RECLAIM_EXEC_START_PRE

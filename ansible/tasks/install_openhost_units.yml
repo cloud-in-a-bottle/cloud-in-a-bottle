@@ -83,6 +83,15 @@
     mode: "0644"
   register: journal_dropin_file
 
+- name: Install openhost bottle-router-config drop-in
+  become: yes
+  become_user: root
+  copy:
+    src: files/openhost.service.d/20-bottle-router-config.conf
+    dest: /etc/systemd/system/openhost.service.d/20-bottle-router-config.conf
+    mode: "0644"
+  register: bottle_router_config_dropin_file
+
 # JuiceFS archive-tier mount: a dedicated systemd service with
 # Restart=always so the FUSE mount recovers automatically if the
 # JuiceFS process is OOM-killed or crashes.  Installed disabled;
@@ -102,7 +111,7 @@
   become_user: root
   systemd:
     daemon_reload: yes
-  when: service_file.changed or juicefs_service_file.changed or journal_dropin_file.changed
+  when: service_file.changed or juicefs_service_file.changed or journal_dropin_file.changed or bottle_router_config_dropin_file.changed
 
 # Enabling openhost is deliberately NOT done here — see the note at the top of
 # this file. It happens in tasks/restart_openhost_service.yml alongside the

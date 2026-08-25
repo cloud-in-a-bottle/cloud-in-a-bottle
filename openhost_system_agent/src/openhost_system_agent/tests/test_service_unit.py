@@ -11,6 +11,7 @@ from openhost_system_agent.migrations.versions.v0002_baseline import RECLAIM_SCR
 from openhost_system_agent.migrations.versions.v0002_baseline import RECLAIM_SCRIPT_PATH
 from openhost_system_agent.migrations.versions.v0002_baseline import build_openhost_service_unit
 from openhost_system_agent.migrations.versions.v0010_journal_read_for_oom import JOURNAL_READ_DROPIN
+from openhost_system_agent.migrations.versions.v0011_bottle_router_config_env import BOTTLE_ROUTER_CONFIG_DROPIN
 
 
 def _effective_directives(unit_text: str) -> list[str]:
@@ -47,6 +48,17 @@ def test_journal_read_dropin_matches_ansible_copy_byte_for_byte() -> None:
     assert "SupplementaryGroups=systemd-journal\n" in JOURNAL_READ_DROPIN
 
 
+def test_bottle_router_config_dropin_matches_ansible_copy_byte_for_byte() -> None:
+    """The migration-written drop-in and the ansible-installed drop-in must be
+    identical so a host advertises BOTTLE_ROUTER_CONFIG the same way however it was
+    set up. The new name lives in this additive drop-in, not the main unit, so no
+    existing migration (or the shared builder) has to change to add it."""
+    repo_root = Path(__file__).resolve().parents[4]
+    ansible_copy = repo_root / "ansible" / "files" / "openhost.service.d" / "20-bottle-router-config.conf"
+    assert ansible_copy.read_text() == BOTTLE_ROUTER_CONFIG_DROPIN
+    assert "Environment=BOTTLE_ROUTER_CONFIG=" in BOTTLE_ROUTER_CONFIG_DROPIN
+
+
 class TestOpenhostServiceUnit:
     def test_reclaim_execstartpre_runs_script_as_root_best_effort(self) -> None:
         unit = build_openhost_service_unit(1001)
@@ -67,16 +79,15 @@ class TestOpenhostServiceUnit:
         # rewrite the unit stay byte-identical with the baseline.
         assert RECLAIM_EXEC_START_PRE in build_openhost_service_unit(1234)
 
-    def test_sets_both_router_config_env_names(self) -> None:
-        # OpenHost -> Cloud in a Bottle rename: the unit must set the config path
-        # under both the new BOTTLE_ name and the legacy OPENHOST_ name so the
-        # router resolves it whichever it reads (works across a version-skewed
-        # self-update). The ansible template carries the same pair (enforced by
-        # test_ansible_template_and_builder_agree_on_directives).
+    def test_baseline_unit_sets_only_the_legacy_router_config_name(self) -> None:
+        # OpenHost -> Cloud in a Bottle rename: the new BOTTLE_ROUTER_CONFIG name is
+        # added by an additive drop-in (see v0011 / the byte-for-byte test below),
+        # NOT by the baseline unit. The baseline still sets only the legacy name, so
+        # the shared builder — and the v0002 migration that owns it — stay frozen.
         unit = build_openhost_service_unit(1001)
         cfg = "/home/host/.openhost/local_compute_space/config.toml"
-        assert f"Environment=BOTTLE_ROUTER_CONFIG={cfg}\n" in unit
         assert f"Environment=OPENHOST_ROUTER_CONFIG={cfg}\n" in unit
+        assert "BOTTLE_ROUTER_CONFIG" not in unit
 
     def test_host_uid_is_substituted(self) -> None:
         unit = build_openhost_service_unit(4242)
