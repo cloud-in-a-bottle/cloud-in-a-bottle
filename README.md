@@ -39,40 +39,6 @@ The Python router provides the dashboard and app management APIs. It reads a `cl
 app repository, builds and runs the app in a rootless Podman container, and routes requests to it by hostname. App and
 instance data remain under your control.
 
-## Local development
-
-The development environment supports Linux x86-64 and ARM64 (kernel 6.8+, glibc 2.39+) and Apple silicon macOS.
-Install [Pixi](https://pixi.sh/), then run:
-
-```bash
-git clone https://github.com/cloud-in-a-bottle/cloud-in-a-bottle.git
-cd cloud-in-a-bottle
-pixi install -e dev
-pixi run -e dev just local-stack
-
-# wipe the persisted local state before starting instead
-pixi run -e dev just local-stack-fresh
-```
-
-The runner binds to a random loopback port and prints setup, dashboard, and app URLs under
-`home.localhost:<port>`. Press `Ctrl-C` to stop it. State persists under `~/.openhost-local-stack`. App containers
-remain running and are adopted after normal restarts. `local-stack-fresh` wipes the state but not those containers;
-remove each one separately, for example with `pixi run -e dev podman rm -f openhost-my-app` for an app named `my-app`.
-
-Deploying apps locally requires a working rootless Podman setup. On macOS, install Podman separately and initialize
-its virtual machine.
-
-## Development checks
-
-```bash
-# install and run the repository hooks
-pixi run -e dev pre-commit install
-pixi run -e dev pre-commit run -a
-
-# run the lightweight test suite
-pixi run -e dev pytest -x
-```
-
 ## Documentation
 
 Read the [Cloud in a Bottle manual](https://cloudinabottle.org/docs/) for platform concepts, app development, and
