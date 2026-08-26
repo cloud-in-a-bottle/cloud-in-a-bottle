@@ -7,6 +7,7 @@
 
 - [Deploying on a dedicated machine](setup/dedicated_machine.md)
 - [Deploying on a shared machine](setup/shared_machine.md)
+- [Exposing a home server](setup/home_network.md)
 
 
 # How it Works

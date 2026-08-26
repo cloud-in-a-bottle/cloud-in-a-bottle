@@ -41,6 +41,7 @@ from litestar.testing import TestClient
 import compute_space.web.routes.docs as docs_routes
 from compute_space.config import set_active_config
 from compute_space.core.apps import RESERVED_PATHS
+from compute_space.db import init_db
 from compute_space.tests._litestar_helpers import make_test_app
 from compute_space.web.routes.docs import docs_routes as docs_router
 
@@ -103,6 +104,8 @@ def _client(repo_root: Path) -> tuple[TestClient[Litestar], Any]:
     ``get_config().openhost_repo_path`` so we install the fake as the active config."""
     cfg = _FakeCfg(openhost_repo_path=repo_root)
     set_active_config(cfg)  # type: ignore[arg-type]
+    # make_test_app's zone middleware opens the DB on every request, so point get_db() at a temp one.
+    init_db(str(repo_root.parent / "router.db"))
     return TestClient(app=make_test_app(docs_router)), cfg
 
 

@@ -1,7 +1,7 @@
 - read the style guide in style_guide.md
 - on first init, ensure pre-commit hooks are installed (`pre-commit install`). this runs ruff and mypy on commit.
 - please ask before doing anything that affects low level system stuff on this machine, or anything using sudo.
-- readmes are all human written. any ai-generated docs will be in files like readme_ai_generated.md. the ai-generated docs can be used for context but should *not* be considered necessarily up to date or as hard constraints on how the system should/must be built.
+- prefer to run only tests specifically covering the files you're working on, instead of eg. the full unit test suite. all tests run in CI on each PR, and the test suite is large, so running large portions of it repeatedly during development just slows things down unnecessarily.
 
 ## project structure
 

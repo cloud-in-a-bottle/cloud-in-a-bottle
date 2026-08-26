@@ -1,98 +1,85 @@
-# Running Cloud in a Bottle in a local QEMU VM
+# Deploying on a shared machine
 
-> The authoritative deployment reference is
-> **[`ansible/readme.md`](https://github.com/cloud-in-a-bottle/cloud-in-a-bottle/blob/main/ansible/readme.md)**
-> and `ansible/setup.yml`; this guide walks the local-VM path end to end.
->
-> Upstream docs for the tools used here:
-> [QEMU](https://www.qemu.org/download/) ·
-> [Ubuntu Server](https://ubuntu.com/download/server)
+Use this path when the machine already does something else: your laptop, a desktop, or a home server with other services on it.
 
-This gets Cloud in a Bottle running on an **Ubuntu 24.04 VM under QEMU** on your
-desktop — good for trying it out before you buy a dedicated domain or machine.
-Two parts:
+Cloud in a Bottle wants to own system packages and ports 80, 443, and 53, which is more than you want to give it on a machine like that. So instead of installing on the host, you give it its own Ubuntu VM and install inside that. Everything it does stays in the VM's disk image. Delete the image and it is gone.
 
-1. **[Build the VM](#part-1--build-an-ubuntu-vm-in-qemu)** — install QEMU and
-   stand up an Ubuntu VM.
-2. **[Deploy Cloud in a Bottle](#part-2--deploy-cloud-in-a-bottle-onto-the-vm)** — run the Ansible
-   playbook against that VM (HTTP-only mode; no domain needed).
+This guide starts with a local HTTP-only instance, because that needs no domain and no DNS. A VM instance is not limited to that. It can serve the public internet over HTTPS exactly like one on a dedicated machine, once traffic can reach it. [Going public](#going-public) at the end covers the difference.
 
-For a dedicated instance instead, see
-[Going to production](#going-to-production-real-host--domain).
+The local instance lives at `http://lvh.me:8080`, with apps at `http://<app>.lvh.me:8080`. `lvh.me` is a public DNS name that resolves to `127.0.0.1`, wildcard subdomains included, which is something `localhost` does not do consistently. Cloud in a Bottle routes apps by subdomain, so this gives you working app URLs with no DNS setup on your part.
 
----
+## What the VM needs
 
-## Settings — edit these once
+Cloud in a Bottle does not care which hypervisor you use. QEMU, UTM, VirtualBox, VMware, Hyper-V, libvirt/virt-manager, Multipass, and Proxmox all work. The VM just has to provide:
 
-Set these in your shell; the commands below use them, so you only fill in
-values here. The defaults target an **Apple Silicon (arm64) Mac**; see
-[Other hosts](#other-hosts-x86_64--linux) for x86_64 / Linux substitutions.
+- Ubuntu 24.04.
+- Key-based SSH from your machine, as a user with sudo.
+- The VM's port 8080 reachable at `127.0.0.1:8080` on your machine, via a port forward in the VM host's NAT config or an SSH tunnel. This matters because `lvh.me` resolves to `127.0.0.1`, and that is what makes app subdomains work.
+- About 8 GB of RAM, 4 cores, and 40 GB of disk.
+- An ext4, xfs, or btrfs root filesystem. App containers need idmapped mounts, and install fails early with a clear error otherwise.
+
+[Part 1](#part-1-build-an-ubuntu-vm-with-qemu) is a QEMU recipe you can follow verbatim if you do not already have a preferred way to make VMs. Otherwise build the VM however you like and skip to [Part 2](#part-2-install-cloud-in-a-bottle-into-the-vm).
+
+## On your machine
+
+- Ansible: `uv tool install ansible-core`, or `pipx install ansible-core`. It runs on your machine, never inside the VM.
+- A checkout of Cloud in a Bottle, for the playbooks: `git clone https://github.com/cloud-in-a-bottle/cloud-in-a-bottle.git ~/openhost`
+- An SSH keypair. Make one if you do not have one: `ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519 -N ""`
+
+## Settings
+
+Set these once in your shell. Every command below reads them, so this is the only place you fill in values.
 
 ```bash
-# --- where the VM lives + how to reach it ---
-export VM_DIR=~/openhost-vm            # holds the disk, firmware vars, seed
+# --- how to reach the VM ---
+export VM_HOST=127.0.0.1               # or the VM's IP, if it has one of its own
+export SSH_PORT=2222                   # 22 if you're connecting to the VM directly
+export HTTP_PORT=8080                  # port on your machine that reaches VM :8080
+export VM_USER=ubuntu                  # a sudo-capable login in the VM
 export SSH_KEY=~/.ssh/id_ed25519       # your SSH private key ($SSH_KEY.pub must exist)
-export VM_USER=ubuntu                  # the login cloud-init sets up in the VM
-export SSH_PORT=2222                   # host port -> VM :22
-export HTTP_PORT=8080                  # host port -> VM :8080 (the dashboard)
 
-# --- VM size ---
+# --- Cloud in a Bottle ---
+export DOMAIN=lvh.me:8080              # zone domain for app routing (see step 2.2)
+export OPENHOST_REPO=~/openhost        # your checkout of the repo
+```
+
+## Part 1: build an Ubuntu VM with QEMU
+
+Skip this if you already have a VM meeting the requirements above.
+
+### QEMU settings
+
+The defaults target an Apple Silicon (arm64) Mac. See [other hosts](#other-hosts-x86_64-linux) for x86_64 and Linux substitutions.
+
+```bash
+export VM_DIR=~/openhost-vm            # holds the disk, firmware vars, seed
 export DISK_SIZE=40G
 export RAM_MB=8192
 export CPUS=4
 
-# --- Cloud in a Bottle ---
-export DOMAIN=lvh.me:8080              # zone domain for app routing (see note in Part 2)
-export OPENHOST_REPO=~/openhost        # path to your checkout of this repo
-
-# --- QEMU (Apple Silicon / arm64 defaults) ---
-# Ubuntu cloud image for your host's architecture (swap the -arm64 suffix for
-# -amd64 on x86_64):
 export UBUNTU_IMG_URL="https://cloud-images.ubuntu.com/releases/24.04/release/ubuntu-24.04-server-cloudimg-arm64.img"
 export QEMU=qemu-system-aarch64
 export ACCEL=hvf                       # macOS accelerator; Linux: kvm
 export EFI_CODE=/opt/homebrew/share/qemu/edk2-aarch64-code.fd
 export EFI_VARS_TEMPLATE=/opt/homebrew/share/qemu/edk2-arm-vars.fd
-
-# If you don't already have an SSH key:  ssh-keygen -t ed25519 -f "$SSH_KEY" -N ""
 ```
 
----
+Install QEMU with `brew install qemu` on macOS, or `sudo apt install qemu-system-arm qemu-system-x86 qemu-utils` on Debian/Ubuntu.
 
-## Part 1 — Build an Ubuntu VM in QEMU
+### 1.1 Create the disk
 
-### 1. Install QEMU
-
-```bash
-# macOS
-brew install qemu
-
-# Debian/Ubuntu Linux
-sudo apt install qemu-system-arm qemu-system-x86 qemu-utils
-```
-
-Verify: `"$QEMU" --version`. (Authoritative install docs:
-<https://www.qemu.org/download/>.)
-
-### 2. Get the Ubuntu cloud image + create the disk
-
-The cloud image is a prebuilt qcow2 that configures itself from cloud-init on
-first boot — no interactive installer. Download it as the VM's disk and grow it
-to `$DISK_SIZE`:
+Ubuntu's cloud image is a prebuilt qcow2 that configures itself from cloud-init on first boot, so there is no interactive installer. Download it as the VM's disk and grow it:
 
 ```bash
-mkdir -p "$VM_DIR"                              # holds the disk, firmware vars, seed
+mkdir -p "$VM_DIR"
 curl -L -o "$VM_DIR/disk.qcow2" "$UBUNTU_IMG_URL"
 qemu-img resize "$VM_DIR/disk.qcow2" "$DISK_SIZE"   # cloud-init grows the rootfs to fill it
-cp "$EFI_VARS_TEMPLATE" "$VM_DIR/efi-vars.fd"   # writable UEFI variable store
+cp "$EFI_VARS_TEMPLATE" "$VM_DIR/efi-vars.fd"       # writable UEFI variable store
 ```
 
-### 3. Build the cloud-init seed
+### 1.2 Build the cloud-init seed
 
-Cloud-init reads a `user-data` + `meta-data` pair from a small ISO labelled
-`CIDATA`. This one creates `$VM_USER`, imports your SSH key, and sets a sudo
-password (`ubuntu` by default — you'll hand it to Ansible's `--ask-become-pass`;
-change it here if you like).
+Cloud-init reads a `user-data` and `meta-data` pair off a small ISO labelled `CIDATA`. This one creates `$VM_USER`, imports your SSH key, and sets a sudo password. The password defaults to `ubuntu` and you hand it to Ansible later. Change it here if you like.
 
 ```bash
 cat > "$VM_DIR/user-data" <<EOF
@@ -111,20 +98,19 @@ chpasswd:
     - {name: $VM_USER, password: ubuntu, type: text}
 ssh_pwauth: false
 EOF
-: > "$VM_DIR/meta-data"        # empty file is required but has no content
+: > "$VM_DIR/meta-data"        # must exist, but stays empty
 
-# Pack them into a CIDATA seed ISO:
+# Pack them into a CIDATA seed ISO.
 # macOS:
 hdiutil makehybrid -iso -joliet -default-volume-name CIDATA \
   -o "$VM_DIR/seed.iso" "$VM_DIR/user-data" "$VM_DIR/meta-data"
-# Linux (cloud-image-utils):  cloud-localds "$VM_DIR/seed.iso" "$VM_DIR/user-data" "$VM_DIR/meta-data"
+# Linux (needs cloud-image-utils):
+# cloud-localds "$VM_DIR/seed.iso" "$VM_DIR/user-data" "$VM_DIR/meta-data"
 ```
 
-### 4. Boot the VM (headless)
+### 1.3 Boot it
 
-Boot the disk with the seed attached, headless (serial on your terminal). Leave
-this running in its own terminal (or a `tmux`/`screen` session) and use a new
-terminal for Part 2. First boot takes a moment while cloud-init runs.
+Boot headless, with the seed attached and two ports forwarded in from your machine: SSH, and the dashboard. Leave this running in its own terminal, or a `tmux` window, and use a second terminal for Part 2. First boot takes a minute while cloud-init runs.
 
 ```bash
 "$QEMU" \
@@ -139,73 +125,39 @@ terminal for Part 2. First boot takes a moment while cloud-init runs.
   -nographic
 ```
 
-Confirm SSH works from another terminal (accept the host key on first connect;
-retry for a few seconds if cloud-init is still finishing):
+This is also the restart command later. The seed ISO is harmless to leave attached, since cloud-init only applies it once per VM.
+
+`-nographic` wires the VM's serial console to this terminal. Quit QEMU with `Ctrl-A` then `X`, not `Ctrl-C`.
+
+Confirm SSH works from your second terminal. Accept the host key, and retry for a few seconds if cloud-init is still finishing.
 
 ```bash
-ssh -p "$SSH_PORT" "$VM_USER@localhost" 'lsb_release -ds && echo SSH_OK'
+ssh -p "$SSH_PORT" "$VM_USER@$VM_HOST" 'lsb_release -ds && echo SSH_OK'
 ```
 
-> The seed ISO is harmless to leave attached — cloud-init only applies it once
-> per VM, so this same command is also your restart command.
->
-> `-nographic` wires the VM's serial console to this terminal; quit QEMU with
-> `Ctrl-A` then `X`. (Don't `Ctrl-C`.)
+### Other hosts (x86_64, Linux)
 
-### Manual install from the Server ISO (TODO)
-
-> **TODO:** document the alternative interactive install from the Ubuntu Server
-> ISO (boot subiquity with a display, use the whole disk, install OpenSSH, import
-> your SSH key) for anyone who'd rather not use the cloud image. To be filled in.
-
-### Other hosts (x86_64 / Linux)
-
-The commands above assume an arm64 Mac. On an **x86_64** host, change the
-Settings block:
+The settings above assume an arm64 Mac. On an x86_64 host:
 
 - `QEMU=qemu-system-x86_64`, and swap `-machine virt` for `-machine q35`.
-- `ACCEL=kvm` on Linux (`ACCEL=hvf` on an Intel Mac).
-- Firmware: OVMF instead of arm EDK2 —
-  `EFI_CODE=/usr/share/OVMF/OVMF_CODE.fd`,
-  `EFI_VARS_TEMPLATE=/usr/share/OVMF/OVMF_VARS.fd` (install `ovmf` on Debian/Ubuntu).
-- Use the **amd64** cloud image (`UBUNTU_IMG_URL` above), and build the seed with
-  `cloud-localds` instead of `hdiutil`.
+- `ACCEL=kvm` on Linux, `ACCEL=hvf` on an Intel Mac.
+- Use OVMF firmware instead of arm EDK2: `EFI_CODE=/usr/share/OVMF/OVMF_CODE.fd` and `EFI_VARS_TEMPLATE=/usr/share/OVMF/OVMF_VARS.fd`. On Debian/Ubuntu, install `ovmf`.
+- Use the amd64 cloud image, and build the seed with `cloud-localds`.
 
-On arm64 Linux, keep `-machine virt` but use
-`EFI_CODE=/usr/share/AAVMF/AAVMF_CODE.fd` and the matching `AAVMF_VARS.fd`.
+On arm64 Linux keep `-machine virt`, but use `EFI_CODE=/usr/share/AAVMF/AAVMF_CODE.fd` and the matching `AAVMF_VARS.fd`.
 
----
+## Part 2: install Cloud in a Bottle into the VM
 
-## Part 2 — Deploy Cloud in a Bottle onto the VM
+Run these from your machine, not inside the VM, with the VM running.
 
-Run these from your **desktop** (not inside the VM), with the VM from Part 1
-still running.
-
-### 1. One-time prerequisites
-
-```bash
-# Ansible on your desktop (control machine)
-uv tool install ansible-core        # or: pipx install ansible-core
-
-# A checkout of this repo (skip if you already have $OPENHOST_REPO)
-git clone https://github.com/cloud-in-a-bottle/cloud-in-a-bottle.git "$OPENHOST_REPO"
-```
-
-### 2. Run the playbook (HTTP-only)
-
-HTTP-only mode skips TLS, CoreDNS, and Caddy — the router serves plain HTTP on
-`:8080`, reachable via the port forward you set up.
+### 2.1 Run the playbook
 
 ```bash
 cd "$OPENHOST_REPO"
 
-# Known rough edge: in HTTP-only mode the playbook still copies an ACME key it
-# never uses. A placeholder satisfies it (git-ignored; harmless without TLS).
-echo '{}' > ansible/secrets/certbot_private_key.json
-
 ANSIBLE_HOST_KEY_CHECKING=False \
 ansible-playbook ansible/setup.yml \
-  -i '127.0.0.1,' \
+  -i "$VM_HOST," \
   -e ansible_connection=ssh \
   -e ansible_port=$SSH_PORT \
   -e initial_user=$VM_USER \
@@ -215,77 +167,80 @@ ansible-playbook ansible/setup.yml \
   -e public_ip=127.0.0.1 \
   -e skip_apt_upgrade=true \
   --private-key=$SSH_KEY \
-  --ask-become-pass          # the VM user's sudo password (set in the cloud-init seed)
+  --ask-become-pass          # the VM user's sudo password
 ```
 
-This installs rootless Podman, pixi, the systemd units, and deploys Cloud in a Bottle's
-default apps. It takes several minutes the first time.
+This installs rootless Podman and pixi inside the VM, clones Cloud in a Bottle from GitHub, writes its config, and starts it as a systemd service. It takes several minutes the first time.
 
-> **Why `DOMAIN=lvh.me:8080`?** Cloud in a Bottle routes apps by subdomain
-> (`<app>.<domain>`), and `localhost` can't have working wildcard subdomains.
-> `lvh.me` and `*.lvh.me` resolve to `127.0.0.1` in public DNS with no setup, so
-> `http://myapp.lvh.me:8080` just works. Include the **`:8080`** so the router's
-> absolute login/redirect URLs keep the port (otherwise they point at `:80` and
-> dead-end).
+Two flags matter. `local_http_only=true` puts the instance in HTTP-only mode: no TLS, no CoreDNS, no Caddy, just the router serving plain HTTP on port 8080. `bind_host=0.0.0.0` makes it listen on the VM's network interface instead of only loopback, which is what a NAT port forward connects to. If you are reaching the VM over an SSH tunnel instead, you can leave `bind_host` at its `127.0.0.1` default.
 
-### 3. Claim it
+### 2.2 Why `DOMAIN=lvh.me:8080`
 
-The playbook prints a **claim URL** at the end:
+Apps are routed by subdomain (`<app>.<domain>`), so the zone domain has to be something whose subdomains resolve. `localhost` does not qualify. `lvh.me` and `*.lvh.me` both resolve to `127.0.0.1` in public DNS, so `http://myapp.lvh.me:8080` reaches the router with nothing to configure. Any other wildcard-to-loopback domain works too, including one you run yourself.
+
+Include the `:8080`. The router builds absolute login and redirect URLs from this value, and without the port they point at `:80` and dead-end.
+
+### 2.3 Claim it
+
+The playbook prints a claim URL at the end:
 
 ```
-http://lvh.me:8080/setup?claim=<token>
+Claim URL: http://lvh.me:8080/setup?claim=<token>
 ```
 
-Open it (or `http://localhost:$HTTP_PORT/setup?claim=<token>`), set the owner
-username + password, and you're in. Visiting the site before claiming just
-redirects to a gated `/setup`. Lost the token? Re-run the playbook (idempotent)
-for a fresh URL, or pass your own with `-e claim_token=<secret>`.
+Open it and set the owner username and password. Before it is claimed, every request redirects to a gated `/setup`.
 
----
-
-## Verify & manage
+If you lose the token, re-run the playbook, which is idempotent, or read it out of the VM:
 
 ```bash
-# From the desktop, through the port forward:
-curl http://localhost:$HTTP_PORT/health            # -> {"status":"ok"}
-
-# Service status / logs (SSH into the VM):
-ssh -p $SSH_PORT $VM_USER@localhost 'sudo systemctl status openhost'
-ssh -p $SSH_PORT $VM_USER@localhost 'sudo journalctl -u openhost -f'
+ssh -p $SSH_PORT $VM_USER@$VM_HOST \
+  'sudo cat /home/host/.openhost/local_compute_space/first_boot.toml'
 ```
 
-- **Stop the VM:** in its terminal, `Ctrl-A` then `X` (or `ssh … sudo poweroff`).
-- **Restart the VM:** re-run the Part 1 step 4 boot command.
-- **Re-deploy after code changes:** `ansible-playbook ansible/deploy.yml …`
-  with the same `-i`/`-e` flags (see `ansible/readme.md`).
+## Verify and manage
 
----
+```bash
+curl http://localhost:$HTTP_PORT/health         # -> {"status":"ok"}
 
-## Going to production (real host + domain)
+ssh -p $SSH_PORT $VM_USER@$VM_HOST 'sudo systemctl status openhost'
+ssh -p $SSH_PORT $VM_USER@$VM_HOST 'sudo journalctl -u openhost -f'
+```
 
-The VM flow above is for local use. For a public instance, the only things that
-change are the *host* (any Ubuntu 24.04 server — cloud VPS or bare metal, reached
-over SSH as `root`) and turning on TLS by dropping `local_http_only`:
+- Stop the VM: shut it down however your VM host does it, or `ssh -p $SSH_PORT $VM_USER@$VM_HOST sudo poweroff`. Under QEMU you can also press `Ctrl-A` then `X` in its terminal.
+- Restart the VM: Cloud in a Bottle comes back up on its own. Under QEMU, re-run the boot command from [step 1.3](#13-boot-it).
+- Throw it away: delete the VM. Under QEMU that is `rm -rf "$VM_DIR"`, and nothing was installed on your machine except QEMU itself.
+- Upgrade Cloud in a Bottle: use the update button on the dashboard's settings page.
 
-1. **DNS** — delegate your zone to the server so its built-in CoreDNS can answer
-   ACME DNS-01 and serve `*.<zone>`:
+## Going public
 
-   | Record | Name | Value |
-   |--------|------|-------|
-   | `A`    | `ns1.host.example.com` | `<SERVER_IP>` |
-   | `NS`   | `host.example.com`     | `ns1.host.example.com` |
+An instance in a VM is a real deployment, not just a test rig. Serving it on the internet takes three things beyond the walkthrough above.
 
-2. **ACME key** — `python scripts/generate_acme_key.py ansible/secrets/certbot_private_key.json --email you@example.com`
-   (or use the `cert_api` broker; see `ansible/readme.md`).
+**Networking.** Delegate a DNS zone to your public IPv4 and get ports 53, 80, and 443 through to the VM. On a home connection that means dynamic DNS plus forwarding rules on both your router and the VM host. See [Exposing a home server](./home_network.md).
 
-3. **Deploy** (TLS is the default — no `local_http_only`):
+**An ACME account key**, so the instance can get its own certificates. Generate one on your machine:
 
-   ```bash
-   ansible-playbook ansible/setup.yml -i <SERVER_IP>, \
-     -e initial_user=root -e domain=host.example.com \
-     --private-key=~/.ssh/your_key
-   ```
+```bash
+cd "$OPENHOST_REPO"
+pixi run python scripts/generate_acme_key.py ansible/secrets/certbot_private_key.json --email you@example.com
+```
 
-Your instance comes up at `https://host.example.com/`. Full options and the
-authoritative reference are in
-**[`ansible/readme.md`](https://github.com/cloud-in-a-bottle/cloud-in-a-bottle/blob/main/ansible/readme.md)**.
+**A playbook run with TLS on.** Use your real zone domain, pass your public IPv4, and drop `local_http_only` and `bind_host`. Caddy terminates TLS on port 443 and proxies to the router over loopback, so the router does not need to listen on the VM's interface anymore.
+
+```bash
+ansible-playbook ansible/setup.yml \
+  -i "$VM_HOST," \
+  -e ansible_connection=ssh \
+  -e ansible_port=$SSH_PORT \
+  -e initial_user=$VM_USER \
+  -e domain=host.example.com \
+  -e public_ip=<your public IPv4> \
+  -e acme_directory_url=https://acme-v02.api.letsencrypt.org/directory \
+  --private-key=$SSH_KEY \
+  --ask-become-pass
+```
+
+Set `acme_directory_url` to Let's Encrypt, which is what the key you just generated is registered with. The built-in default is Google Trust Services, which needs an account binding you have to request separately.
+
+The instance gets a wildcard certificate covering `host.example.com` and `*.host.example.com` over DNS-01, and comes up at `https://host.example.com/`.
+
+Easiest is to do this from the start, on a VM you have not claimed yet. Converting an instance you already claimed at `lvh.me` is more work: the playbook preserves an existing config, so you have to re-run it with `-e overwrite_existing=true` to switch the instance out of HTTP-only mode, and the primary domain is fixed in the database at claim time, so you add the public domain from the dashboard's domain settings rather than replacing it.
