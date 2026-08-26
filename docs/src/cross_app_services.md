@@ -139,9 +139,9 @@ HTTP 403
   "error": "permission_required",
   "required_grant": {
     "grant": { ... },
-    "scope": "app"
-  },
-  "grant_url": GRANT_URL
+    "scope": "app",
+    "grant_url": GRANT_URL
+  }
 }
 ```
 
