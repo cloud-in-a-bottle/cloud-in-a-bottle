@@ -9,7 +9,7 @@ import dns.rdatatype
 import dns.zone
 import pytest
 
-import compute_space.core.dns.zonefile as zonefile
+import compute_space.core.dns.coredns_provider.zonefile as zonefile
 from compute_space.core.dns.records import DnsRecord
 from compute_space.core.dns.records import InvalidRecord
 

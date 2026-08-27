@@ -19,9 +19,9 @@ from cryptography import x509
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 
-from compute_space.core.dns import zonefile
 from compute_space.core.dns.client import DnsClient
 from compute_space.core.dns.client import dns_client
+from compute_space.core.dns.coredns_provider import zonefile
 from compute_space.core.domains import Domain
 from compute_space.core.tls.acquire_cert_broker import CertAcquisitionTimeoutError
 from compute_space.core.tls.acquire_cert_broker import acquire_tls_cert_via_broker

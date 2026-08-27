@@ -9,7 +9,6 @@ from pathlib import Path
 
 import pytest
 
-from compute_space.core.dns import zonefile
 from compute_space.core.dns.client import DnsClient
 from compute_space.core.dns.client import DnsServiceError
 from compute_space.core.dns.client import UnknownZone
@@ -17,6 +16,7 @@ from compute_space.core.dns.client import clear_txt
 from compute_space.core.dns.client import dns_client
 from compute_space.core.dns.client import publish_txt
 from compute_space.core.dns.client import split_fqdn
+from compute_space.core.dns.coredns_provider import zonefile
 from compute_space.core.dns.records import DnsRecord
 from compute_space.core.dns.records import InvalidRecord
 from compute_space.core.domains import Domain

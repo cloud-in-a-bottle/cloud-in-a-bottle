@@ -16,8 +16,8 @@ from compute_space.core.dns.client import clear_txt
 from compute_space.core.dns.client import publish_txt
 from compute_space.core.dns.client import router_grants
 from compute_space.core.dns.records import DnsRecord
-from compute_space.core.dns.service import ROUTER_CONSUMER_ID
-from compute_space.core.dns.service import ROUTER_DNS_PROVIDER_ID
+from compute_space.core.dns.service_api import ROUTER_CONSUMER_ID
+from compute_space.core.dns.service_api import ROUTER_DNS_PROVIDER_ID
 
 
 @attr.s(auto_attribs=True)
@@ -70,7 +70,7 @@ def test_the_router_identifies_itself_as_a_consumer() -> None:
 
 def test_the_router_grants_itself_only_what_it_needs() -> None:
     grants = router_grants(["host.example.com"])
-    entries = {(g["grant"]["name"], g["grant"]["type"]) for g in grants}
+    entries = {(g.name, g.type) for g in grants}
 
     # Challenge records plus the apex/wildcard A records it maintains — and nothing else.
     assert ("_acme-challenge", "TXT") in entries
@@ -81,11 +81,12 @@ def test_the_router_grants_itself_only_what_it_needs() -> None:
     assert ("host.example.com", "A") in entries
     # No blanket grant: a bug here stays bounded, and the provider's audit log stays readable.
     assert ("**", "**") not in entries
-    assert all(g["scope"] == "global" for g in grants)
+    assert all(g.access == "rw" for g in grants)
+    assert all(g.as_permission()["scope"] == "global" for g in grants)
 
 
 def test_the_router_scopes_its_grants_to_the_domains_it_manages() -> None:
-    entries = {g["grant"]["name"] for g in router_grants(["a.example.com", "b.example.org"])}
+    entries = {g.name for g in router_grants(["a.example.com", "b.example.org"])}
     assert "_acme-challenge.a.example.com" in entries
     assert "_acme-challenge.b.example.org" in entries
     assert "_acme-challenge.c.example.net" not in entries
@@ -93,7 +94,7 @@ def test_the_router_scopes_its_grants_to_the_domains_it_manages() -> None:
 
 def test_grants_are_deduplicated_across_domains() -> None:
     grants = router_grants(["a.example.com", "a.example.com"])
-    assert len(grants) == len({json.dumps(g, sort_keys=True) for g in grants})
+    assert len(grants) == len(set(grants))
 
 
 # ─── the wire shape ───

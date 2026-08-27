@@ -6,8 +6,8 @@ from contextlib import closing
 from pathlib import Path
 
 from compute_space.config import DefaultConfig
-from compute_space.core.dns.coredns import _write_coredns_config
-from compute_space.core.dns.coredns import public_dns_zones
+from compute_space.core.dns.coredns_provider.coredns import _write_coredns_config
+from compute_space.core.dns.coredns_provider.coredns import public_dns_zones
 from compute_space.core.domains import Domain
 from compute_space.core.domains import DomainRecord
 from compute_space.core.domains import seed_domains

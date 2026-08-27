@@ -26,17 +26,17 @@ import attr
 import httpx
 
 from compute_space.config import Config
+from compute_space.core.dns.coredns_provider.service import handle_dns_service_call
 from compute_space.core.dns.records import APEX
 from compute_space.core.dns.records import DnsRecord
 from compute_space.core.dns.records import normalize_record
 from compute_space.core.dns.records import normalize_zone
-from compute_space.core.dns.service import DNS_SERVICE_URL
-from compute_space.core.dns.service import DNS_SERVICE_VERSION
-from compute_space.core.dns.service import ROUTER_CONSUMER_ID
-from compute_space.core.dns.service import ROUTER_CONSUMER_NAME
-from compute_space.core.dns.service import ROUTER_DNS_PROVIDER_ID
-from compute_space.core.dns.service import handle_dns_service_call
-from compute_space.core.dns.service import parse_grants
+from compute_space.core.dns.service_api import DNS_SERVICE_URL
+from compute_space.core.dns.service_api import DNS_SERVICE_VERSION
+from compute_space.core.dns.service_api import ROUTER_CONSUMER_ID
+from compute_space.core.dns.service_api import ROUTER_CONSUMER_NAME
+from compute_space.core.dns.service_api import ROUTER_DNS_PROVIDER_ID
+from compute_space.core.dns.service_api import Grant
 from compute_space.core.domains import effective_domains
 from compute_space.core.logging import logger
 from compute_space.core.services_v2 import resolve_provider
@@ -78,20 +78,20 @@ def router_managed_domains(db: sqlite3.Connection) -> list[str]:
     return [d.name_no_port for d in effective_domains(db) if not d.mdns]
 
 
-def router_grants(domains: list[str]) -> list[dict[str, Any]]:
+def router_grants(domains: list[str]) -> list[Grant]:
     """The grants the router asserts for itself: challenge TXT plus the records it maintains.
 
     Narrow rather than a blanket ``**``, because a provider app's audit log is one of the few places
     an owner sees what touched their registrar and it should say something useful.  Each domain
     contributes two shapes, since the provider's zone may be the domain itself or a parent.
     """
-    grants: list[dict[str, Any]] = []
+    grants: list[Grant] = []
     seen: set[tuple[str, str]] = set()
 
     def add(name: str, rrtype: str) -> None:
         if (name, rrtype) not in seen:
             seen.add((name, rrtype))
-            grants.append({"grant": {"name": name, "type": rrtype, "access": "rw"}, "scope": "global"})
+            grants.append(Grant(name=name, type=rrtype, access="rw"))
 
     for domain in domains:
         for base in ("", domain.strip(".").lower()):
@@ -120,7 +120,7 @@ class DnsClient:
     config: Config
     db: sqlite3.Connection
     provider_id: str
-    grants: list[dict[str, Any]]
+    grants: list[Grant]
     # None when the router serves the service itself.
     endpoint_url: str | None = None
     http: httpx.Client | None = None
@@ -187,9 +187,7 @@ class DnsClient:
 
     def _dispatch(self, path: str, payload: dict[str, Any]) -> tuple[int, dict[str, Any]]:
         if self.is_local:
-            return handle_dns_service_call(
-                path, payload, parse_grants(json.dumps(self.grants)), self.config, self.db, ROUTER_CONSUMER_ID
-            )
+            return handle_dns_service_call(path, payload, self.grants, self.config, self.db, ROUTER_CONSUMER_ID)
 
         assert self.endpoint_url is not None and self.http is not None
         try:
@@ -199,7 +197,7 @@ class DnsClient:
                 headers={
                     "X-OpenHost-Consumer-Id": ROUTER_CONSUMER_ID,
                     "X-OpenHost-Consumer-Name": ROUTER_CONSUMER_NAME,
-                    "X-OpenHost-Permissions": json.dumps(self.grants),
+                    "X-OpenHost-Permissions": json.dumps([g.as_permission() for g in self.grants]),
                 },
             )
         except httpx.HTTPError as e:

@@ -1,19 +1,16 @@
-"""The router's own implementation of the ``dns`` service, backed by its CoreDNS zone files.
+"""Request handling for the ``dns`` service as the router provides it.
 
-This is the only thing that reads or writes zone-file *records* — the router's own cert and
-dynamic-DNS writes come through here too, via ``client.DnsClient``, so there is one code path
-regardless of caller.  (``coredns.py`` still creates and re-points the files themselves; that is
-file lifecycle, below the service, and has to work before a zone is servable.)
+The only thing that reads or writes zone-file *records* — the router's own cert and dynamic-DNS
+writes arrive here too, via ``client.DnsClient``, so there is one code path regardless of caller.
+(``coredns.py`` still creates and re-points the files themselves; that is file lifecycle, below
+the service, and has to work before a zone is servable.)
 
 Returns ``(status, body)`` rather than framework responses; the litestar wiring lives in
-``web.routes.services_v2``.  Grant semantics are kept byte-identical to the connector app's
-(``internal/grants/match.go``) — two providers of one service disagreeing about what a grant means
-would be worse than any bug in either.
+``web.routes.services_v2``.
 """
 
 from __future__ import annotations
 
-import json
 import sqlite3
 from pathlib import Path
 from typing import Any
@@ -21,96 +18,21 @@ from typing import Any
 import attr
 
 from compute_space.config import Config
-from compute_space.core.dns import zonefile
-from compute_space.core.dns.coredns import public_dns_zones
+from compute_space.core.dns.coredns_provider import zonefile
+from compute_space.core.dns.coredns_provider.coredns import public_dns_zones
 from compute_space.core.dns.records import DnsRecord
 from compute_space.core.dns.records import InvalidRecord
 from compute_space.core.dns.records import ReservedRecord
 from compute_space.core.dns.records import normalize_record
 from compute_space.core.dns.records import normalize_zone
 from compute_space.core.dns.records import reject_router_owned
+from compute_space.core.dns.service_api import ALL_ZONES
+from compute_space.core.dns.service_api import ROUTER_CONSUMER_ID
+from compute_space.core.dns.service_api import WILDCARD
+from compute_space.core.dns.service_api import Grant
+from compute_space.core.dns.service_api import can_read
+from compute_space.core.dns.service_api import can_write
 from compute_space.core.logging import logger
-
-# Service identity.  The router and a connector app are interchangeable providers; which one
-# applies is the ordinary service default.
-DNS_SERVICE_URL = "github.com/imbue-openhost/openhost/services/dns"
-DNS_SERVICE_VERSION = "0.1.0"
-ROUTER_DNS_PROVIDER_ID = "_openhost_router_dns"
-
-# The router's own consumer identity.  App names are DNS-label-like (see core.app_id), so the
-# leading underscore cannot collide with a real one.
-ROUTER_CONSUMER_ID = "_openhost_router"
-ROUTER_CONSUMER_NAME = "OpenHost Router"
-
-# "**" matches any run of characters.  A single "*" is deliberately literal: it is a real DNS
-# wildcard label, so a grant naming "*.app" means that record and nothing else.
-WILDCARD = "**"
-ALL_ZONES = "*"
-
-
-@attr.s(auto_attribs=True, frozen=True)
-class Grant:
-    name: str
-    type: str
-    access: str
-
-    def matches(self, name: str, rrtype: str) -> bool:
-        return _match(self.name, name) and _match(self.type, rrtype)
-
-    @property
-    def writable(self) -> bool:
-        return self.access == "rw"
-
-
-def _match(pattern: str, value: str) -> bool:
-    pattern, value = pattern.lower(), value.lower()
-    segments = pattern.split(WILDCARD)
-    if len(segments) == 1:
-        return pattern == value
-    prefix, suffix = segments[0], segments[-1]
-    if not value.startswith(prefix) or not value.endswith(suffix) or len(prefix) + len(suffix) > len(value):
-        return False
-    rest = value[len(prefix) : len(value) - len(suffix)]
-    for segment in segments[1:-1]:
-        if segment:
-            i = rest.find(segment)
-            if i < 0:
-                return False
-            rest = rest[i + len(segment) :]
-    return True
-
-
-def parse_grants(header: str | None) -> list[Grant]:
-    """Read the router-injected permissions header.  Malformed entries are skipped rather than
-    failing the request: a bad grant should narrow access, never widen it or break a valid call."""
-    if not header or not header.strip():
-        return []
-    try:
-        entries = json.loads(header)
-    except ValueError:
-        return []
-    if not isinstance(entries, list):
-        return []
-    out: list[Grant] = []
-    for entry in entries:
-        if not isinstance(entry, dict) or entry.get("scope") != "global":
-            continue
-        grant = entry.get("grant")
-        if not isinstance(grant, dict):
-            continue
-        name, rrtype, access = grant.get("name"), grant.get("type"), grant.get("access")
-        if isinstance(name, str) and isinstance(rrtype, str) and access in ("r", "rw"):
-            out.append(Grant(name=name.lower(), type=rrtype.upper(), access=access))
-    return out
-
-
-def can_read(grants: list[Grant], name: str, rrtype: str) -> bool:
-    return any(g.matches(name, rrtype) for g in grants)
-
-
-def can_write(grants: list[Grant], name: str, rrtype: str) -> bool:
-    return any(g.writable and g.matches(name, rrtype) for g in grants)
-
 
 # ─── zone access ───
 

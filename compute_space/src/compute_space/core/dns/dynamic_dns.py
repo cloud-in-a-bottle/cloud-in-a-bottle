@@ -21,7 +21,7 @@ from compute_space.core.dns.client import dns_client
 from compute_space.core.dns.client import router_managed_domains
 from compute_space.core.dns.client import split_fqdn
 from compute_space.core.dns.client import uses_local_dns
-from compute_space.core.dns.coredns import reload_coredns_for_domains
+from compute_space.core.dns.coredns_provider.coredns import reload_coredns_for_domains
 from compute_space.core.dns.public_ip import detect_public_ip
 from compute_space.core.dns.public_ip import effective_public_ip
 from compute_space.core.dns.public_ip import store_public_ip

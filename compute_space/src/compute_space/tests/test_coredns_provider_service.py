@@ -8,10 +8,10 @@ from typing import Any
 
 import pytest
 
-from compute_space.core.dns import zonefile
+from compute_space.core.dns.coredns_provider import zonefile
+from compute_space.core.dns.coredns_provider.service import handle_dns_service_call
 from compute_space.core.dns.records import DnsRecord
-from compute_space.core.dns.service import handle_dns_service_call
-from compute_space.core.dns.service import parse_grants
+from compute_space.core.dns.service_api import parse_grants
 from compute_space.core.domains import Domain
 from compute_space.tests.conftest import open_db
 from compute_space.tests.dns_helpers import seeded_dns_config

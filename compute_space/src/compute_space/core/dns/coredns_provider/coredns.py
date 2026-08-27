@@ -9,7 +9,7 @@
 
 Zone data reloads on an SOA serial bump, but a *new* zone means a new Corefile server block and so
 a restart — see ``reload_coredns_for_domains``.  Record reads and writes go through
-``backend.LocalZoneFileBackend``; this module only seeds zone files and owns the process.
+``service.py``; this module only seeds zone files and owns the process.
 """
 
 from __future__ import annotations
@@ -28,8 +28,8 @@ from jinja2 import StrictUndefined
 
 from compute_space.config import Config
 from compute_space.core.containers import CONTAINER_GATEWAY_IP
+from compute_space.core.dns.coredns_provider.zonefile import update_router_records
 from compute_space.core.dns.public_ip import effective_public_ip
-from compute_space.core.dns.zonefile import update_router_records
 from compute_space.core.domains import effective_domains
 from compute_space.core.domains import primary_domain_or_none
 from compute_space.core.logging import logger

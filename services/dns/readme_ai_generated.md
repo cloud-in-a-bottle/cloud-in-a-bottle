@@ -94,20 +94,26 @@ needs, and nothing in OpenHost touches them.
 
 In `compute_space/src/compute_space/core/dns/`:
 
-- `records.py` — the record shape, validation, and the reserved-record rule.
-- `zonefile.py` — read/modify/write a CoreDNS zone file, which is the source of truth for its
-  records. Locked per zone, written atomically, SOA serial bumped on every write.
-- `coredns.py` — the CoreDNS process. Serves the public authoritative zones and the container view
-  (the app hairpin) independently, so either can run without the other.
-- `service.py` — the router's implementation of this service, and the only thing that touches
-  zone-file records.
-- `client.py` — how router code *calls* the service. Dispatches in-process when the router is the
-  provider, over loopback when an app is.
-- `public_ip.py`, `dynamic.py` — where the instance thinks it is, and keeping that up to date.
+```
+service_api.py       the contract both sides share: service identity, and the grant type
+records.py           what a record is: shape, validation, the reserved-record rule
+client.py            calling the service, from anywhere in the router
+dynamic_dns.py       watch the public IP and re-point the A records when it moves
+public_ip.py         detect and store where the instance actually is
+coredns_provider/    the router's implementation of the service
+  service.py           request handling; the only thing that touches zone-file records
+  coredns.py           the CoreDNS process and zone-file lifecycle
+  zonefile.py          read/modify/write a zone file, locked per zone and written atomically
+```
 
-There is no separate abstraction over "local vs external DNS": the service *is* the interface, and
-the router's own cert and dynamic-DNS writes go through it like any app's would. The router
-identifies as a consumer (`_openhost_router`) with a narrow self-asserted grant covering only the
-challenge TXT and the records it maintains, so a bug in those paths cannot rewrite an app's
-records — and its calls are the one exemption from the reserved-record rule, since it is what
-maintains those records.
+Anything outside `coredns_provider/` is provider-agnostic and would be unchanged if the router
+stopped serving DNS itself. `client.py` reaches into the subpackage for one thing only —
+dispatching in-process when the router is the provider, rather than making it talk to itself over
+loopback.
+
+There is no abstraction over "local vs external DNS": the service *is* the interface, and the
+router's own cert and dynamic-DNS writes go through it like any app's would. The router identifies
+as a consumer (`_openhost_router`) with a narrow self-asserted grant covering only the challenge
+TXT and the records it maintains, so a bug in those paths cannot rewrite an app's records — and
+its calls are the one exemption from the reserved-record rule, since it is what maintains those
+records.
