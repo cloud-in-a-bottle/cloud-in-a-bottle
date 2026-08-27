@@ -2,7 +2,7 @@
 
 [![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
 
-Your corner of the cloud.
+**Your corner of the cloud.**
 
 Deploy, use, and share web apps on a server you control. Built on the idea that modern software lives in the cloud, and if you want to be in control of your digital life, you need your own place in the cloud too.
 
@@ -14,10 +14,10 @@ Cloud in a Bottle is the project our team needed and couldn't find: a corner of 
 
 ## What people deploy
 
-- Personal tools — AI-generated apps, scripts, and utilities with nowhere useful to host them
-- Open source software — Matrix, Minecraft servers, notes apps, project management tools
-- Dev and creative tools — coding agents, image-making software, anything you built and want to share with a real URL
-- Containerized web apps — add a `cloudinabottle.toml` manifest to a repo with a Dockerfile and it's deployable
+- Personal tools: AI-generated apps, scripts, and utilities with nowhere useful to host them
+- Open source software: Matrix, Minecraft servers, notes apps, project management tools
+- Dev and creative tools: coding agents, image-making software, anything you built and want to share with a real URL
+- Containerized web apps: add a `cloudinabottle.toml` manifest to a repo with a Dockerfile and it's deployable
 
 ## Get Cloud in a Bottle
 
