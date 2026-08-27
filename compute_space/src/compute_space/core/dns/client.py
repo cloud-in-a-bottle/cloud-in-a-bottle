@@ -1,9 +1,12 @@
-"""How the router itself writes DNS records.
+"""Read and write DNS records from inside the router.
 
-It needs exactly three things — publish a DNS-01 challenge, clear it, and point a domain's address
-records at an IP — and they must work whether this space serves its own DNS or an app forwards to
-a registrar.  ``core.service_client`` hides that difference entirely, so this is just the three
-operations expressed against the ``dns`` service API.
+Records are addressed by fully-qualified name; the client resolves which configured zone holds one
+and what the name is relative to it, so callers never handle zones.  ``core.service_client`` hides
+whether the records live in our own CoreDNS zone files or at a registrar.
+
+Deliberately record-level.  What a record *means* — that ``_acme-challenge`` is a DNS-01 token, or
+that the apex and wildcard follow the instance's address — belongs to the caller: see
+``core.tls.challenge`` and ``core.dns.dynamic_dns``.
 
 Grants are asserted per call, covering exactly the records that call touches: the narrowest thing
 the router can claim, and the most useful line in a provider app's audit log.
@@ -35,12 +38,6 @@ from compute_space.core.logging import logger
 from compute_space.core.service_client import ServiceCallError
 from compute_space.core.service_client import ServiceEndpoint
 from compute_space.core.service_client import service_client
-
-# A short explicit TTL, so the previous run's token can't be served out of a resolver cache during
-# the next renewal.
-CHALLENGE_TTL_SECONDS = 60
-
-_ADDRESS_NAMES = (APEX, "ns", "*")
 
 # CoreDNS reloads within seconds; an external registrar can take minutes to publish.
 LOCAL_PROPAGATION_TIMEOUT_SECONDS = 120.0
@@ -125,26 +122,21 @@ class DnsClient:
             raise ServiceCallError("DNS service returned no zone list")
         return [str(z) for z in zones]
 
-    def publish_challenge(self, domain: str, values: list[str]) -> None:
-        """Replace whatever is at ``_acme-challenge``, so a run that died before cleaning up
-        doesn't leave stale tokens for the next attempt."""
-        zone, name = self._locate(f"_acme-challenge.{domain}")
-        self._write("set", zone, [DnsRecord(name, "TXT", CHALLENGE_TTL_SECONDS, v) for v in values])
-        logger.info(f"Published {len(values)} challenge record(s) for {domain} in zone {zone}")
+    def set_records(self, fqdn: str, rrtype: str, values: list[str], ttl: int = 300) -> None:
+        """Make ``values`` the only records at ``fqdn``/``rrtype``, replacing whatever is there."""
+        zone, name = self._locate(fqdn)
+        self._write("set", zone, [DnsRecord(name, rrtype, ttl, v) for v in values])
+        logger.info(f"Set {len(values)} {rrtype} record(s) at {fqdn}")
 
-    def clear_challenge(self, domain: str) -> None:
-        zone, name = self._locate(f"_acme-challenge.{domain}")
-        # No data means "whatever is there now", which is what a cleanup path needs.
-        self._write("delete", zone, [DnsRecord(name, "TXT")])
-        logger.info(f"Cleared challenge records for {domain} in zone {zone}")
+    def delete_records(self, fqdn: str, rrtype: str) -> None:
+        """Remove every record at ``fqdn``/``rrtype``, whatever it currently holds.
 
-    def set_address(self, domain: str, ip: str, ttl: int = 300) -> None:
-        """Point the domain's apex, nameserver, and wildcard A records at ``ip``."""
-        zone, base = self._locate(domain)
-        prefix = "" if base == APEX else base
-        names = [(prefix or APEX) if n == APEX else (f"{n}.{prefix}" if prefix else n) for n in _ADDRESS_NAMES]
-        self._write("set", zone, [DnsRecord(n, "A", ttl, ip) for n in names])
-        logger.info(f"Pointed {len(names)} address record(s) for {domain} at {ip}")
+        Sends no data, which is how the service API spells "delete whatever is there" — the only
+        thing a cleanup path can do when it doesn't know what a previous run wrote.
+        """
+        zone, name = self._locate(fqdn)
+        self._write("delete", zone, [DnsRecord(name, rrtype)])
+        logger.info(f"Cleared {rrtype} records at {fqdn}")
 
     def _locate(self, fqdn: str) -> tuple[str, str]:
         """The most specific configured zone containing ``fqdn``, and the name relative to it.
@@ -189,22 +181,19 @@ def dns_client(config: Config, db: sqlite3.Connection) -> Iterator[DnsClient]:
 _PROPAGATION_RESOLVER = "8.8.8.8"
 
 
-def wait_for_challenge_propagation(
-    domain: str, expected_values: list[str], timeout: float, interval: float = 5
-) -> bool:
-    """Poll an external resolver until every expected value is visible.
+def wait_for_records(fqdn: str, rrtype: str, expected_values: list[str], timeout: float, interval: float = 5) -> bool:
+    """Poll an external resolver until every expected value is visible at ``fqdn``.
 
-    False on timeout, and the caller should proceed anyway: the ACME retry loop is the fallback,
-    and some providers are slower than any timeout worth blocking on.
+    False on timeout, and the caller should decide whether that matters; for ACME the retry loop is
+    the fallback, and some providers are slower than any timeout worth blocking on.
     """
-    fqdn = f"_acme-challenge.{domain}"
     deadline = time.monotonic() + timeout
     expected = set(expected_values)
 
     while time.monotonic() < deadline:
         try:
             result = subprocess.run(
-                ["dig", f"@{_PROPAGATION_RESOLVER}", fqdn, "TXT", "+short", "+timeout=5", "+tries=1"],
+                ["dig", f"@{_PROPAGATION_RESOLVER}", fqdn, rrtype, "+short", "+timeout=5", "+tries=1"],
                 capture_output=True,
                 text=True,
                 timeout=10,

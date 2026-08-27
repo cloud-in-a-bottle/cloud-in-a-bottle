@@ -24,8 +24,8 @@ import attr
 from cryptography.hazmat.primitives import serialization
 
 from compute_space.core.dns.client import DnsClient
-from compute_space.core.dns.client import wait_for_challenge_propagation
 from compute_space.core.logging import logger
+from compute_space.core.tls import challenge
 from compute_space.core.tls.acquire_cert import write_cert_and_key
 from compute_space.core.tls.cert_api_client import FINALIZE_STATUS_VALID
 from compute_space.core.tls.cert_api_client import CertApiClient
@@ -67,7 +67,7 @@ def _wait_for_dns_propagation(dns: DnsClient, domain: str, expected_values: list
     ``wait_for_txt_propagation`` logs and proceeds on timeout, so a delegation that never
     propagates still falls through to the broker's own retries.
     """
-    wait_for_challenge_propagation(domain, expected_values, timeout=dns.propagation_timeout_seconds)
+    challenge.wait_until_visible(dns, domain, expected_values)
 
 
 def acquire_tls_cert_via_broker(
@@ -98,7 +98,7 @@ def acquire_tls_cert_via_broker(
     # The broker returns a record name per challenge; a wildcard order puts both at the same
     # name, so publish them together.
     values = [c.record_value for c in order.challenges]
-    dns.publish_challenge(domain, values)
+    challenge.publish(dns, domain, values)
     try:
         # Don't poll finalize until the records are live: the broker drives CA validation during
         # finalize, so a not-yet-visible record fails the order.
@@ -114,7 +114,7 @@ def acquire_tls_cert_via_broker(
         )
     finally:
         # Always pull the challenge records back out, success or failure.
-        dns.clear_challenge(domain)
+        challenge.clear(dns, domain)
 
     write_cert_and_key(cert_path, key_path, certificate.encode(), tls_private_key_to_pem(tls_key))
     logger.info(f"Installed broker-issued TLS cert for {domain} -> {cert_path}")

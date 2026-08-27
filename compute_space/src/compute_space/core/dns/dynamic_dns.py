@@ -17,6 +17,7 @@ from collections.abc import Callable
 from contextlib import closing
 
 from compute_space.config import Config
+from compute_space.core.dns.client import DnsClient
 from compute_space.core.dns.client import dns_client
 from compute_space.core.dns.client import router_managed_domains
 from compute_space.core.dns.client import uses_local_dns
@@ -54,8 +55,19 @@ def check_once(config: Config, db: sqlite3.Connection) -> str | None:
     else:
         with dns_client(config, db) as dns:
             for domain in router_managed_domains(db):
-                dns.set_address(domain, detected, ttl=_DYNAMIC_TTL_SECONDS)
+                _point_at(dns, domain, detected)
     return detected
+
+
+def _point_at(dns: DnsClient, domain: str, ip: str) -> None:
+    """Point the names that follow the instance's address at ``ip``.
+
+    The apex and wildcard are what route the space and its apps; ``ns`` is the glue target when the
+    domain is delegated to us.  Which names those are is router policy, not something the DNS
+    client should know.
+    """
+    for fqdn in (domain, f"ns.{domain}", f"*.{domain}"):
+        dns.set_records(fqdn, "A", [ip], ttl=_DYNAMIC_TTL_SECONDS)
 
 
 def start_dynamic_dns_thread(
