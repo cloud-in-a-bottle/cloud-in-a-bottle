@@ -106,11 +106,13 @@ def _ensure_tls_cert(config: Config, db: sqlite3.Connection) -> None:
         # The existing cert is still valid, so a failed renewal shouldn't block
         # startup — the background renewal loop will keep retrying.
         try:
-            provision_cert(config, db)
+            asyncio.run(provision_cert(config, db))
         except Exception:
             logger.exception("TLS cert renewal failed; serving the existing cert and retrying in the background")
     else:
-        provision_cert(config, db)
+        # Boot's own event loop: acquisition is async library code, and hypercorn's loop does not
+        # exist yet.  asyncio.run belongs here, at the entry point.
+        asyncio.run(provision_cert(config, db))
 
 
 def _ensure_coredns_binary(config: Config) -> str:

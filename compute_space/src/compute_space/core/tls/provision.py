@@ -1,4 +1,3 @@
-import asyncio
 import sqlite3
 from pathlib import Path
 
@@ -13,7 +12,7 @@ from compute_space.core.tls.cert_api_client import CertApiClient
 from compute_space.core.tls.keycloak import KeycloakTokenProvider
 
 
-def acquire_cert_for_domain(
+async def acquire_cert_for_domain(
     config: Config, domain: str, cert_path: Path, key_path: Path, db: sqlite3.Connection
 ) -> None:
     """Acquire a TLS cert (apex + wildcard) for ``domain`` with the configured provider and
@@ -32,16 +31,14 @@ def acquire_cert_for_domain(
     if config.cert_provider == CERT_PROVIDER_ACME:
         if not config.acme_account_key_path:
             raise RuntimeError("ACME account key path must be set in config to acquire TLS cert")
-        asyncio.run(
-            acquire_tls_cert(
-                domain=domain,
-                cert_path=cert_path,
-                key_path=key_path,
-                acme_account_key_path=Path(config.acme_account_key_path),
-                coredns_zonefile_path=zonefile_path,
-                acme_email=config.acme_email,
-                directory_url=config.acme_directory_url,
-            )
+        await acquire_tls_cert(
+            domain=domain,
+            cert_path=cert_path,
+            key_path=key_path,
+            acme_account_key_path=Path(config.acme_account_key_path),
+            coredns_zonefile_path=zonefile_path,
+            acme_email=config.acme_email,
+            directory_url=config.acme_directory_url,
         )
     else:
         # cert_provider is guaranteed to be CERT_PROVIDER_CERT_API with the broker
@@ -53,9 +50,9 @@ def acquire_cert_for_domain(
         assert credentials is not None
         # The token provider fetches a bearer from Keycloak (client-credentials) and
         # refreshes it transparently across the broker's finalize-poll loop.
-        with KeycloakTokenProvider.create(credentials) as token_provider:
-            with CertApiClient.create(config.cert_api_base_url, token_provider) as client:
-                acquire_tls_cert_via_broker(
+        async with KeycloakTokenProvider.create(credentials) as token_provider:
+            async with CertApiClient.create(config.cert_api_base_url, token_provider) as client:
+                await acquire_tls_cert_via_broker(
                     domain=domain,
                     cert_path=cert_path,
                     key_path=key_path,
@@ -64,10 +61,10 @@ def acquire_cert_for_domain(
                 )
 
 
-def provision_cert(config: Config, db: sqlite3.Connection) -> None:
+async def provision_cert(config: Config, db: sqlite3.Connection) -> None:
     """Acquire the primary domain's TLS cert and install it at the config's cert/key paths.
 
     Used both for the initial acquisition at startup and for renewals.  Thin wrapper over
     ``acquire_cert_for_domain`` for the primary domain."""
     primary = primary_domain(db)
-    acquire_cert_for_domain(config, primary.name, config.tls_cert_path, config.tls_key_path, db)
+    await acquire_cert_for_domain(config, primary.name, config.tls_cert_path, config.tls_key_path, db)

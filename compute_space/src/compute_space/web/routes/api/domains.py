@@ -9,6 +9,7 @@ config (so routing sees them) and regenerate + restart Caddy (so it terminates/s
 
 from __future__ import annotations
 
+import asyncio
 import re
 import sqlite3
 import threading
@@ -119,13 +120,13 @@ def _domain_list(config: Config, db: sqlite3.Connection) -> list[DomainInfo]:
     return [_domain_info(config, r.to_domain(), r) for r in load_records(db)]
 
 
-def _run_acquisition(config: Config, domain: Domain) -> None:
+async def _acquire(config: Config, domain: Domain) -> None:
     """Acquire the domain's cert, then flip its status + reload Caddy so it uses the real cert.
     Runs off the request thread (acquisition is slow), so it owns one DB connection for the job.
     Records the error on failure."""
     with closing(get_db()) as db:
         try:
-            ensure_cert_for(config, domain, db)
+            await ensure_cert_for(config, domain, db)
         except Exception as exc:  # noqa: BLE001 — surface any acquisition failure as domain status
             logger.opt(exception=True).error("cert acquisition failed for {}", domain.name)
             set_record_status(db, domain.name_no_port, DomainCertStatus.ERROR, error_message=str(exc))
@@ -134,6 +135,11 @@ def _run_acquisition(config: Config, domain: Domain) -> None:
         # Regenerate Caddy from the *live* active config, not the snapshot captured at add time — a
         # domain added while this (slow) acquisition ran would otherwise be dropped from the Caddyfile.
         reload_caddy_for_domains(get_config(), db)
+
+
+def _run_acquisition(config: Config, domain: Domain) -> None:
+    """The worker thread owns its event loop, so asyncio.run belongs at this boundary."""
+    asyncio.run(_acquire(config, domain))
 
 
 def _spawn_acquisition(config: Config, domain: Domain) -> None:
