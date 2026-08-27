@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import socket
 from contextlib import closing
 from pathlib import Path
@@ -142,8 +143,13 @@ class _FakeProc:
 def _stub_spawn(monkeypatch: pytest.MonkeyPatch) -> None:
     """Stub the spawn wholesale: it starts a log-streaming task that reads proc.stdout."""
 
-    async def fake_spawn(*a: object, **k: object) -> _FakeProc:
-        return _FakeProc()
+    async def fake_spawn(*a: object, **k: object):  # type: ignore[no-untyped-def]
+        async def _noop() -> None:
+            return None
+
+        task = asyncio.create_task(_noop())
+        await task
+        return _FakeProc(), task
 
     monkeypatch.setattr(dns_mod, "_spawn_coredns", fake_spawn)
 
