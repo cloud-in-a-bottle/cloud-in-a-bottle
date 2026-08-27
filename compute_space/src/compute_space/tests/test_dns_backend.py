@@ -8,13 +8,13 @@ from pathlib import Path
 import pytest
 
 from compute_space.config import DefaultConfig
+from compute_space.core.dns.backend import LocalZoneFileBackend
 from compute_space.core.dns.backend import UnknownZone
 from compute_space.core.dns.backend import clear_txt
 from compute_space.core.dns.backend import publish_txt
 from compute_space.core.dns.backend import split_fqdn
 from compute_space.core.dns.coredns import _write_coredns_config
 from compute_space.core.dns.coredns import public_dns_zones
-from compute_space.core.dns.local import LocalZoneFileBackend
 from compute_space.core.dns.records import DnsRecord
 from compute_space.core.dns.records import InvalidRecord
 from compute_space.core.domains import Domain

@@ -1,13 +1,9 @@
-"""The ``dns`` service: its identity, and the router's built-in implementation of it.
+"""The router's own implementation of the ``dns`` service, for apps that want to write records.
 
-The router and the external-dns-connector app are interchangeable providers of one service, so
-an app that wants to write a record declares the same dependency either way and does not care
-whether the records land in a local zone file or at a registrar.  ``resolve_dns_provider`` is
-what decides which of the two is in play, and it uses the ordinary ``service_defaults`` table —
-so installing the connector and making it the default is all it takes to switch a space over.
-
-The handler here returns ``(status, body)`` rather than framework responses; the litestar wiring
-lives in ``web.routes.services_v2``.
+Returns ``(status, body)`` rather than framework responses; the litestar wiring lives in
+``web.routes.services_v2``.  Grant semantics are kept byte-identical to the connector app's
+(``internal/grants/match.go``) — two providers of one service disagreeing about what a grant means
+would be worse than any bug in either.
 """
 
 from __future__ import annotations
@@ -19,8 +15,8 @@ from typing import Any
 import attr
 
 from compute_space.config import Config
+from compute_space.core.dns.backend import LocalZoneFileBackend
 from compute_space.core.dns.backend import UnknownZone
-from compute_space.core.dns.local import LocalZoneFileBackend
 from compute_space.core.dns.records import DnsRecord
 from compute_space.core.dns.records import InvalidRecord
 from compute_space.core.dns.records import ReservedRecord
@@ -29,24 +25,14 @@ from compute_space.core.dns.records import normalize_zone
 from compute_space.core.dns.records import reject_router_owned
 from compute_space.core.logging import logger
 
-# Service URL apps declare in [[services.v2.consumes]].  Same URL the connector app provides, so
-# the two are substitutable.
-DNS_SERVICE_URL = "github.com/imbue-openhost/openhost/services/dns"
-DNS_SERVICE_VERSION = "0.1.0"
-
-# Sentinel provider id for the router's own implementation.  Stored in service_defaults like any
-# other provider, but has no row in `apps`, so the service proxy dispatches it in-process instead
-# of resolving a port.
-ROUTER_DNS_PROVIDER_ID = "_openhost_router_dns"
-
-# Fan-out marker, matching the service API.
+# "**" matches any run of characters.  A single "*" is deliberately literal: it is a real DNS
+# wildcard label, so a grant naming "*.app" means that record and nothing else.
+WILDCARD = "**"
 ALL_ZONES = "*"
 
 
 @attr.s(auto_attribs=True, frozen=True)
 class Grant:
-    """One entry of the caller's ``X-OpenHost-Permissions``, as this service reads it."""
-
     name: str
     type: str
     access: str
@@ -59,38 +45,27 @@ class Grant:
         return self.access == "rw"
 
 
-# "**" matches any run of characters.  A single "*" is deliberately literal: it is a real DNS
-# wildcard label, so a grant naming "*.app" means that record and nothing else.
-WILDCARD = "**"
-
-
 def _match(pattern: str, value: str) -> bool:
     pattern, value = pattern.lower(), value.lower()
     segments = pattern.split(WILDCARD)
     if len(segments) == 1:
         return pattern == value
     prefix, suffix = segments[0], segments[-1]
-    if not value.startswith(prefix) or not value.endswith(suffix):
-        return False
-    if len(prefix) + len(suffix) > len(value):
+    if not value.startswith(prefix) or not value.endswith(suffix) or len(prefix) + len(suffix) > len(value):
         return False
     rest = value[len(prefix) : len(value) - len(suffix)]
     for segment in segments[1:-1]:
-        if not segment:
-            continue
-        i = rest.find(segment)
-        if i < 0:
-            return False
-        rest = rest[i + len(segment) :]
+        if segment:
+            i = rest.find(segment)
+            if i < 0:
+                return False
+            rest = rest[i + len(segment) :]
     return True
 
 
 def parse_grants(header: str | None) -> list[Grant]:
-    """Read the router-injected permissions header.
-
-    Malformed entries are skipped rather than failing the request: a single unparseable grant
-    should narrow access, never widen it or break an otherwise valid call.
-    """
+    """Read the router-injected permissions header.  Malformed entries are skipped rather than
+    failing the request: a bad grant should narrow access, never widen it or break a valid call."""
     if not header or not header.strip():
         return []
     try:
@@ -107,9 +82,8 @@ def parse_grants(header: str | None) -> list[Grant]:
         if not isinstance(grant, dict):
             continue
         name, rrtype, access = grant.get("name"), grant.get("type"), grant.get("access")
-        if not isinstance(name, str) or not isinstance(rrtype, str) or access not in ("r", "rw"):
-            continue
-        out.append(Grant(name=name.lower(), type=rrtype.upper(), access=access))
+        if isinstance(name, str) and isinstance(rrtype, str) and access in ("r", "rw"):
+            out.append(Grant(name=name.lower(), type=rrtype.upper(), access=access))
     return out
 
 
@@ -123,15 +97,7 @@ def can_write(grants: list[Grant], name: str, rrtype: str) -> bool:
 
 # ─── request handling ───
 
-_ERROR_STATUS = {
-    "invalid_request": 400,
-    "invalid_record": 400,
-    "zone_required": 400,
-    "unknown_zone": 400,
-    "no_zones_configured": 400,
-    "reserved_record": 403,
-    "permission_required": 403,
-}
+_ERROR_STATUS = {"reserved_record": 403, "permission_required": 403}
 
 
 def _error(code: str, message: str) -> tuple[int, dict[str, Any]]:
@@ -139,8 +105,8 @@ def _error(code: str, message: str) -> tuple[int, dict[str, Any]]:
 
 
 def _permission_required(name: str, rrtype: str, access: str) -> tuple[int, dict[str, Any]]:
-    """The 403 shape the service proxy understands.  Because the scope is global, the proxy
-    rewrites this to add a ``grant_url`` the consumer can send the owner to."""
+    """The 403 shape the service proxy understands; being global-scoped, it gets a ``grant_url``
+    added on the way out."""
     return 403, {
         "error": "permission_required",
         "message": f"this app has no grant covering {rrtype} records named {name!r}",
@@ -149,18 +115,15 @@ def _permission_required(name: str, rrtype: str, access: str) -> tuple[int, dict
 
 
 def _results(results: list[dict[str, Any]]) -> tuple[int, dict[str, Any]]:
-    """Per-zone outcomes with a status reflecting the whole: 200 when every zone succeeded, 207
-    when some did, 502 when none did.  A blanket 200 would let a caller read a total failure as
-    success."""
+    """200 when every zone succeeded, 207 when some did, 502 when none did.  A blanket 200 would
+    let a caller read a total failure as success."""
     ok = sum(1 for r in results if r["ok"])
-    if not results:
+    if not results or ok == len(results):
         status = 200
     elif ok == 0:
         status = 502
-    elif ok < len(results):
-        status = 207
     else:
-        status = 200
+        status = 207
     return status, {"ok": ok == len(results), "results": results}
 
 
@@ -171,26 +134,19 @@ def handle_dns_service_call(
     config: Config,
     db: sqlite3.Connection,
 ) -> tuple[int, dict[str, Any]]:
-    """Dispatch one ``dns`` service call against the local zone files.
-
-    ``path`` is the sub-path after the service endpoint (``/zones``, ``/records/get``, ...).
-    """
+    """Dispatch one call; ``path`` is the sub-path after the service endpoint."""
     backend = LocalZoneFileBackend.create(config, db)
     route = "/" + path.strip("/")
     if route == "/zones":
-        return _handle_zones(backend, grants)
+        # Which domains the owner runs is not something an app with no DNS access should learn.
+        if not grants:
+            return _permission_required(WILDCARD, WILDCARD, "r")
+        return 200, {"zones": backend.zones()}
     if route == "/records/get":
         return _handle_get(backend, grants, payload)
     if route in ("/records/set", "/records/append", "/records/delete"):
         return _handle_write(backend, grants, payload, route.rsplit("/", 1)[1])
     return _error("invalid_request", f"unknown DNS service path {route!r}")
-
-
-def _handle_zones(backend: LocalZoneFileBackend, grants: list[Grant]) -> tuple[int, dict[str, Any]]:
-    # Which domains the owner runs is not something an app with no DNS access should learn.
-    if not grants:
-        return _permission_required(WILDCARD, WILDCARD, "r")
-    return 200, {"zones": backend.zones()}
 
 
 def _resolve_zones(backend: LocalZoneFileBackend, requested: str) -> list[str]:
@@ -209,9 +165,8 @@ def _handle_get(
     # zones exist.
     if not grants:
         return _results([])
-    requested = str(payload.get("zone") or "").strip() or ALL_ZONES
     try:
-        zones = _resolve_zones(backend, requested)
+        zones = _resolve_zones(backend, str(payload.get("zone") or "").strip() or ALL_ZONES)
     except UnknownZone as e:
         return _error("unknown_zone", str(e))
 
@@ -222,22 +177,22 @@ def _handle_get(
     for zone in zones:
         try:
             records = backend.get_records(zone, name_filter, type_filter)
-        except Exception as e:  # a broken zone file must not take down the other zones
+        except Exception as e:  # a broken zone file must not take down the others
             logger.warning(f"DNS service read failed for {zone}: {e}")
             results.append({"zone": zone, "ok": False, "records": [], "error": str(e)})
             continue
-        # Records the caller has no grant for are omitted rather than refused, so a narrowly
-        # scoped app sees a zone containing just its own records.
-        visible = [r for r in records if can_read(grants, r.name, r.type)]
-        results.append({"zone": zone, "ok": True, "records": [_wire(r) for r in visible]})
+        # Ungranted records are omitted rather than refused, so a narrowly scoped app sees a zone
+        # containing just its own.
+        visible = [_wire(r) for r in records if can_read(grants, r.name, r.type)]
+        results.append({"zone": zone, "ok": True, "records": visible})
     return _results(results)
 
 
 def _handle_write(
     backend: LocalZoneFileBackend, grants: list[Grant], payload: dict[str, Any], op: str
 ) -> tuple[int, dict[str, Any]]:
-    # Unlike reads, a missing zone on a write is an error rather than a fan-out: defaulting to
-    # every zone would let a caller that forgot the field rewrite records across all of them.
+    # Unlike reads, a missing zone is an error rather than a fan-out: defaulting to every zone
+    # would let a caller that forgot the field rewrite records across all of them.
     requested = str(payload.get("zone") or "").strip()
     if not requested:
         return _error("zone_required", f"writes must name a zone, or {ALL_ZONES!r} for all configured zones")
@@ -245,10 +200,9 @@ def _handle_write(
     if not isinstance(raw, list) or not raw:
         return _error("invalid_request", "no records given")
 
-    allow_selector = op == "delete"
-    # Authorize and validate the whole batch before resolving the zone or touching a file: doing
-    # it the other way round would let an app with no grants learn which zones exist from the
-    # error it gets back, and would let a partially-permitted request apply its permitted half.
+    # Authorize and validate the whole batch before resolving the zone or touching a file: the
+    # other order would let an ungranted app learn which zones exist from the error it gets back,
+    # and would let a partially-permitted request apply its permitted half.
     records: list[DnsRecord] = []
     for item in raw:
         if not isinstance(item, dict):
@@ -261,7 +215,7 @@ def _handle_write(
                     ttl=int(item.get("ttl", 300)),
                     data=item.get("data"),
                 ),
-                allow_rrset_selector=allow_selector,
+                allow_rrset_selector=op == "delete",
             )
         except InvalidRecord as e:
             return _error("invalid_record", str(e))

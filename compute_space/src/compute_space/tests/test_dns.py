@@ -10,10 +10,10 @@ import pytest
 import compute_space.core.dns.coredns as dns_mod
 import compute_space.core.dns.zonefile as zonefile_mod
 from compute_space.config import DefaultConfig
-from compute_space.core.dns import DnsZone
-from compute_space.core.dns import public_dns_zones
-from compute_space.core.dns import reload_coredns_for_domains
-from compute_space.core.dns import set_active_coredns
+from compute_space.core.dns.coredns import DnsZone
+from compute_space.core.dns.coredns import public_dns_zones
+from compute_space.core.dns.coredns import reload_coredns_for_domains
+from compute_space.core.dns.coredns import set_active_coredns
 from compute_space.core.dns.records import DnsRecord
 from compute_space.core.domains import Domain
 from compute_space.core.domains import DomainRecord

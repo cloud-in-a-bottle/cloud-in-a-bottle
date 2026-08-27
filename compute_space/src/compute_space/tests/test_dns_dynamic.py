@@ -12,9 +12,9 @@ import pytest
 from compute_space.config import DefaultConfig
 from compute_space.core.dns import dynamic
 from compute_space.core.dns import public_ip as public_ip_mod
+from compute_space.core.dns.backend import LocalZoneFileBackend
 from compute_space.core.dns.coredns import _write_coredns_config
 from compute_space.core.dns.coredns import public_dns_zones
-from compute_space.core.dns.local import LocalZoneFileBackend
 from compute_space.core.dns.public_ip import detect_public_ip
 from compute_space.core.dns.public_ip import effective_public_ip
 from compute_space.core.dns.public_ip import is_public_ipv4

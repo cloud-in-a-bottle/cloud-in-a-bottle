@@ -1,21 +1,15 @@
-"""Manage the VM-side CoreDNS process: the public authoritative zones and the container view.
+"""The CoreDNS process.  It serves two independent things, and either can run without the other:
 
-CoreDNS serves two independent things, and either can run without the other:
+* **Public authoritative zones** — one per public domain, only when the instance is its own DNS
+  provider.  A space using an external provider serves none of these.
+* **The container view** — the same names bound on the container gateway, answering the wildcard
+  with the gateway IP so app containers reach sibling apps through Caddy (NAT hairpin), plus a
+  catch-all forward.  Needed whenever app containers run, whoever answers publicly, because pasta
+  otherwise makes the public IP local to the container netns.
 
-* **Public authoritative zones** — one per public domain the instance answers on
-  (e.g. alice.host.imbue.com plus any additional delegated domains).  Only used when the
-  instance is its own DNS provider; a space using an external provider serves none of these.
-* **The container view** — the same domain names bound on the container gateway, answering the
-  wildcard with the gateway IP so app containers can reach sibling apps' public HTTPS URLs
-  through Caddy (NAT hairpin), plus a catch-all forward upstream.  This is needed whenever app
-  containers run, regardless of who provides public DNS, because pasta otherwise makes the
-  public IP local to the container netns.
-
-CoreDNS watches for SOA serial changes and auto-reloads zone data, but a *new* zone (a new
-server block in the Corefile) requires a restart — see ``reload_coredns_for_domains``.
-
-Record reads and writes go through ``compute_space.core.dns.local.LocalZoneFileBackend``, not
-this module; here we only generate the initial zone files and own the process.
+Zone data reloads on an SOA serial bump, but a *new* zone means a new Corefile server block and so
+a restart — see ``reload_coredns_for_domains``.  Record reads and writes go through
+``backend.LocalZoneFileBackend``; this module only seeds zone files and owns the process.
 """
 
 from __future__ import annotations
@@ -51,12 +45,8 @@ _FALLBACK_UPSTREAM_DNS = ("8.8.8.8", "1.1.1.1")
 
 
 def _gateway_ip_is_bindable(gateway_ip: str) -> bool:
-    """True if ``gateway_ip`` is a local address CoreDNS can bind.
-
-    The ``openhost0`` dummy interface (10.200.0.1) only exists on
-    ansible-provisioned hosts; in dev/CI it won't, and binding it would crash
-    CoreDNS.  Probe a UDP bind (CoreDNS serves DNS on UDP) to decide.
-    """
+    """The ``openhost0`` dummy interface only exists on ansible-provisioned hosts; in dev/CI
+    binding it would crash CoreDNS, so probe a UDP bind to decide."""
     try:
         probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         probe.bind((gateway_ip, 0))
@@ -67,12 +57,10 @@ def _gateway_ip_is_bindable(gateway_ip: str) -> bool:
 
 
 def _host_upstream_resolvers() -> list[str]:
-    """Discover the host's real upstream resolvers for the container DNS view.
+    """Concrete nameservers for the container view's catch-all forward.
 
-    The container-facing CoreDNS view forwards non-zone queries upstream.  We
-    can't forward to the host's 127.0.0.53 stub (unreachable from the container
-    netns) nor loop back to ourselves, so read concrete nameservers from
-    /etc/resolv.conf, dropping loopback/stub and our own gateway address.
+    Can't forward to the host's 127.0.0.53 stub (unreachable from the container netns) nor loop
+    back to ourselves, so read /etc/resolv.conf and drop loopback and our own gateway.
     """
     resolvers: list[str] = []
     try:
@@ -90,13 +78,11 @@ def _host_upstream_resolvers() -> list[str]:
 
 
 def _coredns_bind_ip(public_ip: str) -> str:
-    """Return the local address CoreDNS should bind for authoritative DNS.
+    """The local address to bind for authoritative DNS.
 
-    Binding wildcard :53 conflicts with Podman's aardvark-dns on 10.89.0.1:53.
-    Binding the configured public IP works on hosts where that IP is assigned to
-    an interface (for example Hetzner), but fails on AWS/GCP where public IPs are
-    NATed to a private VM address. The default-route source address is the local
-    interface address that receives that NATed traffic.
+    Wildcard :53 conflicts with podman's aardvark-dns.  The configured public IP works where it is
+    assigned to an interface but fails on AWS/GCP, where public IPs are NATed to a private address;
+    the default-route source is the local address that actually receives that traffic.
     """
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
@@ -108,9 +94,7 @@ def _coredns_bind_ip(public_ip: str) -> str:
 
 @attr.s(auto_attribs=True, frozen=True)
 class DnsZone:
-    """One authoritative zone CoreDNS serves: a public domain plus the path to its zone file.
-
-    The ``.container`` view's zone file lives next to it (``container_zonefile_path``)."""
+    """A public domain plus its zone file.  The container view's file lives next to it."""
 
     domain: str
     zonefile_path: Path
@@ -121,15 +105,12 @@ class DnsZone:
 
 
 def public_dns_zones(config: Config, db: sqlite3.Connection) -> tuple[DnsZone, ...]:
-    """Every non-mDNS domain the instance answers on, paired with its zone file path.
+    """Every non-mDNS domain, paired with its zone file path — the zones CoreDNS *can* serve.
 
-    These are the zones CoreDNS *can* serve.  Whether it serves them publicly depends on
-    ``serve_public`` (i.e. whether this instance is its own DNS provider); the container view is
-    generated for them either way, since the hairpin is needed no matter who answers publicly.
-
-    mDNS ``.local`` domains are excluded: they are served by the wildcard mDNS responder, never
-    CoreDNS/ACME.  The primary keeps the legacy ``zonefile`` path; additional public domains get a
-    per-domain file under ``zones/`` (see ``Config.coredns_zonefile_path_for``)."""
+    Whether it serves them publicly depends on ``serve_public``; the container view is generated
+    for them either way.  mDNS ``.local`` domains are excluded: they are served by the wildcard
+    mDNS responder, never CoreDNS/ACME.  The primary keeps the legacy ``zonefile`` path; other
+    domains get a per-domain file under ``zones/``."""
     primary = primary_domain_or_none(db)
     primary_no_port = primary.name_no_port if primary else None
     return tuple(
@@ -143,12 +124,8 @@ def public_dns_zones(config: Config, db: sqlite3.Connection) -> tuple[DnsZone, .
 
 
 def coredns_is_needed(zones: tuple[DnsZone, ...], serve_public: bool, container_gateway_ip: str | None) -> bool:
-    """True if CoreDNS has anything to serve.
-
-    Two independent reasons to run it: authoritative public zones, or the container view (which
-    needs a bindable gateway but no public zones and no public IP).  With neither, starting it
-    would bind nothing useful.
-    """
+    """True if CoreDNS has anything to serve: public zones, or the container view (which needs a
+    bindable gateway but no public zones and no public IP)."""
     if serve_public and zones:
         return True
     return container_gateway_ip is not None and _gateway_ip_is_bindable(container_gateway_ip)
@@ -164,19 +141,14 @@ def _write_coredns_config(
 ) -> None:
     """Render the Corefile plus the zone files each enabled view needs.
 
-    Public zone files are only *seeded* here, never regenerated: once written they are the source
-    of truth for the zone's records (apps and the cert path both write into them via
-    ``LocalZoneFileBackend``), so re-rendering the template over an existing file would discard
-    everything but the three records the template knows about.  ``sync_public_zone`` updates the
-    router-owned records of an existing file in place instead.
-
-    Container zone files hold nothing but the router-owned records, so they are always rewritten.
+    Public zone files are *seeded* here, never regenerated: once written they are the source of
+    truth for the zone's records, so re-rendering would discard everything but the three records
+    the template knows about.  An existing file gets its router-owned records updated in place.
+    Container zone files hold nothing else, so they are always rewritten.
     """
     bind_serial = int(time.time())
 
-    # Only emit the container-facing view when the gateway IP is actually
-    # bindable (the openhost0 dummy interface exists in production but not in
-    # dev/CI), otherwise CoreDNS would fail to start.
+    # Emitting the container view against an unbindable gateway would stop CoreDNS starting.
     if container_gateway_ip and not _gateway_ip_is_bindable(container_gateway_ip):
         logger.info("Container gateway {} not bindable; skipping container-facing DNS view", container_gateway_ip)
         container_gateway_ip = None
@@ -186,14 +158,12 @@ def _write_coredns_config(
 
     corefile_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # serve_public implies public_ip (guarded above), so the bind address is only computed —
-    # and only meaningful — when there is an authoritative view to bind.
+    # serve_public implies public_ip (guarded above); the bind address is only meaningful when
+    # there is an authoritative view to bind.
     public_zones = zones if serve_public and public_ip else ()
     container_zones = zones if container_gateway_ip else ()
     bind_ip = _coredns_bind_ip(public_ip) if public_zones and public_ip else None
 
-    # Write Corefile. this is coredns's config — one server block per public zone, plus the
-    # container-facing views + catch-all forward when the gateway is bindable.
     corefile = _jinja_env.get_template("Corefile").render(
         public_zones=public_zones,
         container_zones=container_zones,
@@ -210,11 +180,10 @@ def _write_coredns_config(
         if zone.zonefile_path.exists():
             sync_public_zone(zone, public_ip)
             continue
-        # Write zone file. this is the actual DNS data. CoreDNS watches for changes and auto-reloads.
         content = _jinja_env.get_template("zonefile").render(
             zone_domain=zone.domain,
             public_ip=public_ip,
-            # Current timestamp as initial SOA serial: simple, and always increasing across runs.
+            # Timestamp as the initial serial: simple, and always increasing across runs.
             serial=bind_serial,
         )
         with open(zone.zonefile_path, "w") as f:
@@ -232,11 +201,7 @@ def _write_coredns_config(
 
 
 def sync_public_zone(zone: DnsZone, public_ip: str) -> None:
-    """Point an existing zone file's router-owned records at ``public_ip``, leaving the rest alone.
-
-    Split out from seeding so a domain-set change or an IP update doesn't wipe records written
-    through the DNS service.
-    """
+    """Re-point an existing zone file's router-owned records, leaving the rest alone."""
     update_router_records(zone.zonefile_path, zone.domain, public_ip)
 
 
@@ -261,17 +226,17 @@ def _spawn_coredns(corefile_path: Path, coredns_bin: str) -> subprocess.Popen[by
 
 @attr.s(auto_attribs=True)
 class CoreDnsProcess:
-    """Handle to the running CoreDNS child.  Mutable: restart() replaces proc with a fresh one so
-    it picks up a regenerated Corefile (new zones).  Mirrors ``CaddyProcess``."""
+    """Handle to the running CoreDNS child.  Mutable: restart() swaps in a fresh process so it
+    picks up a regenerated Corefile.  Mirrors ``CaddyProcess``."""
 
     proc: subprocess.Popen[bytes]
     corefile_path: Path
     coredns_bin: str
-    # Whether this process serves the public authoritative zones, so a reload regenerates the same
-    # shape of Corefile rather than silently switching the instance's DNS provider.
+    # Recorded so a reload regenerates the same shape of Corefile rather than silently switching
+    # the instance's DNS provider.
     serve_public: bool = True
-    # Serializes restart() to match CaddyProcess — insurance against a future background caller racing
-    # two coredns onto :53 (today's callers are already serialized on the event loop).
+    # Insurance against a future background caller racing two coredns onto :53; today's callers are
+    # already serialized on the event loop.
     _restart_lock: threading.Lock = attr.ib(factory=threading.Lock, init=False, eq=False, repr=False)
 
     def restart(self) -> None:
@@ -298,15 +263,9 @@ def start_coredns(
 ) -> CoreDnsProcess:
     """Write the Corefile + zone files, start CoreDNS, and return the handle.
 
-    ``serve_public`` controls the authoritative half: True when this instance is its own DNS
-    provider, False when an external provider answers for the domains and CoreDNS is running only
-    for the container view.  ``public_ip`` is required for the former and ignored by the latter.
-
-    When ``container_gateway_ip`` is set (the default, and the dummy ``openhost0`` gateway in
-    production), a server view per zone is bound there that resolves the zone wildcard to the
-    gateway so pasta app containers can reach sibling apps' public HTTPS URLs through Caddy (NAT
-    hairpin), with a catch-all forward for everything else.  Pass ``None`` to disable (e.g. in
-    environments without the gateway interface).
+    ``serve_public`` controls the authoritative half — True when this instance is its own DNS
+    provider — and ``public_ip`` is required for it and ignored otherwise.  ``container_gateway_ip``
+    controls the container view; pass ``None`` where the gateway interface doesn't exist.
     """
     _write_coredns_config(zones, public_ip, corefile_path, container_gateway_ip, serve_public=serve_public)
     served = ", ".join(z.domain for z in zones) or "no zones"
@@ -319,9 +278,8 @@ def start_coredns(
     )
 
 
-# The live CoreDnsProcess, registered by start.py so request handlers (e.g. /api/domains) can
-# regenerate the zone config and restart CoreDNS when the domain set changes.  Mirrors the
-# active-Caddy registry.  None when CoreDNS isn't running (dev / .local-only / tests).
+# Registered by start.py so request handlers (e.g. /api/domains) can restart CoreDNS when the
+# domain set changes.  Mirrors the active-Caddy registry; None when CoreDNS isn't running.
 _active_coredns: CoreDnsProcess | None = None
 
 
@@ -335,13 +293,11 @@ def get_active_coredns() -> CoreDnsProcess | None:
 
 
 def reload_coredns_for_domains(config: Config, db: sqlite3.Connection) -> bool:
-    """Regenerate the Corefile from the current public-domain set and restart CoreDNS so it picks
-    up the new set (a new zone needs a restart; the ``file`` plugin's ``reload`` only notices edits
-    to an *already-served* zone file).
+    """Regenerate the Corefile and restart, so a newly added zone gets served — the ``file``
+    plugin's ``reload`` only notices edits to an already-served zone file.
 
-    Existing zone files are re-pointed, not re-rendered — see ``_write_coredns_config``.  No-op
-    (returns False) when CoreDNS isn't running, or when it serves public zones and no public IP is
-    known."""
+    Existing zone files are re-pointed, not re-rendered.  Returns False when CoreDNS isn't running,
+    or when it serves public zones and no public IP is known."""
     coredns = get_active_coredns()
     if coredns is None:
         return False

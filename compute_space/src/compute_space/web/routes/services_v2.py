@@ -55,10 +55,10 @@ from compute_space.core.apps import find_app_by_name
 from compute_space.core.apps import get_app_from_hostname
 from compute_space.core.auth.permissions_v2 import get_granted_permissions_v2
 from compute_space.core.containers import get_docker_logs
-from compute_space.core.dns.selection import dns_provider_id
-from compute_space.core.dns.service import DNS_SERVICE_URL
-from compute_space.core.dns.service import DNS_SERVICE_VERSION
-from compute_space.core.dns.service import ROUTER_DNS_PROVIDER_ID
+from compute_space.core.dns.backend import DNS_SERVICE_URL
+from compute_space.core.dns.backend import DNS_SERVICE_VERSION
+from compute_space.core.dns.backend import ROUTER_DNS_PROVIDER_ID
+from compute_space.core.dns.backend import dns_provider_id
 from compute_space.core.dns.service import handle_dns_service_call
 from compute_space.core.dns.service import parse_grants
 from compute_space.core.domains import primary_domain_or_none

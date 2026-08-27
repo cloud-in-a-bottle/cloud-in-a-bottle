@@ -9,15 +9,15 @@ import attr
 import httpx
 import pytest
 
+from compute_space.core.dns.backend import ROUTER_CONSUMER_ID
 from compute_space.core.dns.backend import DnsBackendError
+from compute_space.core.dns.backend import LocalZoneFileBackend
+from compute_space.core.dns.backend import ServiceDnsBackend
 from compute_space.core.dns.backend import UnknownZone
 from compute_space.core.dns.backend import clear_txt
 from compute_space.core.dns.backend import publish_txt
-from compute_space.core.dns.local import LocalZoneFileBackend
+from compute_space.core.dns.backend import router_grants
 from compute_space.core.dns.records import DnsRecord
-from compute_space.core.dns.remote import ROUTER_CONSUMER_ID
-from compute_space.core.dns.remote import ServiceDnsBackend
-from compute_space.core.dns.remote import router_grants
 
 
 @attr.s(auto_attribs=True)

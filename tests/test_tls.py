@@ -34,7 +34,7 @@ from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.asymmetric import rsa as rsa_module
 from josepy import JWKRSA
 
-from compute_space.core.dns.local import LocalZoneFileBackend
+from compute_space.core.dns.backend import LocalZoneFileBackend
 from compute_space.core.tls.acquire_cert import acquire_tls_cert
 from compute_space.core.tls.util import _acquire_cert_dns01
 from compute_space.core.tls.util import load_account_key

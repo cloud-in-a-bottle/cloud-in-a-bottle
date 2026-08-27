@@ -5,7 +5,7 @@ from pathlib import Path
 from compute_space.config import CERT_PROVIDER_ACME
 from compute_space.config import Config
 from compute_space.core.dns.backend import DnsBackend
-from compute_space.core.dns.selection import dns_backend
+from compute_space.core.dns.backend import dns_backend
 from compute_space.core.domains import primary_domain
 from compute_space.core.identity_store import get_instance_identity
 from compute_space.core.tls.acquire_cert import acquire_tls_cert

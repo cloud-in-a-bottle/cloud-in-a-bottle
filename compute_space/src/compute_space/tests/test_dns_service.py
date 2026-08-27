@@ -9,9 +9,9 @@ from typing import Any
 import pytest
 
 from compute_space.config import DefaultConfig
+from compute_space.core.dns.backend import LocalZoneFileBackend
 from compute_space.core.dns.coredns import _write_coredns_config
 from compute_space.core.dns.coredns import public_dns_zones
-from compute_space.core.dns.local import LocalZoneFileBackend
 from compute_space.core.dns.records import DnsRecord
 from compute_space.core.dns.service import handle_dns_service_call
 from compute_space.core.dns.service import parse_grants

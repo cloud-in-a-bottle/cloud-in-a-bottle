@@ -31,7 +31,7 @@ from litestar.params import FromPath
 from compute_space.config import Config
 from compute_space.config import get_config
 from compute_space.core.caddy import reload_caddy_for_domains
-from compute_space.core.dns import reload_coredns_for_domains
+from compute_space.core.dns.coredns import reload_coredns_for_domains
 from compute_space.core.domains import Domain
 from compute_space.core.domains import DomainCertStatus
 from compute_space.core.domains import DomainRecord

@@ -1,8 +1,8 @@
-"""The record shape shared by every DNS backend, and the rules about what may be written.
+"""The record shape every DNS backend speaks, and the rules about what may be written.
 
-Deliberately the same wire shape the ``dns`` service speaks (see ``services/dns/openapi.yaml``):
-a zone-relative name, an RR type, a TTL, and unescaped zone-file RDATA.  One flat shape covers
-every type, so neither the backends nor the service handler need per-type branching.
+Deliberately the same wire shape as the ``dns`` service (``services/dns/openapi.yaml``): a
+zone-relative name, an RR type, a TTL, and unescaped zone-file RDATA.  One flat shape covers every
+type, so nothing downstream needs per-type branching.
 """
 
 from __future__ import annotations
@@ -12,21 +12,13 @@ from collections.abc import Iterable
 
 import attr
 
-# The zone-relative name of the zone itself, matching the service API and libdns.
 APEX = "@"
 
-# Types the service API will create, change, or delete.  Matches the connector app's allowlist so
-# the two providers accept the same requests.  Reads are unrestricted — whatever is in the zone
-# comes back, including types outside this set.
+# Matches the connector app's allowlist so both providers accept the same requests.  Reads are
+# unrestricted — whatever is in the zone comes back.
 WRITABLE_TYPES = frozenset({"A", "AAAA", "CAA", "CNAME", "MX", "NS", "SRV", "TXT"})
 
-# Records the router generates and keeps in sync itself: the zone apex, the nameserver glue, and
-# the wildcard that routes every app subdomain.  A domain-set change or a dynamic-DNS update
-# rewrites all three, so a service caller writing them would have its change silently undone —
-# and a broad grant could otherwise delete the wildcard and take the whole space offline.
-ROUTER_OWNED_NAMES = frozenset({APEX, "ns", "*"})
-ROUTER_OWNED_APEX_TYPES = frozenset({"SOA", "NS"})
-
+_ROUTER_OWNED_NAMES = frozenset({APEX, "ns", "*"})
 _LABEL_RE = re.compile(r"^[a-z0-9_-]+$")
 
 
@@ -35,14 +27,13 @@ class InvalidRecord(ValueError):
 
 
 class ReservedRecord(InvalidRecord):
-    """A router-owned record a service caller tried to write.  Distinct from InvalidRecord so the
-    service handler can report it as its own error code rather than a generic bad request."""
+    """A router-owned record a service caller tried to write.  Separate from InvalidRecord so the
+    service handler can give it its own error code."""
 
 
 @attr.s(auto_attribs=True, frozen=True)
 class DnsRecord:
-    """One record, relative to a zone.  ``data`` is None only in a delete, where it means "whatever
-    is currently at this name and type" — see ``DnsBackend.delete_records``."""
+    """``data`` is None only in a delete, where it selects the whole ``(name, type)`` RRset."""
 
     name: str
     type: str
@@ -55,7 +46,7 @@ class DnsRecord:
 
 
 def normalize_zone(zone: str) -> str:
-    """Lowercase a zone and drop the trailing dot.  Zone files carry the dot; nothing else does."""
+    """Zone files carry a trailing dot; nothing else does."""
     return zone.strip().rstrip(".").lower()
 
 
@@ -63,8 +54,7 @@ def normalize_name(name: str, zone: str = "") -> str:
     """Validate and canonicalize a zone-relative record name.
 
     Fully-qualified input is rejected rather than fixed up: a zone file reads ``www.example.com``
-    inside zone ``example.com`` as ``www.example.com.example.com``, so quietly accepting it would
-    point the record at a name the caller did not intend.
+    inside zone ``example.com`` as ``www.example.com.example.com``.
     """
     n = name.strip().lower()
     if not n:
@@ -72,38 +62,29 @@ def normalize_name(name: str, zone: str = "") -> str:
     if n == APEX:
         return APEX
     if n.endswith("."):
-        raise InvalidRecord(
-            f"record name {name!r} is fully qualified; names are relative to the zone (use {APEX!r} for the apex)"
-        )
+        raise InvalidRecord(f"record name {name!r} is fully qualified; names are relative to the zone")
     z = normalize_zone(zone)
     if z and (n == z or n.endswith("." + z)):
         suggestion = n[: -len(z)].rstrip(".") or APEX
-        raise InvalidRecord(
-            f"record name {name!r} already includes the zone {z!r}; names are relative (did you mean {suggestion!r}?)"
-        )
+        raise InvalidRecord(f"record name {name!r} already includes the zone {z!r} (did you mean {suggestion!r}?)")
     for label in n.split("."):
-        if not label:
-            raise InvalidRecord(f"record name {name!r} has an empty label")
-        if len(label) > 63:
-            raise InvalidRecord(f"record name {name!r} has a label longer than 63 characters")
         # "*" is a real DNS wildcard label, not a pattern, so it stays literal.
-        if label != "*" and not _LABEL_RE.match(label):
-            raise InvalidRecord(f"record name {name!r} contains an invalid label {label!r}")
+        if not label or len(label) > 63 or (label != "*" and not _LABEL_RE.match(label)):
+            raise InvalidRecord(f"record name {name!r} has an invalid label {label!r}")
     return n
 
 
-def normalize_type(rrtype: str, *, writable: bool = True) -> str:
-    """Uppercase an RR type, optionally checking it against the write allowlist."""
+def normalize_type(rrtype: str) -> str:
     t = rrtype.strip().upper()
     if not t:
         raise InvalidRecord("record type is empty")
-    if writable and t not in WRITABLE_TYPES:
+    if t not in WRITABLE_TYPES:
         raise InvalidRecord(f"record type {t!r} is not writable (supported: {', '.join(sorted(WRITABLE_TYPES))})")
     return t
 
 
 def normalize_record(record: DnsRecord, zone: str = "", *, allow_rrset_selector: bool = False) -> DnsRecord:
-    """Canonicalize a record's name and type, and require data unless a selector is allowed.
+    """Canonicalize name and type, and require data unless a selector is allowed.
 
     Omitting data means "whatever is there now", which only makes sense when removing records; a
     set or append with no data is a mistake, not a wildcard.
@@ -121,21 +102,17 @@ def normalize_record(record: DnsRecord, zone: str = "", *, allow_rrset_selector:
 def is_router_owned(name: str, rrtype: str) -> bool:
     """True if the router generates and maintains this record itself.
 
-    The apex is only reserved for the records the template writes there (SOA, NS, A/AAAA); an app
-    adding an apex MX or TXT — SPF and mail setups need exactly that — is left alone.
+    The apex is reserved only for what the template puts there, so an apex MX or TXT — which is
+    what a mail setup needs — is left alone.
     """
-    name = name.lower()
-    rrtype = rrtype.upper()
-    if name == APEX:
-        return rrtype in ROUTER_OWNED_APEX_TYPES or rrtype in ("A", "AAAA")
-    if name in ROUTER_OWNED_NAMES:
-        return rrtype in ("A", "AAAA")
-    return False
+    name, rrtype = name.lower(), rrtype.upper()
+    if name == APEX and rrtype in ("SOA", "NS"):
+        return True
+    return name in _ROUTER_OWNED_NAMES and rrtype in ("A", "AAAA")
 
 
 def reject_router_owned(records: Iterable[DnsRecord]) -> None:
-    """Raise if any record is one the router maintains.  Applied to service calls only; the
-    router's own backend calls go straight to the backend and bypass this."""
+    """Applied to service calls only; the router's own backend writes bypass it."""
     for rec in records:
         if is_router_owned(rec.name, rec.type):
             raise ReservedRecord(
