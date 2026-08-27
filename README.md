@@ -6,8 +6,6 @@ Deploy, use, and share web apps on a server you control. Built on the idea that 
 
 [![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
 
-> **Early access.** Cloud in a Bottle is in active beta. We want you to try it and share feedback! Note that no password recovery exists yet and we don't hold keys to your instance so we can't reset it. Response time on issues and PRs may be slow as we're heads-down on the core product.
-
 ## Why Cloud in a Bottle
 
 Most people have no access to the cloud that isn't mediated by a company with different incentives than theirs. Open source web software exists but running it somewhere means fighting infrastructure that most people don't want to touch.
