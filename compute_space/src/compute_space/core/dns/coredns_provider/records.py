@@ -25,6 +25,8 @@ _LABEL_RE = re.compile(r"^[a-z0-9_*-]+$")
 class InvalidRecord(ValueError):
     """A record that can't be written as given."""
 
+    error_code = "invalid_record"
+
 
 def normalize(record: DnsRecord, zone: str = "", *, allow_rrset_selector: bool = False) -> DnsRecord:
     """Canonicalize and validate a record, returning the form to store."""

@@ -30,17 +30,30 @@ _OPS = {"set": store.set_records, "append": store.append_records, "delete": stor
 WRITE_OPS = frozenset(_OPS)
 
 
-class UnknownZone(Exception):
+class DnsOperationError(Exception):
+    """A failure the API has an error code for.  Plain exceptions, not framework ones: the code
+    that turns these into responses lives in the web layer."""
+
+    error_code = "invalid_request"
+
+
+class UnknownZone(DnsOperationError):
     """A zone this instance does not serve."""
 
+    error_code = "unknown_zone"
 
-class NoZonesConfigured(Exception):
+
+class NoZonesConfigured(DnsOperationError):
     """The instance serves no zones at all, so there is nothing to write to."""
+
+    error_code = "no_zones_configured"
 
 
 @attr.s(auto_attribs=True, frozen=True)
-class PermissionDenied(Exception):
+class PermissionDenied(DnsOperationError):
     """The caller holds no grant covering a record it tried to touch."""
+
+    error_code = "permission_required"
 
     name: str
     type: str

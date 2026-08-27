@@ -23,6 +23,7 @@ from litestar import Response
 from litestar import post
 from litestar.di import NamedDependency
 from litestar.di import Provide
+from litestar.exceptions import HTTPException
 from litestar.exceptions import ValidationException
 from litestar.params import FromPath
 
@@ -177,13 +178,13 @@ def write_records(
     db: NamedDependency[sqlite3.Connection],
 ) -> Response[ResultsResponse]:
     if op not in operations.WRITE_OPS:
-        raise _Rejected("invalid_request", f"unknown DNS service operation {op!r}")
+        raise InvalidRequest(detail=f"unknown DNS service operation {op!r}")
     # Unlike reads, a missing zone is an error rather than a fan-out: defaulting to every zone
     # would let a caller that forgot the field rewrite records across all of them.
     if not data.zone.strip():
-        raise _Rejected("zone_required", f"writes must name a zone, or {ALL_ZONES!r} for all of them")
+        raise ZoneRequired(detail=f"writes must name a zone, or {ALL_ZONES!r} for all of them")
     if not data.records:
-        raise _Rejected("invalid_request", "no records given")
+        raise InvalidRequest(detail="no records given")
 
     records = [DnsRecord(name=r.name, type=r.type, ttl=r.ttl, data=r.data) for r in data.records]
     results = operations.write(zones, grants, data.zone.strip(), op, records, get_config(), db)
@@ -193,45 +194,50 @@ def write_records(
 # ─── failures ───
 
 
-@attr.s(auto_attribs=True, frozen=True)
-class _Rejected(Exception):
-    """A request this service refuses on its own terms, with the error code the API documents."""
+class DnsServiceException(HTTPException):
+    """A request this service refuses on its own terms.
 
-    code: str
-    message: str
+    A Litestar exception, so a route just raises and the framework unwinds; ``error_code`` is what
+    distinguishes it on the wire.
+    """
 
-
-def _rejected(request: Request[Any, Any, Any], exc: _Rejected) -> Response[ErrorResponse]:
-    return Response(ErrorResponse(error=exc.code, message=exc.message), status_code=400)
+    error_code = "invalid_request"
 
 
-def _bad_record(request: Request[Any, Any, Any], exc: Exception) -> Response[ErrorResponse]:
-    """Covers both our own validation and the framework's body parsing, so a malformed record
-    reads the same either way."""
-    return Response(ErrorResponse(error="invalid_record", message=str(exc)), status_code=400)
+class ZoneRequired(DnsServiceException):
+    status_code = 400
+    error_code = "zone_required"
 
 
-def _unknown_zone(request: Request[Any, Any, Any], exc: Exception) -> Response[ErrorResponse]:
-    return Response(ErrorResponse(error="unknown_zone", message=str(exc)), status_code=400)
+class InvalidRequest(DnsServiceException):
+    status_code = 400
+    error_code = "invalid_request"
 
 
-def _no_zones(request: Request[Any, Any, Any], exc: Exception) -> Response[ErrorResponse]:
-    return Response(ErrorResponse(error="no_zones_configured", message=str(exc)), status_code=400)
+def _render_error(request: Request[Any, Any, Any], exc: Exception) -> Response[Any]:
+    """Render any of this service's failures in the shape the API documents.
 
+    One renderer rather than a handler per failure, and it exists at all only because
+    ``{"error", "message"}`` is the service's contract — shared with the connector app — whereas
+    Litestar's default body is ``{"status_code", "detail", "extra"}``.
+    """
+    # Litestar's own parse failure carries no code of ours, and always means a record it could
+    # not read.
+    default = "invalid_record" if isinstance(exc, ValidationException) else "invalid_request"
+    code = getattr(exc, "error_code", default)
+    message = getattr(exc, "detail", None) or str(exc)
+    status = getattr(exc, "status_code", 400)
 
-def _permission_required(
-    request: Request[Any, Any, Any], exc: operations.PermissionDenied
-) -> Response[PermissionRequiredResponse]:
-    """The 403 shape the service proxy understands; being global-scoped, it gets a ``grant_url``
-    added on the way out."""
-    return Response(
-        PermissionRequiredResponse(
-            error="permission_required",
-            message=f"this app has no grant covering {exc.type} records named {exc.name!r}",
-            required_grant=RequiredGrant(grant=GrantPayload(name=exc.name, type=exc.type, access=exc.access)),
-        ),
-        status_code=403,
-    )
+    if isinstance(exc, operations.PermissionDenied):
+        return Response(
+            PermissionRequiredResponse(
+                error=code,
+                message=f"this app has no grant covering {exc.type} records named {exc.name!r}",
+                required_grant=RequiredGrant(grant=GrantPayload(name=exc.name, type=exc.type, access=exc.access)),
+            ),
+            status_code=403,
+        )
+    return Response(ErrorResponse(error=code, message=message), status_code=status)
 
 
 def _results(results: list[operations.ZoneResult]) -> Response[ResultsResponse]:
@@ -266,12 +272,12 @@ dns_service_app = Litestar(
         "zones": Provide(provide_zones, sync_to_thread=True),
     },
     exception_handlers={
-        _Rejected: _rejected,
-        InvalidRecord: _bad_record,
-        ValidationException: _bad_record,
-        operations.UnknownZone: _unknown_zone,
-        operations.NoZonesConfigured: _no_zones,
-        operations.PermissionDenied: _permission_required,
+        DnsServiceException: _render_error,
+        operations.DnsOperationError: _render_error,
+        InvalidRecord: _render_error,
+        # Litestar rejects a malformed body before the route runs; render it like any bad record
+        # rather than leaking the framework's error shape.
+        ValidationException: _render_error,
     },
     openapi_config=None,
 )
