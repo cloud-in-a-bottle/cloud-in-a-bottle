@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
 import pytest
+from litestar.testing import TestClient
 
 from compute_space.core.dns.coredns_provider import store
 from compute_space.core.dns.coredns_provider.grants import parse as parse_grants
-from compute_space.core.dns.coredns_provider.service import handle_dns_call
+from compute_space.core.dns.coredns_provider.service import dns_service_app
 from compute_space.core.dns.service_api import DnsRecord
 from compute_space.core.domains import Domain
 from compute_space.tests.conftest import open_db
@@ -31,7 +33,10 @@ class _Space:
         self.db = open_db(self.config)
 
     def call(self, path: str, payload: dict[str, Any], permissions: list[Any]) -> tuple[int, dict[str, Any]]:
-        return handle_dns_call(path, payload, permissions, self.config, self.db)
+        """Through the real ASGI app, so routing and body parsing are exercised too."""
+        with TestClient(app=dns_service_app) as client:
+            response = client.post(path, json=payload, headers={"X-OpenHost-Permissions": json.dumps(permissions)})
+        return response.status_code, response.json()
 
     def records(self, name: str, rrtype: str) -> list[str]:
         """Read the store directly, so an assertion isn't filtered by the caller's grants."""

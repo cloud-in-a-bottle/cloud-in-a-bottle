@@ -24,7 +24,6 @@ from collections.abc import Iterable
 from typing import Any
 from urllib.parse import urlencode
 
-import anyio
 import attr
 from litestar import HttpMethod
 from litestar import MediaType
@@ -67,6 +66,7 @@ from compute_space.core.installer import check_install_allowed
 from compute_space.core.installer import install_from_repo_url
 from compute_space.core.manifest import parse_manifest_from_string
 from compute_space.core.oauth import OAuthRequired
+from compute_space.core.service_client import builtin_client
 from compute_space.core.services_v2 import lookup_shortname
 from compute_space.core.services_v2 import resolve_provider
 from compute_space.web.auth.auth import require_app_auth
@@ -484,8 +484,20 @@ async def _handle_builtin_request(
     permissions = [
         {"grant": g.grant, "scope": g.scope} for g in get_granted_permissions_v2(consumer_app_id, service.url)
     ]
-    # Off the event loop: a handler may do SQLite work and rewrite files.
-    status, body = await anyio.to_thread.run_sync(service.handler, rest, payload, permissions, config, db)
+    # Served in-process over ASGI, carrying the calling app's identity — the same headers this
+    # module injects when proxying to an app provider.  The route declares sync_to_thread, so its
+    # blocking work stays off the event loop.
+    http, base_url = builtin_client(service)
+    async with http:
+        response = await http.post(
+            base_url + "/" + rest.lstrip("/"),
+            json=payload,
+            headers={
+                "X-OpenHost-Permissions": json.dumps(permissions),
+                **_consumer_identity_headers(consumer_app_id, db),
+            },
+        )
+    status, body = response.status_code, response.json()
 
     required_grant = body.get("required_grant") if status == 403 else None
     if isinstance(required_grant, dict) and required_grant.get("scope", "global") == "global":

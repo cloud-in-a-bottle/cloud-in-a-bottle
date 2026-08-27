@@ -1,8 +1,8 @@
 """Call a service from inside the router, wherever that service happens to run.
 
 Router-side code — cert acquisition, dynamic DNS, anything later — should not care whether a
-service is provided by an app or by the router itself.  So a builtin is mounted on an httpx
-transport that answers without a socket, and every call takes the same path either way.  The
+service is provided by an app or by the router itself.  A builtin is an ASGI app, so httpx's
+ASGITransport serves it without a socket and every call takes the same path either way.  The
 in-process provider is held to the same wire contract as a real one, so the two cannot drift.
 
 ``call_service`` is a plain function holding nothing: the provider is resolved and the HTTP client
@@ -15,11 +15,12 @@ TLS cert before hypercorn is listening (see ``web.start``).
 
 from __future__ import annotations
 
+import asyncio
 import json
 import sqlite3
 from typing import Any
+from typing import cast
 
-import attr
 import httpx
 from packaging.specifiers import SpecifierSet
 from packaging.version import Version
@@ -52,28 +53,17 @@ class ServiceCallError(RuntimeError):
         self.body = body or {}
 
 
-@attr.s(auto_attribs=True, frozen=True)
-class _BuiltinTransport(httpx.BaseTransport):
-    """Answers requests from a builtin handler, without a socket."""
-
-    service: BuiltinService
-    config: Config
-    db: sqlite3.Connection
-
-    def handle_request(self, request: httpx.Request) -> httpx.Response:
-        permissions = json.loads(request.headers.get(PERMISSIONS_HEADER) or "[]")
-        payload = json.loads(request.content or b"{}")
-        status, body = self.service.handler(request.url.path, payload, permissions, self.config, self.db)
-        return httpx.Response(status, json=body)
-
-
-def _client_for(service_url: str, config: Config, db: sqlite3.Connection, version: str) -> tuple[httpx.Client, str]:
+def _client_for(
+    service_url: str, config: Config, db: sqlite3.Connection, version: str
+) -> tuple[httpx.AsyncClient, str]:
     """An httpx client and base URL for whichever provider currently serves ``service_url``."""
     builtin = builtin_for(service_url, db)
     if builtin is not None:
         if Version(builtin.version) not in SpecifierSet(version):
             raise ServiceCallError(f"{service_url} version {builtin.version} does not match {version}")
-        transport: httpx.BaseTransport | None = _BuiltinTransport(builtin, config, db)
+        # cast: litestar types its ASGIApp with its own scope classes, httpx with the raw
+        # MutableMappings; they are the same protocol.
+        transport: httpx.AsyncBaseTransport | None = httpx.ASGITransport(app=cast(Any, builtin.app))
         base_url = _BUILTIN_HOST
     else:
         try:
@@ -81,10 +71,10 @@ def _client_for(service_url: str, config: Config, db: sqlite3.Connection, versio
         except RuntimeError as e:
             raise ServiceCallError(f"no usable provider for {service_url}: {e}") from e
         transport, base_url = None, f"http://127.0.0.1:{port}/{endpoint.strip('/')}"
-    return httpx.Client(transport=transport, timeout=_REQUEST_TIMEOUT_SECONDS), base_url
+    return httpx.AsyncClient(transport=transport, timeout=_REQUEST_TIMEOUT_SECONDS), base_url
 
 
-def call_service(
+async def acall_service(
     service_url: str,
     path: str,
     payload: dict[str, Any],
@@ -101,9 +91,9 @@ def call_service(
     """
     http, base_url = _client_for(service_url, config, db, version)
     url = base_url + path
-    with http:
+    async with http:
         try:
-            response = http.post(
+            response = await http.post(
                 url,
                 json=payload,
                 headers={
@@ -127,6 +117,37 @@ def call_service(
             body=body,
         )
     return body
+
+
+def call_service(
+    service_url: str,
+    path: str,
+    payload: dict[str, Any],
+    permissions: Permissions,
+    config: Config,
+    db: sqlite3.Connection,
+    version: str = ">=0",
+) -> dict[str, Any]:
+    """Blocking form, for the router's sync paths — cert acquisition and the dynamic-DNS watcher,
+    which run in threads with no event loop of their own.
+
+    ASGI needs a loop, so one is spun up per call.  Callers already inside a loop must await
+    ``acall_service`` instead; doing otherwise would deadlock, so it fails loudly.
+    """
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(acall_service(service_url, path, payload, permissions, config, db, version))
+    raise RuntimeError(f"call_service({service_url}) called from a running event loop; await acall_service instead")
+
+
+def builtin_client(service: BuiltinService) -> tuple[httpx.AsyncClient, str]:
+    """A client that serves ``service`` in-process, for callers that need the raw response — the
+    proxy passes a 403 through after decorating it, rather than treating it as a failure."""
+    return (
+        httpx.AsyncClient(transport=httpx.ASGITransport(app=cast(Any, service.app))),
+        _BUILTIN_HOST,
+    )
 
 
 def provider_is_builtin(service_url: str, db: sqlite3.Connection) -> bool:

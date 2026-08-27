@@ -169,7 +169,7 @@ def _remote(recorder: _Recorder, monkeypatch: pytest.MonkeyPatch) -> DnsClient:
     monkeypatch.setattr(
         service_client_mod,
         "_client_for",
-        lambda *a: (httpx.Client(transport=httpx.MockTransport(recorder)), "http://127.0.0.1:9999/api/dns"),
+        lambda *a: (httpx.AsyncClient(transport=httpx.MockTransport(recorder)), "http://127.0.0.1:9999/api/dns"),
     )
     return DnsClient(config=None, db=None)  # type: ignore[arg-type]  # unused once _client_for is patched
 
@@ -245,7 +245,7 @@ def test_an_unreachable_provider_is_an_error_not_a_crash(monkeypatch: pytest.Mon
     monkeypatch.setattr(
         service_client_mod,
         "_client_for",
-        lambda *a: (httpx.Client(transport=httpx.MockTransport(refuse)), "http://127.0.0.1:9999/api/dns"),
+        lambda *a: (httpx.AsyncClient(transport=httpx.MockTransport(refuse)), "http://127.0.0.1:9999/api/dns"),
     )
     with pytest.raises(ServiceCallError, match="unreachable"):
         DnsClient(config=None, db=None).zones()  # type: ignore[arg-type]

@@ -4,37 +4,38 @@ The v2 proxy resolves a consumer's shortname to a provider app and forwards the 
 services have no app behind them — the installer is the router by definition, and the router serves
 ``dns`` until an owner installs a connector app — so they run in-process instead.
 
-Registering one is an entry here plus a handler; ``service_client`` and the proxy both consult
-``builtin_for``, so which provider serves a service is decided in exactly one place.
+Registering one is an entry here plus an ASGI app — the same thing an app provider is, minus the
+socket — so nothing here defines a request/response contract of its own.  ``service_client`` and
+the proxy both consult ``builtin_for``, so which provider serves a service is decided in exactly
+one place.
 """
 
 from __future__ import annotations
 
 import sqlite3
-from collections.abc import Callable
 from typing import Any
 
 import attr
+from litestar.types import ASGIApp
 
-from compute_space.config import Config
-from compute_space.core.dns.coredns_provider.service import handle_dns_call
+from compute_space.core.dns.coredns_provider.service import dns_service_app
 from compute_space.core.dns.service_api import DNS_SERVICE_URL
 from compute_space.core.dns.service_api import DNS_SERVICE_VERSION
 from compute_space.core.dns.service_api import ROUTER_DNS_PROVIDER_ID
 
+# Permission entries stay in wire form (``{"grant": ..., "scope": ...}``) everywhere outside the
+# service that issued them: a grant payload is defined by that service, so only it can read one.
+Permissions = list[dict[str, Any]]
+
 # A handler takes the sub-path after the service root, the JSON body, and the caller's permission
 # entries, and returns an HTTP status and a JSON body — the same contract an app provider answers
-# on.  Permissions stay in their wire form (``{"grant": ..., "scope": ...}``) because a grant
-# payload is defined by the service that issues it, so only the handler can interpret one.
-Permissions = list[dict[str, Any]]
-Handler = Callable[[str, dict[str, Any], Permissions, Config, sqlite3.Connection], tuple[int, dict[str, Any]]]
 
 
 @attr.s(auto_attribs=True, frozen=True)
 class BuiltinService:
     url: str
     version: str
-    handler: Handler
+    app: ASGIApp
     # Sentinel provider id when an app can provide the service too, so an owner can point the
     # service default elsewhere.  None means the router is the only possible provider.
     provider_id: str | None = None
@@ -44,7 +45,7 @@ BUILTIN_SERVICES: tuple[BuiltinService, ...] = (
     BuiltinService(
         url=DNS_SERVICE_URL,
         version=DNS_SERVICE_VERSION,
-        handler=handle_dns_call,
+        app=dns_service_app,
         provider_id=ROUTER_DNS_PROVIDER_ID,
     ),
 )

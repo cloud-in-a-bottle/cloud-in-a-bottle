@@ -6,6 +6,7 @@ from contextlib import closing
 from pathlib import Path
 
 from compute_space.config import DefaultConfig
+from compute_space.config import set_active_config
 from compute_space.core.dns.coredns_provider.coredns import _write_coredns_config
 from compute_space.core.dns.coredns_provider.coredns import public_dns_zones
 from compute_space.core.domains import Domain
@@ -32,6 +33,8 @@ def seeded_dns_config(
     )
     config.make_all_dirs()
     init_db(config.db_path)
+    # The provider's routes read the active config, as every other route does.
+    set_active_config(config)
     with closing(open_db(config)) as db:
         seed_domains(db, domains[0], [DomainRecord(d.name, d.tls, d.mdns) for d in domains[1:]])
         _write_coredns_config(
