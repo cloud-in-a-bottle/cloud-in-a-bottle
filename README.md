@@ -1,10 +1,10 @@
 # Cloud in a Bottle
 
+[![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
+
 Your corner of the cloud.
 
 Deploy, use, and share web apps on a server you control. Built on the idea that modern software lives in the cloud, and if you want to be in control of your digital life, you need your own place in the cloud too.
-
-[![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
 
 ## Why Cloud in a Bottle
 
@@ -33,9 +33,18 @@ SSH key, your data, your instance. We set up what you need to get going, and the
 
 ## How it works
 
-The Python router provides the dashboard and app management APIs. It reads a `cloudinabottle.toml` manifest from each
-app repository, builds and runs the app in a rootless Podman container, and routes requests to it by hostname. App and
-instance data remain under your control.
+The Python router is the control plane for your instance. Its dashboard and APIs install apps from Git repositories,
+read their `cloudinabottle.toml` manifests, build their Dockerfiles with rootless Podman, and manage updates, logs, and
+the container lifecycle.
+
+By default, each app's main HTTP port is bound to the host's loopback interface. The router proxies HTTP and WebSocket
+requests to the right container based on the app subdomain. App routes require owner authentication by default, while
+the manifest can declare paths that should be public. In the standard public deployment, Caddy handles HTTPS and
+CoreDNS provides wildcard DNS for app subdomains.
+
+App storage is organized into permanent data, temporary files, and archive storage. The manifest controls which tiers
+the container can access. Platform state and permanent app data are stored on your instance. Archive data can stay
+local or use S3-compatible storage you configure.
 
 ## Documentation
 
