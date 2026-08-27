@@ -182,7 +182,9 @@ def dns_client(config: Config, db: sqlite3.Connection) -> Iterator[DnsClient]:
 _PROPAGATION_RESOLVER = "8.8.8.8"
 
 
-def wait_for_records(fqdn: str, rrtype: str, expected_values: list[str], timeout: float, interval: float = 5) -> bool:
+def wait_for_records(
+    fqdn: str, rrtype: RecordType, expected_values: list[str], timeout: float, interval: float = 5
+) -> bool:
     """Poll an external resolver until every expected value is visible at ``fqdn``.
 
     False on timeout, and the caller should decide whether that matters; for ACME the retry loop is

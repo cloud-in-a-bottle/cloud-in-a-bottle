@@ -73,6 +73,9 @@ def normalize_zone(zone: str) -> str:
 def permission(name: str, rrtype: str, access: str = "rw") -> dict[str, Any]:
     """One entry of an ``X-OpenHost-Permissions`` header, in this service's grant shape.
 
+    ``name`` and ``rrtype`` are patterns rather than a literal name and RecordType — ``WILDCARD``
+    is valid for either — so they stay plain strings.
+
     Global scope because these grants name a record pattern rather than anything in a provider's
     own data, so an owner can approve them at install time from a manifest.
     """
