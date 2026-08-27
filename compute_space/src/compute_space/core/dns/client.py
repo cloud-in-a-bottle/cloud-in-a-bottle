@@ -26,7 +26,6 @@ import attr
 
 from compute_space.config import Config
 from compute_space.core.apps import start_app_process
-from compute_space.core.builtin_services import builtin_for
 from compute_space.core.containers import is_container_running
 from compute_space.core.dns.service_api import APEX
 from compute_space.core.dns.service_api import DNS_SERVICE_URL
@@ -37,8 +36,9 @@ from compute_space.core.dns.service_api import normalize_zone
 from compute_space.core.dns.service_api import permission
 from compute_space.core.domains import effective_domains
 from compute_space.core.logging import logger
-from compute_space.core.service_client import ServiceCallError
-from compute_space.core.service_client import call_service
+from compute_space.core.service_interface.builtin_services import builtin_for
+from compute_space.core.service_interface.service_client import ServiceCallError
+from compute_space.core.service_interface.service_client import call_service
 
 # CoreDNS reloads within seconds; an external registrar can take minutes to publish.
 LOCAL_PROPAGATION_TIMEOUT_SECONDS = 120.0

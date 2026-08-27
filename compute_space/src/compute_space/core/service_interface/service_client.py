@@ -26,10 +26,10 @@ from packaging.specifiers import SpecifierSet
 from packaging.version import Version
 
 from compute_space.config import Config
-from compute_space.core.builtin_services import BuiltinService
-from compute_space.core.builtin_services import Permissions
-from compute_space.core.builtin_services import builtin_for
-from compute_space.core.services_v2 import resolve_provider
+from compute_space.core.service_interface.builtin_services import BuiltinService
+from compute_space.core.service_interface.builtin_services import Permissions
+from compute_space.core.service_interface.builtin_services import builtin_for
+from compute_space.core.service_interface.services_v2 import resolve_provider
 
 # The router's own consumer identity.  App names are DNS-label-like (see core.app_id), so the
 # leading underscore cannot collide with a real one.

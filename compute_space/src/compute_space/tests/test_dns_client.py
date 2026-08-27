@@ -15,7 +15,7 @@ import httpx
 import pytest
 
 import compute_space.core.dns.client as client_mod
-import compute_space.core.service_client as service_client_mod
+import compute_space.core.service_interface.service_client as service_client_mod
 from compute_space.core.dns.client import LOCAL_PROPAGATION_TIMEOUT_SECONDS as LOCAL_TIMEOUT
 from compute_space.core.dns.client import REMOTE_PROPAGATION_TIMEOUT_SECONDS as REMOTE_TIMEOUT
 from compute_space.core.dns.client import DnsClient
@@ -24,7 +24,7 @@ from compute_space.core.dns.coredns_provider import store
 from compute_space.core.dns.service_api import DNS_SERVICE_URL
 from compute_space.core.dns.service_api import RecordType
 from compute_space.core.domains import Domain
-from compute_space.core.service_client import ServiceCallError
+from compute_space.core.service_interface.service_client import ServiceCallError
 from compute_space.tests.conftest import open_db
 from compute_space.tests.dns_helpers import seeded_dns_config
 

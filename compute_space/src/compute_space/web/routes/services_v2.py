@@ -53,8 +53,6 @@ from compute_space.config import Config
 from compute_space.core.apps import find_app_by_name
 from compute_space.core.apps import get_app_from_hostname
 from compute_space.core.auth.permissions_v2 import get_granted_permissions_v2
-from compute_space.core.builtin_services import BuiltinService
-from compute_space.core.builtin_services import builtin_for
 from compute_space.core.containers import get_docker_logs
 from compute_space.core.domains import primary_domain_or_none
 from compute_space.core.installer import GRANT_KEY_CAPABILITY
@@ -66,9 +64,11 @@ from compute_space.core.installer import check_install_allowed
 from compute_space.core.installer import install_from_repo_url
 from compute_space.core.manifest import parse_manifest_from_string
 from compute_space.core.oauth import OAuthRequired
-from compute_space.core.service_client import builtin_client
-from compute_space.core.services_v2 import lookup_shortname
-from compute_space.core.services_v2 import resolve_provider
+from compute_space.core.service_interface.builtin_services import BuiltinService
+from compute_space.core.service_interface.builtin_services import builtin_for
+from compute_space.core.service_interface.service_client import builtin_client
+from compute_space.core.service_interface.services_v2 import lookup_shortname
+from compute_space.core.service_interface.services_v2 import resolve_provider
 from compute_space.web.auth.auth import require_app_auth
 from compute_space.web.auth.auth import verify_app_auth
 from compute_space.web.helpers.proxy import proxy_http_request

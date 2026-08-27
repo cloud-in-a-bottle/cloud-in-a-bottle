@@ -11,7 +11,7 @@ import sqlite3
 
 import httpx
 
-from compute_space.core.services_v2 import resolve_provider
+from compute_space.core.service_interface.services_v2 import resolve_provider
 from compute_space.core.util import assert_str
 from compute_space.db import get_db
 
