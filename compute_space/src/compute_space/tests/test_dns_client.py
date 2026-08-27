@@ -14,11 +14,14 @@ import attr
 import httpx
 import pytest
 
+import compute_space.core.dns.client as client_mod
 from compute_space.core.dns.client import LOCAL_PROPAGATION_TIMEOUT_SECONDS as LOCAL_TIMEOUT
 from compute_space.core.dns.client import REMOTE_PROPAGATION_TIMEOUT_SECONDS as REMOTE_TIMEOUT
 from compute_space.core.dns.client import DnsClient
 from compute_space.core.dns.client import dns_client
+from compute_space.core.dns.client import ensure_dns_provider_running
 from compute_space.core.dns.coredns_provider import store
+from compute_space.core.dns.service_api import DNS_SERVICE_URL
 from compute_space.core.domains import Domain
 from compute_space.core.service_client import ServiceCallError
 from compute_space.core.service_client import ServiceEndpoint
@@ -151,7 +154,7 @@ class _Recorder:
 def _remote(recorder: _Recorder) -> DnsClient:
     """A client bound to an app provider, so every call is a real HTTP round trip."""
     http = httpx.Client(transport=httpx.MockTransport(recorder))
-    return DnsClient(ServiceEndpoint(http=http, base_url="http://127.0.0.1:9999/api/dns", is_builtin=False))
+    return DnsClient(ServiceEndpoint(http=http, base_url="http://127.0.0.1:9999/api/dns"))
 
 
 def _zones_ok(*zones: str) -> tuple[int, dict[str, Any]]:
@@ -222,7 +225,7 @@ def test_an_unreachable_provider_is_an_error_not_a_crash() -> None:
         raise httpx.ConnectError("connection refused")
 
     http = httpx.Client(transport=httpx.MockTransport(refuse))
-    client = DnsClient(ServiceEndpoint(http=http, base_url="http://127.0.0.1:9999/api/dns", is_builtin=False))
+    client = DnsClient(ServiceEndpoint(http=http, base_url="http://127.0.0.1:9999/api/dns"))
     with pytest.raises(ServiceCallError, match="unreachable"):
         client.zones()
 
@@ -230,3 +233,97 @@ def test_an_unreachable_provider_is_an_error_not_a_crash() -> None:
 def test_a_remote_provider_gets_a_far_longer_propagation_timeout() -> None:
     # An external registrar can take minutes to publish; a local zone file is instant.
     assert REMOTE_TIMEOUT > LOCAL_TIMEOUT
+
+
+# ─── waiting for a DNS provider app before a cert is acquired ───
+
+
+def _install_provider_app(config: Any, status: str, container_id: str | None = "c1") -> None:
+    """Register an app as the `dns` provider, so the router is no longer the implicit one."""
+    with closing(open_db(config)) as db:
+        db.execute(
+            "INSERT INTO apps (app_id, name, version, repo_path, status, container_id, local_port) "
+            "VALUES ('dnsapp', 'dns-connector', '0.1.0', '/tmp/dnsapp', ?, ?, 19000)",
+            (status, container_id),
+        )
+        db.execute(
+            "INSERT INTO service_providers_v2 (service_url, app_id, service_version, endpoint) "
+            "VALUES (?, 'dnsapp', '0.1.0', '/api/dns/')",
+            (DNS_SERVICE_URL,),
+        )
+        db.execute("INSERT INTO service_defaults (service_url, app_id) VALUES (?, 'dnsapp')", (DNS_SERVICE_URL,))
+        db.commit()
+
+
+def test_the_router_serving_its_own_dns_needs_no_provider_app(tmp_path: Path) -> None:
+    config = seeded_dns_config(tmp_path, Domain(ZONE, tls=True))
+    with closing(open_db(config)) as db:
+        assert ensure_dns_provider_running(config, db) is True
+
+
+def test_a_running_provider_app_is_used_as_is(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    config = seeded_dns_config(tmp_path, Domain(ZONE, tls=True))
+    _install_provider_app(config, status="running")
+    monkeypatch.setattr(client_mod, "is_container_running", lambda cid: True)
+    started: list[str] = []
+    monkeypatch.setattr(client_mod, "start_app_process", lambda *a: started.append("start"))
+
+    with closing(open_db(config)) as db:
+        assert ensure_dns_provider_running(config, db) is True
+    assert started == []
+
+
+def test_a_stopped_provider_app_is_started_and_waited_for(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # The container is dead after a reboot, which is exactly when a first cert is needed.
+    config = seeded_dns_config(tmp_path, Domain(ZONE, tls=True))
+    _install_provider_app(config, status="running", container_id=None)
+
+    def fake_start(app_id: str, db: Any, cfg: Any) -> None:
+        db.execute("UPDATE apps SET status = 'running', container_id = 'c2' WHERE app_id = ?", (app_id,))
+        db.commit()
+
+    monkeypatch.setattr(client_mod, "start_app_process", fake_start)
+    monkeypatch.setattr(client_mod, "is_container_running", lambda cid: True)
+
+    with closing(open_db(config)) as db:
+        assert ensure_dns_provider_running(config, db) is True
+
+
+def test_a_provider_app_that_errors_is_not_waited_out(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    config = seeded_dns_config(tmp_path, Domain(ZONE, tls=True))
+    _install_provider_app(config, status="running", container_id=None)
+
+    def fake_start(app_id: str, db: Any, cfg: Any) -> None:
+        db.execute("UPDATE apps SET status = 'error' WHERE app_id = ?", (app_id,))
+        db.commit()
+
+    monkeypatch.setattr(client_mod, "start_app_process", fake_start)
+    monkeypatch.setattr(client_mod, "is_container_running", lambda cid: False)
+
+    with closing(open_db(config)) as db:
+        assert ensure_dns_provider_running(config, db) is False
+
+
+def test_a_provider_app_that_never_comes_up_times_out(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Bounded, because a rebuild can take minutes and the instance must not stay offline for one.
+    config = seeded_dns_config(tmp_path, Domain(ZONE, tls=True))
+    _install_provider_app(config, status="running", container_id=None)
+    monkeypatch.setattr(client_mod, "start_app_process", lambda *a: None)
+    monkeypatch.setattr(client_mod, "is_container_running", lambda cid: False)
+    monkeypatch.setattr(client_mod, "_PROVIDER_POLL_SECONDS", 0.01)
+
+    with closing(open_db(config)) as db:
+        assert ensure_dns_provider_running(config, db, timeout=0.05) is False
+
+
+def test_a_missing_provider_app_is_reported_rather_than_waited_for(tmp_path: Path) -> None:
+    config = seeded_dns_config(tmp_path, Domain(ZONE, tls=True))
+    with closing(open_db(config)) as db:
+        # Default points at an app that was never installed.
+        db.execute(
+            "INSERT INTO apps (app_id, name, version, repo_path, status, local_port) "
+            "VALUES ('ghost', 'ghost', '0.1.0', '/tmp/g', 'running', 19001)"
+        )
+        db.execute("INSERT INTO service_defaults (service_url, app_id) VALUES (?, 'ghost')", (DNS_SERVICE_URL,))
+        db.commit()
+        assert ensure_dns_provider_running(config, db) is False

@@ -26,6 +26,12 @@ RENEW_BEFORE = datetime.timedelta(days=7)
 CHECK_INTERVAL = datetime.timedelta(hours=12)
 RETRY_INTERVAL = datetime.timedelta(hours=1)
 
+# First failures back off from seconds, not straight to an hour.  This thread owns the *first*
+# acquisition too, and at boot it can legitimately fail a few times in a row: when an app provides
+# the ``dns`` service, that container is still starting.  An hour of no cert over a few seconds of
+# startup skew would be a poor trade.
+INITIAL_RETRY_INTERVAL = datetime.timedelta(seconds=15)
+
 
 class CertStatus(enum.Enum):
     MISSING = "missing"
@@ -143,7 +149,10 @@ def renew_cert_if_needed(
 
 
 def start_renewal_thread(reload_caddy: Callable[[Config, sqlite3.Connection], object]) -> threading.Thread:
-    """Run renew_cert_if_needed periodically in a daemon thread, retrying sooner after failures.
+    """Acquire and renew certs in a daemon thread.
+
+    This owns the *first* acquisition as well as renewals — boot does not wait for a cert, so until
+    the first pass succeeds Caddy serves the domain with its internal CA.
 
     Reads the *live* active config each cycle (``get_config()``), so a domain added at runtime via
     /api/domains after startup is picked up by renewal rather than frozen out by a stale snapshot.
@@ -151,14 +160,19 @@ def start_renewal_thread(reload_caddy: Callable[[Config, sqlite3.Connection], ob
     """
 
     def _loop() -> None:
+        retry = INITIAL_RETRY_INTERVAL
         while True:
-            interval = CHECK_INTERVAL
             try:
                 renew_cert_if_needed(get_config(), reload_caddy)
             except Exception:
-                logger.exception(f"TLS cert renewal failed; retrying in {RETRY_INTERVAL}")
-                interval = RETRY_INTERVAL
-            time.sleep(interval.total_seconds())
+                logger.exception(f"TLS cert acquisition failed; retrying in {retry}")
+                time.sleep(retry.total_seconds())
+                # Back off towards the steady-state retry so a persistently broken setup isn't
+                # hammering an ACME server or a registrar API.
+                retry = min(retry * 2, RETRY_INTERVAL)
+                continue
+            retry = INITIAL_RETRY_INTERVAL
+            time.sleep(CHECK_INTERVAL.total_seconds())
 
     thread = threading.Thread(target=_loop, name="tls-cert-renewal", daemon=True)
     thread.start()

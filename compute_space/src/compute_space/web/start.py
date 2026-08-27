@@ -24,6 +24,7 @@ from compute_space.core.caddy import set_active_caddy
 from compute_space.core.caddy import start_caddy
 from compute_space.core.caddy import unix_admin_address
 from compute_space.core.containers import CONTAINER_GATEWAY_IP
+from compute_space.core.dns.client import ensure_dns_provider_running
 from compute_space.core.dns.client import uses_local_dns
 from compute_space.core.dns.coredns_provider.coredns import ADDRESS_TTL_SECONDS
 from compute_space.core.dns.coredns_provider.coredns import DYNAMIC_ADDRESS_TTL_SECONDS
@@ -97,35 +98,45 @@ def _require_configured_domain(domains: tuple[Domain, ...]) -> None:
 
 
 def _ensure_tls_cert(config: Config, db: sqlite3.Connection) -> None:
-    """Make sure a usable cert+key pair is on disk before Caddy starts, acquiring or renewing as configured."""
+    """Get a usable cert on disk before Caddy starts, so the public HTTPS interface never comes up
+    serving a self-signed one.
+
+    Acquisition needs the ``dns`` service, which may be provided by an app container that is down
+    after a reboot — so the provider is started and waited for first.  If it doesn't come up in
+    time, boot continues without a cert rather than crash-looping: Caddy falls back to its internal
+    CA (see ``config_cert_resolver``) and the renewal thread keeps retrying.
+    """
     status = get_cert_status(config.tls_cert_path, config.tls_key_path)
     if status == CertStatus.OK:
         logger.info(f"Using existing TLS cert from {config.tls_cert_path}")
         return
-    # DNS-01 needs the dns service, not specifically CoreDNS: a space whose records live at an
-    # external provider can acquire a cert with CoreDNS switched off entirely.
-    local_dns = uses_local_dns(db)
-    dns_available = config.coredns_enabled if local_dns else True
-    if not dns_available or not config.acquire_tls_cert_if_missing:
+
+    if not config.acquire_tls_cert_if_missing:
         # A cert nearing expiry still works, so don't block startup over it.
         if status == CertStatus.EXPIRING_SOON:
             logger.warning("TLS cert expires soon but automatic cert acquisition is not enabled; cannot renew")
             return
-        if not dns_available:
-            raise RuntimeError(
-                "This instance provides its own DNS but CoreDNS is disabled, so the DNS-01 challenge "
-                "cannot be answered. Enable coredns_enabled, or install a DNS provider app."
-            )
         raise RuntimeError(f"TLS cert is {status.value} and acquire_tls_cert_if_missing is False")
-    if status == CertStatus.EXPIRING_SOON:
-        # The existing cert is still valid, so a failed renewal shouldn't block
-        # startup — the background renewal loop will keep retrying.
-        try:
-            provision_cert(config, db)
-        except Exception:
-            logger.exception("TLS cert renewal failed; serving the existing cert and retrying in the background")
-    else:
+
+    # DNS-01 needs the dns service, not specifically CoreDNS: a space whose records live at an
+    # external provider can acquire a cert with CoreDNS switched off entirely.
+    if uses_local_dns(db) and not config.coredns_enabled:
+        raise RuntimeError(
+            "This instance provides its own DNS but CoreDNS is disabled, so the DNS-01 challenge "
+            "cannot be answered. Enable coredns_enabled, or install a DNS provider app."
+        )
+
+    if not ensure_dns_provider_running(config, db):
+        logger.warning("DNS provider unavailable; starting without a certificate and retrying in the background")
+        return
+
+    try:
         provision_cert(config, db)
+    except Exception:
+        # An expiring cert still serves, and a missing one leaves Caddy on its internal CA; either
+        # way the renewal thread retries, so a transient ACME or registrar failure must not stop
+        # the instance from booting at all.
+        logger.exception("TLS cert acquisition failed; retrying in the background")
 
 
 def _ensure_coredns_binary(config: Config) -> str:
@@ -202,8 +213,9 @@ def main() -> None:
             # Register so /api/domains can regenerate + restart Caddy when a domain is added/removed.
             set_active_caddy(caddy)
             if needs_caddy_for_tls and (serve_public or not uses_local_dns(db)) and config.acquire_tls_cert_if_missing:
-                # Renew every TLS domain — including a TLS secondary under a non-TLS primary — and
-                # regenerate the Caddyfile so acquired certs are served.
+                # Owns first acquisition as well as renewal, for every TLS domain — including a TLS
+                # secondary under a non-TLS primary — and regenerates the Caddyfile once a cert
+                # lands so Caddy stops serving its internal CA.
                 start_renewal_thread(reload_caddy_for_domains)
 
         if config.dynamic_dns_enabled:

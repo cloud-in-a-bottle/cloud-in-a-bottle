@@ -73,7 +73,6 @@ class ServiceEndpoint:
 
     http: httpx.Client
     base_url: str
-    is_builtin: bool
 
     def call(self, path: str, payload: dict[str, Any], grants: list[Grant]) -> dict[str, Any]:
         """POST to the service and return its JSON body, raising on anything unusable.
@@ -130,4 +129,4 @@ def service_client(
         transport, base_url = None, f"http://127.0.0.1:{port}/{endpoint.strip('/')}"
 
     with httpx.Client(transport=transport, timeout=_REQUEST_TIMEOUT_SECONDS) as http:
-        yield ServiceEndpoint(http=http, base_url=base_url, is_builtin=builtin is not None)
+        yield ServiceEndpoint(http=http, base_url=base_url)
