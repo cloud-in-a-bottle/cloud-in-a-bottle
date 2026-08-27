@@ -1,6 +1,6 @@
+import asyncio
 import datetime
 import json
-import subprocess
 import time
 from pathlib import Path
 
@@ -43,7 +43,7 @@ def _create_csr(private_key: ec.EllipticCurvePrivateKey, domains: str | list[str
     )
 
 
-def _wait_for_txt_propagation(
+async def _wait_for_txt_propagation(
     zone_domain: str,
     expected_values: list[str],
     timeout: float = 120,
@@ -60,32 +60,41 @@ def _wait_for_txt_propagation(
     expected_set = set(expected_values)
 
     while time.monotonic() < deadline:
-        try:
-            result = subprocess.run(
-                ["dig", f"@{resolver}", qname, "TXT", "+short", "+timeout=5", "+tries=1"],
-                capture_output=True,
-                text=True,
-                timeout=10,
-            )
-            found = set()
-            for line in result.stdout.strip().splitlines():
-                # dig +short TXT output looks like: "token-value-here"
-                found.add(line.strip().strip('"'))
-            if expected_set <= found:
-                logger.info(f"DNS propagation confirmed: {qname} has all {len(expected_set)} expected TXT value(s)")
-                return True
-        except (subprocess.TimeoutExpired, FileNotFoundError):
-            pass
+        if expected_set <= await _dig_txt(qname, resolver):
+            logger.info(f"DNS propagation confirmed: {qname} has all {len(expected_set)} expected TXT value(s)")
+            return True
 
         remaining = deadline - time.monotonic()
         logger.info(f"Waiting for DNS propagation of {qname} ({remaining:.0f}s remaining)")
-        time.sleep(interval)
+        await asyncio.sleep(interval)
 
     logger.warning(f"DNS propagation timeout: {qname} not fully visible after {timeout}s, proceeding anyway")
     return False
 
 
-def _acquire_cert_dns01(
+async def _dig_txt(qname: str, resolver: str) -> set[str]:
+    """One dig, or an empty set if it fails — a resolver hiccup is indistinguishable from
+    not-yet-visible, and both mean keep waiting."""
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "dig",
+            f"@{resolver}",
+            qname,
+            "TXT",
+            "+short",
+            "+timeout=5",
+            "+tries=1",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=10)
+    except (TimeoutError, FileNotFoundError, OSError):
+        return set()
+    # dig +short TXT output looks like: "token-value-here"
+    return {line.strip().strip('"') for line in stdout.decode().strip().splitlines()}
+
+
+async def _acquire_cert_dns01(
     domains: list[str],
     directory_url: str,
     coredns_zonefile_path: Path,
@@ -103,13 +112,13 @@ def _acquire_cert_dns01(
         timeout=30,
         verify_ssl=verify_ssl,
     )
-    directory = messages.Directory.from_json(net.get(directory_url).json())
+    directory = messages.Directory.from_json((await asyncio.to_thread(net.get, directory_url)).json())
     acme_client = client.ClientV2(directory, net)
 
     logger.info("DNS-01: looking up existing account")
     try:
         reg = messages.NewRegistration(only_return_existing=True)
-        account = acme_client.query_registration(acme_client.new_account(reg))
+        account = await asyncio.to_thread(lambda: acme_client.query_registration(acme_client.new_account(reg)))
     except errors.ConflictError as e:
         # Account exists but only_return_existing returns a conflict.
         account = messages.RegistrationResource(uri=e.location)
@@ -122,7 +131,7 @@ def _acquire_cert_dns01(
                 reg_kwargs["contact"] = (f"mailto:{acme_email}",)
             reg = messages.NewRegistration(**reg_kwargs)
             try:
-                account = acme_client.new_account(reg)
+                account = await asyncio.to_thread(acme_client.new_account, reg)
             except errors.ConflictError as ce:
                 account = messages.RegistrationResource(uri=ce.location)
         else:
@@ -140,7 +149,7 @@ def _acquire_cert_dns01(
     for attempt in range(1, max_attempts + 1):
         try:
             logger.info(f"DNS-01: creating order for {domains} (attempt {attempt}/{max_attempts})")
-            order = acme_client.new_order(csr_pem)
+            order = await asyncio.to_thread(acme_client.new_order, csr_pem)
             logger.info(f"DNS-01: order created, status={order.body.status}")
 
             # Collect all DNS-01 challenge values first, then write them all at once.
@@ -172,25 +181,27 @@ def _acquire_cert_dns01(
                 )
 
                 # Wait for CoreDNS to pick up the zone file change (reload interval = 2s)
-                time.sleep(3)
+                await asyncio.sleep(3)
 
                 # Wait until an external resolver can see our TXT records before
                 # telling the ACME server to validate.  Without this, the ACME
                 # server's resolvers may get NXDOMAIN if the NS delegation from
                 # the parent zone hasn't propagated yet.
                 zone_domain = domains[0].lstrip("*.")
-                _wait_for_txt_propagation(zone_domain, validation_values)
+                await _wait_for_txt_propagation(zone_domain, validation_values)
 
                 # Now answer all challenges
                 for challenge_body in pending_challenges:
-                    acme_client.answer_challenge(challenge_body, challenge_body.response(account_key))
+                    await asyncio.to_thread(
+                        acme_client.answer_challenge, challenge_body, challenge_body.response(account_key)
+                    )
 
             deadline = datetime.datetime.now() + datetime.timedelta(seconds=120)
             while datetime.datetime.now() < deadline:
-                order = acme_client.poll_and_finalize(order, deadline=deadline)
+                order = await asyncio.to_thread(acme_client.poll_and_finalize, order, deadline)
                 if order.fullchain_pem:
                     break
-                time.sleep(2)
+                await asyncio.sleep(2)
 
             # Clean up DNS record
             dns_module.clear_txt(coredns_zonefile_path)
@@ -209,7 +220,7 @@ def _acquire_cert_dns01(
                 logger.warning(
                     f"ACME validation failed (attempt {attempt}/{max_attempts}): {exc}. Retrying in {wait}s..."
                 )
-                time.sleep(wait)
+                await asyncio.sleep(wait)
             else:
                 logger.error(f"ACME cert acquisition failed after {max_attempts} attempts")
                 raise
