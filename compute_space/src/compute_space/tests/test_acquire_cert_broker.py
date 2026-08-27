@@ -8,6 +8,7 @@ DNS client over a temp CoreDNS zone file.  No real broker, ACME server, or sleep
 from __future__ import annotations
 
 import json
+import sqlite3
 from collections.abc import Iterator
 from contextlib import closing
 from pathlib import Path
@@ -49,16 +50,16 @@ class FakeClock:
 
 
 @pytest.fixture
-def dns(tmp_path: Path) -> Iterator[DnsClient]:
-    """A client for an instance serving DOMAIN from a real zone file."""
+def dns_db(tmp_path: Path) -> Iterator[tuple[DnsClient, sqlite3.Connection]]:
+    """A client for an instance serving DOMAIN from a real zone file, plus its DB so a test can
+    read back what was stored."""
     config = seeded_dns_config(tmp_path, Domain(DOMAIN, tls=True))
     with closing(open_db(config)) as db, dns_client(config, db) as client:
-        yield client
+        yield client, db
 
 
-def _challenge_txt(dns: DnsClient) -> list[str]:
-    """Read the store directly; a grant-filtered read would hide anything the router can't see."""
-    records = store.records_for(dns.db, DOMAIN)
+def _challenge_txt(db: sqlite3.Connection) -> list[str]:
+    records = store.records_for(db, DOMAIN)
     return sorted(r.data for r in records if r.name == "_acme-challenge" and r.type == "TXT" and r.data)
 
 
@@ -90,7 +91,8 @@ class _BrokerState:
     waited_with: tuple[str, list[str]] | None = None
 
 
-def test_full_flow_installs_cert_and_key(tmp_path: Path, dns: DnsClient) -> None:
+def test_full_flow_installs_cert_and_key(tmp_path: Path, dns_db: tuple[DnsClient, sqlite3.Connection]) -> None:
+    dns, db = dns_db
     cert_path = tmp_path / "cert.pem"
     key_path = tmp_path / "key.pem"
 
@@ -106,7 +108,7 @@ def test_full_flow_installs_cert_and_key(tmp_path: Path, dns: DnsClient) -> None
                 # The broker validates DNS; assert our TXT records are already
                 # published (verbatim, absolute) and propagation was awaited
                 # before we are asked to finalize.
-                state.txt_when_first_polled = _challenge_txt(dns)
+                state.txt_when_first_polled = _challenge_txt(db)
                 assert state.waited_with is not None, "must wait for DNS propagation before polling finalize"
             if state.finalize_calls < 3:
                 return httpx.Response(202, json={"status": "pending"})
@@ -154,10 +156,11 @@ def test_full_flow_installs_cert_and_key(tmp_path: Path, dns: DnsClient) -> None
     assert state.txt_when_first_polled == ['"base-value"', '"wildcard-value"']
 
     # ...and cleaned up afterward.
-    assert _challenge_txt(dns) == []
+    assert _challenge_txt(db) == []
 
 
-def test_csr_covers_base_and_wildcard(tmp_path: Path, dns: DnsClient) -> None:
+def test_csr_covers_base_and_wildcard(tmp_path: Path, dns_db: tuple[DnsClient, sqlite3.Connection]) -> None:
+    dns, db = dns_db
     captured: dict[str, str] = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -184,7 +187,8 @@ def test_csr_covers_base_and_wildcard(tmp_path: Path, dns: DnsClient) -> None:
     assert f"*.{DOMAIN}" in names
 
 
-def test_timeout_raises_and_clears_txt(tmp_path: Path, dns: DnsClient) -> None:
+def test_timeout_raises_and_clears_txt(tmp_path: Path, dns_db: tuple[DnsClient, sqlite3.Connection]) -> None:
+    dns, db = dns_db
 
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/v1/orders":
@@ -207,10 +211,11 @@ def test_timeout_raises_and_clears_txt(tmp_path: Path, dns: DnsClient) -> None:
             )
 
     # TXT records cleaned up even on timeout.
-    assert _challenge_txt(dns) == []
+    assert _challenge_txt(db) == []
 
 
-def test_failed_order_raises_and_clears_txt(tmp_path: Path, dns: DnsClient) -> None:
+def test_failed_order_raises_and_clears_txt(tmp_path: Path, dns_db: tuple[DnsClient, sqlite3.Connection]) -> None:
+    dns, db = dns_db
 
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/v1/orders":
@@ -231,4 +236,4 @@ def test_failed_order_raises_and_clears_txt(tmp_path: Path, dns: DnsClient) -> N
             )
 
     # A failed order fails fast (no full-timeout spin) and still cleans up TXT.
-    assert _challenge_txt(dns) == []
+    assert _challenge_txt(db) == []

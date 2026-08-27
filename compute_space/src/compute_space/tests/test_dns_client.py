@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from collections.abc import Iterator
 from contextlib import closing
 from contextlib import contextmanager
@@ -13,14 +14,14 @@ import attr
 import httpx
 import pytest
 
+from compute_space.core.dns.client import LOCAL_PROPAGATION_TIMEOUT_SECONDS as LOCAL_TIMEOUT
+from compute_space.core.dns.client import REMOTE_PROPAGATION_TIMEOUT_SECONDS as REMOTE_TIMEOUT
 from compute_space.core.dns.client import DnsClient
-from compute_space.core.dns.client import DnsServiceError
 from compute_space.core.dns.client import dns_client
-from compute_space.core.dns.client import router_grants
 from compute_space.core.dns.coredns_provider import store
-from compute_space.core.dns.service_api import ROUTER_DNS_PROVIDER_ID
-from compute_space.core.dns.service_api import DnsRecord
 from compute_space.core.domains import Domain
+from compute_space.core.service_client import ServiceCallError
+from compute_space.core.service_client import ServiceEndpoint
 from compute_space.tests.conftest import open_db
 from compute_space.tests.dns_helpers import seeded_dns_config
 
@@ -28,17 +29,17 @@ ZONE = "host.example.com"
 
 
 @contextmanager
-def _local(tmp_path: Path, *domains: Domain) -> Iterator[DnsClient]:
-    """A client for an instance serving its own DNS, over real seeded zone files."""
+def _local(tmp_path: Path, *domains: Domain) -> Iterator[tuple[DnsClient, sqlite3.Connection]]:
+    """A client for an instance serving its own DNS, over real seeded zone files, plus the DB so a
+    test can check what was stored without going back through a grant-filtered read."""
     config = seeded_dns_config(tmp_path, *(domains or (Domain(ZONE, tls=True),)))
     with closing(open_db(config)) as db, dns_client(config, db) as client:
-        yield client
+        yield client, db
 
 
-def _stored(client: DnsClient, zone: str = ZONE) -> dict[tuple[str, str], list[str]]:
-    """Read the DB directly, so an assertion isn't filtered by the caller's grants."""
+def _stored(db: sqlite3.Connection, zone: str = ZONE) -> dict[tuple[str, str], list[str]]:
     out: dict[tuple[str, str], list[str]] = {}
-    for r in store.records_for(client.db, zone):
+    for r in store.records_for(db, zone):
         assert r.data is not None
         out.setdefault((r.name, r.type), []).append(r.data)
     return out
@@ -48,40 +49,40 @@ def _stored(client: DnsClient, zone: str = ZONE) -> dict[tuple[str, str], list[s
 
 
 def test_publishes_and_clears_a_challenge(tmp_path: Path) -> None:
-    with _local(tmp_path) as dns:
+    with _local(tmp_path) as (dns, db):
         dns.publish_challenge(ZONE, ["base", "wildcard"])
-        assert sorted(_stored(dns)[("_acme-challenge", "TXT")]) == ['"base"', '"wildcard"']
+        assert sorted(_stored(db)[("_acme-challenge", "TXT")]) == ['"base"', '"wildcard"']
 
         dns.clear_challenge(ZONE)
-        assert ("_acme-challenge", "TXT") not in _stored(dns)
+        assert ("_acme-challenge", "TXT") not in _stored(db)
 
 
 def test_publishing_replaces_a_previous_runs_leftovers(tmp_path: Path) -> None:
     # A run that died before cleaning up must not leave stale tokens for the next attempt.
-    with _local(tmp_path) as dns:
+    with _local(tmp_path) as (dns, db):
         dns.publish_challenge(ZONE, ["stale"])
         dns.publish_challenge(ZONE, ["fresh"])
-        assert _stored(dns)[("_acme-challenge", "TXT")] == ['"fresh"']
+        assert _stored(db)[("_acme-challenge", "TXT")] == ['"fresh"']
 
 
 def test_clearing_a_challenge_that_is_not_there_is_fine(tmp_path: Path) -> None:
     # The cert path clears in a finally block, so it runs whether or not anything was published.
-    with _local(tmp_path) as dns:
+    with _local(tmp_path) as (dns, db):
         dns.clear_challenge(ZONE)
 
 
 def test_challenges_carry_a_short_ttl(tmp_path: Path) -> None:
     # Otherwise the previous run's token is served out of a resolver cache during a renewal.
-    with _local(tmp_path) as dns:
+    with _local(tmp_path) as (dns, db):
         dns.publish_challenge(ZONE, ["tok"])
-        records = store.records_for(dns.db, ZONE)
+        records = store.records_for(db, ZONE)
         assert [r.ttl for r in records if r.name == "_acme-challenge"] == [60]
 
 
 def test_set_address_points_the_router_owned_names(tmp_path: Path) -> None:
-    with _local(tmp_path) as dns:
+    with _local(tmp_path) as (dns, db):
         dns.set_address(ZONE, "198.51.100.7", ttl=60)
-        stored = _stored(dns)
+        stored = _stored(db)
         for name in ("@", "ns", "*"):
             assert stored[(name, "A")] == ["198.51.100.7"]
 
@@ -95,49 +96,38 @@ def test_a_challenge_reaches_the_zone_file(tmp_path: Path) -> None:
 
 
 def test_writes_land_in_the_named_zone_only(tmp_path: Path) -> None:
-    with _local(tmp_path, Domain(ZONE, tls=True), Domain("host.example.org", tls=True)) as dns:
+    with _local(tmp_path, Domain(ZONE, tls=True), Domain("host.example.org", tls=True)) as (dns, db):
         dns.publish_challenge("host.example.org", ["tok"])
-        assert ("_acme-challenge", "TXT") in _stored(dns, "host.example.org")
-        assert ("_acme-challenge", "TXT") not in _stored(dns, ZONE)
+        assert ("_acme-challenge", "TXT") in _stored(db, "host.example.org")
+        assert ("_acme-challenge", "TXT") not in _stored(db, ZONE)
 
 
 def test_an_unserved_domain_is_refused(tmp_path: Path) -> None:
-    with _local(tmp_path) as dns:
-        with pytest.raises(DnsServiceError, match="no configured DNS zone"):
+    with _local(tmp_path) as (dns, db):
+        with pytest.raises(ServiceCallError, match="no configured DNS zone"):
             dns.publish_challenge("other.org", ["tok"])
-
-
-def test_the_router_cannot_write_outside_what_it_maintains(tmp_path: Path) -> None:
-    # Its grants cover challenge TXT and the address records, so a bug in the cert or dynamic-DNS
-    # path cannot rewrite an app's records or an owner's MX.
-    with _local(tmp_path) as dns:
-        with pytest.raises(DnsServiceError, match="permission_required"):
-            dns._records("set", ZONE, [DnsRecord("www", "A", 300, "198.51.100.7")])
 
 
 # ─── grants the router asserts ───
 
 
-def test_router_grants_cover_what_it_writes_and_no_more() -> None:
-    entries = {(g.name, g.type) for g in router_grants([ZONE])}
-    assert ("_acme-challenge", "TXT") in entries
-    for name in ("@", "ns", "*"):
-        assert (name, "A") in entries
-    # Both zone shapes: the provider's zone may be the domain itself or a parent holding it.
-    assert (f"_acme-challenge.{ZONE}", "TXT") in entries
-    assert (ZONE, "A") in entries
-    assert ("**", "**") not in entries
+def test_the_router_claims_only_the_records_it_writes() -> None:
+    # Self-asserted, so this is about legibility rather than enforcement: a provider app's audit
+    # log should say exactly what was touched.
+    recorder = _Recorder({"/zones": _zones_ok(ZONE), "/records/set": _write_ok(ZONE)})
+    _remote(recorder).publish_challenge(ZONE, ["tok"])
+
+    claimed = json.loads(recorder.requests[-1].headers["X-OpenHost-Permissions"])
+    assert [e["grant"] for e in claimed] == [{"name": "_acme-challenge", "type": "TXT", "access": "rw"}]
+    assert all(e["scope"] == "global" for e in claimed)
 
 
-def test_router_grants_are_scoped_to_the_managed_domains() -> None:
-    entries = {g.name for g in router_grants(["a.example.com", "b.example.org"])}
-    assert "_acme-challenge.a.example.com" in entries
-    assert "_acme-challenge.c.example.net" not in entries
+def test_reading_the_zone_list_claims_only_read_access() -> None:
+    recorder = _Recorder({"/zones": _zones_ok(ZONE)})
+    _remote(recorder).zones()
 
-
-def test_router_grants_are_deduplicated() -> None:
-    grants = router_grants(["a.example.com", "a.example.com"])
-    assert len(grants) == len(set(grants))
+    claimed = json.loads(recorder.requests[0].headers["X-OpenHost-Permissions"])
+    assert [e["grant"]["access"] for e in claimed] == ["r"]
 
 
 # ─── an app provider, over the wire ───
@@ -159,14 +149,9 @@ class _Recorder:
 
 
 def _remote(recorder: _Recorder) -> DnsClient:
-    return DnsClient(
-        config=None,  # type: ignore[arg-type]  # unused on the remote path
-        db=None,  # type: ignore[arg-type]
-        provider_id="external-dns-connector",
-        grants=router_grants([ZONE]),
-        endpoint_url="http://127.0.0.1:9999/api/dns",
-        http=httpx.Client(transport=httpx.MockTransport(recorder)),
-    )
+    """A client bound to an app provider, so every call is a real HTTP round trip."""
+    http = httpx.Client(transport=httpx.MockTransport(recorder))
+    return DnsClient(ServiceEndpoint(http=http, base_url="http://127.0.0.1:9999/api/dns", is_builtin=False))
 
 
 def _zones_ok(*zones: str) -> tuple[int, dict[str, Any]]:
@@ -222,13 +207,13 @@ def test_a_per_zone_failure_is_raised_rather_than_read_as_success() -> None:
             "/records/set": (207, {"ok": False, "results": [{"zone": ZONE, "ok": False, "error": "rate limited"}]}),
         }
     )
-    with pytest.raises(DnsServiceError, match="rate limited"):
+    with pytest.raises(ServiceCallError, match="rate limited"):
         _remote(recorder).publish_challenge(ZONE, ["tok"])
 
 
 def test_an_error_status_surfaces() -> None:
     recorder = _Recorder({"/zones": (403, {"error": "permission_required", "message": "no grant"})})
-    with pytest.raises(DnsServiceError, match="permission_required"):
+    with pytest.raises(ServiceCallError, match="permission_required"):
         _remote(recorder).zones()
 
 
@@ -236,13 +221,12 @@ def test_an_unreachable_provider_is_an_error_not_a_crash() -> None:
     def refuse(request: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError("connection refused")
 
-    recorder = _Recorder({})
-    client = _remote(recorder)
-    client.http = httpx.Client(transport=httpx.MockTransport(refuse))
-    with pytest.raises(DnsServiceError, match="unreachable"):
+    http = httpx.Client(transport=httpx.MockTransport(refuse))
+    client = DnsClient(ServiceEndpoint(http=http, base_url="http://127.0.0.1:9999/api/dns", is_builtin=False))
+    with pytest.raises(ServiceCallError, match="unreachable"):
         client.zones()
 
 
 def test_a_remote_provider_gets_a_far_longer_propagation_timeout() -> None:
-    local = DnsClient(config=None, db=None, provider_id=ROUTER_DNS_PROVIDER_ID, grants=[])  # type: ignore[arg-type]
-    assert _remote(_Recorder({})).propagation_timeout_seconds > local.propagation_timeout_seconds
+    # An external registrar can take minutes to publish; a local zone file is instant.
+    assert REMOTE_TIMEOUT > LOCAL_TIMEOUT

@@ -24,6 +24,7 @@ from collections.abc import Iterable
 from typing import Any
 from urllib.parse import urlencode
 
+import anyio
 import attr
 from litestar import HttpMethod
 from litestar import MediaType
@@ -53,7 +54,10 @@ from compute_space.config import Config
 from compute_space.core.apps import find_app_by_name
 from compute_space.core.apps import get_app_from_hostname
 from compute_space.core.auth.permissions_v2 import get_granted_permissions_v2
+from compute_space.core.builtin_services import BuiltinService
+from compute_space.core.builtin_services import builtin_for
 from compute_space.core.containers import get_docker_logs
+from compute_space.core.dns.service_api import parse_grants
 from compute_space.core.domains import primary_domain_or_none
 from compute_space.core.installer import GRANT_KEY_CAPABILITY
 from compute_space.core.installer import GRANT_KEY_REPO_URL_PREFIX
@@ -70,9 +74,6 @@ from compute_space.web.auth.auth import require_app_auth
 from compute_space.web.auth.auth import verify_app_auth
 from compute_space.web.helpers.proxy import proxy_http_request
 from compute_space.web.helpers.proxy import proxy_websocket_request
-from compute_space.web.routes.builtin_services import BuiltinService
-from compute_space.web.routes.builtin_services import builtin_for
-from compute_space.web.routes.builtin_services import dispatch as dispatch_builtin
 
 _CALL_PATH = "/api/services/v2/call/{shortname:str}/{rest:path}"
 _HTTP_METHODS = [
@@ -469,7 +470,22 @@ async def _handle_builtin_request(
             extra={"code": "service_not_available"},
         )
 
-    status, body = await dispatch_builtin(service, consumer_app_id, rest, request, db, config)
+    payload: dict[str, Any] = {}
+    if request.method in ("POST", "PUT", "PATCH"):
+        try:
+            parsed = await request.json()
+        except Exception:
+            parsed = None
+        if parsed is not None and not isinstance(parsed, dict):
+            raise ClientException(detail="request body must be a JSON object", extra={"code": "bad_request"})
+        payload = parsed or {}
+
+    grants = parse_grants(
+        [{"grant": g.grant, "scope": g.scope} for g in get_granted_permissions_v2(consumer_app_id, service.url)]
+    )
+    # Off the event loop: a handler may do SQLite work and rewrite files.
+    status, body = await anyio.to_thread.run_sync(service.handler, rest, payload, grants, config, db)
+
     required_grant = body.get("required_grant") if status == 403 else None
     if isinstance(required_grant, dict) and required_grant.get("scope", "global") == "global":
         grant = required_grant.get("grant")
