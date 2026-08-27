@@ -132,30 +132,34 @@ def test_clear_txt_removes_records(tmp_path: Path) -> None:
 class _FakeProc:
     pid = 4242
     stdout = None
+    # Report already-exited so CoreDnsProcess.restart() skips the terminate path.
+    returncode = 0
 
-    def wait(self, timeout: float | None = None) -> int:
+    async def wait(self) -> int:
         return 0
 
-    def poll(self) -> int:
-        # Report already-exited so CoreDnsProcess.restart() skips the terminate path.
-        return 0
+
+def _stub_spawn(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Stub the spawn wholesale: it starts a log-streaming task that reads proc.stdout."""
+
+    async def fake_spawn(*a: object, **k: object) -> _FakeProc:
+        return _FakeProc()
+
+    monkeypatch.setattr(dns_mod, "_spawn_coredns", fake_spawn)
 
 
-def _stub_popen(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(dns_mod.subprocess, "Popen", lambda *a, **k: _FakeProc())
-    # Don't spawn the log-streaming thread (its target reads proc.stdout).
-    monkeypatch.setattr(dns_mod.threading, "Thread", lambda *a, **k: type("T", (), {"start": lambda self: None})())
-
-
-def test_container_dns_view_rendered_when_gateway_bindable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.asyncio
+async def test_container_dns_view_rendered_when_gateway_bindable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setattr(dns_mod, "_coredns_bind_ip", lambda ip: "10.0.0.5")
     monkeypatch.setattr(dns_mod, "_gateway_ip_is_bindable", lambda ip: True)
     monkeypatch.setattr(dns_mod, "_host_upstream_resolvers", lambda: ["9.9.9.9"])
-    _stub_popen(monkeypatch)
+    _stub_spawn(monkeypatch)
 
     corefile = tmp_path / "Corefile"
     zonefile = tmp_path / "zonefile"
-    dns_mod.start_coredns(
+    await dns_mod.start_coredns(
         (dns_mod.DnsZone("app.example.com", zonefile),),
         "203.0.113.10",
         corefile,
@@ -177,14 +181,17 @@ def test_container_dns_view_rendered_when_gateway_bindable(tmp_path: Path, monke
     assert "203.0.113.10" not in cz
 
 
-def test_container_dns_view_skipped_when_gateway_not_bindable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.asyncio
+async def test_container_dns_view_skipped_when_gateway_not_bindable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setattr(dns_mod, "_coredns_bind_ip", lambda ip: "10.0.0.5")
     monkeypatch.setattr(dns_mod, "_gateway_ip_is_bindable", lambda ip: False)
-    _stub_popen(monkeypatch)
+    _stub_spawn(monkeypatch)
 
     corefile = tmp_path / "Corefile"
     zonefile = tmp_path / "zonefile"
-    dns_mod.start_coredns(
+    await dns_mod.start_coredns(
         (dns_mod.DnsZone("app.example.com", zonefile),),
         "203.0.113.10",
         corefile,
@@ -239,7 +246,8 @@ def test_host_upstream_resolvers_falls_back_when_only_loopback(
     assert dns_mod._host_upstream_resolvers() == list(dns_mod._FALLBACK_UPSTREAM_DNS)
 
 
-def test_container_view_forward_uses_discovered_resolvers_and_distinct_bind(
+@pytest.mark.asyncio
+async def test_container_view_forward_uses_discovered_resolvers_and_distinct_bind(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # The public view and the container view must bind different addresses (the
@@ -248,10 +256,10 @@ def test_container_view_forward_uses_discovered_resolvers_and_distinct_bind(
     monkeypatch.setattr(dns_mod, "_coredns_bind_ip", lambda ip: "10.0.0.5")
     monkeypatch.setattr(dns_mod, "_gateway_ip_is_bindable", lambda ip: True)
     monkeypatch.setattr(dns_mod, "_host_upstream_resolvers", lambda: ["185.12.64.1", "1.1.1.1"])
-    _stub_popen(monkeypatch)
+    _stub_spawn(monkeypatch)
 
     corefile = tmp_path / "Corefile"
-    dns_mod.start_coredns((dns_mod.DnsZone("app.example.com", tmp_path / "zonefile"),), "203.0.113.10", corefile)
+    await dns_mod.start_coredns((dns_mod.DnsZone("app.example.com", tmp_path / "zonefile"),), "203.0.113.10", corefile)
     cf = corefile.read_text()
 
     assert "bind 10.0.0.5" in cf  # public/authoritative view
@@ -280,17 +288,18 @@ def test_public_dns_zones_covers_every_public_domain_and_skips_mdns(tmp_path: Pa
     assert zones[1].zonefile_path == config.zones_dir / "host.example.org.zone"
 
 
-def test_start_coredns_writes_a_zone_block_and_file_per_public_domain(
+@pytest.mark.asyncio
+async def test_start_coredns_writes_a_zone_block_and_file_per_public_domain(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(dns_mod, "_coredns_bind_ip", lambda ip: "10.0.0.5")
     monkeypatch.setattr(dns_mod, "_gateway_ip_is_bindable", lambda ip: False)
-    _stub_popen(monkeypatch)
+    _stub_spawn(monkeypatch)
 
     corefile = tmp_path / "Corefile"
     primary_zone = tmp_path / "zonefile"
     secondary_zone = tmp_path / "zones" / "host.example.org.zone"
-    dns_mod.start_coredns(
+    await dns_mod.start_coredns(
         (DnsZone("host.example.com", primary_zone), DnsZone("host.example.org", secondary_zone)),
         "203.0.113.10",
         corefile,
@@ -310,23 +319,26 @@ def test_start_coredns_writes_a_zone_block_and_file_per_public_domain(
     assert "*   IN A    203.0.113.10" in secondary_text
 
 
-def test_reload_coredns_for_domains_regenerates_zones_and_restarts(
+@pytest.mark.asyncio
+async def test_reload_coredns_for_domains_regenerates_zones_and_restarts(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(dns_mod, "_coredns_bind_ip", lambda ip: "10.0.0.5")
     monkeypatch.setattr(dns_mod, "_gateway_ip_is_bindable", lambda ip: False)
-    _stub_popen(monkeypatch)
+    _stub_spawn(monkeypatch)
 
     config = _seed_dns_cfg(tmp_path, Domain(name="host.example.com", tls=True), public_ip="203.0.113.10")
     with closing(open_db(config)) as db:
-        coredns = dns_mod.start_coredns(public_dns_zones(config, db), config.public_ip, config.coredns_corefile_path)
+        coredns = await dns_mod.start_coredns(
+            public_dns_zones(config, db), config.public_ip, config.coredns_corefile_path
+        )
         set_active_coredns(coredns)
         try:
             first_proc = coredns.proc
 
             # Add a second public domain to the DB and reload: CoreDNS must now serve its zone too.
             upsert_record(db, DomainRecord("host.example.org", tls=True, mdns=False))
-            assert reload_coredns_for_domains(config, db) is True
+            assert await reload_coredns_for_domains(config, db) is True
 
             cf = config.coredns_corefile_path.read_text()
             assert "host.example.org:53 {" in cf
@@ -337,11 +349,12 @@ def test_reload_coredns_for_domains_regenerates_zones_and_restarts(
             set_active_coredns(None)
 
 
-def test_reload_coredns_for_domains_noop_when_not_running(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_reload_coredns_for_domains_noop_when_not_running(tmp_path: Path) -> None:
     set_active_coredns(None)
     config = _seed_dns_cfg(tmp_path, Domain(name="host.example.com", tls=True), public_ip="203.0.113.10")
     with closing(open_db(config)) as db:
-        assert reload_coredns_for_domains(config, db) is False
+        assert await reload_coredns_for_domains(config, db) is False
 
 
 def test_zone_caches_addresses_long_but_acme_challenges_briefly(tmp_path: Path) -> None:
