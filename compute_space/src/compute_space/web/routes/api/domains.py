@@ -9,10 +9,8 @@ config (so routing sees them) and regenerate + restart Caddy (so it terminates/s
 
 from __future__ import annotations
 
-import asyncio
 import re
 import sqlite3
-import threading
 from contextlib import closing
 
 import anyio
@@ -23,6 +21,7 @@ from litestar import delete
 from litestar import get
 from litestar import post
 from litestar.background_tasks import BackgroundTask
+from litestar.background_tasks import BackgroundTasks
 from litestar.di import NamedDependency
 from litestar.enums import MediaType
 from litestar.exceptions import NotFoundException
@@ -120,34 +119,6 @@ def _domain_list(config: Config, db: sqlite3.Connection) -> list[DomainInfo]:
     return [_domain_info(config, r.to_domain(), r) for r in load_records(db)]
 
 
-async def _acquire(config: Config, domain: Domain) -> None:
-    """Acquire the domain's cert, then flip its status + reload Caddy so it uses the real cert.
-    Runs off the request thread (acquisition is slow), so it owns one DB connection for the job.
-    Records the error on failure."""
-    with closing(get_db()) as db:
-        try:
-            await ensure_cert_for(config, domain, db)
-        except Exception as exc:  # noqa: BLE001 — surface any acquisition failure as domain status
-            logger.opt(exception=True).error("cert acquisition failed for {}", domain.name)
-            set_record_status(db, domain.name_no_port, DomainCertStatus.ERROR, error_message=str(exc))
-            return
-        set_record_status(db, domain.name_no_port, DomainCertStatus.ACTIVE)
-        # Regenerate Caddy from the *live* active config, not the snapshot captured at add time — a
-        # domain added while this (slow) acquisition ran would otherwise be dropped from the Caddyfile.
-        reload_caddy_for_domains(get_config(), db)
-
-
-def _run_acquisition(config: Config, domain: Domain) -> None:
-    """The worker thread owns its event loop, so asyncio.run belongs at this boundary."""
-    asyncio.run(_acquire(config, domain))
-
-
-def _spawn_acquisition(config: Config, domain: Domain) -> None:
-    """Start background cert acquisition.  Indirected through this function so tests can run it
-    synchronously."""
-    threading.Thread(target=_run_acquisition, args=(config, domain), daemon=True).start()
-
-
 async def _reload_caddy_after_response() -> None:
     """Regenerate + gracefully reload Caddy as a response background task.
 
@@ -161,6 +132,23 @@ async def _reload_caddy_after_response() -> None:
             reload_caddy_for_domains(get_config(), db)
 
     await anyio.to_thread.run_sync(_reload)
+
+
+async def _acquire(config: Config, domain: Domain) -> None:
+    """Acquire the domain's cert, then flip its status + reload Caddy so it uses the real cert.
+    Runs after the response (acquisition is slow), so it owns one DB connection for the job.
+    Records the error on failure."""
+    with closing(get_db()) as db:
+        try:
+            await ensure_cert_for(config, domain, db)
+        except Exception as exc:  # noqa: BLE001 — surface any acquisition failure as domain status
+            logger.opt(exception=True).error("cert acquisition failed for {}", domain.name)
+            set_record_status(db, domain.name_no_port, DomainCertStatus.ERROR, error_message=str(exc))
+            return
+        set_record_status(db, domain.name_no_port, DomainCertStatus.ACTIVE)
+    # Regenerate Caddy from the *live* active config, not the snapshot captured at add time — a
+    # domain added while this (slow) acquisition ran would otherwise be dropped from the Caddyfile.
+    await _reload_caddy_after_response()
 
 
 def _validate_new_domain(config: Config, name: str, tls: bool, mdns: bool, db: sqlite3.Connection) -> str | None:
@@ -209,16 +197,18 @@ async def add_domain(
         # the zone.  Run off the event loop — the restart does a blocking terminate+wait(3s) — but
         # await it so ordering before acquisition holds.  (mDNS domains never touch CoreDNS.)
         await anyio.to_thread.run_sync(reload_coredns_for_domains, config, db)
-    if data.tls:
-        _spawn_acquisition(config, domain)
     # Return the full updated list so the client repaints the table without a follow-up GET, and
     # regenerate Caddy (serving the new site) only after this response has been sent — see
-    # _reload_caddy_after_response.
+    # _reload_caddy_after_response.  BackgroundTasks runs these in order, so the new site is being
+    # served (via `tls internal`) before the slow acquisition starts.
+    background: list[BackgroundTask] = [BackgroundTask(_reload_caddy_after_response)]
+    if data.tls:
+        background.append(BackgroundTask(_acquire, config, domain))
     return Response(
         DomainListResponse(domains=_domain_list(config, db)),
         status_code=202,
         media_type=MediaType.JSON,
-        background=BackgroundTask(_reload_caddy_after_response),
+        background=BackgroundTasks(background),
     )
 
 
