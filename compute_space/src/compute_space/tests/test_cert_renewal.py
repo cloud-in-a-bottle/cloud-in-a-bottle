@@ -121,7 +121,9 @@ async def test_renew_skips_valid_cert(tmp_path: Path) -> None:
     )
     calls: list[str] = []
     renewed = await renew_cert_if_needed(
-        config, lambda c, db: calls.append("restart"), provision=_async(lambda c, db: calls.append("provision"))
+        config,
+        _async(lambda c, db: calls.append("restart")),
+        provision=_async(lambda c, db: calls.append("provision")),
     )
     assert renewed is False
     assert calls == []
@@ -140,7 +142,9 @@ async def test_renew_provisions_and_restarts_caddy(tmp_path: Path, expires_in: d
     )
     calls: list[str] = []
     renewed = await renew_cert_if_needed(
-        config, lambda c, db: calls.append("restart"), provision=_async(lambda c, db: calls.append("provision"))
+        config,
+        _async(lambda c, db: calls.append("restart")),
+        provision=_async(lambda c, db: calls.append("provision")),
     )
     assert renewed is True
     assert calls == ["provision", "restart"]
@@ -155,7 +159,7 @@ async def test_renew_failure_does_not_restart_caddy(tmp_path: Path) -> None:
         raise RuntimeError("ACME is down")
 
     with pytest.raises(RuntimeError, match="ACME is down"):
-        await renew_cert_if_needed(config, lambda c, db: calls.append("restart"), provision=_failing_provision)
+        await renew_cert_if_needed(config, _async(lambda c, db: calls.append("restart")), provision=_failing_provision)
     assert calls == []
 
 
@@ -179,7 +183,7 @@ async def test_renew_acquires_stale_secondary_domain(tmp_path: Path) -> None:
     acquired: list[str] = []
     renewed = await renew_cert_if_needed(
         config,
-        lambda c, db: calls.append("restart"),
+        _async(lambda c, db: calls.append("restart")),
         provision=_async(lambda c, db: calls.append("provision")),
         acquire=_async(lambda c, name, cp, kp, db: acquired.append(name)),
     )
@@ -200,7 +204,7 @@ async def test_renew_acquires_secondary_under_non_tls_primary(tmp_path: Path) ->
     acquired: list[str] = []
     renewed = await renew_cert_if_needed(
         config,
-        lambda c, db: calls.append("restart"),
+        _async(lambda c, db: calls.append("restart")),
         provision=_async(lambda c, db: calls.append("provision")),
         acquire=_async(lambda c, name, cp, kp, db: acquired.append(name)),
     )
@@ -222,7 +226,7 @@ async def test_renew_isolates_a_failing_secondary(tmp_path: Path) -> None:
 
     calls: list[str] = []
     renewed = await renew_cert_if_needed(
-        config, lambda c, db: calls.append("restart"), provision=_async(lambda c, db: None), acquire=_acquire
+        config, _async(lambda c, db: calls.append("restart")), provision=_async(lambda c, db: None), acquire=_acquire
     )
     assert renewed is True
     assert acquired == ["good.example.com"]  # bad one failed but didn't abort the loop
@@ -242,7 +246,7 @@ async def test_renew_reload_regenerates_caddyfile_for_new_secondary_cert(tmp_pat
 
     caddyfile = tmp_path / "Caddyfile"
 
-    def _reload(c: Config, db: sqlite3.Connection) -> None:
+    async def _reload(c: Config, db: sqlite3.Connection) -> None:
         caddyfile.write_text(generate_caddyfile(effective_domains(db), c.port, config_cert_resolver(c, db)))
 
     renewed = await renew_cert_if_needed(config, _reload, provision=_async(lambda c, db: None), acquire=_acquire)
@@ -300,7 +304,7 @@ async def test_renew_marks_primary_active_same_cycle(tmp_path: Path) -> None:
     async def _provision(c: Config, db: sqlite3.Connection) -> None:
         _write_self_signed_cert(c.tls_cert_path, c.tls_key_path, datetime.datetime(2100, 1, 1, tzinfo=datetime.UTC))
 
-    renewed = await renew_cert_if_needed(cfg, lambda c, db: None, provision=_provision)
+    renewed = await renew_cert_if_needed(cfg, _async(lambda c, db: None), provision=_provision)
     assert renewed is True
     with closing(open_db(cfg)) as db:
         assert get_record(db, "host.example.com").cert_status == "active"
