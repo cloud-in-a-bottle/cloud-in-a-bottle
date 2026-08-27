@@ -5,9 +5,13 @@ service is provided by an app or by the router itself.  A builtin is an ASGI app
 ASGITransport serves it without a socket and every call takes the same path either way.  The
 in-process provider is held to the same wire contract as a real one, so the two cannot drift.
 
-``call_service`` is a plain function holding nothing: the provider is resolved and the HTTP client
-built per call.  DNS calls are rare enough that losing connection reuse costs nothing, and it means
-no handle to open, close, or thread through a call stack.
+``call_service`` is a plain async function holding nothing: the provider is resolved and the HTTP
+client built per call.  Calls are rare enough that losing connection reuse costs nothing, and it
+means no handle to open, close, or thread through a call stack.
+
+Async because a call crosses a process boundary or a registrar's API and will not return
+immediately.  ``asyncio.run`` belongs at entry points — ``web.start``, thread launchers — not in
+here.
 
 Calling ourselves over actual loopback would not work regardless: the router acquires its first
 TLS cert before hypercorn is listening (see ``web.start``).
@@ -15,7 +19,6 @@ TLS cert before hypercorn is listening (see ``web.start``).
 
 from __future__ import annotations
 
-import asyncio
 import json
 import sqlite3
 from typing import Any
@@ -74,7 +77,7 @@ def _client_for(
     return httpx.AsyncClient(transport=transport, timeout=_REQUEST_TIMEOUT_SECONDS), base_url
 
 
-async def acall_service(
+async def call_service(
     service_url: str,
     path: str,
     payload: dict[str, Any],
@@ -117,28 +120,6 @@ async def acall_service(
             body=body,
         )
     return body
-
-
-def call_service(
-    service_url: str,
-    path: str,
-    payload: dict[str, Any],
-    permissions: Permissions,
-    config: Config,
-    db: sqlite3.Connection,
-    version: str = ">=0",
-) -> dict[str, Any]:
-    """Blocking form, for the router's sync paths — cert acquisition and the dynamic-DNS watcher,
-    which run in threads with no event loop of their own.
-
-    ASGI needs a loop, so one is spun up per call.  Callers already inside a loop must await
-    ``acall_service`` instead; doing otherwise would deadlock, so it fails loudly.
-    """
-    try:
-        asyncio.get_running_loop()
-    except RuntimeError:
-        return asyncio.run(acall_service(service_url, path, payload, permissions, config, db, version))
-    raise RuntimeError(f"call_service({service_url}) called from a running event loop; await acall_service instead")
 
 
 def builtin_client(service: BuiltinService) -> tuple[httpx.AsyncClient, str]:

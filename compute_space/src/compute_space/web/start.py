@@ -126,12 +126,13 @@ def _ensure_tls_cert(config: Config, db: sqlite3.Connection) -> None:
             "cannot be answered. Enable coredns_enabled, or install a DNS provider app."
         )
 
-    if not ensure_dns_provider_running(config, db):
-        logger.warning("DNS provider unavailable; starting without a certificate and retrying in the background")
-        return
-
+    # Boot's own event loop.  Everything below is async library code; asyncio.run belongs here,
+    # at the entry point, and hypercorn's loop does not exist yet.
     try:
-        provision_cert(config, db)
+        if not asyncio.run(ensure_dns_provider_running(config, db)):
+            logger.warning("DNS provider unavailable; starting without a certificate and retrying in the background")
+            return
+        asyncio.run(provision_cert(config, db))
     except Exception:
         # An expiring cert still serves, and a missing one leaves Caddy on its internal CA; either
         # way the renewal thread retries, so a transient ACME or registrar failure must not stop

@@ -10,9 +10,9 @@ records are written through the ``dns`` service instead.
 
 from __future__ import annotations
 
+import asyncio
 import sqlite3
 import threading
-import time
 from collections.abc import Callable
 from contextlib import closing
 
@@ -34,13 +34,13 @@ _DEFAULT_INTERVAL_SECONDS = 300.0
 _DYNAMIC_TTL_SECONDS = 60
 
 
-def check_once(config: Config, db: sqlite3.Connection) -> str | None:
+async def check_once(config: Config, db: sqlite3.Connection) -> str | None:
     """Detect the public IP and, if it moved, store it and re-point the address records.
 
     Returns the new address when something changed.  A detection failure is not a change: stale
     records beat pointing the space at nothing.
     """
-    detected = detect_public_ip()
+    detected = await detect_public_ip()
     if detected is None or detected == effective_public_ip(config, db):
         return None
 
@@ -55,11 +55,11 @@ def check_once(config: Config, db: sqlite3.Connection) -> str | None:
     else:
         dns = DnsClient(config, db)
         for domain in router_managed_domains(db):
-            _point_at(dns, domain, detected)
+            await _point_at(dns, domain, detected)
     return detected
 
 
-def _point_at(dns: DnsClient, domain: str, ip: str) -> None:
+async def _point_at(dns: DnsClient, domain: str, ip: str) -> None:
     """Point the names that follow the instance's address at ``ip``.
 
     The apex and wildcard are what route the space and its apps; ``ns`` is the glue target when the
@@ -67,7 +67,7 @@ def _point_at(dns: DnsClient, domain: str, ip: str) -> None:
     client should know.
     """
     for fqdn in (domain, f"ns.{domain}", f"*.{domain}"):
-        dns.set_records(fqdn, RecordType.A, [ip], ttl=_DYNAMIC_TTL_SECONDS)
+        await dns.set_records(fqdn, RecordType.A, [ip], ttl=_DYNAMIC_TTL_SECONDS)
 
 
 def start_dynamic_dns_thread(
@@ -78,16 +78,21 @@ def start_dynamic_dns_thread(
     """A fresh DB connection per tick: sqlite3 connections aren't shareable across threads, and a
     long-lived one would hold a handle open across the sleep."""
 
-    def loop() -> None:
+    async def _run() -> None:
         logger.info(f"Dynamic DNS watcher started (every {interval_seconds:.0f}s)")
         while True:
-            time.sleep(interval_seconds)
+            await asyncio.sleep(interval_seconds)
             try:
                 with closing(open_db()) as db:
-                    check_once(config, db)
+                    await check_once(config, db)
             except Exception:
                 # A transient provider or network error must not kill the watcher.
                 logger.exception("Dynamic DNS check failed; retrying at the next interval")
+
+    # The watcher owns this thread, so it owns the event loop — asyncio.run belongs at this
+    # boundary, not inside anything it calls.
+    def loop() -> None:
+        asyncio.run(_run())
 
     thread = threading.Thread(target=loop, name="dynamic-dns", daemon=True)
     thread.start()

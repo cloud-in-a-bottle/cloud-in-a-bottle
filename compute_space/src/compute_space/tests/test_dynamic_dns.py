@@ -57,6 +57,15 @@ def _zone_records(config: DefaultConfig, name: str, rrtype: str) -> list[str]:
     return out
 
 
+def _detected(ip: str | None) -> Any:
+    """A stand-in for the now-async detect_public_ip."""
+
+    async def detect() -> str | None:
+        return ip
+
+    return detect
+
+
 def _sources(answers: dict[str, str | Exception]) -> Any:
     """A mock transport returning a canned answer (or failure) per echo service."""
 
@@ -73,14 +82,16 @@ def _sources(answers: dict[str, str | Exception]) -> Any:
 def patched_client(monkeypatch: pytest.MonkeyPatch) -> Any:
     def install(answers: dict[str, str | Exception]) -> None:
         transport = _sources(answers)
-        real_client = httpx.Client
+        real_client = httpx.AsyncClient
 
-        def factory(*args: object, **kwargs: object) -> httpx.Client:
+        def factory(*args: object, **kwargs: object) -> httpx.AsyncClient:
             kwargs.pop("follow_redirects", None)
             kwargs.pop("timeout", None)
             return real_client(transport=transport)
 
-        monkeypatch.setattr(public_ip_mod.httpx, "Client", factory)
+        # AsyncClient, not Client: patching the wrong one silently lets these tests hit the real
+        # echo services.
+        monkeypatch.setattr(public_ip_mod.httpx, "AsyncClient", factory)
 
     return install
 
@@ -111,12 +122,14 @@ def test_only_a_routable_ipv4_is_usable(candidate: str, expected: bool) -> None:
 # ─── detection guardrails ───
 
 
-def test_detection_requires_two_sources_to_agree(patched_client: Any) -> None:
+@pytest.mark.asyncio
+async def test_detection_requires_two_sources_to_agree(patched_client: Any) -> None:
     patched_client({url: PUBLIC_A for url in public_ip_mod._ECHO_SERVICES})
-    assert detect_public_ip() == PUBLIC_A
+    assert await detect_public_ip() == PUBLIC_A
 
 
-def test_a_lone_dissenting_source_cannot_move_the_records(patched_client: Any) -> None:
+@pytest.mark.asyncio
+async def test_a_lone_dissenting_source_cannot_move_the_records(patched_client: Any) -> None:
     # A single flaky or hijacked echo service must not be able to point the space at an attacker.
     patched_client(
         {
@@ -126,15 +139,17 @@ def test_a_lone_dissenting_source_cannot_move_the_records(patched_client: Any) -
             "https://ipv4.icanhazip.com": "  ",
         }
     )
-    assert detect_public_ip() is None
+    assert await detect_public_ip() is None
 
 
-def test_detection_gives_up_rather_than_guessing_when_nothing_answers(patched_client: Any) -> None:
+@pytest.mark.asyncio
+async def test_detection_gives_up_rather_than_guessing_when_nothing_answers(patched_client: Any) -> None:
     patched_client({url: httpx.ConnectError("down") for url in public_ip_mod._ECHO_SERVICES})
-    assert detect_public_ip() is None
+    assert await detect_public_ip() is None
 
 
-def test_a_private_answer_does_not_count_toward_agreement(patched_client: Any) -> None:
+@pytest.mark.asyncio
+async def test_a_private_answer_does_not_count_toward_agreement(patched_client: Any) -> None:
     patched_client(
         {
             "https://api.ipify.org": "10.0.0.5",
@@ -143,7 +158,7 @@ def test_a_private_answer_does_not_count_toward_agreement(patched_client: Any) -
             "https://ipv4.icanhazip.com": "10.0.0.5",
         }
     )
-    assert detect_public_ip() is None
+    assert await detect_public_ip() is None
 
 
 # ─── storage precedence ───
@@ -177,58 +192,63 @@ def test_with_no_stored_or_configured_ip_there_is_none(tmp_path: Path) -> None:
 # ─── the update itself ───
 
 
-def test_an_ip_change_rewrites_the_router_owned_records(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.asyncio
+async def test_an_ip_change_rewrites_the_router_owned_records(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     config = _space(tmp_path)
-    monkeypatch.setattr(dynamic, "detect_public_ip", lambda: "198.51.100.7")
+    monkeypatch.setattr(dynamic, "detect_public_ip", _detected("198.51.100.7"))
 
     with closing(open_db(config)) as db:
         seed_public_ip(config, db)
-        assert dynamic.check_once(config, db) == "198.51.100.7"
+        assert await dynamic.check_once(config, db) == "198.51.100.7"
 
         assert effective_public_ip(config, db) == "198.51.100.7"
     for name in ("@", "*", "ns"):
         assert _zone_records(config, name, "A") == ["198.51.100.7"]
 
 
-def test_an_unchanged_ip_is_not_a_write(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.asyncio
+async def test_an_unchanged_ip_is_not_a_write(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     config = _space(tmp_path)
-    monkeypatch.setattr(dynamic, "detect_public_ip", lambda: "203.0.113.10")
+    monkeypatch.setattr(dynamic, "detect_public_ip", _detected("203.0.113.10"))
     with closing(open_db(config)) as db:
         seed_public_ip(config, db)
-        assert dynamic.check_once(config, db) is None
+        assert await dynamic.check_once(config, db) is None
 
 
-def test_a_detection_failure_leaves_the_records_alone(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.asyncio
+async def test_a_detection_failure_leaves_the_records_alone(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # Stale records beat pointing the space at nothing.
     config = _space(tmp_path)
-    monkeypatch.setattr(dynamic, "detect_public_ip", lambda: None)
+    monkeypatch.setattr(dynamic, "detect_public_ip", _detected(None))
     with closing(open_db(config)) as db:
         seed_public_ip(config, db)
-        assert dynamic.check_once(config, db) is None
+        assert await dynamic.check_once(config, db) is None
         assert effective_public_ip(config, db) == "203.0.113.10"
     assert _zone_records(config, "*", "A") == ["203.0.113.10"]
 
 
-def test_the_update_does_not_disturb_records_apps_wrote(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.asyncio
+async def test_the_update_does_not_disturb_records_apps_wrote(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     config = _space(tmp_path)
-    monkeypatch.setattr(dynamic, "detect_public_ip", lambda: "198.51.100.7")
+    monkeypatch.setattr(dynamic, "detect_public_ip", _detected("198.51.100.7"))
 
     with closing(open_db(config)) as db:
         seed_public_ip(config, db)
         store.append_records(db, ZONE, [DnsRecord("www", "A", 300, "192.0.2.50")])
 
-        dynamic.check_once(config, db)
+        await dynamic.check_once(config, db)
 
     assert _zone_records(config, "www", "A") == ["192.0.2.50"]
 
 
-def test_dynamic_records_carry_a_short_ttl(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.asyncio
+async def test_dynamic_records_carry_a_short_ttl(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # Pointless to poll every few minutes if resolvers cache the old address for five.
     config = seeded_dns_config(tmp_path, Domain(ZONE, tls=True), dynamic_dns=True)
-    monkeypatch.setattr(dynamic, "detect_public_ip", lambda: "198.51.100.7")
+    monkeypatch.setattr(dynamic, "detect_public_ip", _detected("198.51.100.7"))
 
     with closing(open_db(config)) as db:
         seed_public_ip(config, db)
-        dynamic.check_once(config, db)
+        await dynamic.check_once(config, db)
     # Derived address records inherit the zone default, which drops when dynamic DNS is on.
     assert "$TTL 60" in config.coredns_zonefile_path.read_text()

@@ -7,6 +7,8 @@ from __future__ import annotations
 from contextlib import closing
 from pathlib import Path
 
+import pytest
+
 from compute_space.core.domains import Domain
 from compute_space.core.domains import DomainCertStatus
 from compute_space.core.domains import DomainRecord
@@ -128,19 +130,21 @@ def test_seed_populates_primary_once(tmp_path: Path) -> None:
 # --- ensure_cert_for: no-op for mDNS, acquires for TLS ----------------------------
 
 
-def test_ensure_cert_for_noop_on_mdns(tmp_path: Path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+@pytest.mark.asyncio
+async def test_ensure_cert_for_noop_on_mdns(tmp_path: Path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
     called = []
     monkeypatch.setattr(domain_certs, "acquire_cert_for_domain", lambda *a, **k: called.append(a))
     cfg = _cfg(tmp_path)
     with closing(open_db(cfg)) as db:
-        domain_certs.ensure_cert_for(cfg, Domain("myhost.local", tls=False, mdns=True), db)
+        await domain_certs.ensure_cert_for(cfg, Domain("myhost.local", tls=False, mdns=True), db)
     assert called == []  # mDNS never touches ACME
 
 
-def test_ensure_cert_for_acquires_tls_to_per_domain_path(tmp_path: Path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+@pytest.mark.asyncio
+async def test_ensure_cert_for_acquires_tls_to_per_domain_path(tmp_path: Path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
     captured = {}
 
-    def fake_acquire(config, domain, cert_path, key_path, db):  # type: ignore[no-untyped-def]
+    async def fake_acquire(config, domain, cert_path, key_path, db):  # type: ignore[no-untyped-def]
         captured["domain"] = domain
         captured["cert_path"] = cert_path
 
@@ -148,7 +152,7 @@ def test_ensure_cert_for_acquires_tls_to_per_domain_path(tmp_path: Path, monkeyp
     cfg = _cfg(tmp_path)
     with closing(open_db(cfg)) as db:
         seed_domains(db, PRIMARY, [])  # host.example.com is the primary; host.example.org is not
-        domain_certs.ensure_cert_for(cfg, Domain("host.example.org", tls=True), db)
+        await domain_certs.ensure_cert_for(cfg, Domain("host.example.org", tls=True), db)
     assert captured["domain"] == "host.example.org"
     # per-domain path under certs/, NOT the primary's legacy cert file
     assert captured["cert_path"] == cfg.certs_dir / "host.example.org.pem"

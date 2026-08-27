@@ -1,4 +1,3 @@
-import asyncio
 import os
 from pathlib import Path
 
@@ -45,8 +44,7 @@ async def acquire_tls_cert(
         directory_url = GTS_PRODUCTION
     domains = [domain, f"*.{domain}"]
     logger.info(f"Requesting wildcard TLS cert for {domains} from {directory_url} (DNS-01)")
-    cert_pem, key_pem = await asyncio.to_thread(
-        _acquire_cert_dns01,
+    cert_pem, key_pem = await _acquire_cert_dns01(
         domains=domains,
         directory_url=directory_url,
         dns=dns,

@@ -58,7 +58,7 @@ def is_public_ipv4(candidate: str) -> bool:
         return False
 
 
-def detect_public_ip(
+async def detect_public_ip(
     services: tuple[str, ...] = _ECHO_SERVICES,
     required_agreement: int = _REQUIRED_AGREEMENT,
 ) -> str | None:
@@ -67,10 +67,10 @@ def detect_public_ip(
     None means "leave the records alone", not "the IP went away".
     """
     votes: dict[str, int] = {}
-    with httpx.Client(timeout=_TIMEOUT_SECONDS, follow_redirects=True) as client:
+    async with httpx.AsyncClient(timeout=_TIMEOUT_SECONDS, follow_redirects=True) as client:
         for url in services:
             try:
-                answer = client.get(url).text.strip()
+                answer = (await client.get(url)).text.strip()
             except httpx.HTTPError as e:
                 logger.debug(f"Public IP source {url} failed: {e}")
                 continue

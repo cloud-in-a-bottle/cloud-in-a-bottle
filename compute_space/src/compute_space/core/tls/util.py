@@ -1,6 +1,6 @@
+import asyncio
 import datetime
 import json
-import time
 from pathlib import Path
 
 from acme import challenges
@@ -43,7 +43,7 @@ def _create_csr(private_key: ec.EllipticCurvePrivateKey, domains: str | list[str
     )
 
 
-def _acquire_cert_dns01(
+async def _acquire_cert_dns01(
     domains: list[str],
     directory_url: str,
     dns: DnsClient,
@@ -54,7 +54,10 @@ def _acquire_cert_dns01(
     """Acquire a cert via DNS-01, publishing the challenge records through the ``dns`` service.
 
     Whether they land in our own CoreDNS zone files or at a registrar is the service's problem, so
-    this path is identical either way."""
+    this path is identical either way.
+
+    ``acme`` is a blocking library, so each of its network calls is handed to a worker thread
+    rather than stalling the loop."""
     tls_key = _generate_tls_key()
 
     logger.info(f"DNS-01: connecting to ACME directory {directory_url}")
@@ -64,13 +67,13 @@ def _acquire_cert_dns01(
         timeout=30,
         verify_ssl=verify_ssl,
     )
-    directory = messages.Directory.from_json(net.get(directory_url).json())
+    directory = messages.Directory.from_json((await asyncio.to_thread(net.get, directory_url)).json())
     acme_client = client.ClientV2(directory, net)
 
     logger.info("DNS-01: looking up existing account")
     try:
         reg = messages.NewRegistration(only_return_existing=True)
-        account = acme_client.query_registration(acme_client.new_account(reg))
+        account = await asyncio.to_thread(lambda: acme_client.query_registration(acme_client.new_account(reg)))
     except errors.ConflictError as e:
         # Account exists but only_return_existing returns a conflict.
         account = messages.RegistrationResource(uri=e.location)
@@ -83,7 +86,7 @@ def _acquire_cert_dns01(
                 reg_kwargs["contact"] = (f"mailto:{acme_email}",)
             reg = messages.NewRegistration(**reg_kwargs)
             try:
-                account = acme_client.new_account(reg)
+                account = await asyncio.to_thread(acme_client.new_account, reg)
             except errors.ConflictError as ce:
                 account = messages.RegistrationResource(uri=ce.location)
         else:
@@ -101,7 +104,7 @@ def _acquire_cert_dns01(
     for attempt in range(1, max_attempts + 1):
         try:
             logger.info(f"DNS-01: creating order for {domains} (attempt {attempt}/{max_attempts})")
-            order = acme_client.new_order(csr_pem)
+            order = await asyncio.to_thread(acme_client.new_order, csr_pem)
             logger.info(f"DNS-01: order created, status={order.body.status}")
 
             # Collect all DNS-01 challenge values first, then write them all at once.
@@ -130,27 +133,29 @@ def _acquire_cert_dns01(
                 # same time.
                 logger.info(f"Setting {len(validation_values)} DNS-01 challenge TXT record(s)")
                 zone_domain = domains[0].lstrip("*.")
-                challenge.publish(dns, zone_domain, validation_values)
+                await challenge.publish(dns, zone_domain, validation_values)
 
                 # Wait until an external resolver can see the records before telling the ACME
                 # server to validate.  Without this the CA's resolvers may get NXDOMAIN — the zone
                 # file reload hasn't happened yet, the registrar hasn't published, or the NS
                 # delegation from the parent zone hasn't propagated.
-                challenge.wait_until_visible(dns, zone_domain, validation_values)
+                await challenge.wait_until_visible(dns, zone_domain, validation_values)
 
                 # Now answer all challenges
                 for challenge_body in pending_challenges:
-                    acme_client.answer_challenge(challenge_body, challenge_body.response(account_key))
+                    await asyncio.to_thread(
+                        acme_client.answer_challenge, challenge_body, challenge_body.response(account_key)
+                    )
 
             deadline = datetime.datetime.now() + datetime.timedelta(seconds=120)
             while datetime.datetime.now() < deadline:
-                order = acme_client.poll_and_finalize(order, deadline=deadline)
+                order = await asyncio.to_thread(acme_client.poll_and_finalize, order, deadline)
                 if order.fullchain_pem:
                     break
-                time.sleep(2)
+                await asyncio.sleep(2)
 
             # Clean up DNS record
-            challenge.clear(dns, domains[0])
+            await challenge.clear(dns, domains[0])
 
             if not order.fullchain_pem:
                 raise RuntimeError(f"Failed to get cert for {domains}: order not finalized")
@@ -159,14 +164,14 @@ def _acquire_cert_dns01(
 
         except (errors.ValidationError, RuntimeError) as exc:
             # Clean up DNS records before retrying
-            challenge.clear(dns, domains[0])
+            await challenge.clear(dns, domains[0])
 
             if attempt < max_attempts:
                 wait = 30 * attempt
                 logger.warning(
                     f"ACME validation failed (attempt {attempt}/{max_attempts}): {exc}. Retrying in {wait}s..."
                 )
-                time.sleep(wait)
+                await asyncio.sleep(wait)
             else:
                 logger.error(f"ACME cert acquisition failed after {max_attempts} attempts")
                 raise

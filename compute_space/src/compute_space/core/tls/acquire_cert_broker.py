@@ -15,7 +15,9 @@ Flow:
 
 from __future__ import annotations
 
+import asyncio
 import time
+from collections.abc import Awaitable
 from collections.abc import Callable
 from pathlib import Path
 from typing import Protocol
@@ -44,7 +46,7 @@ class Clock(Protocol):
 
     def monotonic(self) -> float: ...
 
-    def sleep(self, seconds: float) -> None: ...
+    async def sleep(self, seconds: float) -> None: ...
 
 
 @attr.s(auto_attribs=True, frozen=True)
@@ -52,25 +54,25 @@ class RealClock:
     def monotonic(self) -> float:
         return time.monotonic()
 
-    def sleep(self, seconds: float) -> None:
-        time.sleep(seconds)
+    async def sleep(self, seconds: float) -> None:
+        await asyncio.sleep(seconds)
 
 
 REAL_CLOCK = RealClock()
 
 
-def _wait_for_dns_propagation(dns: DnsClient, domain: str, expected_values: list[str]) -> None:
+async def _wait_for_dns_propagation(dns: DnsClient, domain: str, expected_values: list[str]) -> None:
     """Wait until an external resolver sees the records.
 
     Same safeguard the BYO-ACME path applies before validation: the broker asks the CA to validate
     during finalize, so the records must be live first or the first attempt fails.
-    ``wait_for_txt_propagation`` logs and proceeds on timeout, so a delegation that never
-    propagates still falls through to the broker's own retries.
+    ``wait_until_visible`` logs and proceeds on timeout, so a delegation that never propagates
+    still falls through to the broker's own retries.
     """
-    challenge.wait_until_visible(dns, domain, expected_values)
+    await challenge.wait_until_visible(dns, domain, expected_values)
 
 
-def acquire_tls_cert_via_broker(
+async def acquire_tls_cert_via_broker(
     domain: str,
     cert_path: Path,
     key_path: Path,
@@ -82,7 +84,7 @@ def acquire_tls_cert_via_broker(
     poll_max_interval_seconds: float = 30.0,
     poll_timeout_seconds: float = 600.0,
     clock: Clock = REAL_CLOCK,
-    wait_for_propagation: Callable[[DnsClient, str, list[str]], None] = _wait_for_dns_propagation,
+    wait_for_propagation: Callable[[DnsClient, str, list[str]], Awaitable[None]] = _wait_for_dns_propagation,
 ) -> None:
     """Acquire and install a wildcard TLS cert for ``domain`` via the broker."""
     domains = [domain, f"*.{domain}"]
@@ -92,18 +94,18 @@ def acquire_tls_cert_via_broker(
     tls_key = _generate_tls_key()
     csr_pem = _create_csr(tls_key, domains).public_bytes(serialization.Encoding.PEM).decode()
 
-    order = client.create_order(csr_pem)
+    order = await client.create_order(csr_pem)
     logger.info(f"Broker order {order.order_id} created with {len(order.challenges)} challenge(s)")
 
     # The broker returns a record name per challenge; a wildcard order puts both at the same
     # name, so publish them together.
     values = [c.record_value for c in order.challenges]
-    challenge.publish(dns, domain, values)
+    await challenge.publish(dns, domain, values)
     try:
         # Don't poll finalize until the records are live: the broker drives CA validation during
         # finalize, so a not-yet-visible record fails the order.
-        wait_for_propagation(dns, domain, values)
-        certificate = _poll_until_issued(
+        await wait_for_propagation(dns, domain, values)
+        certificate = await _poll_until_issued(
             client,
             order.order_id,
             poll_interval_seconds=poll_interval_seconds,
@@ -114,13 +116,13 @@ def acquire_tls_cert_via_broker(
         )
     finally:
         # Always pull the challenge records back out, success or failure.
-        challenge.clear(dns, domain)
+        await challenge.clear(dns, domain)
 
     write_cert_and_key(cert_path, key_path, certificate.encode(), tls_private_key_to_pem(tls_key))
     logger.info(f"Installed broker-issued TLS cert for {domain} -> {cert_path}")
 
 
-def _poll_until_issued(
+async def _poll_until_issued(
     client: CertApiClient,
     order_id: str,
     *,
@@ -138,7 +140,7 @@ def _poll_until_issued(
     deadline = clock.monotonic() + poll_timeout_seconds
     interval = poll_interval_seconds
     while clock.monotonic() < deadline:
-        result = client.finalize_order(order_id)
+        result = await client.finalize_order(order_id)
         if result.status == FINALIZE_STATUS_VALID:
             if not result.certificate:
                 raise CertApiError(f"Broker reported order {order_id} valid but returned no certificate")
@@ -149,7 +151,7 @@ def _poll_until_issued(
         if sleep_for <= 0:
             break
         logger.info(f"Broker order {order_id} still pending; retrying in {sleep_for:.0f}s")
-        clock.sleep(sleep_for)
+        await clock.sleep(sleep_for)
         interval = min(interval * poll_backoff_factor, poll_max_interval_seconds)
 
     raise CertAcquisitionTimeoutError(f"Broker did not issue cert for order {order_id} within {poll_timeout_seconds}s")

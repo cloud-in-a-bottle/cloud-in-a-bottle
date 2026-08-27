@@ -24,24 +24,24 @@ def challenge_fqdn(domain: str) -> str:
     return f"{_LABEL}.{domain.removeprefix('*.')}"
 
 
-def publish(dns: DnsClient, domain: str, values: list[str]) -> None:
+async def publish(dns: DnsClient, domain: str, values: list[str]) -> None:
     """Publish every token for ``domain`` at once.
 
     A wildcard order has two authorizations that must both be answered simultaneously, and setting
     the RRset rather than appending means a run that died before cleaning up doesn't leave stale
     tokens for this one.
     """
-    dns.set_records(challenge_fqdn(domain), RecordType.TXT, values, ttl=CHALLENGE_TTL_SECONDS)
+    await dns.set_records(challenge_fqdn(domain), RecordType.TXT, values, ttl=CHALLENGE_TTL_SECONDS)
 
 
-def clear(dns: DnsClient, domain: str) -> None:
-    dns.delete_records(challenge_fqdn(domain), RecordType.TXT)
+async def clear(dns: DnsClient, domain: str) -> None:
+    await dns.delete_records(challenge_fqdn(domain), RecordType.TXT)
 
 
-def wait_until_visible(dns: DnsClient, domain: str, values: list[str]) -> None:
+async def wait_until_visible(dns: DnsClient, domain: str, values: list[str]) -> None:
     """Block until an external resolver can see the tokens, or the provider's timeout elapses.
 
     Without this the CA's resolvers may get NXDOMAIN — the zone file reload hasn't happened, the
     registrar hasn't published, or the parent zone's NS delegation hasn't propagated.
     """
-    wait_for_records(challenge_fqdn(domain), RecordType.TXT, values, timeout=dns.propagation_timeout_seconds)
+    await wait_for_records(challenge_fqdn(domain), RecordType.TXT, values, timeout=dns.propagation_timeout_seconds)
