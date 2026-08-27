@@ -1,0 +1,3 @@
+[service]
+name = "dns"
+description = "Read and write DNS records for the space's domains, scoped by record name and type"

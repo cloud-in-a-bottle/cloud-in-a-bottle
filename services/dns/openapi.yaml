@@ -1,0 +1,356 @@
+openapi: 3.0.3
+info:
+  title: OpenHost DNS Service
+  version: 0.1.0
+  description: |
+    Read and write DNS records for the space's domains, without the calling app ever seeing
+    registrar credentials or knowing where the records physically live.
+
+    **Service URL:** `github.com/imbue-openhost/openhost/services/dns`
+
+    Two interchangeable providers implement this API, and an app cannot tell which one it is
+    talking to:
+
+    * **The router itself** (the default). Records live in the CoreDNS zone files this instance
+      serves, and the space is its own authoritative nameserver.
+    * **A connector app** such as `external-dns-connector`, which forwards to an external DNS
+      provider. Installing one and making it the default for this service switches the space over.
+
+    Which one is in use is owner configuration, exposed as the service default. Apps declare the
+    service and their grants; nothing else changes between the two.
+
+    All requests are proxied through the OpenHost router, which injects `X-OpenHost-Consumer-Id` and
+    an `X-OpenHost-Permissions` array. The provider enforces those grants; the router does not.
+
+    ## Permission grants
+
+    A grant names a record name pattern, a record type, and an access level:
+
+    ```json
+    {"name": "_acme-challenge.**", "type": "TXT", "access": "rw"}
+    ```
+
+    * `name` — matched against the **zone-relative** record name (`@` is the zone apex). `**` is the
+      only metacharacter and matches any run of characters, including none. A single `*` is
+      **literal**: it is a real DNS wildcard label, so `*.app` grants exactly that record.
+    * `type` — an uppercase RR type, or `**` for any type.
+    * `access` — `r` for read, `rw` for read and write. `rw` always includes read.
+
+    Grants say nothing about zones. Which zones exist is owner-only configuration that no grant can
+    read or change, and an app addresses zones only by the names this service reports back.
+
+    "Read all" is `{"name": "**", "type": "**", "access": "r"}`; "write all" is the same with `rw`.
+
+    Only `scope: "global"` grants are honored — declare them in your manifest and the owner approves
+    them at install time:
+
+    ```toml
+    [[services.v2.consumes]]
+    service   = "github.com/cloud-in-a-bottle/external-dns-connector/services/dns"
+    shortname = "dns"
+    version   = ">=0.1.0"
+    grants    = [{name = "_acme-challenge.**", type = "TXT", access = "rw"}]
+    ```
+
+    ## Reserved records
+
+    Some records are maintained by OpenHost itself: the zone apex `SOA` and `NS`, and the `A`/`AAAA`
+    records at `@`, `ns`, and `*`. Those route the space and are rewritten whenever a domain is
+    added or the instance's public IP moves, so a write to them would be silently undone — and a
+    broad grant could otherwise delete the wildcard and take the whole space offline. Writing one
+    returns `403 reserved_record` regardless of grants.
+
+    Everything else at those names is writable: an apex `MX` or `TXT` is exactly what a mail setup
+    needs, and nothing in OpenHost touches them.
+
+    ## Records
+
+    One flat shape covers every type, mirroring a zone file line:
+
+    ```json
+    {"name": "www", "type": "A", "ttl": 300, "data": "192.0.2.1"}
+    ```
+
+    `name` is relative to the zone — `www`, not `www.example.com`; a name that already includes the
+    zone is rejected rather than silently written as `www.example.com.example.com`. `ttl` is in
+    seconds. `data` is unescaped zone-file RDATA, so `MX` is `"10 mail.example.com."` and `SRV` is
+    `"10 5 443 host.example.com."`.
+
+    Writable types are `A`, `AAAA`, `CAA`, `CNAME`, `MX`, `NS`, `SRV`, and `TXT`. Reads return
+    whatever the provider reports, including types outside that list.
+
+    ## Zones
+
+    Reads default to every configured zone. **Writes must name one**: either an exact zone from
+    `/zones`, or `"*"` to apply the change to all of them. Omitting it is a `zone_required` error
+    rather than a silent fan-out.
+
+paths:
+  /zones:
+    post:
+      summary: List the zones this connector manages
+      description: |
+        Requires at least one grant — which domains the owner runs is not something an app with no
+        DNS access should learn.
+      responses:
+        "200":
+          description: The configured zones.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [zones]
+                properties:
+                  zones:
+                    type: array
+                    items: {type: string}
+                    example: ["example.com", "other.org"]
+        "403":
+          $ref: "#/components/responses/PermissionRequired"
+
+  /records/get:
+    post:
+      summary: Read records
+      description: |
+        Returns only the records the caller's grants match; everything else is omitted rather than
+        refused, so a narrowly-scoped app sees a zone containing just its own records.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                zone:
+                  type: string
+                  description: A configured zone, or `*`. Defaults to every zone.
+                name:
+                  type: string
+                  description: Optional exact zone-relative name filter.
+                type:
+                  type: string
+                  description: Optional exact RR type filter.
+      responses:
+        "200": {$ref: "#/components/responses/Results"}
+        "207": {$ref: "#/components/responses/Results"}
+        "400": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/PermissionRequired"}
+        "502": {$ref: "#/components/responses/Results"}
+
+  /records/set:
+    post:
+      summary: Set records (replaces the RRset)
+      description: |
+        For each `(name, type)` in the input, the supplied records become the only records with that
+        name and type in the zone. Records with other names or types are untouched.
+
+        Every record is authorized before any provider is contacted, so a batch containing one
+        record the caller may not write applies none of them.
+      requestBody: {$ref: "#/components/requestBodies/Write"}
+      responses:
+        "200": {$ref: "#/components/responses/Results"}
+        "207": {$ref: "#/components/responses/Results"}
+        "400": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/PermissionRequired"}
+        "502": {$ref: "#/components/responses/Results"}
+
+  /records/append:
+    post:
+      summary: Add records without replacing existing ones
+      requestBody: {$ref: "#/components/requestBodies/Write"}
+      responses:
+        "200": {$ref: "#/components/responses/Results"}
+        "207": {$ref: "#/components/responses/Results"}
+        "400": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/PermissionRequired"}
+        "502": {$ref: "#/components/responses/Results"}
+
+  /records/delete:
+    post:
+      summary: Delete records, or clear a whole RRset
+      description: |
+        A record given **with** `data` deletes only that exact record. A record given **without**
+        `data` clears the whole `(name, type)` RRset, removing whatever it currently holds.
+
+        The second form is what an unconditional cleanup path needs: a process that died before
+        recording the value it wrote cannot delete by exact value. Clearing a name that holds nothing
+        succeeds and reports nothing deleted, so the call is safe to make unconditionally.
+
+        Grants are checked the same way either way — on `(name, type)`.
+
+        Records that do not exist are silently ignored, per libdns semantics.
+      requestBody: {$ref: "#/components/requestBodies/Delete"}
+      responses:
+        "200": {$ref: "#/components/responses/Results"}
+        "207": {$ref: "#/components/responses/Results"}
+        "400": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/PermissionRequired"}
+        "502": {$ref: "#/components/responses/Results"}
+
+components:
+  requestBodies:
+    Delete:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [zone, records]
+            properties:
+              zone:
+                type: string
+                description: A configured zone, or `*` for all of them. Required.
+                example: example.com
+              records:
+                type: array
+                minItems: 1
+                items: {$ref: "#/components/schemas/DeleteTarget"}
+          examples:
+            exact:
+              summary: Delete one specific record
+              value:
+                zone: example.com
+                records: [{name: _acme-challenge, type: TXT, ttl: 60, data: "the-token"}]
+            clearRRset:
+              summary: Clear the whole RRset, whatever it holds
+              value:
+                zone: example.com
+                records: [{name: _acme-challenge, type: TXT}]
+
+    Write:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [zone, records]
+            properties:
+              zone:
+                type: string
+                description: A configured zone, or `*` for all of them. Required.
+                example: example.com
+              records:
+                type: array
+                minItems: 1
+                items: {$ref: "#/components/schemas/Record"}
+
+  responses:
+    Results:
+      description: |
+        Per-zone outcomes. The status reflects the whole: `200` when every zone succeeded, `207` when
+        some did, `502` when none did — so a total provider outage is never reported as success.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [ok, results]
+            properties:
+              ok:
+                type: boolean
+                description: True only if every zone succeeded.
+              results:
+                type: array
+                items:
+                  type: object
+                  required: [zone, ok]
+                  properties:
+                    zone: {type: string}
+                    ok: {type: boolean}
+                    records:
+                      type: array
+                      items: {$ref: "#/components/schemas/Record"}
+                    error: {type: string}
+
+    Error:
+      description: |
+        The request was rejected. `error` is one of `invalid_request`, `invalid_record`,
+        `zone_required`, `unknown_zone`, `no_zones_configured`, or `reserved_record` (403 — a
+        record OpenHost maintains itself; see "Reserved records" above).
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/Error"}
+
+    PermissionRequired:
+      description: |
+        The caller has no grant covering a record it tried to touch. `required_grant` describes the
+        grant that would permit it; because the scope is `global`, the router rewrites this response
+        to add a `grant_url` the consumer can send the owner to.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [error, required_grant]
+            properties:
+              error:
+                type: string
+                enum: [permission_required, not_a_service_call]
+              message: {type: string}
+              required_grant:
+                type: object
+                properties:
+                  grant: {$ref: "#/components/schemas/Grant"}
+                  scope: {type: string, enum: [global]}
+
+  schemas:
+    Record:
+      type: object
+      required: [name, type, ttl, data]
+      properties:
+        name:
+          type: string
+          description: Zone-relative name; `@` for the apex.
+          example: www
+        type:
+          type: string
+          enum: [A, AAAA, CAA, CNAME, MX, NS, SRV, TXT]
+        ttl:
+          type: integer
+          description: Seconds.
+          example: 300
+        data:
+          type: string
+          description: Unescaped zone-file RDATA.
+          example: 192.0.2.1
+
+    DeleteTarget:
+      type: object
+      required: [name, type]
+      description: |
+        A record to remove. With `data`, only that exact record is deleted. Without it, the whole
+        `(name, type)` RRset is cleared and `ttl` is ignored.
+      properties:
+        name:
+          type: string
+          description: Zone-relative name; `@` for the apex.
+          example: _acme-challenge
+        type:
+          type: string
+          enum: [A, AAAA, CAA, CNAME, MX, NS, SRV, TXT]
+        ttl:
+          type: integer
+          description: Seconds. Ignored when `data` is omitted.
+        data:
+          type: string
+          description: Omit to clear the whole RRset.
+
+    Grant:
+      type: object
+      required: [name, type, access]
+      properties:
+        name:
+          type: string
+          description: Name pattern; `**` matches any run of characters, `*` is a literal label.
+          example: _acme-challenge.**
+        type:
+          type: string
+          description: RR type, or `**` for any.
+          example: TXT
+        access:
+          type: string
+          enum: [r, rw]
+
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error: {type: string}
+        message: {type: string}

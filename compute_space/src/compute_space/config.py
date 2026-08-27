@@ -54,6 +54,8 @@ class Config:
     ## coredns (only really needed if acquiring TLS certs via DNS-01, or if using NS dns records)
     coredns_enabled: bool
     public_ip: str | None
+    dynamic_dns_enabled: bool
+    dynamic_dns_interval_seconds: float
 
     start_caddy: bool
 
@@ -284,7 +286,13 @@ class DefaultConfig(Config):
 
     # coredns (only truly needed for DNS-01 TLS cert acquisition)
     coredns_enabled: bool = False
+    # Seeds the DB's public IP on first boot only; after that the DB is authoritative so a
+    # dynamic-DNS update isn't undone by a stale config file.  See core.dns.public_ip.
     public_ip: str | None = None
+    # Watch the instance's public IP and rewrite its A records when it moves.  Off by default:
+    # only worth the polling on a connection whose address actually changes.
+    dynamic_dns_enabled: bool = False
+    dynamic_dns_interval_seconds: float = 300.0
 
     # TLS
     acquire_tls_cert_if_missing: bool = False

@@ -1,18 +1,58 @@
-
-
 ## DNS
+
+DNS records for a space are read and written through the **`dns` service**
+(`github.com/imbue-openhost/openhost/services/dns`). Two providers implement it, and nothing
+above the service — cert acquisition, dynamic DNS, or an app — knows which one is in use:
+
+- **the router itself** (the default, when no provider app is installed). the space is its own
+  authoritative nameserver, and records live in CoreDNS zone files on disk.
+- **a connector app** such as `external-dns-connector`, which forwards to an external DNS
+  provider. installing one makes it the service default and switches the whole space over.
+
+`core/dns/selection.py` resolves which backend applies; `core/dns/service.py` is the router's own
+implementation of the service.
+
+### when the router provides DNS
 
 our imbue.com domain is managed at godaddy.
 for each server we set up 2 DNS records:
 - NS record pointing `host`(.imbue.com) to `ns.host`(.imbue.com). this says "the DNS server handling `host.` requests is at this location".
 - "glue" A record pointing ns.host to the IP of the server. the NS record can't take an IP, so this resolves ns.host.imbue.com to the specific IP of the server.
 
-on the server, we run CoreDNS (started by the router process). this serves authoritative DNS for the zone:
+on the server, CoreDNS (started by the router process) serves authoritative DNS for the zone:
 - A record for `host.imbue.com` -> server IP
 - wildcard A record for `*.host.imbue.com` -> server IP (so app subdomains resolve)
 - TXT records for `_acme-challenge.host.imbue.com` (written dynamically during ACME DNS-01 cert acquisition)
+- anything else an app has written through the `dns` service
 
-CoreDNS watches the zone file for SOA serial changes and auto-reloads. the router writes TXT records during cert acquisition and removes them afterward.
+the **zone file is the source of truth** for its records. the template only seeds a zone file that
+doesn't exist yet; after that, adding a domain or changing the instance's IP re-points the
+router-owned records in place rather than re-rendering, so app-written records survive. reads and
+writes go through dnspython (`core/dns/zonefile.py`), serialized per zone and written atomically.
+every write bumps the SOA serial, which is what makes CoreDNS reload.
+
+the apex/`ns`/wildcard A records, and the apex SOA and NS, are **reserved**: the router maintains
+them, so the service refuses writes to them (`403 reserved_record`) no matter what grants the
+caller holds. everything else at those names — an apex MX or TXT for mail — is writable.
+
+### the container view
+
+CoreDNS also serves a second, private view bound to the container gateway (`10.200.0.1`), which
+answers each domain's wildcard with the gateway IP so app containers reach sibling apps' public
+HTTPS URLs through Caddy instead of looping back inside their own netns. app containers point at
+it via `--dns` (see `core/containers.py`).
+
+this is **independent of the authoritative half**: the hairpin is needed whoever answers publicly,
+so CoreDNS runs for the container view even on an http-only box or one using an external DNS
+provider. see `coredns_is_needed`.
+
+### the public IP
+
+the DB is the source of truth; `public_ip` in config.toml only seeds it on first boot, so a
+dynamic update isn't undone by a stale config file. with `dynamic_dns_enabled`, a background
+watcher re-detects the address and rewrites the A records when it moves. detection requires two
+independent echo services to agree on a globally routable address before anything is written —
+a wrong answer here takes the whole space offline.
 
 ## TLS certs
 

@@ -1,4 +1,4 @@
-{% for zone in zones %}
+{% for zone in public_zones %}
 {{ zone.domain }}:53 {
     bind {{ bind_ip }}
     file {{ zone.zonefile_path }} {
@@ -13,7 +13,9 @@
 # core/containers.py --dns).  It answers each zone's wildcard with the gateway IP
 # so containers reach sibling apps' public HTTPS URLs through Caddy (hairpin),
 # and forwards everything else upstream so normal name resolution still works.
-{% for zone in zones %}
+# Independent of the public view above: the hairpin is needed whoever answers
+# publicly, so this is generated even when the space uses an external DNS provider.
+{% for zone in container_zones %}
 {{ zone.domain }}:53 {
     bind {{ container_gateway_ip }}
     file {{ zone.container_zonefile_path }} {

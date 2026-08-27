@@ -4,7 +4,8 @@ from pathlib import Path
 
 from compute_space.config import CERT_PROVIDER_ACME
 from compute_space.config import Config
-from compute_space.core.domains import is_primary_domain
+from compute_space.core.dns.backend import DnsBackend
+from compute_space.core.dns.selection import dns_backend
 from compute_space.core.domains import primary_domain
 from compute_space.core.identity_store import get_instance_identity
 from compute_space.core.tls.acquire_cert import acquire_tls_cert
@@ -20,15 +21,26 @@ def acquire_cert_for_domain(
     install it at ``cert_path``/``key_path``.
 
     The provider dispatch (BYO-ACME vs the openhost-cert-api broker) and DNS-01 mechanics are
-    identical for every domain; only the domain name and output paths vary.  The DNS-01 challenge
-    TXT records go into ``domain``'s own zone file (each public domain is a separate authoritative
-    zone), so the challenge is answerable for secondary domains too.  Caller must ensure CoreDNS is
-    running and authoritative for ``domain``, and that ``cert_path``'s parent directory exists.
+    identical for every domain; only the domain name and output paths vary.  The challenge records
+    are published through whichever DnsBackend this space uses — its own CoreDNS zone files, or an
+    external provider via the ``dns`` service — so a secondary domain is answerable either way.
+    Caller must ensure the backend can serve ``domain`` and that ``cert_path``'s parent exists.
 
     The cert_provider value and its required settings are validated when the Config is constructed
     (Config.__attrs_post_init__), so here we only narrow the optional fields for the type checker.
     """
-    zonefile_path = config.coredns_zonefile_path_for(domain, is_primary_domain(db, domain))
+    with dns_backend(config, db) as backend:
+        _acquire_with_backend(config, domain, cert_path, key_path, db, backend)
+
+
+def _acquire_with_backend(
+    config: Config,
+    domain: str,
+    cert_path: Path,
+    key_path: Path,
+    db: sqlite3.Connection,
+    backend: DnsBackend,
+) -> None:
     if config.cert_provider == CERT_PROVIDER_ACME:
         if not config.acme_account_key_path:
             raise RuntimeError("ACME account key path must be set in config to acquire TLS cert")
@@ -38,7 +50,7 @@ def acquire_cert_for_domain(
                 cert_path=cert_path,
                 key_path=key_path,
                 acme_account_key_path=Path(config.acme_account_key_path),
-                coredns_zonefile_path=zonefile_path,
+                backend=backend,
                 acme_email=config.acme_email,
                 directory_url=config.acme_directory_url,
             )
@@ -59,7 +71,7 @@ def acquire_cert_for_domain(
                     domain=domain,
                     cert_path=cert_path,
                     key_path=key_path,
-                    coredns_zonefile_path=zonefile_path,
+                    backend=backend,
                     client=client,
                 )
 

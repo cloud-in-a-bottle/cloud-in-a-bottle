@@ -34,6 +34,7 @@ from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.asymmetric import rsa as rsa_module
 from josepy import JWKRSA
 
+from compute_space.core.dns.local import LocalZoneFileBackend
 from compute_space.core.tls.acquire_cert import acquire_tls_cert
 from compute_space.core.tls.util import _acquire_cert_dns01
 from compute_space.core.tls.util import load_account_key
@@ -296,13 +297,19 @@ def acme_account_key(tls_tmpdir, pebble_server):
 
 
 @pytest.fixture(scope="module")
-def acquired_cert(pebble_server, acme_account_key, zonefile_path):
+def dns_backend(zonefile_path):
+    """A local backend over the CoreDNS zone file this test's coredns is serving."""
+    return LocalZoneFileBackend(zone_paths={ZONE_DOMAIN: zonefile_path})
+
+
+@pytest.fixture(scope="module")
+def acquired_cert(pebble_server, acme_account_key, dns_backend):
     """Acquire a wildcard cert via DNS-01 — reused by multiple tests."""
     domains = [ZONE_DOMAIN, f"*.{ZONE_DOMAIN}"]
     cert_pem, key_pem = _acquire_cert_dns01(
         domains=domains,
         directory_url=pebble_server["directory_url"],
-        coredns_zonefile_path=zonefile_path,
+        backend=dns_backend,
         account_key=acme_account_key["jwk"],
         verify_ssl=False,
     )
@@ -367,11 +374,9 @@ class TestCertAcquisition:
         assert cert.not_valid_before_utc <= now
         assert cert.not_valid_after_utc > now
 
-    def test_dns_txt_records_cleaned_up(self, acquired_cert, zonefile_path):
+    def test_dns_txt_records_cleaned_up(self, acquired_cert, dns_backend):
         """After cert acquisition, ACME TXT records are removed from the zone file."""
-        with open(zonefile_path) as f:
-            content = f.read()
-        assert "IN TXT" not in content
+        assert dns_backend.get_records(ZONE_DOMAIN, "_acme-challenge", "TXT") == []
 
 
 # ---------------------------------------------------------------------------
@@ -383,7 +388,7 @@ class TestCertAcquisition:
 class TestAcquireTlsCert:
     """Test the public acquire_tls_cert function that writes cert files to disk."""
 
-    def test_acquire_writes_cert_files(self, pebble_server, acme_account_key, zonefile_path, tls_tmpdir):
+    def test_acquire_writes_cert_files(self, pebble_server, acme_account_key, dns_backend, tls_tmpdir):
         """acquire_tls_cert writes cert and key PEM files with correct permissions."""
         cert_path = tls_tmpdir / "acquired-cert.pem"
         key_path = tls_tmpdir / "acquired-key.pem"
@@ -394,7 +399,7 @@ class TestAcquireTlsCert:
                 cert_path=cert_path,
                 key_path=key_path,
                 acme_account_key_path=acme_account_key["path"],
-                coredns_zonefile_path=zonefile_path,
+                backend=dns_backend,
                 directory_url=pebble_server["directory_url"],
                 verify_ssl=False,
             )

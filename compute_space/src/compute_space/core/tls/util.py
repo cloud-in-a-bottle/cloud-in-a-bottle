@@ -1,6 +1,5 @@
 import datetime
 import json
-import subprocess
 import time
 from pathlib import Path
 
@@ -14,7 +13,10 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from josepy import JWKRSA  # type: ignore[attr-defined]
 
-import compute_space.core.dns as dns_module
+from compute_space.core.dns.backend import DnsBackend
+from compute_space.core.dns.backend import clear_txt
+from compute_space.core.dns.backend import publish_txt
+from compute_space.core.dns.backend import wait_for_txt_propagation
 from compute_space.core.logging import logger
 
 
@@ -43,57 +45,18 @@ def _create_csr(private_key: ec.EllipticCurvePrivateKey, domains: str | list[str
     )
 
 
-def _wait_for_txt_propagation(
-    zone_domain: str,
-    expected_values: list[str],
-    timeout: float = 120,
-    interval: float = 5,
-    resolver: str = "8.8.8.8",
-) -> bool:
-    """Poll an external resolver until all expected TXT values are visible.
-
-    Returns True if all values were found, False on timeout.  On timeout the
-    caller should proceed anyway — the ACME retry loop is the fallback.
-    """
-    qname = f"_acme-challenge.{zone_domain}"
-    deadline = time.monotonic() + timeout
-    expected_set = set(expected_values)
-
-    while time.monotonic() < deadline:
-        try:
-            result = subprocess.run(
-                ["dig", f"@{resolver}", qname, "TXT", "+short", "+timeout=5", "+tries=1"],
-                capture_output=True,
-                text=True,
-                timeout=10,
-            )
-            found = set()
-            for line in result.stdout.strip().splitlines():
-                # dig +short TXT output looks like: "token-value-here"
-                found.add(line.strip().strip('"'))
-            if expected_set <= found:
-                logger.info(f"DNS propagation confirmed: {qname} has all {len(expected_set)} expected TXT value(s)")
-                return True
-        except (subprocess.TimeoutExpired, FileNotFoundError):
-            pass
-
-        remaining = deadline - time.monotonic()
-        logger.info(f"Waiting for DNS propagation of {qname} ({remaining:.0f}s remaining)")
-        time.sleep(interval)
-
-    logger.warning(f"DNS propagation timeout: {qname} not fully visible after {timeout}s, proceeding anyway")
-    return False
-
-
 def _acquire_cert_dns01(
     domains: list[str],
     directory_url: str,
-    coredns_zonefile_path: Path,
+    backend: DnsBackend,
     account_key: JWKRSA,
     verify_ssl: bool = True,
     acme_email: str | None = None,
 ) -> tuple[bytes, bytes]:
-    """Acquire cert via DNS-01 challenge by writing TXT records to the local zone file."""
+    """Acquire a cert via DNS-01, publishing the challenge records through ``backend``.
+
+    The backend is whatever provides this space's DNS — our own CoreDNS zone files or an external
+    provider via the ``dns`` service — so this path is identical either way."""
     tls_key = _generate_tls_key()
 
     logger.info(f"DNS-01: connecting to ACME directory {directory_url}")
@@ -164,22 +127,21 @@ def _acquire_cert_dns01(
 
             logger.info(f"DNS-01: {len(pending_challenges)} pending challenges to answer")
             if pending_challenges:
-                # Write all TXT records to the zone file at once
+                # Publish every challenge value at once.  For a wildcard cert the base domain
+                # and *.domain are separate authorizations that both need a TXT record live at the
+                # same time.
                 logger.info(f"Setting {len(validation_values)} DNS-01 challenge TXT record(s)")
-                dns_module.append_txt_records(
-                    coredns_zonefile_path,
-                    [dns_module.TxtRecord(record_name="_acme-challenge", record_value=v) for v in validation_values],
-                )
-
-                # Wait for CoreDNS to pick up the zone file change (reload interval = 2s)
-                time.sleep(3)
-
-                # Wait until an external resolver can see our TXT records before
-                # telling the ACME server to validate.  Without this, the ACME
-                # server's resolvers may get NXDOMAIN if the NS delegation from
-                # the parent zone hasn't propagated yet.
                 zone_domain = domains[0].lstrip("*.")
-                _wait_for_txt_propagation(zone_domain, validation_values)
+                challenge_fqdn = f"_acme-challenge.{zone_domain}"
+                publish_txt(backend, challenge_fqdn, validation_values)
+
+                # Wait until an external resolver can see the records before telling the ACME
+                # server to validate.  Without this the CA's resolvers may get NXDOMAIN — the zone
+                # file reload hasn't happened yet, the registrar hasn't published, or the NS
+                # delegation from the parent zone hasn't propagated.
+                wait_for_txt_propagation(
+                    challenge_fqdn, validation_values, timeout=backend.propagation_timeout_seconds
+                )
 
                 # Now answer all challenges
                 for challenge_body in pending_challenges:
@@ -193,7 +155,7 @@ def _acquire_cert_dns01(
                 time.sleep(2)
 
             # Clean up DNS record
-            dns_module.clear_txt(coredns_zonefile_path)
+            clear_txt(backend, f"_acme-challenge.{domains[0].lstrip('*.')}")
 
             if not order.fullchain_pem:
                 raise RuntimeError(f"Failed to get cert for {domains}: order not finalized")
@@ -202,7 +164,7 @@ def _acquire_cert_dns01(
 
         except (errors.ValidationError, RuntimeError) as exc:
             # Clean up DNS records before retrying
-            dns_module.clear_txt(coredns_zonefile_path)
+            clear_txt(backend, f"_acme-challenge.{domains[0].lstrip('*.')}")
 
             if attempt < max_attempts:
                 wait = 30 * attempt

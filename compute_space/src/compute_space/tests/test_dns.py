@@ -7,15 +7,14 @@ from typing import Any
 
 import pytest
 
-import compute_space.core.dns as dns_mod
+import compute_space.core.dns.coredns as dns_mod
+import compute_space.core.dns.zonefile as zonefile_mod
 from compute_space.config import DefaultConfig
 from compute_space.core.dns import DnsZone
-from compute_space.core.dns import TxtRecord
-from compute_space.core.dns import append_txt_records
-from compute_space.core.dns import clear_txt
 from compute_space.core.dns import public_dns_zones
 from compute_space.core.dns import reload_coredns_for_domains
 from compute_space.core.dns import set_active_coredns
+from compute_space.core.dns.records import DnsRecord
 from compute_space.core.domains import Domain
 from compute_space.core.domains import DomainRecord
 from compute_space.core.domains import seed_domains
@@ -33,22 +32,6 @@ def _seed_dns_cfg(tmp_path: Path, *domains: Domain, **kw: Any) -> DefaultConfig:
     with closing(open_db(cfg)) as db:
         seed_domains(db, primary, [DomainRecord(d.name, d.tls, d.mdns) for d in domains[1:]])
     return cfg
-
-
-def _write_zonefile(path: Path, serial: int = 100) -> None:
-    path.write_text(
-        "$ORIGIN app.example.com.\n"
-        "$TTL 60\n"
-        "@   IN SOA  ns.app.example.com. admin.app.example.com. (\n"
-        f"    {serial}   ; serial\n"
-        "    3600  ; refresh\n"
-        "    600   ; retry\n"
-        "    86400 ; expire\n"
-        "    60    ; minimum\n"
-        ")\n"
-        "@   IN NS   ns.app.example.com.\n"
-        "@   IN A    127.0.0.1\n"
-    )
 
 
 class _FakeSocket:
@@ -80,53 +63,6 @@ def test_coredns_bind_ip_falls_back_to_public_ip(monkeypatch: pytest.MonkeyPatch
     monkeypatch.setattr(socket, "socket", raise_os_error)
 
     assert dns_mod._coredns_bind_ip("203.0.113.10") == "203.0.113.10"
-
-
-def test_append_txt_records_writes_relative_names_verbatim(tmp_path: Path) -> None:
-    zonefile = tmp_path / "zonefile"
-    _write_zonefile(zonefile, serial=100)
-
-    # Local DNS-01 path: several values share one relative name, left for CoreDNS
-    # to resolve against $ORIGIN.
-    append_txt_records(
-        zonefile,
-        [
-            TxtRecord(record_name="_acme-challenge", record_value="base-value"),
-            TxtRecord(record_name="_acme-challenge", record_value="wildcard-value"),
-        ],
-    )
-
-    content = zonefile.read_text()
-    assert '_acme-challenge   60  IN TXT  "base-value"' in content
-    assert '_acme-challenge   60  IN TXT  "wildcard-value"' in content
-    # Relative name is not turned into an absolute FQDN.
-    assert "_acme-challenge.   IN TXT" not in content
-    # Serial bumped so CoreDNS reloads.
-    assert "101   ; serial" in content
-
-
-def test_append_txt_records_writes_absolute_fqdn_names_verbatim(tmp_path: Path) -> None:
-    zonefile = tmp_path / "zonefile"
-    _write_zonefile(zonefile)
-
-    # Broker path: names arrive as absolute FQDNs (trailing dot) so CoreDNS does
-    # not re-append $ORIGIN.
-    append_txt_records(zonefile, [TxtRecord(record_name="_acme-challenge.app.example.com.", record_value="v")])
-
-    content = zonefile.read_text()
-    assert '_acme-challenge.app.example.com.   60  IN TXT  "v"' in content
-    # Not doubled up into _acme-challenge.app.example.com.app.example.com.
-    assert "app.example.com.app.example.com" not in content
-
-
-def test_clear_txt_removes_records(tmp_path: Path) -> None:
-    zonefile = tmp_path / "zonefile"
-    _write_zonefile(zonefile)
-    append_txt_records(zonefile, [TxtRecord(record_name="_acme-challenge.app.example.com.", record_value="v")])
-
-    clear_txt(zonefile)
-
-    assert "IN TXT" not in zonefile.read_text()
 
 
 class _FakeProc:
@@ -353,16 +289,104 @@ def test_zone_caches_addresses_long_but_acme_challenges_briefly(tmp_path: Path) 
     corefile = tmp_path / "Corefile"
     zonefile = tmp_path / "zonefile"
     dns_mod._write_coredns_config(
-        (dns_mod.DnsZone("app.example.com", zonefile),), "203.0.113.10", corefile, container_gateway_ip=None
+        (dns_mod.DnsZone("app.example.com", zonefile),),
+        "203.0.113.10",
+        corefile,
+        container_gateway_ip=None,
+        serve_public=True,
     )
     content = zonefile.read_text()
     assert "$TTL 300" in content
     # Negative caching stays short (RFC 2308 uses min(SOA MINIMUM, SOA TTL)), which
-    # is what lets the NODATA left by clear_txt expire before the next renewal.
+    # is what lets the NODATA left by a challenge cleanup expire before the next renewal.
     assert "60    ; minimum" in content
 
-    dns_mod.append_txt_records(zonefile, [dns_mod.TxtRecord(record_name="_acme-challenge", record_value="tok")])
-    assert '_acme-challenge   60  IN TXT  "tok"' in zonefile.read_text()
-    # And the explicit TTL column must not stop clear_txt from finding the record.
-    dns_mod.clear_txt(zonefile)
-    assert "IN TXT" not in zonefile.read_text()
+
+def test_write_coredns_config_seeds_a_zone_file_but_never_overwrites_one(tmp_path: Path) -> None:
+    # The zone file is the source of truth for its records once it exists: apps and the cert path
+    # both write into it. Re-rendering the template over it -- which a domain add/remove does --
+    # would silently drop everything but the three records the template knows about.
+    corefile = tmp_path / "Corefile"
+    zonefile = tmp_path / "zonefile"
+    zone = dns_mod.DnsZone("app.example.com", zonefile)
+    args = dict(corefile_path=corefile, container_gateway_ip=None, serve_public=True)
+    dns_mod._write_coredns_config((zone,), "203.0.113.10", **args)
+
+    zonefile_mod.append_records(
+        zonefile, "app.example.com", [DnsRecord(name="www", type="A", ttl=300, data="198.51.100.7")]
+    )
+
+    dns_mod._write_coredns_config((zone,), "203.0.113.10", **args)
+
+    records = zonefile_mod.read_records(zonefile, "app.example.com")
+    assert ("www", "A", "198.51.100.7") in [(r.name, r.type, r.data) for r in records]
+
+
+def test_write_coredns_config_repoints_router_records_on_an_ip_change(tmp_path: Path) -> None:
+    corefile = tmp_path / "Corefile"
+    zonefile = tmp_path / "zonefile"
+    zone = dns_mod.DnsZone("app.example.com", zonefile)
+    args = dict(corefile_path=corefile, container_gateway_ip=None, serve_public=True)
+    dns_mod._write_coredns_config((zone,), "203.0.113.10", **args)
+    zonefile_mod.append_records(
+        zonefile, "app.example.com", [DnsRecord(name="www", type="A", ttl=300, data="198.51.100.7")]
+    )
+
+    dns_mod._write_coredns_config((zone,), "203.0.113.99", **args)
+
+    by_name = {(r.name, r.type): r.data for r in zonefile_mod.read_records(zonefile, "app.example.com")}
+    # Router-owned records follow the new address...
+    assert by_name[("@", "A")] == "203.0.113.99"
+    assert by_name[("*", "A")] == "203.0.113.99"
+    assert by_name[("ns", "A")] == "203.0.113.99"
+    # ...and an app's record is left exactly where it was.
+    assert by_name[("www", "A")] == "198.51.100.7"
+
+
+def test_container_view_runs_without_any_public_zones(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # A space using an external DNS provider still needs the hairpin, so the container view is
+    # generated with no public server block and no public IP at all.
+    monkeypatch.setattr(dns_mod, "_gateway_ip_is_bindable", lambda ip: True)
+    monkeypatch.setattr(dns_mod, "_host_upstream_resolvers", lambda: ["9.9.9.9"])
+
+    corefile = tmp_path / "Corefile"
+    zonefile = tmp_path / "zonefile"
+    dns_mod._write_coredns_config(
+        (dns_mod.DnsZone("app.example.com", zonefile),),
+        None,
+        corefile,
+        container_gateway_ip="10.200.0.1",
+        serve_public=False,
+    )
+
+    cf = corefile.read_text()
+    assert "bind 10.200.0.1" in cf
+    assert "forward . 9.9.9.9" in cf
+    # No authoritative view, and no public zone file written.
+    assert cf.count("bind ") == cf.count("bind 10.200.0.1")
+    assert not zonefile.exists()
+    assert (tmp_path / "zonefile.container").exists()
+
+
+def test_serving_public_zones_requires_a_public_ip(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="public IP is required"):
+        dns_mod._write_coredns_config(
+            (dns_mod.DnsZone("app.example.com", tmp_path / "zonefile"),),
+            None,
+            tmp_path / "Corefile",
+            container_gateway_ip=None,
+            serve_public=True,
+        )
+
+
+def test_coredns_is_needed_for_either_view(monkeypatch: pytest.MonkeyPatch) -> None:
+    zones = (dns_mod.DnsZone("app.example.com", Path("/tmp/zonefile")),)
+    monkeypatch.setattr(dns_mod, "_gateway_ip_is_bindable", lambda ip: True)
+    assert dns_mod.coredns_is_needed(zones, serve_public=True, container_gateway_ip=None) is True
+    # No public zones, but the hairpin still needs it.
+    assert dns_mod.coredns_is_needed((), serve_public=False, container_gateway_ip="10.200.0.1") is True
+
+    monkeypatch.setattr(dns_mod, "_gateway_ip_is_bindable", lambda ip: False)
+    # Nothing to serve on either side: don't start it at all.
+    assert dns_mod.coredns_is_needed((), serve_public=False, container_gateway_ip="10.200.0.1") is False
+    assert dns_mod.coredns_is_needed(zones, serve_public=False, container_gateway_ip=None) is False

@@ -8,8 +8,8 @@ control, so a malicious instance cannot mint certs for domains it does not contr
 Flow:
   1. generate keypair + CSR locally
   2. POST the CSR -> broker returns DNS-01 challenge record(s)
-  3. publish those TXT record(s) verbatim via the existing CoreDNS write path
-  4. wait for CoreDNS to reload + the records to be externally visible
+  3. publish those TXT record(s) verbatim through this space's DNS backend
+  4. wait for the records to become externally visible
   5. poll finalize (202 = keep waiting) until issued, then install cert + local key
 """
 
@@ -23,8 +23,10 @@ from typing import Protocol
 import attr
 from cryptography.hazmat.primitives import serialization
 
-import compute_space.core.dns as dns_module
-from compute_space.core.dns import TxtRecord
+from compute_space.core.dns.backend import DnsBackend
+from compute_space.core.dns.backend import clear_txt
+from compute_space.core.dns.backend import publish_txt
+from compute_space.core.dns.backend import wait_for_txt_propagation
 from compute_space.core.logging import logger
 from compute_space.core.tls.acquire_cert import write_cert_and_key
 from compute_space.core.tls.cert_api_client import FINALIZE_STATUS_VALID
@@ -32,12 +34,7 @@ from compute_space.core.tls.cert_api_client import CertApiClient
 from compute_space.core.tls.cert_api_client import CertApiError
 from compute_space.core.tls.util import _create_csr
 from compute_space.core.tls.util import _generate_tls_key
-from compute_space.core.tls.util import _wait_for_txt_propagation
 from compute_space.core.tls.util import tls_private_key_to_pem
-
-# CoreDNS reloads the zone file on a ~2s interval; give it a beat before we expect
-# the new records to be servable.  Mirrors the BYO-ACME path in core/tls/util.py.
-_COREDNS_RELOAD_SECONDS = 3.0
 
 
 def _as_fqdn(name: str) -> str:
@@ -69,23 +66,22 @@ class RealClock:
 REAL_CLOCK = RealClock()
 
 
-def _wait_for_dns_propagation(zone_domain: str, expected_values: list[str]) -> None:
-    """Let CoreDNS reload, then wait until an external resolver sees the records.
+def _wait_for_dns_propagation(backend: DnsBackend, fqdn: str, expected_values: list[str]) -> None:
+    """Wait until an external resolver sees the records.
 
-    Same safeguard the BYO-ACME path applies before validation: the broker asks the
-    CA to validate during finalize, so the records must be live first or the first
-    attempt fails.  ``_wait_for_txt_propagation`` logs and proceeds on timeout, so a
-    delegation that never propagates still falls through to the broker's own retries.
+    Same safeguard the BYO-ACME path applies before validation: the broker asks the CA to validate
+    during finalize, so the records must be live first or the first attempt fails.
+    ``wait_for_txt_propagation`` logs and proceeds on timeout, so a delegation that never
+    propagates still falls through to the broker's own retries.
     """
-    time.sleep(_COREDNS_RELOAD_SECONDS)
-    _wait_for_txt_propagation(zone_domain, expected_values)
+    wait_for_txt_propagation(fqdn, expected_values, timeout=backend.propagation_timeout_seconds)
 
 
 def acquire_tls_cert_via_broker(
     domain: str,
     cert_path: Path,
     key_path: Path,
-    coredns_zonefile_path: Path,
+    backend: DnsBackend,
     client: CertApiClient,
     *,
     poll_interval_seconds: float = 5.0,
@@ -93,7 +89,7 @@ def acquire_tls_cert_via_broker(
     poll_max_interval_seconds: float = 30.0,
     poll_timeout_seconds: float = 600.0,
     clock: Clock = REAL_CLOCK,
-    wait_for_propagation: Callable[[str, list[str]], None] = _wait_for_dns_propagation,
+    wait_for_propagation: Callable[[DnsBackend, str, list[str]], None] = _wait_for_dns_propagation,
 ) -> None:
     """Acquire and install a wildcard TLS cert for ``domain`` via the broker."""
     domains = [domain, f"*.{domain}"]
@@ -106,14 +102,18 @@ def acquire_tls_cert_via_broker(
     order = client.create_order(csr_pem)
     logger.info(f"Broker order {order.order_id} created with {len(order.challenges)} challenge(s)")
 
-    # Broker challenge names are full FQDNs; write them absolute (trailing dot) so
-    # CoreDNS does not re-append $ORIGIN.
-    records = [TxtRecord(record_name=_as_fqdn(c.record_name), record_value=c.record_value) for c in order.challenges]
-    dns_module.append_txt_records(coredns_zonefile_path, records)
+    # Broker challenge names are full FQDNs, and a wildcard order puts the base and *.domain
+    # challenges at the same name, so group by name and publish each set in one write.
+    by_name: dict[str, list[str]] = {}
+    for challenge in order.challenges:
+        by_name.setdefault(_as_fqdn(challenge.record_name).rstrip("."), []).append(challenge.record_value)
+    for fqdn, values in by_name.items():
+        publish_txt(backend, fqdn, values)
     try:
         # Don't poll finalize until the records are actually live: the broker drives
         # CA validation during finalize, so a not-yet-visible record fails the order.
-        wait_for_propagation(domain, [c.record_value for c in order.challenges])
+        for fqdn, values in by_name.items():
+            wait_for_propagation(backend, fqdn, values)
         certificate = _poll_until_issued(
             client,
             order.order_id,
@@ -125,7 +125,8 @@ def acquire_tls_cert_via_broker(
         )
     finally:
         # Always pull the challenge records back out, success or failure.
-        dns_module.clear_txt(coredns_zonefile_path)
+        for fqdn in by_name:
+            clear_txt(backend, fqdn)
 
     write_cert_and_key(cert_path, key_path, certificate.encode(), tls_private_key_to_pem(tls_key))
     logger.info(f"Installed broker-issued TLS cert for {domain} -> {cert_path}")

@@ -23,10 +23,16 @@ from compute_space.core.caddy import reload_caddy_for_domains
 from compute_space.core.caddy import set_active_caddy
 from compute_space.core.caddy import start_caddy
 from compute_space.core.caddy import unix_admin_address
+from compute_space.core.containers import CONTAINER_GATEWAY_IP
 from compute_space.core.dns import CoreDnsProcess
+from compute_space.core.dns import coredns_is_needed
 from compute_space.core.dns import public_dns_zones
 from compute_space.core.dns import set_active_coredns
 from compute_space.core.dns import start_coredns
+from compute_space.core.dns import uses_local_dns
+from compute_space.core.dns.dynamic import start_dynamic_dns_thread
+from compute_space.core.dns.public_ip import effective_public_ip
+from compute_space.core.dns.public_ip import seed_public_ip
 from compute_space.core.domains import Domain
 from compute_space.core.domains import effective_domains
 from compute_space.core.first_boot import owner_exists
@@ -94,13 +100,20 @@ def _ensure_tls_cert(config: Config, db: sqlite3.Connection) -> None:
     if status == CertStatus.OK:
         logger.info(f"Using existing TLS cert from {config.tls_cert_path}")
         return
-    if not config.coredns_enabled or not config.acquire_tls_cert_if_missing:
+    # DNS-01 needs *a* DNS backend, not specifically CoreDNS: a space whose records live at an
+    # external provider can acquire a cert with CoreDNS switched off entirely.
+    local_dns = uses_local_dns(db)
+    dns_available = config.coredns_enabled if local_dns else True
+    if not dns_available or not config.acquire_tls_cert_if_missing:
         # A cert nearing expiry still works, so don't block startup over it.
         if status == CertStatus.EXPIRING_SOON:
             logger.warning("TLS cert expires soon but automatic cert acquisition is not enabled; cannot renew")
             return
-        if not config.coredns_enabled:
-            raise RuntimeError("CoreDNS must be enabled to acquire TLS cert via DNS-01 challenge")
+        if not dns_available:
+            raise RuntimeError(
+                "This instance provides its own DNS but CoreDNS is disabled, so the DNS-01 challenge "
+                "cannot be answered. Enable coredns_enabled, or install a DNS provider app."
+            )
         raise RuntimeError(f"TLS cert is {status.value} and acquire_tls_cert_if_missing is False")
     if status == CertStatus.EXPIRING_SOON:
         # The existing cert is still valid, so a failed renewal shouldn't block
@@ -142,16 +155,24 @@ def main() -> None:
         dns_zones = public_dns_zones(config, db)
         _require_configured_domain(domains)  # fail loud at boot, not late in the first request
 
-        if config.coredns_enabled:
-            if not config.public_ip:
-                raise RuntimeError("Public IP must be set in config to use CoreDNS")
-            # Authoritative for every public (non-mDNS) domain the instance answers on, so a
-            # secondary domain delegated to this box resolves too — not just the primary.
+        # No DNS provider app installed means the router provides the `dns` service itself, so a
+        # fresh instance answers its own DNS with no setup at all.
+        seed_public_ip(config, db)
+        public_ip = effective_public_ip(config, db)
+
+        # Two independent reasons to run CoreDNS.  Public authoritative zones, when this instance
+        # is its own DNS provider; and the container view, which the app hairpin needs whoever
+        # answers publicly — including on an http-only box where coredns_enabled is false.
+        serve_public = config.coredns_enabled and uses_local_dns(db)
+        if serve_public and not public_ip:
+            raise RuntimeError("Public IP must be set to serve authoritative DNS")
+        if coredns_is_needed(dns_zones, serve_public, CONTAINER_GATEWAY_IP):
             coredns = start_coredns(
                 dns_zones,
-                config.public_ip,
+                public_ip,
                 config.coredns_corefile_path,
                 coredns_bin=_ensure_coredns_binary(config),
+                serve_public=serve_public,
             )
             # Register so /api/domains can regenerate zones + restart CoreDNS when a domain is added.
             set_active_coredns(coredns)
@@ -176,10 +197,15 @@ def main() -> None:
             )
             # Register so /api/domains can regenerate + restart Caddy when a domain is added/removed.
             set_active_caddy(caddy)
-            if needs_caddy_for_tls and config.coredns_enabled and config.acquire_tls_cert_if_missing:
+            if needs_caddy_for_tls and (serve_public or not uses_local_dns(db)) and config.acquire_tls_cert_if_missing:
                 # Renew every TLS domain — including a TLS secondary under a non-TLS primary — and
                 # regenerate the Caddyfile so acquired certs are served.
                 start_renewal_thread(reload_caddy_for_domains)
+
+        if config.dynamic_dns_enabled:
+            # Opt-in: on a fixed address the polling is pure cost, but on a connection that gets
+            # renumbered it is the only thing that brings the space back.
+            start_dynamic_dns_thread(config, get_db, config.dynamic_dns_interval_seconds)
         elif needs_caddy_for_tls:
             raise RuntimeError(
                 "A TLS domain is configured but start_caddy is False. Caddy is required for TLS termination."
