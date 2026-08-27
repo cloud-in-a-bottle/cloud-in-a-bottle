@@ -26,6 +26,17 @@ CERT = Path("/data/cert.pem")
 KEY = Path("/data/key.pem")
 
 
+async def _done_task() -> asyncio.Task[None]:
+    """Stand-in for a log-streaming task, already finished so stops and drains return at once."""
+
+    async def _noop() -> None:
+        return None
+
+    task = asyncio.create_task(_noop())
+    await task
+    return task
+
+
 def _cert_for(cert_domain: str | None):  # type: ignore[no-untyped-def]
     """Resolver that hands out the file cert for `cert_domain` only (mimics the primary having an
     acquired cert while other domains don't yet)."""
@@ -139,16 +150,16 @@ async def test_restart_serializes_concurrent_callers(tmp_path: Path, monkeypatch
     active = 0
     max_active = 0
 
-    async def fake_spawn(_path: Path) -> _FakeProc:
+    async def fake_spawn(_path: Path):  # type: ignore[no-untyped-def]
         nonlocal active, max_active
         active += 1
         max_active = max(max_active, active)
         await asyncio.sleep(0.02)  # widen the window so an unserialized restart would overlap here
         active -= 1
-        return _FakeProc()
+        return _FakeProc(), await _done_task()
 
     monkeypatch.setattr(caddy, "_spawn_caddy", fake_spawn)
-    cp = CaddyProcess(proc=_FakeProc(), caddyfile_path=tmp_path / "Caddyfile")  # type: ignore[arg-type]
+    cp = CaddyProcess(proc=_FakeProc(), log_task=await _done_task(), caddyfile_path=tmp_path / "Caddyfile")  # type: ignore[arg-type]
 
     await asyncio.gather(*(cp.restart() for _ in range(5)))
 
@@ -191,9 +202,9 @@ class _AliveProc:
 
 
 def _spawn_recorder(spawned: list[Path]):  # type: ignore[no-untyped-def]
-    async def fake_spawn(path: Path) -> _AliveProc:
+    async def fake_spawn(path: Path):  # type: ignore[no-untyped-def]
         spawned.append(path)
-        return _AliveProc()
+        return _AliveProc(), await _done_task()
 
     return fake_spawn
 
@@ -214,7 +225,12 @@ async def test_reload_uses_admin_api_without_respawn(tmp_path: Path, monkeypatch
     reloads: list[tuple[Path, str]] = []
     monkeypatch.setattr(caddy, "_spawn_caddy", _spawn_recorder(spawned))
     monkeypatch.setattr(caddy, "_run_caddy_reload", _reload_recorder(reloads))
-    cp = CaddyProcess(proc=_AliveProc(), caddyfile_path=tmp_path / "Caddyfile", admin_addr="unix//x.sock")  # type: ignore[arg-type]
+    cp = CaddyProcess(  # type: ignore[arg-type]
+        proc=_AliveProc(),
+        log_task=await _done_task(),
+        caddyfile_path=tmp_path / "Caddyfile",
+        admin_addr="unix//x.sock",
+    )
 
     await cp.reload()
 
@@ -227,7 +243,12 @@ async def test_reload_falls_back_to_cold_restart_on_failure(tmp_path: Path, monk
     spawned: list[Path] = []
     monkeypatch.setattr(caddy, "_spawn_caddy", _spawn_recorder(spawned))
     monkeypatch.setattr(caddy, "_run_caddy_reload", _reload_recorder([], returncode=1))  # reload fails
-    cp = CaddyProcess(proc=_AliveProc(), caddyfile_path=tmp_path / "Caddyfile", admin_addr="unix//x.sock")  # type: ignore[arg-type]
+    cp = CaddyProcess(  # type: ignore[arg-type]
+        proc=_AliveProc(),
+        log_task=await _done_task(),
+        caddyfile_path=tmp_path / "Caddyfile",
+        admin_addr="unix//x.sock",
+    )
 
     await cp.reload()
 
@@ -245,7 +266,12 @@ async def test_reload_falls_back_to_cold_restart_on_timeout(tmp_path: Path, monk
         raise TimeoutError
 
     monkeypatch.setattr(caddy, "_run_caddy_reload", _hang)
-    cp = CaddyProcess(proc=_AliveProc(), caddyfile_path=tmp_path / "Caddyfile", admin_addr="unix//x.sock")  # type: ignore[arg-type]
+    cp = CaddyProcess(  # type: ignore[arg-type]
+        proc=_AliveProc(),
+        log_task=await _done_task(),
+        caddyfile_path=tmp_path / "Caddyfile",
+        admin_addr="unix//x.sock",
+    )
 
     await cp.reload()  # must not raise
 
@@ -260,7 +286,9 @@ async def test_reload_cold_restarts_when_admin_off(tmp_path: Path, monkeypatch: 
     spawned: list[Path] = []
     monkeypatch.setattr(caddy, "_run_caddy_reload", _reload_recorder(reloads))
     monkeypatch.setattr(caddy, "_spawn_caddy", _spawn_recorder(spawned))
-    cp = CaddyProcess(proc=_AliveProc(), caddyfile_path=tmp_path / "Caddyfile")  # type: ignore[arg-type]  # admin_addr=None
+    cp = CaddyProcess(  # type: ignore[arg-type]  # admin_addr=None
+        proc=_AliveProc(), log_task=await _done_task(), caddyfile_path=tmp_path / "Caddyfile"
+    )
 
     await cp.reload()
 
@@ -288,17 +316,6 @@ class _DeadProc:
 _ADDR_IN_USE_LINE = "Error: loading initial config: ... listen tcp :443: bind: address already in use"
 
 
-async def _done_task() -> asyncio.Task[None]:
-    """Stand-in for the log-streaming task, already finished so the drain returns at once."""
-
-    async def _noop() -> None:
-        return None
-
-    task = asyncio.create_task(_noop())
-    await task
-    return task
-
-
 @pytest.mark.asyncio
 async def test_spawn_caddy_retries_until_ports_free(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     # First two spawns hit a bind conflict (updater still holds :443), third binds.
@@ -312,7 +329,7 @@ async def test_spawn_caddy_retries_until_ports_free(monkeypatch: pytest.MonkeyPa
 
     monkeypatch.setattr(caddy, "_spawn_caddy_once", fake_once)
     monkeypatch.setattr(caddy, "_CADDY_BIND_RETRY_INTERVAL", 0)
-    proc = await caddy._spawn_caddy(tmp_path / "Caddyfile")
+    proc, _ = await caddy._spawn_caddy(tmp_path / "Caddyfile")
     assert isinstance(proc, _RunningProc)
     assert calls["n"] == 3  # retried past the two conflicts
 
@@ -327,7 +344,7 @@ async def test_spawn_caddy_gives_up_after_window(monkeypatch: pytest.MonkeyPatch
     monkeypatch.setattr(caddy, "_spawn_caddy_once", fake_once)
     monkeypatch.setattr(caddy, "_CADDY_BIND_RETRY_INTERVAL", 0)
     monkeypatch.setattr(caddy, "_CADDY_BIND_RETRY_SECONDS", 0.0)
-    proc = await caddy._spawn_caddy(tmp_path / "Caddyfile")
+    proc, _ = await caddy._spawn_caddy(tmp_path / "Caddyfile")
     assert isinstance(proc, _DeadProc)
 
 
@@ -343,6 +360,6 @@ async def test_spawn_caddy_fails_fast_on_non_bind_error(monkeypatch: pytest.Monk
 
     monkeypatch.setattr(caddy, "_spawn_caddy_once", fake_once)
     monkeypatch.setattr(caddy, "_CADDY_BIND_RETRY_INTERVAL", 0)
-    proc = await caddy._spawn_caddy(tmp_path / "Caddyfile")
+    proc, _ = await caddy._spawn_caddy(tmp_path / "Caddyfile")
     assert isinstance(proc, _DeadProc)
     assert calls["n"] == 1  # no retry on a non-bind failure

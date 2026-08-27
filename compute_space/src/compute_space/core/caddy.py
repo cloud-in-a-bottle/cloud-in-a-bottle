@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import sqlite3
 import time
 from collections.abc import Callable
@@ -121,11 +122,6 @@ _CADDY_BIND_RETRY_INTERVAL = 0.25
 _CADDY_ADDR_IN_USE = "address already in use"
 
 
-# Log-streaming tasks outlive the call that started them, so hold a strong reference —
-# the loop only keeps weak ones and would otherwise garbage-collect them mid-stream.
-_log_tasks: set[asyncio.Task[None]] = set()
-
-
 async def _spawn_caddy_once(caddyfile_path: Path) -> tuple[asyncio.subprocess.Process, list[str], asyncio.Task[None]]:
     """Spawn Caddy and stream its logs. Returns the proc, a bounded tail of recent
     output lines (so _spawn_caddy can tell a bind conflict from a config error),
@@ -153,26 +149,27 @@ async def _spawn_caddy_once(caddyfile_path: Path) -> tuple[asyncio.subprocess.Pr
         logger.warning(f"Caddy exited with code {proc.returncode}")
 
     log_task = asyncio.create_task(_stream_caddy_logs())
-    _log_tasks.add(log_task)
-    log_task.add_done_callback(_log_tasks.discard)
     logger.info(f"Started Caddy (pid {proc.pid})")
     return proc, recent, log_task
 
 
-async def _spawn_caddy(caddyfile_path: Path) -> asyncio.subprocess.Process:
+async def _spawn_caddy(caddyfile_path: Path) -> tuple[asyncio.subprocess.Process, asyncio.Task[None]]:
     """Start Caddy, retrying only the "address already in use" case while :443/:80
     is still held by the update-downtime server. Any other immediate exit (e.g. a
     config error) is returned right away so the caller fails fast.
+
+    Returns the process and its log task; the caller owns both (see CaddyProcess).
     """
     deadline = time.monotonic() + _CADDY_BIND_RETRY_SECONDS
     while True:
         proc, recent, log_task = await _spawn_caddy_once(caddyfile_path)
         await asyncio.sleep(_CADDY_BIND_RETRY_INTERVAL)
         if proc.returncode is None:
-            return proc  # still running after the settle window — bound successfully
+            return proc, log_task  # still running after the settle window — bound successfully
         # Drain the log task before classifying, else a bind conflict could look
-        # like a config error.
+        # like a config error.  Cancel covers the drain timing out; it's a no-op otherwise.
         await asyncio.wait([log_task], timeout=2.0)
+        log_task.cancel()
         addr_in_use = any(_CADDY_ADDR_IN_USE in line for line in recent)
         if addr_in_use and time.monotonic() < deadline:
             logger.info("Caddy bind conflict (ports still held by the update server); retrying")
@@ -182,7 +179,7 @@ async def _spawn_caddy(caddyfile_path: Path) -> asyncio.subprocess.Process:
             logger.warning("Caddy exited immediately for a non-bind reason; not retrying")
         else:
             logger.warning("Caddy failed to bind within the update-handoff retry window")
-        return proc
+        return proc, log_task
 
 
 _CADDY_RELOAD_TIMEOUT = 30.0
@@ -216,9 +213,13 @@ async def _run_caddy_reload(caddyfile_path: Path, admin_addr: str) -> tuple[int,
 
 @attr.s(auto_attribs=True)
 class CaddyProcess:
-    """Handle to the running Caddy child.  Mutable: restart()/reload() may replace proc."""
+    """Handle to the running Caddy child.  Mutable: restart()/reload() may replace proc.
+
+    Owns the log-streaming task alongside the process it reads — the two share a lifetime, and the
+    loop keeps only a weak reference to a task, so something has to hold a strong one."""
 
     proc: asyncio.subprocess.Process
+    log_task: asyncio.Task[None]
     caddyfile_path: Path
     # Admin API address (Caddy network form, e.g. `unix//path`) for zero-downtime reloads; None
     # means Caddy runs with `admin off`, so reload() falls back to a cold restart.
@@ -227,9 +228,8 @@ class CaddyProcess:
     # at once, and two overlapping restarts race :443.
     _restart_lock: asyncio.Lock = attr.ib(factory=asyncio.Lock, init=False, eq=False, repr=False)
 
-    async def _cold_restart_locked(self) -> None:
-        """Stop the current process (if alive) and spawn a fresh one.  Caller must hold the lock; the
-        old process must exit before the new one starts since both bind :80/:443."""
+    async def _stop_locked(self) -> None:
+        """Terminate Caddy and wind down its log task.  Caller must hold the lock."""
         if self.proc.returncode is None:
             self.proc.terminate()
             try:
@@ -238,10 +238,24 @@ class CaddyProcess:
                 logger.warning(f"Caddy (pid {self.proc.pid}) did not exit after terminate, killing")
                 self.proc.kill()
                 await self.proc.wait()
+        # An unprompted exit is worth logging, so the task logs it itself; a deliberate stop isn't.
+        self.log_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await self.log_task
+
+    async def _cold_restart_locked(self) -> None:
+        """Stop the current process (if alive) and spawn a fresh one.  Caller must hold the lock; the
+        old process must exit before the new one starts since both bind :80/:443."""
+        await self._stop_locked()
         # A killed Caddy may leave its admin unix socket behind, blocking rebind; clear it first.
         if self.admin_addr and self.admin_addr.startswith("unix/"):
             Path(self.admin_addr.removeprefix("unix/")).unlink(missing_ok=True)
-        self.proc = await _spawn_caddy(self.caddyfile_path)
+        self.proc, self.log_task = await _spawn_caddy(self.caddyfile_path)
+
+    async def stop(self) -> None:
+        """Shut Caddy down for good."""
+        async with self._restart_lock:
+            await self._stop_locked()
 
     async def restart(self) -> None:
         """Cold restart (terminate + respawn), dropping in-flight connections.  Prefer reload()."""
@@ -280,7 +294,8 @@ async def start_caddy(
     """Generate Caddyfile and start Caddy."""
     caddyfile_path.parent.mkdir(parents=True, exist_ok=True)
     caddyfile_path.write_text(generate_caddyfile(domains, web_server_port, cert_for, admin_addr))
-    return CaddyProcess(proc=await _spawn_caddy(caddyfile_path), caddyfile_path=caddyfile_path, admin_addr=admin_addr)
+    proc, log_task = await _spawn_caddy(caddyfile_path)
+    return CaddyProcess(proc=proc, log_task=log_task, caddyfile_path=caddyfile_path, admin_addr=admin_addr)
 
 
 # The live CaddyProcess, registered by start.py so request handlers (e.g. /api/domains) can

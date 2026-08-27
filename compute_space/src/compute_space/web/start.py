@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import os
 import shutil
 import signal
@@ -47,19 +48,6 @@ from compute_space.db import init_db
 from compute_space.web.app import create_app
 from compute_space.web.setup_app import create_setup_app
 from openhost_system_agent.updater.paths import DATA_DIR_ENV
-
-
-async def _terminate_children(children: list[asyncio.subprocess.Process]) -> None:
-    for proc in children:
-        if proc.returncode is None:
-            logger.info(f"Terminating child process {proc.pid}")
-            proc.terminate()
-    for proc in children:
-        try:
-            await asyncio.wait_for(proc.wait(), timeout=3)
-        except TimeoutError:
-            logger.warning(f"Child process {proc.pid} did not exit, killing")
-            proc.kill()
 
 
 def _bootstrap(config: Config) -> None:
@@ -194,11 +182,15 @@ async def _main() -> None:
     mark_boot_complete()
 
     async def _shutdown() -> None:
-        """Stop the renewal task and the child processes.  Reads caddy.proc / coredns.proc now
-        rather than capturing them earlier: restart() may have replaced them since."""
+        """Stop the renewal task and the child processes.  Each handle stops its own process and
+        log task, which restart() may have replaced since startup."""
         if renewal_task is not None:
             renewal_task.cancel()
-        await _terminate_children([p.proc for p in (caddy, coredns) if p is not None])
+            with contextlib.suppress(asyncio.CancelledError):
+                await renewal_task
+        for child in (caddy, coredns):
+            if child is not None:
+                await child.stop()
 
     hypercorn_config = hypercorn.config.Config()
     # Bind the primary address (127.0.0.1 in production) plus the container
