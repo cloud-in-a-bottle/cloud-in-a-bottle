@@ -15,6 +15,7 @@ clear_txt() after the cert is issued.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import re
 import socket
 import sqlite3
@@ -193,11 +194,9 @@ def _write_coredns_config(
                 f.write(container_content)
 
 
-# Strong references to the log-streaming tasks; see the same set in caddy.py.
-_log_tasks: set[asyncio.Task[None]] = set()
-
-
-async def _spawn_coredns(corefile_path: Path, coredns_bin: str) -> asyncio.subprocess.Process:
+async def _spawn_coredns(
+    corefile_path: Path, coredns_bin: str
+) -> tuple[asyncio.subprocess.Process, asyncio.Task[None]]:
     proc = await asyncio.create_subprocess_exec(
         coredns_bin,
         "-conf",
@@ -214,35 +213,48 @@ async def _spawn_coredns(corefile_path: Path, coredns_bin: str) -> asyncio.subpr
         logger.warning(f"CoreDNS exited with code {proc.returncode}")
 
     log_task = asyncio.create_task(_stream_coredns_logs())
-    _log_tasks.add(log_task)
-    log_task.add_done_callback(_log_tasks.discard)
     logger.info(f"Started CoreDNS (pid {proc.pid})")
-    return proc
+    return proc, log_task
 
 
 @attr.s(auto_attribs=True)
 class CoreDnsProcess:
     """Handle to the running CoreDNS child.  Mutable: restart() replaces proc with a fresh one so
-    it picks up a regenerated Corefile (new zones).  Mirrors ``CaddyProcess``."""
+    it picks up a regenerated Corefile (new zones).  Mirrors ``CaddyProcess``, including owning the
+    log-streaming task that reads the process it holds."""
 
     proc: asyncio.subprocess.Process
+    log_task: asyncio.Task[None]
     corefile_path: Path
     coredns_bin: str
     # Serializes restart() to match CaddyProcess — insurance against a future background caller racing
     # two coredns onto :53 (today's callers are already serialized on the event loop).
     _restart_lock: asyncio.Lock = attr.ib(factory=asyncio.Lock, init=False, eq=False, repr=False)
 
+    async def _stop_locked(self) -> None:
+        """Terminate CoreDNS and wind down its log task.  Caller must hold the lock."""
+        if self.proc.returncode is None:
+            self.proc.terminate()
+            try:
+                await asyncio.wait_for(self.proc.wait(), timeout=3)
+            except TimeoutError:
+                logger.warning(f"CoreDNS (pid {self.proc.pid}) did not exit after terminate, killing")
+                self.proc.kill()
+                await self.proc.wait()
+        # An unprompted exit is worth logging, so the task logs it itself; a deliberate stop isn't.
+        self.log_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await self.log_task
+
+    async def stop(self) -> None:
+        """Shut CoreDNS down for good."""
+        async with self._restart_lock:
+            await self._stop_locked()
+
     async def restart(self) -> None:
         async with self._restart_lock:
-            if self.proc.returncode is None:
-                self.proc.terminate()
-                try:
-                    await asyncio.wait_for(self.proc.wait(), timeout=3)
-                except TimeoutError:
-                    logger.warning(f"CoreDNS (pid {self.proc.pid}) did not exit after terminate, killing")
-                    self.proc.kill()
-                    await self.proc.wait()
-            self.proc = await _spawn_coredns(self.corefile_path, self.coredns_bin)
+            await self._stop_locked()
+            self.proc, self.log_task = await _spawn_coredns(self.corefile_path, self.coredns_bin)
 
 
 async def start_coredns(
@@ -262,8 +274,10 @@ async def start_coredns(
     """
     _write_coredns_config(zones, public_ip, corefile_path, container_gateway_ip)
     logger.info(f"Starting CoreDNS for {', '.join(z.domain for z in zones)}")
+    proc, log_task = await _spawn_coredns(corefile_path, coredns_bin)
     return CoreDnsProcess(
-        proc=await _spawn_coredns(corefile_path, coredns_bin),
+        proc=proc,
+        log_task=log_task,
         corefile_path=corefile_path,
         coredns_bin=coredns_bin,
     )
