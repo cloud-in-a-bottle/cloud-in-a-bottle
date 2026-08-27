@@ -25,6 +25,8 @@ from compute_space.core.caddy import start_caddy
 from compute_space.core.caddy import unix_admin_address
 from compute_space.core.containers import CONTAINER_GATEWAY_IP
 from compute_space.core.dns.client import uses_local_dns
+from compute_space.core.dns.coredns_provider.coredns import ADDRESS_TTL_SECONDS
+from compute_space.core.dns.coredns_provider.coredns import DYNAMIC_ADDRESS_TTL_SECONDS
 from compute_space.core.dns.coredns_provider.coredns import CoreDnsProcess
 from compute_space.core.dns.coredns_provider.coredns import coredns_is_needed
 from compute_space.core.dns.coredns_provider.coredns import public_dns_zones
@@ -173,6 +175,8 @@ def main() -> None:
                 config.coredns_corefile_path,
                 coredns_bin=_ensure_coredns_binary(config),
                 serve_public=serve_public,
+                db=db,
+                default_ttl=DYNAMIC_ADDRESS_TTL_SECONDS if config.dynamic_dns_enabled else ADDRESS_TTL_SECONDS,
             )
             # Register so /api/domains can regenerate zones + restart CoreDNS when a domain is added.
             set_active_coredns(coredns)

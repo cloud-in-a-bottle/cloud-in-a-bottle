@@ -14,6 +14,7 @@ a restart — see ``reload_coredns_for_domains``.  Record reads and writes go th
 
 from __future__ import annotations
 
+import os
 import socket
 import sqlite3
 import subprocess
@@ -28,11 +29,13 @@ from jinja2 import StrictUndefined
 
 from compute_space.config import Config
 from compute_space.core.containers import CONTAINER_GATEWAY_IP
-from compute_space.core.dns.coredns_provider.zonefile import update_router_records
+from compute_space.core.dns.coredns_provider import store
 from compute_space.core.dns.public_ip import effective_public_ip
 from compute_space.core.domains import effective_domains
 from compute_space.core.domains import primary_domain_or_none
 from compute_space.core.logging import logger
+from compute_space.core.settings_store import get_setting
+from compute_space.core.settings_store import set_setting
 
 _TEMPLATES_DIR = Path(__file__).parent / "templates"
 # StrictUndefined so a template referencing a variable/attribute we forgot to pass raises instead
@@ -42,6 +45,15 @@ _jinja_env = Environment(loader=FileSystemLoader(_TEMPLATES_DIR), undefined=Stri
 # Fallback upstream resolvers for the container-facing DNS view's catch-all
 # forward block, used only if the host's own resolvers can't be discovered.
 _FALLBACK_UPSTREAM_DNS = ("8.8.8.8", "1.1.1.1")
+
+# Monotonic SOA serial shared by every zone; serials need not relate across zones.
+_SERIAL_KEY = "dns_serial"
+
+# Zone default TTL, which the derived address records inherit.  Long by default: it is what keeps
+# visitors able to reach the instance while CoreDNS is down during an update.  Dynamic DNS drops
+# it, since polling every few minutes is pointless if resolvers cache the old address for five.
+ADDRESS_TTL_SECONDS = 300
+DYNAMIC_ADDRESS_TTL_SECONDS = 60
 
 
 def _gateway_ip_is_bindable(gateway_ip: str) -> bool:
@@ -138,16 +150,10 @@ def _write_coredns_config(
     container_gateway_ip: str | None,
     *,
     serve_public: bool,
+    db: sqlite3.Connection | None = None,
+    default_ttl: int = ADDRESS_TTL_SECONDS,
 ) -> None:
-    """Render the Corefile plus the zone files each enabled view needs.
-
-    Public zone files are *seeded* here, never regenerated: once written they are the source of
-    truth for the zone's records, so re-rendering would discard everything but the three records
-    the template knows about.  An existing file gets its router-owned records updated in place.
-    Container zone files hold nothing else, so they are always rewritten.
-    """
-    bind_serial = int(time.time())
-
+    """Render the Corefile plus the zone files each enabled view needs."""
     # Emitting the container view against an unbindable gateway would stop CoreDNS starting.
     if container_gateway_ip and not _gateway_ip_is_bindable(container_gateway_ip):
         logger.info("Container gateway {} not bindable; skipping container-facing DNS view", container_gateway_ip)
@@ -162,47 +168,65 @@ def _write_coredns_config(
     # there is an authoritative view to bind.
     public_zones = zones if serve_public and public_ip else ()
     container_zones = zones if container_gateway_ip else ()
-    bind_ip = _coredns_bind_ip(public_ip) if public_zones and public_ip else None
 
-    corefile = _jinja_env.get_template("Corefile").render(
-        public_zones=public_zones,
-        container_zones=container_zones,
-        bind_ip=bind_ip,
-        container_gateway_ip=container_gateway_ip,
-        upstream_dns=" ".join(_host_upstream_resolvers()),
+    corefile_path.write_text(
+        _jinja_env.get_template("Corefile").render(
+            public_zones=public_zones,
+            container_zones=container_zones,
+            bind_ip=_coredns_bind_ip(public_ip) if public_zones and public_ip else None,
+            container_gateway_ip=container_gateway_ip,
+            upstream_dns=" ".join(_host_upstream_resolvers()),
+        )
     )
-    with open(corefile_path, "w") as f:
-        f.write(corefile)
 
     for zone in public_zones:
         assert public_ip is not None  # guarded above
-        zone.zonefile_path.parent.mkdir(parents=True, exist_ok=True)
-        if zone.zonefile_path.exists():
-            sync_public_zone(zone, public_ip)
-            continue
-        content = _jinja_env.get_template("zonefile").render(
-            zone_domain=zone.domain,
-            public_ip=public_ip,
-            # Timestamp as the initial serial: simple, and always increasing across runs.
-            serial=bind_serial,
-        )
-        with open(zone.zonefile_path, "w") as f:
-            f.write(content)
+        write_zone_file(zone, public_ip, db, default_ttl)
 
     for zone in container_zones:
         zone.container_zonefile_path.parent.mkdir(parents=True, exist_ok=True)
-        container_content = _jinja_env.get_template("zonefile_container").render(
-            zone_domain=zone.domain,
-            gateway_ip=container_gateway_ip,
-            serial=bind_serial,
+        zone.container_zonefile_path.write_text(
+            _jinja_env.get_template("zonefile_container").render(
+                zone_domain=zone.domain, gateway_ip=container_gateway_ip, serial=_next_serial(db)
+            )
         )
-        with open(zone.container_zonefile_path, "w") as f:
-            f.write(container_content)
 
 
-def sync_public_zone(zone: DnsZone, public_ip: str) -> None:
-    """Re-point an existing zone file's router-owned records, leaving the rest alone."""
-    update_router_records(zone.zonefile_path, zone.domain, public_ip)
+def write_zone_file(
+    zone: DnsZone, public_ip: str, db: sqlite3.Connection | None, default_ttl: int = ADDRESS_TTL_SECONDS
+) -> None:
+    """Generate a zone file from the public IP plus the records stored for it, overwriting it.
+
+    Zone files are outputs, never inputs: nothing reads them back, so a record change or an IP move
+    is a whole-file rewrite.  Written via a temp file and renamed, because CoreDNS re-reads on
+    mtime change and a partial write would leave the zone unparseable.
+    """
+    content = _jinja_env.get_template("zonefile").render(
+        zone_domain=zone.domain,
+        public_ip=public_ip,
+        serial=_next_serial(db),
+        default_ttl=default_ttl,
+        records=store.records_for(db, zone.domain) if db is not None else [],
+    )
+    zone.zonefile_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = zone.zonefile_path.with_name(zone.zonefile_path.name + ".tmp")
+    tmp.write_text(content)
+    os.replace(tmp, zone.zonefile_path)
+
+
+def _next_serial(db: sqlite3.Connection | None) -> int:
+    """A strictly increasing SOA serial, which is what makes CoreDNS reload the zone.
+
+    Wall-clock alone is not enough: two writes in the same second would render the same serial and
+    the second change would never be picked up.
+    """
+    if db is None:
+        return int(time.time())
+    previous = int(get_setting(db, _SERIAL_KEY) or 0)
+    # Serials are unsigned 32-bit and wrap; RFC 1982 arithmetic makes the wrapped value newer.
+    serial = max(previous + 1, int(time.time())) % 2**32
+    set_setting(db, _SERIAL_KEY, str(serial))
+    return serial
 
 
 def _spawn_coredns(corefile_path: Path, coredns_bin: str) -> subprocess.Popen[bytes]:
@@ -260,6 +284,8 @@ def start_coredns(
     coredns_bin: str = "coredns",
     *,
     serve_public: bool = True,
+    db: sqlite3.Connection | None = None,
+    default_ttl: int = ADDRESS_TTL_SECONDS,
 ) -> CoreDnsProcess:
     """Write the Corefile + zone files, start CoreDNS, and return the handle.
 
@@ -267,7 +293,15 @@ def start_coredns(
     provider — and ``public_ip`` is required for it and ignored otherwise.  ``container_gateway_ip``
     controls the container view; pass ``None`` where the gateway interface doesn't exist.
     """
-    _write_coredns_config(zones, public_ip, corefile_path, container_gateway_ip, serve_public=serve_public)
+    _write_coredns_config(
+        zones,
+        public_ip,
+        corefile_path,
+        container_gateway_ip,
+        serve_public=serve_public,
+        db=db,
+        default_ttl=default_ttl,
+    )
     served = ", ".join(z.domain for z in zones) or "no zones"
     logger.info(f"Starting CoreDNS ({'authoritative + ' if serve_public else ''}container view) for {served}")
     return CoreDnsProcess(
@@ -293,23 +327,29 @@ def get_active_coredns() -> CoreDnsProcess | None:
 
 
 def reload_coredns_for_domains(config: Config, db: sqlite3.Connection) -> bool:
-    """Regenerate the Corefile and restart, so a newly added zone gets served — the ``file``
-    plugin's ``reload`` only notices edits to an already-served zone file.
+    """Regenerate the Corefile and zone files, and restart CoreDNS so a newly added zone is served.
 
-    Existing zone files are re-pointed, not re-rendered.  Returns False when CoreDNS isn't running,
-    or when it serves public zones and no public IP is known."""
-    coredns = get_active_coredns()
-    if coredns is None:
-        return False
+    The regeneration happens either way — zone files should reflect the current domain set and IP
+    whether or not anything is serving them right now.  Returns True only if CoreDNS was running
+    and restarted; a restart is needed because a new zone means a new Corefile server block, and
+    the bind address derives from the public IP.
+    """
     public_ip = effective_public_ip(config, db)
-    if coredns.serve_public and not public_ip:
+    coredns = get_active_coredns()
+    serve_public = coredns.serve_public if coredns is not None else config.coredns_enabled
+    if serve_public and not public_ip:
         return False
+
     _write_coredns_config(
         public_dns_zones(config, db),
         public_ip,
-        coredns.corefile_path,
+        coredns.corefile_path if coredns is not None else config.coredns_corefile_path,
         CONTAINER_GATEWAY_IP,
-        serve_public=coredns.serve_public,
+        serve_public=serve_public,
+        db=db,
+        default_ttl=DYNAMIC_ADDRESS_TTL_SECONDS if config.dynamic_dns_enabled else ADDRESS_TTL_SECONDS,
     )
+    if coredns is None:
+        return False
     coredns.restart()
     return True

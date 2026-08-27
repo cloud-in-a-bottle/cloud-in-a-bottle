@@ -13,9 +13,13 @@ import pytest
 
 from compute_space.db.schema import schema_path
 from compute_space.db.versioned.migrations.v0013_domains_and_settings import Migration0013DomainsAndSettings
+from compute_space.db.versioned.registry import REGISTRY
 from compute_space.db.versioned.runner import apply_migrations
 from compute_space.db.versioned.runner import read_version
 from openhost_system_agent.migrations.versions.v0007_seed_domains_and_scrub import _SCHEMA as _AGENT_SCHEMA
+
+# Derived, not pinned: a fresh DB lands on the newest migration, whatever that currently is.
+_HEAD_VERSION = max(m.version for m in REGISTRY)
 
 
 def _tables(db: sqlite3.Connection) -> set[str]:
@@ -47,7 +51,7 @@ def test_fresh_init_creates_domains_and_settings(tmp_path: Path) -> None:
     db = sqlite3.connect(db_path)
     try:
         assert {"domains", "settings"} <= _tables(db)
-        assert read_version(db) == 13
+        assert read_version(db) == _HEAD_VERSION
     finally:
         db.close()
 
@@ -67,7 +71,7 @@ def test_v12_db_upgrades_to_domains_and_settings(tmp_path: Path) -> None:
     db = sqlite3.connect(db_path)
     try:
         assert {"domains", "settings"} <= _tables(db)
-        assert read_version(db) == 13
+        assert read_version(db) == _HEAD_VERSION
     finally:
         db.close()
 

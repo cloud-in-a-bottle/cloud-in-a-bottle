@@ -24,7 +24,6 @@ from collections.abc import Iterable
 from typing import Any
 from urllib.parse import urlencode
 
-import anyio
 import attr
 from litestar import HttpMethod
 from litestar import MediaType
@@ -55,12 +54,6 @@ from compute_space.core.apps import find_app_by_name
 from compute_space.core.apps import get_app_from_hostname
 from compute_space.core.auth.permissions_v2 import get_granted_permissions_v2
 from compute_space.core.containers import get_docker_logs
-from compute_space.core.dns.client import dns_provider_id
-from compute_space.core.dns.coredns_provider.service import handle_dns_service_call
-from compute_space.core.dns.service_api import DNS_SERVICE_URL
-from compute_space.core.dns.service_api import DNS_SERVICE_VERSION
-from compute_space.core.dns.service_api import ROUTER_DNS_PROVIDER_ID
-from compute_space.core.dns.service_api import parse_grants
 from compute_space.core.domains import primary_domain_or_none
 from compute_space.core.installer import GRANT_KEY_CAPABILITY
 from compute_space.core.installer import GRANT_KEY_REPO_URL_PREFIX
@@ -77,6 +70,9 @@ from compute_space.web.auth.auth import require_app_auth
 from compute_space.web.auth.auth import verify_app_auth
 from compute_space.web.helpers.proxy import proxy_http_request
 from compute_space.web.helpers.proxy import proxy_websocket_request
+from compute_space.web.routes.builtin_services import BuiltinService
+from compute_space.web.routes.builtin_services import builtin_for
+from compute_space.web.routes.builtin_services import dispatch as dispatch_builtin
 
 _CALL_PATH = "/api/services/v2/call/{shortname:str}/{rest:path}"
 _HTTP_METHODS = [
@@ -217,15 +213,12 @@ class InstallerServiceRequest:
 
 
 @attr.s(auto_attribs=True, frozen=True)
-class RouterDnsServiceRequest:
-    """A ``dns`` service call to the router's own implementation, dispatched in-process.
-
-    The router is one of two interchangeable providers of this service — the other is an app like
-    external-dns-connector — so which one a call lands on is just the resolved service default.
-    """
+class BuiltinServiceRequest:
+    """A call to a service the router provides itself; see ``web.routes.builtin_services``."""
 
     service_url: str
     version_spec: str
+    service: BuiltinService
 
 
 @attr.s(auto_attribs=True, frozen=True)
@@ -238,24 +231,13 @@ class ServiceRequest:
     extra_headers: list[tuple[str, str]]
 
 
-def _dns_provider_is_router(db: sqlite3.Connection, provider_app_id: str | None) -> bool:
-    """True when the ``dns`` call should be served by the router rather than a provider app.
-
-    The router's provider id has no row in ``apps``, so ``resolve_provider`` cannot resolve it to a
-    port; it is dispatched here instead.
-    """
-    if provider_app_id is not None:
-        return provider_app_id == ROUTER_DNS_PROVIDER_ID
-    return dns_provider_id(db) == ROUTER_DNS_PROVIDER_ID
-
-
 def _service_call_common(
     consumer_app_id: str,
     shortname: str,
     rest: str,
     db: sqlite3.Connection,
     provider_app_id: str | None = None,
-) -> ServiceRequest | InstallerServiceRequest | RouterDnsServiceRequest:
+) -> ServiceRequest | InstallerServiceRequest | BuiltinServiceRequest:
     """Resolve a consumer's shortname to a proxyable request.
 
     Only the two resolution calls are translated, so an accidental lookup bug still surfaces as a 500.
@@ -270,11 +252,8 @@ def _service_call_common(
             service_url=service_url,
             version_spec=version_spec,
         )
-    elif service_url == DNS_SERVICE_URL and _dns_provider_is_router(db, provider_app_id):
-        return RouterDnsServiceRequest(
-            service_url=service_url,
-            version_spec=version_spec,
-        )
+    elif (builtin := builtin_for(service_url, db, provider_app_id)) is not None:
+        return BuiltinServiceRequest(service_url=service_url, version_spec=version_spec, service=builtin)
     else:
         try:
             provider_app_id, provider_port, _, provider_endpoint = resolve_provider(
@@ -339,11 +318,9 @@ async def service_call(
         )
         return installer_response.to_asgi_response(None, request=request)
 
-    if isinstance(resolved, RouterDnsServiceRequest):
-        dns_response = await _handle_router_dns_request(
-            consumer_app_id, resolved.version_spec, rest, request, db, config
-        )
-        return dns_response.to_asgi_response(None, request=request)
+    if isinstance(resolved, BuiltinServiceRequest):
+        builtin_response = await _handle_builtin_request(consumer_app_id, resolved, rest, request, db, config)
+        return builtin_response.to_asgi_response(None, request=request)
 
     response = await proxy_http_request(
         request,
@@ -388,7 +365,7 @@ async def service_call_ws(
         await socket.close(code=4503, reason=e.detail)
         return
 
-    if isinstance(resolved, (InstallerServiceRequest, RouterDnsServiceRequest)):
+    if isinstance(resolved, (InstallerServiceRequest, BuiltinServiceRequest)):
         # Router-implemented services are request/response only; there is no port to proxy to.
         await socket.accept()
         await socket.close(code=1011, reason="This service is not available over WebSocket")
@@ -466,69 +443,39 @@ async def oauth_callback_proxy_v2(request: Request[Any, Any, Any]) -> ASGIRespon
 # and call /api/services/v2/call/installer/{install,status/<name>,logs/<name>}.
 
 
-async def _handle_router_dns_request(
+async def _handle_builtin_request(
     consumer_app_id: str,
-    version_spec: str,
+    resolved: BuiltinServiceRequest,
     rest: str,
     request: Request[Any, Any, Any],
     db: sqlite3.Connection,
     config: Config,
 ) -> Response[Any]:
-    """Serve a ``dns`` service call from the instance's own CoreDNS zone files.
+    """Serve a call to a service the router provides itself.
 
-    The grant check happens in ``handle_dns_service_call`` against the same permissions this
-    module builds for a proxied call, so an app sees identical behavior whether the provider is
-    the router or the connector app.  The 403 body it produces is the standard
-    ``permission_required`` shape, which ``_inject_grant_url_if_global`` then decorates.
+    A builtin's 403 never passes through ``_inject_grant_url_if_global`` (that works on a proxied
+    HTTP response), so the same decoration is applied here.
     """
+    service = resolved.service
     try:
-        spec = SpecifierSet(version_spec)
+        spec = SpecifierSet(resolved.version_spec)
     except InvalidSpecifier as e:
         raise ClientException(
-            detail=f"Invalid version specifier: {version_spec}", extra={"code": "bad_request"}
+            detail=f"Invalid version specifier: {resolved.version_spec}", extra={"code": "bad_request"}
         ) from e
-    if Version(DNS_SERVICE_VERSION) not in spec:
+    if Version(service.version) not in spec:
         raise ServiceUnavailableException(
-            detail=f"dns version {DNS_SERVICE_VERSION} does not match {version_spec}",
+            detail=f"{service.url} version {service.version} does not match {resolved.version_spec}",
             extra={"code": "service_not_available"},
         )
 
-    payload: dict[str, Any] = {}
-    if request.method in ("POST", "PUT", "PATCH"):
-        try:
-            body = await request.json()
-        except Exception:
-            body = None
-        if body is not None and not isinstance(body, dict):
-            raise ClientException(detail="request body must be a JSON object", extra={"code": "bad_request"})
-        payload = body or {}
-
-    grants = parse_grants(_build_permissions_header(consumer_app_id, DNS_SERVICE_URL, ROUTER_DNS_PROVIDER_ID))
-    # Off the event loop: zone file reads and writes are blocking, and a write holds the zone lock
-    # for the duration.
-    status, response_body = await anyio.to_thread.run_sync(
-        handle_dns_service_call, rest, payload, grants, config, db, consumer_app_id
-    )
-    if status == 403:
-        response_body = _decorate_grant_url(response_body, consumer_app_id, config, db)
-    return Response(content=response_body, status_code=status, media_type=MediaType.JSON)
-
-
-def _decorate_grant_url(
-    body: dict[str, Any], consumer_app_id: str, config: Config, db: sqlite3.Connection
-) -> dict[str, Any]:
-    """Add ``grant_url`` to a permission_required body, as the proxy does for app providers.
-
-    In-process responses never pass through ``_inject_grant_url_if_global`` (that works on a
-    proxied HTTP response), so the same decoration is applied here.
-    """
-    required_grant = body.get("required_grant")
-    if not isinstance(required_grant, dict) or required_grant.get("scope", "global") != "global":
-        return body
-    grant = required_grant.get("grant")
-    if isinstance(grant, (str, dict)):
-        required_grant["grant_url"] = _approve_grant_url(consumer_app_id, DNS_SERVICE_URL, grant, db)
-    return body
+    status, body = await dispatch_builtin(service, consumer_app_id, rest, request, db, config)
+    required_grant = body.get("required_grant") if status == 403 else None
+    if isinstance(required_grant, dict) and required_grant.get("scope", "global") == "global":
+        grant = required_grant.get("grant")
+        if isinstance(grant, (str, dict)):
+            required_grant["grant_url"] = _approve_grant_url(consumer_app_id, service.url, grant, db)
+    return Response(content=body, status_code=status, media_type=MediaType.JSON)
 
 
 async def _handle_installer_request(

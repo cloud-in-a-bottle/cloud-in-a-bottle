@@ -1,5 +1,5 @@
 $ORIGIN {{ zone_domain }}.
-$TTL 300
+$TTL {{ default_ttl }}
 @   IN SOA  ns.{{ zone_domain }}. admin.{{ zone_domain }}. (
     {{ serial }}   ; serial
     3600  ; refresh
@@ -11,4 +11,6 @@ $TTL 300
 ns  IN A    {{ public_ip }}
 @   IN A    {{ public_ip }}
 *   IN A    {{ public_ip }}
-
+{% for r in records %}
+{{ r.name }}   {{ r.ttl }}  IN {{ r.type }}  {{ r.data }}
+{%- endfor %}

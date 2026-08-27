@@ -14,9 +14,7 @@ from cryptography.hazmat.primitives.asymmetric import ec
 from josepy import JWKRSA  # type: ignore[attr-defined]
 
 from compute_space.core.dns.client import DnsClient
-from compute_space.core.dns.client import clear_txt
-from compute_space.core.dns.client import publish_txt
-from compute_space.core.dns.client import wait_for_txt_propagation
+from compute_space.core.dns.client import wait_for_challenge_propagation
 from compute_space.core.logging import logger
 
 
@@ -132,14 +130,13 @@ def _acquire_cert_dns01(
                 # same time.
                 logger.info(f"Setting {len(validation_values)} DNS-01 challenge TXT record(s)")
                 zone_domain = domains[0].lstrip("*.")
-                challenge_fqdn = f"_acme-challenge.{zone_domain}"
-                publish_txt(dns, challenge_fqdn, validation_values)
+                dns.publish_challenge(zone_domain, validation_values)
 
                 # Wait until an external resolver can see the records before telling the ACME
                 # server to validate.  Without this the CA's resolvers may get NXDOMAIN — the zone
                 # file reload hasn't happened yet, the registrar hasn't published, or the NS
                 # delegation from the parent zone hasn't propagated.
-                wait_for_txt_propagation(challenge_fqdn, validation_values, timeout=dns.propagation_timeout_seconds)
+                wait_for_challenge_propagation(zone_domain, validation_values, timeout=dns.propagation_timeout_seconds)
 
                 # Now answer all challenges
                 for challenge_body in pending_challenges:
@@ -153,7 +150,7 @@ def _acquire_cert_dns01(
                 time.sleep(2)
 
             # Clean up DNS record
-            clear_txt(dns, f"_acme-challenge.{domains[0].lstrip('*.')}")
+            dns.clear_challenge(domains[0].lstrip("*."))
 
             if not order.fullchain_pem:
                 raise RuntimeError(f"Failed to get cert for {domains}: order not finalized")
@@ -162,7 +159,7 @@ def _acquire_cert_dns01(
 
         except (errors.ValidationError, RuntimeError) as exc:
             # Clean up DNS records before retrying
-            clear_txt(dns, f"_acme-challenge.{domains[0].lstrip('*.')}")
+            dns.clear_challenge(domains[0].lstrip("*."))
 
             if attempt < max_attempts:
                 wait = 30 * attempt

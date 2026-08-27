@@ -24,9 +24,7 @@ import attr
 from cryptography.hazmat.primitives import serialization
 
 from compute_space.core.dns.client import DnsClient
-from compute_space.core.dns.client import clear_txt
-from compute_space.core.dns.client import publish_txt
-from compute_space.core.dns.client import wait_for_txt_propagation
+from compute_space.core.dns.client import wait_for_challenge_propagation
 from compute_space.core.logging import logger
 from compute_space.core.tls.acquire_cert import write_cert_and_key
 from compute_space.core.tls.cert_api_client import FINALIZE_STATUS_VALID
@@ -35,11 +33,6 @@ from compute_space.core.tls.cert_api_client import CertApiError
 from compute_space.core.tls.util import _create_csr
 from compute_space.core.tls.util import _generate_tls_key
 from compute_space.core.tls.util import tls_private_key_to_pem
-
-
-def _as_fqdn(name: str) -> str:
-    """Return ``name`` as an absolute FQDN, appending a trailing dot if missing."""
-    return name if name.endswith(".") else f"{name}."
 
 
 class CertAcquisitionTimeoutError(RuntimeError):
@@ -66,7 +59,7 @@ class RealClock:
 REAL_CLOCK = RealClock()
 
 
-def _wait_for_dns_propagation(dns: DnsClient, fqdn: str, expected_values: list[str]) -> None:
+def _wait_for_dns_propagation(dns: DnsClient, domain: str, expected_values: list[str]) -> None:
     """Wait until an external resolver sees the records.
 
     Same safeguard the BYO-ACME path applies before validation: the broker asks the CA to validate
@@ -74,7 +67,7 @@ def _wait_for_dns_propagation(dns: DnsClient, fqdn: str, expected_values: list[s
     ``wait_for_txt_propagation`` logs and proceeds on timeout, so a delegation that never
     propagates still falls through to the broker's own retries.
     """
-    wait_for_txt_propagation(fqdn, expected_values, timeout=dns.propagation_timeout_seconds)
+    wait_for_challenge_propagation(domain, expected_values, timeout=dns.propagation_timeout_seconds)
 
 
 def acquire_tls_cert_via_broker(
@@ -102,18 +95,14 @@ def acquire_tls_cert_via_broker(
     order = client.create_order(csr_pem)
     logger.info(f"Broker order {order.order_id} created with {len(order.challenges)} challenge(s)")
 
-    # Broker challenge names are full FQDNs, and a wildcard order puts the base and *.domain
-    # challenges at the same name, so group by name and publish each set in one write.
-    by_name: dict[str, list[str]] = {}
-    for challenge in order.challenges:
-        by_name.setdefault(_as_fqdn(challenge.record_name).rstrip("."), []).append(challenge.record_value)
-    for fqdn, values in by_name.items():
-        publish_txt(dns, fqdn, values)
+    # The broker returns a record name per challenge; a wildcard order puts both at the same
+    # name, so publish them together.
+    values = [c.record_value for c in order.challenges]
+    dns.publish_challenge(domain, values)
     try:
-        # Don't poll finalize until the records are actually live: the broker drives
-        # CA validation during finalize, so a not-yet-visible record fails the order.
-        for fqdn, values in by_name.items():
-            wait_for_propagation(dns, fqdn, values)
+        # Don't poll finalize until the records are live: the broker drives CA validation during
+        # finalize, so a not-yet-visible record fails the order.
+        wait_for_propagation(dns, domain, values)
         certificate = _poll_until_issued(
             client,
             order.order_id,
@@ -125,8 +114,7 @@ def acquire_tls_cert_via_broker(
         )
     finally:
         # Always pull the challenge records back out, success or failure.
-        for fqdn in by_name:
-            clear_txt(dns, fqdn)
+        dns.clear_challenge(domain)
 
     write_cert_and_key(cert_path, key_path, certificate.encode(), tls_private_key_to_pem(tls_key))
     logger.info(f"Installed broker-issued TLS cert for {domain} -> {cert_path}")

@@ -21,7 +21,7 @@ from cryptography.hazmat.primitives.asymmetric import ec
 
 from compute_space.core.dns.client import DnsClient
 from compute_space.core.dns.client import dns_client
-from compute_space.core.dns.coredns_provider import zonefile
+from compute_space.core.dns.coredns_provider import store
 from compute_space.core.domains import Domain
 from compute_space.core.tls.acquire_cert_broker import CertAcquisitionTimeoutError
 from compute_space.core.tls.acquire_cert_broker import acquire_tls_cert_via_broker
@@ -57,8 +57,8 @@ def dns(tmp_path: Path) -> Iterator[DnsClient]:
 
 
 def _challenge_txt(dns: DnsClient) -> list[str]:
-    """Read the file directly; a grant-filtered read would hide anything the router can't see."""
-    records = zonefile.read_records(dns.config.coredns_zonefile_path, DOMAIN)
+    """Read the store directly; a grant-filtered read would hide anything the router can't see."""
+    records = store.records_for(dns.db, DOMAIN)
     return sorted(r.data for r in records if r.name == "_acme-challenge" and r.type == "TXT" and r.data)
 
 
@@ -130,7 +130,7 @@ def test_full_flow_installs_cert_and_key(tmp_path: Path, dns: DnsClient) -> None
         )
 
     # Propagation was awaited for the base domain with both challenge values.
-    assert state.waited_with == (f"_acme-challenge.{DOMAIN}", ["base-value", "wildcard-value"])
+    assert state.waited_with == (DOMAIN, ["base-value", "wildcard-value"])
 
     # Polled until issued.
     assert state.finalize_calls == 3

@@ -12,13 +12,13 @@ import pytest
 from compute_space.config import DefaultConfig
 from compute_space.core.dns import dynamic_dns as dynamic
 from compute_space.core.dns import public_ip as public_ip_mod
-from compute_space.core.dns.coredns_provider import zonefile
+from compute_space.core.dns.coredns_provider import store
 from compute_space.core.dns.public_ip import detect_public_ip
 from compute_space.core.dns.public_ip import effective_public_ip
 from compute_space.core.dns.public_ip import is_public_ipv4
 from compute_space.core.dns.public_ip import seed_public_ip
 from compute_space.core.dns.public_ip import store_public_ip
-from compute_space.core.dns.records import DnsRecord
+from compute_space.core.dns.service_api import DnsRecord
 from compute_space.core.domains import Domain
 from compute_space.core.domains import seed_domains
 from compute_space.db import init_db
@@ -48,8 +48,13 @@ def _space(tmp_path: Path, public_ip: str | None = "203.0.113.10") -> DefaultCon
 
 
 def _zone_records(config: DefaultConfig, name: str, rrtype: str) -> list[str]:
-    found = zonefile.read_records(config.coredns_zonefile_path, ZONE)
-    return [r.data for r in found if r.name == name and r.type == rrtype and r.data]
+    """Read the rendered zone file: what CoreDNS actually serves after an update."""
+    out = []
+    for line in config.coredns_zonefile_path.read_text().splitlines():
+        fields = line.split()
+        if len(fields) >= 4 and fields[0] == name and fields[-2] == rrtype:
+            out.append(fields[-1])
+    return out
 
 
 def _sources(answers: dict[str, str | Exception]) -> Any:
@@ -175,7 +180,6 @@ def test_with_no_stored_or_configured_ip_there_is_none(tmp_path: Path) -> None:
 def test_an_ip_change_rewrites_the_router_owned_records(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     config = _space(tmp_path)
     monkeypatch.setattr(dynamic, "detect_public_ip", lambda: "198.51.100.7")
-    monkeypatch.setattr(dynamic, "reload_coredns_for_domains", lambda *a: True, raising=False)
 
     with closing(open_db(config)) as db:
         seed_public_ip(config, db)
@@ -208,11 +212,10 @@ def test_a_detection_failure_leaves_the_records_alone(tmp_path: Path, monkeypatc
 def test_the_update_does_not_disturb_records_apps_wrote(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     config = _space(tmp_path)
     monkeypatch.setattr(dynamic, "detect_public_ip", lambda: "198.51.100.7")
-    monkeypatch.setattr(dynamic, "reload_coredns_for_domains", lambda *a: True, raising=False)
 
     with closing(open_db(config)) as db:
         seed_public_ip(config, db)
-        zonefile.append_records(config.coredns_zonefile_path, ZONE, [DnsRecord("www", "A", 300, "192.0.2.50")])
+        store.append_records(db, ZONE, [DnsRecord("www", "A", 300, "192.0.2.50")])
 
         dynamic.check_once(config, db)
 
@@ -220,13 +223,12 @@ def test_the_update_does_not_disturb_records_apps_wrote(tmp_path: Path, monkeypa
 
 
 def test_dynamic_records_carry_a_short_ttl(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    # Pointless to poll every few minutes if resolvers cache the old address for an hour.
-    config = _space(tmp_path)
+    # Pointless to poll every few minutes if resolvers cache the old address for five.
+    config = seeded_dns_config(tmp_path, Domain(ZONE, tls=True), dynamic_dns=True)
     monkeypatch.setattr(dynamic, "detect_public_ip", lambda: "198.51.100.7")
-    monkeypatch.setattr(dynamic, "reload_coredns_for_domains", lambda *a: True, raising=False)
 
     with closing(open_db(config)) as db:
         seed_public_ip(config, db)
         dynamic.check_once(config, db)
-    records = zonefile.read_records(config.coredns_zonefile_path, ZONE)
-    assert [r.ttl for r in records if r.name == "*" and r.type == "A"] == [60]
+    # Derived address records inherit the zone default, which drops when dynamic DNS is on.
+    assert "$TTL 60" in config.coredns_zonefile_path.read_text()

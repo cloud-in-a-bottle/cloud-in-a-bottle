@@ -110,6 +110,17 @@ CREATE TABLE IF NOT EXISTS service_defaults (
     FOREIGN KEY (app_id) REFERENCES apps(app_id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS dns_records (
+    id    INTEGER PRIMARY KEY AUTOINCREMENT,
+    zone  TEXT NOT NULL,
+    name  TEXT NOT NULL,
+    type  TEXT NOT NULL,
+    ttl   INTEGER NOT NULL,
+    data  TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_dns_records_rrset ON dns_records(zone, name, type);
+
 -- Versioned-migrations metadata: single-row table recording the current
 -- schema version. The runner (compute_space/db/versioned/runner.py) owns
 -- the value; schema.sql only creates the table.

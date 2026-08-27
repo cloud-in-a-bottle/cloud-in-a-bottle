@@ -3,9 +3,9 @@
 Opt-in (``dynamic_dns_enabled``) — on a fixed address the polling is pure cost, but on a
 connection that gets renumbered it is the only thing that brings the space back.
 
-Updates go through the ``dns`` service like everything else, so this works the same for local zone
-files and an external registrar.  These records are reserved from apps precisely so nothing else
-moves them out from under this loop; the router's own calls are exempt.
+When the router serves DNS the address records are derived from the stored IP at render time, so
+updating them is a re-render.  With an external provider there is nothing to re-render, so the
+records are written through the ``dns`` service instead.
 """
 
 from __future__ import annotations
@@ -19,17 +19,13 @@ from contextlib import closing
 from compute_space.config import Config
 from compute_space.core.dns.client import dns_client
 from compute_space.core.dns.client import router_managed_domains
-from compute_space.core.dns.client import split_fqdn
 from compute_space.core.dns.client import uses_local_dns
 from compute_space.core.dns.coredns_provider.coredns import reload_coredns_for_domains
 from compute_space.core.dns.public_ip import detect_public_ip
 from compute_space.core.dns.public_ip import effective_public_ip
 from compute_space.core.dns.public_ip import store_public_ip
-from compute_space.core.dns.records import APEX
-from compute_space.core.dns.records import DnsRecord
 from compute_space.core.logging import logger
 
-_ROUTER_A_NAMES = (APEX, "ns", "*")
 _DEFAULT_INTERVAL_SECONDS = 300.0
 
 # Much shorter than the zone default: pointless to poll every few minutes if resolvers cache the
@@ -38,7 +34,7 @@ _DYNAMIC_TTL_SECONDS = 60
 
 
 def check_once(config: Config, db: sqlite3.Connection) -> str | None:
-    """Detect the public IP and, if it moved, store it and rewrite the records.
+    """Detect the public IP and, if it moved, store it and re-point the address records.
 
     Returns the new address when something changed.  A detection failure is not a change: stale
     records beat pointing the space at nothing.
@@ -49,36 +45,17 @@ def check_once(config: Config, db: sqlite3.Connection) -> str | None:
 
     logger.info(f"Public IP changed to {detected}")
     store_public_ip(db, detected)
-    update_public_ip_records(config, db, detected)
+
     if uses_local_dns(db):
-        # The zone files were rewritten in place, but the Corefile's bind address derives from the
-        # IP too, so CoreDNS has to come back on the new one.
+        # Re-rendering *is* the update: the address records come from the stored IP.  Writing them
+        # as records too would duplicate what the template emits.  The Corefile's bind address
+        # derives from the IP as well, so CoreDNS has to come back on the new one.
         reload_coredns_for_domains(config, db)
+    else:
+        with dns_client(config, db) as dns:
+            for domain in router_managed_domains(db):
+                dns.set_address(domain, detected, ttl=_DYNAMIC_TTL_SECONDS)
     return detected
-
-
-def update_public_ip_records(config: Config, db: sqlite3.Connection, ip: str) -> None:
-    with dns_client(config, db) as dns:
-        for zone in dns.zones():
-            records = [DnsRecord(name=n, type="A", ttl=_DYNAMIC_TTL_SECONDS, data=ip) for n in _names_for(zone, db)]
-            dns.set_records(zone, records)
-            logger.info(f"Updated {len(records)} A record(s) in {zone} to {ip}")
-
-
-def _names_for(zone: str, db: sqlite3.Connection) -> list[str]:
-    """The zone-relative names to update.  When the router serves DNS each domain is its own zone;
-    with an external provider the zone may be a parent, so each domain contributes a prefixed set."""
-    names: list[str] = []
-    for domain in router_managed_domains(db):
-        try:
-            match = split_fqdn(domain, [zone])
-        except Exception:
-            continue  # this domain lives in a different zone
-        base = "" if match.name == APEX else match.name
-        names += [
-            (base or APEX) if label == APEX else (f"{label}.{base}" if base else label) for label in _ROUTER_A_NAMES
-        ]
-    return list(dict.fromkeys(names))
 
 
 def start_dynamic_dns_thread(

@@ -1,16 +1,15 @@
-"""The router's own implementation of the ``dns`` service: grants, filtering, reserved records."""
+"""The router's implementation of the ``dns`` service: grants, filtering, and record ops."""
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-from compute_space.core.dns.coredns_provider import zonefile
-from compute_space.core.dns.coredns_provider.service import handle_dns_service_call
-from compute_space.core.dns.records import DnsRecord
+from compute_space.core.dns.coredns_provider import store
+from compute_space.core.dns.coredns_provider.service import handle_dns_call
+from compute_space.core.dns.service_api import DnsRecord
 from compute_space.core.dns.service_api import parse_grants
 from compute_space.core.domains import Domain
 from compute_space.tests.conftest import open_db
@@ -20,9 +19,7 @@ ZONE = "host.example.com"
 
 
 def _grants(*entries: tuple[str, str, str]) -> list[Any]:
-    return parse_grants(
-        json.dumps([{"grant": {"name": n, "type": t, "access": a}, "scope": "global"} for n, t, a in entries])
-    )
+    return parse_grants([{"grant": {"name": n, "type": t, "access": a}, "scope": "global"} for n, t, a in entries])
 
 
 class _Space:
@@ -33,15 +30,15 @@ class _Space:
         self.db = open_db(self.config)
 
     def call(self, path: str, payload: dict[str, Any], grants: list[Any]) -> tuple[int, dict[str, Any]]:
-        return handle_dns_service_call(path, payload, grants, self.config, self.db)
+        return handle_dns_call(path, payload, grants, self.config, self.db)
 
     def records(self, name: str, rrtype: str) -> list[str]:
-        """Read straight from the zone file, so an assertion isn't filtered by the caller's grants."""
-        found = zonefile.read_records(self.config.coredns_zonefile_path, ZONE)
+        """Read the store directly, so an assertion isn't filtered by the caller's grants."""
+        found = store.records_for(self.db, ZONE)
         return [r.data for r in found if r.name == name and r.type == rrtype and r.data]
 
     def write(self, records: list[DnsRecord]) -> None:
-        zonefile.append_records(self.config.coredns_zonefile_path, ZONE, records)
+        store.append_records(self.db, ZONE, records)
 
     def close(self) -> None:
         self.db.close()
@@ -64,24 +61,20 @@ ACME = ("_acme-challenge**", "TXT", "rw")
 
 
 def test_only_global_scoped_grants_are_honored() -> None:
-    header = json.dumps(
-        [
-            {"grant": {"name": "a", "type": "TXT", "access": "rw"}, "scope": "app"},
-            {"grant": {"name": "b", "type": "TXT", "access": "rw"}, "scope": "global"},
-        ]
-    )
-    assert [g.name for g in parse_grants(header)] == ["b"]
+    entries = [
+        {"grant": {"name": "a", "type": "TXT", "access": "rw"}, "scope": "app"},
+        {"grant": {"name": "b", "type": "TXT", "access": "rw"}, "scope": "global"},
+    ]
+    assert [g.name for g in parse_grants(entries)] == ["b"]
 
 
 def test_a_malformed_grant_narrows_access_rather_than_breaking_the_call() -> None:
-    header = json.dumps(
-        [
-            {"grant": {"name": "ok", "type": "TXT", "access": "rw"}, "scope": "global"},
-            {"grant": {"name": "bad", "type": "TXT", "access": "sudo"}, "scope": "global"},
-            {"grant": "not-an-object", "scope": "global"},
-        ]
-    )
-    assert [g.name for g in parse_grants(header)] == ["ok"]
+    entries = [
+        {"grant": {"name": "ok", "type": "TXT", "access": "rw"}, "scope": "global"},
+        {"grant": {"name": "bad", "type": "TXT", "access": "sudo"}, "scope": "global"},
+        {"grant": "not-an-object", "scope": "global"},
+    ]
+    assert [g.name for g in parse_grants(entries)] == ["ok"]
 
 
 def test_a_dotted_wildcard_grant_does_not_cover_the_bare_label() -> None:
@@ -243,37 +236,18 @@ def test_an_unknown_zone_is_reported_once_the_caller_is_authorized(space: Any) -
     assert body["error"] == "unknown_zone"
 
 
-# ─── reserved records ───
-
-
-@pytest.mark.parametrize(
-    "name,rrtype",
-    [("@", "A"), ("*", "A"), ("ns", "A"), ("@", "NS"), ("*", "AAAA")],
-)
-def test_router_owned_records_are_refused_even_with_a_blanket_grant(space: Any, name: str, rrtype: str) -> None:
-    # These route the space and get rewritten on any domain or IP change, so a write would be
-    # silently undone — and deleting the wildcard would take every app offline.
-    status, body = space.call(
+def test_an_app_may_write_the_router_owned_names(space: Any) -> None:
+    # There is no reserved-record rule: the router regenerates its address records from the public
+    # IP on the next render, so an app writing them is overwritten rather than rejected.
+    status, _ = space.call(
         "/records/set",
-        {"zone": ZONE, "records": [{"name": name, "type": rrtype, "ttl": 300, "data": "198.51.100.7"}]},
+        {"zone": ZONE, "records": [{"name": "www", "type": "A", "ttl": 300, "data": "198.51.100.7"}]},
         _grants(RW_ALL),
     )
-    assert status == 403
-    assert body["error"] == "reserved_record"
+    assert status == 200
 
 
-def test_deleting_a_router_owned_record_is_refused_too(space: Any) -> None:
-    status, body = space.call(
-        "/records/delete", {"zone": ZONE, "records": [{"name": "*", "type": "A", "ttl": 300}]}, _grants(RW_ALL)
-    )
-    assert status == 403
-    assert body["error"] == "reserved_record"
-    assert space.records("*", "A") == ["203.0.113.10"]
-
-
-def test_mail_records_at_the_apex_are_not_reserved(space: Any) -> None:
-    # Only the records OpenHost maintains are off limits; an apex MX or TXT is exactly what a mail
-    # setup needs and nothing in the router touches them.
+def test_mail_records_at_the_apex_are_writable(space: Any) -> None:
     status, _ = space.call(
         "/records/append",
         {
@@ -289,13 +263,36 @@ def test_mail_records_at_the_apex_are_not_reserved(space: Any) -> None:
     assert space.records("@", "MX") == ["10 mail.example.com."]
 
 
-def test_a_normal_subdomain_is_writable(space: Any) -> None:
-    status, _ = space.call(
+def test_a_write_reaches_the_zone_file(space: Any) -> None:
+    space.call(
         "/records/append",
         {"zone": ZONE, "records": [{"name": "www", "type": "A", "ttl": 300, "data": "198.51.100.7"}]},
         _grants(RW_ALL),
     )
-    assert status == 200
+    assert "www   300  IN A  198.51.100.7" in space.config.coredns_zonefile_path.read_text()
+
+
+def test_unparseable_rdata_is_rejected_before_it_reaches_the_zone_file(space: Any) -> None:
+    # Zone files are generated from stored records, so a bad value would make CoreDNS reject the
+    # whole zone and take the domain down.
+    status, body = space.call(
+        "/records/set",
+        {"zone": ZONE, "records": [{"name": "www", "type": "A", "ttl": 300, "data": "not-an-ip"}]},
+        _grants(RW_ALL),
+    )
+    assert status == 400
+    assert body["error"] == "invalid_record"
+
+
+def test_an_a_record_holding_an_ipv6_literal_is_rejected(space: Any) -> None:
+    # Otherwise an app granted A could write an AAAA.
+    status, body = space.call(
+        "/records/set",
+        {"zone": ZONE, "records": [{"name": "www", "type": "A", "ttl": 300, "data": "2001:db8::1"}]},
+        _grants(RW_ALL),
+    )
+    assert status == 400
+    assert body["error"] == "invalid_record"
 
 
 # ─── malformed input ───

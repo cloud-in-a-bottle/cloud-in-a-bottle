@@ -8,13 +8,13 @@ from typing import Any
 import pytest
 
 import compute_space.core.dns.coredns_provider.coredns as dns_mod
-import compute_space.core.dns.coredns_provider.zonefile as zonefile_mod
 from compute_space.config import DefaultConfig
+from compute_space.core.dns.coredns_provider import store
 from compute_space.core.dns.coredns_provider.coredns import DnsZone
 from compute_space.core.dns.coredns_provider.coredns import public_dns_zones
 from compute_space.core.dns.coredns_provider.coredns import reload_coredns_for_domains
 from compute_space.core.dns.coredns_provider.coredns import set_active_coredns
-from compute_space.core.dns.records import DnsRecord
+from compute_space.core.dns.service_api import DnsRecord
 from compute_space.core.domains import Domain
 from compute_space.core.domains import DomainRecord
 from compute_space.core.domains import seed_domains
@@ -280,12 +280,11 @@ def test_reload_coredns_for_domains_noop_when_not_running(tmp_path: Path) -> Non
         assert reload_coredns_for_domains(config, db) is False
 
 
-def test_zone_caches_addresses_long_but_acme_challenges_briefly(tmp_path: Path) -> None:
-    # The wildcard TTL is what a visitor's resolver caches, and it is the only
-    # thing keeping them able to reach the instance while CoreDNS is down during an
-    # update -- so it is deliberately long. ACME challenge records must NOT inherit
-    # it: a renewal would then find the CA (and our own propagation check) served
-    # the previous run's token out of a resolver cache.
+def test_zone_caches_addresses_long_but_negative_answers_briefly(tmp_path: Path) -> None:
+    # The wildcard TTL is what a visitor's resolver caches, and it is the only thing keeping them
+    # able to reach the instance while CoreDNS is down during an update -- so it is deliberately
+    # long. Negative caching stays short (RFC 2308 uses min(SOA MINIMUM, SOA TTL)), which is what
+    # lets the NODATA left by a cleared challenge expire before the next renewal.
     corefile = tmp_path / "Corefile"
     zonefile = tmp_path / "zonefile"
     dns_mod._write_coredns_config(
@@ -297,50 +296,51 @@ def test_zone_caches_addresses_long_but_acme_challenges_briefly(tmp_path: Path) 
     )
     content = zonefile.read_text()
     assert "$TTL 300" in content
-    # Negative caching stays short (RFC 2308 uses min(SOA MINIMUM, SOA TTL)), which
-    # is what lets the NODATA left by a challenge cleanup expire before the next renewal.
     assert "60    ; minimum" in content
 
 
-def test_write_coredns_config_seeds_a_zone_file_but_never_overwrites_one(tmp_path: Path) -> None:
-    # The zone file is the source of truth for its records once it exists: apps and the cert path
-    # both write into it. Re-rendering the template over it -- which a domain add/remove does --
-    # would silently drop everything but the three records the template knows about.
-    corefile = tmp_path / "Corefile"
-    zonefile = tmp_path / "zonefile"
-    zone = dns_mod.DnsZone("app.example.com", zonefile)
-    args = dict(corefile_path=corefile, container_gateway_ip=None, serve_public=True)
-    dns_mod._write_coredns_config((zone,), "203.0.113.10", **args)
+def test_stored_records_are_rendered_into_the_zone_file(tmp_path: Path) -> None:
+    config = _seed_dns_cfg(tmp_path, Domain(name="app.example.com", tls=True), public_ip="203.0.113.10")
+    with closing(open_db(config)) as db:
+        store.append_records(db, "app.example.com", [DnsRecord("www", "A", 300, "198.51.100.7")])
+        zone = public_dns_zones(config, db)[0]
 
-    zonefile_mod.append_records(
-        zonefile, "app.example.com", [DnsRecord(name="www", type="A", ttl=300, data="198.51.100.7")]
-    )
+        dns_mod.write_zone_file(zone, "203.0.113.10", db)
 
-    dns_mod._write_coredns_config((zone,), "203.0.113.10", **args)
-
-    records = zonefile_mod.read_records(zonefile, "app.example.com")
-    assert ("www", "A", "198.51.100.7") in [(r.name, r.type, r.data) for r in records]
+        content = zone.zonefile_path.read_text()
+        assert "www   300  IN A  198.51.100.7" in content
+        # The router's own records are derived from the IP, not stored.
+        assert "*   IN A    203.0.113.10" in content
 
 
-def test_write_coredns_config_repoints_router_records_on_an_ip_change(tmp_path: Path) -> None:
-    corefile = tmp_path / "Corefile"
-    zonefile = tmp_path / "zonefile"
-    zone = dns_mod.DnsZone("app.example.com", zonefile)
-    args = dict(corefile_path=corefile, container_gateway_ip=None, serve_public=True)
-    dns_mod._write_coredns_config((zone,), "203.0.113.10", **args)
-    zonefile_mod.append_records(
-        zonefile, "app.example.com", [DnsRecord(name="www", type="A", ttl=300, data="198.51.100.7")]
-    )
+def test_regenerating_a_zone_keeps_its_stored_records(tmp_path: Path) -> None:
+    # A domain change or an IP move rewrites the file wholesale, so anything an app wrote has to
+    # come back from the DB rather than surviving in the file.
+    config = _seed_dns_cfg(tmp_path, Domain(name="app.example.com", tls=True), public_ip="203.0.113.10")
+    with closing(open_db(config)) as db:
+        store.append_records(db, "app.example.com", [DnsRecord("www", "A", 300, "198.51.100.7")])
+        zones = public_dns_zones(config, db)
 
-    dns_mod._write_coredns_config((zone,), "203.0.113.99", **args)
+        dns_mod._write_coredns_config(
+            zones, "203.0.113.99", config.coredns_corefile_path, None, serve_public=True, db=db
+        )
 
-    by_name = {(r.name, r.type): r.data for r in zonefile_mod.read_records(zonefile, "app.example.com")}
-    # Router-owned records follow the new address...
-    assert by_name[("@", "A")] == "203.0.113.99"
-    assert by_name[("*", "A")] == "203.0.113.99"
-    assert by_name[("ns", "A")] == "203.0.113.99"
-    # ...and an app's record is left exactly where it was.
-    assert by_name[("www", "A")] == "198.51.100.7"
+        content = zones[0].zonefile_path.read_text()
+        assert "www   300  IN A  198.51.100.7" in content
+        assert "*   IN A    203.0.113.99" in content
+
+
+def test_every_render_advances_the_serial_so_coredns_reloads(tmp_path: Path) -> None:
+    # Two renders in the same second must not produce the same serial, or the second change is
+    # never picked up.
+    config = _seed_dns_cfg(tmp_path, Domain(name="app.example.com", tls=True), public_ip="203.0.113.10")
+    with closing(open_db(config)) as db:
+        zone = public_dns_zones(config, db)[0]
+        serials = []
+        for _ in range(3):
+            dns_mod.write_zone_file(zone, "203.0.113.10", db)
+            serials.append(int(zone.zonefile_path.read_text().split("; serial")[0].strip().splitlines()[-1].strip()))
+    assert serials == sorted(set(serials))
 
 
 def test_container_view_runs_without_any_public_zones(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
