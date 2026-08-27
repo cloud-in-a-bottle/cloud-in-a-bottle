@@ -25,6 +25,7 @@ from compute_space.core.containers import run_container
 from compute_space.core.containers import stop_container
 from compute_space.core.manifest import AppManifest
 from compute_space.core.manifest import PortMapping
+from compute_space.core.manifest import parse_manifest_from_string
 
 
 class _FakeCompleted:
@@ -454,7 +455,7 @@ def test_run_container_network_host_app_gets_no_dns_override(tmp_path, monkeypat
 
 
 def test_run_container_mounts_use_idmap_option(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
-    manifest = _basic_manifest(app_data=True, app_temp_data=True, access_vm_data=True)
+    manifest = _basic_manifest(app_data=True, app_temp_data=True, app_archive=True)
     argv = _run_and_capture(monkeypatch, manifest=manifest, tmp_path=tmp_path)
     # Every -v argument value should have :idmap (or :ro,idmap) as its
     # options suffix so container-root writes land on disk under the host
@@ -532,20 +533,27 @@ def test_run_container_adds_manifest_devices(tmp_path, monkeypatch: pytest.Monke
         )
 
 
-def test_run_container_access_vm_data_mounts_vm_data_read_only(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """access_vm_data (without access_all_app_data) grants only a read-only
-    view of /data/vm_data.  The distinction matters: this is what lets
-    apps read shared state without being able to corrupt it, and a
-    regression swapping in rw here would turn a security-critical mount
-    into a write-through channel.
-    """
-    manifest = _basic_manifest(access_vm_data=True)
+def test_run_container_removed_access_vm_data_flag_does_not_mount_vm_data(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manifest = parse_manifest_from_string(
+        """\
+[app]
+name = "myapp"
+version = "0.1.0"
+
+[runtime.container]
+image = "Dockerfile"
+port = 8080
+
+[data]
+access_vm_data = true
+"""
+    )
     argv = _run_and_capture(monkeypatch, manifest=manifest, tmp_path=tmp_path)
 
     volume_args = [arg for prev, arg in zip(argv, argv[1:], strict=False) if prev == "-v"]
-    vm_mounts = [v for v in volume_args if "/data/vm_data" in v]
-    assert len(vm_mounts) == 1, vm_mounts
-    assert vm_mounts[0].endswith(":ro,idmap"), vm_mounts[0]
+    assert not any("/data/vm_data" in v for v in volume_args)
 
 
 def test_run_container_app_archive_mounts_per_app_subdir(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -629,11 +637,30 @@ def test_run_container_access_all_app_data_mounts_parent_dirs(tmp_path, monkeypa
     targets = [v.rsplit(":", 2)[1] for v in volume_args]
     assert "/data/app_data" in targets
     assert "/data/app_temp_data" in targets
-    # vm_data must be rw under access_all_app_data.
-    vm_mount = next(v for v in volume_args if v.endswith(":/data/vm_data:idmap"))
-    assert "ro" not in vm_mount.rsplit(":", 1)[1]
+    assert "/data/vm_data" not in targets
     # No per-app subdir.
     assert f"/data/app_data/{manifest.name}" not in targets
+
+
+def test_run_container_access_all_data_does_not_mount_vm_data(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    manifest = parse_manifest_from_string(
+        """\
+[app]
+name = "myapp"
+version = "0.1.0"
+
+[runtime.container]
+image = "Dockerfile"
+port = 8080
+
+[data]
+access_all_data = true
+"""
+    )
+    argv = _run_and_capture(monkeypatch, manifest=manifest, tmp_path=tmp_path)
+
+    volume_args = [arg for prev, arg in zip(argv, argv[1:], strict=False) if prev == "-v"]
+    assert not any("/data/vm_data" in v for v in volume_args)
 
 
 def test_run_container_access_all_app_data_does_not_mount_archive(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:

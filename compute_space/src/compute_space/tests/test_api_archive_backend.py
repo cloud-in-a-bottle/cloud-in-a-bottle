@@ -404,7 +404,6 @@ def _archive_manifest(name: str, *, app_archive: bool, access_all_archive: bool 
         app_data=True,
         app_archive=app_archive,
         access_all_archive=access_all_archive,
-        access_vm_data=False,
         app_temp_data=False,
         public_paths=["/"],
         capabilities=[],
