@@ -36,7 +36,7 @@ class FakeClock:
     def monotonic(self) -> float:
         return self.now
 
-    def sleep(self, seconds: float) -> None:
+    async def sleep(self, seconds: float) -> None:
         self.now += seconds
 
 
@@ -68,11 +68,11 @@ def _order_payload() -> dict[str, object]:
 
 def _client_from_handler(handler: object) -> CertApiClient:
     transport = httpx.MockTransport(handler)  # type: ignore[arg-type]
-    http_client = httpx.Client(base_url="https://broker.test", transport=transport)
+    http_client = httpx.AsyncClient(base_url="https://broker.test", transport=transport)
     return CertApiClient(http_client=http_client, token_provider=StaticTokenProvider("tok"))
 
 
-def _noop_wait(zone_domain: str, expected_values: list[str]) -> None:
+async def _noop_wait(zone_domain: str, expected_values: list[str]) -> None:
     """Stub out the real CoreDNS-reload sleep + external dig so tests stay fast."""
 
 
@@ -84,7 +84,8 @@ class _BrokerState:
     waited_with: tuple[str, list[str]] | None = None
 
 
-def test_full_flow_installs_cert_and_key(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_full_flow_installs_cert_and_key(tmp_path: Path) -> None:
     zonefile = tmp_path / "zonefile"
     cert_path = tmp_path / "cert.pem"
     key_path = tmp_path / "key.pem"
@@ -109,11 +110,11 @@ def test_full_flow_installs_cert_and_key(tmp_path: Path) -> None:
             return httpx.Response(200, json={"status": "valid", "certificate": FAKE_CHAIN})
         return httpx.Response(404, json={"error": "not_found", "message": request.url.path})
 
-    def record_wait(zone_domain: str, expected_values: list[str]) -> None:
+    async def record_wait(zone_domain: str, expected_values: list[str]) -> None:
         state.waited_with = (zone_domain, expected_values)
 
-    with _client_from_handler(handler) as client:
-        acquire_tls_cert_via_broker(
+    async with _client_from_handler(handler) as client:
+        await acquire_tls_cert_via_broker(
             domain=DOMAIN,
             cert_path=cert_path,
             key_path=key_path,
@@ -153,7 +154,8 @@ def test_full_flow_installs_cert_and_key(tmp_path: Path) -> None:
     assert "IN TXT" not in zonefile.read_text()
 
 
-def test_csr_covers_base_and_wildcard(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_csr_covers_base_and_wildcard(tmp_path: Path) -> None:
     zonefile = tmp_path / "zonefile"
     _write_zonefile(zonefile)
     captured: dict[str, str] = {}
@@ -164,8 +166,8 @@ def test_csr_covers_base_and_wildcard(tmp_path: Path) -> None:
             return httpx.Response(200, json=_order_payload())
         return httpx.Response(200, json={"status": "valid", "certificate": FAKE_CHAIN})
 
-    with _client_from_handler(handler) as client:
-        acquire_tls_cert_via_broker(
+    async with _client_from_handler(handler) as client:
+        await acquire_tls_cert_via_broker(
             domain=DOMAIN,
             cert_path=tmp_path / "cert.pem",
             key_path=tmp_path / "key.pem",
@@ -182,7 +184,8 @@ def test_csr_covers_base_and_wildcard(tmp_path: Path) -> None:
     assert f"*.{DOMAIN}" in names
 
 
-def test_timeout_raises_and_clears_txt(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_timeout_raises_and_clears_txt(tmp_path: Path) -> None:
     zonefile = tmp_path / "zonefile"
     _write_zonefile(zonefile)
 
@@ -192,9 +195,9 @@ def test_timeout_raises_and_clears_txt(tmp_path: Path) -> None:
         # Never finishes — always pending.
         return httpx.Response(202, json={"status": "pending"})
 
-    with _client_from_handler(handler) as client:
+    async with _client_from_handler(handler) as client:
         with pytest.raises(CertAcquisitionTimeoutError):
-            acquire_tls_cert_via_broker(
+            await acquire_tls_cert_via_broker(
                 domain=DOMAIN,
                 cert_path=tmp_path / "cert.pem",
                 key_path=tmp_path / "key.pem",
@@ -210,7 +213,8 @@ def test_timeout_raises_and_clears_txt(tmp_path: Path) -> None:
     assert "IN TXT" not in zonefile.read_text()
 
 
-def test_failed_order_raises_and_clears_txt(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_failed_order_raises_and_clears_txt(tmp_path: Path) -> None:
     zonefile = tmp_path / "zonefile"
     _write_zonefile(zonefile)
 
@@ -220,9 +224,9 @@ def test_failed_order_raises_and_clears_txt(tmp_path: Path) -> None:
         # Broker drove the ACME order to a terminal failure.
         return httpx.Response(409, json={"error": "order_failed", "detail": "DNS-01 validation failed"})
 
-    with _client_from_handler(handler) as client:
+    async with _client_from_handler(handler) as client:
         with pytest.raises(CertApiOrderFailed):
-            acquire_tls_cert_via_broker(
+            await acquire_tls_cert_via_broker(
                 domain=DOMAIN,
                 cert_path=tmp_path / "cert.pem",
                 key_path=tmp_path / "key.pem",
