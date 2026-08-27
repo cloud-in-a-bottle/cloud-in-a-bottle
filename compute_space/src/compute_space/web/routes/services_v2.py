@@ -64,8 +64,8 @@ from compute_space.core.installer import check_install_allowed
 from compute_space.core.installer import install_from_repo_url
 from compute_space.core.manifest import parse_manifest_from_string
 from compute_space.core.oauth import OAuthRequired
-from compute_space.core.services_v2 import lookup_shortname
-from compute_space.core.services_v2 import resolve_provider
+from compute_space.core.service_interface.services_v2 import lookup_shortname
+from compute_space.core.service_interface.services_v2 import resolve_provider
 from compute_space.web.auth.auth import require_app_auth
 from compute_space.web.auth.auth import verify_app_auth
 from compute_space.web.helpers.proxy import proxy_http_request

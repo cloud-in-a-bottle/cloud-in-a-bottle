@@ -24,7 +24,7 @@ from compute_space.core.git_ops import parse_repo_url
 from compute_space.core.logging import logger
 from compute_space.core.manifest import manifest_ungranted_permissions_v2
 from compute_space.core.manifest import parse_manifest_from_string
-from compute_space.core.services_v2 import resolve_provider
+from compute_space.core.service_interface.services_v2 import resolve_provider
 from compute_space.web.auth.auth import require_owner_auth
 from compute_space.web.helpers.zone import zone_for_request
 

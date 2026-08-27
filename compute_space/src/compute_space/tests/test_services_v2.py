@@ -5,8 +5,8 @@ from compute_space.core.auth.permissions_v2 import get_all_permissions_v2
 from compute_space.core.auth.permissions_v2 import get_granted_permissions_v2
 from compute_space.core.auth.permissions_v2 import grant_permission_v2
 from compute_space.core.auth.permissions_v2 import revoke_permission_v2
-from compute_space.core.services_v2 import lookup_shortname
-from compute_space.core.services_v2 import resolve_provider
+from compute_space.core.service_interface.services_v2 import lookup_shortname
+from compute_space.core.service_interface.services_v2 import resolve_provider
 
 SVC_SECRETS = "github.com/org/repo/services/secrets"
 SVC_OAUTH = "github.com/org/repo/services/oauth"
