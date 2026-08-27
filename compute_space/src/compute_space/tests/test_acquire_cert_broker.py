@@ -21,7 +21,6 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 
 from compute_space.core.dns.client import DnsClient
-from compute_space.core.dns.client import dns_client
 from compute_space.core.dns.coredns_provider import store
 from compute_space.core.domains import Domain
 from compute_space.core.tls.acquire_cert_broker import CertAcquisitionTimeoutError
@@ -54,8 +53,8 @@ def dns_db(tmp_path: Path) -> Iterator[tuple[DnsClient, sqlite3.Connection]]:
     """A client for an instance serving DOMAIN from a real zone file, plus its DB so a test can
     read back what was stored."""
     config = seeded_dns_config(tmp_path, Domain(DOMAIN, tls=True))
-    with closing(open_db(config)) as db, dns_client(config, db) as client:
-        yield client, db
+    with closing(open_db(config)) as db:
+        yield DnsClient(config, db), db
 
 
 def _challenge_txt(db: sqlite3.Connection) -> list[str]:

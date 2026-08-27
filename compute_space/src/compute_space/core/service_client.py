@@ -2,9 +2,12 @@
 
 Router-side code — cert acquisition, dynamic DNS, anything later — should not care whether a
 service is provided by an app or by the router itself.  So a builtin is mounted on an httpx
-transport that answers without a socket, and every caller gets the same ``httpx``-shaped client
-either way.  One code path, and the in-process provider is held to the same wire contract as a
-real one, so the two cannot drift.
+transport that answers without a socket, and every call takes the same path either way.  The
+in-process provider is held to the same wire contract as a real one, so the two cannot drift.
+
+``call_service`` is a plain function holding nothing: the provider is resolved and the HTTP client
+built per call.  DNS calls are rare enough that losing connection reuse costs nothing, and it means
+no handle to open, close, or thread through a call stack.
 
 Calling ourselves over actual loopback would not work regardless: the router acquires its first
 TLS cert before hypercorn is listening (see ``web.start``).
@@ -14,8 +17,6 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from collections.abc import Iterator
-from contextlib import contextmanager
 from typing import Any
 
 import attr
@@ -66,23 +67,43 @@ class _BuiltinTransport(httpx.BaseTransport):
         return httpx.Response(status, json=body)
 
 
-@attr.s(auto_attribs=True, frozen=True)
-class ServiceEndpoint:
-    """A service, ready to call, with no indication of where it runs."""
-
-    http: httpx.Client
-    base_url: str
-
-    def call(self, path: str, payload: dict[str, Any], permissions: Permissions) -> dict[str, Any]:
-        """POST to the service and return its JSON body, raising on anything unusable.
-
-        The router has no app token, but it is the sole authority for the ``X-OpenHost-*`` identity
-        headers in the first place, so it asserts the same ones the proxy would have injected for a
-        consumer app.
-        """
-        url = self.base_url + path
+def _client_for(service_url: str, config: Config, db: sqlite3.Connection, version: str) -> tuple[httpx.Client, str]:
+    """An httpx client and base URL for whichever provider currently serves ``service_url``."""
+    builtin = builtin_for(service_url, db)
+    if builtin is not None:
+        if Version(builtin.version) not in SpecifierSet(version):
+            raise ServiceCallError(f"{service_url} version {builtin.version} does not match {version}")
+        transport: httpx.BaseTransport | None = _BuiltinTransport(builtin, config, db)
+        base_url = _BUILTIN_HOST
+    else:
         try:
-            response = self.http.post(
+            _, port, _, endpoint = resolve_provider(service_url, version, db)
+        except RuntimeError as e:
+            raise ServiceCallError(f"no usable provider for {service_url}: {e}") from e
+        transport, base_url = None, f"http://127.0.0.1:{port}/{endpoint.strip('/')}"
+    return httpx.Client(transport=transport, timeout=_REQUEST_TIMEOUT_SECONDS), base_url
+
+
+def call_service(
+    service_url: str,
+    path: str,
+    payload: dict[str, Any],
+    permissions: Permissions,
+    config: Config,
+    db: sqlite3.Connection,
+    version: str = ">=0",
+) -> dict[str, Any]:
+    """POST to a service and return its JSON body, raising on anything unusable.
+
+    The router has no app token, but it is the sole authority for the ``X-OpenHost-*`` identity
+    headers in the first place, so it asserts the same ones the proxy would have injected for a
+    consumer app.
+    """
+    http, base_url = _client_for(service_url, config, db, version)
+    url = base_url + path
+    with http:
+        try:
+            response = http.post(
                 url,
                 json=payload,
                 headers={
@@ -97,35 +118,18 @@ class ServiceEndpoint:
         except ValueError as e:
             raise ServiceCallError(f"service returned non-JSON ({response.status_code})") from e
 
-        if not isinstance(body, dict):
-            raise ServiceCallError(f"service returned unexpected body: {body!r}")
-        if not 200 <= response.status_code < 300:
-            raise ServiceCallError(
-                f"{path} failed ({response.status_code}): "
-                f"{body.get('error', 'unknown_error')} {body.get('message', '')}",
-                status=response.status_code,
-                body=body,
-            )
-        return body
+    if not isinstance(body, dict):
+        raise ServiceCallError(f"service returned unexpected body: {body!r}")
+    if not 200 <= response.status_code < 300:
+        raise ServiceCallError(
+            f"{path} failed ({response.status_code}): {body.get('error', 'unknown_error')} {body.get('message', '')}",
+            status=response.status_code,
+            body=body,
+        )
+    return body
 
 
-@contextmanager
-def service_client(
-    service_url: str, config: Config, db: sqlite3.Connection, version: str = ">=0"
-) -> Iterator[ServiceEndpoint]:
-    """Open a client for ``service_url``, whichever provider currently serves it."""
-    builtin = builtin_for(service_url, db)
-    if builtin is not None:
-        if Version(builtin.version) not in SpecifierSet(version):
-            raise ServiceCallError(f"{service_url} version {builtin.version} does not match {version}")
-        transport: httpx.BaseTransport | None = _BuiltinTransport(builtin, config, db)
-        base_url = _BUILTIN_HOST
-    else:
-        try:
-            _, port, _, endpoint = resolve_provider(service_url, version, db)
-        except RuntimeError as e:
-            raise ServiceCallError(f"no usable provider for {service_url}: {e}") from e
-        transport, base_url = None, f"http://127.0.0.1:{port}/{endpoint.strip('/')}"
-
-    with httpx.Client(transport=transport, timeout=_REQUEST_TIMEOUT_SECONDS) as http:
-        yield ServiceEndpoint(http=http, base_url=base_url)
+def provider_is_builtin(service_url: str, db: sqlite3.Connection) -> bool:
+    """Whether the router serves this itself — which callers occasionally need, e.g. to know how
+    slow a write is to become visible."""
+    return builtin_for(service_url, db) is not None

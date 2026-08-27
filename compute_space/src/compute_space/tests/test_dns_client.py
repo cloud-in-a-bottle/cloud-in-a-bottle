@@ -15,17 +15,16 @@ import httpx
 import pytest
 
 import compute_space.core.dns.client as client_mod
+import compute_space.core.service_client as service_client_mod
 from compute_space.core.dns.client import LOCAL_PROPAGATION_TIMEOUT_SECONDS as LOCAL_TIMEOUT
 from compute_space.core.dns.client import REMOTE_PROPAGATION_TIMEOUT_SECONDS as REMOTE_TIMEOUT
 from compute_space.core.dns.client import DnsClient
-from compute_space.core.dns.client import dns_client
 from compute_space.core.dns.client import ensure_dns_provider_running
 from compute_space.core.dns.coredns_provider import store
 from compute_space.core.dns.service_api import DNS_SERVICE_URL
 from compute_space.core.dns.service_api import RecordType
 from compute_space.core.domains import Domain
 from compute_space.core.service_client import ServiceCallError
-from compute_space.core.service_client import ServiceEndpoint
 from compute_space.tests.conftest import open_db
 from compute_space.tests.dns_helpers import seeded_dns_config
 
@@ -41,8 +40,8 @@ def _local(tmp_path: Path, *domains: Domain) -> Iterator[tuple[DnsClient, sqlite
     """A client for an instance serving its own DNS, over real seeded zone files, plus the DB so a
     test can check what was stored without going back through a grant-filtered read."""
     config = seeded_dns_config(tmp_path, *(domains or (Domain(ZONE, tls=True),)))
-    with closing(open_db(config)) as db, dns_client(config, db) as client:
-        yield client, db
+    with closing(open_db(config)) as db:
+        yield DnsClient(config, db), db
 
 
 def _stored(db: sqlite3.Connection, zone: str = ZONE) -> dict[tuple[str, str], list[str]]:
@@ -103,8 +102,8 @@ def test_a_subdomain_keeps_its_prefix(tmp_path: Path) -> None:
 def test_a_challenge_reaches_the_zone_file(tmp_path: Path) -> None:
     # The whole point of the write: CoreDNS serves the file, so the record has to land in it.
     config = seeded_dns_config(tmp_path, Domain(ZONE, tls=True))
-    with closing(open_db(config)) as db, dns_client(config, db) as dns:
-        dns.set_records(_challenge(ZONE), RecordType.TXT, ["tok"], ttl=60)
+    with closing(open_db(config)) as db:
+        DnsClient(config, db).set_records(_challenge(ZONE), RecordType.TXT, ["tok"], ttl=60)
     assert '_acme-challenge   60  IN TXT  "tok"' in config.coredns_zonefile_path.read_text()
 
 
@@ -115,7 +114,7 @@ def test_writes_land_in_the_named_zone_only(tmp_path: Path) -> None:
         assert ("_acme-challenge", "TXT") not in _stored(db, ZONE)
 
 
-def test_an_unserved_domain_is_refused(tmp_path: Path) -> None:
+def test_an_unserved_domain_is_refused(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     with _local(tmp_path) as (dns, db):
         with pytest.raises(ServiceCallError, match="no configured DNS zone"):
             dns.set_records(_challenge("other.org"), RecordType.TXT, ["tok"], ttl=60)
@@ -124,20 +123,20 @@ def test_an_unserved_domain_is_refused(tmp_path: Path) -> None:
 # ─── grants the router asserts ───
 
 
-def test_the_router_claims_only_the_records_it_writes() -> None:
+def test_the_router_claims_only_the_records_it_writes(monkeypatch: pytest.MonkeyPatch) -> None:
     # Self-asserted, so this is about legibility rather than enforcement: a provider app's audit
     # log should say exactly what was touched.
     recorder = _Recorder({"/zones": _zones_ok(ZONE), "/records/set": _write_ok(ZONE)})
-    _remote(recorder).set_records(_challenge(ZONE), RecordType.TXT, ["tok"], ttl=60)
+    _remote(recorder, monkeypatch).set_records(_challenge(ZONE), RecordType.TXT, ["tok"], ttl=60)
 
     claimed = json.loads(recorder.requests[-1].headers["X-OpenHost-Permissions"])
     assert [e["grant"] for e in claimed] == [{"name": "_acme-challenge", "type": "TXT", "access": "rw"}]
     assert all(e["scope"] == "global" for e in claimed)
 
 
-def test_reading_the_zone_list_claims_only_read_access() -> None:
+def test_reading_the_zone_list_claims_only_read_access(monkeypatch: pytest.MonkeyPatch) -> None:
     recorder = _Recorder({"/zones": _zones_ok(ZONE)})
-    _remote(recorder).zones()
+    _remote(recorder, monkeypatch).zones()
 
     claimed = json.loads(recorder.requests[0].headers["X-OpenHost-Permissions"])
     assert [e["grant"]["access"] for e in claimed] == ["r"]
@@ -161,10 +160,18 @@ class _Recorder:
         return json.loads(self.requests[index].content)
 
 
-def _remote(recorder: _Recorder) -> DnsClient:
-    """A client bound to an app provider, so every call is a real HTTP round trip."""
-    http = httpx.Client(transport=httpx.MockTransport(recorder))
-    return DnsClient(ServiceEndpoint(http=http, base_url="http://127.0.0.1:9999/api/dns"))
+def _remote(recorder: _Recorder, monkeypatch: pytest.MonkeyPatch) -> DnsClient:
+    """A client whose provider is an app, so every call is a real HTTP round trip.
+
+    Patches the transport rather than injecting a handle: the client resolves its provider per
+    call now, so there is nothing to hand it.
+    """
+    monkeypatch.setattr(
+        service_client_mod,
+        "_client_for",
+        lambda *a: (httpx.Client(transport=httpx.MockTransport(recorder)), "http://127.0.0.1:9999/api/dns"),
+    )
+    return DnsClient(config=None, db=None)  # type: ignore[arg-type]  # unused once _client_for is patched
 
 
 def _zones_ok(*zones: str) -> tuple[int, dict[str, Any]]:
@@ -175,43 +182,43 @@ def _write_ok(zone: str) -> tuple[int, dict[str, Any]]:
     return 200, {"ok": True, "results": [{"zone": zone, "ok": True, "records": []}]}
 
 
-def test_the_router_identifies_itself_as_a_consumer() -> None:
+def test_the_router_identifies_itself_as_a_consumer(monkeypatch: pytest.MonkeyPatch) -> None:
     # The provider app rejects anything without a consumer identity, and the router is the sole
     # authority for these headers in the first place.
     recorder = _Recorder({"/zones": _zones_ok(ZONE)})
-    _remote(recorder).zones()
+    _remote(recorder, monkeypatch).zones()
 
     headers = recorder.requests[0].headers
     assert headers["X-OpenHost-Consumer-Id"] == "_openhost_router"
     assert json.loads(headers["X-OpenHost-Permissions"])[0]["scope"] == "global"
 
 
-def test_a_challenge_under_a_parent_zone_keeps_its_prefix() -> None:
+def test_a_challenge_under_a_parent_zone_keeps_its_prefix(monkeypatch: pytest.MonkeyPatch) -> None:
     recorder = _Recorder({"/zones": _zones_ok("example.com"), "/records/set": _write_ok("example.com")})
-    _remote(recorder).set_records(_challenge("host.example.com"), RecordType.TXT, ["tok"], ttl=60)
+    _remote(recorder, monkeypatch).set_records(_challenge("host.example.com"), RecordType.TXT, ["tok"], ttl=60)
 
     body = recorder.body()
     assert body["zone"] == "example.com"
     assert body["records"] == [{"name": "_acme-challenge.host", "type": "TXT", "ttl": 60, "data": "tok"}]
 
 
-def test_the_most_specific_zone_wins() -> None:
+def test_the_most_specific_zone_wins(monkeypatch: pytest.MonkeyPatch) -> None:
     recorder = _Recorder(
         {"/zones": _zones_ok("example.com", "host.example.com"), "/records/set": _write_ok("host.example.com")}
     )
-    _remote(recorder).set_records(_challenge("host.example.com"), RecordType.TXT, ["tok"], ttl=60)
+    _remote(recorder, monkeypatch).set_records(_challenge("host.example.com"), RecordType.TXT, ["tok"], ttl=60)
     assert recorder.body()["zone"] == "host.example.com"
 
 
-def test_clearing_omits_data_entirely() -> None:
+def test_clearing_omits_data_entirely(monkeypatch: pytest.MonkeyPatch) -> None:
     # That is how the API spells "delete whatever is at this name and type"; sending data: null
     # would ask to delete a record whose value is the string "null".
     recorder = _Recorder({"/zones": _zones_ok(ZONE), "/records/delete": _write_ok(ZONE)})
-    _remote(recorder).delete_records(_challenge(ZONE), RecordType.TXT)
+    _remote(recorder, monkeypatch).delete_records(_challenge(ZONE), RecordType.TXT)
     assert recorder.body()["records"] == [{"name": "_acme-challenge", "type": "TXT", "ttl": 300}]
 
 
-def test_a_per_zone_failure_is_raised_rather_than_read_as_success() -> None:
+def test_a_per_zone_failure_is_raised_rather_than_read_as_success(monkeypatch: pytest.MonkeyPatch) -> None:
     # The service reports 207 for a partial fan-out, but we always name one zone, so a failed zone
     # is a failed operation -- treating it as success would silently drop a challenge record.
     recorder = _Recorder(
@@ -221,23 +228,28 @@ def test_a_per_zone_failure_is_raised_rather_than_read_as_success() -> None:
         }
     )
     with pytest.raises(ServiceCallError, match="rate limited"):
-        _remote(recorder).set_records(_challenge(ZONE), RecordType.TXT, ["tok"], ttl=60)
+        _remote(recorder, monkeypatch).set_records(_challenge(ZONE), RecordType.TXT, ["tok"], ttl=60)
 
 
-def test_an_error_status_surfaces() -> None:
+def test_an_error_status_surfaces(monkeypatch: pytest.MonkeyPatch) -> None:
     recorder = _Recorder({"/zones": (403, {"error": "permission_required", "message": "no grant"})})
     with pytest.raises(ServiceCallError, match="permission_required"):
-        _remote(recorder).zones()
+        _remote(recorder, monkeypatch).zones()
 
 
-def test_an_unreachable_provider_is_an_error_not_a_crash() -> None:
+def test_an_unreachable_provider_is_an_error_not_a_crash(monkeypatch: pytest.MonkeyPatch) -> None:
     def refuse(request: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError("connection refused")
 
-    http = httpx.Client(transport=httpx.MockTransport(refuse))
-    client = DnsClient(ServiceEndpoint(http=http, base_url="http://127.0.0.1:9999/api/dns"))
+    recorder = _Recorder({})
+    monkeypatch.setattr(
+        service_client_mod,
+        "_client_for",
+        lambda *a: (httpx.Client(transport=httpx.MockTransport(refuse)), "http://127.0.0.1:9999/api/dns"),
+    )
     with pytest.raises(ServiceCallError, match="unreachable"):
-        client.zones()
+        DnsClient(config=None, db=None).zones()  # type: ignore[arg-type]
+    assert recorder.requests == []
 
 
 def test_a_remote_provider_gets_a_far_longer_propagation_timeout() -> None:

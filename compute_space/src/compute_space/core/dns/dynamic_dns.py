@@ -18,7 +18,6 @@ from contextlib import closing
 
 from compute_space.config import Config
 from compute_space.core.dns.client import DnsClient
-from compute_space.core.dns.client import dns_client
 from compute_space.core.dns.client import router_managed_domains
 from compute_space.core.dns.client import uses_local_dns
 from compute_space.core.dns.coredns_provider.coredns import reload_coredns_for_domains
@@ -54,9 +53,9 @@ def check_once(config: Config, db: sqlite3.Connection) -> str | None:
         # derives from the IP as well, so CoreDNS has to come back on the new one.
         reload_coredns_for_domains(config, db)
     else:
-        with dns_client(config, db) as dns:
-            for domain in router_managed_domains(db):
-                _point_at(dns, domain, detected)
+        dns = DnsClient(config, db)
+        for domain in router_managed_domains(db):
+            _point_at(dns, domain, detected)
     return detected
 
 

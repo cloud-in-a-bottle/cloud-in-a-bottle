@@ -5,7 +5,6 @@ from pathlib import Path
 from compute_space.config import CERT_PROVIDER_ACME
 from compute_space.config import Config
 from compute_space.core.dns.client import DnsClient
-from compute_space.core.dns.client import dns_client
 from compute_space.core.domains import primary_domain
 from compute_space.core.identity_store import get_instance_identity
 from compute_space.core.tls.acquire_cert import acquire_tls_cert
@@ -29,8 +28,7 @@ def acquire_cert_for_domain(
     The cert_provider value and its required settings are validated when the Config is constructed
     (Config.__attrs_post_init__), so here we only narrow the optional fields for the type checker.
     """
-    with dns_client(config, db) as dns:
-        _acquire_with_dns(config, domain, cert_path, key_path, db, dns)
+    _acquire_with_dns(config, domain, cert_path, key_path, db, DnsClient(config, db))
 
 
 def _acquire_with_dns(

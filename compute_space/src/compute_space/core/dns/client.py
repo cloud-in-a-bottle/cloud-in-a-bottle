@@ -4,6 +4,9 @@ Records are addressed by fully-qualified name; the client resolves which configu
 and what the name is relative to it, so callers never handle zones.  ``core.service_client`` hides
 whether the records live in our own CoreDNS zone files or at a registrar.
 
+Holds nothing but the config and DB handle it was given, so construct one wherever you need it
+rather than threading one through.
+
 Deliberately record-level.  What a record *means* — that ``_acme-challenge`` is a DNS-01 token, or
 that the apex and wildcard follow the instance's address — belongs to the caller: see
 ``core.tls.challenge`` and ``core.dns.dynamic_dns``.
@@ -17,8 +20,6 @@ from __future__ import annotations
 import sqlite3
 import subprocess
 import time
-from collections.abc import Iterator
-from contextlib import contextmanager
 from typing import Any
 
 import attr
@@ -37,8 +38,7 @@ from compute_space.core.dns.service_api import permission
 from compute_space.core.domains import effective_domains
 from compute_space.core.logging import logger
 from compute_space.core.service_client import ServiceCallError
-from compute_space.core.service_client import ServiceEndpoint
-from compute_space.core.service_client import service_client
+from compute_space.core.service_client import call_service
 
 # CoreDNS reloads within seconds; an external registrar can take minutes to publish.
 LOCAL_PROPAGATION_TIMEOUT_SECONDS = 120.0
@@ -112,13 +112,19 @@ def router_managed_domains(db: sqlite3.Connection) -> list[str]:
 
 @attr.s(auto_attribs=True, frozen=True)
 class DnsClient:
-    service: ServiceEndpoint
-    # How long to wait for a write to be visible externally.  Set by ``dns_client`` from the
-    # provider, since a registrar is orders of magnitude slower than our own zone file.
-    propagation_timeout_seconds: float = REMOTE_PROPAGATION_TIMEOUT_SECONDS
+    config: Config
+    db: sqlite3.Connection
+
+    @property
+    def propagation_timeout_seconds(self) -> float:
+        """How long a write takes to become visible externally.  Our own zone file reloads in
+        seconds; a registrar can take minutes."""
+        if uses_local_dns(self.db):
+            return LOCAL_PROPAGATION_TIMEOUT_SECONDS
+        return REMOTE_PROPAGATION_TIMEOUT_SECONDS
 
     def zones(self) -> list[str]:
-        zones = self.service.call("/zones", {}, [permission(WILDCARD, WILDCARD, "r")]).get("zones")
+        zones = self._call("/zones", {}, [permission(WILDCARD, WILDCARD, "r")]).get("zones")
         if not isinstance(zones, list):
             raise ServiceCallError("DNS service returned no zone list")
         return [str(z) for z in zones]
@@ -152,9 +158,12 @@ class DnsClient:
         zone = max(candidates, key=len)
         return zone, target[: -len(zone)].rstrip(".") or APEX
 
+    def _call(self, path: str, payload: dict[str, Any], permissions: list[dict[str, Any]]) -> dict[str, Any]:
+        return call_service(DNS_SERVICE_URL, path, payload, permissions, self.config, self.db)
+
     def _write(self, op: str, zone: str, records: list[DnsRecord]) -> None:
         payload = {"zone": zone, "records": [_to_wire(r) for r in records]}
-        body = self.service.call(f"/records/{op}", payload, [permission(r.name, r.type) for r in records])
+        body = self._call(f"/records/{op}", payload, [permission(r.name, r.type) for r in records])
         # We always name exactly one zone, so a failed zone is a failed operation even under 207.
         for result in body.get("results") or []:
             if isinstance(result, dict) and not result.get("ok"):
@@ -168,13 +177,6 @@ def _to_wire(record: DnsRecord) -> dict[str, Any]:
     if record.data is not None:
         wire["data"] = record.data
     return wire
-
-
-@contextmanager
-def dns_client(config: Config, db: sqlite3.Connection) -> Iterator[DnsClient]:
-    timeout = LOCAL_PROPAGATION_TIMEOUT_SECONDS if uses_local_dns(db) else REMOTE_PROPAGATION_TIMEOUT_SECONDS
-    with service_client(DNS_SERVICE_URL, config, db) as service:
-        yield DnsClient(service, timeout)
 
 
 # Deliberately not the host's own resolver: with the router serving DNS that would query CoreDNS
