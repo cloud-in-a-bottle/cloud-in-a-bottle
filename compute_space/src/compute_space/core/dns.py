@@ -14,11 +14,10 @@ clear_txt() after the cert is issued.
 
 from __future__ import annotations
 
+import asyncio
 import re
 import socket
 import sqlite3
-import subprocess
-import threading
 import time
 from pathlib import Path
 
@@ -194,21 +193,29 @@ def _write_coredns_config(
                 f.write(container_content)
 
 
-def _spawn_coredns(corefile_path: Path, coredns_bin: str) -> subprocess.Popen[bytes]:
-    proc = subprocess.Popen(
-        [coredns_bin, "-conf", corefile_path],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
+# Strong references to the log-streaming tasks; see the same set in caddy.py.
+_log_tasks: set[asyncio.Task[None]] = set()
+
+
+async def _spawn_coredns(corefile_path: Path, coredns_bin: str) -> asyncio.subprocess.Process:
+    proc = await asyncio.create_subprocess_exec(
+        coredns_bin,
+        "-conf",
+        str(corefile_path),
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.STDOUT,
     )
 
-    def _stream_coredns_logs(proc: subprocess.Popen[bytes]) -> None:
+    async def _stream_coredns_logs() -> None:
         assert proc.stdout is not None
-        for line in proc.stdout:
+        async for line in proc.stdout:
             logger.info(f"[coredns] {line.decode(errors='replace').rstrip()}")
-        proc.wait()
+        await proc.wait()
         logger.warning(f"CoreDNS exited with code {proc.returncode}")
 
-    threading.Thread(target=_stream_coredns_logs, args=(proc,), daemon=True).start()
+    log_task = asyncio.create_task(_stream_coredns_logs())
+    _log_tasks.add(log_task)
+    log_task.add_done_callback(_log_tasks.discard)
     logger.info(f"Started CoreDNS (pid {proc.pid})")
     return proc
 
@@ -218,27 +225,27 @@ class CoreDnsProcess:
     """Handle to the running CoreDNS child.  Mutable: restart() replaces proc with a fresh one so
     it picks up a regenerated Corefile (new zones).  Mirrors ``CaddyProcess``."""
 
-    proc: subprocess.Popen[bytes]
+    proc: asyncio.subprocess.Process
     corefile_path: Path
     coredns_bin: str
     # Serializes restart() to match CaddyProcess — insurance against a future background caller racing
     # two coredns onto :53 (today's callers are already serialized on the event loop).
-    _restart_lock: threading.Lock = attr.ib(factory=threading.Lock, init=False, eq=False, repr=False)
+    _restart_lock: asyncio.Lock = attr.ib(factory=asyncio.Lock, init=False, eq=False, repr=False)
 
-    def restart(self) -> None:
-        with self._restart_lock:
-            if self.proc.poll() is None:
+    async def restart(self) -> None:
+        async with self._restart_lock:
+            if self.proc.returncode is None:
                 self.proc.terminate()
                 try:
-                    self.proc.wait(timeout=3)
-                except subprocess.TimeoutExpired:
+                    await asyncio.wait_for(self.proc.wait(), timeout=3)
+                except TimeoutError:
                     logger.warning(f"CoreDNS (pid {self.proc.pid}) did not exit after terminate, killing")
                     self.proc.kill()
-                    self.proc.wait()
-            self.proc = _spawn_coredns(self.corefile_path, self.coredns_bin)
+                    await self.proc.wait()
+            self.proc = await _spawn_coredns(self.corefile_path, self.coredns_bin)
 
 
-def start_coredns(
+async def start_coredns(
     zones: tuple[DnsZone, ...],
     public_ip: str,
     corefile_path: Path,
@@ -256,7 +263,7 @@ def start_coredns(
     _write_coredns_config(zones, public_ip, corefile_path, container_gateway_ip)
     logger.info(f"Starting CoreDNS for {', '.join(z.domain for z in zones)}")
     return CoreDnsProcess(
-        proc=_spawn_coredns(corefile_path, coredns_bin),
+        proc=await _spawn_coredns(corefile_path, coredns_bin),
         corefile_path=corefile_path,
         coredns_bin=coredns_bin,
     )
@@ -277,7 +284,7 @@ def get_active_coredns() -> CoreDnsProcess | None:
     return _active_coredns
 
 
-def reload_coredns_for_domains(config: Config, db: sqlite3.Connection) -> bool:
+async def reload_coredns_for_domains(config: Config, db: sqlite3.Connection) -> bool:
     """Regenerate the Corefile + zone files from the config's current public-domain set and restart
     CoreDNS so it becomes authoritative for the new set (a new zone needs a restart; the ``file``
     plugin's ``reload`` only picks up edits to an *already-served* zone file).  No-op (returns
@@ -286,7 +293,7 @@ def reload_coredns_for_domains(config: Config, db: sqlite3.Connection) -> bool:
     if coredns is None or not config.public_ip:
         return False
     _write_coredns_config(public_dns_zones(config, db), config.public_ip, coredns.corefile_path, CONTAINER_GATEWAY_IP)
-    coredns.restart()
+    await coredns.restart()
     return True
 
 

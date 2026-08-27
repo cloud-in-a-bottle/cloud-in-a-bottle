@@ -4,8 +4,6 @@ import shutil
 import signal
 import socket
 import sqlite3
-import subprocess
-import time
 from contextlib import closing
 from pathlib import Path
 from typing import Any
@@ -41,7 +39,7 @@ from compute_space.core.terminal import cleanup_all as cleanup_terminal_sessions
 from compute_space.core.tls.provision import provision_cert
 from compute_space.core.tls.renewal import CertStatus
 from compute_space.core.tls.renewal import get_cert_status
-from compute_space.core.tls.renewal import start_renewal_thread
+from compute_space.core.tls.renewal import start_renewal_task
 from compute_space.core.updates import RESTART_EXIT_CODE
 from compute_space.core.updates import initialize_shutdown_event
 from compute_space.db import get_db
@@ -51,15 +49,15 @@ from compute_space.web.setup_app import create_setup_app
 from openhost_system_agent.updater.paths import DATA_DIR_ENV
 
 
-def _terminate_children(children: list[subprocess.Popen[bytes]]) -> None:
+async def _terminate_children(children: list[asyncio.subprocess.Process]) -> None:
     for proc in children:
-        if proc.poll() is None:
+        if proc.returncode is None:
             logger.info(f"Terminating child process {proc.pid}")
             proc.terminate()
     for proc in children:
         try:
-            proc.wait(timeout=3)
-        except subprocess.TimeoutExpired:
+            await asyncio.wait_for(proc.wait(), timeout=3)
+        except TimeoutError:
             logger.warning(f"Child process {proc.pid} did not exit, killing")
             proc.kill()
 
@@ -88,7 +86,7 @@ def _require_configured_domain(domains: tuple[Domain, ...]) -> None:
         )
 
 
-def _ensure_tls_cert(config: Config, db: sqlite3.Connection) -> None:
+async def _ensure_tls_cert(config: Config, db: sqlite3.Connection) -> None:
     """Make sure a usable cert+key pair is on disk before Caddy starts, acquiring or renewing as configured."""
     status = get_cert_status(config.tls_cert_path, config.tls_key_path)
     if status == CertStatus.OK:
@@ -106,13 +104,11 @@ def _ensure_tls_cert(config: Config, db: sqlite3.Connection) -> None:
         # The existing cert is still valid, so a failed renewal shouldn't block
         # startup — the background renewal loop will keep retrying.
         try:
-            asyncio.run(provision_cert(config, db))
+            await provision_cert(config, db)
         except Exception:
             logger.exception("TLS cert renewal failed; serving the existing cert and retrying in the background")
     else:
-        # Boot's own event loop: acquisition is async library code, and hypercorn's loop does not
-        # exist yet.  asyncio.run belongs here, at the entry point.
-        asyncio.run(provision_cert(config, db))
+        await provision_cert(config, db)
 
 
 def _ensure_coredns_binary(config: Config) -> str:
@@ -125,6 +121,12 @@ def _ensure_coredns_binary(config: Config) -> str:
 
 
 def main() -> None:
+    """Entry point.  One event loop owns the whole process — boot, the child processes it spawns,
+    the renewal task and hypercorn — so Caddy/CoreDNS handles stay valid everywhere they're used."""
+    asyncio.run(_main())
+
+
+async def _main() -> None:
     # Allow group members to write files/dirs we create (files 664, dirs 775).
     os.umask(0o002)
 
@@ -134,9 +136,9 @@ def main() -> None:
     # The DB `domains` table is the source of truth.  Seed it once (+ the claim token) from
     # first_boot.toml before starting CoreDNS/Caddy so every configured domain is served this boot.
     seed_first_boot(config)
-    children: list[subprocess.Popen[bytes]] = []
     coredns: CoreDnsProcess | None = None
     caddy: CaddyProcess | None = None
+    renewal_task: asyncio.Task[None] | None = None
     # One connection for the whole domain-dependent startup sequence (CoreDNS -> TLS cert -> Caddy);
     # the primary + cert/zone paths are read live from it.
     with closing(get_db()) as db:
@@ -149,7 +151,7 @@ def main() -> None:
                 raise RuntimeError("Public IP must be set in config to use CoreDNS")
             # Authoritative for every public (non-mDNS) domain the instance answers on, so a
             # secondary domain delegated to this box resolves too — not just the primary.
-            coredns = start_coredns(
+            coredns = await start_coredns(
                 dns_zones,
                 config.public_ip,
                 config.coredns_corefile_path,
@@ -159,7 +161,7 @@ def main() -> None:
             set_active_coredns(coredns)
 
         if domains[0].tls:  # primary is a TLS domain
-            _ensure_tls_cert(config, db)
+            await _ensure_tls_cert(config, db)
 
         # Caddy reverse proxy. mainly for TLS termination, but also some other features.
         # The acquired file cert covers the primary domain (a wildcard for it);
@@ -168,8 +170,8 @@ def main() -> None:
         if config.start_caddy:
             # Release 80/443 from the detached updater (if a self-update just
             # happened) before Caddy binds, so Caddy can't lose the handoff race.
-            system_agent_stop_updater_sync()
-            caddy = start_caddy(
+            await asyncio.to_thread(system_agent_stop_updater_sync)
+            caddy = await start_caddy(
                 config.caddyfile_path,
                 domains,
                 config.port,
@@ -181,7 +183,7 @@ def main() -> None:
             if needs_caddy_for_tls and config.coredns_enabled and config.acquire_tls_cert_if_missing:
                 # Renew every TLS domain — including a TLS secondary under a non-TLS primary — and
                 # regenerate the Caddyfile so acquired certs are served.
-                start_renewal_thread(reload_caddy_for_domains)
+                renewal_task = start_renewal_task(reload_caddy_for_domains)
         elif needs_caddy_for_tls:
             raise RuntimeError(
                 "A TLS domain is configured but start_caddy is False. Caddy is required for TLS termination."
@@ -191,10 +193,12 @@ def main() -> None:
     # /updating page's "back online" doesn't fire before CoreDNS/cert/Caddy are up.
     mark_boot_complete()
 
-    def _all_children() -> list[subprocess.Popen[bytes]]:
-        # Read caddy.proc / coredns.proc at shutdown time: restart() may have replaced them.
-        live = [p.proc for p in (caddy, coredns) if p is not None]
-        return children + live
+    async def _shutdown() -> None:
+        """Stop the renewal task and the child processes.  Reads caddy.proc / coredns.proc now
+        rather than capturing them earlier: restart() may have replaced them since."""
+        if renewal_task is not None:
+            renewal_task.cancel()
+        await _terminate_children([p.proc for p in (caddy, coredns) if p is not None])
 
     hypercorn_config = hypercorn.config.Config()
     # Bind the primary address (127.0.0.1 in production) plus the container
@@ -221,28 +225,28 @@ def main() -> None:
     # handler triggers shutdown via trigger_restart(); we then proceed to the full app
     if not owner_exists(config):
         logger.info("No owner row found; serving setup-only app")
-        setup_completed = asyncio.run(_serve(create_setup_app(config), hypercorn_config))
+        setup_completed = await _serve(create_setup_app(config), hypercorn_config)
         if not setup_completed:
             logger.info("Setup interrupted by signal; exiting")
-            _terminate_children(_all_children())
-            time.sleep(0.1)
+            await _shutdown()
+            await asyncio.sleep(0.1)
             os._exit(0)
 
     # Main web server
     app = create_app(config)
     logger.info("running hypercorn serve")
-    restart_requested = asyncio.run(_serve(app, hypercorn_config))
+    restart_requested = await _serve(app, hypercorn_config)
     logger.info(f"hypercorn serve returned, restart_requested={restart_requested}")
 
-    _terminate_children(_all_children())
+    await _shutdown()
 
     if restart_requested:
         logger.info(f"Calling os._exit({RESTART_EXIT_CODE})")
-        time.sleep(0.1)
+        await asyncio.sleep(0.1)
         os._exit(RESTART_EXIT_CODE)
 
     logger.info("Calling os._exit(0)")
-    time.sleep(0.1)
+    await asyncio.sleep(0.1)
     os._exit(0)
 
 

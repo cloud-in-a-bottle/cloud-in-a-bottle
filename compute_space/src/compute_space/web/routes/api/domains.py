@@ -13,7 +13,6 @@ import re
 import sqlite3
 from contextlib import closing
 
-import anyio
 import attr
 from litestar import Response
 from litestar import Router
@@ -122,19 +121,14 @@ def _domain_list(config: Config, db: sqlite3.Connection) -> list[DomainInfo]:
 async def _reload_caddy_after_response() -> None:
     """Regenerate + gracefully reload Caddy as a response background task.
 
-    The reload is zero-downtime (admin-API config reload — see CaddyProcess.reload), so it won't drop
-    the request that triggered it; running it after the response is sent just keeps the reload's
-    latency off the response path.  Reads the *live* config so a concurrent domain change isn't
-    dropped from the regenerated Caddyfile; off the event loop since the reload shells out."""
-
-    def _reload() -> None:
-        with closing(get_db()) as db:
-            reload_caddy_for_domains(get_config(), db)
-
-    await anyio.to_thread.run_sync(_reload)
+    Deferred past the response because the reload falls back to a cold restart when the admin API
+    fails, and that *would* drop the request that triggered it.  Reads the *live* config so a
+    concurrent domain change isn't dropped from the regenerated Caddyfile."""
+    with closing(get_db()) as db:
+        await reload_caddy_for_domains(get_config(), db)
 
 
-async def _acquire(config: Config, domain: Domain) -> None:
+async def _acquire_cert(config: Config, domain: Domain) -> None:
     """Acquire the domain's cert, then flip its status + reload Caddy so it uses the real cert.
     Runs after the response (acquisition is slow), so it owns one DB connection for the job.
     Records the error on failure."""
@@ -194,16 +188,15 @@ async def add_domain(
     if not data.mdns:
         # Make CoreDNS authoritative for the new public zone *before* acquisition: DNS-01 writes the
         # _acme-challenge TXT into this domain's zone file, which only resolves once CoreDNS serves
-        # the zone.  Run off the event loop — the restart does a blocking terminate+wait(3s) — but
-        # await it so ordering before acquisition holds.  (mDNS domains never touch CoreDNS.)
-        await anyio.to_thread.run_sync(reload_coredns_for_domains, config, db)
+        # the zone.  (mDNS domains never touch CoreDNS.)
+        await reload_coredns_for_domains(config, db)
     # Return the full updated list so the client repaints the table without a follow-up GET, and
     # regenerate Caddy (serving the new site) only after this response has been sent — see
     # _reload_caddy_after_response.  BackgroundTasks runs these in order, so the new site is being
     # served (via `tls internal`) before the slow acquisition starts.
     background: list[BackgroundTask] = [BackgroundTask(_reload_caddy_after_response)]
     if data.tls:
-        background.append(BackgroundTask(_acquire, config, domain))
+        background.append(BackgroundTask(_acquire_cert, config, domain))
     return Response(
         DomainListResponse(domains=_domain_list(config, db)),
         status_code=202,
@@ -230,9 +223,8 @@ async def remove_domain(
     if not remove_record(db, name):
         raise NotFoundException(detail="domain not found")
     if removed is not None and not removed.mdns:
-        # Drop the zone from CoreDNS so it stops answering for the removed public domain.  Off the
-        # event loop — the restart blocks on a terminate+wait(3s).
-        await anyio.to_thread.run_sync(reload_coredns_for_domains, config, db)
+        # Drop the zone from CoreDNS so it stops answering for the removed public domain.
+        await reload_coredns_for_domains(config, db)
     # Regenerate Caddy only after this response has been sent — see _reload_caddy_after_response.
     return Response(
         DomainListResponse(domains=_domain_list(config, db)),
