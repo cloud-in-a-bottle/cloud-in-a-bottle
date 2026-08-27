@@ -8,9 +8,9 @@ from typing import Any
 import pytest
 
 from compute_space.core.dns.coredns_provider import store
+from compute_space.core.dns.coredns_provider.grants import parse as parse_grants
 from compute_space.core.dns.coredns_provider.service import handle_dns_call
 from compute_space.core.dns.service_api import DnsRecord
-from compute_space.core.dns.service_api import parse_grants
 from compute_space.core.domains import Domain
 from compute_space.tests.conftest import open_db
 from compute_space.tests.dns_helpers import seeded_dns_config
@@ -18,8 +18,9 @@ from compute_space.tests.dns_helpers import seeded_dns_config
 ZONE = "host.example.com"
 
 
-def _grants(*entries: tuple[str, str, str]) -> list[Any]:
-    return parse_grants([{"grant": {"name": n, "type": t, "access": a}, "scope": "global"} for n, t, a in entries])
+def _perms(*entries: tuple[str, str, str]) -> list[Any]:
+    """Permission entries in wire form, as the router injects them."""
+    return [{"grant": {"name": n, "type": t, "access": a}, "scope": "global"} for n, t, a in entries]
 
 
 class _Space:
@@ -29,8 +30,8 @@ class _Space:
         self.config = seeded_dns_config(tmp_path, *domains)
         self.db = open_db(self.config)
 
-    def call(self, path: str, payload: dict[str, Any], grants: list[Any]) -> tuple[int, dict[str, Any]]:
-        return handle_dns_call(path, payload, grants, self.config, self.db)
+    def call(self, path: str, payload: dict[str, Any], permissions: list[Any]) -> tuple[int, dict[str, Any]]:
+        return handle_dns_call(path, payload, permissions, self.config, self.db)
 
     def records(self, name: str, rrtype: str) -> list[str]:
         """Read the store directly, so an assertion isn't filtered by the caller's grants."""
@@ -84,18 +85,18 @@ def test_a_dotted_wildcard_grant_does_not_cover_the_bare_label() -> None:
     # required literally — and a cert for the zone apex puts its challenge at the bare
     # "_acme-challenge". A grant meaning "this label and anything under it" is written without
     # the dot.
-    dotted = _grants(("_acme-challenge.**", "TXT", "rw"))[0]
+    dotted = parse_grants(_perms(("_acme-challenge.**", "TXT", "rw")))[0]
     assert dotted.matches("_acme-challenge.host", "TXT")
     assert not dotted.matches("_acme-challenge", "TXT")
 
-    undotted = _grants(("_acme-challenge**", "TXT", "rw"))[0]
+    undotted = parse_grants(_perms(("_acme-challenge**", "TXT", "rw")))[0]
     assert undotted.matches("_acme-challenge", "TXT")
     assert undotted.matches("_acme-challenge.host", "TXT")
 
 
 def test_a_single_star_is_a_literal_dns_wildcard_label(space: Any) -> None:
     # "*.app" is a real record name, so a grant naming it must not become a pattern.
-    grants = _grants(("*", "A", "rw"))
+    grants = _perms(("*", "A", "rw"))
     status, body = space.call("/records/get", {"zone": ZONE, "name": "www", "type": "A"}, grants)
     assert status == 200
     assert body["results"][0]["records"] == []
@@ -111,7 +112,7 @@ def test_zones_needs_a_grant_before_it_names_the_owner_s_domains(space: Any) -> 
 
 
 def test_zones_lists_the_instance_s_domains(space: Any) -> None:
-    status, body = space.call("/zones", {}, _grants(ACME))
+    status, body = space.call("/zones", {}, _perms(ACME))
     assert status == 200
     assert body["zones"] == [ZONE]
 
@@ -122,7 +123,7 @@ def test_zones_lists_the_instance_s_domains(space: Any) -> None:
 def test_a_read_returns_only_what_the_grants_match(space: Any) -> None:
     space.write([DnsRecord("_acme-challenge", "TXT", 60, "tok"), DnsRecord("secret", "TXT", 300, "other")])
 
-    status, body = space.call("/records/get", {"zone": ZONE}, _grants(ACME))
+    status, body = space.call("/records/get", {"zone": ZONE}, _perms(ACME))
 
     assert status == 200
     names = {r["name"] for r in body["results"][0]["records"]}
@@ -137,7 +138,7 @@ def test_an_ungranted_app_reads_nothing_and_learns_no_zone_names(space: Any) -> 
 
 
 def test_a_read_defaults_to_every_zone(space: Any) -> None:
-    status, body = space.call("/records/get", {}, _grants(RW_ALL))
+    status, body = space.call("/records/get", {}, _perms(RW_ALL))
     assert status == 200
     assert [r["zone"] for r in body["results"]] == [ZONE]
 
@@ -147,7 +148,7 @@ def test_a_read_defaults_to_every_zone(space: Any) -> None:
 
 def test_a_write_must_name_a_zone(space: Any) -> None:
     status, body = space.call(
-        "/records/set", {"records": [{"name": "www", "type": "A", "ttl": 300, "data": "1.2.3.4"}]}, _grants(RW_ALL)
+        "/records/set", {"records": [{"name": "www", "type": "A", "ttl": 300, "data": "1.2.3.4"}]}, _perms(RW_ALL)
     )
     assert status == 400
     assert body["error"] == "zone_required"
@@ -157,7 +158,7 @@ def test_a_write_without_a_covering_grant_is_refused_with_the_grant_it_would_nee
     status, body = space.call(
         "/records/set",
         {"zone": ZONE, "records": [{"name": "www", "type": "A", "ttl": 300, "data": "1.2.3.4"}]},
-        _grants(ACME),
+        _perms(ACME),
     )
     assert status == 403
     assert body["error"] == "permission_required"
@@ -169,7 +170,7 @@ def test_a_read_only_grant_cannot_write(space: Any) -> None:
     status, body = space.call(
         "/records/set",
         {"zone": ZONE, "records": [{"name": "www", "type": "A", "ttl": 300, "data": "1.2.3.4"}]},
-        _grants(("**", "**", "r")),
+        _perms(("**", "**", "r")),
     )
     assert status == 403
 
@@ -184,7 +185,7 @@ def test_a_partly_permitted_batch_applies_none_of_it(space: Any) -> None:
                 {"name": "www", "type": "A", "ttl": 300, "data": "1.2.3.4"},
             ],
         },
-        _grants(ACME),
+        _perms(ACME),
     )
     assert status == 403
     assert space.records("_acme-challenge", "TXT") == []
@@ -206,7 +207,7 @@ def test_a_granted_write_lands_in_the_zone_file(space: Any) -> None:
     status, body = space.call(
         "/records/append",
         {"zone": ZONE, "records": [{"name": "_acme-challenge", "type": "TXT", "ttl": 60, "data": "tok"}]},
-        _grants(ACME),
+        _perms(ACME),
     )
     assert status == 200
     assert body["ok"] is True
@@ -219,7 +220,7 @@ def test_delete_without_data_clears_the_rrset(space: Any) -> None:
     status, _ = space.call(
         "/records/delete",
         {"zone": ZONE, "records": [{"name": "_acme-challenge", "type": "TXT", "ttl": 60}]},
-        _grants(ACME),
+        _perms(ACME),
     )
 
     assert status == 200
@@ -230,7 +231,7 @@ def test_an_unknown_zone_is_reported_once_the_caller_is_authorized(space: Any) -
     status, body = space.call(
         "/records/set",
         {"zone": "other.org", "records": [{"name": "www", "type": "A", "ttl": 300, "data": "1.2.3.4"}]},
-        _grants(RW_ALL),
+        _perms(RW_ALL),
     )
     assert status == 400
     assert body["error"] == "unknown_zone"
@@ -242,7 +243,7 @@ def test_an_app_may_write_the_router_owned_names(space: Any) -> None:
     status, _ = space.call(
         "/records/set",
         {"zone": ZONE, "records": [{"name": "www", "type": "A", "ttl": 300, "data": "198.51.100.7"}]},
-        _grants(RW_ALL),
+        _perms(RW_ALL),
     )
     assert status == 200
 
@@ -257,7 +258,7 @@ def test_mail_records_at_the_apex_are_writable(space: Any) -> None:
                 {"name": "@", "type": "TXT", "ttl": 300, "data": "v=spf1 -all"},
             ],
         },
-        _grants(RW_ALL),
+        _perms(RW_ALL),
     )
     assert status == 200
     assert space.records("@", "MX") == ["10 mail.example.com."]
@@ -267,7 +268,7 @@ def test_a_write_reaches_the_zone_file(space: Any) -> None:
     space.call(
         "/records/append",
         {"zone": ZONE, "records": [{"name": "www", "type": "A", "ttl": 300, "data": "198.51.100.7"}]},
-        _grants(RW_ALL),
+        _perms(RW_ALL),
     )
     assert "www   300  IN A  198.51.100.7" in space.config.coredns_zonefile_path.read_text()
 
@@ -278,7 +279,7 @@ def test_unparseable_rdata_is_rejected_before_it_reaches_the_zone_file(space: An
     status, body = space.call(
         "/records/set",
         {"zone": ZONE, "records": [{"name": "www", "type": "A", "ttl": 300, "data": "not-an-ip"}]},
-        _grants(RW_ALL),
+        _perms(RW_ALL),
     )
     assert status == 400
     assert body["error"] == "invalid_record"
@@ -289,7 +290,7 @@ def test_an_a_record_holding_an_ipv6_literal_is_rejected(space: Any) -> None:
     status, body = space.call(
         "/records/set",
         {"zone": ZONE, "records": [{"name": "www", "type": "A", "ttl": 300, "data": "2001:db8::1"}]},
-        _grants(RW_ALL),
+        _perms(RW_ALL),
     )
     assert status == 400
     assert body["error"] == "invalid_record"
@@ -302,19 +303,19 @@ def test_an_unwritable_record_type_is_rejected(space: Any) -> None:
     status, body = space.call(
         "/records/set",
         {"zone": ZONE, "records": [{"name": "www", "type": "DNSKEY", "ttl": 300, "data": "x"}]},
-        _grants(RW_ALL),
+        _perms(RW_ALL),
     )
     assert status == 400
     assert body["error"] == "invalid_record"
 
 
 def test_an_empty_record_list_is_rejected(space: Any) -> None:
-    status, body = space.call("/records/set", {"zone": ZONE, "records": []}, _grants(RW_ALL))
+    status, body = space.call("/records/set", {"zone": ZONE, "records": []}, _perms(RW_ALL))
     assert status == 400
     assert body["error"] == "invalid_request"
 
 
 def test_an_unknown_path_is_rejected(space: Any) -> None:
-    status, body = space.call("/records/frobnicate", {"zone": ZONE}, _grants(RW_ALL))
+    status, body = space.call("/records/frobnicate", {"zone": ZONE}, _perms(RW_ALL))
     assert status == 400
     assert body["error"] == "invalid_request"

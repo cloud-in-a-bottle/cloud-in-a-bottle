@@ -31,8 +31,9 @@ from compute_space.core.dns.service_api import APEX
 from compute_space.core.dns.service_api import DNS_SERVICE_URL
 from compute_space.core.dns.service_api import WILDCARD
 from compute_space.core.dns.service_api import DnsRecord
-from compute_space.core.dns.service_api import Grant
+from compute_space.core.dns.service_api import RecordType
 from compute_space.core.dns.service_api import normalize_zone
+from compute_space.core.dns.service_api import permission
 from compute_space.core.domains import effective_domains
 from compute_space.core.logging import logger
 from compute_space.core.service_client import ServiceCallError
@@ -117,18 +118,18 @@ class DnsClient:
     propagation_timeout_seconds: float = REMOTE_PROPAGATION_TIMEOUT_SECONDS
 
     def zones(self) -> list[str]:
-        zones = self.service.call("/zones", {}, [Grant(WILDCARD, WILDCARD, "r")]).get("zones")
+        zones = self.service.call("/zones", {}, [permission(WILDCARD, WILDCARD, "r")]).get("zones")
         if not isinstance(zones, list):
             raise ServiceCallError("DNS service returned no zone list")
         return [str(z) for z in zones]
 
-    def set_records(self, fqdn: str, rrtype: str, values: list[str], ttl: int = 300) -> None:
+    def set_records(self, fqdn: str, rrtype: RecordType, values: list[str], ttl: int = 300) -> None:
         """Make ``values`` the only records at ``fqdn``/``rrtype``, replacing whatever is there."""
         zone, name = self._locate(fqdn)
         self._write("set", zone, [DnsRecord(name, rrtype, ttl, v) for v in values])
         logger.info(f"Set {len(values)} {rrtype} record(s) at {fqdn}")
 
-    def delete_records(self, fqdn: str, rrtype: str) -> None:
+    def delete_records(self, fqdn: str, rrtype: RecordType) -> None:
         """Remove every record at ``fqdn``/``rrtype``, whatever it currently holds.
 
         Sends no data, which is how the service API spells "delete whatever is there" — the only
@@ -153,7 +154,7 @@ class DnsClient:
 
     def _write(self, op: str, zone: str, records: list[DnsRecord]) -> None:
         payload = {"zone": zone, "records": [_to_wire(r) for r in records]}
-        body = self.service.call(f"/records/{op}", payload, [Grant(r.name, r.type, "rw") for r in records])
+        body = self.service.call(f"/records/{op}", payload, [permission(r.name, r.type) for r in records])
         # We always name exactly one zone, so a failed zone is a failed operation even under 207.
         for result in body.get("results") or []:
             if isinstance(result, dict) and not result.get("ok"):

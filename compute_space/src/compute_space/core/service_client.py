@@ -25,9 +25,8 @@ from packaging.version import Version
 
 from compute_space.config import Config
 from compute_space.core.builtin_services import BuiltinService
+from compute_space.core.builtin_services import Permissions
 from compute_space.core.builtin_services import builtin_for
-from compute_space.core.dns.service_api import Grant
-from compute_space.core.dns.service_api import parse_grants
 from compute_space.core.services_v2 import resolve_provider
 
 # The router's own consumer identity.  App names are DNS-label-like (see core.app_id), so the
@@ -61,9 +60,9 @@ class _BuiltinTransport(httpx.BaseTransport):
     db: sqlite3.Connection
 
     def handle_request(self, request: httpx.Request) -> httpx.Response:
-        grants = parse_grants(json.loads(request.headers.get(PERMISSIONS_HEADER) or "[]"))
+        permissions = json.loads(request.headers.get(PERMISSIONS_HEADER) or "[]")
         payload = json.loads(request.content or b"{}")
-        status, body = self.service.handler(request.url.path, payload, grants, self.config, self.db)
+        status, body = self.service.handler(request.url.path, payload, permissions, self.config, self.db)
         return httpx.Response(status, json=body)
 
 
@@ -74,7 +73,7 @@ class ServiceEndpoint:
     http: httpx.Client
     base_url: str
 
-    def call(self, path: str, payload: dict[str, Any], grants: list[Grant]) -> dict[str, Any]:
+    def call(self, path: str, payload: dict[str, Any], permissions: Permissions) -> dict[str, Any]:
         """POST to the service and return its JSON body, raising on anything unusable.
 
         The router has no app token, but it is the sole authority for the ``X-OpenHost-*`` identity
@@ -89,7 +88,7 @@ class ServiceEndpoint:
                 headers={
                     "X-OpenHost-Consumer-Id": ROUTER_CONSUMER_ID,
                     "X-OpenHost-Consumer-Name": ROUTER_CONSUMER_NAME,
-                    PERMISSIONS_HEADER: json.dumps([g.as_permission() for g in grants]),
+                    PERMISSIONS_HEADER: json.dumps(permissions),
                 },
             )
             body = response.json()

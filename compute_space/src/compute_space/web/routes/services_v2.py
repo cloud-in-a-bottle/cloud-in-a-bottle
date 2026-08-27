@@ -57,7 +57,6 @@ from compute_space.core.auth.permissions_v2 import get_granted_permissions_v2
 from compute_space.core.builtin_services import BuiltinService
 from compute_space.core.builtin_services import builtin_for
 from compute_space.core.containers import get_docker_logs
-from compute_space.core.dns.service_api import parse_grants
 from compute_space.core.domains import primary_domain_or_none
 from compute_space.core.installer import GRANT_KEY_CAPABILITY
 from compute_space.core.installer import GRANT_KEY_REPO_URL_PREFIX
@@ -480,11 +479,13 @@ async def _handle_builtin_request(
             raise ClientException(detail="request body must be a JSON object", extra={"code": "bad_request"})
         payload = parsed or {}
 
-    grants = parse_grants(
-        [{"grant": g.grant, "scope": g.scope} for g in get_granted_permissions_v2(consumer_app_id, service.url)]
-    )
+    # Wire form, not a parsed type: a grant payload is defined by the service that issues it, so
+    # only the handler can read one.
+    permissions = [
+        {"grant": g.grant, "scope": g.scope} for g in get_granted_permissions_v2(consumer_app_id, service.url)
+    ]
     # Off the event loop: a handler may do SQLite work and rewrite files.
-    status, body = await anyio.to_thread.run_sync(service.handler, rest, payload, grants, config, db)
+    status, body = await anyio.to_thread.run_sync(service.handler, rest, payload, permissions, config, db)
 
     required_grant = body.get("required_grant") if status == 403 else None
     if isinstance(required_grant, dict) and required_grant.get("scope", "global") == "global":

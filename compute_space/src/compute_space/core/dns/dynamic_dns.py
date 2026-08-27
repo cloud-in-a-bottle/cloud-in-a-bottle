@@ -25,6 +25,7 @@ from compute_space.core.dns.coredns_provider.coredns import reload_coredns_for_d
 from compute_space.core.dns.public_ip import detect_public_ip
 from compute_space.core.dns.public_ip import effective_public_ip
 from compute_space.core.dns.public_ip import store_public_ip
+from compute_space.core.dns.service_api import RecordType
 from compute_space.core.logging import logger
 
 _DEFAULT_INTERVAL_SECONDS = 300.0
@@ -67,7 +68,7 @@ def _point_at(dns: DnsClient, domain: str, ip: str) -> None:
     client should know.
     """
     for fqdn in (domain, f"ns.{domain}", f"*.{domain}"):
-        dns.set_records(fqdn, "A", [ip], ttl=_DYNAMIC_TTL_SECONDS)
+        dns.set_records(fqdn, RecordType.A, [ip], ttl=_DYNAMIC_TTL_SECONDS)
 
 
 def start_dynamic_dns_thread(

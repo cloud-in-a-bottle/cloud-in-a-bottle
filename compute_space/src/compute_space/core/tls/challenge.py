@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from compute_space.core.dns.client import DnsClient
 from compute_space.core.dns.client import wait_for_records
+from compute_space.core.dns.service_api import RecordType
 
 # Short and explicit, not the zone default: a renewal must not have the CA — or our own propagation
 # check — served the previous run's token out of a resolver cache.
@@ -30,11 +31,11 @@ def publish(dns: DnsClient, domain: str, values: list[str]) -> None:
     the RRset rather than appending means a run that died before cleaning up doesn't leave stale
     tokens for this one.
     """
-    dns.set_records(challenge_fqdn(domain), "TXT", values, ttl=CHALLENGE_TTL_SECONDS)
+    dns.set_records(challenge_fqdn(domain), RecordType.TXT, values, ttl=CHALLENGE_TTL_SECONDS)
 
 
 def clear(dns: DnsClient, domain: str) -> None:
-    dns.delete_records(challenge_fqdn(domain), "TXT")
+    dns.delete_records(challenge_fqdn(domain), RecordType.TXT)
 
 
 def wait_until_visible(dns: DnsClient, domain: str, values: list[str]) -> None:
@@ -43,4 +44,4 @@ def wait_until_visible(dns: DnsClient, domain: str, values: list[str]) -> None:
     Without this the CA's resolvers may get NXDOMAIN — the zone file reload hasn't happened, the
     registrar hasn't published, or the parent zone's NS delegation hasn't propagated.
     """
-    wait_for_records(challenge_fqdn(domain), "TXT", values, timeout=dns.propagation_timeout_seconds)
+    wait_for_records(challenge_fqdn(domain), RecordType.TXT, values, timeout=dns.propagation_timeout_seconds)

@@ -21,11 +21,13 @@ from compute_space.core.dns.coredns_provider.service import handle_dns_call
 from compute_space.core.dns.service_api import DNS_SERVICE_URL
 from compute_space.core.dns.service_api import DNS_SERVICE_VERSION
 from compute_space.core.dns.service_api import ROUTER_DNS_PROVIDER_ID
-from compute_space.core.dns.service_api import Grant
 
-# A handler takes the sub-path after the service root, the JSON body, and the caller's grants, and
-# returns an HTTP status and a JSON body — the same contract an app provider answers on.
-Handler = Callable[[str, dict[str, Any], list[Grant], Config, sqlite3.Connection], tuple[int, dict[str, Any]]]
+# A handler takes the sub-path after the service root, the JSON body, and the caller's permission
+# entries, and returns an HTTP status and a JSON body — the same contract an app provider answers
+# on.  Permissions stay in their wire form (``{"grant": ..., "scope": ...}``) because a grant
+# payload is defined by the service that issues it, so only the handler can interpret one.
+Permissions = list[dict[str, Any]]
+Handler = Callable[[str, dict[str, Any], Permissions, Config, sqlite3.Connection], tuple[int, dict[str, Any]]]
 
 
 @attr.s(auto_attribs=True, frozen=True)

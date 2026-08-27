@@ -14,15 +14,16 @@ from compute_space.config import Config
 from compute_space.core.dns.coredns_provider import store
 from compute_space.core.dns.coredns_provider.coredns import public_dns_zones
 from compute_space.core.dns.coredns_provider.coredns import write_zone_file
+from compute_space.core.dns.coredns_provider.grants import Grant
+from compute_space.core.dns.coredns_provider.grants import can_read
+from compute_space.core.dns.coredns_provider.grants import can_write
+from compute_space.core.dns.coredns_provider.grants import parse as parse_grants
+from compute_space.core.dns.coredns_provider.records import InvalidRecord
+from compute_space.core.dns.coredns_provider.records import normalize as normalize_record
 from compute_space.core.dns.public_ip import effective_public_ip
 from compute_space.core.dns.service_api import ALL_ZONES
 from compute_space.core.dns.service_api import WILDCARD
 from compute_space.core.dns.service_api import DnsRecord
-from compute_space.core.dns.service_api import Grant
-from compute_space.core.dns.service_api import InvalidRecord
-from compute_space.core.dns.service_api import can_read
-from compute_space.core.dns.service_api import can_write
-from compute_space.core.dns.service_api import normalize_record
 from compute_space.core.dns.service_api import normalize_zone
 from compute_space.core.logging import logger
 
@@ -30,8 +31,11 @@ _OPS = {"set": store.set_records, "append": store.append_records, "delete": stor
 
 
 def handle_dns_call(
-    path: str, payload: dict[str, Any], grants: list[Grant], config: Config, db: sqlite3.Connection
+    path: str, payload: dict[str, Any], permissions: list[dict[str, Any]], config: Config, db: sqlite3.Connection
 ) -> tuple[int, dict[str, Any]]:
+    """Serve one ``dns`` call.  Permissions arrive in wire form; only this service knows how to
+    read its own grant shape."""
+    grants = parse_grants(permissions)
     zones = {z.domain: z for z in public_dns_zones(config, db)}
     route = "/" + path.strip("/")
     if route == "/zones":
