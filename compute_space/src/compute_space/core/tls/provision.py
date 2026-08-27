@@ -4,8 +4,8 @@ from pathlib import Path
 
 from compute_space.config import CERT_PROVIDER_ACME
 from compute_space.config import Config
-from compute_space.core.dns.backend import DnsBackend
-from compute_space.core.dns.backend import dns_backend
+from compute_space.core.dns.client import DnsClient
+from compute_space.core.dns.client import dns_client
 from compute_space.core.domains import primary_domain
 from compute_space.core.identity_store import get_instance_identity
 from compute_space.core.tls.acquire_cert import acquire_tls_cert
@@ -22,24 +22,24 @@ def acquire_cert_for_domain(
 
     The provider dispatch (BYO-ACME vs the openhost-cert-api broker) and DNS-01 mechanics are
     identical for every domain; only the domain name and output paths vary.  The challenge records
-    are published through whichever DnsBackend this space uses — its own CoreDNS zone files, or an
+    are published through the ``dns`` service — backed by our own CoreDNS zone files, or an
     external provider via the ``dns`` service — so a secondary domain is answerable either way.
-    Caller must ensure the backend can serve ``domain`` and that ``cert_path``'s parent exists.
+    Caller must ensure the service can serve ``domain`` and that ``cert_path``'s parent exists.
 
     The cert_provider value and its required settings are validated when the Config is constructed
     (Config.__attrs_post_init__), so here we only narrow the optional fields for the type checker.
     """
-    with dns_backend(config, db) as backend:
-        _acquire_with_backend(config, domain, cert_path, key_path, db, backend)
+    with dns_client(config, db) as dns:
+        _acquire_with_dns(config, domain, cert_path, key_path, db, dns)
 
 
-def _acquire_with_backend(
+def _acquire_with_dns(
     config: Config,
     domain: str,
     cert_path: Path,
     key_path: Path,
     db: sqlite3.Connection,
-    backend: DnsBackend,
+    dns: DnsClient,
 ) -> None:
     if config.cert_provider == CERT_PROVIDER_ACME:
         if not config.acme_account_key_path:
@@ -50,7 +50,7 @@ def _acquire_with_backend(
                 cert_path=cert_path,
                 key_path=key_path,
                 acme_account_key_path=Path(config.acme_account_key_path),
-                backend=backend,
+                dns=dns,
                 acme_email=config.acme_email,
                 directory_url=config.acme_directory_url,
             )
@@ -71,7 +71,7 @@ def _acquire_with_backend(
                     domain=domain,
                     cert_path=cert_path,
                     key_path=key_path,
-                    backend=backend,
+                    dns=dns,
                     client=client,
                 )
 

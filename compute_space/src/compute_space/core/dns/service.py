@@ -1,4 +1,9 @@
-"""The router's own implementation of the ``dns`` service, for apps that want to write records.
+"""The router's own implementation of the ``dns`` service, backed by its CoreDNS zone files.
+
+This is the only thing that reads or writes zone-file *records* — the router's own cert and
+dynamic-DNS writes come through here too, via ``client.DnsClient``, so there is one code path
+regardless of caller.  (``coredns.py`` still creates and re-points the files themselves; that is
+file lifecycle, below the service, and has to work before a zone is servable.)
 
 Returns ``(status, body)`` rather than framework responses; the litestar wiring lives in
 ``web.routes.services_v2``.  Grant semantics are kept byte-identical to the connector app's
@@ -10,13 +15,14 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from pathlib import Path
 from typing import Any
 
 import attr
 
 from compute_space.config import Config
-from compute_space.core.dns.backend import LocalZoneFileBackend
-from compute_space.core.dns.backend import UnknownZone
+from compute_space.core.dns import zonefile
+from compute_space.core.dns.coredns import public_dns_zones
 from compute_space.core.dns.records import DnsRecord
 from compute_space.core.dns.records import InvalidRecord
 from compute_space.core.dns.records import ReservedRecord
@@ -24,6 +30,17 @@ from compute_space.core.dns.records import normalize_record
 from compute_space.core.dns.records import normalize_zone
 from compute_space.core.dns.records import reject_router_owned
 from compute_space.core.logging import logger
+
+# Service identity.  The router and a connector app are interchangeable providers; which one
+# applies is the ordinary service default.
+DNS_SERVICE_URL = "github.com/imbue-openhost/openhost/services/dns"
+DNS_SERVICE_VERSION = "0.1.0"
+ROUTER_DNS_PROVIDER_ID = "_openhost_router_dns"
+
+# The router's own consumer identity.  App names are DNS-label-like (see core.app_id), so the
+# leading underscore cannot collide with a real one.
+ROUTER_CONSUMER_ID = "_openhost_router"
+ROUTER_CONSUMER_NAME = "OpenHost Router"
 
 # "**" matches any run of characters.  A single "*" is deliberately literal: it is a real DNS
 # wildcard label, so a grant naming "*.app" means that record and nothing else.
@@ -95,6 +112,55 @@ def can_write(grants: list[Grant], name: str, rrtype: str) -> bool:
     return any(g.writable and g.matches(name, rrtype) for g in grants)
 
 
+# ─── zone access ───
+
+
+class UnknownZone(ValueError):
+    """A zone this instance does not serve."""
+
+
+@attr.s(auto_attribs=True, frozen=True)
+class _Zones:
+    """The instance's zone files, snapshotted per call so a stale map can't outlive a domain change."""
+
+    paths: dict[str, Path]
+
+    @classmethod
+    def load(cls, config: Config, db: sqlite3.Connection) -> _Zones:
+        return cls(paths={z.domain: z.zonefile_path for z in public_dns_zones(config, db)})
+
+    def names(self) -> list[str]:
+        return sorted(self.paths)
+
+    def resolve(self, requested: str) -> list[str]:
+        if requested == ALL_ZONES:
+            return self.names()
+        wanted = normalize_zone(requested)
+        if wanted not in self.paths:
+            raise UnknownZone(f"{requested!r} is not a zone this instance serves")
+        return [wanted]
+
+    def path(self, zone: str) -> Path:
+        path = self.paths[normalize_zone(zone)]
+        if not path.exists():
+            raise FileNotFoundError(f"zone file for {zone} has not been created yet")
+        return path
+
+    def read(self, zone: str, name: str | None, rrtype: str | None) -> list[DnsRecord]:
+        records = zonefile.read_records(self.path(zone), zone)
+        if name is not None:
+            records = [r for r in records if r.name == name]
+        if rrtype is not None:
+            records = [r for r in records if r.type == rrtype]
+        return records
+
+    def write(self, zone: str, op: str, records: list[DnsRecord]) -> list[DnsRecord]:
+        path = self.path(zone)
+        write = {"set": zonefile.set_records, "append": zonefile.append_records, "delete": zonefile.delete_records}
+        logger.info(f"DNS service: {op} {len(records)} record(s) in zone {zone}")
+        return write[op](path, zone, records)
+
+
 # ─── request handling ───
 
 _ERROR_STATUS = {"reserved_record": 403, "permission_required": 403}
@@ -133,40 +199,34 @@ def handle_dns_service_call(
     grants: list[Grant],
     config: Config,
     db: sqlite3.Connection,
+    consumer_id: str = "",
 ) -> tuple[int, dict[str, Any]]:
-    """Dispatch one call; ``path`` is the sub-path after the service endpoint."""
-    backend = LocalZoneFileBackend.create(config, db)
+    """Dispatch one call; ``path`` is the sub-path after the service endpoint.
+
+    ``consumer_id`` identifies the calling app, and exempts the router from the reserved-record
+    rule: those records are reserved *from apps*, and the router is the thing that maintains them.
+    """
+    zones = _Zones.load(config, db)
     route = "/" + path.strip("/")
     if route == "/zones":
         # Which domains the owner runs is not something an app with no DNS access should learn.
         if not grants:
             return _permission_required(WILDCARD, WILDCARD, "r")
-        return 200, {"zones": backend.zones()}
+        return 200, {"zones": zones.names()}
     if route == "/records/get":
-        return _handle_get(backend, grants, payload)
+        return _handle_get(zones, grants, payload)
     if route in ("/records/set", "/records/append", "/records/delete"):
-        return _handle_write(backend, grants, payload, route.rsplit("/", 1)[1])
+        return _handle_write(zones, grants, payload, route.rsplit("/", 1)[1], consumer_id)
     return _error("invalid_request", f"unknown DNS service path {route!r}")
 
 
-def _resolve_zones(backend: LocalZoneFileBackend, requested: str) -> list[str]:
-    if requested == ALL_ZONES:
-        return backend.zones()
-    wanted = normalize_zone(requested)
-    if wanted not in backend.zones():
-        raise UnknownZone(f"{requested!r} is not a zone this instance serves")
-    return [wanted]
-
-
-def _handle_get(
-    backend: LocalZoneFileBackend, grants: list[Grant], payload: dict[str, Any]
-) -> tuple[int, dict[str, Any]]:
+def _handle_get(zones: _Zones, grants: list[Grant], payload: dict[str, Any]) -> tuple[int, dict[str, Any]]:
     # An app with no grants can read nothing, so resolving the zone first would only tell it which
     # zones exist.
     if not grants:
         return _results([])
     try:
-        zones = _resolve_zones(backend, str(payload.get("zone") or "").strip() or ALL_ZONES)
+        targets = zones.resolve(str(payload.get("zone") or "").strip() or ALL_ZONES)
     except UnknownZone as e:
         return _error("unknown_zone", str(e))
 
@@ -174,9 +234,9 @@ def _handle_get(
     type_filter = str(payload.get("type") or "").strip().upper() or None
 
     results: list[dict[str, Any]] = []
-    for zone in zones:
+    for zone in targets:
         try:
-            records = backend.get_records(zone, name_filter, type_filter)
+            records = zones.read(zone, name_filter, type_filter)
         except Exception as e:  # a broken zone file must not take down the others
             logger.warning(f"DNS service read failed for {zone}: {e}")
             results.append({"zone": zone, "ok": False, "records": [], "error": str(e)})
@@ -189,7 +249,7 @@ def _handle_get(
 
 
 def _handle_write(
-    backend: LocalZoneFileBackend, grants: list[Grant], payload: dict[str, Any], op: str
+    zones: _Zones, grants: list[Grant], payload: dict[str, Any], op: str, consumer_id: str
 ) -> tuple[int, dict[str, Any]]:
     # Unlike reads, a missing zone is an error rather than a fan-out: defaulting to every zone
     # would let a caller that forgot the field rewrite records across all of them.
@@ -225,23 +285,23 @@ def _handle_write(
             return _permission_required(record.name, record.type, "rw")
         records.append(record)
 
-    try:
-        reject_router_owned(records)
-    except ReservedRecord as e:
-        return _error("reserved_record", str(e))
+    if consumer_id != ROUTER_CONSUMER_ID:
+        try:
+            reject_router_owned(records)
+        except ReservedRecord as e:
+            return _error("reserved_record", str(e))
 
     try:
-        zones = _resolve_zones(backend, requested)
+        targets = zones.resolve(requested)
     except UnknownZone as e:
         return _error("unknown_zone", str(e))
-    if not zones:
+    if not targets:
         return _error("no_zones_configured", "no DNS zones are configured on this instance")
 
-    method = {"set": backend.set_records, "append": backend.append_records, "delete": backend.delete_records}[op]
     results: list[dict[str, Any]] = []
-    for zone in zones:
+    for zone in targets:
         try:
-            applied = method(zone, records)
+            applied = zones.write(zone, op, records)
         except Exception as e:
             logger.warning(f"DNS service {op} failed for {zone}: {e}")
             results.append({"zone": zone, "ok": False, "records": [], "error": str(e)})

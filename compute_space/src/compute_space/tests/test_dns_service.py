@@ -8,18 +8,13 @@ from typing import Any
 
 import pytest
 
-from compute_space.config import DefaultConfig
-from compute_space.core.dns.backend import LocalZoneFileBackend
-from compute_space.core.dns.coredns import _write_coredns_config
-from compute_space.core.dns.coredns import public_dns_zones
+from compute_space.core.dns import zonefile
 from compute_space.core.dns.records import DnsRecord
 from compute_space.core.dns.service import handle_dns_service_call
 from compute_space.core.dns.service import parse_grants
 from compute_space.core.domains import Domain
-from compute_space.core.domains import DomainRecord
-from compute_space.core.domains import seed_domains
-from compute_space.db import init_db
 from compute_space.tests.conftest import open_db
+from compute_space.tests.dns_helpers import seeded_dns_config
 
 ZONE = "host.example.com"
 
@@ -34,24 +29,19 @@ class _Space:
     """A seeded instance with real zone files, callable like the service proxy would call it."""
 
     def __init__(self, tmp_path: Path, *domains: Domain) -> None:
-        self.config = DefaultConfig(data_root_dir=str(tmp_path), public_ip="203.0.113.10")
-        self.config.make_all_dirs()
-        init_db(self.config.db_path)
+        self.config = seeded_dns_config(tmp_path, *domains)
         self.db = open_db(self.config)
-        seed_domains(self.db, domains[0], [DomainRecord(d.name, d.tls, d.mdns) for d in domains[1:]])
-        _write_coredns_config(
-            public_dns_zones(self.config, self.db),
-            "203.0.113.10",
-            self.config.coredns_corefile_path,
-            None,
-            serve_public=True,
-        )
 
     def call(self, path: str, payload: dict[str, Any], grants: list[Any]) -> tuple[int, dict[str, Any]]:
         return handle_dns_service_call(path, payload, grants, self.config, self.db)
 
-    def backend(self) -> LocalZoneFileBackend:
-        return LocalZoneFileBackend.create(self.config, self.db)
+    def records(self, name: str, rrtype: str) -> list[str]:
+        """Read straight from the zone file, so an assertion isn't filtered by the caller's grants."""
+        found = zonefile.read_records(self.config.coredns_zonefile_path, ZONE)
+        return [r.data for r in found if r.name == name and r.type == rrtype and r.data]
+
+    def write(self, records: list[DnsRecord]) -> None:
+        zonefile.append_records(self.config.coredns_zonefile_path, ZONE, records)
 
     def close(self) -> None:
         self.db.close()
@@ -137,9 +127,7 @@ def test_zones_lists_the_instance_s_domains(space: Any) -> None:
 
 
 def test_a_read_returns_only_what_the_grants_match(space: Any) -> None:
-    space.backend().append_records(
-        ZONE, [DnsRecord("_acme-challenge", "TXT", 60, "tok"), DnsRecord("secret", "TXT", 300, "other")]
-    )
+    space.write([DnsRecord("_acme-challenge", "TXT", 60, "tok"), DnsRecord("secret", "TXT", 300, "other")])
 
     status, body = space.call("/records/get", {"zone": ZONE}, _grants(ACME))
 
@@ -206,7 +194,7 @@ def test_a_partly_permitted_batch_applies_none_of_it(space: Any) -> None:
         _grants(ACME),
     )
     assert status == 403
-    assert space.backend().get_records(ZONE, "_acme-challenge", "TXT") == []
+    assert space.records("_acme-challenge", "TXT") == []
 
 
 def test_an_ungranted_app_cannot_probe_zone_names_through_write_errors(space: Any) -> None:
@@ -229,11 +217,11 @@ def test_a_granted_write_lands_in_the_zone_file(space: Any) -> None:
     )
     assert status == 200
     assert body["ok"] is True
-    assert [r.data for r in space.backend().get_records(ZONE, "_acme-challenge", "TXT")] == ['"tok"']
+    assert space.records("_acme-challenge", "TXT") == ['"tok"']
 
 
 def test_delete_without_data_clears_the_rrset(space: Any) -> None:
-    space.backend().append_records(ZONE, [DnsRecord("_acme-challenge", "TXT", 60, "tok")])
+    space.write([DnsRecord("_acme-challenge", "TXT", 60, "tok")])
 
     status, _ = space.call(
         "/records/delete",
@@ -242,7 +230,7 @@ def test_delete_without_data_clears_the_rrset(space: Any) -> None:
     )
 
     assert status == 200
-    assert space.backend().get_records(ZONE, "_acme-challenge", "TXT") == []
+    assert space.records("_acme-challenge", "TXT") == []
 
 
 def test_an_unknown_zone_is_reported_once_the_caller_is_authorized(space: Any) -> None:
@@ -280,7 +268,7 @@ def test_deleting_a_router_owned_record_is_refused_too(space: Any) -> None:
     )
     assert status == 403
     assert body["error"] == "reserved_record"
-    assert [r.data for r in space.backend().get_records(ZONE, "*", "A")] == ["203.0.113.10"]
+    assert space.records("*", "A") == ["203.0.113.10"]
 
 
 def test_mail_records_at_the_apex_are_not_reserved(space: Any) -> None:
@@ -298,7 +286,7 @@ def test_mail_records_at_the_apex_are_not_reserved(space: Any) -> None:
         _grants(RW_ALL),
     )
     assert status == 200
-    assert [r.data for r in space.backend().get_records(ZONE, "@", "MX")] == ["10 mail.example.com."]
+    assert space.records("@", "MX") == ["10 mail.example.com."]
 
 
 def test_a_normal_subdomain_is_writable(space: Any) -> None:

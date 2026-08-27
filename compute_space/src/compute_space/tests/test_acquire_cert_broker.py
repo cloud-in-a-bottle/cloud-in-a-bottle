@@ -1,13 +1,15 @@
 """Tests for the openhost-cert-api broker cert-acquisition flow.
 
-Drives the full flow against an in-process httpx.MockTransport broker and a real local DNS
-backend over a temp CoreDNS zone file.  No real broker, ACME server, or sleeping is involved
+Drives the full flow against an in-process httpx.MockTransport broker and a real router-served
+DNS client over a temp CoreDNS zone file.  No real broker, ACME server, or sleeping is involved
 (a FakeClock makes the poll loop deterministic).
 """
 
 from __future__ import annotations
 
 import json
+from collections.abc import Iterator
+from contextlib import closing
 from pathlib import Path
 
 import attr
@@ -17,12 +19,17 @@ from cryptography import x509
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 
-from compute_space.core.dns.backend import LocalZoneFileBackend
+from compute_space.core.dns import zonefile
+from compute_space.core.dns.client import DnsClient
+from compute_space.core.dns.client import dns_client
+from compute_space.core.domains import Domain
 from compute_space.core.tls.acquire_cert_broker import CertAcquisitionTimeoutError
 from compute_space.core.tls.acquire_cert_broker import acquire_tls_cert_via_broker
 from compute_space.core.tls.cert_api_client import CertApiClient
 from compute_space.core.tls.cert_api_client import CertApiOrderFailed
 from compute_space.core.tls.keycloak import StaticTokenProvider
+from compute_space.tests.conftest import open_db
+from compute_space.tests.dns_helpers import seeded_dns_config
 
 DOMAIN = "app.example.com"
 FAKE_CHAIN = "-----BEGIN CERTIFICATE-----\nFAKECHAINBYTES\n-----END CERTIFICATE-----\n"
@@ -41,20 +48,18 @@ class FakeClock:
         self.now += seconds
 
 
-def _write_zonefile(path: Path) -> None:
-    path.write_text(
-        f"$ORIGIN {DOMAIN}.\n"
-        "$TTL 60\n"
-        f"@   IN SOA  ns.{DOMAIN}. admin.{DOMAIN}. (\n"
-        "    100   ; serial\n"
-        "    3600  ; refresh\n"
-        "    600   ; retry\n"
-        "    86400 ; expire\n"
-        "    60    ; minimum\n"
-        ")\n"
-        f"@   IN NS   ns.{DOMAIN}.\n"
-        "@   IN A    127.0.0.1\n"
-    )
+@pytest.fixture
+def dns(tmp_path: Path) -> Iterator[DnsClient]:
+    """A client for an instance serving DOMAIN from a real zone file."""
+    config = seeded_dns_config(tmp_path, Domain(DOMAIN, tls=True))
+    with closing(open_db(config)) as db, dns_client(config, db) as client:
+        yield client
+
+
+def _challenge_txt(dns: DnsClient) -> list[str]:
+    """Read the file directly; a grant-filtered read would hide anything the router can't see."""
+    records = zonefile.read_records(dns.config.coredns_zonefile_path, DOMAIN)
+    return sorted(r.data for r in records if r.name == "_acme-challenge" and r.type == "TXT" and r.data)
 
 
 def _order_payload() -> dict[str, object]:
@@ -77,15 +82,6 @@ def _noop_wait(backend: object, fqdn: str, expected_values: list[str]) -> None:
     """Stub out the external dig so tests stay fast."""
 
 
-def _backend(zonefile: Path) -> LocalZoneFileBackend:
-    return LocalZoneFileBackend(zone_paths={DOMAIN: zonefile})
-
-
-def _challenge_txt(zonefile: Path) -> list[str]:
-    records = _backend(zonefile).get_records(DOMAIN, "_acme-challenge", "TXT")
-    return sorted(r.data for r in records if r.data)
-
-
 @attr.s(auto_attribs=True)
 class _BrokerState:
     finalize_calls: int = 0
@@ -94,11 +90,9 @@ class _BrokerState:
     waited_with: tuple[str, list[str]] | None = None
 
 
-def test_full_flow_installs_cert_and_key(tmp_path: Path) -> None:
-    zonefile = tmp_path / "zonefile"
+def test_full_flow_installs_cert_and_key(tmp_path: Path, dns: DnsClient) -> None:
     cert_path = tmp_path / "cert.pem"
     key_path = tmp_path / "key.pem"
-    _write_zonefile(zonefile)
 
     state = _BrokerState()
 
@@ -112,14 +106,14 @@ def test_full_flow_installs_cert_and_key(tmp_path: Path) -> None:
                 # The broker validates DNS; assert our TXT records are already
                 # published (verbatim, absolute) and propagation was awaited
                 # before we are asked to finalize.
-                state.txt_when_first_polled = _challenge_txt(zonefile)
+                state.txt_when_first_polled = _challenge_txt(dns)
                 assert state.waited_with is not None, "must wait for DNS propagation before polling finalize"
             if state.finalize_calls < 3:
                 return httpx.Response(202, json={"status": "pending"})
             return httpx.Response(200, json={"status": "valid", "certificate": FAKE_CHAIN})
         return httpx.Response(404, json={"error": "not_found", "message": request.url.path})
 
-    def record_wait(backend: object, fqdn: str, expected_values: list[str]) -> None:
+    def record_wait(dns: object, fqdn: str, expected_values: list[str]) -> None:
         state.waited_with = (fqdn, expected_values)
 
     with _client_from_handler(handler) as client:
@@ -127,7 +121,7 @@ def test_full_flow_installs_cert_and_key(tmp_path: Path) -> None:
             domain=DOMAIN,
             cert_path=cert_path,
             key_path=key_path,
-            backend=_backend(zonefile),
+            dns=dns,
             client=client,
             poll_interval_seconds=1.0,
             poll_timeout_seconds=600.0,
@@ -160,12 +154,10 @@ def test_full_flow_installs_cert_and_key(tmp_path: Path) -> None:
     assert state.txt_when_first_polled == ['"base-value"', '"wildcard-value"']
 
     # ...and cleaned up afterward.
-    assert _challenge_txt(zonefile) == []
+    assert _challenge_txt(dns) == []
 
 
-def test_csr_covers_base_and_wildcard(tmp_path: Path) -> None:
-    zonefile = tmp_path / "zonefile"
-    _write_zonefile(zonefile)
+def test_csr_covers_base_and_wildcard(tmp_path: Path, dns: DnsClient) -> None:
     captured: dict[str, str] = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -179,7 +171,7 @@ def test_csr_covers_base_and_wildcard(tmp_path: Path) -> None:
             domain=DOMAIN,
             cert_path=tmp_path / "cert.pem",
             key_path=tmp_path / "key.pem",
-            backend=_backend(zonefile),
+            dns=dns,
             client=client,
             clock=FakeClock(),
             wait_for_propagation=_noop_wait,
@@ -192,9 +184,7 @@ def test_csr_covers_base_and_wildcard(tmp_path: Path) -> None:
     assert f"*.{DOMAIN}" in names
 
 
-def test_timeout_raises_and_clears_txt(tmp_path: Path) -> None:
-    zonefile = tmp_path / "zonefile"
-    _write_zonefile(zonefile)
+def test_timeout_raises_and_clears_txt(tmp_path: Path, dns: DnsClient) -> None:
 
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/v1/orders":
@@ -208,7 +198,7 @@ def test_timeout_raises_and_clears_txt(tmp_path: Path) -> None:
                 domain=DOMAIN,
                 cert_path=tmp_path / "cert.pem",
                 key_path=tmp_path / "key.pem",
-                backend=_backend(zonefile),
+                dns=dns,
                 client=client,
                 poll_interval_seconds=5.0,
                 poll_timeout_seconds=30.0,
@@ -217,12 +207,10 @@ def test_timeout_raises_and_clears_txt(tmp_path: Path) -> None:
             )
 
     # TXT records cleaned up even on timeout.
-    assert _challenge_txt(zonefile) == []
+    assert _challenge_txt(dns) == []
 
 
-def test_failed_order_raises_and_clears_txt(tmp_path: Path) -> None:
-    zonefile = tmp_path / "zonefile"
-    _write_zonefile(zonefile)
+def test_failed_order_raises_and_clears_txt(tmp_path: Path, dns: DnsClient) -> None:
 
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/v1/orders":
@@ -236,11 +224,11 @@ def test_failed_order_raises_and_clears_txt(tmp_path: Path) -> None:
                 domain=DOMAIN,
                 cert_path=tmp_path / "cert.pem",
                 key_path=tmp_path / "key.pem",
-                backend=_backend(zonefile),
+                dns=dns,
                 client=client,
                 clock=FakeClock(),
                 wait_for_propagation=_noop_wait,
             )
 
     # A failed order fails fast (no full-timeout spin) and still cleans up TXT.
-    assert _challenge_txt(zonefile) == []
+    assert _challenge_txt(dns) == []

@@ -3,9 +3,9 @@
 Opt-in (``dynamic_dns_enabled``) — on a fixed address the polling is pure cost, but on a
 connection that gets renumbered it is the only thing that brings the space back.
 
-Updates go through whichever backend is configured, so this works the same for local zone files
-and an external registrar.  These are router-owned records, written directly rather than through
-the service handler, which reserves them so nothing else moves them out from under this loop.
+Updates go through the ``dns`` service like everything else, so this works the same for local zone
+files and an external registrar.  These records are reserved from apps precisely so nothing else
+moves them out from under this loop; the router's own calls are exempt.
 """
 
 from __future__ import annotations
@@ -17,10 +17,10 @@ from collections.abc import Callable
 from contextlib import closing
 
 from compute_space.config import Config
-from compute_space.core.dns.backend import dns_backend
-from compute_space.core.dns.backend import router_managed_domains
-from compute_space.core.dns.backend import split_fqdn
-from compute_space.core.dns.backend import uses_local_dns
+from compute_space.core.dns.client import dns_client
+from compute_space.core.dns.client import router_managed_domains
+from compute_space.core.dns.client import split_fqdn
+from compute_space.core.dns.client import uses_local_dns
 from compute_space.core.dns.coredns import reload_coredns_for_domains
 from compute_space.core.dns.public_ip import detect_public_ip
 from compute_space.core.dns.public_ip import effective_public_ip
@@ -58,16 +58,16 @@ def check_once(config: Config, db: sqlite3.Connection) -> str | None:
 
 
 def update_public_ip_records(config: Config, db: sqlite3.Connection, ip: str) -> None:
-    with dns_backend(config, db) as backend:
-        for zone in backend.zones():
+    with dns_client(config, db) as dns:
+        for zone in dns.zones():
             records = [DnsRecord(name=n, type="A", ttl=_DYNAMIC_TTL_SECONDS, data=ip) for n in _names_for(zone, db)]
-            backend.set_records(zone, records)
+            dns.set_records(zone, records)
             logger.info(f"Updated {len(records)} A record(s) in {zone} to {ip}")
 
 
 def _names_for(zone: str, db: sqlite3.Connection) -> list[str]:
-    """The zone-relative names to update.  With the local backend each domain is its own zone; with
-    an external provider the zone may be a parent, so each domain contributes a prefixed set."""
+    """The zone-relative names to update.  When the router serves DNS each domain is its own zone;
+    with an external provider the zone may be a parent, so each domain contributes a prefixed set."""
     names: list[str] = []
     for domain in router_managed_domains(db):
         try:

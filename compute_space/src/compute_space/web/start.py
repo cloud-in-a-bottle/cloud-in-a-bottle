@@ -24,7 +24,7 @@ from compute_space.core.caddy import set_active_caddy
 from compute_space.core.caddy import start_caddy
 from compute_space.core.caddy import unix_admin_address
 from compute_space.core.containers import CONTAINER_GATEWAY_IP
-from compute_space.core.dns.backend import uses_local_dns
+from compute_space.core.dns.client import uses_local_dns
 from compute_space.core.dns.coredns import CoreDnsProcess
 from compute_space.core.dns.coredns import coredns_is_needed
 from compute_space.core.dns.coredns import public_dns_zones
@@ -100,7 +100,7 @@ def _ensure_tls_cert(config: Config, db: sqlite3.Connection) -> None:
     if status == CertStatus.OK:
         logger.info(f"Using existing TLS cert from {config.tls_cert_path}")
         return
-    # DNS-01 needs *a* DNS backend, not specifically CoreDNS: a space whose records live at an
+    # DNS-01 needs the dns service, not specifically CoreDNS: a space whose records live at an
     # external provider can acquire a cert with CoreDNS switched off entirely.
     local_dns = uses_local_dns(db)
     dns_available = config.coredns_enabled if local_dns else True

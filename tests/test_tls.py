@@ -22,7 +22,7 @@ import os
 import signal
 import socket
 import subprocess
-import time
+from contextlib import closing
 
 import pytest
 from acme import client
@@ -34,10 +34,14 @@ from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.asymmetric import rsa as rsa_module
 from josepy import JWKRSA
 
-from compute_space.core.dns.backend import LocalZoneFileBackend
+from compute_space.core.dns import zonefile as zonefile_mod
+from compute_space.core.dns.client import dns_client
+from compute_space.core.domains import Domain
 from compute_space.core.tls.acquire_cert import acquire_tls_cert
 from compute_space.core.tls.util import _acquire_cert_dns01
 from compute_space.core.tls.util import load_account_key
+from compute_space.tests.conftest import open_db
+from compute_space.tests.dns_helpers import seeded_dns_config
 from compute_space.tests.utils import kill_tree
 from compute_space.tests.utils import poll
 from compute_space.tests.utils import port_connectable
@@ -149,28 +153,15 @@ def pebble_certs(tls_tmpdir):
 
 
 @pytest.fixture(scope="module")
-def zonefile_path(tls_tmpdir):
-    """Write an initial DNS zone file for CoreDNS."""
-    path = tls_tmpdir / "zonefile"
-    serial = int(time.time())
-    content = (
-        f"$ORIGIN {ZONE_DOMAIN}.\n"
-        f"$TTL 60\n"
-        f"@   IN SOA  ns.{ZONE_DOMAIN}. admin.{ZONE_DOMAIN}. (\n"
-        f"    {serial}   ; serial\n"
-        f"    3600  ; refresh\n"
-        f"    600   ; retry\n"
-        f"    86400 ; expire\n"
-        f"    60    ; minimum\n"
-        f")\n"
-        f"@   IN NS   ns.{ZONE_DOMAIN}.\n"
-        f"ns  IN A    127.0.0.1\n"
-        f"@   IN A    127.0.0.1\n"
-        f"*   IN A    127.0.0.1\n\n"
-    )
-    with open(path, "w") as f:
-        f.write(content)
-    return path
+def dns_config(tls_tmpdir):
+    """A seeded instance whose zone file the test's CoreDNS serves, so cert acquisition drives DNS
+    through exactly the path production uses."""
+    return seeded_dns_config(tls_tmpdir / "instance", Domain(ZONE_DOMAIN, tls=True), public_ip="127.0.0.1")
+
+
+@pytest.fixture(scope="module")
+def zonefile_path(dns_config):
+    return dns_config.coredns_zonefile_path
 
 
 @pytest.fixture(scope="module")
@@ -297,9 +288,9 @@ def acme_account_key(tls_tmpdir, pebble_server):
 
 
 @pytest.fixture(scope="module")
-def dns_backend(zonefile_path):
-    """A local backend over the CoreDNS zone file this test's coredns is serving."""
-    return LocalZoneFileBackend(zone_paths={ZONE_DOMAIN: zonefile_path})
+def dns_backend(dns_config):
+    with closing(open_db(dns_config)) as db, dns_client(dns_config, db) as client:
+        yield client
 
 
 @pytest.fixture(scope="module")
@@ -309,7 +300,7 @@ def acquired_cert(pebble_server, acme_account_key, dns_backend):
     cert_pem, key_pem = _acquire_cert_dns01(
         domains=domains,
         directory_url=pebble_server["directory_url"],
-        backend=dns_backend,
+        dns=dns_backend,
         account_key=acme_account_key["jwk"],
         verify_ssl=False,
     )
@@ -374,9 +365,10 @@ class TestCertAcquisition:
         assert cert.not_valid_before_utc <= now
         assert cert.not_valid_after_utc > now
 
-    def test_dns_txt_records_cleaned_up(self, acquired_cert, dns_backend):
+    def test_dns_txt_records_cleaned_up(self, acquired_cert, zonefile_path):
         """After cert acquisition, ACME TXT records are removed from the zone file."""
-        assert dns_backend.get_records(ZONE_DOMAIN, "_acme-challenge", "TXT") == []
+        records = zonefile_mod.read_records(zonefile_path, ZONE_DOMAIN)
+        assert [r for r in records if r.type == "TXT"] == []
 
 
 # ---------------------------------------------------------------------------
@@ -399,7 +391,7 @@ class TestAcquireTlsCert:
                 cert_path=cert_path,
                 key_path=key_path,
                 acme_account_key_path=acme_account_key["path"],
-                backend=dns_backend,
+                dns=dns_backend,
                 directory_url=pebble_server["directory_url"],
                 verify_ssl=False,
             )

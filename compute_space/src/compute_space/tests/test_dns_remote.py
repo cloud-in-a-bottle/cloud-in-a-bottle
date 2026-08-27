@@ -9,15 +9,15 @@ import attr
 import httpx
 import pytest
 
-from compute_space.core.dns.backend import ROUTER_CONSUMER_ID
-from compute_space.core.dns.backend import DnsBackendError
-from compute_space.core.dns.backend import LocalZoneFileBackend
-from compute_space.core.dns.backend import ServiceDnsBackend
-from compute_space.core.dns.backend import UnknownZone
-from compute_space.core.dns.backend import clear_txt
-from compute_space.core.dns.backend import publish_txt
-from compute_space.core.dns.backend import router_grants
+from compute_space.core.dns.client import DnsClient
+from compute_space.core.dns.client import DnsServiceError
+from compute_space.core.dns.client import UnknownZone
+from compute_space.core.dns.client import clear_txt
+from compute_space.core.dns.client import publish_txt
+from compute_space.core.dns.client import router_grants
 from compute_space.core.dns.records import DnsRecord
+from compute_space.core.dns.service import ROUTER_CONSUMER_ID
+from compute_space.core.dns.service import ROUTER_DNS_PROVIDER_ID
 
 
 @attr.s(auto_attribs=True)
@@ -37,11 +37,15 @@ class _Recorder:
         return json.loads(self.requests[index].content)
 
 
-def _backend(recorder: _Recorder, domains: list[str] | None = None) -> ServiceDnsBackend:
-    return ServiceDnsBackend(
-        base_url="http://127.0.0.1:9999/api/dns",
-        permissions_header=json.dumps(router_grants(domains or ["host.example.com"])),
-        client=httpx.Client(transport=httpx.MockTransport(recorder)),
+def _backend(recorder: _Recorder, domains: list[str] | None = None) -> DnsClient:
+    """A client bound to an app provider, so every call goes over the wire."""
+    return DnsClient(
+        config=None,  # type: ignore[arg-type]  # unused on the remote path
+        db=None,  # type: ignore[arg-type]
+        provider_id="external-dns-connector",
+        grants=router_grants(domains or ["host.example.com"]),
+        endpoint_url="http://127.0.0.1:9999/api/dns",
+        http=httpx.Client(transport=httpx.MockTransport(recorder)),
     )
 
 
@@ -164,7 +168,7 @@ def test_a_per_zone_failure_is_raised_rather_than_read_as_success() -> None:
             )
         }
     )
-    with pytest.raises(DnsBackendError, match="rate limited"):
+    with pytest.raises(DnsServiceError, match="rate limited"):
         _backend(recorder).set_records("host.example.com", [DnsRecord("www", "A", 300, "198.51.100.7")])
 
 
@@ -176,7 +180,7 @@ def test_an_unknown_zone_maps_to_the_typed_error() -> None:
 
 def test_a_permission_denial_surfaces_as_a_backend_error() -> None:
     recorder = _Recorder({"/records/set": (403, {"error": "permission_required", "message": "no grant"})})
-    with pytest.raises(DnsBackendError, match="permission_required"):
+    with pytest.raises(DnsServiceError, match="permission_required"):
         _backend(recorder).set_records("host.example.com", [DnsRecord("www", "A", 300, "198.51.100.7")])
 
 
@@ -184,12 +188,15 @@ def test_an_unreachable_provider_is_a_backend_error_not_a_crash() -> None:
     def refuse(request: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError("connection refused")
 
-    backend = ServiceDnsBackend(
-        base_url="http://127.0.0.1:9999/api/dns",
-        permissions_header="[]",
-        client=httpx.Client(transport=httpx.MockTransport(refuse)),
+    backend = DnsClient(
+        config=None,  # type: ignore[arg-type]
+        db=None,  # type: ignore[arg-type]
+        provider_id="external-dns-connector",
+        grants=[],
+        endpoint_url="http://127.0.0.1:9999/api/dns",
+        http=httpx.Client(transport=httpx.MockTransport(refuse)),
     )
-    with pytest.raises(DnsBackendError, match="unreachable"):
+    with pytest.raises(DnsServiceError, match="unreachable"):
         backend.zones()
 
 
@@ -197,15 +204,19 @@ def test_a_non_json_response_is_a_backend_error() -> None:
     def html(request: httpx.Request) -> httpx.Response:
         return httpx.Response(502, text="<html>bad gateway</html>")
 
-    backend = ServiceDnsBackend(
-        base_url="http://127.0.0.1:9999/api/dns",
-        permissions_header="[]",
-        client=httpx.Client(transport=httpx.MockTransport(html)),
+    backend = DnsClient(
+        config=None,  # type: ignore[arg-type]
+        db=None,  # type: ignore[arg-type]
+        provider_id="external-dns-connector",
+        grants=[],
+        endpoint_url="http://127.0.0.1:9999/api/dns",
+        http=httpx.Client(transport=httpx.MockTransport(html)),
     )
-    with pytest.raises(DnsBackendError, match="non-JSON"):
+    with pytest.raises(DnsServiceError, match="non-JSON"):
         backend.zones()
 
 
-def test_the_remote_backend_waits_far_longer_for_propagation_than_the_local_one() -> None:
+def test_a_remote_provider_gets_a_far_longer_propagation_timeout() -> None:
     remote = _backend(_Recorder({}))
-    assert remote.propagation_timeout_seconds > LocalZoneFileBackend(zone_paths={}).propagation_timeout_seconds
+    local = DnsClient(config=None, db=None, provider_id=ROUTER_DNS_PROVIDER_ID, grants=[])  # type: ignore[arg-type]
+    assert remote.propagation_timeout_seconds > local.propagation_timeout_seconds

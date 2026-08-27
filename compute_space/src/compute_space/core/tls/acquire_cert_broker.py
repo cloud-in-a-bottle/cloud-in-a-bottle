@@ -8,7 +8,7 @@ control, so a malicious instance cannot mint certs for domains it does not contr
 Flow:
   1. generate keypair + CSR locally
   2. POST the CSR -> broker returns DNS-01 challenge record(s)
-  3. publish those TXT record(s) verbatim through this space's DNS backend
+  3. publish those TXT record(s) verbatim through the dns service
   4. wait for the records to become externally visible
   5. poll finalize (202 = keep waiting) until issued, then install cert + local key
 """
@@ -23,10 +23,10 @@ from typing import Protocol
 import attr
 from cryptography.hazmat.primitives import serialization
 
-from compute_space.core.dns.backend import DnsBackend
-from compute_space.core.dns.backend import clear_txt
-from compute_space.core.dns.backend import publish_txt
-from compute_space.core.dns.backend import wait_for_txt_propagation
+from compute_space.core.dns.client import DnsClient
+from compute_space.core.dns.client import clear_txt
+from compute_space.core.dns.client import publish_txt
+from compute_space.core.dns.client import wait_for_txt_propagation
 from compute_space.core.logging import logger
 from compute_space.core.tls.acquire_cert import write_cert_and_key
 from compute_space.core.tls.cert_api_client import FINALIZE_STATUS_VALID
@@ -66,7 +66,7 @@ class RealClock:
 REAL_CLOCK = RealClock()
 
 
-def _wait_for_dns_propagation(backend: DnsBackend, fqdn: str, expected_values: list[str]) -> None:
+def _wait_for_dns_propagation(dns: DnsClient, fqdn: str, expected_values: list[str]) -> None:
     """Wait until an external resolver sees the records.
 
     Same safeguard the BYO-ACME path applies before validation: the broker asks the CA to validate
@@ -74,14 +74,14 @@ def _wait_for_dns_propagation(backend: DnsBackend, fqdn: str, expected_values: l
     ``wait_for_txt_propagation`` logs and proceeds on timeout, so a delegation that never
     propagates still falls through to the broker's own retries.
     """
-    wait_for_txt_propagation(fqdn, expected_values, timeout=backend.propagation_timeout_seconds)
+    wait_for_txt_propagation(fqdn, expected_values, timeout=dns.propagation_timeout_seconds)
 
 
 def acquire_tls_cert_via_broker(
     domain: str,
     cert_path: Path,
     key_path: Path,
-    backend: DnsBackend,
+    dns: DnsClient,
     client: CertApiClient,
     *,
     poll_interval_seconds: float = 5.0,
@@ -89,7 +89,7 @@ def acquire_tls_cert_via_broker(
     poll_max_interval_seconds: float = 30.0,
     poll_timeout_seconds: float = 600.0,
     clock: Clock = REAL_CLOCK,
-    wait_for_propagation: Callable[[DnsBackend, str, list[str]], None] = _wait_for_dns_propagation,
+    wait_for_propagation: Callable[[DnsClient, str, list[str]], None] = _wait_for_dns_propagation,
 ) -> None:
     """Acquire and install a wildcard TLS cert for ``domain`` via the broker."""
     domains = [domain, f"*.{domain}"]
@@ -108,12 +108,12 @@ def acquire_tls_cert_via_broker(
     for challenge in order.challenges:
         by_name.setdefault(_as_fqdn(challenge.record_name).rstrip("."), []).append(challenge.record_value)
     for fqdn, values in by_name.items():
-        publish_txt(backend, fqdn, values)
+        publish_txt(dns, fqdn, values)
     try:
         # Don't poll finalize until the records are actually live: the broker drives
         # CA validation during finalize, so a not-yet-visible record fails the order.
         for fqdn, values in by_name.items():
-            wait_for_propagation(backend, fqdn, values)
+            wait_for_propagation(dns, fqdn, values)
         certificate = _poll_until_issued(
             client,
             order.order_id,
@@ -126,7 +126,7 @@ def acquire_tls_cert_via_broker(
     finally:
         # Always pull the challenge records back out, success or failure.
         for fqdn in by_name:
-            clear_txt(backend, fqdn)
+            clear_txt(dns, fqdn)
 
     write_cert_and_key(cert_path, key_path, certificate.encode(), tls_private_key_to_pem(tls_key))
     logger.info(f"Installed broker-issued TLS cert for {domain} -> {cert_path}")

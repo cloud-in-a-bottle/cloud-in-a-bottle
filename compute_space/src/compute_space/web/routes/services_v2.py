@@ -55,10 +55,10 @@ from compute_space.core.apps import find_app_by_name
 from compute_space.core.apps import get_app_from_hostname
 from compute_space.core.auth.permissions_v2 import get_granted_permissions_v2
 from compute_space.core.containers import get_docker_logs
-from compute_space.core.dns.backend import DNS_SERVICE_URL
-from compute_space.core.dns.backend import DNS_SERVICE_VERSION
-from compute_space.core.dns.backend import ROUTER_DNS_PROVIDER_ID
-from compute_space.core.dns.backend import dns_provider_id
+from compute_space.core.dns.client import dns_provider_id
+from compute_space.core.dns.service import DNS_SERVICE_URL
+from compute_space.core.dns.service import DNS_SERVICE_VERSION
+from compute_space.core.dns.service import ROUTER_DNS_PROVIDER_ID
 from compute_space.core.dns.service import handle_dns_service_call
 from compute_space.core.dns.service import parse_grants
 from compute_space.core.domains import primary_domain_or_none
@@ -506,7 +506,9 @@ async def _handle_router_dns_request(
     grants = parse_grants(_build_permissions_header(consumer_app_id, DNS_SERVICE_URL, ROUTER_DNS_PROVIDER_ID))
     # Off the event loop: zone file reads and writes are blocking, and a write holds the zone lock
     # for the duration.
-    status, response_body = await anyio.to_thread.run_sync(handle_dns_service_call, rest, payload, grants, config, db)
+    status, response_body = await anyio.to_thread.run_sync(
+        handle_dns_service_call, rest, payload, grants, config, db, consumer_app_id
+    )
     if status == 403:
         response_body = _decorate_grant_url(response_body, consumer_app_id, config, db)
     return Response(content=response_body, status_code=status, media_type=MediaType.JSON)

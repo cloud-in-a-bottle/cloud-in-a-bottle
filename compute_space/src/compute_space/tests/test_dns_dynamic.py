@@ -12,9 +12,7 @@ import pytest
 from compute_space.config import DefaultConfig
 from compute_space.core.dns import dynamic
 from compute_space.core.dns import public_ip as public_ip_mod
-from compute_space.core.dns.backend import LocalZoneFileBackend
-from compute_space.core.dns.coredns import _write_coredns_config
-from compute_space.core.dns.coredns import public_dns_zones
+from compute_space.core.dns import zonefile
 from compute_space.core.dns.public_ip import detect_public_ip
 from compute_space.core.dns.public_ip import effective_public_ip
 from compute_space.core.dns.public_ip import is_public_ipv4
@@ -25,6 +23,7 @@ from compute_space.core.domains import Domain
 from compute_space.core.domains import seed_domains
 from compute_space.db import init_db
 from compute_space.tests.conftest import open_db
+from compute_space.tests.dns_helpers import seeded_dns_config
 
 ZONE = "host.example.com"
 
@@ -37,16 +36,20 @@ PUBLIC_C = "51.75.30.3"
 
 
 def _space(tmp_path: Path, public_ip: str | None = "203.0.113.10") -> DefaultConfig:
-    config = DefaultConfig(data_root_dir=str(tmp_path), public_ip=public_ip)
-    config.make_all_dirs()
-    init_db(config.db_path)
-    with closing(open_db(config)) as db:
-        seed_domains(db, Domain(ZONE, tls=True), [])
-        if public_ip:
-            _write_coredns_config(
-                public_dns_zones(config, db), public_ip, config.coredns_corefile_path, None, serve_public=True
-            )
-    return config
+    if public_ip is None:
+        # No IP means no zone files to seed; the test only cares about storage precedence.
+        config = DefaultConfig(data_root_dir=str(tmp_path), public_ip=None)
+        config.make_all_dirs()
+        init_db(config.db_path)
+        with closing(open_db(config)) as db:
+            seed_domains(db, Domain(ZONE, tls=True), [])
+        return config
+    return seeded_dns_config(tmp_path, Domain(ZONE, tls=True), public_ip=public_ip)
+
+
+def _zone_records(config: DefaultConfig, name: str, rrtype: str) -> list[str]:
+    found = zonefile.read_records(config.coredns_zonefile_path, ZONE)
+    return [r.data for r in found if r.name == name and r.type == rrtype and r.data]
 
 
 def _sources(answers: dict[str, str | Exception]) -> Any:
@@ -179,9 +182,8 @@ def test_an_ip_change_rewrites_the_router_owned_records(tmp_path: Path, monkeypa
         assert dynamic.check_once(config, db) == "198.51.100.7"
 
         assert effective_public_ip(config, db) == "198.51.100.7"
-        backend = LocalZoneFileBackend.create(config, db)
-        for name in ("@", "*", "ns"):
-            assert [r.data for r in backend.get_records(ZONE, name, "A")] == ["198.51.100.7"]
+    for name in ("@", "*", "ns"):
+        assert _zone_records(config, name, "A") == ["198.51.100.7"]
 
 
 def test_an_unchanged_ip_is_not_a_write(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -200,8 +202,7 @@ def test_a_detection_failure_leaves_the_records_alone(tmp_path: Path, monkeypatc
         seed_public_ip(config, db)
         assert dynamic.check_once(config, db) is None
         assert effective_public_ip(config, db) == "203.0.113.10"
-        backend = LocalZoneFileBackend.create(config, db)
-        assert [r.data for r in backend.get_records(ZONE, "*", "A")] == ["203.0.113.10"]
+    assert _zone_records(config, "*", "A") == ["203.0.113.10"]
 
 
 def test_the_update_does_not_disturb_records_apps_wrote(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -211,12 +212,11 @@ def test_the_update_does_not_disturb_records_apps_wrote(tmp_path: Path, monkeypa
 
     with closing(open_db(config)) as db:
         seed_public_ip(config, db)
-        LocalZoneFileBackend.create(config, db).append_records(ZONE, [DnsRecord("www", "A", 300, "192.0.2.50")])
+        zonefile.append_records(config.coredns_zonefile_path, ZONE, [DnsRecord("www", "A", 300, "192.0.2.50")])
 
         dynamic.check_once(config, db)
 
-        backend = LocalZoneFileBackend.create(config, db)
-        assert [r.data for r in backend.get_records(ZONE, "www", "A")] == ["192.0.2.50"]
+    assert _zone_records(config, "www", "A") == ["192.0.2.50"]
 
 
 def test_dynamic_records_carry_a_short_ttl(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -228,5 +228,5 @@ def test_dynamic_records_carry_a_short_ttl(tmp_path: Path, monkeypatch: pytest.M
     with closing(open_db(config)) as db:
         seed_public_ip(config, db)
         dynamic.check_once(config, db)
-        records = LocalZoneFileBackend.create(config, db).get_records(ZONE, "*", "A")
-        assert [r.ttl for r in records] == [60]
+    records = zonefile.read_records(config.coredns_zonefile_path, ZONE)
+    assert [r.ttl for r in records if r.name == "*" and r.type == "A"] == [60]

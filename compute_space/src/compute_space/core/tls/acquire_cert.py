@@ -2,7 +2,7 @@ import asyncio
 import os
 from pathlib import Path
 
-from compute_space.core.dns.backend import DnsBackend
+from compute_space.core.dns.client import DnsClient
 from compute_space.core.logging import logger
 from compute_space.core.tls.util import _acquire_cert_dns01
 from compute_space.core.tls.util import load_account_key
@@ -30,7 +30,7 @@ async def acquire_tls_cert(
     cert_path: Path,
     key_path: Path,
     acme_account_key_path: Path,
-    backend: DnsBackend,
+    dns: DnsClient,
     directory_url: str | None = None,
     verify_ssl: bool = True,
     acme_email: str | None = None,
@@ -49,7 +49,7 @@ async def acquire_tls_cert(
         _acquire_cert_dns01,
         domains=domains,
         directory_url=directory_url,
-        backend=backend,
+        dns=dns,
         account_key=account_key,
         verify_ssl=verify_ssl,
         acme_email=acme_email,
