@@ -11,7 +11,7 @@ from litestar.testing import TestClient
 
 from compute_space.core.dns.coredns_provider import store
 from compute_space.core.dns.coredns_provider.grants import parse as parse_grants
-from compute_space.core.dns.coredns_provider.service import dns_service_app
+from compute_space.core.dns.coredns_provider.routes import dns_service_app
 from compute_space.core.dns.service_api import DnsRecord
 from compute_space.core.domains import Domain
 from compute_space.tests.conftest import open_db

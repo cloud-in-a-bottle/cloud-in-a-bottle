@@ -18,7 +18,7 @@ from typing import Any
 import attr
 from litestar.types import ASGIApp
 
-from compute_space.core.dns.coredns_provider.service import dns_service_app
+from compute_space.core.dns.coredns_provider.routes import dns_service_app
 from compute_space.core.dns.service_api import DNS_SERVICE_URL
 from compute_space.core.dns.service_api import DNS_SERVICE_VERSION
 from compute_space.core.dns.service_api import ROUTER_DNS_PROVIDER_ID
