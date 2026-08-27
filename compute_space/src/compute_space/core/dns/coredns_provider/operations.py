@@ -129,9 +129,16 @@ def write(
     public_ip = effective_public_ip(config, db)
     results = []
     for zone in targets:
-        applied = _OPS[op](db, zone, validated)
-        if public_ip:
-            write_zone_file(zones[zone], public_ip, db)
+        # Per zone, so a fan-out (``zone: "*"``) reports 207 rather than losing the zones that
+        # did apply.  Validation and authorization already happened for the whole batch.
+        try:
+            applied = _OPS[op](db, zone, validated)
+            if public_ip:
+                write_zone_file(zones[zone], public_ip, db)
+        except Exception as e:
+            logger.warning(f"DNS service {op} failed for {zone}: {e}")
+            results.append(ZoneResult(zone=zone, ok=False, error=str(e)))
+            continue
         logger.info(f"DNS service: {op} {len(applied)} record(s) in zone {zone}")
         results.append(ZoneResult(zone=zone, ok=True, records=applied))
     return results

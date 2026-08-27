@@ -9,6 +9,7 @@ from typing import Any
 import pytest
 from litestar.testing import TestClient
 
+from compute_space.core.dns.coredns_provider import operations
 from compute_space.core.dns.coredns_provider import store
 from compute_space.core.dns.coredns_provider.grants import parse as parse_grants
 from compute_space.core.dns.coredns_provider.routes import dns_service_app
@@ -322,5 +323,66 @@ def test_an_empty_record_list_is_rejected(space: Any) -> None:
 
 def test_an_unknown_path_is_rejected(space: Any) -> None:
     status, body = space.call("/records/frobnicate", {"zone": ZONE}, _perms(RW_ALL))
+    assert status == 400
+    assert body["error"] == "invalid_request"
+
+
+# ─── partial failures and malformed bodies ───
+
+
+def test_a_fan_out_reports_207_when_only_some_zones_apply(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # One zone failing must not lose the ones that worked, which is what the per-zone results and
+    # the 207 status are for.
+    space = _Space(tmp_path, Domain(ZONE, tls=True), Domain("other.example.com", tls=True))
+    try:
+        real = operations.write_zone_file
+
+        def fail_second(zone: Any, ip: str, db: Any, *a: Any) -> None:
+            if zone.domain == "other.example.com":
+                raise OSError("disk full")
+            real(zone, ip, db, *a)
+
+        monkeypatch.setattr(operations, "write_zone_file", fail_second)
+
+        status, body = space.call(
+            "/records/append",
+            {"zone": "*", "records": [{"name": "www", "type": "A", "ttl": 300, "data": "198.51.100.7"}]},
+            _perms(RW_ALL),
+        )
+
+        assert status == 207
+        assert body["ok"] is False
+        assert {r["zone"]: r["ok"] for r in body["results"]} == {ZONE: True, "other.example.com": False}
+        assert "disk full" in next(r["error"] for r in body["results"] if not r["ok"])
+    finally:
+        space.close()
+
+
+def test_every_zone_failing_is_reported_as_502(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # A blanket 200 would let a caller read a total failure as success.
+    space = _Space(tmp_path, Domain(ZONE, tls=True))
+    try:
+        monkeypatch.setattr(operations, "write_zone_file", lambda *a: (_ for _ in ()).throw(OSError("disk full")))
+        status, body = space.call(
+            "/records/append",
+            {"zone": ZONE, "records": [{"name": "www", "type": "A", "ttl": 300, "data": "198.51.100.7"}]},
+            _perms(RW_ALL),
+        )
+        assert status == 502
+        assert body["ok"] is False
+    finally:
+        space.close()
+
+
+def test_a_record_that_is_not_an_object_is_an_invalid_record(space: Any) -> None:
+    # Litestar rejects this while parsing the body, so it never reaches our validation; the
+    # exception handler makes it read the same as any other bad record.
+    status, body = space.call("/records/set", {"zone": ZONE, "records": ["not-an-object"]}, _perms(RW_ALL))
+    assert status == 400
+    assert body["error"] == "invalid_record"
+
+
+def test_an_unknown_operation_is_rejected(space: Any) -> None:
+    status, body = space.call("/records/frobnicate", {"zone": ZONE, "records": []}, _perms(RW_ALL))
     assert status == 400
     assert body["error"] == "invalid_request"
