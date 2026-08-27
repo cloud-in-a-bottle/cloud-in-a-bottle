@@ -27,42 +27,50 @@ Unfortunately, there are some important non-HTTP protocols that we think Cloud i
 
 ## Using the IP from your ISP
 
-### Check if you have an IP at all
+If your ISP gives you a real public IPv4, you can point the zone straight at your own connection. Nothing sits in the path, every protocol works, and you depend on nobody. The cost is that this is the fiddliest of the three options, and a few things about a home connection can rule it out entirely.
 
-Behind CGNAT (carrier-grade NAT) you share one address with other customers and cannot accept inbound connections on it, so there is nothing to delegate to. Check by comparing what the internet sees against the WAN address on your router's status page:
+Three ports have to be reachable from the public internet at your address:
 
-```bash
-curl -4 https://ifconfig.me
-```
+| Port | Protocol     | Used for                                                               |
+|------|--------------|------------------------------------------------------------------------|
+| 53   | TCP and UDP  | the instance's CoreDNS answering for your zone, including ACME DNS-01   |
+| 443  | TCP          | the dashboard and every app                                             |
+| 80   | TCP          | redirecting plain HTTP to HTTPS, optional                               |
 
-If they differ, you are behind CGNAT. Most ISPs will hand out a real public address on request, sometimes free and sometimes as a paid static IP.
+Some residential ISPs block inbound 80 and 443. Losing 80 costs you only the redirect. If 443 is blocked, this route will not work on that connection.
 
-## What has to be reachable
+### 1. Check that you have a public IPv4
 
-| Port | Protocol     | Used for                                                                    |
-|------|--------------|-----------------------------------------------------------------------------|
-| 53   | TCP and UDP  | the instance's CoreDNS answering for your zone, including ACME DNS-01        |
-| 443  | TCP          | the dashboard and every app                                                   |
-| 80   | TCP          | redirecting plain HTTP to HTTPS, optional                                     |
+Behind CGNAT (carrier-grade NAT) your ISP shares one public address across many customers, so inbound connections cannot reach you and there is nothing to delegate to. Compare two addresses:
 
-Some residential ISPs block inbound 80 and 443. Losing 80 costs you only the redirect. If 443 is blocked, this approach will not work on that connection.
+- **What the internet sees:** `curl -4 https://ifconfig.me`, run from your home network.
+- **What your router holds:** the WAN or internet address on your router's admin page.
 
-### 1. Delegate the zone, and keep the record current
+If they match, you have a public IPv4. If they differ, the router's address says why:
 
-Two records at your DNS provider, for a zone of `host.example.com`:
+- `100.64.0.0` to `100.127.255.255` is CGNAT. Ask your ISP for a public address, or use a tunnel.
+- `10.x`, `172.16.x` to `172.31.x`, or `192.168.x` means an upstream router or modem is doing its own NAT. Bridge it and check again.
 
-| Type | Name                   | Value             |
-|------|------------------------|-------------------|
-| `A`  | `ns1.host.example.com` | your public IPv4  |
+### 2. Delegate the zone
+
+Two records at your DNS provider, using `host.example.com` as the zone:
+
+| Type | Name                   | Value                  |
+|------|------------------------|------------------------|
+| `A`  | `ns1.host.example.com` | your public IPv4       |
 | `NS` | `host.example.com`     | `ns1.host.example.com` |
 
-Set the `A` record's TTL as low as your provider allows. 60 seconds is typical. That record is the glue for the delegation, and it has to follow your IP.
+The `A` record is the glue for the delegation, and it has to follow your IP, so set its TTL as low as your provider allows. 60 seconds is typical.
 
-So run a dynamic DNS client that updates it. `ddclient` and `inadyn` are both packaged for Ubuntu and both do the job; run one on the instance itself. Any DNS provider with an update API works, which is worth checking before you pick one.
+### 3. Handle when your IP address changes
 
-### 2. Update the instance's own idea of its IP
+A residential IP address is typically not static, at least for most ISPs. In practice though it often changes infrequently, when your router reboots or something similar. This can be worked around with "dynamic DNS" - a small program that runs inside your network, watching for when your public IP changes, and then updating your DNS record to point to the new address.
 
-The instance serves `host.example.com` and `*.host.example.com` from a zone file built out of the `public_ip` value in its config. That is read at startup and does not track a changing address, so a DDNS client on its own is not enough. Update both together, with something like:
+Two things point at your address, and both have to be updated.
+
+**The glue record at your DNS provider.** Run a dynamic DNS client to keep `ns1.host.example.com` current. `ddclient` and `inadyn` are both packaged for Ubuntu; run one on the instance itself. Any DNS provider with an update API works, which is worth checking before you pick one.
+
+**The instance's own zone file.** The instance serves `host.example.com` and `*.host.example.com` out of the `public_ip` value in its config, read once at startup, so a DDNS client on its own leaves it handing out a stale address. Update it with something like:
 
 ```bash
 #!/usr/bin/env bash
@@ -74,9 +82,9 @@ sed -i "s|^public_ip = .*|public_ip = \"$IP\"|" "$CONFIG"
 systemctl restart openhost
 ```
 
-Run it as root from cron every few minutes, next to your DDNS update. The early `exit 0` keeps it from restarting the service on every tick. Records the instance serves carry a 300 second TTL, so clients pick up a new address within about five minutes of the restart.
+Run it as root from cron every few minutes, next to your DDNS update. The early `exit 0` means it only restarts when the address actually moved. Records the instance serves carry a 300 second TTL, so clients pick up the change within about five minutes of the restart.
 
-### 3. Forward the ports on your router
+### 4. Forward the ports on your router
 
 Give the machine a static DHCP lease so its LAN address stops moving, then forward 53/TCP, 53/UDP, 443/TCP, and 80/TCP to it.
 
@@ -86,7 +94,7 @@ Three things commonly get in the way:
 - The machine's own firewall. If `ufw` is enabled, `sudo ufw allow 53`, `sudo ufw allow 80`, and `sudo ufw allow 443`.
 - NAT hairpinning. From inside your LAN, `host.example.com` resolves to your public IP, and plenty of routers will not loop that back inside. Test from a phone on cellular before concluding anything is broken.
 
-### 4. If the instance is in a VM, pass the traffic through the host
+### 5. If the instance is in a VM, pass the traffic through the host
 
 Traffic now reaches the host machine and still has to reach the VM. Two ways to do that.
 
@@ -100,7 +108,7 @@ Traffic now reaches the host machine and still has to reach the VM. Two ways to 
 
 Binding 53, 80, and 443 on the host needs privileges, so QEMU has to run as root or with `cap_net_bind_service`. The guest also sees every connection as coming from the VM gateway, so app logs show a single source address for all traffic. Bridged networking avoids both problems.
 
-### 5. Verify from outside your network
+### 6. Verify from outside your network
 
 Run these from a machine on a different network:
 
