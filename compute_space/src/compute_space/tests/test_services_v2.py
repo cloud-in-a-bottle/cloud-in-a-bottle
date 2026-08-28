@@ -6,8 +6,8 @@ from compute_space.core.auth.permissions_v2 import get_granted_permissions_v2
 from compute_space.core.auth.permissions_v2 import grant_permission_v2
 from compute_space.core.auth.permissions_v2 import revoke_permission_v2
 from compute_space.core.proxy_target import LocalPort
-from compute_space.core.service_interface.registry import lookup_shortname
 from compute_space.core.service_interface.resolve import resolve_provider
+from compute_space.core.service_interface.services import lookup_service_by_manifest_shortname
 
 SVC_SECRETS = "github.com/org/repo/services/secrets"
 SVC_OAUTH = "github.com/org/repo/services/oauth"
@@ -257,7 +257,7 @@ class TestShortnameLookup:
             "consumer",
             f'\n[[services.v2.consumes]]\nservice = "{SVC_OAUTH}"\nshortname = "oauth"\nversion = ">=0.1.0"\ngrants = []\n',
         )
-        service_url, version = lookup_shortname(consumer_id, "oauth", db)
+        service_url, version = lookup_service_by_manifest_shortname(consumer_id, "oauth", db)
         assert service_url == SVC_OAUTH
         assert version == ">=0.1.0"
 
@@ -268,7 +268,7 @@ class TestShortnameLookup:
             f'\n[[services.v2.consumes]]\nservice = "{SVC_OAUTH}"\nshortname = "oauth"\nversion = ">=0.1.0"\ngrants = []\n',
         )
         with pytest.raises(LookupError, match="not declared"):
-            lookup_shortname(consumer_id, "missing", db)
+            lookup_service_by_manifest_shortname(consumer_id, "missing", db)
 
     def test_no_manifest_raises(self, db):
         # Consumer row without manifest_raw at all.
@@ -280,11 +280,11 @@ class TestShortnameLookup:
         )
         db.commit()
         with pytest.raises(LookupError, match="No manifest"):
-            lookup_shortname(bare_id, "anything", db)
+            lookup_service_by_manifest_shortname(bare_id, "anything", db)
 
     def test_unknown_consumer_raises(self, db):
         with pytest.raises(LookupError, match="No manifest"):
-            lookup_shortname(new_app_id(), "oauth", db)
+            lookup_service_by_manifest_shortname(new_app_id(), "oauth", db)
 
     def test_picks_correct_entry_among_many(self, db):
         perms = (
@@ -292,8 +292,8 @@ class TestShortnameLookup:
             f'\n[[services.v2.consumes]]\nservice = "{SVC_OAUTH}"\nshortname = "oauth"\nversion = "==1.0.0"\ngrants = []\n'
         )
         multi_id = _install_consumer(db, "multi", perms)
-        assert lookup_shortname(multi_id, "secrets", db) == (SVC_SECRETS, ">=0.1.0")
-        assert lookup_shortname(multi_id, "oauth", db) == (SVC_OAUTH, "==1.0.0")
+        assert lookup_service_by_manifest_shortname(multi_id, "secrets", db) == (SVC_SECRETS, ">=0.1.0")
+        assert lookup_service_by_manifest_shortname(multi_id, "oauth", db) == (SVC_OAUTH, "==1.0.0")
 
 
 # ---------------------------------------------------------------------------

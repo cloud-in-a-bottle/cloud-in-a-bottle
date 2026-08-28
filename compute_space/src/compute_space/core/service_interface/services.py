@@ -2,20 +2,28 @@ import sqlite3
 
 import attr
 
-from compute_space.core.app_id import ROUTER_APP_ID
-from compute_space.core.app_id import ROUTER_APP_NAME
 from compute_space.core.manifest import AppManifest
 from compute_space.core.manifest import parse_manifest_from_string
 from compute_space.core.service_interface import builtin_services
-from compute_space.core.service_interface.builtin_services import BuiltinService
 from compute_space.db.connection import make_atomic_with_savepoint
 
 
-def lookup_shortname(consumer_app_id: str, shortname: str, db: sqlite3.Connection) -> tuple[str, str]:
-    """Resolve (service_url, version_spec) by shortname from the consumer's stored manifest.
+@attr.s(auto_attribs=True, frozen=True)
+class ServiceProvider:
+    service_url: str
+    app_id: str
+    app_name: str
+    service_version: str
+    # a subpath of the app's root, e.g. "/v1" or "/api/v2", where the service root lives.
+    endpoint: str
+    status: str
+    is_default: bool
 
-    Manifest is read from apps.manifest_raw and parsed on each call (typically a few KB of TOML).
-    """
+
+def lookup_service_by_manifest_shortname(
+    consumer_app_id: str, shortname: str, db: sqlite3.Connection
+) -> tuple[str, str]:
+    """Resolve (service_url, version_spec) by shortname from the consumer's stored manifest."""
     row = db.execute("SELECT manifest_raw FROM apps WHERE app_id = ?", (consumer_app_id,)).fetchone()
     if not row or not row["manifest_raw"]:
         raise LookupError(f"No manifest stored for app '{consumer_app_id}'")
@@ -26,11 +34,7 @@ def lookup_shortname(consumer_app_id: str, shortname: str, db: sqlite3.Connectio
     raise LookupError(f"Shortname '{shortname}' not declared in '{consumer_app_id}' manifest")
 
 
-def register_v2_service_providers(
-    app_id: str,
-    manifest: AppManifest,
-    db: sqlite3.Connection,
-) -> None:
+def register_services_provided_by_app(app_id: str, manifest: AppManifest, db: sqlite3.Connection) -> None:
     """Register V2 service providers from manifest. Sets default if none exists."""
     with make_atomic_with_savepoint(db):
         db.execute("DELETE FROM service_providers_v2 WHERE app_id = ?", (app_id,))
@@ -50,25 +54,7 @@ def register_v2_service_providers(
                 )
 
 
-@attr.s(auto_attribs=True, frozen=True)
-class ServiceProvider:
-    """Something that can provide a service in this space: an installed app, or the router itself.
-
-    A catalogue entry, not a routing decision — it lists providers that are stopped or on an
-    incompatible version too, which is exactly what an owner choosing between them needs to see.
-    ``resolve_provider`` is the one that picks.
-    """
-
-    service_url: str
-    app_id: str
-    app_name: str
-    service_version: str
-    endpoint: str
-    status: str
-    is_default: bool
-
-
-def all_providers(db: sqlite3.Connection) -> list[ServiceProvider]:
+def list_all_service_providers(db: sqlite3.Connection) -> list[ServiceProvider]:
     """Every provider of every service, builtins included."""
     rows = db.execute(
         """SELECT sp.service_url, sp.app_id, a.name AS app_name, sp.service_version, sp.endpoint, a.status
@@ -88,29 +74,15 @@ def all_providers(db: sqlite3.Connection) -> list[ServiceProvider]:
         )
         for r in rows
     ]
-    # Read the registry through the module, not a from-import: the binding is resolved per call,
-    # so a builtin registered (or, in tests, swapped) after import is still seen.
     builtins = [
-        _builtin_as_provider(b, is_default=b.service_url not in defaults) for b in builtin_services.BUILTIN_SERVICES
+        builtin_services.builtin_as_provider(b, is_default=b.service_url not in defaults)
+        for b in builtin_services.BUILTIN_SERVICES
     ]
     return builtins + providers
 
 
 def providers_for(service_url: str, db: sqlite3.Connection) -> list[ServiceProvider]:
-    return [p for p in all_providers(db) if p.service_url == service_url]
-
-
-def _builtin_as_provider(builtin: BuiltinService, is_default: bool) -> ServiceProvider:
-    """A builtin as the owner sees it.  Always running — it is us — and served from the root."""
-    return ServiceProvider(
-        service_url=builtin.service_url,
-        app_id=ROUTER_APP_ID,
-        app_name=ROUTER_APP_NAME,
-        service_version=builtin.version,
-        endpoint="/",
-        status="running",
-        is_default=is_default,
-    )
+    return [p for p in list_all_service_providers(db) if p.service_url == service_url]
 
 
 def default_provider_id(service_url: str, db: sqlite3.Connection) -> str | None:
