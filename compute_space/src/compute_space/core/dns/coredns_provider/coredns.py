@@ -50,8 +50,10 @@ _FALLBACK_UPSTREAM_DNS = ("8.8.8.8", "1.1.1.1")
 _SERIAL_KEY = "dns_serial"
 
 # Zone default TTL, which the derived address records inherit.  Long by default: it is what keeps
-# visitors able to reach the instance while CoreDNS is down during an update.
+# visitors able to reach the instance while CoreDNS is down during an update.  Dynamic DNS drops
+# it, since polling every few minutes is pointless if resolvers cache the old address for five.
 ADDRESS_TTL_SECONDS = 300
+DYNAMIC_ADDRESS_TTL_SECONDS = 60
 
 
 def _gateway_ip_is_bindable(gateway_ip: str) -> bool:
@@ -366,7 +368,7 @@ async def reload_coredns_for_domains(config: Config, db: sqlite3.Connection) -> 
         CONTAINER_GATEWAY_IP,
         serve_public=serve_public,
         db=db,
-        default_ttl=ADDRESS_TTL_SECONDS,
+        default_ttl=DYNAMIC_ADDRESS_TTL_SECONDS if config.dynamic_dns_enabled else ADDRESS_TTL_SECONDS,
     )
     if coredns is None:
         return False

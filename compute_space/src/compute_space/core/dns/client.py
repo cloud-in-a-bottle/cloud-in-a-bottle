@@ -9,7 +9,7 @@ rather than threading one through.
 
 Deliberately record-level.  What a record *means* — that ``_acme-challenge`` is a DNS-01 token, or
 that the apex and wildcard follow the instance's address — belongs to the caller: see
-``core.tls.challenge``.
+``core.tls.challenge`` and ``core.dns.dynamic_dns``.
 
 Grants are asserted per call, covering exactly the records that call touches: the narrowest thing
 the router can claim, and the most useful line in a provider app's audit log.
