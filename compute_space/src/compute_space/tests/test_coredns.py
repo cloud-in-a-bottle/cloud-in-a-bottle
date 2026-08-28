@@ -339,9 +339,7 @@ def test_regenerating_a_zone_keeps_its_stored_records(tmp_path: Path) -> None:
         store.append_records(db, "app.example.com", [DnsRecord("www", "A", 300, "198.51.100.7")])
         zones = public_dns_zones(config, db)
 
-        dns_mod._write_coredns_config(
-            zones, "203.0.113.99", config.coredns_corefile_path, None, db=db
-        )
+        dns_mod._write_coredns_config(zones, "203.0.113.99", config.coredns_corefile_path, None, db=db)
 
         content = zones[0].zonefile_path.read_text()
         assert "www   300  IN A  198.51.100.7" in content

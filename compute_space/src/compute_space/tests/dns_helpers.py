@@ -34,7 +34,5 @@ def seeded_dns_config(tmp_path: Path, *domains: Domain, public_ip: str = PUBLIC_
     set_active_config(config)
     with closing(open_db(config)) as db:
         seed_domains(db, domains[0], [DomainRecord(d.name, d.tls, d.mdns) for d in domains[1:]])
-        _write_coredns_config(
-            public_dns_zones(config, db), public_ip, config.coredns_corefile_path, None, db=db
-        )
+        _write_coredns_config(public_dns_zones(config, db), public_ip, config.coredns_corefile_path, None, db=db)
     return config

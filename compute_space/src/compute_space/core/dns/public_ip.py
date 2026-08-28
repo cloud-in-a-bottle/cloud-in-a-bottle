@@ -15,6 +15,7 @@ from compute_space.core.settings_store import set_setting
 
 PUBLIC_IP_KEY = "public_ip"
 
+
 def effective_public_ip(config: Config, db: sqlite3.Connection) -> str | None:
     return get_setting(db, PUBLIC_IP_KEY) or config.public_ip
 
