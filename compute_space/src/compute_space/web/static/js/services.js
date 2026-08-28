@@ -1,6 +1,6 @@
 // Settings ▸ Services: let the owner choose the default provider app for each
-// registered service. Backend: GET /api/services/v2 (providers),
-// GET/POST/DELETE /api/services/v2/defaults.
+// registered service. Backend: GET /api/services/v2 (providers, each carrying
+// is_default), POST/DELETE /api/services/v2/defaults.
 
 // Escape for both text and double-quoted attribute contexts (service_url and
 // app_id are interpolated into data-service="…" / value="…").
@@ -27,13 +27,15 @@ function groupProviders(providers) {
   return byService;
 }
 
-function renderServices(providers, defaults) {
+function renderServices(providers) {
   var el = document.getElementById('services-status');
   if (!el) return;
 
   var byService = groupProviders(providers);
   var defaultByService = {};
-  defaults.forEach(function(d) { defaultByService[d.service_url] = d.app_id; });
+  providers.forEach(function(p) {
+    if (p.is_default) defaultByService[p.service_url] = p.app_id;
+  });
 
   var serviceUrls = Object.keys(byService).sort();
   if (serviceUrls.length === 0) {
@@ -104,17 +106,12 @@ function saveDefaultProvider(btn) {
 
 function loadServices() {
   var el = document.getElementById('services-status');
-  Promise.all([
-    fetch('/api/services/v2', {credentials: 'same-origin'}).then(function(r) {
+  fetch('/api/services/v2', {credentials: 'same-origin'})
+    .then(function(r) {
       if (!r.ok) throw new Error('HTTP ' + r.status);
       return r.json();
-    }),
-    fetch('/api/services/v2/defaults', {credentials: 'same-origin'}).then(function(r) {
-      if (!r.ok) throw new Error('HTTP ' + r.status);
-      return r.json();
-    }),
-  ])
-    .then(function(results) { renderServices(results[0], results[1]); })
+    })
+    .then(renderServices)
     .catch(function(err) {
       if (el) el.innerHTML = '<p class="error"><strong>Services unavailable.</strong> ' + escServiceHtml(err) + '</p>';
     });

@@ -78,6 +78,11 @@ def _seed_provider(db_path: str, app_id: str, name: str, port: int, service_url:
 SERVICE = "github.com/x/mailer"
 
 
+def _default_app_ids(client: TestClient[Any]) -> list[tuple[str, str]]:
+    """What the settings page reads to preselect each service's provider."""
+    return [(p["service_url"], p["app_id"]) for p in client.get("/api/services/v2").json() if p["is_default"]]
+
+
 def test_settings_page_renders_services_section(cfg: Any) -> None:
     cookie = auth_cookie(cfg)
     with TestClient(app=_build_app(cfg)) as client:
@@ -107,19 +112,19 @@ def test_set_and_clear_default_provider(cfg: Any) -> None:
     cookie = auth_cookie(cfg)
     with TestClient(app=_build_app(cfg)) as client:
         client.cookies.update(cookie)
-        # Initially no default.
-        assert client.get("/api/services/v2/defaults").json() == []
+        # With nothing chosen, the highest version serves.
+        assert _default_app_ids(client) == [(SERVICE, "apptwo000002")]
 
-        # Set (what the UI's "Save" with a provider selected sends).
-        r = client.post("/api/services/v2/defaults", json={"service_url": SERVICE, "app_id": "apptwo000002"})
+        # Set (what the UI's "Save" with a provider selected sends) — the older one, so the
+        # choice is distinguishable from the fallback.
+        r = client.post("/api/services/v2/defaults", json={"service_url": SERVICE, "app_id": "appone000001"})
         assert r.status_code == 200
-        defaults = client.get("/api/services/v2/defaults").json()
-        assert defaults == [{"service_url": SERVICE, "app_id": "apptwo000002", "app_name": "mailer-b"}]
+        assert _default_app_ids(client) == [(SERVICE, "appone000001")]
 
-        # Clear (what "Save" with "(no default)" selected sends).
+        # Clear (what "Save" with "(no default)" selected sends) — back to the highest version.
         r = client.request("DELETE", "/api/services/v2/defaults", json={"service_url": SERVICE})
         assert r.status_code == 200
-        assert client.get("/api/services/v2/defaults").json() == []
+        assert _default_app_ids(client) == [(SERVICE, "apptwo000002")]
 
 
 def test_set_default_rejects_non_provider(cfg: Any) -> None:
