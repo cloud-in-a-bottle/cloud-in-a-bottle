@@ -6,9 +6,11 @@
     <a href="https://cloudinabottle.org/docs/"><img alt="Documentation" src="https://img.shields.io/badge/docs-manual-blue.svg"></a>
     <a href="https://github.com/cloud-in-a-bottle/cloud-in-a-bottle/releases"><img alt="Releases and changelogs" src="https://img.shields.io/github/v/release/cloud-in-a-bottle/cloud-in-a-bottle?label=releases&amp;color=blue"></a>
   </p>
+  <p>
+    Deploy, use, and share web apps on a server you control.<br>
+    Your apps, data, and infrastructure stay yours.
+  </p>
 </div>
-
-Deploy, use, and share web apps on a server you control. Built on the idea that modern software lives in the cloud, and if you want to be in control of your digital life, you need your own place in the cloud too.
 
 ## Why Cloud in a Bottle
 
