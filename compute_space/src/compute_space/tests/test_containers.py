@@ -668,6 +668,29 @@ def test_run_container_app_archive_env_var_translated_to_container_path(
     assert archive_env[0] == f"OPENHOST_APP_ARCHIVE_DIR=/data/app_archive/{manifest.name}"
 
 
+def test_run_container_stamps_bottle_and_openhost_env_twins(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every app env var is stamped under both the legacy OPENHOST_ name and
+    the new BOTTLE_ name (OpenHost -> Cloud in a Bottle rename).  The BOTTLE_
+    twin of a path var must carry the already-translated in-container value,
+    not the host path — i.e. aliasing happens after path translation."""
+    manifest = _basic_manifest(app_data=True, app_archive=True)
+    env_vars = {
+        "OPENHOST_APP_TOKEN": "tok123",
+        "OPENHOST_APP_ARCHIVE_DIR": "/some/host/archive/myapp",
+    }
+    argv = _run_and_capture(monkeypatch, manifest=manifest, tmp_path=tmp_path, env_vars=env_vars)
+
+    e_values = [arg for prev, arg in zip(argv, argv[1:], strict=False) if prev == "-e"]
+
+    # Non-path var: legacy + new twin, same value.
+    assert "OPENHOST_APP_TOKEN=tok123" in e_values
+    assert "BOTTLE_APP_TOKEN=tok123" in e_values
+
+    # Path var: the BOTTLE_ twin carries the translated container path.
+    assert f"OPENHOST_APP_ARCHIVE_DIR=/data/app_archive/{manifest.name}" in e_values
+    assert f"BOTTLE_APP_ARCHIVE_DIR=/data/app_archive/{manifest.name}" in e_values
+
+
 def test_run_container_port_mappings_bind_tcp_and_udp_on_all_interfaces(
     tmp_path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
