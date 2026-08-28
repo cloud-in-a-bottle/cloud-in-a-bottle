@@ -14,10 +14,10 @@ from litestar import Response
 from litestar import post
 
 from compute_space.config import DefaultConfig
+from compute_space.core.app_id import ROUTER_APP_ID
 from compute_space.core.service_interface import builtin_services
 from compute_space.core.service_interface.builtin_services import BuiltinService
 from compute_space.core.service_interface.builtin_services import builtin_for
-from compute_space.core.service_interface.service_client import ROUTER_CONSUMER_ID
 from compute_space.core.service_interface.service_client import ServiceCallError
 from compute_space.core.service_interface.service_client import call_service
 from compute_space.core.service_interface.service_client import provider_is_builtin
@@ -25,7 +25,6 @@ from compute_space.db import init_db
 from compute_space.tests.conftest import open_db
 
 SERVICE_URL = "github.com/example/svc"
-PROVIDER_ID = "_openhost_router_example"
 
 
 @post("/echo", status_code=200, sync_to_thread=False)
@@ -47,8 +46,8 @@ def partial() -> Response[Any]:
 _APP = Litestar(route_handlers=[echo, boom, partial], openapi_config=None)
 
 
-def _service(provider_id: str | None = PROVIDER_ID, version: str = "1.0.0") -> BuiltinService:
-    return BuiltinService(url=SERVICE_URL, version=version, app=_APP, provider_id=provider_id)
+def _service(version: str = "1.0.0") -> BuiltinService:
+    return BuiltinService(service_url=SERVICE_URL, version=version, app=_APP)
 
 
 @pytest.fixture
@@ -85,20 +84,9 @@ def test_a_builtin_yields_to_an_app_the_owner_made_default(registered: BuiltinSe
     assert builtin_for(SERVICE_URL, conn) is None
 
 
-def test_a_builtin_with_no_alternative_provider_always_serves(monkeypatch: pytest.MonkeyPatch, db: Any) -> None:
-    # provider_id=None means the router is the only possible provider, so a stray default row
-    # must not take the service away from it.
-    _, conn = db
-    monkeypatch.setattr(builtin_services, "BUILTIN_SERVICES", (_service(provider_id=None),))
-    _install_app(conn, "someapp")
-    conn.execute("INSERT INTO service_defaults (service_url, app_id) VALUES (?, 'someapp')", (SERVICE_URL,))
-    conn.commit()
-    assert builtin_for(SERVICE_URL, conn) is not None
-
-
 def test_an_explicit_provider_override_is_honoured(registered: BuiltinService, db: Any) -> None:
     _, conn = db
-    assert builtin_for(SERVICE_URL, conn, provider_override=PROVIDER_ID) is registered
+    assert builtin_for(SERVICE_URL, conn, provider_override=ROUTER_APP_ID) is registered
     assert builtin_for(SERVICE_URL, conn, provider_override="someapp") is None
 
 
@@ -123,7 +111,7 @@ async def test_the_router_asserts_its_own_identity(registered: BuiltinService, d
     # ones the proxy would have for a consumer app.
     config, conn = db
     body = await call_service(SERVICE_URL, "/echo", {}, [], config, conn)
-    assert body["headers"]["x-openhost-consumer-id"] == ROUTER_CONSUMER_ID
+    assert body["headers"]["x-openhost-consumer-id"] == ROUTER_APP_ID
 
 
 @pytest.mark.asyncio
