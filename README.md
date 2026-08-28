@@ -1,7 +1,7 @@
 <div align="center">
   <h1>Cloud in a Bottle</h1>
+  <p><em>Your corner of the cloud.</em></p>
   <p>
-    <em>Your corner of the cloud.</em><br>
     <a href="https://www.gnu.org/licenses/agpl-3.0"><img alt="License: AGPL-3.0" src="https://img.shields.io/badge/license-AGPL--3.0-blue.svg"></a>
     <a href="https://cloudinabottle.org/docs/"><img alt="Documentation" src="https://img.shields.io/badge/docs-manual-blue.svg"></a>
     <a href="https://github.com/cloud-in-a-bottle/cloud-in-a-bottle/releases"><img alt="Releases and changelogs" src="https://img.shields.io/github/v/release/cloud-in-a-bottle/cloud-in-a-bottle?label=releases&amp;color=blue"></a>
