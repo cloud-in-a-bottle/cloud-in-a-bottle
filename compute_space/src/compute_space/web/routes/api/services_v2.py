@@ -10,20 +10,15 @@ from litestar.exceptions import NotFoundException
 from litestar.params import FromQuery
 
 from compute_space.core.app_id import ROUTER_APP_ID
-from compute_space.core.service_interface.registry import ServiceDefault
-from compute_space.core.service_interface.registry import ServiceProvider
-from compute_space.core.service_interface.registry import all_defaults
-from compute_space.core.service_interface.registry import all_providers
-from compute_space.core.service_interface.registry import clear_default
-from compute_space.core.service_interface.registry import providers_for
-from compute_space.core.service_interface.registry import set_default
+from compute_space.core.service_interface.services import ServiceDefault
+from compute_space.core.service_interface.services import ServiceProvider
+from compute_space.core.service_interface.services import all_defaults
+from compute_space.core.service_interface.services import clear_default
+from compute_space.core.service_interface.services import list_all_service_providers
+from compute_space.core.service_interface.services import providers_for
+from compute_space.core.service_interface.services import set_default
 from compute_space.web.auth.auth import require_owner_auth
 from compute_space.web.auth.auth import require_owner_or_app_auth
-
-
-@attr.s(auto_attribs=True, frozen=True)
-class DiscoverProvidersResponse:
-    providers: list[ServiceProvider]
 
 
 @attr.s(auto_attribs=True, frozen=True)
@@ -45,19 +40,14 @@ class RemoveDefaultRequest:
 @get("/api/services/v2", guards=[require_owner_auth])
 async def list_services_v2(db: NamedDependency[sqlite3.Connection]) -> list[ServiceProvider]:
     """List all registered V2 service providers."""
-    return all_providers(db)
+    return list_all_service_providers(db)
 
 
 @get("/api/services/v2/providers", guards=[require_owner_or_app_auth])
 async def discover_providers(
     db: NamedDependency[sqlite3.Connection], service: FromQuery[str]
-) -> DiscoverProvidersResponse:
-    """Discover providers for a service.
-
-    A router builtin is listed alongside the apps, so the owner can see what is serving the
-    service today and switch between them.  It is the default exactly when no app has been picked.
-    """
-    return DiscoverProvidersResponse(providers=providers_for(service, db))
+) -> list[ServiceProvider]:
+    return providers_for(service, db)
 
 
 @get("/api/services/v2/defaults", guards=[require_owner_auth])

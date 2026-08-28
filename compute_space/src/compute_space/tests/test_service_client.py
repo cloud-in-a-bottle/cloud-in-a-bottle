@@ -21,10 +21,10 @@ from compute_space.core.service_interface import builtin_services
 from compute_space.core.service_interface.builtin_services import BuiltinService
 from compute_space.core.service_interface.builtin_services import builtin_for
 from compute_space.core.service_interface.provider import ProviderVersionError
-from compute_space.core.service_interface.registry import providers_for
 from compute_space.core.service_interface.resolve import resolve_provider
 from compute_space.core.service_interface.service_client import ServiceCallError
 from compute_space.core.service_interface.service_client import call_service
+from compute_space.core.service_interface.services import providers_for
 from compute_space.db import init_db
 from compute_space.tests.conftest import open_db
 
