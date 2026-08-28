@@ -15,6 +15,11 @@ def main(db_path: str) -> None:
         conn.executescript(open(schema_path()).read())
         conn.execute("DROP TABLE domains")
         conn.execute("DROP TABLE settings")
+        # schema.sql is the *current* baseline, so restore what later migrations have since
+        # dropped — otherwise those migrations fail on a column that was never there.  The same
+        # reconstruction lives in compute_space's test_domains_schema; both need a line per
+        # column-dropping migration.
+        conn.execute("ALTER TABLE apps ADD COLUMN installed_by TEXT")
         conn.execute("INSERT OR REPLACE INTO schema_version (id, version) VALUES (1, 12)")
         conn.commit()
     finally:

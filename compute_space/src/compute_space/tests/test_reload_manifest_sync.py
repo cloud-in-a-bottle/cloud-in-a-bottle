@@ -121,7 +121,7 @@ def test_manifest_column_values_maps_all_manifest_fields(tmp_path: Path) -> None
     assert cols["runtime_type"] == "serverfull"
     assert cols["gpu"] == 0
     # Non-manifest columns must NOT be present (they must survive reload).
-    for forbidden in ("app_id", "local_port", "repo_path", "repo_url", "status", "installed_by", "container_id"):
+    for forbidden in ("app_id", "local_port", "repo_path", "repo_url", "status", "container_id"):
         assert forbidden not in cols
 
 
@@ -372,7 +372,7 @@ def test_install_writes_same_manifest_columns_as_helper(cfg: Any, tmp_path: Path
     try:
         # Stub the background build thread so no container work happens.
         with mock.patch.object(apps_mod, "deploy_app_background"):
-            app_id = insert_and_deploy(manifest, str(repo), cfg, db, installed_by="installer-app")
+            app_id = insert_and_deploy(manifest, str(repo), cfg, db)
         row = db.execute("SELECT * FROM apps WHERE app_id = ?", (app_id,)).fetchone()
     finally:
         db.close()
@@ -381,5 +381,4 @@ def test_install_writes_same_manifest_columns_as_helper(cfg: Any, tmp_path: Path
         assert row[col] == value, f"install wrote {col}={row[col]!r}, expected {value!r}"
     # Non-manifest install-only columns are set by insert_and_deploy itself.
     assert row["status"] == "building"
-    assert row["installed_by"] == "installer-app"
     assert row["repo_path"] == str(repo)

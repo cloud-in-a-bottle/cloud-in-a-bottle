@@ -36,7 +36,6 @@ from litestar import websocket
 from litestar.datastructures import MutableScopeHeaders
 from litestar.di import NamedDependency
 from litestar.exceptions import ClientException
-from litestar.exceptions import HTTPException
 from litestar.exceptions import NotAuthorizedException
 from litestar.exceptions import NotFoundException
 from litestar.exceptions import PermissionDeniedException
@@ -45,25 +44,12 @@ from litestar.openapi import ResponseSpec
 from litestar.params import FromPath
 from litestar.response import Response
 from litestar.response.base import ASGIResponse
-from packaging.specifiers import InvalidSpecifier
-from packaging.specifiers import SpecifierSet
-from packaging.version import Version
 
 from compute_space.config import Config
 from compute_space.core.apps import find_app_by_name
 from compute_space.core.apps import get_app_from_hostname
 from compute_space.core.auth.permissions_v2 import get_granted_permissions_v2
-from compute_space.core.containers import get_docker_logs
 from compute_space.core.domains import primary_domain_or_none
-from compute_space.core.installer import GRANT_KEY_CAPABILITY
-from compute_space.core.installer import GRANT_KEY_REPO_URL_PREFIX
-from compute_space.core.installer import INSTALLER_SERVICE_URL
-from compute_space.core.installer import INSTALLER_SERVICE_VERSION
-from compute_space.core.installer import INSTALL_CAPABILITY
-from compute_space.core.installer import check_install_allowed
-from compute_space.core.installer import install_from_repo_url
-from compute_space.core.manifest import parse_manifest_from_string
-from compute_space.core.oauth import OAuthRequired
 from compute_space.core.service_interface.services_v2 import lookup_shortname
 from compute_space.core.service_interface.services_v2 import resolve_provider
 from compute_space.web.auth.auth import require_app_auth
@@ -80,10 +66,6 @@ _HTTP_METHODS = [
     HttpMethod.PATCH,
     HttpMethod.HEAD,
 ]
-
-
-def _json_ok(body: dict[str, Any]) -> Response[dict[str, Any]]:
-    return Response(content=body, status_code=200, media_type=MediaType.JSON)
 
 
 def _build_permissions_header(consumer_app_id: str, service_url: str, provider_app_id: str) -> str:
@@ -204,12 +186,6 @@ async def service_call_cors(
 
 
 @attr.s(auto_attribs=True, frozen=True)
-class InstallerServiceRequest:
-    service_url: str
-    version_spec: str
-
-
-@attr.s(auto_attribs=True, frozen=True)
 class ServiceRequest:
     service_url: str
     version_spec: str
@@ -225,7 +201,7 @@ def _service_call_common(
     rest: str,
     db: sqlite3.Connection,
     provider_app_id: str | None = None,
-) -> ServiceRequest | InstallerServiceRequest:
+) -> ServiceRequest:
     """Resolve a consumer's shortname to a proxyable request.
 
     Only the two resolution calls are translated, so an accidental lookup bug still surfaces as a 500.
@@ -235,33 +211,26 @@ def _service_call_common(
     except LookupError as e:
         raise NotFoundException(detail=str(e), extra={"code": "shortname_not_declared"}) from e
 
-    if service_url == INSTALLER_SERVICE_URL:
-        return InstallerServiceRequest(
-            service_url=service_url,
-            version_spec=version_spec,
+    try:
+        provider_app_id, provider_port, _, provider_endpoint = resolve_provider(
+            service_url, version_spec, db, provider_app_id=provider_app_id
         )
-    else:
-        try:
-            provider_app_id, provider_port, _, provider_endpoint = resolve_provider(
-                service_url, version_spec, db, provider_app_id=provider_app_id
-            )
-        except RuntimeError as e:
-            raise ServiceUnavailableException(detail=str(e), extra={"code": "service_not_available"}) from e
-        # `rest` is captured as "/sub/path" (leading slash); fold into the
-        # provider's endpoint.
-        target_path = provider_endpoint.rstrip("/") + "/" + rest.lstrip("/")
-        extra_headers = [
-            ("X-OpenHost-Permissions", _build_permissions_header(consumer_app_id, service_url, provider_app_id)),
-            *_consumer_identity_headers(consumer_app_id, db).items(),
-        ]
-        return ServiceRequest(
-            service_url=service_url,
-            version_spec=version_spec,
-            provider_app_id=provider_app_id,
-            provider_port=provider_port,
-            target_path=target_path,
-            extra_headers=extra_headers,
-        )
+    except RuntimeError as e:
+        raise ServiceUnavailableException(detail=str(e), extra={"code": "service_not_available"}) from e
+    # `rest` is captured as "/sub/path" (leading slash); fold into the provider's endpoint.
+    target_path = provider_endpoint.rstrip("/") + "/" + rest.lstrip("/")
+    extra_headers = [
+        ("X-OpenHost-Permissions", _build_permissions_header(consumer_app_id, service_url, provider_app_id)),
+        *_consumer_identity_headers(consumer_app_id, db).items(),
+    ]
+    return ServiceRequest(
+        service_url=service_url,
+        version_spec=version_spec,
+        provider_app_id=provider_app_id,
+        provider_port=provider_port,
+        target_path=target_path,
+        extra_headers=extra_headers,
+    )
 
 
 @route(
@@ -274,7 +243,6 @@ def _service_call_common(
         ClientException,
         NotAuthorizedException,
         PermissionDeniedException,
-        HTTPException,
     ],
     responses={
         502: ResponseSpec(
@@ -297,12 +265,6 @@ async def service_call(
     provider_override = request.headers.get("X-OpenHost-Provider") or None
 
     resolved = _service_call_common(consumer_app_id, shortname, rest, db, provider_app_id=provider_override)
-
-    if isinstance(resolved, InstallerServiceRequest):
-        installer_response = await _handle_installer_request(
-            consumer_app_id, resolved.version_spec, rest, request, db, config
-        )
-        return installer_response.to_asgi_response(None, request=request)
 
     response = await proxy_http_request(
         request,
@@ -345,11 +307,6 @@ async def service_call_ws(
     except ServiceUnavailableException as e:
         await socket.accept()
         await socket.close(code=4503, reason=e.detail)
-        return
-
-    if isinstance(resolved, InstallerServiceRequest):
-        await socket.accept()
-        await socket.close(code=1011, reason="Installer service is not available over WebSocket")
         return
 
     await proxy_websocket_request(
@@ -408,164 +365,6 @@ async def oauth_callback_proxy_v2(request: Request[Any, Any, Any]) -> ASGIRespon
         )
 
     return await proxy_http_request(request, target_port=app_row.local_port, override_path="/callback")
-
-
-# ─── Installer (router-internal v2 service) ─────────────────────────────────
-#
-# The installer has no provider app — its handlers run in-process so they can
-# share the router's DB and apps.* state.  Apps that consume it declare:
-#
-#     [[services.v2.consumes]]
-#     service   = "github.com/imbue-openhost/openhost/services/installer"
-#     shortname = "installer"
-#     version   = ">=0.1.0"
-#     grants    = [{capability = "install", repo_url_prefix = "https://..."}]
-#
-# and call /api/services/v2/call/installer/{install,status/<name>,logs/<name>}.
-
-
-async def _handle_installer_request(
-    consumer_app_id: str,
-    version_spec: str,
-    rest: str,
-    request: Request[Any, Any, Any],
-    db: sqlite3.Connection,
-    config: Config,
-) -> Response[Any]:
-    """Dispatch installer v2 service requests in-process.
-
-    Routes:
-        POST /install                — body: {repo_url, app_name?}
-        GET  /status/<app_name>      — only for apps this consumer installed
-        GET  /logs/<app_name>        — only for apps this consumer installed
-    """
-    try:
-        spec = SpecifierSet(version_spec)
-    except InvalidSpecifier as e:
-        raise ClientException(
-            detail=f"Invalid version specifier: {version_spec}", extra={"code": "bad_request"}
-        ) from e
-    if Version(INSTALLER_SERVICE_VERSION) not in spec:
-        raise ServiceUnavailableException(
-            detail=f"installer version {INSTALLER_SERVICE_VERSION} does not match {version_spec}",
-            extra={"code": "service_not_available"},
-        )
-
-    method = str(request.method)
-    parts = rest.strip("/").split("/")
-
-    if method == "POST" and parts == ["install"]:
-        try:
-            body = await request.json()
-        except Exception as e:
-            raise ClientException(detail="request body must be JSON object", extra={"code": "bad_request"}) from e
-        if not isinstance(body, dict):
-            raise ClientException(detail="request body must be JSON object", extra={"code": "bad_request"})
-        repo_url = (body.get("repo_url") or "").strip()
-        if not repo_url:
-            raise ClientException(detail="repo_url is required", extra={"code": "bad_request"})
-        app_name = (body.get("app_name") or "").strip() or None
-
-        grants = [g.grant for g in get_granted_permissions_v2(consumer_app_id, INSTALLER_SERVICE_URL)]
-        if (reason := check_install_allowed(repo_url, grants)) is not None:
-            raise _installer_permission_denied(consumer_app_id, repo_url, reason, db)
-
-        try:
-            result = await install_from_repo_url(repo_url, config, db, app_name=app_name, installed_by=consumer_app_id)
-        except OAuthRequired as exc:
-            raise NotAuthorizedException(
-                detail="GitHub authorization required",
-                extra={"authorize_url": exc.authorize_url},
-            ) from exc
-        except ValueError as exc:
-            raise HTTPException(
-                status_code=400,
-                detail=str(exc),
-                extra={"code": "install_failed", "output": str(exc)},
-            ) from exc
-        return _json_ok({"ok": True, "app_name": result.app_name, "status": result.status})
-
-    if method == "GET" and len(parts) == 2 and parts[0] in ("status", "logs"):
-        sub, app_name = parts
-        row = _lookup_consumer_install(consumer_app_id, app_name, db)
-        if sub == "status":
-            return _json_ok({"status": row["status"], "error": row["error_message"]})
-        logs = get_docker_logs(app_name, config.temporary_data_dir, row["container_id"])
-        return Response(content=logs, status_code=200, media_type="text/plain; charset=utf-8")
-
-    raise NotFoundException(
-        detail=f"Unknown installer endpoint: {method} /{rest.lstrip('/')}", extra={"code": "bad_request"}
-    )
-
-
-def _lookup_consumer_install(consumer_app_id: str, app_name: str, db: sqlite3.Connection) -> sqlite3.Row:
-    row: sqlite3.Row | None = db.execute(
-        "SELECT status, error_message, container_id, installed_by FROM apps WHERE name = ?",
-        (app_name,),
-    ).fetchone()
-    if not row:
-        raise NotFoundException(detail=f"app {app_name!r} not found", extra={"code": "not_found"})
-    if row["installed_by"] != consumer_app_id:
-        raise PermissionDeniedException(
-            detail=f"{consumer_app_id} did not install {app_name!r}", extra={"code": "forbidden"}
-        )
-    return row
-
-
-def _proposed_install_grant_from_manifest(
-    consumer_app_id: str, repo_url: str, db: sqlite3.Connection
-) -> dict[str, str]:
-    """Pick the install grant payload to offer the owner on a 403.
-
-    Prefers a grant the consumer **already declared** in its
-    ``[[services.v2.consumes]]`` block for the installer service whose
-    ``repo_url_prefix`` matches ``repo_url`` — so a manifest-declared broad
-    grant (e.g. ``"https://github.com/"``) gets approved once and covers every
-    subsequent install instead of producing one approval prompt per repo.
-
-    Falls back to a per-URL grant only if the consumer's manifest declares no
-    installer grants at all, or none whose prefix covers the requested URL.
-    """
-    fallback = {GRANT_KEY_CAPABILITY: INSTALL_CAPABILITY, GRANT_KEY_REPO_URL_PREFIX: repo_url}
-    row = db.execute("SELECT manifest_raw FROM apps WHERE app_id = ?", (consumer_app_id,)).fetchone()
-    if not row or not row["manifest_raw"]:
-        return fallback
-    try:
-        manifest = parse_manifest_from_string(row["manifest_raw"])
-    except Exception:
-        return fallback
-
-    for consume in manifest.consumes_services_v2:
-        if consume.service != INSTALLER_SERVICE_URL:
-            continue
-        for g in consume.grants:
-            if not isinstance(g, dict):
-                continue
-            if g.get(GRANT_KEY_CAPABILITY) != INSTALL_CAPABILITY:
-                continue
-            prefix = g.get(GRANT_KEY_REPO_URL_PREFIX, "")
-            if not isinstance(prefix, str):
-                continue
-            if prefix in ("", "*") or repo_url.startswith(prefix):
-                return {GRANT_KEY_CAPABILITY: INSTALL_CAPABILITY, GRANT_KEY_REPO_URL_PREFIX: prefix}
-    return fallback
-
-
-def _installer_permission_denied(
-    consumer_app_id: str, repo_url: str, reason: str, db: sqlite3.Connection
-) -> PermissionDeniedException:
-    grant = _proposed_install_grant_from_manifest(consumer_app_id, repo_url, db)
-    return PermissionDeniedException(
-        detail=reason,
-        extra={
-            "code": "permission_required",
-            "required_grant": {
-                "grant": grant,
-                "scope": "global",
-                "grant_url": _approve_grant_url(consumer_app_id, INSTALLER_SERVICE_URL, grant, db),
-            },
-        },
-    )
 
 
 # ─── Router ─────────────────────────────────────────────────────────────────
