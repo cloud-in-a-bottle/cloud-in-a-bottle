@@ -109,8 +109,6 @@ def _ensure_coredns_binary(config: Config) -> str:
 
 
 def main() -> None:
-    """Entry point.  One event loop owns the whole process — boot, the child processes it spawns,
-    the renewal task and hypercorn — so Caddy/CoreDNS handles stay valid everywhere they're used."""
     asyncio.run(_main())
 
 
@@ -126,7 +124,9 @@ async def _main() -> None:
     seed_first_boot(config)
     coredns: CoreDnsProcess | None = None
     caddy: CaddyProcess | None = None
-    renewal_task: asyncio.Task[None] | None = None
+    # Long-running tasks started at boot.  Held here for their whole lifetime (the loop keeps only
+    # weak references) and cancelled together by _shutdown.
+    background_tasks: list[asyncio.Task[None]] = []
     # One connection for the whole domain-dependent startup sequence (CoreDNS -> TLS cert -> Caddy);
     # the primary + cert/zone paths are read live from it.
     with closing(get_db()) as db:
@@ -171,7 +171,7 @@ async def _main() -> None:
             if needs_caddy_for_tls and config.coredns_enabled and config.acquire_tls_cert_if_missing:
                 # Renew every TLS domain — including a TLS secondary under a non-TLS primary — and
                 # regenerate the Caddyfile so acquired certs are served.
-                renewal_task = start_renewal_task(reload_caddy_for_domains)
+                background_tasks.append(start_renewal_task(reload_caddy_for_domains))
         elif needs_caddy_for_tls:
             raise RuntimeError(
                 "A TLS domain is configured but start_caddy is False. Caddy is required for TLS termination."
@@ -182,12 +182,13 @@ async def _main() -> None:
     mark_boot_complete()
 
     async def _shutdown() -> None:
-        """Stop the renewal task and the child processes.  Each handle stops its own process and
+        """Stop the background tasks and the child processes.  Each handle stops its own process and
         log task, which restart() may have replaced since startup."""
-        if renewal_task is not None:
-            renewal_task.cancel()
+        for task in background_tasks:
+            task.cancel()
+        for task in background_tasks:
             with contextlib.suppress(asyncio.CancelledError):
-                await renewal_task
+                await task
         for child in (caddy, coredns):
             if child is not None:
                 await child.stop()
