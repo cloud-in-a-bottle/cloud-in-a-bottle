@@ -73,8 +73,8 @@ def _seed_app(db_path: str, name: str, local_port: int, public_paths: list[str])
     try:
         db.execute(
             """INSERT INTO apps
-                 (app_id, name, version, repo_path, local_port, status, installed_by, public_paths)
-               VALUES (?, ?, ?, ?, ?, ?, NULL, ?)""",
+                 (app_id, name, version, repo_path, local_port, status, public_paths)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
             (new_app_id(), name, "1.0.0", f"/tmp/{name}", local_port, "running", json.dumps(public_paths)),
         )
         db.commit()
