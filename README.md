@@ -95,10 +95,4 @@ We may move to a different license in the future — something like a [fair sour
 
 ---
 
-## About Imbue
-
-We build honest software. Often open source. Tools that help people think, create, and build. Tools that are loyal to you. 
-
-- [Explore Imbue's code on GitHub](https://github.com/imbue-ai)
-- [Check us out at imbue.com](https://imbue.com/)
-- [Follow @Imbue_AI on X](https://x.com/imbue_ai)
+Cloud in a Bottle is an Open Source project from [Imbue](https://imbue.com/).
