@@ -22,11 +22,9 @@ from compute_space.core.caddy import reload_caddy_for_domains
 from compute_space.core.caddy import set_active_caddy
 from compute_space.core.caddy import start_caddy
 from compute_space.core.caddy import unix_admin_address
-from compute_space.core.containers import CONTAINER_GATEWAY_IP
 from compute_space.core.dns.client import ensure_dns_provider_running
 from compute_space.core.dns.client import uses_local_dns
 from compute_space.core.dns.coredns_provider.coredns import CoreDnsProcess
-from compute_space.core.dns.coredns_provider.coredns import coredns_is_needed
 from compute_space.core.dns.coredns_provider.coredns import public_dns_zones
 from compute_space.core.dns.coredns_provider.coredns import set_active_coredns
 from compute_space.core.dns.coredns_provider.coredns import start_coredns
@@ -161,19 +159,14 @@ async def _main() -> None:
         seed_public_ip(config, db)
         public_ip = effective_public_ip(config, db)
 
-        # Two independent reasons to run CoreDNS.  Public authoritative zones, when this instance
-        # is its own DNS provider; and the container view, which the app hairpin needs whoever
-        # answers publicly — including on an http-only box where coredns_enabled is false.
-        serve_public = config.coredns_enabled and uses_local_dns(db)
-        if serve_public and not public_ip:
-            raise RuntimeError("Public IP must be set to serve authoritative DNS")
-        if coredns_is_needed(dns_zones, serve_public, CONTAINER_GATEWAY_IP):
+        if config.coredns_enabled:
+            if not public_ip:
+                raise RuntimeError("Public IP must be set to serve authoritative DNS")
             coredns = await start_coredns(
                 dns_zones,
                 public_ip,
                 config.coredns_corefile_path,
                 coredns_bin=_ensure_coredns_binary(config),
-                serve_public=serve_public,
                 db=db,
             )
             # Register so /api/domains can regenerate zones + restart CoreDNS when a domain is added.
@@ -199,7 +192,11 @@ async def _main() -> None:
             )
             # Register so /api/domains can regenerate + restart Caddy when a domain is added/removed.
             set_active_caddy(caddy)
-            if needs_caddy_for_tls and (serve_public or not uses_local_dns(db)) and config.acquire_tls_cert_if_missing:
+            if (
+                needs_caddy_for_tls
+                and (config.coredns_enabled or not uses_local_dns(db))
+                and config.acquire_tls_cert_if_missing
+            ):
                 # Owns first acquisition as well as renewal, for every TLS domain — including a TLS
                 # secondary under a non-TLS primary — and regenerates the Caddyfile once a cert
                 # lands so Caddy stops serving its internal CA.
