@@ -11,12 +11,13 @@ from compute_space.core.app_id import ROUTER_APP_ID
 from compute_space.core.app_id import ROUTER_APP_NAME
 from compute_space.core.proxy_target import InProcess
 from compute_space.core.proxy_target import LocalPort
-from compute_space.core.service_interface.builtin_services import builtin_for
+from compute_space.core.service_interface.builtin_services import builtin_by_url
 from compute_space.core.service_interface.provider import NoProviderError
 from compute_space.core.service_interface.provider import ProviderNotRunningError
 from compute_space.core.service_interface.provider import ProviderUnavailable
 from compute_space.core.service_interface.provider import ProviderVersionError
 from compute_space.core.service_interface.provider import ResolvedProvider
+from compute_space.core.service_interface.services import default_provider_id_for_service
 
 
 def resolve_provider(
@@ -27,9 +28,9 @@ def resolve_provider(
 ) -> ResolvedProvider:
     """Pick the provider for a service, whether the router serves it or an app does.
 
-    Builtins are checked first; one yields to an app the owner has made the default (see
-    ``builtin_for``).  ``provider_app_id`` pins a specific provider instead — ``ROUTER_APP_ID`` to
-    demand the builtin — and fails rather than falling back if that one can't serve.
+    Who serves it by default is ``default_provider_id_for_service``'s call, builtins included.
+    ``provider_app_id`` pins a specific provider instead — ``ROUTER_APP_ID`` to demand the builtin
+    — and fails rather than falling back if that one can't serve.
 
     Raises a :class:`ProviderUnavailable` subclass for every "can't serve this" case, so callers
     can map the lot to one status code without matching on message text.
@@ -39,8 +40,14 @@ def resolve_provider(
     except InvalidSpecifier as e:
         raise ProviderUnavailable(f"Invalid version specifier: {version_specifier}") from e
 
-    builtin = builtin_for(service_url, db, provider_override=provider_app_id)
-    if builtin is not None:
+    target_app_id = provider_app_id or default_provider_id_for_service(service_url, db)
+    if target_app_id is None:
+        raise NoProviderError(f"No provider for service '{service_url}'")
+
+    if target_app_id == ROUTER_APP_ID:
+        builtin = builtin_by_url(service_url)
+        if builtin is None:
+            raise NoProviderError(f"The router does not provide '{service_url}'")
         _check_version(builtin.version, spec, version_specifier, ROUTER_APP_NAME)
         return ResolvedProvider(
             service_url=service_url,
@@ -51,7 +58,6 @@ def resolve_provider(
             target=InProcess(builtin.app),
         )
 
-    target_app_id = provider_app_id or _default_provider_id(service_url, db)
     row = db.execute(
         """SELECT sp.service_version, sp.endpoint, a.local_port, a.status, a.name
            FROM service_providers_v2 sp
@@ -73,13 +79,6 @@ def resolve_provider(
         endpoint=row["endpoint"],
         target=LocalPort(row["local_port"]),
     )
-
-
-def _default_provider_id(service_url: str, db: sqlite3.Connection) -> str:
-    row = db.execute("SELECT app_id FROM service_defaults WHERE service_url = ?", (service_url,)).fetchone()
-    if not row:
-        raise NoProviderError(f"No provider for service '{service_url}'")
-    return str(row["app_id"])
 
 
 def _check_version(provider_version: str, spec: SpecifierSet, specifier_text: str, provider_name: str) -> None:

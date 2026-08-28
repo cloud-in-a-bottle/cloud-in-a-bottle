@@ -19,12 +19,14 @@ from compute_space.core.proxy_target import InProcess
 from compute_space.core.proxy_target import LocalPort
 from compute_space.core.service_interface import builtin_services
 from compute_space.core.service_interface.builtin_services import BuiltinService
-from compute_space.core.service_interface.builtin_services import builtin_for
+from compute_space.core.service_interface.builtin_services import builtin_by_url
 from compute_space.core.service_interface.provider import ProviderVersionError
 from compute_space.core.service_interface.resolve import resolve_provider
 from compute_space.core.service_interface.service_client import ServiceCallError
 from compute_space.core.service_interface.service_client import call_service
-from compute_space.core.service_interface.services import providers_for
+from compute_space.core.service_interface.services import default_provider_id_for_service
+from compute_space.core.service_interface.services import list_all_service_providers
+from compute_space.core.service_interface.services import set_default
 from compute_space.db import init_db
 from compute_space.tests.conftest import open_db
 
@@ -75,7 +77,7 @@ def db(tmp_path: Path) -> Any:
 
 def test_a_builtin_serves_when_no_app_has_claimed_the_service(registered: BuiltinService, db: Any) -> None:
     _, conn = db
-    assert builtin_for(SERVICE_URL, conn) is registered
+    assert default_provider_id_for_service(SERVICE_URL, conn) == ROUTER_APP_ID
     assert resolve_provider(SERVICE_URL, ">=0", conn).target == InProcess(registered.app)
 
 
@@ -85,34 +87,59 @@ def test_a_builtin_yields_to_an_app_the_owner_made_default(registered: BuiltinSe
     _install_app(conn, "someapp")
     conn.execute("INSERT INTO service_defaults (service_url, app_id) VALUES (?, 'someapp')", (SERVICE_URL,))
     conn.commit()
-    assert builtin_for(SERVICE_URL, conn) is None
+    assert default_provider_id_for_service(SERVICE_URL, conn) == "someapp"
     assert resolve_provider(SERVICE_URL, ">=0", conn).target == LocalPort(19100)
 
 
 def test_an_explicit_provider_override_is_honoured(registered: BuiltinService, db: Any) -> None:
+    # An override beats the default in both directions: it can demand the builtin, and it can name
+    # an app while the builtin still holds the service.
     _, conn = db
-    assert builtin_for(SERVICE_URL, conn, provider_override=ROUTER_APP_ID) is registered
-    assert builtin_for(SERVICE_URL, conn, provider_override="someapp") is None
+    _install_app(conn, "someapp")
+    conn.commit()
+    assert resolve_provider(SERVICE_URL, ">=0", conn, provider_app_id=ROUTER_APP_ID).target == InProcess(
+        registered.app
+    )
+    assert resolve_provider(SERVICE_URL, ">=0", conn, provider_app_id="someapp").target == LocalPort(19100)
 
 
 def test_a_builtin_is_listed_for_the_owner_alongside_the_apps(registered: BuiltinService, db: Any) -> None:
     # The owner picks a provider from this list, so a service the router serves has to appear in
     # it — otherwise there is no way to see what is handling the service, or to switch back.
     _, conn = db
-    assert [(p.app_id, p.is_default) for p in providers_for(SERVICE_URL, conn)] == [(ROUTER_APP_ID, True)]
+    assert [(p.app_id, p.is_default) for p in list_all_service_providers(conn, SERVICE_URL)] == [(ROUTER_APP_ID, True)]
 
     _install_app(conn, "someapp")
     conn.execute("INSERT INTO service_defaults (service_url, app_id) VALUES (?, 'someapp')", (SERVICE_URL,))
     conn.commit()
-    assert [(p.app_id, p.is_default) for p in providers_for(SERVICE_URL, conn)] == [
+    assert [(p.app_id, p.is_default) for p in list_all_service_providers(conn, SERVICE_URL)] == [
         (ROUTER_APP_ID, False),
         ("someapp", True),
     ]
 
 
-def test_an_unregistered_service_has_no_builtin(registered: BuiltinService, db: Any) -> None:
+def test_the_router_can_be_chosen_as_the_default_like_any_other_provider(registered: BuiltinService, db: Any) -> None:
+    # Callers pass ROUTER_APP_ID the same way they pass an app_id; that it is stored as the absence
+    # of a row rather than a row naming the router stays inside these two functions.
     _, conn = db
-    assert builtin_for("github.com/example/other", conn) is None
+    _install_app(conn, "someapp")
+    set_default(SERVICE_URL, "someapp", conn)
+    assert default_provider_id_for_service(SERVICE_URL, conn) == "someapp"
+
+    set_default(SERVICE_URL, ROUTER_APP_ID, conn)
+    assert default_provider_id_for_service(SERVICE_URL, conn) == ROUTER_APP_ID
+
+
+def test_the_router_cannot_be_made_default_for_a_service_it_does_not_provide(db: Any) -> None:
+    _, conn = db
+    with pytest.raises(LookupError, match="does not provide"):
+        set_default("github.com/example/other", ROUTER_APP_ID, conn)
+
+
+def test_an_unregistered_service_has_no_provider_at_all(registered: BuiltinService, db: Any) -> None:
+    _, conn = db
+    assert builtin_by_url("github.com/example/other") is None
+    assert default_provider_id_for_service("github.com/example/other", conn) is None
 
 
 # ─── calling it ───
