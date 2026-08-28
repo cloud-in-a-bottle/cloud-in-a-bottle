@@ -11,7 +11,8 @@ import sqlite3
 
 import httpx
 
-from compute_space.core.service_interface.services_v2 import resolve_provider
+from compute_space.core.proxy_target import client_for
+from compute_space.core.service_interface.resolve import resolve_provider
 from compute_space.core.util import assert_str
 from compute_space.db import get_db
 
@@ -43,17 +44,18 @@ async def get_oauth_token(
     """
     if db is None:
         db = get_db()
-    _, port, _, endpoint = resolve_provider(OAUTH_SERVICE_URL, ">=0", db)
+    oauth_provider = resolve_provider(OAUTH_SERVICE_URL, ">=0", db)
 
     # Forge an app-scoped grant. We bypass the v2 service proxy (which would normally do the per-provider
-    # filter + provider_app_id strip) by going straight to the loopback port, so we hand-build the same
+    # filter + provider_app_id strip) by going straight to the provider, so we hand-build the same
     # post-filter shape the proxy would produce. The oauth service only honours app-scoped grants
     # (see services/oauth/openapi.yaml).
     grant_payload = {"provider": provider, "scopes": list(scopes)}
     permissions_header = json.dumps([{"grant": grant_payload, "scope": "app"}])
-    url = f"http://127.0.0.1:{port}{endpoint.rstrip('/')}/token"
+    client, base_url = client_for(oauth_provider.target, 5)
+    url = f"{base_url}{oauth_provider.endpoint.rstrip('/')}/token"
     try:
-        async with httpx.AsyncClient(timeout=5) as client:
+        async with client:
             resp = await client.post(
                 url,
                 json={"provider": provider, "scopes": list(scopes), "return_to": return_to},

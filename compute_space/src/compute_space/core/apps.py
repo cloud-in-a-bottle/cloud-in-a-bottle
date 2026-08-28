@@ -50,7 +50,7 @@ from compute_space.core.oauth import OAuthRequired
 from compute_space.core.oauth import get_oauth_token
 from compute_space.core.ports import allocate_port
 from compute_space.core.ports import resolve_port_mappings
-from compute_space.core.service_interface.services_v2 import register_v2_service_providers
+from compute_space.core.service_interface.registry import register_v2_service_providers
 from compute_space.db import get_db
 
 RESERVED_PATHS = {

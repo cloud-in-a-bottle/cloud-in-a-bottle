@@ -15,12 +15,15 @@ from litestar import post
 
 from compute_space.config import DefaultConfig
 from compute_space.core.app_id import ROUTER_APP_ID
+from compute_space.core.proxy_target import InProcess
+from compute_space.core.proxy_target import LocalPort
 from compute_space.core.service_interface import builtin_services
 from compute_space.core.service_interface.builtin_services import BuiltinService
 from compute_space.core.service_interface.builtin_services import builtin_for
+from compute_space.core.service_interface.provider import ProviderVersionError
+from compute_space.core.service_interface.resolve import resolve_provider
 from compute_space.core.service_interface.service_client import ServiceCallError
 from compute_space.core.service_interface.service_client import call_service
-from compute_space.core.service_interface.service_client import provider_is_builtin
 from compute_space.db import init_db
 from compute_space.tests.conftest import open_db
 
@@ -72,7 +75,7 @@ def db(tmp_path: Path) -> Any:
 def test_a_builtin_serves_when_no_app_has_claimed_the_service(registered: BuiltinService, db: Any) -> None:
     _, conn = db
     assert builtin_for(SERVICE_URL, conn) is registered
-    assert provider_is_builtin(SERVICE_URL, conn) is True
+    assert resolve_provider(SERVICE_URL, ">=0", conn).target == InProcess(registered.app)
 
 
 def test_a_builtin_yields_to_an_app_the_owner_made_default(registered: BuiltinService, db: Any) -> None:
@@ -82,6 +85,7 @@ def test_a_builtin_yields_to_an_app_the_owner_made_default(registered: BuiltinSe
     conn.execute("INSERT INTO service_defaults (service_url, app_id) VALUES (?, 'someapp')", (SERVICE_URL,))
     conn.commit()
     assert builtin_for(SERVICE_URL, conn) is None
+    assert resolve_provider(SERVICE_URL, ">=0", conn).target == LocalPort(19100)
 
 
 def test_an_explicit_provider_override_is_honoured(registered: BuiltinService, db: Any) -> None:
@@ -100,8 +104,8 @@ def test_an_unregistered_service_has_no_builtin(registered: BuiltinService, db: 
 
 @pytest.mark.asyncio
 async def test_a_builtin_is_served_without_a_socket(registered: BuiltinService, db: Any) -> None:
-    config, conn = db
-    body = await call_service(SERVICE_URL, "/echo", {"hello": "world"}, [], config, conn)
+    _, conn = db
+    body = await call_service(SERVICE_URL, "/echo", {"hello": "world"}, [], conn)
     assert body["body"] == {"hello": "world"}
 
 
@@ -109,8 +113,8 @@ async def test_a_builtin_is_served_without_a_socket(registered: BuiltinService, 
 async def test_the_router_asserts_its_own_identity(registered: BuiltinService, db: Any) -> None:
     # The router has no app token; it is the authority for these headers, so it injects the same
     # ones the proxy would have for a consumer app.
-    config, conn = db
-    body = await call_service(SERVICE_URL, "/echo", {}, [], config, conn)
+    _, conn = db
+    body = await call_service(SERVICE_URL, "/echo", {}, [], conn)
     assert body["headers"]["x-openhost-consumer-id"] == ROUTER_APP_ID
 
 
@@ -118,17 +122,17 @@ async def test_the_router_asserts_its_own_identity(registered: BuiltinService, d
 async def test_permissions_reach_the_provider_untouched(registered: BuiltinService, db: Any) -> None:
     # A grant payload is defined by the service that issues it, so nothing in between may reshape
     # one.
-    config, conn = db
+    _, conn = db
     grants = [{"grant": {"anything": "at all"}, "scope": "global"}]
-    body = await call_service(SERVICE_URL, "/echo", {}, grants, config, conn)
+    body = await call_service(SERVICE_URL, "/echo", {}, grants, conn)
     assert body["headers"]["x-openhost-permissions"] == '[{"grant": {"anything": "at all"}, "scope": "global"}]'
 
 
 @pytest.mark.asyncio
 async def test_an_error_status_raises_and_carries_the_body(registered: BuiltinService, db: Any) -> None:
-    config, conn = db
+    _, conn = db
     with pytest.raises(ServiceCallError, match="not today") as caught:
-        await call_service(SERVICE_URL, "/boom", {}, [], config, conn)
+        await call_service(SERVICE_URL, "/boom", {}, [], conn)
     assert caught.value.status == 400
     assert caught.value.body["error"] == "nope"
 
@@ -136,28 +140,35 @@ async def test_an_error_status_raises_and_carries_the_body(registered: BuiltinSe
 @pytest.mark.asyncio
 async def test_a_multi_status_is_not_a_failure(registered: BuiltinService, db: Any) -> None:
     # 207 means some of a fan-out applied; the caller inspects the per-item results.
-    config, conn = db
-    assert await call_service(SERVICE_URL, "/partial", {}, [], config, conn) == {"ok": False, "results": []}
+    _, conn = db
+    assert await call_service(SERVICE_URL, "/partial", {}, [], conn) == {"ok": False, "results": []}
 
 
 @pytest.mark.asyncio
 async def test_a_version_the_builtin_cannot_satisfy_is_refused(registered: BuiltinService, db: Any) -> None:
-    config, conn = db
+    _, conn = db
     with pytest.raises(ServiceCallError, match="does not match"):
-        await call_service(SERVICE_URL, "/echo", {}, [], config, conn, version=">=2.0.0")
+        await call_service(SERVICE_URL, "/echo", {}, [], conn, version=">=2.0.0")
+    with pytest.raises(ProviderVersionError):
+        resolve_provider(SERVICE_URL, ">=2.0.0", conn)
 
 
 @pytest.mark.asyncio
 async def test_no_provider_at_all_is_a_clear_error(db: Any) -> None:
     # No builtin registered and no app installed: say so, rather than failing at connect time.
-    config, conn = db
+    _, conn = db
     with pytest.raises(ServiceCallError, match="no usable provider"):
-        await call_service("github.com/example/missing", "/echo", {}, [], config, conn)
+        await call_service("github.com/example/missing", "/echo", {}, [], conn)
 
 
 def _install_app(conn: sqlite3.Connection, app_id: str) -> None:
+    """An app that is running and provides SERVICE_URL — an alternative to the builtin."""
     conn.execute(
         "INSERT INTO apps (app_id, name, version, repo_path, status, local_port) "
         "VALUES (?, ?, '0.1.0', '/tmp/a', 'running', 19100)",
         (app_id, app_id),
+    )
+    conn.execute(
+        "INSERT INTO service_providers_v2 (service_url, app_id, service_version, endpoint) VALUES (?, ?, ?, ?)",
+        (SERVICE_URL, app_id, "1.0.0", "/"),
     )
