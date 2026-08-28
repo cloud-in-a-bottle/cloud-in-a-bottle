@@ -104,49 +104,49 @@ def _raise_for_unexpected(response: httpx.Response, expected: set[int]) -> None:
 
 @attr.s(auto_attribs=True, frozen=True)
 class CertApiClient:
-    """Thin synchronous client over the broker's REST API.
+    """Thin asynchronous client over the broker's REST API.
 
     Construct via ``CertApiClient.create(base_url, token_provider)`` in production;
-    tests inject an ``httpx.Client`` backed by a MockTransport plus a StaticTokenProvider.
+    tests inject an ``httpx.AsyncClient`` backed by a MockTransport plus a StaticTokenProvider.
     """
 
-    http_client: httpx.Client
+    http_client: httpx.AsyncClient
     token_provider: TokenProvider
 
     @classmethod
     def create(cls, base_url: str, token_provider: TokenProvider, timeout: float = 30.0) -> CertApiClient:
-        http_client = httpx.Client(
+        http_client = httpx.AsyncClient(
             base_url=base_url.rstrip("/"),
             timeout=timeout,
         )
         return cls(http_client=http_client, token_provider=token_provider)
 
-    def __enter__(self) -> CertApiClient:
+    async def __aenter__(self) -> CertApiClient:
         return self
 
-    def __exit__(
+    async def __aexit__(
         self,
         exc_type: type[BaseException] | None,
         exc: BaseException | None,
         tb: TracebackType | None,
     ) -> None:
-        self.http_client.close()
+        await self.http_client.aclose()
 
-    def _auth_headers(self) -> dict[str, str]:
+    async def _auth_headers(self) -> dict[str, str]:
         """Bearer header built fresh per request so the token can refresh mid-flow."""
-        return {"Authorization": f"Bearer {self.token_provider.get_token()}"}
+        return {"Authorization": f"Bearer {await self.token_provider.get_token()}"}
 
-    def health(self) -> bool:
+    async def health(self) -> bool:
         """Return True if the broker reports healthy.  Does not require auth."""
-        response = self.http_client.get("/health")
+        response = await self.http_client.get("/health")
         if response.status_code != 200:
             return False
         body = response.json()
         return isinstance(body, dict) and body.get("status") == "ok"
 
-    def create_order(self, csr_pem: str) -> CreateOrderResult:
+    async def create_order(self, csr_pem: str) -> CreateOrderResult:
         """Submit a CSR and receive the DNS-01 challenge record(s) to publish."""
-        response = self.http_client.post("/v1/orders", json={"csr": csr_pem}, headers=self._auth_headers())
+        response = await self.http_client.post("/v1/orders", json={"csr": csr_pem}, headers=await self._auth_headers())
         _raise_for_unexpected(response, {200})
         body = response.json()
         challenges = [
@@ -159,13 +159,13 @@ class CertApiClient:
         ]
         return CreateOrderResult(order_id=body["order_id"], challenges=challenges)
 
-    def finalize_order(self, order_id: str) -> FinalizeResult:
+    async def finalize_order(self, order_id: str) -> FinalizeResult:
         """Poll the order.
 
         200 -> issued (certificate present); 202 -> still pending; 409 -> the order
         failed terminally (raises CertApiOrderFailed with the ACME error detail).
         """
-        response = self.http_client.post(f"/v1/orders/{order_id}/finalize", headers=self._auth_headers())
+        response = await self.http_client.post(f"/v1/orders/{order_id}/finalize", headers=await self._auth_headers())
         _raise_for_unexpected(response, {200, 202})
         if response.status_code == 202:
             return FinalizeResult(status=FINALIZE_STATUS_PENDING, certificate=None)

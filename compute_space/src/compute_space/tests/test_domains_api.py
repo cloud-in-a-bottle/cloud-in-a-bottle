@@ -1,7 +1,7 @@
 """Phase 3b: the /api/domains endpoint — owner-authed add/list/remove of domains on a live
 instance, with the TLS-domain acquisition state machine (acquiring → active|error).  ACME is
-stubbed and acquisition is run synchronously so the state machine is deterministic; no Caddy
-runs (reload is a no-op in tests)."""
+stubbed, and TestClient drains the response's background tasks before returning, so acquisition
+has settled by the time POST comes back; no Caddy runs (reload is a no-op in tests)."""
 
 from __future__ import annotations
 
@@ -103,10 +103,8 @@ def client(cfg: Any) -> Iterator[TestClient[Litestar]]:
         yield c
 
 
-@pytest.fixture
-def sync_acquisition(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Run cert acquisition synchronously so POST returns after the state machine settled."""
-    monkeypatch.setattr(domains, "_spawn_acquisition", domains._run_acquisition)
+async def _acquired(config: Any, domain: Any, db: Any) -> None:
+    """ensure_cert_for is async now; a stub has to be too."""
 
 
 # --- auth ---------------------------------------------------------------------------
@@ -169,22 +167,22 @@ def test_add_local_domain_is_active_and_routable(cfg: Any, client: TestClient[Li
 
 
 def test_add_tls_domain_acquires_and_becomes_active(
-    cfg: Any, client: TestClient[Litestar], sync_acquisition: None, monkeypatch: pytest.MonkeyPatch
+    cfg: Any, client: TestClient[Litestar], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(domains, "ensure_cert_for", lambda config, domain, db: None)  # "acquired"
+    monkeypatch.setattr(domains, "ensure_cert_for", _acquired)  # "acquired"
     client.cookies.update(_auth_cookie(cfg.db_path))
     resp = client.post("/api/domains", json={"name": "host.example.org", "tls": True})
     assert resp.status_code == 202
-    # acquisition ran synchronously → status settled to active
+    # the background task ran before POST returned → status settled to active
     info = next(d for d in client.get("/api/domains").json()["domains"] if d["name"] == "host.example.org")
     assert info["cert_status"] == DomainCertStatus.ACTIVE
     assert info["scheme"] == "https"
 
 
 def test_add_tls_domain_records_acquisition_error(
-    cfg: Any, client: TestClient[Litestar], sync_acquisition: None, monkeypatch: pytest.MonkeyPatch
+    cfg: Any, client: TestClient[Litestar], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    def boom(config: Any, domain: Any, db: Any) -> None:
+    async def boom(config: Any, domain: Any, db: Any) -> None:
         raise RuntimeError("DNS not delegated")
 
     monkeypatch.setattr(domains, "ensure_cert_for", boom)
