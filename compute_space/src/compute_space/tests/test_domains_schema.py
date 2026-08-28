@@ -63,7 +63,8 @@ def test_v12_db_upgrades_to_domains_and_settings(tmp_path: Path) -> None:
     db.execute("DROP TABLE domains")
     db.execute("DROP TABLE settings")
     # schema.sql is the *current* baseline; restore the columns later migrations have since
-    # dropped, so this really looks like a v12 DB rather than a v12-stamped modern one.
+    # dropped, so this really looks like a v12 DB rather than a v12-stamped modern one.  The same
+    # reconstruction lives in the system agent's seed_pre_consolidation_db.
     db.execute("ALTER TABLE apps ADD COLUMN installed_by TEXT")
     db.execute("INSERT OR REPLACE INTO schema_version (id, version) VALUES (1, 12)")
     db.close()
