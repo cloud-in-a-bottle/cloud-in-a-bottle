@@ -7,6 +7,7 @@ from compute_space.core.auth.permissions_v2 import grant_permission_v2
 from compute_space.core.auth.permissions_v2 import revoke_permission_v2
 from compute_space.core.proxy_target import LocalPort
 from compute_space.core.service_interface.resolve import resolve_provider
+from compute_space.core.service_interface.services import default_provider_id_for_service
 from compute_space.core.service_interface.services import lookup_service_by_manifest_shortname
 
 SVC_SECRETS = "github.com/org/repo/services/secrets"
@@ -51,6 +52,38 @@ class TestVersionResolution:
     def test_exact_version(self, db):
         _add_provider(db, SVC_SECRETS, "secrets", "1.0.0", "/_svc/")
         assert resolve_provider(SVC_SECRETS, "==1.0.0", db).service_version == "1.0.0"
+
+    def test_highest_version_serves_when_no_default_is_set(self, db):
+        # The default row goes away with the app it named (ON DELETE CASCADE), and the owner can
+        # clear it outright — neither should leave the service dead while a provider exists.
+        _add_provider(db, SVC_SECRETS, "secrets-a", "0.1.0", "/_a/", port=9001, default=False)
+        b_id = _add_provider(db, SVC_SECRETS, "secrets-b", "0.2.0", "/_b/", port=9002, default=False)
+        assert default_provider_id_for_service(SVC_SECRETS, db) == b_id
+        assert resolve_provider(SVC_SECRETS, ">=0.1.0", db).app_id == b_id
+
+    def test_a_default_naming_a_non_provider_is_reported_not_silently_replaced(self, db):
+        # An app that drops a service on update loses its service_providers_v2 row, but the
+        # default row survives (its foreign key is on apps).  Say so rather than quietly routing
+        # to whoever else happens to provide the service.
+        b_id = _add_provider(db, SVC_SECRETS, "secrets-b", "0.2.0", "/_b/", port=9002, default=False)
+        gone_id = new_app_id()
+        db.execute(
+            """INSERT INTO apps (app_id, name, version, repo_path, local_port, status)
+               VALUES (?, 'lapsed', '0.0.0', '/tmp/lapsed', 9003, 'running')""",
+            (gone_id,),
+        )
+        db.execute("INSERT INTO service_defaults (service_url, app_id) VALUES (?, ?)", (SVC_SECRETS, gone_id))
+        db.commit()
+
+        assert default_provider_id_for_service(SVC_SECRETS, db) == gone_id
+        assert default_provider_id_for_service(SVC_SECRETS, db) != b_id
+        with pytest.raises(RuntimeError, match="not found"):
+            resolve_provider(SVC_SECRETS, ">=0.1.0", db)
+
+    def test_an_explicit_default_beats_a_higher_version(self, db):
+        a_id = _add_provider(db, SVC_SECRETS, "secrets-a", "0.1.0", "/_a/", port=9001)
+        _add_provider(db, SVC_SECRETS, "secrets-b", "0.2.0", "/_b/", port=9002, default=False)
+        assert default_provider_id_for_service(SVC_SECRETS, db) == a_id
 
     def test_no_provider_raises(self, db):
         with pytest.raises(RuntimeError, match="No provider"):

@@ -9,13 +9,9 @@ from litestar.di import NamedDependency
 from litestar.exceptions import NotFoundException
 from litestar.params import FromQuery
 
-from compute_space.core.app_id import ROUTER_APP_ID
-from compute_space.core.service_interface.services import ServiceDefault
-from compute_space.core.service_interface.services import ServiceProvider
-from compute_space.core.service_interface.services import all_defaults
+from compute_space.core.service_interface.provider import ServiceProvider
 from compute_space.core.service_interface.services import clear_default
 from compute_space.core.service_interface.services import list_all_service_providers
-from compute_space.core.service_interface.services import providers_for
 from compute_space.core.service_interface.services import set_default
 from compute_space.web.auth.auth import require_owner_auth
 from compute_space.web.auth.auth import require_owner_or_app_auth
@@ -47,25 +43,12 @@ async def list_services_v2(db: NamedDependency[sqlite3.Connection]) -> list[Serv
 async def discover_providers(
     db: NamedDependency[sqlite3.Connection], service: FromQuery[str]
 ) -> list[ServiceProvider]:
-    return providers_for(service, db)
-
-
-@get("/api/services/v2/defaults", guards=[require_owner_auth])
-async def list_defaults(db: NamedDependency[sqlite3.Connection]) -> list[ServiceDefault]:
-    """List all default provider settings."""
-    return all_defaults(db)
+    return list_all_service_providers(db, service)
 
 
 @post("/api/services/v2/defaults", status_code=200, guards=[require_owner_auth], raises=[NotFoundException])
 async def set_default_route(data: SetDefaultRequest, db: NamedDependency[sqlite3.Connection]) -> OkResponse:
-    """Set the default provider for a service.
-
-    Choosing the router means clearing the default rather than storing a row: ``service_defaults``
-    has a foreign key into ``apps``, and the builtin serves whenever no app is picked.
-    """
-    if data.app_id == ROUTER_APP_ID:
-        clear_default(data.service_url, db)
-        return OkResponse(ok=True)
+    """Set the default provider for a service."""
     try:
         set_default(data.service_url, data.app_id, db)
     except LookupError as e:
@@ -82,5 +65,5 @@ async def remove_default(data: RemoveDefaultRequest, db: NamedDependency[sqlite3
 
 api_services_v2_routes = Router(
     path="/",
-    route_handlers=[list_services_v2, discover_providers, list_defaults, set_default_route, remove_default],
+    route_handlers=[list_services_v2, discover_providers, set_default_route, remove_default],
 )
