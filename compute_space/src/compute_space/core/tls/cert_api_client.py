@@ -104,7 +104,7 @@ def _raise_for_unexpected(response: httpx.Response, expected: set[int]) -> None:
 
 @attr.s(auto_attribs=True, frozen=True)
 class CertApiClient:
-    """Thin synchronous client over the broker's REST API.
+    """Thin asynchronous client over the broker's REST API.
 
     Construct via ``CertApiClient.create(base_url, token_provider)`` in production;
     tests inject an ``httpx.AsyncClient`` backed by a MockTransport plus a StaticTokenProvider.

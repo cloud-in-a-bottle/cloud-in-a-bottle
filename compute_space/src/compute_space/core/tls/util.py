@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import datetime
 import json
 import time
@@ -16,6 +17,8 @@ from josepy import JWKRSA  # type: ignore[attr-defined]
 
 import compute_space.core.dns as dns_module
 from compute_space.core.logging import logger
+
+_DIG_TIMEOUT_SECONDS = 10.0
 
 
 def load_account_key(path: Path) -> JWKRSA:
@@ -87,7 +90,16 @@ async def _dig_txt(qname: str, resolver: str) -> set[str]:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.DEVNULL,
         )
-        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=10)
+        try:
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=_DIG_TIMEOUT_SECONDS)
+        except BaseException:
+            if proc.returncode is None:
+                with contextlib.suppress(ProcessLookupError):
+                    proc.kill()
+            # Keep reaping in the background if another cancellation arrives.
+            with contextlib.suppress(Exception):
+                await asyncio.shield(proc.wait())
+            raise
     except (TimeoutError, FileNotFoundError, OSError):
         return set()
     # dig +short TXT output looks like: "token-value-here"
@@ -172,49 +184,60 @@ async def _acquire_cert_dns01(
                         break
 
             logger.info(f"DNS-01: {len(pending_challenges)} pending challenges to answer")
-            if pending_challenges:
-                # Write all TXT records to the zone file at once
-                logger.info(f"Setting {len(validation_values)} DNS-01 challenge TXT record(s)")
-                dns_module.append_txt_records(
-                    coredns_zonefile_path,
-                    [dns_module.TxtRecord(record_name="_acme-challenge", record_value=v) for v in validation_values],
-                )
-
-                # Wait for CoreDNS to pick up the zone file change (reload interval = 2s)
-                await asyncio.sleep(3)
-
-                # Wait until an external resolver can see our TXT records before
-                # telling the ACME server to validate.  Without this, the ACME
-                # server's resolvers may get NXDOMAIN if the NS delegation from
-                # the parent zone hasn't propagated yet.
-                zone_domain = domains[0].lstrip("*.")
-                await _wait_for_txt_propagation(zone_domain, validation_values)
-
-                # Now answer all challenges
-                for challenge_body in pending_challenges:
-                    await asyncio.to_thread(
-                        acme_client.answer_challenge, challenge_body, challenge_body.response(account_key)
+            txt_records_written = False
+            acquisition_succeeded = False
+            try:
+                if pending_challenges:
+                    # Write all TXT records to the zone file at once
+                    logger.info(f"Setting {len(validation_values)} DNS-01 challenge TXT record(s)")
+                    dns_module.append_txt_records(
+                        coredns_zonefile_path,
+                        [
+                            dns_module.TxtRecord(record_name="_acme-challenge", record_value=v)
+                            for v in validation_values
+                        ],
                     )
+                    txt_records_written = True
 
-            deadline = datetime.datetime.now() + datetime.timedelta(seconds=120)
-            while datetime.datetime.now() < deadline:
-                order = await asyncio.to_thread(acme_client.poll_and_finalize, order, deadline)
-                if order.fullchain_pem:
-                    break
-                await asyncio.sleep(2)
+                    # Wait for CoreDNS to pick up the zone file change (reload interval = 2s)
+                    await asyncio.sleep(3)
 
-            # Clean up DNS record
-            dns_module.clear_txt(coredns_zonefile_path)
+                    # Wait until an external resolver can see our TXT records before
+                    # telling the ACME server to validate.  Without this, the ACME
+                    # server's resolvers may get NXDOMAIN if the NS delegation from
+                    # the parent zone hasn't propagated yet.
+                    zone_domain = domains[0].lstrip("*.")
+                    await _wait_for_txt_propagation(zone_domain, validation_values)
 
-            if not order.fullchain_pem:
-                raise RuntimeError(f"Failed to get cert for {domains}: order not finalized")
+                    # Now answer all challenges
+                    for challenge_body in pending_challenges:
+                        await asyncio.to_thread(
+                            acme_client.answer_challenge, challenge_body, challenge_body.response(account_key)
+                        )
 
-            return _extract_cert_and_key(order, tls_key)
+                deadline = datetime.datetime.now() + datetime.timedelta(seconds=120)
+                while datetime.datetime.now() < deadline:
+                    order = await asyncio.to_thread(acme_client.poll_and_finalize, order, deadline)
+                    if order.fullchain_pem:
+                        break
+                    await asyncio.sleep(2)
+
+                if not order.fullchain_pem:
+                    raise RuntimeError(f"Failed to get cert for {domains}: order not finalized")
+
+                result = _extract_cert_and_key(order, tls_key)
+                acquisition_succeeded = True
+                return result
+            finally:
+                if txt_records_written:
+                    try:
+                        dns_module.clear_txt(coredns_zonefile_path)
+                    except Exception:
+                        if acquisition_succeeded:
+                            raise
+                        logger.exception("Failed to clear DNS challenge records while handling acquisition failure")
 
         except (errors.ValidationError, RuntimeError) as exc:
-            # Clean up DNS records before retrying
-            dns_module.clear_txt(coredns_zonefile_path)
-
             if attempt < max_attempts:
                 wait = 30 * attempt
                 logger.warning(
