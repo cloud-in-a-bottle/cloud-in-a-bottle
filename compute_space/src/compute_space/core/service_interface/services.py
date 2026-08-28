@@ -1,23 +1,13 @@
 import sqlite3
 
-import attr
+from packaging.version import Version
 
+from compute_space.core.app_id import ROUTER_APP_ID
 from compute_space.core.manifest import AppManifest
 from compute_space.core.manifest import parse_manifest_from_string
 from compute_space.core.service_interface import builtin_services
+from compute_space.core.service_interface.provider import ServiceProvider
 from compute_space.db.connection import make_atomic_with_savepoint
-
-
-@attr.s(auto_attribs=True, frozen=True)
-class ServiceProvider:
-    service_url: str
-    app_id: str
-    app_name: str
-    service_version: str
-    # a subpath of the app's root, e.g. "/v1" or "/api/v2", where the service root lives.
-    endpoint: str
-    status: str
-    is_default: bool
 
 
 def lookup_service_by_manifest_shortname(
@@ -54,15 +44,22 @@ def register_services_provided_by_app(app_id: str, manifest: AppManifest, db: sq
                 )
 
 
-def list_all_service_providers(db: sqlite3.Connection) -> list[ServiceProvider]:
-    """Every provider of every service, builtins included."""
-    rows = db.execute(
+def list_all_service_providers(db: sqlite3.Connection, service_url: str | None = None) -> list[ServiceProvider]:
+    """Every provider of every service, builtins included — or of one service, if named."""
+    all_rows = db.execute(
         """SELECT sp.service_url, sp.app_id, a.name AS app_name, sp.service_version, sp.endpoint, a.status
            FROM service_providers_v2 sp
            JOIN apps a ON a.app_id = sp.app_id"""
     ).fetchall()
-    defaults = {d.service_url: d.app_id for d in all_defaults(db)}
-    providers = [
+    rows = [r for r in all_rows if service_url in (None, r["service_url"])]
+    builtins = [b for b in builtin_services.BUILTIN_SERVICES if service_url in (None, b.service_url)]
+
+    service_urls = {r["service_url"] for r in rows} | {b.service_url for b in builtins}
+    defaults = {url: default_provider_id_for_service(url, db) for url in service_urls}
+    return [
+        builtin_services.builtin_as_provider(b, is_default=defaults.get(b.service_url) == ROUTER_APP_ID)
+        for b in builtins
+    ] + [
         ServiceProvider(
             service_url=r["service_url"],
             app_id=r["app_id"],
@@ -74,42 +71,53 @@ def list_all_service_providers(db: sqlite3.Connection) -> list[ServiceProvider]:
         )
         for r in rows
     ]
-    builtins = [
-        builtin_services.builtin_as_provider(b, is_default=b.service_url not in defaults)
-        for b in builtin_services.BUILTIN_SERVICES
-    ]
-    return builtins + providers
 
 
-def providers_for(service_url: str, db: sqlite3.Connection) -> list[ServiceProvider]:
-    return [p for p in list_all_service_providers(db) if p.service_url == service_url]
+def default_provider_id_for_service(service_url: str, db: sqlite3.Connection) -> str | None:
+    """Which provider serves this service by default?
 
+    In priority order:
+    1. the app the owner picked;
+    2. the router's builtin, which holds the service until an app is picked and takes it back when
+       the owner clears that;
+    3. the highest version otherwise registered — a service keeps working when its default app is
+       uninstalled (the default row cascades away with it) or was never chosen.
 
-def default_provider_id(service_url: str, db: sqlite3.Connection) -> str | None:
-    """The app the owner has pointed this service at, or None — which means the router's builtin
-    serves it if there is one, and nothing does otherwise."""
+    Returns None only if nothing provides the service at all.
+    ROUTER_APP_ID is never stored in service_defaults — the column is a foreign key into apps.
+    """
     row = db.execute("SELECT app_id FROM service_defaults WHERE service_url = ?", (service_url,)).fetchone()
-    return str(row["app_id"]) if row else None
+    if row:
+        return str(row["app_id"])
+    if builtin_services.builtin_by_url(service_url) is not None:
+        return ROUTER_APP_ID
+    return _highest_version_provider_id(service_url, db)
 
 
-@attr.s(auto_attribs=True, frozen=True)
-class ServiceDefault:
-    service_url: str
-    app_id: str
-    app_name: str
-
-
-def all_defaults(db: sqlite3.Connection) -> list[ServiceDefault]:
+def _highest_version_provider_id(service_url: str, db: sqlite3.Connection) -> str | None:
     rows = db.execute(
-        """SELECT sd.service_url, sd.app_id, a.name AS app_name
-           FROM service_defaults sd
-           JOIN apps a ON a.app_id = sd.app_id"""
+        "SELECT app_id, service_version FROM service_providers_v2 WHERE service_url = ?", (service_url,)
     ).fetchall()
-    return [ServiceDefault(service_url=r["service_url"], app_id=r["app_id"], app_name=r["app_name"]) for r in rows]
+    if not rows:
+        return None
+    # Versions are validated when the manifest is parsed, so they are all comparable here.
+    return str(max(rows, key=lambda r: Version(r["service_version"]))["app_id"])
 
 
 def set_default(service_url: str, app_id: str, db: sqlite3.Connection) -> None:
-    """Point a service at a provider app.  Raises LookupError if that app doesn't provide it."""
+    """Point a service at a provider.  Raises LookupError if it doesn't provide that service.
+
+    Picking the router is stored as the *absence* of a row rather than one naming it:
+    ``service_defaults.app_id`` is a foreign key into ``apps`` and the router has none.
+    ``default_provider_id_for_service`` reads it back the same way, so callers can pass
+    ``ROUTER_APP_ID`` here like any other provider id and never see the difference.
+    """
+    if app_id == ROUTER_APP_ID:
+        if builtin_services.builtin_by_url(service_url) is None:
+            raise LookupError(f"The router does not provide '{service_url}'")
+        clear_default(service_url, db)
+        return
+
     row = db.execute(
         "SELECT 1 FROM service_providers_v2 WHERE service_url = ? AND app_id = ?", (service_url, app_id)
     ).fetchone()
