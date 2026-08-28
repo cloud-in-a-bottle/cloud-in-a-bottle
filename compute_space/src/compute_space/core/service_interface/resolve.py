@@ -45,8 +45,8 @@ def resolve_provider(
         return ResolvedProvider(
             service_url=service_url,
             app_id=ROUTER_APP_ID,
-            name=ROUTER_APP_NAME,
-            version=builtin.version,
+            app_name=ROUTER_APP_NAME,
+            service_version=builtin.version,
             endpoint="/",
             target=InProcess(builtin.app),
         )
@@ -68,8 +68,8 @@ def resolve_provider(
     return ResolvedProvider(
         service_url=service_url,
         app_id=target_app_id,
-        name=row["name"],
-        version=row["service_version"],
+        app_name=row["name"],
+        service_version=row["service_version"],
         endpoint=row["endpoint"],
         target=LocalPort(row["local_port"]),
     )

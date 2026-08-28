@@ -2,8 +2,12 @@ import sqlite3
 
 import attr
 
+from compute_space.core.app_id import ROUTER_APP_ID
+from compute_space.core.app_id import ROUTER_APP_NAME
 from compute_space.core.manifest import AppManifest
 from compute_space.core.manifest import parse_manifest_from_string
+from compute_space.core.service_interface import builtin_services
+from compute_space.core.service_interface.builtin_services import BuiltinService
 from compute_space.db.connection import make_atomic_with_savepoint
 
 
@@ -47,8 +51,13 @@ def register_v2_service_providers(
 
 
 @attr.s(auto_attribs=True, frozen=True)
-class RegisteredProvider:
-    """A row of ``service_providers_v2``, joined to the app that owns it."""
+class ServiceProvider:
+    """Something that can provide a service in this space: an installed app, or the router itself.
+
+    A catalogue entry, not a routing decision — it lists providers that are stopped or on an
+    incompatible version too, which is exactly what an owner choosing between them needs to see.
+    ``resolve_provider`` is the one that picks.
+    """
 
     service_url: str
     app_id: str
@@ -56,29 +65,52 @@ class RegisteredProvider:
     service_version: str
     endpoint: str
     status: str
+    is_default: bool
 
 
-def all_providers(db: sqlite3.Connection) -> list[RegisteredProvider]:
+def all_providers(db: sqlite3.Connection) -> list[ServiceProvider]:
+    """Every provider of every service, builtins included."""
     rows = db.execute(
         """SELECT sp.service_url, sp.app_id, a.name AS app_name, sp.service_version, sp.endpoint, a.status
            FROM service_providers_v2 sp
            JOIN apps a ON a.app_id = sp.app_id"""
     ).fetchall()
-    return [
-        RegisteredProvider(
+    defaults = {d.service_url: d.app_id for d in all_defaults(db)}
+    providers = [
+        ServiceProvider(
             service_url=r["service_url"],
             app_id=r["app_id"],
             app_name=r["app_name"],
             service_version=r["service_version"],
             endpoint=r["endpoint"],
             status=r["status"],
+            is_default=defaults.get(r["service_url"]) == r["app_id"],
         )
         for r in rows
     ]
+    # Read the registry through the module, not a from-import: the binding is resolved per call,
+    # so a builtin registered (or, in tests, swapped) after import is still seen.
+    builtins = [
+        _builtin_as_provider(b, is_default=b.service_url not in defaults) for b in builtin_services.BUILTIN_SERVICES
+    ]
+    return builtins + providers
 
 
-def providers_for(service_url: str, db: sqlite3.Connection) -> list[RegisteredProvider]:
+def providers_for(service_url: str, db: sqlite3.Connection) -> list[ServiceProvider]:
     return [p for p in all_providers(db) if p.service_url == service_url]
+
+
+def _builtin_as_provider(builtin: BuiltinService, is_default: bool) -> ServiceProvider:
+    """A builtin as the owner sees it.  Always running — it is us — and served from the root."""
+    return ServiceProvider(
+        service_url=builtin.service_url,
+        app_id=ROUTER_APP_ID,
+        app_name=ROUTER_APP_NAME,
+        service_version=builtin.version,
+        endpoint="/",
+        status="running",
+        is_default=is_default,
+    )
 
 
 def default_provider_id(service_url: str, db: sqlite3.Connection) -> str | None:
