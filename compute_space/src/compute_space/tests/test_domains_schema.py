@@ -19,7 +19,7 @@ from compute_space.db.versioned.runner import read_version
 from openhost_system_agent.migrations.versions.v0007_seed_domains_and_scrub import _SCHEMA as _AGENT_SCHEMA
 
 # Derived, not pinned: a fresh DB lands on the newest migration, whatever that currently is.
-_HEAD_VERSION = max(m.version for m in REGISTRY)
+_LATEST_VERSION = max(m.version for m in REGISTRY)
 
 
 def _tables(db: sqlite3.Connection) -> set[str]:
@@ -51,7 +51,7 @@ def test_fresh_init_creates_domains_and_settings(tmp_path: Path) -> None:
     db = sqlite3.connect(db_path)
     try:
         assert {"domains", "settings"} <= _tables(db)
-        assert read_version(db) == _HEAD_VERSION
+        assert read_version(db) == _LATEST_VERSION
     finally:
         db.close()
 
@@ -63,6 +63,10 @@ def test_v12_db_upgrades_to_domains_and_settings(tmp_path: Path) -> None:
     db.executescript(Path(schema_path()).read_text())
     db.execute("DROP TABLE domains")
     db.execute("DROP TABLE settings")
+    # schema.sql is the *current* baseline; restore the columns later migrations have since
+    # dropped, so this really looks like a v12 DB rather than a v12-stamped modern one.  The same
+    # reconstruction lives in the system agent's seed_pre_consolidation_db.
+    db.execute("ALTER TABLE apps ADD COLUMN installed_by TEXT")
     db.execute("INSERT OR REPLACE INTO schema_version (id, version) VALUES (1, 12)")
     db.close()
 
@@ -71,7 +75,7 @@ def test_v12_db_upgrades_to_domains_and_settings(tmp_path: Path) -> None:
     db = sqlite3.connect(db_path)
     try:
         assert {"domains", "settings"} <= _tables(db)
-        assert read_version(db) == _HEAD_VERSION
+        assert read_version(db) == _LATEST_VERSION
     finally:
         db.close()
 

@@ -5,8 +5,10 @@ from compute_space.core.auth.permissions_v2 import get_all_permissions_v2
 from compute_space.core.auth.permissions_v2 import get_granted_permissions_v2
 from compute_space.core.auth.permissions_v2 import grant_permission_v2
 from compute_space.core.auth.permissions_v2 import revoke_permission_v2
-from compute_space.core.service_interface.services_v2 import lookup_shortname
-from compute_space.core.service_interface.services_v2 import resolve_provider
+from compute_space.core.proxy_target import LocalPort
+from compute_space.core.service_interface.resolve import resolve_provider
+from compute_space.core.service_interface.services import default_provider_id_for_service
+from compute_space.core.service_interface.services import lookup_service_by_manifest_shortname
 
 SVC_SECRETS = "github.com/org/repo/services/secrets"
 SVC_OAUTH = "github.com/org/repo/services/oauth"
@@ -41,15 +43,47 @@ def _add_provider(db, service_url, app_name, version, endpoint, port=9000, statu
 class TestVersionResolution:
     def test_compatible_version_resolves(self, db):
         provider_id = _add_provider(db, SVC_SECRETS, "secrets", "0.2.0", "/_svc/")
-        app_id, port, ver, ep = resolve_provider(SVC_SECRETS, ">=0.1.0", db)
-        assert app_id == provider_id
-        assert ver == "0.2.0"
-        assert ep == "/_svc/"
+        provider = resolve_provider(SVC_SECRETS, ">=0.1.0", db)
+        assert provider.app_id == provider_id
+        assert provider.service_version == "0.2.0"
+        assert provider.endpoint == "/_svc/"
+        assert provider.target == LocalPort(9000)
 
     def test_exact_version(self, db):
         _add_provider(db, SVC_SECRETS, "secrets", "1.0.0", "/_svc/")
-        _, _, ver, _ = resolve_provider(SVC_SECRETS, "==1.0.0", db)
-        assert ver == "1.0.0"
+        assert resolve_provider(SVC_SECRETS, "==1.0.0", db).service_version == "1.0.0"
+
+    def test_highest_version_serves_when_no_default_is_set(self, db):
+        # The default row goes away with the app it named (ON DELETE CASCADE), and the owner can
+        # clear it outright — neither should leave the service dead while a provider exists.
+        _add_provider(db, SVC_SECRETS, "secrets-a", "0.1.0", "/_a/", port=9001, default=False)
+        b_id = _add_provider(db, SVC_SECRETS, "secrets-b", "0.2.0", "/_b/", port=9002, default=False)
+        assert default_provider_id_for_service(SVC_SECRETS, db) == b_id
+        assert resolve_provider(SVC_SECRETS, ">=0.1.0", db).app_id == b_id
+
+    def test_a_default_naming_a_non_provider_is_reported_not_silently_replaced(self, db):
+        # An app that drops a service on update loses its service_providers_v2 row, but the
+        # default row survives (its foreign key is on apps).  Say so rather than quietly routing
+        # to whoever else happens to provide the service.
+        b_id = _add_provider(db, SVC_SECRETS, "secrets-b", "0.2.0", "/_b/", port=9002, default=False)
+        gone_id = new_app_id()
+        db.execute(
+            """INSERT INTO apps (app_id, name, version, repo_path, local_port, status)
+               VALUES (?, 'lapsed', '0.0.0', '/tmp/lapsed', 9003, 'running')""",
+            (gone_id,),
+        )
+        db.execute("INSERT INTO service_defaults (service_url, app_id) VALUES (?, ?)", (SVC_SECRETS, gone_id))
+        db.commit()
+
+        assert default_provider_id_for_service(SVC_SECRETS, db) == gone_id
+        assert default_provider_id_for_service(SVC_SECRETS, db) != b_id
+        with pytest.raises(RuntimeError, match="not found"):
+            resolve_provider(SVC_SECRETS, ">=0.1.0", db)
+
+    def test_an_explicit_default_beats_a_higher_version(self, db):
+        a_id = _add_provider(db, SVC_SECRETS, "secrets-a", "0.1.0", "/_a/", port=9001)
+        _add_provider(db, SVC_SECRETS, "secrets-b", "0.2.0", "/_b/", port=9002, default=False)
+        assert default_provider_id_for_service(SVC_SECRETS, db) == a_id
 
     def test_no_provider_raises(self, db):
         with pytest.raises(RuntimeError, match="No provider"):
@@ -69,9 +103,9 @@ class TestVersionResolution:
         _add_provider(db, SVC_SECRETS, "secrets-a", "0.1.0", "/_a/", port=9001)
         b_id = _add_provider(db, SVC_SECRETS, "secrets-b", "0.2.0", "/_b/", port=9002, default=False)
 
-        app_id, _, ver, ep = resolve_provider(SVC_SECRETS, ">=0.1.0", db, provider_app_id=b_id)
-        assert app_id == b_id
-        assert ep == "/_b/"
+        provider = resolve_provider(SVC_SECRETS, ">=0.1.0", db, provider_app_id=b_id)
+        assert provider.app_id == b_id
+        assert provider.endpoint == "/_b/"
 
     def test_explicit_provider_app_not_found(self, db):
         _add_provider(db, SVC_SECRETS, "secrets", "0.1.0", "/_svc/")
@@ -87,8 +121,7 @@ class TestVersionResolution:
         a_id = _add_provider(db, SVC_SECRETS, "secrets-a", "0.1.0", "/_a/", port=9001)
         _add_provider(db, SVC_SECRETS, "secrets-b", "0.2.0", "/_b/", port=9002, default=False)
 
-        app_id, _, _, _ = resolve_provider(SVC_SECRETS, ">=0.1.0", db)
-        assert app_id == a_id
+        assert resolve_provider(SVC_SECRETS, ">=0.1.0", db).app_id == a_id
 
 
 # ---------------------------------------------------------------------------
@@ -257,7 +290,7 @@ class TestShortnameLookup:
             "consumer",
             f'\n[[services.v2.consumes]]\nservice = "{SVC_OAUTH}"\nshortname = "oauth"\nversion = ">=0.1.0"\ngrants = []\n',
         )
-        service_url, version = lookup_shortname(consumer_id, "oauth", db)
+        service_url, version = lookup_service_by_manifest_shortname(consumer_id, "oauth", db)
         assert service_url == SVC_OAUTH
         assert version == ">=0.1.0"
 
@@ -268,7 +301,7 @@ class TestShortnameLookup:
             f'\n[[services.v2.consumes]]\nservice = "{SVC_OAUTH}"\nshortname = "oauth"\nversion = ">=0.1.0"\ngrants = []\n',
         )
         with pytest.raises(LookupError, match="not declared"):
-            lookup_shortname(consumer_id, "missing", db)
+            lookup_service_by_manifest_shortname(consumer_id, "missing", db)
 
     def test_no_manifest_raises(self, db):
         # Consumer row without manifest_raw at all.
@@ -280,11 +313,11 @@ class TestShortnameLookup:
         )
         db.commit()
         with pytest.raises(LookupError, match="No manifest"):
-            lookup_shortname(bare_id, "anything", db)
+            lookup_service_by_manifest_shortname(bare_id, "anything", db)
 
     def test_unknown_consumer_raises(self, db):
         with pytest.raises(LookupError, match="No manifest"):
-            lookup_shortname(new_app_id(), "oauth", db)
+            lookup_service_by_manifest_shortname(new_app_id(), "oauth", db)
 
     def test_picks_correct_entry_among_many(self, db):
         perms = (
@@ -292,8 +325,8 @@ class TestShortnameLookup:
             f'\n[[services.v2.consumes]]\nservice = "{SVC_OAUTH}"\nshortname = "oauth"\nversion = "==1.0.0"\ngrants = []\n'
         )
         multi_id = _install_consumer(db, "multi", perms)
-        assert lookup_shortname(multi_id, "secrets", db) == (SVC_SECRETS, ">=0.1.0")
-        assert lookup_shortname(multi_id, "oauth", db) == (SVC_OAUTH, "==1.0.0")
+        assert lookup_service_by_manifest_shortname(multi_id, "secrets", db) == (SVC_SECRETS, ">=0.1.0")
+        assert lookup_service_by_manifest_shortname(multi_id, "oauth", db) == (SVC_OAUTH, "==1.0.0")
 
 
 # ---------------------------------------------------------------------------

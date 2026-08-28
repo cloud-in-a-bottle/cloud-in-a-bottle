@@ -52,7 +52,7 @@ async def check_once(config: Config, db: sqlite3.Connection) -> str | None:
         # derives from the IP as well, so CoreDNS has to come back on the new one.
         await reload_coredns_for_domains(config, db)
     else:
-        dns = DnsClient(config, db)
+        dns = DnsClient(db)
         for domain in router_managed_domains(db):
             await _point_at(dns, domain, detected)
     return detected

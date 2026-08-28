@@ -1,71 +1,62 @@
 """Services the router provides itself, rather than proxying to an app.
 
-The v2 proxy resolves a consumer's shortname to a provider app and forwards the request.  Some
-services have no app behind them — the installer is the router by definition, and the router serves
-``dns`` until an owner installs a connector app — so they run in-process instead.
-
-Registering one is an entry here plus an ASGI app — the same thing an app provider is, minus the
-socket — so nothing here defines a request/response contract of its own.  ``service_client`` and
-the proxy both consult ``builtin_for``, so which provider serves a service is decided in exactly
-one place.
+A builtin is an ASGI app: the same thing an app provider is, minus the socket, so nothing here
+defines a request/response contract of its own.
 """
 
 from __future__ import annotations
 
-import sqlite3
 from typing import Any
+from typing import cast
 
 import attr
-from litestar.types import ASGIApp
 
+from compute_space.core.app_id import ROUTER_APP_ID
+from compute_space.core.app_id import ROUTER_APP_NAME
 from compute_space.core.dns.coredns_provider.routes import dns_service_app
 from compute_space.core.dns.service_api import DNS_SERVICE_URL
 from compute_space.core.dns.service_api import DNS_SERVICE_VERSION
-from compute_space.core.dns.service_api import ROUTER_DNS_PROVIDER_ID
+from compute_space.core.proxy_target import AsgiApp
+from compute_space.core.service_interface.provider import ServiceProvider
 
 # Permission entries stay in wire form (``{"grant": ..., "scope": ...}``) everywhere outside the
 # service that issued them: a grant payload is defined by that service, so only it can read one.
 Permissions = list[dict[str, Any]]
 
-# A handler takes the sub-path after the service root, the JSON body, and the caller's permission
-# entries, and returns an HTTP status and a JSON body — the same contract an app provider answers
-
 
 @attr.s(auto_attribs=True, frozen=True)
 class BuiltinService:
-    url: str
+    service_url: str
     version: str
-    app: ASGIApp
-    # Sentinel provider id when an app can provide the service too, so an owner can point the
-    # service default elsewhere.  None means the router is the only possible provider.
-    provider_id: str | None = None
+    app: AsgiApp
 
 
+# The router answers `dns` itself until an owner installs a connector app and makes it the
+# default, which is what lets a fresh space serve its own DNS with no setup at all.
 BUILTIN_SERVICES: tuple[BuiltinService, ...] = (
-    BuiltinService(
-        url=DNS_SERVICE_URL,
-        version=DNS_SERVICE_VERSION,
-        app=dns_service_app,
-        provider_id=ROUTER_DNS_PROVIDER_ID,
-    ),
+    # cast: litestar types its ASGIApp with its own scope classes, AsgiApp with the raw
+    # MutableMappings; they are the same protocol.
+    BuiltinService(service_url=DNS_SERVICE_URL, version=DNS_SERVICE_VERSION, app=cast(AsgiApp, dns_service_app)),
 )
 
 
-def builtin_for(
-    service_url: str, db: sqlite3.Connection, provider_override: str | None = None
-) -> BuiltinService | None:
-    """The router-provided implementation of ``service_url``, if it should serve this call.
+def builtin_by_url(service_url: str) -> BuiltinService | None:
+    """The router's own implementation of a service, if it has one.
 
-    A service with a ``provider_id`` yields to an app the owner has made the default, so installing
-    a connector app switches the space over with no further configuration.
+    A registry lookup and nothing more — whether it *should* serve a given call is
+    ``default_provider_id_for_service``'s question, so the two can't answer it differently.
     """
-    for service in BUILTIN_SERVICES:
-        if service.url != service_url:
-            continue
-        if service.provider_id is None:
-            return service
-        if provider_override is not None:
-            return service if provider_override == service.provider_id else None
-        row = db.execute("SELECT app_id FROM service_defaults WHERE service_url = ?", (service_url,)).fetchone()
-        return service if row is None or row["app_id"] == service.provider_id else None
-    return None
+    return next((s for s in BUILTIN_SERVICES if s.service_url == service_url), None)
+
+
+def builtin_as_provider(builtin: BuiltinService, is_default: bool) -> ServiceProvider:
+    """A builtin as the owner sees it.  Always running — it is us — and served from the root."""
+    return ServiceProvider(
+        service_url=builtin.service_url,
+        app_id=ROUTER_APP_ID,
+        app_name=ROUTER_APP_NAME,
+        service_version=builtin.version,
+        endpoint="/",
+        status="running",
+        is_default=is_default,
+    )

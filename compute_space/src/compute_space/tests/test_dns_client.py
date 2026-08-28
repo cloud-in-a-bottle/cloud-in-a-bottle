@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Callable
 from collections.abc import Iterator
 from contextlib import closing
 from contextlib import contextmanager
@@ -24,6 +25,8 @@ from compute_space.core.dns.coredns_provider import store
 from compute_space.core.dns.service_api import DNS_SERVICE_URL
 from compute_space.core.dns.service_api import RecordType
 from compute_space.core.domains import Domain
+from compute_space.core.proxy_target import LocalPort
+from compute_space.core.service_interface.provider import ResolvedProvider
 from compute_space.core.service_interface.service_client import ServiceCallError
 from compute_space.tests.conftest import open_db
 from compute_space.tests.dns_helpers import seeded_dns_config
@@ -41,7 +44,7 @@ def _local(tmp_path: Path, *domains: Domain) -> Iterator[tuple[DnsClient, sqlite
     test can check what was stored without going back through a grant-filtered read."""
     config = seeded_dns_config(tmp_path, *(domains or (Domain(ZONE, tls=True),)))
     with closing(open_db(config)) as db:
-        yield DnsClient(config, db), db
+        yield DnsClient(db), db
 
 
 def _stored(db: sqlite3.Connection, zone: str = ZONE) -> dict[tuple[str, str], list[str]]:
@@ -110,7 +113,7 @@ async def test_a_challenge_reaches_the_zone_file(tmp_path: Path) -> None:
     # The whole point of the write: CoreDNS serves the file, so the record has to land in it.
     config = seeded_dns_config(tmp_path, Domain(ZONE, tls=True))
     with closing(open_db(config)) as db:
-        await DnsClient(config, db).set_records(_challenge(ZONE), RecordType.TXT, ["tok"], ttl=60)
+        await DnsClient(db).set_records(_challenge(ZONE), RecordType.TXT, ["tok"], ttl=60)
     assert '_acme-challenge   60  IN TXT  "tok"' in config.coredns_zonefile_path.read_text()
 
 
@@ -171,7 +174,11 @@ class _Recorder:
         return json.loads(self.requests[index].content)
 
 
-def _remote(recorder: _Recorder, monkeypatch: pytest.MonkeyPatch) -> DnsClient:
+def _remote(
+    recorder: _Recorder,
+    monkeypatch: pytest.MonkeyPatch,
+    handler: Callable[[httpx.Request], httpx.Response] | None = None,
+) -> DnsClient:
     """A client whose provider is an app, so every call is a real HTTP round trip.
 
     Patches the transport rather than injecting a handle: the client resolves its provider per
@@ -179,10 +186,22 @@ def _remote(recorder: _Recorder, monkeypatch: pytest.MonkeyPatch) -> DnsClient:
     """
     monkeypatch.setattr(
         service_client_mod,
-        "_client_for",
-        lambda *a: (httpx.AsyncClient(transport=httpx.MockTransport(recorder)), "http://127.0.0.1:9999/api/dns"),
+        "resolve_provider",
+        lambda *a, **k: ResolvedProvider(
+            service_url=DNS_SERVICE_URL,
+            app_id="dnsapp000001",
+            app_name="dns-connector",
+            service_version="0.1.0",
+            endpoint="/api/dns",
+            target=LocalPort(9999),
+        ),
     )
-    return DnsClient(config=None, db=None)  # type: ignore[arg-type]  # unused once _client_for is patched
+    monkeypatch.setattr(
+        service_client_mod,
+        "client_for",
+        lambda *a: (httpx.AsyncClient(transport=httpx.MockTransport(handler or recorder)), "http://127.0.0.1:9999"),
+    )
+    return DnsClient(db=None)  # type: ignore[arg-type]  # unused once the provider is patched
 
 
 def _zones_ok(*zones: str) -> tuple[int, dict[str, Any]]:
@@ -260,13 +279,8 @@ async def test_an_unreachable_provider_is_an_error_not_a_crash(monkeypatch: pyte
         raise httpx.ConnectError("connection refused")
 
     recorder = _Recorder({})
-    monkeypatch.setattr(
-        service_client_mod,
-        "_client_for",
-        lambda *a: (httpx.AsyncClient(transport=httpx.MockTransport(refuse)), "http://127.0.0.1:9999/api/dns"),
-    )
     with pytest.raises(ServiceCallError, match="unreachable"):
-        await DnsClient(config=None, db=None).zones()  # type: ignore[arg-type]
+        await _remote(recorder, monkeypatch, refuse).zones()
     assert recorder.requests == []
 
 

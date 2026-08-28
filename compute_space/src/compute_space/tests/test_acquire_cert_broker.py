@@ -54,7 +54,7 @@ def dns_db(tmp_path: Path) -> Iterator[tuple[DnsClient, sqlite3.Connection]]:
     read back what was stored."""
     config = seeded_dns_config(tmp_path, Domain(DOMAIN, tls=True))
     with closing(open_db(config)) as db:
-        yield DnsClient(config, db), db
+        yield DnsClient(db), db
 
 
 def _challenge_txt(db: sqlite3.Connection) -> list[str]:

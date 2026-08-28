@@ -50,7 +50,7 @@ from compute_space.core.oauth import OAuthRequired
 from compute_space.core.oauth import get_oauth_token
 from compute_space.core.ports import allocate_port
 from compute_space.core.ports import resolve_port_mappings
-from compute_space.core.service_interface.services_v2 import register_v2_service_providers
+from compute_space.core.service_interface.services import register_services_provided_by_app
 from compute_space.db import get_db
 
 RESERVED_PATHS = {
@@ -93,7 +93,7 @@ def _manifest_column_values(manifest: AppManifest) -> dict[str, object]:
     values — which surfaced as "the new cpu isn't applied" on the dashboard.
 
     Excludes columns that are NOT manifest-derived (app_id, local_port,
-    repo_path, repo_url, status, installed_by, container_id): those are set at
+    repo_path, repo_url, status, container_id): those are set at
     install / port-allocation time and must survive a reload unchanged.
     """
     return {
@@ -156,7 +156,6 @@ class App:
     public_paths: list[str]
     links: list[AppLink]
     manifest_raw: str | None
-    installed_by: str | None
     created_at: str
     updated_at: str
 
@@ -300,7 +299,6 @@ def insert_and_deploy(
     app_name: str | None = None,
     repo_url: str | None = None,
     port_overrides: dict[str, int] | None = None,
-    installed_by: str | None = None,
 ) -> str:
     """Insert app into DB and start background deploy.
 
@@ -311,11 +309,6 @@ def insert_and_deploy(
         approved on the deploy page.  Only these are granted at install
         time.
     port_overrides: optional dict of label -> host_port from CLI/API.
-    installed_by: consumer app name when the install came in via the
-        installer v2 service.  Stored on the apps row in the same
-        INSERT (so there's no race with the background build thread)
-        and used by the installer's /status and /logs endpoints to
-        scope visibility to the installs each caller initiated.
     """
     if app_name is None:
         app_name = manifest.name
@@ -348,7 +341,7 @@ def insert_and_deploy(
 
     # Manifest-derived columns come from the shared helper so install and
     # reload write exactly the same set; non-manifest columns (identity, repo
-    # location, allocated port, initial status, installer) are set here only.
+    # location, allocated port, initial status) are set here only.
     manifest_columns = _manifest_column_values(manifest)
     install_columns: dict[str, object] = {
         "app_id": app_id,
@@ -357,7 +350,6 @@ def insert_and_deploy(
         "repo_url": repo_url,
         "local_port": local_port,
         "status": "building",
-        "installed_by": installed_by,
         **manifest_columns,
     }
     _columns = list(install_columns)
@@ -387,7 +379,7 @@ def insert_and_deploy(
             (app_id, app_token_hash),
         )
 
-    register_v2_service_providers(app_id, manifest, db)
+    register_services_provided_by_app(app_id, manifest, db)
 
     db.commit()
 
@@ -673,7 +665,7 @@ def start_app_process(app_id: str, db: sqlite3.Connection, config: Config) -> No
             (app_id, app_token_hash),
         )
 
-    register_v2_service_providers(app_id, manifest, db)
+    register_services_provided_by_app(app_id, manifest, db)
 
     # Load resolved port mappings from DB (preserves host_port assignments)
     port_mappings = _load_port_mappings_from_db(app_id, db)
@@ -980,7 +972,7 @@ def reload_app_background(app_id: str, repo_path: str, config: Config) -> None:
                 _sync_port_mappings(app_id, manifest.port_mappings, db, config)
 
                 # Re-register v2 service providers from the new manifest.
-                register_v2_service_providers(app_id, manifest, db)
+                register_services_provided_by_app(app_id, manifest, db)
 
                 db.commit()
             except ValueError:

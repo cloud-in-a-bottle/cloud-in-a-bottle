@@ -26,6 +26,7 @@ from typing import Any
 import attr
 
 from compute_space.config import Config
+from compute_space.core.app_id import ROUTER_APP_ID
 from compute_space.core.apps import start_app_process
 from compute_space.core.containers import is_container_running
 from compute_space.core.dns.service_api import APEX
@@ -37,9 +38,9 @@ from compute_space.core.dns.service_api import normalize_zone
 from compute_space.core.dns.service_api import permission
 from compute_space.core.domains import effective_domains
 from compute_space.core.logging import logger
-from compute_space.core.service_interface.builtin_services import builtin_for
 from compute_space.core.service_interface.service_client import ServiceCallError
 from compute_space.core.service_interface.service_client import call_service
+from compute_space.core.service_interface.services import default_provider_id_for_service
 
 # CoreDNS reloads within seconds; an external registrar can take minutes to publish.
 LOCAL_PROPAGATION_TIMEOUT_SECONDS = 120.0
@@ -48,7 +49,7 @@ REMOTE_PROPAGATION_TIMEOUT_SECONDS = 600.0
 
 def uses_local_dns(db: sqlite3.Connection) -> bool:
     """True when this instance answers its own DNS, so CoreDNS must serve the public zones."""
-    return builtin_for(DNS_SERVICE_URL, db) is not None
+    return default_provider_id_for_service(DNS_SERVICE_URL, db) == ROUTER_APP_ID
 
 
 # How long boot will wait for a DNS provider app before giving up and letting the renewal thread
@@ -125,7 +126,6 @@ def router_managed_domains(db: sqlite3.Connection) -> list[str]:
 
 @attr.s(auto_attribs=True, frozen=True)
 class DnsClient:
-    config: Config
     db: sqlite3.Connection
 
     @property
@@ -172,7 +172,7 @@ class DnsClient:
         return zone, target[: -len(zone)].rstrip(".") or APEX
 
     async def _call(self, path: str, payload: dict[str, Any], permissions: list[dict[str, Any]]) -> dict[str, Any]:
-        return await call_service(DNS_SERVICE_URL, path, payload, permissions, self.config, self.db)
+        return await call_service(DNS_SERVICE_URL, path, payload, permissions, self.db)
 
     async def _write(self, op: str, zone: str, records: list[DnsRecord]) -> None:
         payload = {"zone": zone, "records": [_to_wire(r) for r in records]}

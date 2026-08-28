@@ -27,7 +27,7 @@ async def acquire_cert_for_domain(
     The cert_provider value and its required settings are validated when the Config is constructed
     (Config.__attrs_post_init__), so here we only narrow the optional fields for the type checker.
     """
-    await _acquire_with_dns(config, domain, cert_path, key_path, db, DnsClient(config, db))
+    await _acquire_with_dns(config, domain, cert_path, key_path, db, DnsClient(db))
 
 
 async def _acquire_with_dns(

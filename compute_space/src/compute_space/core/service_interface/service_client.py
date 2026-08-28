@@ -1,9 +1,8 @@
 """Call a service from inside the router, wherever that service happens to run.
 
 Router-side code — cert acquisition, dynamic DNS, anything later — should not care whether a
-service is provided by an app or by the router itself.  A builtin is an ASGI app, so httpx's
-ASGITransport serves it without a socket and every call takes the same path either way.  The
-in-process provider is held to the same wire contract as a real one, so the two cannot drift.
+service is provided by an app or by the router itself.  ``resolve_provider`` answers that, and the
+two kinds of provider differ only in the transport, so every call takes the same path either way.
 
 ``call_service`` is a plain async function holding nothing: the provider is resolved and the HTTP
 client built per call.  Calls are rare enough that losing connection reuse costs nothing, and it
@@ -19,32 +18,18 @@ TLS cert before hypercorn is listening (see ``web.start``).
 
 from __future__ import annotations
 
-import json
 import sqlite3
 from typing import Any
-from typing import cast
 
 import httpx
-from packaging.specifiers import SpecifierSet
-from packaging.version import Version
 
-from compute_space.config import Config
-from compute_space.core.service_interface.builtin_services import BuiltinService
+from compute_space.core.proxy_target import client_for
 from compute_space.core.service_interface.builtin_services import Permissions
-from compute_space.core.service_interface.builtin_services import builtin_for
-from compute_space.core.service_interface.services_v2 import resolve_provider
+from compute_space.core.service_interface.headers import router_consumer_headers
+from compute_space.core.service_interface.provider import ProviderUnavailable
+from compute_space.core.service_interface.resolve import resolve_provider
 
-# The router's own consumer identity.  App names are DNS-label-like (see core.app_id), so the
-# leading underscore cannot collide with a real one.
-ROUTER_CONSUMER_ID = "_openhost_router"
-ROUTER_CONSUMER_NAME = "OpenHost Router"
-
-PERMISSIONS_HEADER = "X-OpenHost-Permissions"
 _REQUEST_TIMEOUT_SECONDS = 60.0
-
-# Host for in-process calls.  Never resolved — the transport answers before any lookup — but httpx
-# needs a valid absolute URL.
-_BUILTIN_HOST = "http://builtin.openhost.internal"
 
 
 class ServiceCallError(RuntimeError):
@@ -56,55 +41,26 @@ class ServiceCallError(RuntimeError):
         self.body = body or {}
 
 
-def _client_for(
-    service_url: str, config: Config, db: sqlite3.Connection, version: str
-) -> tuple[httpx.AsyncClient, str]:
-    """An httpx client and base URL for whichever provider currently serves ``service_url``."""
-    builtin = builtin_for(service_url, db)
-    if builtin is not None:
-        if Version(builtin.version) not in SpecifierSet(version):
-            raise ServiceCallError(f"{service_url} version {builtin.version} does not match {version}")
-        # cast: litestar types its ASGIApp with its own scope classes, httpx with the raw
-        # MutableMappings; they are the same protocol.
-        transport: httpx.AsyncBaseTransport | None = httpx.ASGITransport(app=cast(Any, builtin.app))
-        base_url = _BUILTIN_HOST
-    else:
-        try:
-            _, port, _, endpoint = resolve_provider(service_url, version, db)
-        except RuntimeError as e:
-            raise ServiceCallError(f"no usable provider for {service_url}: {e}") from e
-        transport, base_url = None, f"http://127.0.0.1:{port}/{endpoint.strip('/')}"
-    return httpx.AsyncClient(transport=transport, timeout=_REQUEST_TIMEOUT_SECONDS), base_url
-
-
 async def call_service(
     service_url: str,
     path: str,
     payload: dict[str, Any],
     permissions: Permissions,
-    config: Config,
     db: sqlite3.Connection,
     version: str = ">=0",
+    timeout: float = _REQUEST_TIMEOUT_SECONDS,
 ) -> dict[str, Any]:
-    """POST to a service and return its JSON body, raising on anything unusable.
+    """POST to a service and return its JSON body, raising on anything unusable."""
+    try:
+        provider = resolve_provider(service_url, version, db)
+    except ProviderUnavailable as e:
+        raise ServiceCallError(f"no usable provider for {service_url}: {e}") from e
 
-    The router has no app token, but it is the sole authority for the ``X-OpenHost-*`` identity
-    headers in the first place, so it asserts the same ones the proxy would have injected for a
-    consumer app.
-    """
-    http, base_url = _client_for(service_url, config, db, version)
-    url = base_url + path
+    http, base_url = client_for(provider.target, timeout)
+    url = _service_url(base_url, provider.endpoint, path)
     async with http:
         try:
-            response = await http.post(
-                url,
-                json=payload,
-                headers={
-                    "X-OpenHost-Consumer-Id": ROUTER_CONSUMER_ID,
-                    "X-OpenHost-Consumer-Name": ROUTER_CONSUMER_NAME,
-                    PERMISSIONS_HEADER: json.dumps(permissions),
-                },
-            )
+            response = await http.post(url, json=payload, headers=dict(router_consumer_headers(permissions)))
             body = response.json()
         except httpx.HTTPError as e:
             raise ServiceCallError(f"service unreachable at {url}: {e}") from e
@@ -122,16 +78,7 @@ async def call_service(
     return body
 
 
-def builtin_client(service: BuiltinService) -> tuple[httpx.AsyncClient, str]:
-    """A client that serves ``service`` in-process, for callers that need the raw response — the
-    proxy passes a 403 through after decorating it, rather than treating it as a failure."""
-    return (
-        httpx.AsyncClient(transport=httpx.ASGITransport(app=cast(Any, service.app))),
-        _BUILTIN_HOST,
-    )
-
-
-def provider_is_builtin(service_url: str, db: sqlite3.Connection) -> bool:
-    """Whether the router serves this itself — which callers occasionally need, e.g. to know how
-    slow a write is to become visible."""
-    return builtin_for(service_url, db) is not None
+def _service_url(base_url: str, endpoint: str, path: str) -> str:
+    """Fold the provider's endpoint prefix and the caller's path onto the base URL."""
+    prefix = endpoint.strip("/")
+    return f"{base_url}/{prefix}{path}" if prefix else f"{base_url}{path}"
