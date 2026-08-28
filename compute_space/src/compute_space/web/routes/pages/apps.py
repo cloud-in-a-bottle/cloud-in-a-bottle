@@ -194,7 +194,7 @@ async def _resolve_edit_app(
     # Build the provider URL on the domain the operator is currently browsing, so the
     # POST stays same-domain (and any login bounce stays on that domain) rather than
     # jumping to the canonical one.
-    action = f"{zone.scheme}://{provider.name}.{zone.name}{provider.endpoint}?{qs}"
+    action = f"{zone.scheme}://{provider.app_name}.{zone.name}{provider.endpoint}?{qs}"
     return {"mode": "service", "action": action, "repo": base_url, "ref": ref}
 
 
