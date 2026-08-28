@@ -21,6 +21,7 @@ from compute_space.core.service_interface import builtin_services
 from compute_space.core.service_interface.builtin_services import BuiltinService
 from compute_space.core.service_interface.builtin_services import builtin_for
 from compute_space.core.service_interface.provider import ProviderVersionError
+from compute_space.core.service_interface.registry import providers_for
 from compute_space.core.service_interface.resolve import resolve_provider
 from compute_space.core.service_interface.service_client import ServiceCallError
 from compute_space.core.service_interface.service_client import call_service
@@ -92,6 +93,21 @@ def test_an_explicit_provider_override_is_honoured(registered: BuiltinService, d
     _, conn = db
     assert builtin_for(SERVICE_URL, conn, provider_override=ROUTER_APP_ID) is registered
     assert builtin_for(SERVICE_URL, conn, provider_override="someapp") is None
+
+
+def test_a_builtin_is_listed_for_the_owner_alongside_the_apps(registered: BuiltinService, db: Any) -> None:
+    # The owner picks a provider from this list, so a service the router serves has to appear in
+    # it — otherwise there is no way to see what is handling the service, or to switch back.
+    _, conn = db
+    assert [(p.app_id, p.is_default) for p in providers_for(SERVICE_URL, conn)] == [(ROUTER_APP_ID, True)]
+
+    _install_app(conn, "someapp")
+    conn.execute("INSERT INTO service_defaults (service_url, app_id) VALUES (?, 'someapp')", (SERVICE_URL,))
+    conn.commit()
+    assert [(p.app_id, p.is_default) for p in providers_for(SERVICE_URL, conn)] == [
+        (ROUTER_APP_ID, False),
+        ("someapp", True),
+    ]
 
 
 def test_an_unregistered_service_has_no_builtin(registered: BuiltinService, db: Any) -> None:
