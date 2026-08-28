@@ -52,8 +52,8 @@ from compute_space.core.proxy_target import ProxyTarget
 from compute_space.core.service_interface.headers import app_consumer_headers
 from compute_space.core.service_interface.headers import approve_grant_url
 from compute_space.core.service_interface.provider import ProviderUnavailable
-from compute_space.core.service_interface.registry import lookup_shortname
 from compute_space.core.service_interface.resolve import resolve_provider
+from compute_space.core.service_interface.services import lookup_service_by_manifest_shortname
 from compute_space.web.auth.auth import require_app_auth
 from compute_space.web.auth.auth import verify_app_auth
 from compute_space.web.helpers.proxy import proxy_http_request
@@ -165,7 +165,7 @@ def _service_call_common(
     Only the two resolution calls are translated, so an accidental lookup bug still surfaces as a 500.
     """
     try:
-        service_url, version_spec = lookup_shortname(consumer_app_id, shortname, db)
+        service_url, version_spec = lookup_service_by_manifest_shortname(consumer_app_id, shortname, db)
     except LookupError as e:
         raise NotFoundException(detail=str(e), extra={"code": "shortname_not_declared"}) from e
 

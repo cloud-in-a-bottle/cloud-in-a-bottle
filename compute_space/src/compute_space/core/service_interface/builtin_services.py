@@ -12,7 +12,9 @@ from typing import Any
 import attr
 
 from compute_space.core.app_id import ROUTER_APP_ID
+from compute_space.core.app_id import ROUTER_APP_NAME
 from compute_space.core.proxy_target import AsgiApp
+from compute_space.core.service_interface.services import ServiceProvider
 
 # Permission entries stay in wire form (``{"grant": ..., "scope": ...}``) everywhere outside the
 # service that issued them: a grant payload is defined by that service, so only it can read one.
@@ -46,3 +48,16 @@ def builtin_for(
         return service if provider_override == ROUTER_APP_ID else None
     row = db.execute("SELECT 1 FROM service_defaults WHERE service_url = ?", (service_url,)).fetchone()
     return None if row else service
+
+
+def builtin_as_provider(builtin: BuiltinService, is_default: bool) -> ServiceProvider:
+    """A builtin as the owner sees it.  Always running — it is us — and served from the root."""
+    return ServiceProvider(
+        service_url=builtin.service_url,
+        app_id=ROUTER_APP_ID,
+        app_name=ROUTER_APP_NAME,
+        service_version=builtin.version,
+        endpoint="/",
+        status="running",
+        is_default=is_default,
+    )

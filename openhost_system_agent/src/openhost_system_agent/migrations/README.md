@@ -92,7 +92,7 @@ migration may only use:
 - Packages already installed in the previous env (attr, loguru, and anything else in the prior lockfile)
 
 This is rarely a constraint — migrations change host state (apt, sysctls, systemd, files) via `subprocess`, not the
-project's Python deps. Note that `registry.py` imports every migration module at startup, so a migration module must
+project's Python deps. Note that `services.py` imports every migration module at startup, so a migration module must
 not import a new dependency at module top level either.
 
 If a migration genuinely needs a new dependency from this tag's lockfile, run `subprocess.run([PIXI_BIN, "install"])`
