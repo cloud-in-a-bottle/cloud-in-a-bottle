@@ -10,9 +10,9 @@ import sqlite3
 from typing import Any
 
 import attr
-from litestar.types import ASGIApp
 
 from compute_space.core.app_id import ROUTER_APP_ID
+from compute_space.core.proxy_target import AsgiApp
 
 # Permission entries stay in wire form (``{"grant": ..., "scope": ...}``) everywhere outside the
 # service that issued them: a grant payload is defined by that service, so only it can read one.
@@ -23,7 +23,7 @@ Permissions = list[dict[str, Any]]
 class BuiltinService:
     service_url: str
     version: str
-    app: ASGIApp
+    app: AsgiApp
 
 
 BUILTIN_SERVICES: tuple[BuiltinService, ...] = ()

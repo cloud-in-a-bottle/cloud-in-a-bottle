@@ -9,6 +9,15 @@ from litestar.di import NamedDependency
 from litestar.exceptions import NotFoundException
 from litestar.params import FromQuery
 
+from compute_space.core.app_id import ROUTER_APP_ID
+from compute_space.core.app_id import ROUTER_APP_NAME
+from compute_space.core.service_interface.builtin_services import builtin_for
+from compute_space.core.service_interface.registry import all_defaults
+from compute_space.core.service_interface.registry import all_providers
+from compute_space.core.service_interface.registry import clear_default
+from compute_space.core.service_interface.registry import default_provider_id
+from compute_space.core.service_interface.registry import providers_for
+from compute_space.core.service_interface.registry import set_default
 from compute_space.web.auth.auth import require_owner_auth
 from compute_space.web.auth.auth import require_owner_or_app_auth
 
@@ -64,21 +73,16 @@ class RemoveDefaultRequest:
 @get("/api/services/v2", guards=[require_owner_auth])
 async def list_services_v2(db: NamedDependency[sqlite3.Connection]) -> list[ProviderV2]:
     """List all registered V2 service providers."""
-    rows = db.execute(
-        """SELECT sp.service_url, sp.app_id, a.name AS app_name, sp.service_version, sp.endpoint, a.status
-           FROM service_providers_v2 sp
-           JOIN apps a ON a.app_id = sp.app_id"""
-    ).fetchall()
     return [
         ProviderV2(
-            service_url=r["service_url"],
-            app_id=r["app_id"],
-            app_name=r["app_name"],
-            service_version=r["service_version"],
-            endpoint=r["endpoint"],
-            status=r["status"],
+            service_url=p.service_url,
+            app_id=p.app_id,
+            app_name=p.app_name,
+            service_version=p.service_version,
+            endpoint=p.endpoint,
+            status=p.status,
         )
-        for r in rows
+        for p in all_providers(db)
     ]
 
 
@@ -86,75 +90,71 @@ async def list_services_v2(db: NamedDependency[sqlite3.Connection]) -> list[Prov
 async def discover_providers(
     db: NamedDependency[sqlite3.Connection], service: FromQuery[str]
 ) -> DiscoverProvidersResponse:
-    """Discover providers for a service, optionally filtered by version specifier."""
+    """Discover providers for a service.
 
-    rows = db.execute(
-        """SELECT sp.app_id, a.name AS app_name, sp.service_version, sp.endpoint, a.status
-           FROM service_providers_v2 sp
-           JOIN apps a ON a.app_id = sp.app_id
-           WHERE sp.service_url = ?""",
-        (service,),
-    ).fetchall()
+    A router builtin is listed alongside the apps, so the owner can see what is serving the
+    service today and switch between them.  It is the default exactly when no app has been picked.
+    """
+    default_app_id = default_provider_id(service, db)
+    providers = [
+        DiscoveredProvider(
+            app_id=p.app_id,
+            app_name=p.app_name,
+            service_version=p.service_version,
+            endpoint=p.endpoint,
+            status=p.status,
+            is_default=p.app_id == default_app_id,
+        )
+        for p in providers_for(service, db)
+    ]
 
-    default = db.execute(
-        "SELECT app_id FROM service_defaults WHERE service_url = ?",
-        (service,),
-    ).fetchone()
-    default_app_id = default["app_id"] if default else None
-
-    return DiscoverProvidersResponse(
-        providers=[
+    builtin = builtin_for(service, db, provider_override=ROUTER_APP_ID)
+    if builtin is not None:
+        providers.insert(
+            0,
             DiscoveredProvider(
-                app_id=r["app_id"],
-                app_name=r["app_name"],
-                service_version=r["service_version"],
-                endpoint=r["endpoint"],
-                status=r["status"],
-                is_default=r["app_id"] == default_app_id,
-            )
-            for r in rows
-        ]
-    )
+                app_id=ROUTER_APP_ID,
+                app_name=ROUTER_APP_NAME,
+                service_version=builtin.version,
+                endpoint="/",
+                status="running",
+                is_default=default_app_id is None,
+            ),
+        )
+    return DiscoverProvidersResponse(providers=providers)
 
 
 @get("/api/services/v2/defaults", guards=[require_owner_auth])
 async def list_defaults(db: NamedDependency[sqlite3.Connection]) -> list[DefaultEntry]:
     """List all default provider settings."""
-    rows = db.execute(
-        """SELECT sd.service_url, sd.app_id, a.name AS app_name
-           FROM service_defaults sd
-           JOIN apps a ON a.app_id = sd.app_id"""
-    ).fetchall()
-    return [DefaultEntry(service_url=r["service_url"], app_id=r["app_id"], app_name=r["app_name"]) for r in rows]
+    return [DefaultEntry(service_url=d.service_url, app_id=d.app_id, app_name=d.app_name) for d in all_defaults(db)]
 
 
 @post("/api/services/v2/defaults", status_code=200, guards=[require_owner_auth], raises=[NotFoundException])
-async def set_default(data: SetDefaultRequest, db: NamedDependency[sqlite3.Connection]) -> OkResponse:
-    """Set the default provider for a service."""
-    row = db.execute(
-        "SELECT 1 FROM service_providers_v2 WHERE service_url = ? AND app_id = ?",
-        (data.service_url, data.app_id),
-    ).fetchone()
-    if not row:
-        raise NotFoundException(detail="No such provider")
+async def set_default_route(data: SetDefaultRequest, db: NamedDependency[sqlite3.Connection]) -> OkResponse:
+    """Set the default provider for a service.
 
-    db.execute(
-        "INSERT OR REPLACE INTO service_defaults (service_url, app_id) VALUES (?, ?)",
-        (data.service_url, data.app_id),
-    )
-    db.commit()
+    Choosing the router means clearing the default rather than storing a row: ``service_defaults``
+    has a foreign key into ``apps``, and the builtin serves whenever no app is picked.
+    """
+    if data.app_id == ROUTER_APP_ID:
+        clear_default(data.service_url, db)
+        return OkResponse(ok=True)
+    try:
+        set_default(data.service_url, data.app_id, db)
+    except LookupError as e:
+        raise NotFoundException(detail="No such provider") from e
     return OkResponse(ok=True)
 
 
 @delete("/api/services/v2/defaults", status_code=200, guards=[require_owner_auth])
 async def remove_default(data: RemoveDefaultRequest, db: NamedDependency[sqlite3.Connection]) -> OkResponse:
-    """Remove the default provider for a service (falls back to highest version)."""
-    db.execute("DELETE FROM service_defaults WHERE service_url = ?", (data.service_url,))
-    db.commit()
+    """Remove the default provider for a service, handing it back to the builtin if there is one."""
+    clear_default(data.service_url, db)
     return OkResponse(ok=True)
 
 
 api_services_v2_routes = Router(
     path="/",
-    route_handlers=[list_services_v2, discover_providers, list_defaults, set_default, remove_default],
+    route_handlers=[list_services_v2, discover_providers, list_defaults, set_default_route, remove_default],
 )

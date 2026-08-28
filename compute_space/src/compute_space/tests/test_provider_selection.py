@@ -16,6 +16,7 @@ from litestar.testing import TestClient
 
 from compute_space.config import provide_config
 from compute_space.core.app_id import new_app_id
+from compute_space.core.proxy_target import LocalPort
 from compute_space.db import provide_db
 from compute_space.db.connection import init_db
 from compute_space.tests.conftest import _make_test_config
@@ -148,7 +149,7 @@ class TestProviderSelectionHeader:
             # Verify the proxy was called with provider B's port (19002)
             assert mock_proxy.called
             _, kwargs = mock_proxy.call_args
-            assert kwargs["target_port"] == 19002
+            assert kwargs["target"] == LocalPort(19002)
 
     def test_call_without_header_uses_default_provider(self, cfg: object) -> None:
         init_db(cfg.db_path)  # type: ignore[attr-defined]
@@ -171,7 +172,7 @@ class TestProviderSelectionHeader:
             assert resp.status_code == 200
             _, kwargs = mock_proxy.call_args
             # Default provider A is on port 19001
-            assert kwargs["target_port"] == 19001
+            assert kwargs["target"] == LocalPort(19001)
 
     def test_call_with_unknown_provider_returns_503(self, cfg: object) -> None:
         init_db(cfg.db_path)  # type: ignore[attr-defined]

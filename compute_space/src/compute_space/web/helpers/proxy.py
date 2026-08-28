@@ -18,7 +18,6 @@ import websockets
 from litestar import Request
 from litestar import WebSocket
 from litestar.datastructures import Headers
-from litestar.enums import ScopeType
 from litestar.exceptions import WebSocketDisconnect
 from litestar.response.base import ASGIResponse
 from litestar.response.streaming import ASGIStreamingResponse
@@ -31,6 +30,8 @@ from websockets.typing import Subprotocol
 
 from compute_space.core.auth.auth import SESSION_COOKIE_NAME
 from compute_space.core.logging import logger
+from compute_space.core.proxy_target import ProxyTarget
+from compute_space.core.proxy_target import client_for
 from compute_space.core.updates import wait_for_shutdown
 
 # auth cookies must never reach a backend app
@@ -74,7 +75,7 @@ def _build_forwarded_request_headers(
     return new_headers
 
 
-def _format_proxy_request_url(scope: Scope, target_port: int, override_path: str | None = None) -> str:
+def _format_proxy_request_url(scope: Scope, base_url: str, override_path: str | None = None) -> str:
     if override_path:
         path = override_path
     else:
@@ -85,9 +86,7 @@ def _format_proxy_request_url(scope: Scope, target_port: int, override_path: str
         path = scope["raw_path"].decode("ascii")
 
     path = path.lstrip("/")
-    # websockets.connect() rejects http/https URIs; use ws for WS scopes.
-    scheme = "ws" if scope["type"] == ScopeType.WEBSOCKET else "http"
-    target_url = f"{scheme}://127.0.0.1:{target_port}/{path}"
+    target_url = f"{base_url}/{path}"
     query_string = scope["query_string"]
     if query_string:
         target_url += f"?{query_string.decode('utf-8')}"
@@ -125,13 +124,17 @@ _HTTP_RESPONSE_EXCLUDED_HEADERS = frozenset(
 
 async def proxy_http_request(
     request: Request[Any, Any, Any],
-    target_port: int,
+    target: ProxyTarget,
     override_path: str | None = None,
     extra_headers: Iterable[tuple[str, str]] = (),
     timeout: float = 30,
     read_timeout: float | None = None,
 ) -> ASGIResponse:
-    """Forward an HTTP request to a local port and return the response.
+    """Forward an HTTP request to a backend and return the response.
+
+    ``target`` is either a loopback port or an ASGI app we serve in-process; the two go over the
+    same code from here on, so a builtin provider gets the same buffering, header handling and
+    error mapping a real app does.
 
     The request body is read eagerly from the ASGI ``receive`` channel and
     forwarded to the backend as bytes.  Eager reading keeps the ``receive``
@@ -151,7 +154,8 @@ async def proxy_http_request(
     want to bound how long they'll wait on a backend (e.g. internal service
     calls) can pass an explicit ``read_timeout``.
     """
-    target_url = _format_proxy_request_url(request.scope, target_port, override_path)
+    client, base_url = client_for(target, httpx.Timeout(timeout, read=read_timeout))
+    target_url = _format_proxy_request_url(request.scope, base_url, override_path)
     new_request_headers = _build_forwarded_request_headers(
         request.headers, _HTTP_REQUEST_EXCLUDED_HEADERS, extra_headers
     )
@@ -189,9 +193,6 @@ async def proxy_http_request(
     # -- HTTP long-polls (e.g. Matrix /sync) that stay quiet for tens of seconds,
     # and streaming/SSE responses with long inter-chunk gaps -- treating them as
     # a backend hang and returning 504 (or truncating the stream mid-flight).
-    client = httpx.AsyncClient(
-        timeout=httpx.Timeout(timeout, read=read_timeout),
-    )
     try:
         new_request = client.build_request(
             method=str(request.method),
@@ -293,7 +294,9 @@ async def proxy_websocket_request(
 
     If ``override_path`` is set, use it instead of the client path.
     """
-    target_url = _format_proxy_request_url(connection.scope, target_port, override_path)
+    # websockets.connect() rejects http/https URIs, and there is no ASGI websocket transport to
+    # serve a builtin through — hence a port rather than a ProxyTarget.
+    target_url = _format_proxy_request_url(connection.scope, f"ws://127.0.0.1:{target_port}", override_path)
 
     if subprotocols_str := connection.headers.get("Sec-WebSocket-Protocol"):
         subprotocols = [Subprotocol(s.strip()) for s in subprotocols_str.split(",")]

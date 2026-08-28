@@ -20,6 +20,7 @@ from compute_space.core.apps import is_public_path
 from compute_space.core.containers import ROUTER_INTERNAL_HOSTS
 from compute_space.core.domains import Domain
 from compute_space.core.logging import logger
+from compute_space.core.proxy_target import LocalPort
 from compute_space.db import get_db
 from compute_space.web.auth.auth import login_required_redirect
 from compute_space.web.auth.auth import verify_owner_auth
@@ -226,7 +227,7 @@ class SubdomainProxyMiddleware:
             # there; a proper WS-Host rewrite needs a different proxy approach.
             proxied = await proxy_http_request(
                 Request(scope, receive, send),
-                target_port=app.local_port,
+                target=LocalPort(app.local_port),
                 extra_headers=[*extra_headers, ("Host", netloc)],
             )
             await proxied(scope, receive, send)
