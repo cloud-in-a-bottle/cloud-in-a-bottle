@@ -1,12 +1,15 @@
 """OpenHost -> Cloud in a Bottle env-var rename.
 
 Every OPENHOST_* variable is kept for backward compatibility and also
-exposed under a BOTTLE_* twin.  These tests pin the alias helper that stamps
-the BOTTLE_* twins onto the env passed into app containers.
+exposed under a BOTTLE_* twin.  These tests pin the alias helper and the
+daemon config loader's dual-prefix precedence.
 """
 
 from __future__ import annotations
 
+import pytest
+
+from compute_space.config import load_config
 from compute_space.core.containers import add_bottle_env_aliases
 
 
@@ -37,3 +40,16 @@ def test_alias_is_pure() -> None:
     original = {"OPENHOST_APP_NAME": "myapp"}
     add_bottle_env_aliases(original)
     assert original == {"OPENHOST_APP_NAME": "myapp"}
+
+
+def test_load_config_prefers_bottle_over_openhost(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OPENHOST_PORT", "9001")
+    assert load_config().port == 9001, "legacy OPENHOST_ override still works"
+
+    monkeypatch.setenv("BOTTLE_PORT", "9002")
+    assert load_config().port == 9002, "BOTTLE_ wins when both are set"
+
+
+def test_load_config_reads_field_from_bottle_prefix(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("BOTTLE_MY_OPENHOST_REDIRECT_DOMAIN", "bottle.example")
+    assert load_config().my_openhost_redirect_domain == "bottle.example"

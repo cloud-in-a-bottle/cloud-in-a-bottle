@@ -48,7 +48,7 @@ from compute_space.db import get_db
 from compute_space.db import init_db
 from compute_space.web.app import create_app
 from compute_space.web.setup_app import create_setup_app
-from openhost_system_agent.updater.paths import DATA_DIR_ENV
+from openhost_system_agent.updater.paths import DATA_DIR_ENV_NAMES
 
 
 def _terminate_children(children: list[subprocess.Popen[bytes]]) -> None:
@@ -73,7 +73,9 @@ def _bootstrap(config: Config) -> None:
     # same shared module the agent, the apply unit and the updater use, and that
     # module resolves the directory from this variable so all four agree on one
     # path. Agent invocations forward it explicitly on top (see _agent_argv).
-    os.environ[DATA_DIR_ENV] = str(config.openhost_data_path)
+    # Set both the new BOTTLE_ and legacy OPENHOST_ names (rename compat).
+    for _data_dir_env in DATA_DIR_ENV_NAMES:
+        os.environ[_data_dir_env] = str(config.openhost_data_path)
     setup_file_logging(Path(os.path.dirname(config.db_path)) / "compute_space.log")
     load_keys(config.keys_dir)
     init_db(config.db_path)

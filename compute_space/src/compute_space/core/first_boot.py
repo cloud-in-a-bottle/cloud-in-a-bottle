@@ -9,7 +9,6 @@ exactly once, after which the DB is authoritative.  Old instances (whose domain 
 
 from __future__ import annotations
 
-import os
 import sqlite3
 import tomllib
 from contextlib import closing
@@ -18,6 +17,7 @@ from pathlib import Path
 import attr
 
 from compute_space.config import Config
+from compute_space.config import router_config_path_from_env
 from compute_space.core import identity_store
 from compute_space.core import settings_store
 from compute_space.core.domains import Domain
@@ -44,7 +44,7 @@ class FirstBoot:
 
 def _config_dir() -> Path | None:
     """Directory of the router config file (``first_boot.toml`` lives beside it)."""
-    path = os.environ.get("OPENHOST_ROUTER_CONFIG") or os.environ.get("OPENHOST_CONFIG")
+    path = router_config_path_from_env()
     return Path(path).parent if path else None
 
 

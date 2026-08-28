@@ -105,6 +105,10 @@ def test_detach_launches_a_transient_unit_with_everything_it_needs(monkeypatch: 
     assert "--setenv=HOME=/root" in cmd
     # Without this the detached walk resolves a different progress log and token.
     assert f"--setenv={updater_paths.DATA_DIR_ENV}=/custom/data" in cmd
+    # OpenHost -> Cloud in a Bottle rename: both env-var names are exported so the
+    # detached walk resolves them whichever it reads.
+    assert f"--setenv={detach_mod.DETACHED_ENV_NEW}=1" in cmd
+    assert f"--setenv={updater_paths.DATA_DIR_ENV_NEW}=/custom/data" in cmd
     # A wedged walk would otherwise hold the instance down indefinitely.
     assert f"--property=RuntimeMaxSec={detach_mod._RUNTIME_MAX_SECONDS}" in cmd
 

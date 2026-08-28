@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 import subprocess
 import time
 
@@ -13,7 +12,8 @@ from openhost_system_agent.protocol import DiffResult
 from openhost_system_agent.protocol import FetchResult
 from openhost_system_agent.protocol import MigrationStatus
 from openhost_system_agent.protocol import RemoteInfo
-from openhost_system_agent.updater.paths import DATA_DIR_ENV
+from openhost_system_agent.updater.paths import data_dir_env_value
+from openhost_system_agent.updater.paths import data_dir_setenv_pairs
 
 
 class SystemAgentError(Exception):
@@ -21,13 +21,14 @@ class SystemAgentError(Exception):
 
 
 # The agent resolves the shared updater paths (progress log, token, certs) from
-# OPENHOST_DATA_DIR, but sudo's env_reset strips it. Forward it explicitly (via
-# `sudo env`) so a non-default data_root_dir keeps compute_space and the agent
-# pointed at the same files instead of silently diverging to the agent's default.
+# the data-dir env var (BOTTLE_DATA_DIR, legacy OPENHOST_DATA_DIR), but sudo's
+# env_reset strips it. Forward it explicitly (via `sudo env`) so a non-default
+# data_root_dir keeps compute_space and the agent pointed at the same files
+# instead of silently diverging to the agent's default. Both names are forwarded.
 def _agent_argv(*args: str) -> list[str]:
-    data_dir = os.environ.get(DATA_DIR_ENV)
+    data_dir = data_dir_env_value()
     if data_dir:
-        return ["sudo", "env", f"{DATA_DIR_ENV}={data_dir}", "openhost_system_agent", *args]
+        return ["sudo", "env", *data_dir_setenv_pairs(data_dir), "openhost_system_agent", *args]
     return ["sudo", "openhost_system_agent", *args]
 
 

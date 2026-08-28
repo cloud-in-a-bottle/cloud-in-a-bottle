@@ -51,6 +51,32 @@ class Migration{NNNN}{Name}(SystemMigration):
 
 4. Versions must be **contiguous** starting at 2 (v1 is the ansible baseline).
 
+## Never edit a landed migration — only add new ones
+
+A migration is **write-once, edit-never.** Once a `v{NNNN}` migration has landed, its behavior is frozen: hosts run
+only the migrations they haven't seen yet to catch up, so a host at v10 will *never* re-run an edited v2. If you change
+what an old migration does, two hosts reporting the "same" version can end up in different states, and the stepping-stone
+guarantee breaks. To change or fix host state, **add the next migration** — never touch an existing one. (This also
+applies to shared helpers a migration calls: editing a builder that an old migration invokes is editing that migration.
+Freeze it and add a new migration instead.)
+
+### Changing a systemd unit: use an additive drop-in
+
+Do **not** change host-level state by rewriting the main `openhost.service` unit from a shared builder and re-applying
+it in a new migration — that pattern requires editing the builder, which lives in the v0002 baseline migration, so it
+edits an old migration. Instead, layer the change on with an **additive systemd drop-in** under
+`/etc/systemd/system/openhost.service.d/NN-*.conf` and `systemctl daemon-reload`:
+
+- Ship the identical drop-in from ansible (`ansible/files/openhost.service.d/NN-*.conf`, installed by
+  `install_openhost_units.yml`) so fresh hosts and self-updating hosts converge to the same state. A test keeps the
+  migration constant and the ansible copy byte-identical.
+- `Environment=` and other list directives accumulate across drop-ins (good for *adding* a var); single-value
+  directives (`Restart=`, etc.) are overridden by the highest-numbered drop-in. Either way the baseline unit — and the
+  v0002 migration that builds it — stays frozen.
+
+See `v0010_journal_read_for_oom` (adds `SupplementaryGroups=`) and `v0011_bottle_router_config_env` (adds
+`Environment=BOTTLE_ROUTER_CONFIG=`) for the canonical shape.
+
 ## The stepping-stone guarantee
 
 The tag walk ensures a host that has been offline for a long time can catch up safely by walking through each

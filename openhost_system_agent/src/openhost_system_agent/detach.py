@@ -18,11 +18,16 @@ import time
 
 from loguru import logger
 
-from openhost_system_agent.updater.paths import DATA_DIR_ENV
+from openhost_system_agent.updater.paths import data_dir_env_value
+from openhost_system_agent.updater.paths import data_dir_setenv_pairs
 
 OPENHOST_UNIT = "openhost.service"
 APPLY_UNIT = "openhost-apply.service"
+# OpenHost -> Cloud in a Bottle rename: mark a detached apply under the new
+# BOTTLE_ name and the legacy OPENHOST_ name. Set both; read either.
 DETACHED_ENV = "OPENHOST_APPLY_DETACHED"
+DETACHED_ENV_NEW = "BOTTLE_APPLY_DETACHED"
+DETACHED_ENV_NAMES = (DETACHED_ENV_NEW, DETACHED_ENV)
 
 _WAIT_TIMEOUT_SECONDS = 3600.0
 _RUNTIME_MAX_SECONDS = 3600
@@ -45,7 +50,7 @@ def _systemctl(*args: str, timeout: int = 120) -> subprocess.CompletedProcess[st
 
 
 def is_detached() -> bool:
-    return os.environ.get(DETACHED_ENV) == "1"
+    return any(os.environ.get(name) == "1" for name in DETACHED_ENV_NAMES)
 
 
 def apply_is_running() -> bool:
@@ -92,14 +97,15 @@ def detach_apply() -> None:
         # start, including this failsafe, which is when it matters most.
         f'--property=ExecStopPost=/bin/sh -c "{systemctl} reset-failed {OPENHOST_UNIT}; '
         f'{systemctl} start --no-block {OPENHOST_UNIT}"',
+        f"--setenv={DETACHED_ENV_NEW}=1",
         f"--setenv={DETACHED_ENV}=1",
         # Transient units get no HOME, and git needs one (root's safe.directory
         # lives in $HOME/.gitconfig), or the walk dies on its first git call.
         f"--setenv=HOME={os.environ.get('HOME') or '/root'}",
     ]
-    data_dir = os.environ.get(DATA_DIR_ENV)
+    data_dir = data_dir_env_value()
     if data_dir:
-        cmd.append(f"--setenv={DATA_DIR_ENV}={data_dir}")
+        cmd += [f"--setenv={pair}" for pair in data_dir_setenv_pairs(data_dir)]
     cmd += [sys.executable, "-c", _ENTRYPOINT]
 
     try:
