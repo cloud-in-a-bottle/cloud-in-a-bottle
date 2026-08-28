@@ -15,8 +15,8 @@ class ResolvedProvider:
 
     service_url: str
     app_id: str
-    name: str
-    version: str
+    app_name: str
+    service_version: str
     # Path prefix the provider serves this service under; "/" for a builtin.
     endpoint: str
     target: ProxyTarget

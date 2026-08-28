@@ -44,13 +44,13 @@ class TestVersionResolution:
         provider_id = _add_provider(db, SVC_SECRETS, "secrets", "0.2.0", "/_svc/")
         provider = resolve_provider(SVC_SECRETS, ">=0.1.0", db)
         assert provider.app_id == provider_id
-        assert provider.version == "0.2.0"
+        assert provider.service_version == "0.2.0"
         assert provider.endpoint == "/_svc/"
         assert provider.target == LocalPort(9000)
 
     def test_exact_version(self, db):
         _add_provider(db, SVC_SECRETS, "secrets", "1.0.0", "/_svc/")
-        assert resolve_provider(SVC_SECRETS, "==1.0.0", db).version == "1.0.0"
+        assert resolve_provider(SVC_SECRETS, "==1.0.0", db).service_version == "1.0.0"
 
     def test_no_provider_raises(self, db):
         with pytest.raises(RuntimeError, match="No provider"):
