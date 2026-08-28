@@ -36,6 +36,30 @@ from compute_space.core.manifest import PortMapping
 
 CONTAINER_ROOT = "/data"
 
+# Env-var naming contract.  The project was renamed OpenHost -> Cloud in a
+# Bottle; every OPENHOST_* variable stamped into an app container is now also
+# exposed under BOTTLE_*.  The legacy names are kept indefinitely for backward
+# compatibility.
+LEGACY_ENV_PREFIX = "OPENHOST_"
+ENV_PREFIX = "BOTTLE_"
+
+
+def add_bottle_env_aliases(env: dict[str, str]) -> dict[str, str]:
+    """Return ``env`` with a ``BOTTLE_``-prefixed twin for every ``OPENHOST_`` var.
+
+    The rename from OpenHost to Cloud in a Bottle keeps the legacy
+    ``OPENHOST_*`` names for compatibility while exposing the same values
+    under ``BOTTLE_*``.  An already-present ``BOTTLE_*`` entry is never
+    clobbered, so an explicit new-style value wins over the auto-alias.
+    """
+    aliased = dict(env)
+    for key, value in env.items():
+        if key.startswith(LEGACY_ENV_PREFIX):
+            twin = ENV_PREFIX + key[len(LEGACY_ENV_PREFIX) :]
+            aliased.setdefault(twin, value)
+    return aliased
+
+
 # Dummy-interface IP that the host kernel accepts as local; the router (and a
 # container-facing CoreDNS view) bind here so pasta containers can reach host
 # services via ``host.containers.internal``.  Created by ansible as the
@@ -424,6 +448,11 @@ def run_container(
         # conflicts with other host services, so it should bind on this
         # allocated port instead.
         container_env["OPENHOST_LOCAL_PORT"] = str(local_port)
+
+    # Expose every var under both the legacy OPENHOST_ name and the new
+    # BOTTLE_ name.  Done here (after host->container path translation and
+    # after LOCAL_PORT is set) so the twins carry the final container values.
+    container_env = add_bottle_env_aliases(container_env)
 
     for key, value in container_env.items():
         cmd.extend(["-e", f"{key}={value}"])
