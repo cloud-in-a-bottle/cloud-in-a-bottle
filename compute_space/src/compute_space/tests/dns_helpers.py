@@ -18,9 +18,7 @@ from compute_space.tests.conftest import open_db
 PUBLIC_IP = "203.0.113.10"
 
 
-def seeded_dns_config(
-    tmp_path: Path, *domains: Domain, public_ip: str = PUBLIC_IP, dynamic_dns: bool = False
-) -> DefaultConfig:
+def seeded_dns_config(tmp_path: Path, *domains: Domain, public_ip: str = PUBLIC_IP) -> DefaultConfig:
     """A config with a live DB and seeded CoreDNS zone files for ``domains`` (primary first).
 
     Real zone files rather than stubs, so tests exercise the same read/write path production does.
@@ -29,7 +27,6 @@ def seeded_dns_config(
         data_root_dir=str(tmp_path),
         public_ip=public_ip,
         coredns_enabled=True,
-        dynamic_dns_enabled=dynamic_dns,
     )
     config.make_all_dirs()
     init_db(config.db_path)

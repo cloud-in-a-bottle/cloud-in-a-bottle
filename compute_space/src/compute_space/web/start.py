@@ -25,14 +25,11 @@ from compute_space.core.caddy import unix_admin_address
 from compute_space.core.containers import CONTAINER_GATEWAY_IP
 from compute_space.core.dns.client import ensure_dns_provider_running
 from compute_space.core.dns.client import uses_local_dns
-from compute_space.core.dns.coredns_provider.coredns import ADDRESS_TTL_SECONDS
-from compute_space.core.dns.coredns_provider.coredns import DYNAMIC_ADDRESS_TTL_SECONDS
 from compute_space.core.dns.coredns_provider.coredns import CoreDnsProcess
 from compute_space.core.dns.coredns_provider.coredns import coredns_is_needed
 from compute_space.core.dns.coredns_provider.coredns import public_dns_zones
 from compute_space.core.dns.coredns_provider.coredns import set_active_coredns
 from compute_space.core.dns.coredns_provider.coredns import start_coredns
-from compute_space.core.dns.dynamic_dns import start_dynamic_dns_task
 from compute_space.core.dns.public_ip import effective_public_ip
 from compute_space.core.dns.public_ip import seed_public_ip
 from compute_space.core.domains import Domain
@@ -178,7 +175,6 @@ async def _main() -> None:
                 coredns_bin=_ensure_coredns_binary(config),
                 serve_public=serve_public,
                 db=db,
-                default_ttl=DYNAMIC_ADDRESS_TTL_SECONDS if config.dynamic_dns_enabled else ADDRESS_TTL_SECONDS,
             )
             # Register so /api/domains can regenerate zones + restart CoreDNS when a domain is added.
             set_active_coredns(coredns)
@@ -208,11 +204,6 @@ async def _main() -> None:
                 # secondary under a non-TLS primary — and regenerates the Caddyfile once a cert
                 # lands so Caddy stops serving its internal CA.
                 background_tasks.append(start_renewal_task(reload_caddy_for_domains))
-
-        if config.dynamic_dns_enabled:
-            # Opt-in: on a fixed address the polling is pure cost, but on a connection that gets
-            # renumbered it is the only thing that brings the space back.
-            background_tasks.append(start_dynamic_dns_task(config, get_db, config.dynamic_dns_interval_seconds))
         elif needs_caddy_for_tls:
             raise RuntimeError(
                 "A TLS domain is configured but start_caddy is False. Caddy is required for TLS termination."
