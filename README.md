@@ -13,7 +13,7 @@
 </div>
 
 <p align="center">
-  <img src=".github/assets/dashboard.webp" alt="Cloud in a Bottle dashboard showing a variety of installed apps" width="900">
+  <img src=".github/assets/dashboard.webp" alt="Cloud in a Bottle dashboard showing a variety of installed apps" width="720">
 </p>
 
 ## Why Cloud in a Bottle
@@ -55,11 +55,6 @@ CoreDNS provides wildcard DNS for app subdomains.
 App storage is organized into permanent data, temporary files, and archive storage. The manifest controls which tiers
 the container can access. Platform state and permanent app data are stored on your instance. Archive data can stay
 local or use S3-compatible storage you configure.
-
-<p align="center">
-  <img src=".github/assets/app-detail.webp" alt="Cloud in a Bottle app detail page showing status, configuration, and logs" width="900"><br>
-  <em>Manage app status, resources, source, logs, and lifecycle from one place.</em>
-</p>
 
 ## Documentation
 
