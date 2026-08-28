@@ -38,8 +38,8 @@ Cloud in a Bottle runs on your own hardware, a local virtual machine, or a cloud
 
 ### Managed hosting
 
-If you'd rather not run your own server, [Imbue can provision one for you](https://cloudinabottle.imbue.com/): your
-SSH key, your data, your instance. We set up what you need to get going, and then it's yours.
+If you'd rather not run your own server, [Imbue can provision one for you](https://cloudinabottle.imbue.com/). We
+configure it with your SSH key, then hand it over.
 
 ## How it works
 
@@ -64,9 +64,6 @@ operating guides. Useful starting points include:
 - [Deploying Cloud in a Bottle](https://cloudinabottle.org/docs/deploying.html)
 - [Creating an app](https://cloudinabottle.org/docs/creating_an_app.html)
 - [`cloudinabottle.toml` manifest specification](https://cloudinabottle.org/docs/manifest_spec.html)
-
-The manual's source lives in `docs/src/` and is served directly by each Cloud in a Bottle instance, with no separate
-build step. Add pages to `docs/src/SUMMARY.md` to include them in the manual.
 
 ## Agent skill
 
