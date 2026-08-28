@@ -1,5 +1,5 @@
 <div align="center">
-  <h1>Cloud in a Bottle <img alt="" src=".github/assets/logo-icon.svg" height="38" align="top"></h1>
+  <h1>Cloud in a Bottle <img alt="" src=".github/assets/logo-icon.svg" height="30" align="top"></h1>
   <p><strong>Your corner of the cloud.</strong></p>
   <p>
     <a href="https://www.gnu.org/licenses/agpl-3.0"><img alt="License: AGPL-3.0" src="https://img.shields.io/badge/license-AGPL--3.0-blue.svg"></a>
