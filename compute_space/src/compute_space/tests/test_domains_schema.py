@@ -12,8 +12,8 @@ from pathlib import Path
 import pytest
 
 from compute_space.db.schema import schema_path
+from compute_space.db.versioned import REGISTRY
 from compute_space.db.versioned.migrations.v0013_domains_and_settings import Migration0013DomainsAndSettings
-from compute_space.db.versioned.registry import REGISTRY
 from compute_space.db.versioned.runner import apply_migrations
 from compute_space.db.versioned.runner import read_version
 from openhost_system_agent.migrations.versions.v0007_seed_domains_and_scrub import _SCHEMA as _AGENT_SCHEMA

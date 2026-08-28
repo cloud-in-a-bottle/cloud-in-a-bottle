@@ -127,44 +127,55 @@ async def _acquire_cert_dns01(
                         break
 
             logger.info(f"DNS-01: {len(pending_challenges)} pending challenges to answer")
-            if pending_challenges:
-                # Publish every challenge value at once.  For a wildcard cert the base domain
-                # and *.domain are separate authorizations that both need a TXT record live at the
-                # same time.
-                logger.info(f"Setting {len(validation_values)} DNS-01 challenge TXT record(s)")
-                await challenge.publish(dns, domains[0], validation_values)
+            challenge_published = False
+            acquisition_succeeded = False
+            try:
+                if pending_challenges:
+                    # Publish every challenge value at once.  For a wildcard cert the base domain
+                    # and *.domain are separate authorizations that both need a TXT record live at
+                    # the same time.
+                    logger.info(f"Setting {len(validation_values)} DNS-01 challenge TXT record(s)")
+                    await challenge.publish(dns, domains[0], validation_values)
+                    challenge_published = True
 
-                # Wait until an external resolver can see the records before telling the ACME
-                # server to validate.  Without this the CA's resolvers may get NXDOMAIN — the zone
-                # file reload hasn't happened yet, the registrar hasn't published, or the NS
-                # delegation from the parent zone hasn't propagated.
-                await challenge.wait_until_visible(dns, domains[0], validation_values)
+                    # Wait until an external resolver can see the records before telling the ACME
+                    # server to validate.  Without this the CA's resolvers may get NXDOMAIN — the
+                    # zone file reload hasn't happened yet, the registrar hasn't published, or the
+                    # NS delegation from the parent zone hasn't propagated.
+                    await challenge.wait_until_visible(dns, domains[0], validation_values)
 
-                # Now answer all challenges
-                for challenge_body in pending_challenges:
-                    await asyncio.to_thread(
-                        acme_client.answer_challenge, challenge_body, challenge_body.response(account_key)
-                    )
+                    # Now answer all challenges
+                    for challenge_body in pending_challenges:
+                        await asyncio.to_thread(
+                            acme_client.answer_challenge, challenge_body, challenge_body.response(account_key)
+                        )
 
-            deadline = datetime.datetime.now() + datetime.timedelta(seconds=120)
-            while datetime.datetime.now() < deadline:
-                order = await asyncio.to_thread(acme_client.poll_and_finalize, order, deadline)
-                if order.fullchain_pem:
-                    break
-                await asyncio.sleep(2)
+                deadline = datetime.datetime.now() + datetime.timedelta(seconds=120)
+                while datetime.datetime.now() < deadline:
+                    order = await asyncio.to_thread(acme_client.poll_and_finalize, order, deadline)
+                    if order.fullchain_pem:
+                        break
+                    await asyncio.sleep(2)
 
-            # Clean up DNS record
-            await challenge.clear(dns, domains[0])
+                if not order.fullchain_pem:
+                    raise RuntimeError(f"Failed to get cert for {domains}: order not finalized")
 
-            if not order.fullchain_pem:
-                raise RuntimeError(f"Failed to get cert for {domains}: order not finalized")
-
-            return _extract_cert_and_key(order, tls_key)
+                result = _extract_cert_and_key(order, tls_key)
+                acquisition_succeeded = True
+                return result
+            finally:
+                # In a `finally` so a cancellation between publishing and finalizing still takes
+                # the tokens back down; only if we actually published, so a failure before that
+                # doesn't delete another run's records.
+                if challenge_published:
+                    try:
+                        await challenge.clear(dns, domains[0])
+                    except Exception:
+                        if acquisition_succeeded:
+                            raise
+                        logger.exception("Failed to clear DNS challenge records while handling acquisition failure")
 
         except (errors.ValidationError, RuntimeError) as exc:
-            # Clean up DNS records before retrying
-            await challenge.clear(dns, domains[0])
-
             if attempt < max_attempts:
                 wait = 30 * attempt
                 logger.warning(

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import sqlite3
 from collections.abc import Callable
@@ -389,3 +390,68 @@ async def test_a_missing_provider_app_is_reported_rather_than_waited_for(tmp_pat
         db.execute("INSERT INTO service_defaults (service_url, app_id) VALUES (?, 'ghost')", (DNS_SERVICE_URL,))
         db.commit()
         assert await ensure_dns_provider_running(config, db) is False
+
+
+class _HungProcess:
+    """A dig that never exits, so the timeout and cancellation paths are the ones under test."""
+
+    returncode: int | None = None
+
+    def __init__(self) -> None:
+        self.killed = False
+        self.waited = False
+        self.communicate_cancelled = False
+        self.communicate_started = asyncio.Event()
+
+    async def communicate(self) -> tuple[bytes, bytes]:
+        self.communicate_started.set()
+        try:
+            return await asyncio.Future[tuple[bytes, bytes]]()
+        except asyncio.CancelledError:
+            self.communicate_cancelled = True
+            raise
+
+    def kill(self) -> None:
+        self.killed = True
+
+    async def wait(self) -> int:
+        self.waited = True
+        self.returncode = -9
+        return self.returncode
+
+
+def _spawns(proc: _HungProcess) -> Callable[..., Any]:
+    async def spawn(*args: object, **kwargs: object) -> _HungProcess:
+        return proc
+
+    return spawn
+
+
+@pytest.mark.asyncio
+async def test_a_dig_that_hangs_is_killed_and_reaped(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A propagation wait polls for minutes; leaking a dig per poll would pile up zombies.
+    proc = _HungProcess()
+    monkeypatch.setattr(client_mod.asyncio, "create_subprocess_exec", _spawns(proc))
+    monkeypatch.setattr(client_mod, "_DIG_TIMEOUT_SECONDS", 0.01)
+
+    assert await client_mod._dig_sees("_acme-challenge.example.com", RecordType.TXT, {"tok"}) is False
+    assert proc.communicate_cancelled is True
+    assert proc.killed is True
+    assert proc.waited is True
+
+
+@pytest.mark.asyncio
+async def test_cancelling_the_wait_still_reaps_the_dig(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Cancellation propagates — the caller asked to stop — but not before cleaning up the child.
+    proc = _HungProcess()
+    monkeypatch.setattr(client_mod.asyncio, "create_subprocess_exec", _spawns(proc))
+
+    task = asyncio.create_task(client_mod._dig_sees("_acme-challenge.example.com", RecordType.TXT, {"tok"}))
+    await proc.communicate_started.wait()
+    task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert proc.communicate_cancelled is True
+    assert proc.killed is True
+    assert proc.waited is True

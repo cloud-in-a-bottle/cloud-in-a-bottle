@@ -18,6 +18,7 @@ the router can claim, and the most useful line in a provider app's audit log.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import sqlite3
 import time
 from contextlib import closing
@@ -196,6 +197,8 @@ def _to_wire(record: DnsRecord) -> dict[str, Any]:
 # directly and confirm nothing about whether the delegation works.
 _PROPAGATION_RESOLVER = "8.8.8.8"
 
+_DIG_TIMEOUT_SECONDS = 10.0
+
 
 async def wait_for_records(
     fqdn: str, rrtype: RecordType, expected_values: list[str], timeout: float, interval: float = 5
@@ -234,7 +237,16 @@ async def _dig_sees(fqdn: str, rrtype: RecordType, expected: set[str]) -> bool:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.DEVNULL,
         )
-        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=10)
+        try:
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=_DIG_TIMEOUT_SECONDS)
+        except BaseException:
+            if proc.returncode is None:
+                with contextlib.suppress(ProcessLookupError):
+                    proc.kill()
+            # Keep reaping in the background if another cancellation arrives.
+            with contextlib.suppress(Exception):
+                await asyncio.shield(proc.wait())
+            raise
     except (TimeoutError, FileNotFoundError, OSError):
         return False
     return expected <= {line.strip().strip('"') for line in stdout.decode().strip().splitlines()}
