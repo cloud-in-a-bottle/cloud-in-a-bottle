@@ -1,5 +1,5 @@
 ---
-name: openhost-context
+name: cloud-in-a-bottle-context
 description: Deploy and debug apps on Cloud in a Bottle, a platform for self-hosting apps. Use when working with the `bottle` CLI, deploying or reloading an app on a Cloud in a Bottle zone, or building a Cloud in a Bottle app.
 ---
 
