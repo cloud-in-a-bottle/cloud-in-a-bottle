@@ -29,15 +29,12 @@ from packaging.specifiers import SpecifierSet
 from packaging.version import Version
 
 from compute_space.config import Config
+from compute_space.core.app_id import ROUTER_APP_ID
+from compute_space.core.app_id import ROUTER_APP_NAME
 from compute_space.core.service_interface.builtin_services import BuiltinService
 from compute_space.core.service_interface.builtin_services import Permissions
 from compute_space.core.service_interface.builtin_services import builtin_for
 from compute_space.core.service_interface.services_v2 import resolve_provider
-
-# The router's own consumer identity.  App names are DNS-label-like (see core.app_id), so the
-# leading underscore cannot collide with a real one.
-ROUTER_CONSUMER_ID = "_openhost_router"
-ROUTER_CONSUMER_NAME = "OpenHost Router"
 
 PERMISSIONS_HEADER = "X-OpenHost-Permissions"
 _REQUEST_TIMEOUT_SECONDS = 60.0
@@ -100,8 +97,8 @@ async def call_service(
                 url,
                 json=payload,
                 headers={
-                    "X-OpenHost-Consumer-Id": ROUTER_CONSUMER_ID,
-                    "X-OpenHost-Consumer-Name": ROUTER_CONSUMER_NAME,
+                    "X-OpenHost-Consumer-Id": ROUTER_APP_ID,
+                    "X-OpenHost-Consumer-Name": ROUTER_APP_NAME,
                     PERMISSIONS_HEADER: json.dumps(permissions),
                 },
             )
