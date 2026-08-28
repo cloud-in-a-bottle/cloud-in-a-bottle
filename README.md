@@ -1,12 +1,11 @@
 <div align="center">
-  <h1>Cloud in a Bottle</h1>
+  <h1><img alt="" src=".github/assets/logo-icon.svg" height="32"> Cloud in a Bottle</h1>
   <p><strong>Your corner of the cloud.</strong></p>
   <p>
     <a href="https://www.gnu.org/licenses/agpl-3.0"><img alt="License: AGPL-3.0" src="https://img.shields.io/badge/license-AGPL--3.0-blue.svg"></a>
     <a href="https://cloudinabottle.org/docs/"><img alt="Documentation" src="https://img.shields.io/badge/docs-read_the_manual-blue.svg"></a>
     <a href="https://github.com/cloud-in-a-bottle/cloud-in-a-bottle/releases"><img alt="Releases and changelogs" src="https://img.shields.io/github/v/release/cloud-in-a-bottle/cloud-in-a-bottle?label=changelog"></a>
   </p>
-  <img alt="Cloud in a Bottle logo" src=".github/assets/logo-icon.svg" width="155">
 </div>
 
 Deploy, use, and share web apps on a server you control. Built on the idea that modern software lives in the cloud, and if you want to be in control of your digital life, you need your own place in the cloud too.
