@@ -48,7 +48,6 @@ CREATE TABLE "apps" (
                 gpu INTEGER NOT NULL DEFAULT 0,
                 public_paths TEXT NOT NULL DEFAULT '[]',
                 manifest_raw TEXT,
-                installed_by TEXT,
                 created_at TEXT NOT NULL DEFAULT (datetime('now')),
                 updated_at TEXT NOT NULL DEFAULT (datetime('now'))
             , links TEXT NOT NULL DEFAULT '[]', cpu_cores REAL NOT NULL DEFAULT 0.1);
@@ -88,7 +87,7 @@ CREATE TABLE schema_version (
     id INTEGER PRIMARY KEY CHECK (id = 1),
     version INTEGER NOT NULL
 );
-INSERT INTO "schema_version" VALUES(1,13);
+INSERT INTO "schema_version" VALUES(1,14);
 CREATE TABLE "service_defaults" (
                 service_url TEXT PRIMARY KEY,
                 app_id TEXT NOT NULL,
