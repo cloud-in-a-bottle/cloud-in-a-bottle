@@ -311,6 +311,7 @@ def test_zone_caches_addresses_long_but_negative_answers_briefly(tmp_path: Path)
         "203.0.113.10",
         corefile,
         container_gateway_ip=None,
+        serve_public=True,
     )
     content = zonefile.read_text()
     assert "$TTL 300" in content
@@ -340,7 +341,7 @@ def test_regenerating_a_zone_keeps_its_stored_records(tmp_path: Path) -> None:
         zones = public_dns_zones(config, db)
 
         dns_mod._write_coredns_config(
-            zones, "203.0.113.99", config.coredns_corefile_path, None, db=db
+            zones, "203.0.113.99", config.coredns_corefile_path, None, serve_public=True, db=db
         )
 
         content = zones[0].zonefile_path.read_text()
@@ -359,3 +360,52 @@ def test_every_render_advances_the_serial_so_coredns_reloads(tmp_path: Path) -> 
             dns_mod.write_zone_file(zone, "203.0.113.10", db)
             serials.append(int(zone.zonefile_path.read_text().split("; serial")[0].strip().splitlines()[-1].strip()))
     assert serials == sorted(set(serials))
+
+
+def test_container_view_runs_without_any_public_zones(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # A space using an external DNS provider still needs the hairpin, so the container view is
+    # generated with no public server block and no public IP at all.
+    monkeypatch.setattr(dns_mod, "_gateway_ip_is_bindable", lambda ip: True)
+    monkeypatch.setattr(dns_mod, "_host_upstream_resolvers", lambda: ["9.9.9.9"])
+
+    corefile = tmp_path / "Corefile"
+    zonefile = tmp_path / "zonefile"
+    dns_mod._write_coredns_config(
+        (dns_mod.DnsZone("app.example.com", zonefile),),
+        None,
+        corefile,
+        container_gateway_ip="10.200.0.1",
+        serve_public=False,
+    )
+
+    cf = corefile.read_text()
+    assert "bind 10.200.0.1" in cf
+    assert "forward . 9.9.9.9" in cf
+    # No authoritative view, and no public zone file written.
+    assert cf.count("bind ") == cf.count("bind 10.200.0.1")
+    assert not zonefile.exists()
+    assert (tmp_path / "zonefile.container").exists()
+
+
+def test_serving_public_zones_requires_a_public_ip(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="public IP is required"):
+        dns_mod._write_coredns_config(
+            (dns_mod.DnsZone("app.example.com", tmp_path / "zonefile"),),
+            None,
+            tmp_path / "Corefile",
+            container_gateway_ip=None,
+            serve_public=True,
+        )
+
+
+def test_coredns_is_needed_for_either_view(monkeypatch: pytest.MonkeyPatch) -> None:
+    zones = (dns_mod.DnsZone("app.example.com", Path("/tmp/zonefile")),)
+    monkeypatch.setattr(dns_mod, "_gateway_ip_is_bindable", lambda ip: True)
+    assert dns_mod.coredns_is_needed(zones, serve_public=True, container_gateway_ip=None) is True
+    # No public zones, but the hairpin still needs it.
+    assert dns_mod.coredns_is_needed((), serve_public=False, container_gateway_ip="10.200.0.1") is True
+
+    monkeypatch.setattr(dns_mod, "_gateway_ip_is_bindable", lambda ip: False)
+    # Nothing to serve on either side: don't start it at all.
+    assert dns_mod.coredns_is_needed((), serve_public=False, container_gateway_ip="10.200.0.1") is False
+    assert dns_mod.coredns_is_needed(zones, serve_public=False, container_gateway_ip=None) is False

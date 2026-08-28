@@ -1,10 +1,11 @@
-"""The CoreDNS process.  It serves two things:
+"""The CoreDNS process.  It serves two independent things, and either can run without the other:
 
-* **Public authoritative zones** — one per public domain the instance answers on.
+* **Public authoritative zones** — one per public domain, only when the instance is its own DNS
+  provider.  A space using an external provider serves none of these.
 * **The container view** — the same names bound on the container gateway, answering the wildcard
   with the gateway IP so app containers reach sibling apps through Caddy (NAT hairpin), plus a
-  catch-all forward.  Needed because pasta otherwise makes the public IP local to the container
-  netns.
+  catch-all forward.  Needed whenever app containers run, whoever answers publicly, because pasta
+  otherwise makes the public IP local to the container netns.
 
 Zone data reloads on an SOA serial bump, but a *new* zone means a new Corefile server block and so
 a restart — see ``reload_coredns_for_domains``.  Record reads and writes go through
@@ -114,11 +115,12 @@ class DnsZone:
 
 
 def public_dns_zones(config: Config, db: sqlite3.Connection) -> tuple[DnsZone, ...]:
-    """Every non-mDNS domain, paired with its zone file path.
+    """Every non-mDNS domain, paired with its zone file path — the zones CoreDNS *can* serve.
 
-    mDNS ``.local`` domains are excluded: they are served by the wildcard mDNS responder, never
-    CoreDNS/ACME.  The primary keeps the legacy ``zonefile`` path; other domains get a per-domain
-    file under ``zones/``."""
+    Whether it serves them publicly depends on ``serve_public``; the container view is generated
+    for them either way.  mDNS ``.local`` domains are excluded: they are served by the wildcard
+    mDNS responder, never CoreDNS/ACME.  The primary keeps the legacy ``zonefile`` path; other
+    domains get a per-domain file under ``zones/``."""
     primary = primary_domain_or_none(db)
     primary_no_port = primary.name_no_port if primary else None
     return tuple(
@@ -131,35 +133,55 @@ def public_dns_zones(config: Config, db: sqlite3.Connection) -> tuple[DnsZone, .
     )
 
 
+def coredns_is_needed(zones: tuple[DnsZone, ...], serve_public: bool, container_gateway_ip: str | None) -> bool:
+    """True if CoreDNS has anything to serve: public zones, or the container view (which needs a
+    bindable gateway but no public zones and no public IP)."""
+    if serve_public and zones:
+        return True
+    return container_gateway_ip is not None and _gateway_ip_is_bindable(container_gateway_ip)
+
+
 def _write_coredns_config(
     zones: tuple[DnsZone, ...],
-    public_ip: str,
+    public_ip: str | None,
     corefile_path: Path,
     container_gateway_ip: str | None,
     *,
+    serve_public: bool,
     db: sqlite3.Connection | None = None,
     default_ttl: int = ADDRESS_TTL_SECONDS,
 ) -> None:
-    """Render the Corefile plus a zone file per zone, for each enabled view."""
+    """Render the Corefile plus the zone files each enabled view needs."""
     # Emitting the container view against an unbindable gateway would stop CoreDNS starting.
     if container_gateway_ip and not _gateway_ip_is_bindable(container_gateway_ip):
         logger.info("Container gateway {} not bindable; skipping container-facing DNS view", container_gateway_ip)
         container_gateway_ip = None
 
+    if serve_public and not public_ip:
+        raise ValueError("a public IP is required to serve public authoritative zones")
+
     corefile_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # serve_public implies public_ip (guarded above); the bind address is only meaningful when
+    # there is an authoritative view to bind.
+    public_zones = zones if serve_public and public_ip else ()
+    container_zones = zones if container_gateway_ip else ()
+
     corefile_path.write_text(
         _jinja_env.get_template("Corefile").render(
-            zones=zones,
-            bind_ip=_coredns_bind_ip(public_ip),
+            public_zones=public_zones,
+            container_zones=container_zones,
+            bind_ip=_coredns_bind_ip(public_ip) if public_zones and public_ip else None,
             container_gateway_ip=container_gateway_ip,
             upstream_dns=" ".join(_host_upstream_resolvers()),
         )
     )
 
-    for zone in zones:
+    for zone in public_zones:
+        assert public_ip is not None  # guarded above
         write_zone_file(zone, public_ip, db, default_ttl)
 
-    for zone in zones if container_gateway_ip else ():
+    for zone in container_zones:
         zone.container_zonefile_path.parent.mkdir(parents=True, exist_ok=True)
         zone.container_zonefile_path.write_text(
             _jinja_env.get_template("zonefile_container").render(
@@ -238,6 +260,9 @@ class CoreDnsProcess:
     log_task: asyncio.Task[None]
     corefile_path: Path
     coredns_bin: str
+    # Recorded so a reload regenerates the same shape of Corefile rather than silently switching
+    # the instance's DNS provider.
+    serve_public: bool = True
     # Insurance against a future background caller racing two coredns onto :53; today's callers are
     # already serialized on the event loop.
     _restart_lock: asyncio.Lock = attr.ib(factory=asyncio.Lock, init=False, eq=False, repr=False)
@@ -270,34 +295,39 @@ class CoreDnsProcess:
 
 async def start_coredns(
     zones: tuple[DnsZone, ...],
-    public_ip: str,
+    public_ip: str | None,
     corefile_path: Path,
     container_gateway_ip: str | None = CONTAINER_GATEWAY_IP,
     coredns_bin: str = "coredns",
     *,
+    serve_public: bool = True,
     db: sqlite3.Connection | None = None,
     default_ttl: int = ADDRESS_TTL_SECONDS,
 ) -> CoreDnsProcess:
     """Write the Corefile + zone files, start CoreDNS, and return the handle.
 
-    ``container_gateway_ip`` controls the container view; pass ``None`` where the gateway
-    interface doesn't exist.
+    ``serve_public`` controls the authoritative half — True when this instance is its own DNS
+    provider — and ``public_ip`` is required for it and ignored otherwise.  ``container_gateway_ip``
+    controls the container view; pass ``None`` where the gateway interface doesn't exist.
     """
     _write_coredns_config(
         zones,
         public_ip,
         corefile_path,
         container_gateway_ip,
+        serve_public=serve_public,
         db=db,
         default_ttl=default_ttl,
     )
-    logger.info(f"Starting CoreDNS for {', '.join(z.domain for z in zones)}")
+    served = ", ".join(z.domain for z in zones) or "no zones"
+    logger.info(f"Starting CoreDNS ({'authoritative + ' if serve_public else ''}container view) for {served}")
     proc, log_task = await _spawn_coredns(corefile_path, coredns_bin)
     return CoreDnsProcess(
         proc=proc,
         log_task=log_task,
         corefile_path=corefile_path,
         coredns_bin=coredns_bin,
+        serve_public=serve_public,
     )
 
 
@@ -325,7 +355,8 @@ async def reload_coredns_for_domains(config: Config, db: sqlite3.Connection) -> 
     """
     public_ip = effective_public_ip(config, db)
     coredns = get_active_coredns()
-    if not public_ip:
+    serve_public = coredns.serve_public if coredns is not None else config.coredns_enabled
+    if serve_public and not public_ip:
         return False
 
     _write_coredns_config(
@@ -333,6 +364,7 @@ async def reload_coredns_for_domains(config: Config, db: sqlite3.Connection) -> 
         public_ip,
         coredns.corefile_path if coredns is not None else config.coredns_corefile_path,
         CONTAINER_GATEWAY_IP,
+        serve_public=serve_public,
         db=db,
         default_ttl=ADDRESS_TTL_SECONDS,
     )
