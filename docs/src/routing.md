@@ -2,15 +2,15 @@
 
 DNS records for a space are read and written through the **`dns` service**
 (`github.com/imbue-openhost/openhost/services/dns`). Two providers implement it, and nothing
-above the service — cert acquisition, dynamic DNS, or an app — knows which one is in use:
+above the service — cert acquisition or an app — knows which one is in use:
 
 - **the router itself** (the default, when no provider app is installed). the space is its own
-  authoritative nameserver, and records live in CoreDNS zone files on disk.
+  authoritative nameserver, and CoreDNS serves the records.
 - **a connector app** such as `external-dns-connector`, which forwards to an external DNS
   provider. installing one makes it the service default and switches the whole space over.
 
-`core/dns/selection.py` resolves which backend applies; `core/dns/service.py` is the router's own
-implementation of the service.
+`core/dns/client.py` is how router-side code calls the service; `core/dns/coredns_provider/` is
+the router's own implementation of it.
 
 ### when the router provides DNS
 
@@ -25,34 +25,22 @@ on the server, CoreDNS (started by the router process) serves authoritative DNS 
 - TXT records for `_acme-challenge.host.imbue.com` (written dynamically during ACME DNS-01 cert acquisition)
 - anything else an app has written through the `dns` service
 
-the **zone file is the source of truth** for its records. the template only seeds a zone file that
-doesn't exist yet; after that, adding a domain or changing the instance's IP re-points the
-router-owned records in place rather than re-rendering, so app-written records survive. reads and
-writes go through dnspython (`core/dns/zonefile.py`), serialized per zone and written atomically.
-every write bumps the SOA serial, which is what makes CoreDNS reload.
+the **DB is the source of truth**: records written through the service go to the `dns_records`
+table, and the zone file is generated from them. zone files are outputs, never inputs — nothing
+reads them back, so any change is a whole-file rewrite (via a temp file and rename, since CoreDNS
+re-reads on mtime change and a partial write would leave the zone unparseable). that makes RRset
+semantics plain SQL, with no read-modify-write on a file to race.
 
-the apex/`ns`/wildcard A records, and the apex SOA and NS, are **reserved**: the router maintains
-them, so the service refuses writes to them (`403 reserved_record`) no matter what grants the
-caller holds. everything else at those names — an apex MX or TXT for mail — is writable.
+the apex/`ns`/wildcard A records are not stored. they are derived from the instance's public IP
+when the zone file is rendered, so re-pointing the space is a re-render rather than a write.
 
-### the container view
-
-CoreDNS also serves a second, private view bound to the container gateway (`10.200.0.1`), which
-answers each domain's wildcard with the gateway IP so app containers reach sibling apps' public
-HTTPS URLs through Caddy instead of looping back inside their own netns. app containers point at
-it via `--dns` (see `core/containers.py`).
-
-this is **independent of the authoritative half**: the hairpin is needed whoever answers publicly,
-so CoreDNS runs for the container view even on an http-only box or one using an external DNS
-provider. see `coredns_is_needed`.
+every render bumps the SOA serial, which is what makes CoreDNS reload. a *new* zone needs a new
+Corefile server block, so it needs a CoreDNS restart rather than just a reload.
 
 ### the public IP
 
-the DB is the source of truth; `public_ip` in config.toml only seeds it on first boot, so a
-dynamic update isn't undone by a stale config file. with `dynamic_dns_enabled`, a background
-watcher re-detects the address and rewrites the A records when it moves. detection requires two
-independent echo services to agree on a globally routable address before anything is written —
-a wrong answer here takes the whole space offline.
+the DB is the source of truth here too; `public_ip` in config.toml only seeds it on first boot,
+so a later update isn't undone by a stale config file.
 
 ## TLS certs
 
@@ -61,8 +49,9 @@ we use wildcard certs: one cert covers both `host.imbue.com` and `*.host.imbue.c
 certs are acquired via ACME DNS-01 challenge:
 1. router creates an ACME order for `[domain, *.domain]`
 2. ACME server asks us to prove we control the domain by setting a TXT record
-3. router writes the TXT record to the CoreDNS zone file
-4. ACME server queries our CoreDNS, sees the TXT record, issues the cert
+3. router writes the TXT record through the `dns` service — so this works the same whether the
+   router or a connector app answers for the domain
+4. ACME server queries whoever is authoritative, sees the TXT record, issues the cert
 5. router clears the TXT record
 
 the cert and key are stored on disk and reused across restarts. the router only acquires a new cert if none exists.

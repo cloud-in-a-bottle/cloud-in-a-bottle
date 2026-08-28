@@ -15,11 +15,6 @@ import attr
 DNS_SERVICE_URL = "github.com/imbue-openhost/openhost/services/dns"
 DNS_SERVICE_VERSION = "0.1.0"
 
-# Provider id for the router's own implementation.  It has no row in ``apps``, and
-# ``service_defaults.app_id`` is a foreign key into that table, so the router is the *implicit*
-# provider: it is what you get when no app has claimed the service.
-ROUTER_DNS_PROVIDER_ID = "_openhost_router_dns"
-
 # The zone apex, as a zone-relative name.
 APEX = "@"
 
