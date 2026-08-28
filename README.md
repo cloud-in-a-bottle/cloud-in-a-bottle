@@ -69,7 +69,7 @@ build step. Add pages to `docs/src/SUMMARY.md` to include them in the manual.
 An agent skill that gives an AI coding agent context for deploying and debugging apps on Cloud in a Bottle via the `bottle` CLI. Install with:
 
 ```bash
-npx skills add cloud-in-a-bottle/cloud-in-a-bottle --skill openhost-context
+npx skills add cloud-in-a-bottle/cloud-in-a-bottle --skill cloud-in-a-bottle-context
 ```
 
 The skill works best with the `bottle` CLI installed and logged in:
