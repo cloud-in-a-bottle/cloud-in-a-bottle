@@ -132,14 +132,13 @@ async def _acquire_cert_dns01(
                 # and *.domain are separate authorizations that both need a TXT record live at the
                 # same time.
                 logger.info(f"Setting {len(validation_values)} DNS-01 challenge TXT record(s)")
-                zone_domain = domains[0].lstrip("*.")
-                await challenge.publish(dns, zone_domain, validation_values)
+                await challenge.publish(dns, domains[0], validation_values)
 
                 # Wait until an external resolver can see the records before telling the ACME
                 # server to validate.  Without this the CA's resolvers may get NXDOMAIN — the zone
                 # file reload hasn't happened yet, the registrar hasn't published, or the NS
                 # delegation from the parent zone hasn't propagated.
-                await challenge.wait_until_visible(dns, zone_domain, validation_values)
+                await challenge.wait_until_visible(dns, domains[0], validation_values)
 
                 # Now answer all challenges
                 for challenge_body in pending_challenges:

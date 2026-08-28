@@ -297,12 +297,15 @@ def dns_backend(dns_config):
 def acquired_cert(pebble_server, acme_account_key, dns_backend):
     """Acquire a wildcard cert via DNS-01 — reused by multiple tests."""
     domains = [ZONE_DOMAIN, f"*.{ZONE_DOMAIN}"]
-    cert_pem, key_pem = _acquire_cert_dns01(
-        domains=domains,
-        directory_url=pebble_server["directory_url"],
-        dns=dns_backend,
-        account_key=acme_account_key["jwk"],
-        verify_ssl=False,
+    # The fixture is sync and owns no loop, so asyncio.run belongs here.
+    cert_pem, key_pem = asyncio.run(
+        _acquire_cert_dns01(
+            domains=domains,
+            directory_url=pebble_server["directory_url"],
+            dns=dns_backend,
+            account_key=acme_account_key["jwk"],
+            verify_ssl=False,
+        )
     )
     return {"cert_pem": cert_pem, "key_pem": key_pem, "domains": domains}
 

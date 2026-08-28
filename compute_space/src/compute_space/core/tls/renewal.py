@@ -2,7 +2,6 @@ import asyncio
 import datetime
 import enum
 import sqlite3
-import threading
 from collections.abc import Awaitable
 from collections.abc import Callable
 from contextlib import closing
@@ -97,7 +96,7 @@ def _mark_cert_active(name: str) -> None:
 
 async def renew_cert_if_needed(
     config: Config,
-    reload_caddy: Callable[[Config, sqlite3.Connection], object],
+    reload_caddy: Callable[[Config, sqlite3.Connection], Awaitable[object]],
     provision: Callable[[Config, sqlite3.Connection], Awaitable[None]] = provision_cert,
     acquire: Callable[[Config, str, Path, Path, sqlite3.Connection], Awaitable[None]] = acquire_cert_for_domain,
 ) -> bool:
@@ -145,12 +144,14 @@ async def renew_cert_if_needed(
                 logger.exception(f"TLS cert renewal failed for {name}; will retry next cycle")
 
         if renewed:
-            reload_caddy(config, db)
+            await reload_caddy(config, db)
     return renewed
 
 
-def start_renewal_thread(reload_caddy: Callable[[Config, sqlite3.Connection], object]) -> threading.Thread:
-    """Acquire and renew certs in a daemon thread.
+def start_renewal_task(
+    reload_caddy: Callable[[Config, sqlite3.Connection], Awaitable[object]],
+) -> asyncio.Task[None]:
+    """Acquire and renew certs periodically on the caller's event loop.
 
     This owns the *first* acquisition as well as renewals — boot does not wait for a cert, so until
     the first pass succeeds Caddy serves the domain with its internal CA.
@@ -158,6 +159,8 @@ def start_renewal_thread(reload_caddy: Callable[[Config, sqlite3.Connection], ob
     Reads the *live* active config each cycle (``get_config()``), so a domain added at runtime via
     /api/domains after startup is picked up by renewal rather than frozen out by a stale snapshot.
     ``reload_caddy`` regenerates the Caddyfile so a renewed/newly-acquired cert is actually served.
+
+    The caller must keep the returned task alive — the loop holds only a weak reference.
     """
 
     async def _run() -> None:
@@ -175,11 +178,4 @@ def start_renewal_thread(reload_caddy: Callable[[Config, sqlite3.Connection], ob
             retry = INITIAL_RETRY_INTERVAL
             await asyncio.sleep(CHECK_INTERVAL.total_seconds())
 
-    # The loop owns this thread, so it owns the event loop too — asyncio.run belongs here, at the
-    # boundary, rather than inside anything it calls.
-    def _loop() -> None:
-        asyncio.run(_run())
-
-    thread = threading.Thread(target=_loop, name="tls-cert-renewal", daemon=True)
-    thread.start()
-    return thread
+    return asyncio.create_task(_run(), name="tls-cert-renewal")

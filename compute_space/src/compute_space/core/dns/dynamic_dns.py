@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import asyncio
 import sqlite3
-import threading
 from collections.abc import Callable
 from contextlib import closing
 
@@ -51,7 +50,7 @@ async def check_once(config: Config, db: sqlite3.Connection) -> str | None:
         # Re-rendering *is* the update: the address records come from the stored IP.  Writing them
         # as records too would duplicate what the template emits.  The Corefile's bind address
         # derives from the IP as well, so CoreDNS has to come back on the new one.
-        reload_coredns_for_domains(config, db)
+        await reload_coredns_for_domains(config, db)
     else:
         dns = DnsClient(config, db)
         for domain in router_managed_domains(db):
@@ -70,13 +69,16 @@ async def _point_at(dns: DnsClient, domain: str, ip: str) -> None:
         await dns.set_records(fqdn, RecordType.A, [ip], ttl=_DYNAMIC_TTL_SECONDS)
 
 
-def start_dynamic_dns_thread(
+def start_dynamic_dns_task(
     config: Config,
     open_db: Callable[[], sqlite3.Connection],
     interval_seconds: float = _DEFAULT_INTERVAL_SECONDS,
-) -> threading.Thread:
-    """A fresh DB connection per tick: sqlite3 connections aren't shareable across threads, and a
-    long-lived one would hold a handle open across the sleep."""
+) -> asyncio.Task[None]:
+    """Poll for address changes on the caller's event loop.
+
+    A fresh DB connection per tick, so a handle isn't held open across the sleep.  The caller must
+    keep the returned task alive — the loop holds only a weak reference.
+    """
 
     async def _run() -> None:
         logger.info(f"Dynamic DNS watcher started (every {interval_seconds:.0f}s)")
@@ -89,11 +91,4 @@ def start_dynamic_dns_thread(
                 # A transient provider or network error must not kill the watcher.
                 logger.exception("Dynamic DNS check failed; retrying at the next interval")
 
-    # The watcher owns this thread, so it owns the event loop — asyncio.run belongs at this
-    # boundary, not inside anything it calls.
-    def loop() -> None:
-        asyncio.run(_run())
-
-    thread = threading.Thread(target=loop, name="dynamic-dns", daemon=True)
-    thread.start()
-    return thread
+    return asyncio.create_task(_run(), name="dynamic-dns")
