@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Callable
+from collections.abc import Generator
 from typing import Any
 
 import attr
@@ -27,16 +29,14 @@ from litestar.exceptions import HTTPException
 from litestar.exceptions import ValidationException
 from litestar.params import FromPath
 
-from compute_space.config import get_config
 from compute_space.core.dns.coredns_provider import operations
 from compute_space.core.dns.coredns_provider.coredns import DnsZone
 from compute_space.core.dns.coredns_provider.grants import Grant
 from compute_space.core.dns.coredns_provider.grants import parse as parse_grants
 from compute_space.core.dns.coredns_provider.records import InvalidRecord
+from compute_space.core.dns.coredns_provider.settings import DnsSettings
 from compute_space.core.dns.service_api import ALL_ZONES
-from compute_space.core.dns.service_api import WILDCARD
 from compute_space.core.dns.service_api import DnsRecord
-from compute_space.db import provide_db
 
 PERMISSIONS_HEADER = "X-OpenHost-Permissions"
 
@@ -70,11 +70,6 @@ class WriteRequest:
     # service's own error code instead of the framework's validation shape.
     zone: str = ""
     records: list[RecordPayload] = attr.ib(factory=list)
-
-
-@attr.s(auto_attribs=True, frozen=True)
-class ZonesResponse:
-    zones: list[str]
 
 
 @attr.s(auto_attribs=True, frozen=True)
@@ -136,30 +131,16 @@ def provide_grants(request: Request[Any, Any, Any]) -> list[Grant]:
     return parse_grants(entries) if isinstance(entries, list) else []
 
 
-def provide_zones(db: NamedDependency[sqlite3.Connection]) -> dict[str, DnsZone]:
-    return operations.zone_map(get_config(), db)
-
-
 # ─── routes ───
-
-
-@post("/zones", status_code=200, sync_to_thread=True)
-def list_zones(grants: NamedDependency[list[Grant]], zones: NamedDependency[dict[str, DnsZone]]) -> ZonesResponse:
-    # Which domains the owner runs is not something an app with no DNS access should learn.
-    if not grants:
-        raise operations.PermissionDenied(WILDCARD, WILDCARD, "r")
-    return ZonesResponse(zones=sorted(zones))
 
 
 @post("/records/get", status_code=200, sync_to_thread=True)
 def get_records(
     data: GetRequest,
     grants: NamedDependency[list[Grant]],
-    zones: NamedDependency[dict[str, DnsZone]],
     db: NamedDependency[sqlite3.Connection],
 ) -> Response[ResultsResponse]:
     results = operations.read(
-        zones,
         grants,
         data.zone or ALL_ZONES,
         (data.name or "").strip().lower() or None,
@@ -174,7 +155,8 @@ def write_records(
     op: FromPath[str],
     data: WriteRequest,
     grants: NamedDependency[list[Grant]],
-    zones: NamedDependency[dict[str, DnsZone]],
+    zones: NamedDependency[tuple[DnsZone, ...]],
+    settings: NamedDependency[DnsSettings],
     db: NamedDependency[sqlite3.Connection],
 ) -> Response[ResultsResponse]:
     if op not in operations.WRITE_OPS:
@@ -187,7 +169,7 @@ def write_records(
         raise InvalidRequest(detail="no records given")
 
     records = [DnsRecord(name=r.name, type=r.type, ttl=r.ttl, data=r.data) for r in data.records]
-    results = operations.write(zones, grants, data.zone.strip(), op, records, get_config(), db)
+    results = operations.write(grants, data.zone.strip(), op, records, zones, settings, db)
     return _results(results)
 
 
@@ -262,22 +244,37 @@ def _results(results: list[operations.ZoneResult]) -> Response[ResultsResponse]:
     )
 
 
-# Constructed once at import: ~20ms, and it holds no per-call state.  OpenAPI is off — the spec is
-# checked in at services/dns/openapi.yaml, and this app is never exposed on a socket.
-dns_service_app = Litestar(
-    route_handlers=[list_zones, get_records, write_records],
-    dependencies={
-        "db": Provide(provide_db),
-        "grants": Provide(provide_grants, sync_to_thread=False),
-        "zones": Provide(provide_zones, sync_to_thread=True),
-    },
-    exception_handlers={
-        DnsServiceException: _render_error,
-        operations.DnsOperationError: _render_error,
-        InvalidRecord: _render_error,
-        # Litestar rejects a malformed body before the route runs; render it like any bad record
-        # rather than leaking the framework's error shape.
-        ValidationException: _render_error,
-    },
-    openapi_config=None,
-)
+DbProvider = Callable[[], Generator[sqlite3.Connection, None, None]]
+ZoneSupplier = Callable[[], tuple[DnsZone, ...]]
+
+
+def build_coredns_service_app(provide_db: DbProvider, settings: DnsSettings, zones: ZoneSupplier) -> Litestar:
+    """The router's own implementation of the ``dns`` service, which it serves until an owner
+    installs a connector app and makes it the default.
+
+    The DB dependency and the settings are passed in rather than imported: both are the compute
+    space's, and this package should need nothing from the application around it to be built.
+    ``zones`` is called per request rather than captured, so a zone added after the app was built
+    is one a write still reaches.
+
+    Built once and reused — ~20ms, and it holds no per-call state.  OpenAPI is off: the spec is
+    checked in at services/dns/openapi.yaml, and this app is never exposed on a socket.
+    """
+    return Litestar(
+        route_handlers=[get_records, write_records],
+        dependencies={
+            "db": Provide(provide_db),
+            "grants": Provide(provide_grants, sync_to_thread=False),
+            "settings": Provide(lambda: settings, sync_to_thread=False, use_cache=True),
+            "zones": Provide(lambda: zones(), sync_to_thread=False),
+        },
+        exception_handlers={
+            DnsServiceException: _render_error,
+            operations.DnsOperationError: _render_error,
+            InvalidRecord: _render_error,
+            # Litestar rejects a malformed body before the route runs; render it like any bad record
+            # rather than leaking the framework's error shape.
+            ValidationException: _render_error,
+        },
+        openapi_config=None,
+    )

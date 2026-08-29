@@ -30,7 +30,8 @@ from litestar.params import FromPath
 from compute_space.config import Config
 from compute_space.config import get_config
 from compute_space.core.caddy import reload_caddy_for_domains
-from compute_space.core.dns.coredns_provider.coredns import reload_coredns_for_domains
+from compute_space.core.dns.coredns_provider.interface import InternalDnsProvider
+from compute_space.core.dns.coredns_provider.interface import ManagedZone
 from compute_space.core.domains import Domain
 from compute_space.core.domains import DomainCertStatus
 from compute_space.core.domains import DomainRecord
@@ -167,6 +168,7 @@ async def add_domain(
     data: AddDomainRequest,
     config: NamedDependency[Config],
     db: NamedDependency[sqlite3.Connection],
+    dns: NamedDependency[InternalDnsProvider | None],
 ) -> Response[DomainListResponse]:
     name = data.name.strip().lower()
     error = _validate_new_domain(config, name, data.tls, data.mdns, db)
@@ -185,11 +187,11 @@ async def add_domain(
             cert_status=DomainCertStatus.ACQUIRING if data.tls else DomainCertStatus.ACTIVE,
         ),
     )
-    if not data.mdns:
-        # Make CoreDNS authoritative for the new public zone *before* acquisition: DNS-01 writes the
-        # _acme-challenge TXT into this domain's zone file, which only resolves once CoreDNS serves
-        # the zone.  (mDNS domains never touch CoreDNS.)
-        await reload_coredns_for_domains(config, db)
+    if not data.mdns and dns is not None:
+        # Make CoreDNS authoritative for the new zone *before* acquisition: DNS-01 writes the
+        # _acme-challenge TXT into every zone file, and it only resolves for this domain once
+        # CoreDNS serves its zone.  (mDNS domains never touch CoreDNS.)
+        await dns.add_zone(db, ManagedZone(zone=name, is_primary=False))
     # Return the full updated list so the client repaints the table without a follow-up GET, and
     # regenerate Caddy (serving the new site) only after this response has been sent — see
     # _reload_caddy_after_response.  BackgroundTasks runs these in order, so the new site is being
@@ -215,6 +217,7 @@ async def remove_domain(
     name: FromPath[str],
     config: NamedDependency[Config],
     db: NamedDependency[sqlite3.Connection],
+    dns: NamedDependency[InternalDnsProvider | None],
 ) -> Response[DomainListResponse]:
     name = name.strip().lower()
     if name == primary_domain(db).name_no_port:
@@ -222,9 +225,10 @@ async def remove_domain(
     removed = get_record(db, name)
     if not remove_record(db, name):
         raise NotFoundException(detail="domain not found")
-    if removed is not None and not removed.mdns:
-        # Drop the zone from CoreDNS so it stops answering for the removed public domain.
-        await reload_coredns_for_domains(config, db)
+    if removed is not None and not removed.mdns and dns is not None:
+        # Drop the zone from CoreDNS so it stops answering for the removed public domain, and
+        # discard its zone file.  The records survive — they belong to no zone.
+        await dns.remove_zone(db, name)
     # Regenerate Caddy only after this response has been sent — see _reload_caddy_after_response.
     return Response(
         DomainListResponse(domains=_domain_list(config, db)),

@@ -1,7 +1,12 @@
 """What the ``dns`` service actually does, with no HTTP in it.
 
-Reads are filtered by grant, writes are authorized and validated as a batch and then applied to
-the store, and every write re-renders the zone file CoreDNS serves.  Failures are raised as the
+Every record applies to every managed zone, so a request addresses ``ALL_ZONES`` or nothing: this
+provider serves a set of zones that are aliases for one space, and a record that existed in only
+some of them would make them differ.  A request naming a single zone is refused rather than
+narrowed, so a caller can't believe it scoped a write that in fact applied everywhere.
+
+Reads are filtered by grant, writes are authorized and validated as a batch and then applied to the
+store, and every write re-renders the zone files CoreDNS serves.  Failures are raised as the
 exceptions below; turning those into status codes is ``routes``' job.
 """
 
@@ -11,19 +16,16 @@ import sqlite3
 
 import attr
 
-from compute_space.config import Config
 from compute_space.core.dns.coredns_provider import store
 from compute_space.core.dns.coredns_provider.coredns import DnsZone
-from compute_space.core.dns.coredns_provider.coredns import public_dns_zones
 from compute_space.core.dns.coredns_provider.coredns import write_zone_file
 from compute_space.core.dns.coredns_provider.grants import Grant
 from compute_space.core.dns.coredns_provider.grants import can_read
 from compute_space.core.dns.coredns_provider.grants import can_write
 from compute_space.core.dns.coredns_provider.records import normalize as normalize_record
-from compute_space.core.dns.public_ip import effective_public_ip
+from compute_space.core.dns.coredns_provider.settings import DnsSettings
 from compute_space.core.dns.service_api import ALL_ZONES
 from compute_space.core.dns.service_api import DnsRecord
-from compute_space.core.dns.service_api import normalize_zone
 from compute_space.core.logging import logger
 
 _OPS = {"set": store.set_records, "append": store.append_records, "delete": store.delete_records}
@@ -38,7 +40,10 @@ class DnsOperationError(Exception):
 
 
 class UnknownZone(DnsOperationError):
-    """A zone this instance does not serve."""
+    """A zone this instance does not serve.
+
+    Which is every named zone: this provider is addressable only as ``ALL_ZONES``.
+    """
 
     error_code = "unknown_zone"
 
@@ -62,8 +67,9 @@ class PermissionDenied(DnsOperationError):
 
 @attr.s(auto_attribs=True, frozen=True)
 class ZoneResult:
-    """The outcome for one zone.  Reported per zone because one provider being unhappy says
-    nothing about the others."""
+    """The outcome of one request.  Still per-zone on the wire, because a connector app fans out
+    across zones that can fail independently; this provider always reports the one ``ALL_ZONES``
+    result, since a record either applies to every zone or to none."""
 
     zone: str
     ok: bool
@@ -71,63 +77,53 @@ class ZoneResult:
     error: str | None = None
 
 
-def zone_map(config: Config, db: sqlite3.Connection) -> dict[str, DnsZone]:
-    return {z.domain: z for z in public_dns_zones(config, db)}
+def require_all_zones(requested: str) -> None:
+    """Refuse anything but ``ALL_ZONES``, which is the only zone this provider is addressable as.
 
-
-def resolve_zones(zones: dict[str, DnsZone], requested: str) -> list[str]:
-    if requested == ALL_ZONES:
-        return sorted(zones)
-    wanted = normalize_zone(requested)
-    if wanted not in zones:
-        raise UnknownZone(f"{requested!r} is not a zone this instance serves")
-    return [wanted]
+    The message names no zone.  Saying whether *this* one is served would answer, one guess at a
+    time, the question ``/zones`` was removed for.
+    """
+    if requested and requested != ALL_ZONES:
+        raise UnknownZone(f"this provider serves no zone by name; address every zone at once with {ALL_ZONES!r}")
 
 
 def read(
-    zones: dict[str, DnsZone],
-    grants: list[Grant],
-    requested: str,
-    name: str | None,
-    rrtype: str | None,
-    db: sqlite3.Connection,
+    grants: list[Grant], requested: str, name: str | None, rrtype: str | None, db: sqlite3.Connection
 ) -> list[ZoneResult]:
-    """Records the caller may see, per zone.
+    """Records the caller may see.
 
-    An app with no grants can read nothing, so the zone is not even resolved — doing so would only
-    tell it which zones exist.  Ungranted records are omitted rather than refused, so a narrowly
-    scoped app sees a zone containing just its own.
+    An app with no grants can read nothing, and gets an empty result rather than an error: telling
+    it whether the zone set is empty is itself more than it may know.  Ungranted records are
+    omitted rather than refused, so a narrowly scoped app sees just its own.
     """
+    require_all_zones(requested)
     if not grants:
         return []
-    results = []
-    for zone in resolve_zones(zones, requested or ALL_ZONES):
-        visible = [
-            r
-            for r in store.records_for(db, zone)
-            if (name is None or r.name == name)
-            and (rrtype is None or r.type == rrtype)
-            and can_read(grants, r.name, r.type)
-        ]
-        results.append(ZoneResult(zone=zone, ok=True, records=visible))
-    return results
+    visible = [
+        r
+        for r in store.all_records(db)
+        if (name is None or r.name == name)
+        and (rrtype is None or r.type == rrtype)
+        and can_read(grants, r.name, r.type)
+    ]
+    return [ZoneResult(zone=ALL_ZONES, ok=True, records=visible)]
 
 
 def write(
-    zones: dict[str, DnsZone],
     grants: list[Grant],
     requested: str,
     op: str,
     records: list[DnsRecord],
-    config: Config,
+    zones: tuple[DnsZone, ...],
+    settings: DnsSettings,
     db: sqlite3.Connection,
 ) -> list[ZoneResult]:
-    """Apply one write op, then re-render every zone it touched.
+    """Apply one write op, then re-render every zone.
 
-    The whole batch is authorized and validated before the zone is resolved or anything is
-    written: the other order would let an ungranted app learn which zones exist from the error it
-    gets back, and would let a partially-permitted request apply its permitted half.
+    The whole batch is authorized and validated before anything is written, so a partially
+    permitted request applies none of itself.
     """
+    require_all_zones(requested)
     validated = []
     for record in records:
         checked = normalize_record(record, allow_rrset_selector=op == "delete")
@@ -135,23 +131,18 @@ def write(
             raise PermissionDenied(checked.name, checked.type, "rw")
         validated.append(checked)
 
-    targets = resolve_zones(zones, requested)
-    if not targets:
+    if not zones:
         raise NoZonesConfigured("no DNS zones are configured on this instance")
 
-    public_ip = effective_public_ip(config, db)
-    results = []
-    for zone in targets:
-        # Per zone, so a fan-out (``zone: "*"``) reports 207 rather than losing the zones that
-        # did apply.  Validation and authorization already happened for the whole batch.
-        try:
-            applied = _OPS[op](db, zone, validated)
-            if public_ip:
-                write_zone_file(zones[zone], public_ip, db)
-        except Exception as e:
-            logger.warning(f"DNS service {op} failed for {zone}: {e}")
-            results.append(ZoneResult(zone=zone, ok=False, error=str(e)))
-            continue
-        logger.info(f"DNS service: {op} {len(applied)} record(s) in zone {zone}")
-        results.append(ZoneResult(zone=zone, ok=True, records=applied))
-    return results
+    # The store write and the render are one outcome: a record that is saved but not rendered is
+    # not being served, so reporting success would be a lie.
+    try:
+        applied = _OPS[op](db, validated)
+        for zone in zones:
+            write_zone_file(zone, settings, db)
+    except Exception as e:
+        logger.warning(f"DNS service {op} failed: {e}")
+        return [ZoneResult(zone=ALL_ZONES, ok=False, error=str(e))]
+
+    logger.info(f"DNS service: {op} {len(applied)} record(s) across {len(zones)} zone(s)")
+    return [ZoneResult(zone=ALL_ZONES, ok=True, records=applied)]

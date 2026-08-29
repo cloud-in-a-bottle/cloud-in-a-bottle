@@ -8,9 +8,6 @@ $TTL {{ default_ttl }}
     60    ; minimum
 )
 @   IN NS   ns.{{ zone_domain }}.
-ns  IN A    {{ public_ip }}
-@   IN A    {{ public_ip }}
-*   IN A    {{ public_ip }}
 {% for r in records %}
 {{ r.name }}   {{ r.ttl }}  IN {{ r.type }}  {{ r.data }}
 {%- endfor %}

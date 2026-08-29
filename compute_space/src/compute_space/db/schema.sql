@@ -109,16 +109,17 @@ CREATE TABLE IF NOT EXISTS service_defaults (
     FOREIGN KEY (app_id) REFERENCES apps(app_id) ON DELETE CASCADE
 );
 
+-- Records apply to every zone the provider serves, so they carry no zone of their own.  The zone
+-- set is not stored at all -- it comes from `domains` at startup and lives in the provider.
 CREATE TABLE IF NOT EXISTS dns_records (
     id    INTEGER PRIMARY KEY AUTOINCREMENT,
-    zone  TEXT NOT NULL,
     name  TEXT NOT NULL,
     type  TEXT NOT NULL,
     ttl   INTEGER NOT NULL,
     data  TEXT NOT NULL
 );
 
-CREATE INDEX IF NOT EXISTS idx_dns_records_rrset ON dns_records(zone, name, type);
+CREATE INDEX IF NOT EXISTS idx_dns_records_rrset ON dns_records(name, type);
 
 -- Versioned-migrations metadata: single-row table recording the current
 -- schema version. The runner (compute_space/db/versioned/runner.py) owns

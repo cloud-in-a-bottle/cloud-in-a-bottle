@@ -154,7 +154,9 @@ def start_renewal_task(
     """Acquire and renew certs periodically on the caller's event loop.
 
     This owns the *first* acquisition as well as renewals — boot does not wait for a cert, so until
-    the first pass succeeds Caddy serves the domain with its internal CA.
+    the first pass succeeds Caddy serves the domain with its internal CA.  That matters on a fresh
+    boot: DNS-01 needs the ``dns`` service, and a connector app providing it is not started until
+    the app sweep, so the early passes are expected to fail and are retried rather than fatal.
 
     Reads the *live* active config each cycle (``get_config()``), so a domain added at runtime via
     /api/domains after startup is picked up by renewal rather than frozen out by a stale snapshot.
@@ -168,8 +170,10 @@ def start_renewal_task(
         while True:
             try:
                 await renew_cert_if_needed(get_config(), reload_caddy)
-            except Exception:
-                logger.exception(f"TLS cert acquisition failed; retrying in {retry}")
+            except Exception as exc:
+                # Expected while a DNS provider app is still coming up; only a long run of these
+                # means something is actually wrong.
+                logger.warning(f"TLS cert acquisition failed ({exc}); retrying in {retry}")
                 await asyncio.sleep(retry.total_seconds())
                 # Back off towards the steady-state retry so a persistently broken setup isn't
                 # hammering an ACME server or a registrar API.

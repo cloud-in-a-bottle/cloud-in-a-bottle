@@ -100,7 +100,7 @@ async def acquire_tls_cert_via_broker(
     # The broker returns a record name per challenge; a wildcard order puts both at the same
     # name, so publish them together.
     values = [c.record_value for c in order.challenges]
-    await challenge.publish(dns, domain, values)
+    await challenge.publish(dns, values)
     try:
         # Don't poll finalize until the records are live: the broker drives CA validation during
         # finalize, so a not-yet-visible record fails the order.
@@ -116,7 +116,7 @@ async def acquire_tls_cert_via_broker(
         )
     finally:
         # Always pull the challenge records back out, success or failure.
-        await challenge.clear(dns, domain)
+        await challenge.clear(dns)
 
     write_cert_and_key(cert_path, key_path, certificate.encode(), tls_private_key_to_pem(tls_key))
     logger.info(f"Installed broker-issued TLS cert for {domain} -> {cert_path}")

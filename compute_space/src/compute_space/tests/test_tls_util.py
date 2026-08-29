@@ -83,13 +83,13 @@ async def test_acquire_cert_clears_challenge_records_on_cancellation(
     # cleanup must not replace the cancellation the caller is waiting on, either.
     calls: list[str] = []
 
-    async def publish(dns: object, domain: str, values: list[str]) -> None:
+    async def publish(dns: object, values: list[str]) -> None:
         calls.append("publish")
 
     async def wait_until_visible(dns: object, domain: str, values: list[str]) -> None:
         raise asyncio.CancelledError
 
-    async def clear(dns: object, domain: str) -> None:
+    async def clear(dns: object) -> None:
         calls.append("clear")
         if cleanup_fails:
             raise RuntimeError("DNS service unavailable")

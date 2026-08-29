@@ -19,23 +19,27 @@ _LABEL = "_acme-challenge"
 
 
 def challenge_fqdn(domain: str) -> str:
-    """Where a DNS-01 token for ``domain`` goes.  A wildcard order validates against the base
-    domain, so ``*.example.com`` and ``example.com`` share one name."""
+    """Where a DNS-01 token for ``domain`` resolves.  A wildcard order validates against the base
+    domain, so ``*.example.com`` and ``example.com`` share one name.
+
+    Only for the propagation check, which queries a real resolver.  Writes use ``_LABEL`` directly:
+    the provider names records relative to the zone, and publishes into every zone it manages.
+    """
     return f"{_LABEL}.{domain.removeprefix('*.')}"
 
 
-async def publish(dns: DnsClient, domain: str, values: list[str]) -> None:
-    """Publish every token for ``domain`` at once.
+async def publish(dns: DnsClient, values: list[str]) -> None:
+    """Publish every token for the order at once.
 
     A wildcard order has two authorizations that must both be answered simultaneously, and setting
     the RRset rather than appending means a run that died before cleaning up doesn't leave stale
     tokens for this one.
     """
-    await dns.set_records(challenge_fqdn(domain), RecordType.TXT, values, ttl=CHALLENGE_TTL_SECONDS)
+    await dns.set_records(_LABEL, RecordType.TXT, values, ttl=CHALLENGE_TTL_SECONDS)
 
 
-async def clear(dns: DnsClient, domain: str) -> None:
-    await dns.delete_records(challenge_fqdn(domain), RecordType.TXT)
+async def clear(dns: DnsClient) -> None:
+    await dns.delete_records(_LABEL, RecordType.TXT)
 
 
 async def wait_until_visible(dns: DnsClient, domain: str, values: list[str]) -> None:
@@ -44,4 +48,4 @@ async def wait_until_visible(dns: DnsClient, domain: str, values: list[str]) -> 
     Without this the CA's resolvers may get NXDOMAIN — the zone file reload hasn't happened, the
     registrar hasn't published, or the parent zone's NS delegation hasn't propagated.
     """
-    await wait_for_records(challenge_fqdn(domain), RecordType.TXT, values, timeout=dns.propagation_timeout_seconds)
+    await wait_for_records(challenge_fqdn(domain), RecordType.TXT, values, timeout=90)

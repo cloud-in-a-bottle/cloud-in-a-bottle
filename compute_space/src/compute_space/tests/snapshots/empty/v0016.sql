@@ -65,9 +65,8 @@ CREATE TABLE "archive_backend" (
     state_message TEXT
 );
 INSERT INTO "archive_backend" VALUES(1,'local',NULL,NULL,NULL,NULL,NULL,NULL,'openhost',NULL,NULL);
-CREATE TABLE dns_records (
+CREATE TABLE "dns_records" (
     id    INTEGER PRIMARY KEY AUTOINCREMENT,
-    zone  TEXT NOT NULL,
     name  TEXT NOT NULL,
     type  TEXT NOT NULL,
     ttl   INTEGER NOT NULL,
@@ -95,7 +94,7 @@ CREATE TABLE schema_version (
     id INTEGER PRIMARY KEY CHECK (id = 1),
     version INTEGER NOT NULL
 );
-INSERT INTO "schema_version" VALUES(1,15);
+INSERT INTO "schema_version" VALUES(1,16);
 CREATE TABLE "service_defaults" (
                 service_url TEXT PRIMARY KEY,
                 app_id TEXT NOT NULL,
@@ -129,5 +128,5 @@ CREATE UNIQUE INDEX idx_apps_app_id ON apps(app_id);
 CREATE UNIQUE INDEX idx_port_mappings_host_port ON app_port_mappings(host_port);
 CREATE INDEX sessions_user_id_idx ON sessions(user_id);
 CREATE UNIQUE INDEX idx_domains_one_primary ON domains(is_primary) WHERE is_primary = 1;
-CREATE INDEX idx_dns_records_rrset ON dns_records(zone, name, type);
+CREATE INDEX idx_dns_records_rrset ON dns_records(name, type);
 COMMIT;

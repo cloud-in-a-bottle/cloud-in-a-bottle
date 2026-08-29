@@ -7,15 +7,11 @@ defines a request/response contract of its own.
 from __future__ import annotations
 
 from typing import Any
-from typing import cast
 
 import attr
 
 from compute_space.core.app_id import ROUTER_APP_ID
 from compute_space.core.app_id import ROUTER_APP_NAME
-from compute_space.core.dns.coredns_provider.routes import dns_service_app
-from compute_space.core.dns.service_api import DNS_SERVICE_URL
-from compute_space.core.dns.service_api import DNS_SERVICE_VERSION
 from compute_space.core.proxy_target import AsgiApp
 from compute_space.core.service_interface.provider import ServiceProvider
 
@@ -31,13 +27,20 @@ class BuiltinService:
     app: AsgiApp
 
 
-# The router answers `dns` itself until an owner installs a connector app and makes it the
-# default, which is what lets a fresh space serve its own DNS with no setup at all.
-BUILTIN_SERVICES: tuple[BuiltinService, ...] = (
-    # cast: litestar types its ASGIApp with its own scope classes, AsgiApp with the raw
-    # MutableMappings; they are the same protocol.
-    BuiltinService(service_url=DNS_SERVICE_URL, version=DNS_SERVICE_VERSION, app=cast(AsgiApp, dns_service_app)),
-)
+# Registered at startup rather than listed here, so this module needs no import of any provider's
+# implementation — the router answers `dns` itself until an owner installs a connector app and
+# makes it the default, which is what lets a fresh space serve its own DNS with no setup at all.
+BUILTIN_SERVICES: list[BuiltinService] = []
+
+
+def register_builtin_service(service: BuiltinService) -> None:
+    """Register the router's implementation of a service, replacing any earlier one for that URL.
+
+    Replacing rather than appending: ``builtin_by_url`` would return the first of a duplicate pair
+    and the second would sit there unreachable.
+    """
+    BUILTIN_SERVICES[:] = [s for s in BUILTIN_SERVICES if s.service_url != service.service_url]
+    BUILTIN_SERVICES.append(service)
 
 
 def builtin_by_url(service_url: str) -> BuiltinService | None:

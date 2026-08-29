@@ -58,7 +58,7 @@ def dns_db(tmp_path: Path) -> Iterator[tuple[DnsClient, sqlite3.Connection]]:
 
 
 def _challenge_txt(db: sqlite3.Connection) -> list[str]:
-    records = store.records_for(db, DOMAIN)
+    records = store.all_records(db)
     return sorted(r.data for r in records if r.name == "_acme-challenge" and r.type == "TXT" and r.data)
 
 

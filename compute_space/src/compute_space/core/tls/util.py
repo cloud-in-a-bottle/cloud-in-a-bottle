@@ -135,7 +135,7 @@ async def _acquire_cert_dns01(
                     # and *.domain are separate authorizations that both need a TXT record live at
                     # the same time.
                     logger.info(f"Setting {len(validation_values)} DNS-01 challenge TXT record(s)")
-                    await challenge.publish(dns, domains[0], validation_values)
+                    await challenge.publish(dns, validation_values)
                     challenge_published = True
 
                     # Wait until an external resolver can see the records before telling the ACME
@@ -169,7 +169,7 @@ async def _acquire_cert_dns01(
                 # doesn't delete another run's records.
                 if challenge_published:
                     try:
-                        await challenge.clear(dns, domains[0])
+                        await challenge.clear(dns)
                     except Exception:
                         if acquisition_succeeded:
                             raise

@@ -4,10 +4,10 @@ import os
 import shutil
 import signal
 import socket
-import sqlite3
 from contextlib import closing
 from pathlib import Path
 from typing import Any
+from typing import cast
 
 import hypercorn.asyncio
 import hypercorn.config
@@ -22,14 +22,13 @@ from compute_space.core.caddy import reload_caddy_for_domains
 from compute_space.core.caddy import set_active_caddy
 from compute_space.core.caddy import start_caddy
 from compute_space.core.caddy import unix_admin_address
-from compute_space.core.dns.client import ensure_dns_provider_running
-from compute_space.core.dns.client import uses_local_dns
-from compute_space.core.dns.coredns_provider.coredns import CoreDnsProcess
-from compute_space.core.dns.coredns_provider.coredns import public_dns_zones
-from compute_space.core.dns.coredns_provider.coredns import set_active_coredns
-from compute_space.core.dns.coredns_provider.coredns import start_coredns
+from compute_space.core.dns.coredns_provider.interface import InternalDnsProvider
 from compute_space.core.dns.public_ip import effective_public_ip
 from compute_space.core.dns.public_ip import seed_public_ip
+from compute_space.core.dns.service_api import DNS_SERVICE_URL
+from compute_space.core.dns.service_api import DNS_SERVICE_VERSION
+from compute_space.core.dns.settings import dns_settings_for
+from compute_space.core.dns.settings import zones_for_domains
 from compute_space.core.domains import Domain
 from compute_space.core.domains import effective_domains
 from compute_space.core.first_boot import owner_exists
@@ -38,17 +37,18 @@ from compute_space.core.logging import logger
 from compute_space.core.logging import setup_file_logging
 from compute_space.core.pinned_binary import get_pinned_binary
 from compute_space.core.pinned_binary import install_pinned_binary
+from compute_space.core.proxy_target import AsgiApp
+from compute_space.core.service_interface.builtin_services import BuiltinService
+from compute_space.core.service_interface.builtin_services import register_builtin_service
 from compute_space.core.system_agent.client import system_agent_stop_updater_sync
 from compute_space.core.system_agent.progress import mark_boot_complete
 from compute_space.core.terminal import cleanup_all as cleanup_terminal_sessions
-from compute_space.core.tls.provision import provision_cert
-from compute_space.core.tls.renewal import CertStatus
-from compute_space.core.tls.renewal import get_cert_status
 from compute_space.core.tls.renewal import start_renewal_task
 from compute_space.core.updates import RESTART_EXIT_CODE
 from compute_space.core.updates import initialize_shutdown_event
 from compute_space.db import get_db
 from compute_space.db import init_db
+from compute_space.db import provide_db
 from compute_space.web.app import create_app
 from compute_space.web.setup_app import create_setup_app
 from openhost_system_agent.updater.paths import DATA_DIR_ENV
@@ -78,47 +78,6 @@ def _require_configured_domain(domains: tuple[Domain, ...]) -> None:
         )
 
 
-async def _ensure_tls_cert(config: Config, db: sqlite3.Connection) -> None:
-    """Get a usable cert on disk before Caddy starts, so the public HTTPS interface never comes up
-    serving a self-signed one.
-
-    Acquisition needs the ``dns`` service, which may be provided by an app container that is down
-    after a reboot — so the provider is started and waited for first.  If it doesn't come up in
-    time, boot continues without a cert rather than crash-looping: Caddy falls back to its internal
-    CA (see ``config_cert_resolver``) and the renewal task keeps retrying.
-    """
-    status = get_cert_status(config.tls_cert_path, config.tls_key_path)
-    if status == CertStatus.OK:
-        logger.info(f"Using existing TLS cert from {config.tls_cert_path}")
-        return
-
-    if not config.acquire_tls_cert_if_missing:
-        # A cert nearing expiry still works, so don't block startup over it.
-        if status == CertStatus.EXPIRING_SOON:
-            logger.warning("TLS cert expires soon but automatic cert acquisition is not enabled; cannot renew")
-            return
-        raise RuntimeError(f"TLS cert is {status.value} and acquire_tls_cert_if_missing is False")
-
-    # DNS-01 needs the dns service, not specifically CoreDNS: a space whose records live at an
-    # external provider can acquire a cert with CoreDNS switched off entirely.
-    if uses_local_dns(db) and not config.coredns_enabled:
-        raise RuntimeError(
-            "This instance provides its own DNS but CoreDNS is disabled, so the DNS-01 challenge "
-            "cannot be answered. Enable coredns_enabled, or install a DNS provider app."
-        )
-
-    try:
-        if not await ensure_dns_provider_running(config, db):
-            logger.warning("DNS provider unavailable; starting without a certificate and retrying in the background")
-            return
-        await provision_cert(config, db)
-    except Exception:
-        # An expiring cert still serves, and a missing one leaves Caddy on its internal CA; either
-        # way the renewal task retries, so a transient ACME or registrar failure must not stop the
-        # instance from booting at all.
-        logger.exception("TLS cert acquisition failed; retrying in the background")
-
-
 def _ensure_coredns_binary(config: Config) -> str:
     """Return the CoreDNS binary to launch, self-healing a missing one."""
     if found := shutil.which("coredns"):
@@ -142,7 +101,7 @@ async def _main() -> None:
     # The DB `domains` table is the source of truth.  Seed it once (+ the claim token) from
     # first_boot.toml before starting CoreDNS/Caddy so every configured domain is served this boot.
     seed_first_boot(config)
-    coredns: CoreDnsProcess | None = None
+    dns: InternalDnsProvider | None = None
     caddy: CaddyProcess | None = None
     # Long-running tasks started at boot.  Held here for their whole lifetime (the loop keeps only
     # weak references) and cancelled together by _shutdown.
@@ -151,7 +110,6 @@ async def _main() -> None:
     # the primary + cert/zone paths are read live from it.
     with closing(get_db()) as db:
         domains = effective_domains(db)  # primary first
-        dns_zones = public_dns_zones(config, db)
         _require_configured_domain(domains)  # fail loud at boot, not late in the first request
 
         # No DNS provider app installed means the router provides the `dns` service itself, so a
@@ -162,23 +120,21 @@ async def _main() -> None:
         if config.coredns_enabled:
             if not public_ip:
                 raise RuntimeError("Public IP must be set to serve authoritative DNS")
-            coredns = await start_coredns(
-                dns_zones,
-                public_ip,
-                config.coredns_corefile_path,
+            dns = InternalDnsProvider(
+                settings=dns_settings_for(config, public_ip),
+                db_provider=provide_db,
+                zones=zones_for_domains(db),
                 coredns_bin=_ensure_coredns_binary(config),
-                db=db,
             )
-            # Register so /api/domains can regenerate zones + restart CoreDNS when a domain is added.
-            set_active_coredns(coredns)
+            await dns.start(db)
+            # Only once it is up: the registry is what makes the router answer `dns` calls, and
+            # answering before CoreDNS can serve what we accept would be a lie.
+            # cast: litestar types its ASGIApp with its own scope classes, AsgiApp with the raw
+            # MutableMappings; they are the same protocol.
+            register_builtin_service(
+                BuiltinService(service_url=DNS_SERVICE_URL, version=DNS_SERVICE_VERSION, app=cast(AsgiApp, dns.app))
+            )
 
-        if domains[0].tls:  # primary is a TLS domain
-            await _ensure_tls_cert(config, db)
-
-        # Caddy reverse proxy. mainly for TLS termination, but also some other features.
-        # The acquired file cert covers the primary domain (a wildcard for it);
-        # any additional TLS domains fall back to Caddy's internal CA (see generate_caddyfile).
-        needs_caddy_for_tls = any(d.tls for d in domains)
         if config.start_caddy:
             # Release 80/443 from the detached updater (if a self-update just
             # happened) before Caddy binds, so Caddy can't lose the handoff race.
@@ -192,19 +148,15 @@ async def _main() -> None:
             )
             # Register so /api/domains can regenerate + restart Caddy when a domain is added/removed.
             set_active_caddy(caddy)
-            if (
-                needs_caddy_for_tls
-                and (config.coredns_enabled or not uses_local_dns(db))
-                and config.acquire_tls_cert_if_missing
-            ):
-                # Owns first acquisition as well as renewal, for every TLS domain — including a TLS
-                # secondary under a non-TLS primary — and regenerates the Caddyfile once a cert
-                # lands so Caddy stops serving its internal CA.
-                background_tasks.append(start_renewal_task(reload_caddy_for_domains))
-        elif needs_caddy_for_tls:
-            raise RuntimeError(
-                "A TLS domain is configured but start_caddy is False. Caddy is required for TLS termination."
-            )
+
+    for _ in domains:
+        if config.acquire_tls_cert_if_missing:
+            # Owns first acquisition as well as renewal, for every TLS domain — including a TLS
+            # secondary under a non-TLS primary — and regenerates the Caddyfile once a cert
+            # lands so Caddy stops serving its internal CA.
+
+            # TODO: make this take a domain.
+            background_tasks.append(start_renewal_task(reload_caddy_for_domains))
 
     # Finalize the progress log only now that we're actually serving, so the
     # /updating page's "back online" doesn't fire before CoreDNS/cert/Caddy are up.
@@ -218,7 +170,7 @@ async def _main() -> None:
         for task in background_tasks:
             with contextlib.suppress(asyncio.CancelledError):
                 await task
-        for child in (caddy, coredns):
+        for child in (caddy, dns):
             if child is not None:
                 await child.stop()
 
@@ -255,7 +207,7 @@ async def _main() -> None:
             os._exit(0)
 
     # Main web server
-    app = create_app(config)
+    app = create_app(config, dns)
     logger.info("running hypercorn serve")
     restart_requested = await _serve(app, hypercorn_config)
     logger.info(f"hypercorn serve returned, restart_requested={restart_requested}")
