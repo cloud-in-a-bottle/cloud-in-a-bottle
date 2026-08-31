@@ -1,17 +1,15 @@
 # Deploying on a dedicated machine
 
-Use this path when the machine runs nothing but Cloud in a Bottle: a VPS, a rented bare metal box, or a spare machine at home.
+Use this path when the machine runs nothing but Cloud in a Bottle: a VPS or other cloud server, or a spare machine at home.
 
-Cloud in a Bottle installs directly on the host. It runs as a systemd service, takes ports 80, 443, and 53, installs system packages, and runs app containers under rootless Podman. That is why the machine has to be dedicated to it.
-
-If the machine also does other things, install into a VM instead. See [Deploying on a shared machine](./shared_machine.md).
+Cloud in a Bottle installs directly on the host. It runs various system services, sets system-level configuration, and expects to be able to manage the system ongoing. If you want to install on a non-dedicated machine, [install into a VM instead](./shared_machine.md).
 
 The result is a public instance with HTTPS: a dashboard at `https://host.example.com/`, and each app on its own subdomain at `https://<app>.host.example.com/`.
 
 ## Prerequisites
 
 - Ubuntu 24.04 on the target machine, freshly installed.
-- SSH access as `root`, or as a user with sudo. Your public key must already be in that account's `authorized_keys`.
+- SSH access as `root`, or as a user with sudo.
 - A domain you control and can edit DNS for. You will give a subdomain zone to the instance. The examples use `host.example.com`.
 - Inbound `80/tcp`, `443/tcp`, and `53/tcp+udp` reachable from the internet. Port 53 is required, because the instance runs its own DNS server.
 - A root filesystem supporting idmapped mounts (ext4, xfs, or btrfs). Install fails early with a clear error if it does not.
