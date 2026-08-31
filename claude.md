@@ -26,11 +26,13 @@ openhost/
 
 ## running and testing
 
-always run tests with -x to fail quickly.
+**in general don't run the full test suite (or full sub-suites) locally — that's what CI is for.** it is fine to run individual tests or a few test files, but the strong default is to let CI handle the rest. this applies to the unit test suite also.
 
-- **all lightweight tests**: `pixi run -e dev pytest -x` (from project root)
-- **everything**: `pixi run -e dev pytest -x --run-containers`
-- **compute_space tests**: `pixi run -e dev pytest -x compute_space/tests/`
+run a single test file with `-x` to fail fast, e.g.:
+
+```
+pixi run -e dev pytest -x compute_space/src/compute_space/tests/test_token_hashing.py
+```
 
 ## warnings
 

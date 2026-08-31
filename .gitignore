@@ -34,9 +34,9 @@ tests/pebble/
 
 # ACME account key (provided out-of-band; CI writes from secrets.ACME_ACCOUNT_KEY)
 ansible/secrets/certbot_private_key.json
-.claude/settings.json
+.claude/*
+!.claude/settings.json
 .claude/settings.local.json
-.claude/
 specs/
 
 # Beads (local only — not shared via git)
