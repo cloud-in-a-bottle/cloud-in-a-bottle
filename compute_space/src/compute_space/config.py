@@ -52,6 +52,7 @@ class Config:
     cert_api_keycloak_client_secret: str | None
 
     ## coredns (only really needed if acquiring TLS certs via DNS-01, or if using NS dns records)
+    # TODO: maybe make a StrEnum of dns_provider: INTERNAL, EXTERNAL, IMBUE. or something like that.
     coredns_enabled: bool
     public_ip: str | None
 
