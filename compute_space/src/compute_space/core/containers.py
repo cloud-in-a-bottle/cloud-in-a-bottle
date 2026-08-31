@@ -26,6 +26,7 @@ import sqlite3
 import subprocess
 from datetime import UTC
 from datetime import datetime
+from typing import NoReturn
 
 import attr
 
@@ -34,6 +35,30 @@ from compute_space.core.manifest import AppManifest
 from compute_space.core.manifest import PortMapping
 
 CONTAINER_ROOT = "/data"
+
+# Env-var naming contract.  The project was renamed OpenHost -> Cloud in a
+# Bottle; every OPENHOST_* variable stamped into an app container is now also
+# exposed under BOTTLE_*.  The legacy names are kept indefinitely for backward
+# compatibility.
+LEGACY_ENV_PREFIX = "OPENHOST_"
+ENV_PREFIX = "BOTTLE_"
+
+
+def add_bottle_env_aliases(env: dict[str, str]) -> dict[str, str]:
+    """Return ``env`` with a ``BOTTLE_``-prefixed twin for every ``OPENHOST_`` var.
+
+    The rename from OpenHost to Cloud in a Bottle keeps the legacy
+    ``OPENHOST_*`` names for compatibility while exposing the same values
+    under ``BOTTLE_*``.  An already-present ``BOTTLE_*`` entry is never
+    clobbered, so an explicit new-style value wins over the auto-alias.
+    """
+    aliased = dict(env)
+    for key, value in env.items():
+        if key.startswith(LEGACY_ENV_PREFIX):
+            twin = ENV_PREFIX + key[len(LEGACY_ENV_PREFIX) :]
+            aliased.setdefault(twin, value)
+    return aliased
+
 
 # Dummy-interface IP that the host kernel accepts as local; the router (and a
 # container-facing CoreDNS view) bind here so pasta containers can reach host
@@ -169,6 +194,15 @@ def _raise_if_build_cache_corrupt(output: str) -> None:
         raise RuntimeError(f"{BUILD_CACHE_CORRUPT_MARKER} Container build cache is corrupted.")
 
 
+def _raise_build_failed(output: str, returncode: int) -> NoReturn:
+    """Raise a tagged RuntimeError for corrupt cache or a truncated build failure."""
+    _raise_if_build_cache_corrupt(output)
+    lines = [line for line in output.splitlines() if line]
+    tail = lines[-1] if lines else ""
+    tail = "..." + tail[-150:] if len(tail) > 150 else tail
+    raise RuntimeError(f"Container build failed (exit code {returncode}):\n{tail}")
+
+
 def build_image(
     app_name: str,
     repo_path: str,
@@ -223,15 +257,12 @@ def build_image(
                     logger.warning("Build process {} did not exit within 5s of SIGKILL", proc.pid)
                 raise
         if proc.returncode != 0:
-            _raise_if_build_cache_corrupt(build_output)
-            tail = build_output[-2000:] if len(build_output) > 2000 else build_output
-            raise RuntimeError(f"Container build failed (exit code {proc.returncode}):\n{tail}")
+            _raise_build_failed(build_output, proc.returncode)
     else:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
         if result.returncode != 0:
             combined = result.stdout + result.stderr
-            _raise_if_build_cache_corrupt(combined)
-            raise RuntimeError(f"Container build failed:\n{combined}")
+            _raise_build_failed(combined, result.returncode)
 
     if temp_data_dir:
         _append_log(app_name, temp_data_dir, "=== Build complete ===\n\n")
@@ -260,7 +291,6 @@ def run_container(
     app_data_dir = os.path.join(data_dir, "app_data", app_name)
     app_temp_dir = os.path.join(temp_data_dir, "app_temp_data", app_name)
     app_archive_dir = os.path.join(archive_dir, app_name)
-    vm_data_dir = os.path.join(data_dir, "vm_data")
     container_name = f"openhost-{app_name}"
 
     wants_all_app_data = manifest.access_all_app_data
@@ -269,12 +299,10 @@ def run_container(
     has_app_data = manifest.app_data or manifest.sqlite_dbs or wants_all_app_data
     has_app_temp = manifest.app_temp_data or wants_all_app_data
     has_app_archive = manifest.app_archive or wants_all_archive
-    has_vm_data = manifest.access_vm_data or wants_all_app_data
 
     c_app_data = f"{CONTAINER_ROOT}/app_data/{app_name}"
     c_app_temp = f"{CONTAINER_ROOT}/app_temp_data/{app_name}"
     c_app_archive = f"{CONTAINER_ROOT}/app_archive/{app_name}"
-    c_vm_data = f"{CONTAINER_ROOT}/vm_data"
 
     # Translate host paths in env vars to their in-container equivalents.
     container_env = {}
@@ -373,17 +401,11 @@ def run_container(
                 ),
             ]
         )
-        # vm_data is rw under wants_all_app_data (admin-level access).
-        os.makedirs(vm_data_dir, exist_ok=True)
-        cmd.extend(["-v", _bind_mount_arg(vm_data_dir, c_vm_data)])
     else:
         if has_app_data:
             cmd.extend(["-v", _bind_mount_arg(app_data_dir, c_app_data)])
         if has_app_temp:
             cmd.extend(["-v", _bind_mount_arg(app_temp_dir, c_app_temp)])
-        if has_vm_data:
-            os.makedirs(vm_data_dir, exist_ok=True)
-            cmd.extend(["-v", _bind_mount_arg(vm_data_dir, c_vm_data, read_only=True)])
 
     if wants_all_archive:
         # access_all_archive is permissive — skip the archive mount when
@@ -417,6 +439,11 @@ def run_container(
         # conflicts with other host services, so it should bind on this
         # allocated port instead.
         container_env["OPENHOST_LOCAL_PORT"] = str(local_port)
+
+    # Expose every var under both the legacy OPENHOST_ name and the new
+    # BOTTLE_ name.  Done here (after host->container path translation and
+    # after LOCAL_PORT is set) so the twins carry the final container values.
+    container_env = add_bottle_env_aliases(container_env)
 
     for key, value in container_env.items():
         cmd.extend(["-e", f"{key}={value}"])

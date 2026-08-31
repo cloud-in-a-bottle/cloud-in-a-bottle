@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -24,6 +25,7 @@ from compute_space.core.containers import run_container
 from compute_space.core.containers import stop_container
 from compute_space.core.manifest import AppManifest
 from compute_space.core.manifest import PortMapping
+from compute_space.core.manifest import parse_manifest_from_string
 
 
 class _FakeCompleted:
@@ -195,10 +197,11 @@ def test_build_image_streaming_path_detects_cache_corrupt(
 
 
 def test_build_image_generic_failure_does_not_use_cache_marker(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     def fake_run(cmd, capture_output, text, timeout):  # type: ignore[no-untyped-def]
-        return _FakeCompleted(1, stderr="Dockerfile not found")
+        long_line = "x" * 200
+        return _FakeCompleted(1, stderr=f"Step 1/2\n{long_line}\n\n")
 
     _patch_subprocess_run(monkeypatch, fake_run)
 
@@ -206,7 +209,33 @@ def test_build_image_generic_failure_does_not_use_cache_marker(
         build_image("myapp", "/tmp/repo", "Dockerfile", temp_data_dir=None)
     msg = str(exc_info.value)
     assert containers.BUILD_CACHE_CORRUPT_MARKER not in msg
-    assert "Dockerfile not found" in msg
+    assert msg == f"Container build failed (exit code 1):\n...{'x' * 150}"
+
+    class _FakePopen:
+        def __init__(self, *a, **_kw):  # type: ignore[no-untyped-def]
+            self.stdout = iter(["step 1\n", "step 2\n", "syntax error on line 5\n"])
+            self.returncode = 2
+            self.pid = 12345
+
+        def wait(self, timeout: int | None = None) -> int:
+            return self.returncode
+
+        def kill(self) -> None:
+            pass
+
+        def __enter__(self):  # type: ignore[no-untyped-def]
+            return self
+
+        def __exit__(self, *_exc):  # type: ignore[no-untyped-def]
+            return False
+
+    monkeypatch.setattr("compute_space.core.containers.subprocess.Popen", _FakePopen)
+    temp_data_dir = str(tmp_path / "temp")
+    os.makedirs(os.path.join(temp_data_dir, "app_temp_data", "myapp"), exist_ok=True)
+
+    with pytest.raises(RuntimeError) as exc_info:
+        build_image("myapp", "/tmp/repo", "Dockerfile", temp_data_dir=temp_data_dir)
+    assert str(exc_info.value) == "Container build failed (exit code 2):\nsyntax error on line 5"
 
 
 def test_build_image_non_streaming_path_inspects_stdout_too(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -426,7 +455,7 @@ def test_run_container_network_host_app_gets_no_dns_override(tmp_path, monkeypat
 
 
 def test_run_container_mounts_use_idmap_option(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
-    manifest = _basic_manifest(app_data=True, app_temp_data=True, access_vm_data=True)
+    manifest = _basic_manifest(app_data=True, app_temp_data=True, app_archive=True)
     argv = _run_and_capture(monkeypatch, manifest=manifest, tmp_path=tmp_path)
     # Every -v argument value should have :idmap (or :ro,idmap) as its
     # options suffix so container-root writes land on disk under the host
@@ -504,20 +533,27 @@ def test_run_container_adds_manifest_devices(tmp_path, monkeypatch: pytest.Monke
         )
 
 
-def test_run_container_access_vm_data_mounts_vm_data_read_only(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """access_vm_data (without access_all_app_data) grants only a read-only
-    view of /data/vm_data.  The distinction matters: this is what lets
-    apps read shared state without being able to corrupt it, and a
-    regression swapping in rw here would turn a security-critical mount
-    into a write-through channel.
-    """
-    manifest = _basic_manifest(access_vm_data=True)
+def test_run_container_removed_access_vm_data_flag_does_not_mount_vm_data(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manifest = parse_manifest_from_string(
+        """\
+[app]
+name = "myapp"
+version = "0.1.0"
+
+[runtime.container]
+image = "Dockerfile"
+port = 8080
+
+[data]
+access_vm_data = true
+"""
+    )
     argv = _run_and_capture(monkeypatch, manifest=manifest, tmp_path=tmp_path)
 
     volume_args = [arg for prev, arg in zip(argv, argv[1:], strict=False) if prev == "-v"]
-    vm_mounts = [v for v in volume_args if "/data/vm_data" in v]
-    assert len(vm_mounts) == 1, vm_mounts
-    assert vm_mounts[0].endswith(":ro,idmap"), vm_mounts[0]
+    assert not any("/data/vm_data" in v for v in volume_args)
 
 
 def test_run_container_app_archive_mounts_per_app_subdir(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -601,11 +637,30 @@ def test_run_container_access_all_app_data_mounts_parent_dirs(tmp_path, monkeypa
     targets = [v.rsplit(":", 2)[1] for v in volume_args]
     assert "/data/app_data" in targets
     assert "/data/app_temp_data" in targets
-    # vm_data must be rw under access_all_app_data.
-    vm_mount = next(v for v in volume_args if v.endswith(":/data/vm_data:idmap"))
-    assert "ro" not in vm_mount.rsplit(":", 1)[1]
+    assert "/data/vm_data" not in targets
     # No per-app subdir.
     assert f"/data/app_data/{manifest.name}" not in targets
+
+
+def test_run_container_access_all_data_does_not_mount_vm_data(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    manifest = parse_manifest_from_string(
+        """\
+[app]
+name = "myapp"
+version = "0.1.0"
+
+[runtime.container]
+image = "Dockerfile"
+port = 8080
+
+[data]
+access_all_data = true
+"""
+    )
+    argv = _run_and_capture(monkeypatch, manifest=manifest, tmp_path=tmp_path)
+
+    volume_args = [arg for prev, arg in zip(argv, argv[1:], strict=False) if prev == "-v"]
+    assert not any("/data/vm_data" in v for v in volume_args)
 
 
 def test_run_container_access_all_app_data_does_not_mount_archive(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -638,6 +693,29 @@ def test_run_container_app_archive_env_var_translated_to_container_path(
     archive_env = [e for e in e_values if e.startswith("OPENHOST_APP_ARCHIVE_DIR=")]
     assert len(archive_env) == 1, archive_env
     assert archive_env[0] == f"OPENHOST_APP_ARCHIVE_DIR=/data/app_archive/{manifest.name}"
+
+
+def test_run_container_stamps_bottle_and_openhost_env_twins(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every app env var is stamped under both the legacy OPENHOST_ name and
+    the new BOTTLE_ name (OpenHost -> Cloud in a Bottle rename).  The BOTTLE_
+    twin of a path var must carry the already-translated in-container value,
+    not the host path — i.e. aliasing happens after path translation."""
+    manifest = _basic_manifest(app_data=True, app_archive=True)
+    env_vars = {
+        "OPENHOST_APP_TOKEN": "tok123",
+        "OPENHOST_APP_ARCHIVE_DIR": "/some/host/archive/myapp",
+    }
+    argv = _run_and_capture(monkeypatch, manifest=manifest, tmp_path=tmp_path, env_vars=env_vars)
+
+    e_values = [arg for prev, arg in zip(argv, argv[1:], strict=False) if prev == "-e"]
+
+    # Non-path var: legacy + new twin, same value.
+    assert "OPENHOST_APP_TOKEN=tok123" in e_values
+    assert "BOTTLE_APP_TOKEN=tok123" in e_values
+
+    # Path var: the BOTTLE_ twin carries the translated container path.
+    assert f"OPENHOST_APP_ARCHIVE_DIR=/data/app_archive/{manifest.name}" in e_values
+    assert f"BOTTLE_APP_ARCHIVE_DIR=/data/app_archive/{manifest.name}" in e_values
 
 
 def test_run_container_port_mappings_bind_tcp_and_udp_on_all_interfaces(

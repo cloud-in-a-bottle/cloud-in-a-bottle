@@ -101,19 +101,18 @@ function renderManifest(m, url, storage) {
   const wantsAllData = m.access_all_data;
   const wantsAllAppData = m.access_all_app_data;
   const wantsAllArchive = m.access_all_archive;
-  const hasFs = m.app_data || m.app_temp_data || m.access_vm_data || m.access_all_data || m.access_all_app_data || m.access_all_archive || m.app_archive || m.sqlite_dbs.length;
+  const hasFs = m.app_data || m.app_temp_data || m.access_all_data || m.access_all_app_data || m.access_all_archive || m.app_archive || m.sqlite_dbs.length;
   if (hasFs) {
     section('Filesystem Permissions', '#fff3cd');
     if (wantsAllData) {
-      row('Full data access', 'Read/write to ALL apps\u2019 permanent data, temporary data, VM data, and archive data (rw)');
+      row('Full data access', 'Read/write to ALL apps\u2019 permanent data, temporary data, and archive data');
     } else {
       if (wantsAllAppData) {
-        row('Full app data access', 'Read/write to ALL apps\u2019 permanent data, temporary data, and VM data (rw)');
+        row('Full app data access', 'Read/write to ALL apps\u2019 permanent and temporary data');
       } else {
         if (m.app_data || m.sqlite_dbs.length)
           row('Permanent data', "Read/write to app's own permanent data directory");
         if (m.app_temp_data) row('Temporary data', "Read/write to app's own temporary data directory");
-        if (m.access_vm_data) row('VM data', 'Read-only access to VM shared data');
       }
       if (wantsAllArchive) {
         row('Full archive access', 'Read/write to ALL apps\u2019 archive (bulk) data');

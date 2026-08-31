@@ -55,7 +55,7 @@ class _TokenEndpoint:
 
 def _provider(handler: object, monotonic: FakeMonotonic) -> KeycloakTokenProvider:
     transport = httpx.MockTransport(handler)  # type: ignore[arg-type]
-    http_client = httpx.Client(transport=transport)
+    http_client = httpx.AsyncClient(transport=transport)
     return KeycloakTokenProvider(credentials=CREDENTIALS, http_client=http_client, monotonic=monotonic)
 
 
@@ -66,7 +66,8 @@ def test_token_endpoint_composition() -> None:
     assert trailing.token_endpoint == TOKEN_ENDPOINT
 
 
-def test_fetches_token_with_client_credentials_grant() -> None:
+@pytest.mark.asyncio
+async def test_fetches_token_with_client_credentials_grant() -> None:
     endpoint = _TokenEndpoint()
     captured: dict[str, object] = {}
 
@@ -76,8 +77,8 @@ def test_fetches_token_with_client_credentials_grant() -> None:
         captured["content_type"] = request.headers.get("content-type")
         return endpoint.handler(request)
 
-    with _provider(handler, FakeMonotonic()) as provider:
-        token = provider.get_token()
+    async with _provider(handler, FakeMonotonic()) as provider:
+        token = await provider.get_token()
 
     assert token == "token-1"
     assert captured["url"] == TOKEN_ENDPOINT
@@ -90,32 +91,34 @@ def test_fetches_token_with_client_credentials_grant() -> None:
     }
 
 
-def test_token_is_cached_until_near_expiry() -> None:
+@pytest.mark.asyncio
+async def test_token_is_cached_until_near_expiry() -> None:
     endpoint = _TokenEndpoint(expires_in=300)
     clock = FakeMonotonic()
 
-    with _provider(endpoint.handler, clock) as provider:
-        assert provider.get_token() == "token-1"
+    async with _provider(endpoint.handler, clock) as provider:
+        assert await provider.get_token() == "token-1"
         assert endpoint.calls == 1
 
         # 30s skew before a 300s token => still cached at t=269.
         clock.now = 269.0
-        assert provider.get_token() == "token-1"
+        assert await provider.get_token() == "token-1"
         assert endpoint.calls == 1
 
         # Past the skew-adjusted expiry (270s) => refetch.
         clock.now = 271.0
-        assert provider.get_token() == "token-2"
+        assert await provider.get_token() == "token-2"
         assert endpoint.calls == 2
 
 
-def test_error_response_raises_with_detail() -> None:
+@pytest.mark.asyncio
+async def test_error_response_raises_with_detail() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(401, json={"error": "unauthorized_client", "error_description": "bad secret"})
 
-    with _provider(handler, FakeMonotonic()) as provider:
+    async with _provider(handler, FakeMonotonic()) as provider:
         with pytest.raises(KeycloakAuthError) as exc_info:
-            provider.get_token()
+            await provider.get_token()
 
     message = str(exc_info.value)
     assert "401" in message
@@ -123,10 +126,11 @@ def test_error_response_raises_with_detail() -> None:
     assert "bad secret" in message
 
 
-def test_missing_access_token_raises() -> None:
+@pytest.mark.asyncio
+async def test_missing_access_token_raises() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={"token_type": "Bearer", "expires_in": 300})
 
-    with _provider(handler, FakeMonotonic()) as provider:
+    async with _provider(handler, FakeMonotonic()) as provider:
         with pytest.raises(KeycloakAuthError):
-            provider.get_token()
+            await provider.get_token()

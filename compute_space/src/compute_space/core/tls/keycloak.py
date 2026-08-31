@@ -33,7 +33,7 @@ _DEFAULT_TOKEN_LIFETIME_SECONDS = 300.0
 class TokenProvider(Protocol):
     """Supplies a bearer token for each broker request, so it can refresh over time."""
 
-    def get_token(self) -> str: ...
+    async def get_token(self) -> str: ...
 
 
 @attr.s(auto_attribs=True, frozen=True)
@@ -42,7 +42,7 @@ class StaticTokenProvider:
 
     token: str
 
-    def get_token(self) -> str:
+    async def get_token(self) -> str:
         return self.token
 
 
@@ -76,7 +76,7 @@ class KeycloakTokenProvider:
     """
 
     credentials: KeycloakClientCredentials
-    http_client: httpx.Client
+    http_client: httpx.AsyncClient
     # Injected so tests can drive expiry deterministically.
     monotonic: Callable[[], float] = time.monotonic
     _cached_token: str | None = attr.ib(default=None, init=False)
@@ -84,33 +84,33 @@ class KeycloakTokenProvider:
 
     @classmethod
     def create(cls, credentials: KeycloakClientCredentials, timeout: float = 30.0) -> KeycloakTokenProvider:
-        return cls(credentials=credentials, http_client=httpx.Client(timeout=timeout))
+        return cls(credentials=credentials, http_client=httpx.AsyncClient(timeout=timeout))
 
-    def __enter__(self) -> KeycloakTokenProvider:
+    async def __aenter__(self) -> KeycloakTokenProvider:
         return self
 
-    def __exit__(
+    async def __aexit__(
         self,
         exc_type: type[BaseException] | None,
         exc: BaseException | None,
         tb: TracebackType | None,
     ) -> None:
-        self.http_client.close()
+        await self.http_client.aclose()
 
-    def get_token(self) -> str:
+    async def get_token(self) -> str:
         if self._cached_token is not None and self.monotonic() < self._expires_at_monotonic:
             return self._cached_token
-        token, expires_in = self._fetch_token()
+        token, expires_in = await self._fetch_token()
         self._cached_token = token
         self._expires_at_monotonic = self.monotonic() + max(0.0, expires_in - _TOKEN_EXPIRY_SKEW_SECONDS)
         return token
 
-    def _fetch_token(self) -> tuple[str, float]:
+    async def _fetch_token(self) -> tuple[str, float]:
         logger.info(
             f"Fetching cert-api access token for client {self.credentials.client_id!r} "
             f"from {self.credentials.token_endpoint}"
         )
-        response = self.http_client.post(
+        response = await self.http_client.post(
             self.credentials.token_endpoint,
             data={
                 "grant_type": "client_credentials",

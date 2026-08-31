@@ -22,7 +22,6 @@ CREATE TABLE IF NOT EXISTS apps (
     public_paths TEXT NOT NULL DEFAULT '[]',
     links TEXT NOT NULL DEFAULT '[]',
     manifest_raw TEXT,
-    installed_by TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );

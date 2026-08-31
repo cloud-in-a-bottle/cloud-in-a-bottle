@@ -27,7 +27,7 @@ TOKEN = "per-instance-token"
 def _make_client(handler: object) -> CertApiClient:
     """Build a CertApiClient backed by a MockTransport using the given request handler."""
     transport = httpx.MockTransport(handler)  # type: ignore[arg-type]
-    http_client = httpx.Client(base_url=BASE_URL, transport=transport)
+    http_client = httpx.AsyncClient(base_url=BASE_URL, transport=transport)
     return CertApiClient(http_client=http_client, token_provider=StaticTokenProvider(TOKEN))
 
 
@@ -36,22 +36,24 @@ def _make_client(handler: object) -> CertApiClient:
 # ---------------------------------------------------------------------------
 
 
-def test_health_ok() -> None:
+@pytest.mark.asyncio
+async def test_health_ok() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.method == "GET"
         assert request.url.path == "/health"
         return httpx.Response(200, json={"status": "ok"})
 
-    with _make_client(handler) as client:
-        assert client.health() is True
+    async with _make_client(handler) as client:
+        assert await client.health() is True
 
 
-def test_health_non_ok_status() -> None:
+@pytest.mark.asyncio
+async def test_health_non_ok_status() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(503, json={"status": "down"})
 
-    with _make_client(handler) as client:
-        assert client.health() is False
+    async with _make_client(handler) as client:
+        assert await client.health() is False
 
 
 # ---------------------------------------------------------------------------
@@ -59,7 +61,8 @@ def test_health_non_ok_status() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_create_order_sends_csr_and_auth() -> None:
+@pytest.mark.asyncio
+async def test_create_order_sends_csr_and_auth() -> None:
     captured: dict[str, object] = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -86,8 +89,8 @@ def test_create_order_sends_csr_and_auth() -> None:
             },
         )
 
-    with _make_client(handler) as client:
-        result = client.create_order(
+    async with _make_client(handler) as client:
+        result = await client.create_order(
             "-----BEGIN CERTIFICATE REQUEST-----\nMII...\n-----END CERTIFICATE REQUEST-----\n"
         )
 
@@ -106,23 +109,25 @@ def test_create_order_sends_csr_and_auth() -> None:
     assert result.challenges[1].record_value == "wildcard-value"
 
 
-def test_create_order_bad_request_raises() -> None:
+@pytest.mark.asyncio
+async def test_create_order_bad_request_raises() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(400, json={"error": "bad_request", "message": "csr unparseable"})
 
-    with _make_client(handler) as client:
+    async with _make_client(handler) as client:
         with pytest.raises(CertApiBadRequest) as exc_info:
-            client.create_order("not-a-csr")
+            await client.create_order("not-a-csr")
     assert "csr unparseable" in str(exc_info.value)
 
 
-def test_create_order_unauthorized_raises() -> None:
+@pytest.mark.asyncio
+async def test_create_order_unauthorized_raises() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(401, json={"error": "unauthorized", "message": "bad token"})
 
-    with _make_client(handler) as client:
+    async with _make_client(handler) as client:
         with pytest.raises(CertApiUnauthorized):
-            client.create_order("csr")
+            await client.create_order("csr")
 
 
 # ---------------------------------------------------------------------------
@@ -130,40 +135,44 @@ def test_create_order_unauthorized_raises() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_finalize_pending() -> None:
+@pytest.mark.asyncio
+async def test_finalize_pending() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.method == "POST"
         assert request.url.path == "/v1/orders/order-123/finalize"
         return httpx.Response(202, json={"status": "pending"})
 
-    with _make_client(handler) as client:
-        result = client.finalize_order("order-123")
+    async with _make_client(handler) as client:
+        result = await client.finalize_order("order-123")
     assert result.status == FINALIZE_STATUS_PENDING
     assert result.certificate is None
 
 
-def test_finalize_valid_returns_certificate() -> None:
+@pytest.mark.asyncio
+async def test_finalize_valid_returns_certificate() -> None:
     chain = "-----BEGIN CERTIFICATE-----\nAAA\n-----END CERTIFICATE-----\n"
 
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={"status": "valid", "certificate": chain})
 
-    with _make_client(handler) as client:
-        result = client.finalize_order("order-123")
+    async with _make_client(handler) as client:
+        result = await client.finalize_order("order-123")
     assert result.status == FINALIZE_STATUS_VALID
     assert result.certificate == chain
 
 
-def test_finalize_unknown_order_raises_not_found() -> None:
+@pytest.mark.asyncio
+async def test_finalize_unknown_order_raises_not_found() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(404, json={"error": "not_found", "message": "no such order"})
 
-    with _make_client(handler) as client:
+    async with _make_client(handler) as client:
         with pytest.raises(CertApiNotFound):
-            client.finalize_order("nope")
+            await client.finalize_order("nope")
 
 
-def test_finalize_failed_order_raises_with_acme_detail() -> None:
+@pytest.mark.asyncio
+async def test_finalize_failed_order_raises_with_acme_detail() -> None:
     # The broker passes the ACME problem document's `detail` through on a 409.
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(
@@ -174,20 +183,21 @@ def test_finalize_failed_order_raises_with_acme_detail() -> None:
             },
         )
 
-    with _make_client(handler) as client:
+    async with _make_client(handler) as client:
         with pytest.raises(CertApiOrderFailed) as exc_info:
-            client.finalize_order("order-123")
+            await client.finalize_order("order-123")
     assert "order_failed" in str(exc_info.value)
     assert "NXDOMAIN" in str(exc_info.value)
 
 
-def test_unexpected_status_raises_generic_error() -> None:
+@pytest.mark.asyncio
+async def test_unexpected_status_raises_generic_error() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(500, text="boom")
 
-    with _make_client(handler) as client:
+    async with _make_client(handler) as client:
         with pytest.raises(CertApiError):
-            client.create_order("csr")
+            await client.create_order("csr")
 
 
 # ---------------------------------------------------------------------------
@@ -195,14 +205,15 @@ def test_unexpected_status_raises_generic_error() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_auth_token_fetched_fresh_per_request() -> None:
+@pytest.mark.asyncio
+async def test_auth_token_fetched_fresh_per_request() -> None:
     """The bearer is pulled from the provider on each call, not cached at construct time."""
 
     class _RotatingTokenProvider:
         def __init__(self) -> None:
             self.calls = 0
 
-        def get_token(self) -> str:
+        async def get_token(self) -> str:
             self.calls += 1
             return f"token-{self.calls}"
 
@@ -216,10 +227,10 @@ def test_auth_token_fetched_fresh_per_request() -> None:
 
     provider = _RotatingTokenProvider()
     transport = httpx.MockTransport(handler)  # type: ignore[arg-type]
-    http_client = httpx.Client(base_url=BASE_URL, transport=transport)
-    with CertApiClient(http_client=http_client, token_provider=provider) as client:
-        client.create_order("csr")
-        client.finalize_order("o1")
+    http_client = httpx.AsyncClient(base_url=BASE_URL, transport=transport)
+    async with CertApiClient(http_client=http_client, token_provider=provider) as client:
+        await client.create_order("csr")
+        await client.finalize_order("o1")
 
     # Each request asked the provider for a token, and the rotated value was used.
     assert seen_auth == ["Bearer token-1", "Bearer token-2"]

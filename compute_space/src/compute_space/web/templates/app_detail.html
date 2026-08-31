@@ -82,9 +82,11 @@
     {% endif %}
     {{ info_row("Repo path", app.repo_path) }}
     {{ info_row("Created", app.created_at) }}
-    {% if app.error_message %}
-    {{ info_row("Error", app.error_message, class_="error") }}
-    {% endif %}
+    {#- Always rendered so app-detail.js can reveal it when an error streams in. -#}
+    <tr id="app-error-row"{% if not app.error_message %} hidden{% endif %}>
+      <th scope="row">Error</th>
+      <td class="error" id="app-error-cell" style="white-space: pre-wrap;">{{ app.error_message or "" }}</td>
+    </tr>
     {% if app.container_id %}
     {{ info_row("Container ID", code_value(app.container_id[:12])) }}
     {% endif %}

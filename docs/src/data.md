@@ -13,7 +13,7 @@
         - Durability: on the `local` backend JuiceFS's objects live under `persistent_data_dir` and ARE included in backups, but have no off-instance copy.  On the `s3` backend durability is tied to the operator's S3 provider (and the mountpoint is deliberately excluded from restic backups because the bytes already live in the bucket).
     - **temporary data (`app_temp_data`)** — local disk scratch, not backed up, recreatable on demand.
         - examples: low-res thumbnails generated from source photos, transcoding work files, in-flight upload chunks.
-- there’s also VM-level / router data (eg the sqlite database used by the router). apps see this in-container as `/data/vm_data/` (only with the `access_vm_data` permission); on the host the router db lives at `persistent_data/openhost/router.db`.
+- VM-level / router data (such as the router's SQLite database) is host-only and is not mounted into app containers.
 - where do app build artifacts go? probably in app temp data?
 - folder structure (as seen inside containers, mounted at `/data/`)
     - /data/
@@ -23,7 +23,6 @@
             - app_name/
         - app_archive/
             - app_name/
-        - vm_data/          # VM-level / router shared data (only with access_vm_data)
 - regardless of permissions, apps should see the same folder structure, just only with folders they have access to. that way the structure doesn't change if the permissions change. without any special permissions, apps will just have basically `/data/app_data/APP_NAME` and `/data/app_temp_data/APP_NAME` (and `/data/app_archive/APP_NAME` if requested).
 
 ### Why three tiers, not two
@@ -57,7 +56,7 @@ The same `sync` + `config` mechanism also drives an `s3` → `s3` migration (rot
 
 ### permissions
 
-- apps can request access to the entire data dir, or to specific apps, and/or to the router’s data.
+- apps can request access to all app data or to specific apps' data, but not to router data.
 - there should also be a permission explicitly requesting access to the app's own POSIX file system - some apps won't need this at all.
   - separate permissions for permanent and temp data dirs, too.
 - this probably gives access just to the “permanent data”. idk that we need cross-app access to temp data.
@@ -71,7 +70,7 @@ The same `sync` + `config` mechanism also drives an `s3` → `s3` migration (rot
 
 ## Router-level data
 
-the router stores its own state (database, TLS certs, etc.) in the configured data directory alongside app data.
+the router stores its own state (database, TLS certs, etc.) in the configured data directory alongside app data. This state is only accessible through the terminal or SSH, not from app containers.
 
 ## Storage Guard
 

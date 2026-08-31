@@ -62,6 +62,14 @@ def _clear_render_cache() -> Iterator[None]:
     docs_routes._render_cache.clear()
 
 
+@pytest.fixture(autouse=True)
+def _db(tmp_path: Path) -> None:
+    """The test app's zone-stashing middleware calls get_db() on every request, so the module
+    needs its own DB.  Without this the file only passes when some earlier test module happens to
+    have initialized the global connection first."""
+    init_db(str(tmp_path / "docs-test.db"))
+
+
 def _populate_fake_docs(src_dir: Path) -> None:
     """Drop a small docs/src/ tree at ``src_dir``."""
     src_dir.mkdir(parents=True, exist_ok=True)

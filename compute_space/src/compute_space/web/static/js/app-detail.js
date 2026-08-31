@@ -261,6 +261,12 @@ function clearCacheAndReload() {
         }
     }
 
+    // A 4401 close means the session is gone; reconnecting would just loop through
+    // handshake/close every 2s, so go re-authenticate and come back here.
+    function redirectToLogin() {
+        window.location.href = '/login?next=' + encodeURIComponent(window.location.pathname);
+    }
+
     // Tracked so a reset can tell the old socket's onclose not to reconnect.
     var currentWs = null;
 
@@ -279,8 +285,9 @@ function clearCacheAndReload() {
             }
             appendLog(e.data + '\n');
         };
-        ws.onclose = function() {
+        ws.onclose = function(e) {
             if (ws !== currentWs) return;  // superseded by a reset
+            if (e.code === 4401) { redirectToLogin(); return; }
             // The server holds the socket open past end-of-log, so a close is a real
             // drop — reconnect (which re-primes to replay the tail).
             logPrimed = false;
@@ -321,50 +328,57 @@ function clearCacheAndReload() {
         clearRemovingChrome = null;
     }
 
+    function handleStatus(data) {
+        if (!data) return;
+        if (data.status !== appStatus) {
+            appStatus = data.status;
+            statusEl.textContent = appStatus;
+            statusEl.className = 'status-value status-' + appStatus;
+        }
+        // Adopt the first container_id silently; reset only on a later change.
+        if (data.container_id && data.container_id !== streamContainerId) {
+            if (streamContainerId !== null) resetLogStream();
+            streamContainerId = data.container_id;
+        }
+        if (appStatus === 'removing') {
+            applyRemovingChrome();
+        } else {
+            clearRemovingChromeIfApplied(
+                appStatus === 'error' ? (data.error || 'Removal failed') : null
+            );
+        }
+        if (appStatus === 'running' && nextUrl) {
+            window.location.href = nextUrl;
+        }
+        if (appStatus === 'error' && data.error_kind === 'build_cache_corrupt') {
+            showCacheCorruptToast();
+        }
+        var errorRow = document.getElementById('app-error-row');
+        var errorCell = document.getElementById('app-error-cell');
+        if (errorRow && errorCell) {
+            if (appStatus === 'error' && data.error) {
+                errorCell.textContent = data.error;
+                errorRow.hidden = false;
+            } else {
+                errorRow.hidden = true;
+                errorCell.textContent = '';
+            }
+        }
+    }
+
     function pollStatus() {
-        fetch(config.appStatusUrl)
+        if (!config.appStatusUrl) return;
+        fetch(config.appStatusUrl, { credentials: 'same-origin' })
             .then(function(r) {
-                if (r.status === 404) {
-                    window.location.href = '/dashboard';
-                    return null;
-                }
+                if (r.status === 401) { redirectToLogin(); return null; }
+                if (r.status === 404) { window.location.href = '/dashboard'; return null; }
+                if (!r.ok) return null;
                 return r.json();
             })
             .then(function(data) {
-                if (!data) return;
-                if (data.status !== appStatus) {
-                    appStatus = data.status;
-                    statusEl.textContent = appStatus;
-                    statusEl.className = 'status-value status-' + appStatus;
-                }
-                // Adopt the first container_id silently; reset only on a later change.
-                if (data.container_id && data.container_id !== streamContainerId) {
-                    if (streamContainerId !== null) resetLogStream();
-                    streamContainerId = data.container_id;
-                }
-                if (appStatus === 'removing') {
-                    applyRemovingChrome();
-                } else {
-                    clearRemovingChromeIfApplied(
-                        appStatus === 'error' ? (data.error || 'Removal failed') : null
-                    );
-                }
-                if (appStatus === 'running' && nextUrl) {
-                    window.location.href = nextUrl;
-                }
-                if (appStatus === 'error' && data.error_kind === 'build_cache_corrupt') {
-                    showCacheCorruptToast();
-                }
-            });
-    }
-
-    // Check on initial load too (for when you navigate to an already-errored app)
-    if (appStatus === 'error') {
-        fetch(config.appStatusUrl)
-            .then(function(r) { return r.json(); })
-            .then(function(data) {
-                if (data.error_kind === 'build_cache_corrupt') showCacheCorruptToast();
-            });
+                if (data) handleStatus(data);
+            })
+            .catch(function() {});
     }
 
     if (appStatus === 'removing') {
@@ -376,16 +390,8 @@ function clearCacheAndReload() {
     // Stream regardless of status: a stopped/errored app still has a build log to replay.
     startLogStream();
 
-    // 'removing' polls so the page learns when the row vanishes (404).
-    if (
-        appStatus === 'running' ||
-        appStatus === 'starting' ||
-        appStatus === 'building' ||
-        appStatus === 'removing'
-    ) {
-        var interval = (appStatus === 'building') ? 1000 : 3000;
-        setInterval(pollStatus, interval);
-    }
+    pollStatus();
+    setInterval(pollStatus, 1000);
 })();
 
 // Grey out Save until the git upstream input actually differs from what's saved.

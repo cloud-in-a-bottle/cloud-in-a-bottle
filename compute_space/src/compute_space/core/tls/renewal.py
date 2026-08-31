@@ -1,8 +1,8 @@
+import asyncio
 import datetime
 import enum
 import sqlite3
-import threading
-import time
+from collections.abc import Awaitable
 from collections.abc import Callable
 from contextlib import closing
 from pathlib import Path
@@ -88,11 +88,11 @@ def _mark_cert_active(name: str) -> None:
         logger.exception(f"cert_status active-mark skipped for {name} (non-fatal)")
 
 
-def renew_cert_if_needed(
+async def renew_cert_if_needed(
     config: Config,
-    reload_caddy: Callable[[Config, sqlite3.Connection], object],
-    provision: Callable[[Config, sqlite3.Connection], None] = provision_cert,
-    acquire: Callable[[Config, str, Path, Path, sqlite3.Connection], None] = acquire_cert_for_domain,
+    reload_caddy: Callable[[Config, sqlite3.Connection], Awaitable[object]],
+    provision: Callable[[Config, sqlite3.Connection], Awaitable[None]] = provision_cert,
+    acquire: Callable[[Config, str, Path, Path, sqlite3.Connection], Awaitable[None]] = acquire_cert_for_domain,
 ) -> bool:
     """Renew every TLS cert that is missing, expired, or inside the renewal window.
 
@@ -113,7 +113,7 @@ def renew_cert_if_needed(
             status = get_cert_status(config.tls_cert_path, config.tls_key_path)
             if status != CertStatus.OK:
                 logger.info(f"TLS cert for {primary.name} is {status.value}; renewing")
-                provision(config, db)
+                await provision(config, db)
                 _mark_cert_active(primary.name_no_port)
                 renewed = True
 
@@ -131,35 +131,37 @@ def renew_cert_if_needed(
             try:
                 logger.info(f"TLS cert for {name} is {status.value}; renewing")
                 cert_path.parent.mkdir(parents=True, exist_ok=True)
-                acquire(config, name, cert_path, key_path, db)
+                await acquire(config, name, cert_path, key_path, db)
                 _mark_cert_active(name)
                 renewed = True
             except Exception:
                 logger.exception(f"TLS cert renewal failed for {name}; will retry next cycle")
 
         if renewed:
-            reload_caddy(config, db)
+            await reload_caddy(config, db)
     return renewed
 
 
-def start_renewal_thread(reload_caddy: Callable[[Config, sqlite3.Connection], object]) -> threading.Thread:
-    """Run renew_cert_if_needed periodically in a daemon thread, retrying sooner after failures.
+def start_renewal_task(
+    reload_caddy: Callable[[Config, sqlite3.Connection], Awaitable[object]],
+) -> asyncio.Task[None]:
+    """Run renew_cert_if_needed periodically on the caller's event loop, retrying sooner after failures.
 
     Reads the *live* active config each cycle (``get_config()``), so a domain added at runtime via
     /api/domains after startup is picked up by renewal rather than frozen out by a stale snapshot.
     ``reload_caddy`` regenerates the Caddyfile so a renewed/newly-acquired cert is actually served.
+
+    The caller must keep the returned task alive — the loop holds only a weak reference.
     """
 
-    def _loop() -> None:
+    async def _run() -> None:
         while True:
             interval = CHECK_INTERVAL
             try:
-                renew_cert_if_needed(get_config(), reload_caddy)
+                await renew_cert_if_needed(get_config(), reload_caddy)
             except Exception:
                 logger.exception(f"TLS cert renewal failed; retrying in {RETRY_INTERVAL}")
                 interval = RETRY_INTERVAL
-            time.sleep(interval.total_seconds())
+            await asyncio.sleep(interval.total_seconds())
 
-    thread = threading.Thread(target=_loop, name="tls-cert-renewal", daemon=True)
-    thread.start()
-    return thread
+    return asyncio.create_task(_run(), name="tls-cert-renewal")
