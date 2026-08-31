@@ -69,8 +69,7 @@ User-facing links the app advertises for paths on its own URL that aren't the ba
 | `app_temp_data` | boolean | no | false | Request access to temporary filesystem directory (not backed up) |
 | `app_archive` | boolean | no | false | Request access to the archive directory for bulk content. Always available: backed by local disk by default, upgradable to S3 (via JuiceFS) by the operator. Apps with this flag install on any zone; on a local-backed zone the operator sees an install-time notice that the data is on non-durable local disk. |
 | `sqlite` | string[] | no | [] | SQLite database names to provision (implicitly enables `app_data`) |
-| `access_vm_data` | boolean | no | false | Whether the app can access the VM's shared data directory (read-only) |
-| `access_all_app_data` | boolean | no | false | Mount all apps' permanent data and temp data parent directories (rw). Also grants rw access to vm_data. For admin tools like file browsers. |
+| `access_all_app_data` | boolean | no | false | Mount all apps' permanent data and temp data parent directories (rw). For admin tools like file browsers. |
 | `access_all_archive` | boolean | no | false | Mount all apps' archive parent directory. Permissive: silently skipped if the archive mount is transiently unavailable. For backup tools. |
 | `access_all_data` | boolean | no | false | Convenience shorthand for `access_all_app_data = true` + `access_all_archive = true`. |
 
@@ -82,7 +81,6 @@ Apps have three storage areas, each with different durability + size + latency t
 - **Permanent data** (`/data/app_data/{app_name}/`) — local disk. Small, fast, backed up. Enabled by `app_data = true` or by requesting `sqlite` entries. **SQLite databases must live here**, not in `app_archive`: the archive tier may be backed by a network FS with close-to-open consistency that corrupts SQLite WAL.
 - **Temporary data** (`/data/app_temp_data/{app_name}/`) — local disk scratch. Not backed up, recreatable. Enabled by `app_temp_data = true`.
 - **Archive data** (`/data/app_archive/{app_name}/`) — bulk content storage. Always available. Backed by **local disk** by default (kept under `persistent_data_dir`, survives rebuilds, included in backups). The operator can upgrade the zone to **S3** (JuiceFS) from the dashboard for elastic, durable object storage; existing local archive data is migrated into the bucket. Higher-latency on uncached reads once on S3, durability then tied to the provider's SLA. Intended for bulk content (videos, photos, attachments). Enabled by `app_archive = true`.
-- **VM data** (`/data/vm_data/`) — router database and VM-level shared data. Only accessible if `access_vm_data = true`.
 
 The archive tier defaults to local-disk backing and is always available. The operator can upgrade a zone to S3 one-shot from the dashboard, supplying S3 credentials and a per-zone prefix; archive bytes then route through a JuiceFS mount of the operator-supplied bucket (and any existing local archive data is migrated into it). Apps see `/data/app_archive/<app>/` as a normal POSIX directory and don't need to know which backing is in use.
 

@@ -199,7 +199,6 @@ class AppManifest:
     app_data: Annotated[bool, SettingLabel("Data", "Permanent data")] = True
     app_temp_data: Annotated[bool, SettingLabel("Data", "Temporary data")] = False
     app_archive: Annotated[bool, SettingLabel("Data", "Archive data")] = False
-    access_vm_data: Annotated[bool, SettingLabel("Data", "Access VM data")] = False
     # Granular cross-app data flags (preferred):
     access_all_app_data: Annotated[bool, SettingLabel("Data", "Access all app data")] = False
     access_all_archive: Annotated[bool, SettingLabel("Data", "Access all archive")] = False
@@ -498,7 +497,6 @@ def parse_manifest_from_string(raw_text: str) -> AppManifest:
         app_data=data_section.get("app_data", True),
         app_temp_data=data_section.get("app_temp_data", False),
         app_archive=data_section.get("app_archive", False),
-        access_vm_data=data_section.get("access_vm_data", False),
         access_all_data=_compat_all_data,
         access_all_app_data=data_section.get("access_all_app_data", False) or _compat_all_data,
         access_all_archive=data_section.get("access_all_archive", False) or _compat_all_data,

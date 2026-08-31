@@ -59,7 +59,6 @@ class TestDefaults:
         assert manifest.app_data is True  # default on
         assert manifest.app_temp_data is False
         assert manifest.app_archive is False
-        assert manifest.access_vm_data is False
         assert manifest.access_all_app_data is False
         assert manifest.access_all_archive is False
         assert manifest.access_all_data is False

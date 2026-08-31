@@ -291,7 +291,6 @@ def run_container(
     app_data_dir = os.path.join(data_dir, "app_data", app_name)
     app_temp_dir = os.path.join(temp_data_dir, "app_temp_data", app_name)
     app_archive_dir = os.path.join(archive_dir, app_name)
-    vm_data_dir = os.path.join(data_dir, "vm_data")
     container_name = f"openhost-{app_name}"
 
     wants_all_app_data = manifest.access_all_app_data
@@ -300,12 +299,10 @@ def run_container(
     has_app_data = manifest.app_data or manifest.sqlite_dbs or wants_all_app_data
     has_app_temp = manifest.app_temp_data or wants_all_app_data
     has_app_archive = manifest.app_archive or wants_all_archive
-    has_vm_data = manifest.access_vm_data or wants_all_app_data
 
     c_app_data = f"{CONTAINER_ROOT}/app_data/{app_name}"
     c_app_temp = f"{CONTAINER_ROOT}/app_temp_data/{app_name}"
     c_app_archive = f"{CONTAINER_ROOT}/app_archive/{app_name}"
-    c_vm_data = f"{CONTAINER_ROOT}/vm_data"
 
     # Translate host paths in env vars to their in-container equivalents.
     container_env = {}
@@ -404,17 +401,11 @@ def run_container(
                 ),
             ]
         )
-        # vm_data is rw under wants_all_app_data (admin-level access).
-        os.makedirs(vm_data_dir, exist_ok=True)
-        cmd.extend(["-v", _bind_mount_arg(vm_data_dir, c_vm_data)])
     else:
         if has_app_data:
             cmd.extend(["-v", _bind_mount_arg(app_data_dir, c_app_data)])
         if has_app_temp:
             cmd.extend(["-v", _bind_mount_arg(app_temp_dir, c_app_temp)])
-        if has_vm_data:
-            os.makedirs(vm_data_dir, exist_ok=True)
-            cmd.extend(["-v", _bind_mount_arg(vm_data_dir, c_vm_data, read_only=True)])
 
     if wants_all_archive:
         # access_all_archive is permissive — skip the archive mount when
