@@ -991,6 +991,13 @@ async def collect_platform_diagnostics(db: sqlite3.Connection, config: Config) -
     )
 
 
+def app_diagnostics_filename(app_name: str) -> str:
+    """Build a safe, timestamped filename for a downloaded app diagnostics bundle."""
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    safe_name = "".join(c if c.isalnum() or c in "-." else "_" for c in app_name) or "app"
+    return f"openhost-app-diagnostics-{safe_name}-{stamp}.json"
+
+
 async def collect_app_diagnostics(row: sqlite3.Row, config: Config, db: sqlite3.Connection) -> AppDiagnostics:
     """Assemble a per-app diagnostics bundle for the given ``apps`` row."""
     version, runtime_type = _manifest_fields(row["manifest_raw"])

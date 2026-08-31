@@ -18,6 +18,7 @@ from unittest import mock
 import pytest
 from litestar.testing import TestClient
 
+import compute_space.core.apps as core_apps
 import compute_space.web.routes.api.apps as apps_routes
 from compute_space.core.app_id import new_app_id
 from compute_space.core.apps import git_pull
@@ -282,8 +283,8 @@ def test_reload_update_pins_resolved_default_branch(cfg: Any, tmp_path: Path) ->
 
     cookies = auth_cookie(cfg)
     with (
-        mock.patch.object(apps_routes, "stop_app_process"),
-        mock.patch.object(apps_routes, "reload_app_background"),
+        mock.patch.object(core_apps, "stop_app_process"),
+        mock.patch.object(core_apps, "reload_app_background"),
         TestClient(app=make_test_app(api_apps_routes)) as client,
     ):
         client.cookies.update(cookies)

@@ -228,6 +228,9 @@
        action_label("Remove, keep data", "Removes the app but leaves its databases and files in place. Re-deploying to the same app name picks them up again."),
        button("Remove (Keep Data)", onclick="if(confirm('Remove " ~ app.name ~ " but keep its databases and files? You can re-deploy later to the same app name to reuse the data.')) appAction('/remove_app/" ~ app.app_id ~ "', {keep_data: true}, {isRemove: true, label: 'Removing (keeping data)'})")) }}
   {{ info_row(
+       action_label("Wipe data & restart", "Deletes permanent, temporary, and archive data while keeping the checked-out source, then rebuilds and restarts the app.", danger=true),
+       button("Wipe Data & Restart", variant="danger", onclick="if(confirm('Wipe all data for " ~ app.name ~ " and restart it? This deletes permanent, temporary, and archive data, while retaining the checked-out source for rebuilding.')) appAction('/wipe_data_restart/" ~ app.app_id ~ "', {}, {label: 'Wiping data & restarting'})")) }}
+  {{ info_row(
        action_label("Remove app & data", "Deletes the app together with every database and file it owns. This cannot be undone.", danger=true),
        button("Remove App & Data", variant="danger", onclick="if(confirm('Remove " ~ app.name ~ "? This deletes all app data permanently.')) appAction('/remove_app/" ~ app.app_id ~ "', {}, {isRemove: true, label: 'Removing'})")) }}
 {% endcall %}

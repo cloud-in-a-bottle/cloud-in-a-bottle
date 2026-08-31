@@ -22,7 +22,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import sqlite3
 import subprocess
 from datetime import UTC
 from datetime import datetime
@@ -497,13 +496,13 @@ def stop_container(container_id: str) -> None:
     subprocess.run(["podman", "rm", "-f", container_id], capture_output=True, timeout=30)
 
 
-def stop_app_process(app_row: sqlite3.Row) -> None:
+def stop_app_process(app_name: str, container_id: str | None) -> None:
     """Stop the running process for an app.  Does not update the database."""
     try:
-        if app_row["container_id"]:
-            stop_container(app_row["container_id"])
+        if container_id:
+            stop_container(container_id)
     except Exception as e:
-        logger.warning("Error stopping app {}: {}", app_row["name"], e)
+        logger.warning("Error stopping app {}: {}", app_name, e)
 
 
 def remove_image(app_name: str) -> None:

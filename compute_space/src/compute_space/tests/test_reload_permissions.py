@@ -4,7 +4,7 @@ explicit owner approval, mirroring the approval required at install time.
 Before this, ``reload_app_background`` re-synced manifest-derived columns but
 silently left newly declared permissions ungranted — the update proceeded and
 the new permissions only showed up passively on the app detail page. Now
-``_reload_app_impl`` refuses the reload (via ``_gate_update_review``) until
+``compute_space.core.apps.reload_app`` refuses it (via ``gate_update_review``) until
 the owner approves, and the app keeps running its current version meanwhile.
 """
 
@@ -23,6 +23,7 @@ from litestar import Litestar
 from litestar.testing import TestClient
 
 from compute_space.core.app_id import new_app_id
+from compute_space.core.apps import gate_update_review
 from compute_space.core.auth.permissions_v2 import PermissionRecord
 from compute_space.core.auth.permissions_v2 import get_all_permissions_v2
 from compute_space.core.auth.permissions_v2 import grant_permission_v2
@@ -34,7 +35,6 @@ from compute_space.core.manifest import parse_manifest_from_string
 from compute_space.db.connection import init_db
 from compute_space.tests._litestar_helpers import auth_cookie
 from compute_space.tests._litestar_helpers import make_test_app
-from compute_space.web.routes.api.apps import _gate_update_review
 from compute_space.web.routes.api.apps import api_apps_routes
 
 from .conftest import _make_test_config
@@ -256,7 +256,7 @@ def test_gate_returns_none_when_no_new_permissions(cfg: Any, tmp_path: Path) -> 
     _manifest_with_consumes(repo, "")  # no consumes
     app_id = _seed_perm_app(cfg, str(repo))
 
-    assert _gate_update_review(app_id, str(repo), approve_new_permissions=False) is None
+    assert gate_update_review(app_id, str(repo), approve_new_permissions=False) is None
 
 
 def test_gate_refuses_new_permission_without_approval(cfg: Any, tmp_path: Path) -> None:
@@ -264,9 +264,8 @@ def test_gate_refuses_new_permission_without_approval(cfg: Any, tmp_path: Path) 
     _manifest_with_consumes(repo, _consume_block("github.com/x/secrets", "secrets", '{ key = "API_KEY" }'))
     app_id = _seed_perm_app(cfg, str(repo))
 
-    result = _gate_update_review(app_id, str(repo), approve_new_permissions=False)
+    result = gate_update_review(app_id, str(repo), approve_new_permissions=False)
     assert result is not None
-    assert result.ok is False
     assert len(result.permissions_required) == 1
     assert result.permissions_required[0]["service_url"] == "github.com/x/secrets"
     assert result.permissions_required[0]["shortname"] == "secrets"
@@ -279,7 +278,7 @@ def test_gate_grants_and_proceeds_when_approved(cfg: Any, tmp_path: Path) -> Non
     _manifest_with_consumes(repo, _consume_block("github.com/x/secrets", "secrets", '{ key = "API_KEY" }'))
     app_id = _seed_perm_app(cfg, str(repo))
 
-    result = _gate_update_review(app_id, str(repo), approve_new_permissions=True)
+    result = gate_update_review(app_id, str(repo), approve_new_permissions=True)
     assert result is None
     granted = get_all_permissions_v2(consumer_app_id=app_id)
     assert len(granted) == 1
@@ -294,7 +293,7 @@ def test_gate_ignores_already_granted_permission(cfg: Any, tmp_path: Path) -> No
     grant_permission_v2(consumer_app_id=app_id, service_url="github.com/x/secrets", grant_payload={"key": "API_KEY"})
 
     # Already held -> not "new" -> gate passes without prompting.
-    assert _gate_update_review(app_id, str(repo), approve_new_permissions=False) is None
+    assert gate_update_review(app_id, str(repo), approve_new_permissions=False) is None
 
 
 def test_gate_returns_none_for_unparseable_manifest(cfg: Any, tmp_path: Path) -> None:
@@ -304,7 +303,7 @@ def test_gate_returns_none_for_unparseable_manifest(cfg: Any, tmp_path: Path) ->
     app_id = _seed_perm_app(cfg, str(repo))
 
     # A broken manifest isn't the gate's problem; the reload path surfaces it.
-    assert _gate_update_review(app_id, str(repo), approve_new_permissions=False) is None
+    assert gate_update_review(app_id, str(repo), approve_new_permissions=False) is None
 
 
 # ─── the update delta: gate only author-added permissions ─────────────────────
@@ -366,9 +365,7 @@ def test_gate_does_not_reprompt_revoked_permission_on_update(cfg: Any, tmp_path:
     app_id = _seed_perm_app(cfg, str(repo))
     prev_raw = _CONSUMES.format(consumes=consumes)
     # No permissions_v2 row for it (owner revoked, or never granted).
-    assert (
-        _gate_update_review(app_id, str(repo), approve_new_permissions=False, previous_manifest_raw=prev_raw) is None
-    )
+    assert gate_update_review(app_id, str(repo), approve_new_permissions=False, previous_manifest_raw=prev_raw) is None
 
 
 def test_gate_prompts_for_author_added_permission_on_update(cfg: Any, tmp_path: Path) -> None:
@@ -380,9 +377,8 @@ def test_gate_prompts_for_author_added_permission_on_update(cfg: Any, tmp_path: 
     _manifest_with_consumes(repo, new_consumes)
     app_id = _seed_perm_app(cfg, str(repo))
     prev_raw = _CONSUMES.format(consumes=prev_consumes)
-    result = _gate_update_review(app_id, str(repo), approve_new_permissions=False, previous_manifest_raw=prev_raw)
+    result = gate_update_review(app_id, str(repo), approve_new_permissions=False, previous_manifest_raw=prev_raw)
     assert result is not None
-    assert result.ok is False
     assert [p["service_url"] for p in result.permissions_required] == ["github.com/x/b"]
 
 
@@ -425,10 +421,10 @@ def _mocked_reload_side_effects() -> Iterator[dict[str, Any]]:
     exercise the permission gate hermetically: a successful git pull, no ref
     re-pin, no container stop, no background reload thread."""
     with (
-        patch("compute_space.web.routes.api.apps.git_pull", return_value=(True, None)),
-        patch("compute_space.web.routes.api.apps._pin_refless_to_landed_branch", return_value=None),
-        patch("compute_space.web.routes.api.apps.stop_app_process") as stop,
-        patch("compute_space.web.routes.api.apps.Thread") as thread,
+        patch("compute_space.core.apps.git_pull", return_value=(True, None)),
+        patch("compute_space.core.apps.pin_refless_to_landed_branch", return_value=None),
+        patch("compute_space.core.apps.stop_app_process") as stop,
+        patch("compute_space.core.apps.Thread") as thread,
     ):
         yield {"stop": stop, "thread": thread}
 
@@ -518,8 +514,8 @@ def test_plain_reload_does_not_gate_declared_but_ungranted_permission(
     )
 
     with (
-        patch("compute_space.web.routes.api.apps.stop_app_process") as stop,
-        patch("compute_space.web.routes.api.apps.Thread") as thread,
+        patch("compute_space.core.apps.stop_app_process") as stop,
+        patch("compute_space.core.apps.Thread") as thread,
     ):
         client.cookies.update(cookies)
         resp = client.post(f"/reload_app/{app_id}", json={"update": False})
@@ -666,10 +662,10 @@ def test_refused_update_rolls_back_working_tree(
         return True, None
 
     with (
-        patch("compute_space.web.routes.api.apps.git_pull", side_effect=_fake_pull),
-        patch("compute_space.web.routes.api.apps._pin_refless_to_landed_branch", return_value=None),
-        patch("compute_space.web.routes.api.apps.stop_app_process") as stop,
-        patch("compute_space.web.routes.api.apps.Thread") as thread,
+        patch("compute_space.core.apps.git_pull", side_effect=_fake_pull),
+        patch("compute_space.core.apps.pin_refless_to_landed_branch", return_value=None),
+        patch("compute_space.core.apps.stop_app_process") as stop,
+        patch("compute_space.core.apps.Thread") as thread,
     ):
         # sanity: the pulled v2 really does declare a new consume
         client.cookies.update(cookies)
@@ -732,10 +728,8 @@ def test_gate_refuses_settings_change_without_approval(cfg: Any, tmp_path: Path)
     app_id = _seed_perm_app(cfg, str(repo))
     prev_raw = _BASE.format(version="1.0.0", memory=128)
 
-    result = _gate_update_review(app_id, str(repo), approve_new_permissions=False, previous_manifest_raw=prev_raw)
+    result = gate_update_review(app_id, str(repo), approve_new_permissions=False, previous_manifest_raw=prev_raw)
     assert result is not None
-    assert result.ok is False
-    assert result.review_required is True
     assert result.permissions_required == []
     labels = {c["label"] for c in result.settings_changed}
     assert {"Version", "Memory (MB)"} <= labels
@@ -749,7 +743,7 @@ def test_gate_proceeds_on_settings_change_when_approved(cfg: Any, tmp_path: Path
     prev_raw = _BASE.format(version="1.0.0", memory=128)
 
     # No permissions involved, so approval simply lets the update proceed.
-    assert _gate_update_review(app_id, str(repo), approve_new_permissions=True, previous_manifest_raw=prev_raw) is None
+    assert gate_update_review(app_id, str(repo), approve_new_permissions=True, previous_manifest_raw=prev_raw) is None
 
 
 def test_gate_passes_when_manifest_unchanged(cfg: Any, tmp_path: Path) -> None:
@@ -759,7 +753,7 @@ def test_gate_passes_when_manifest_unchanged(cfg: Any, tmp_path: Path) -> None:
     (repo / "openhost.toml").write_text(raw)
     app_id = _seed_perm_app(cfg, str(repo))
 
-    assert _gate_update_review(app_id, str(repo), approve_new_permissions=False, previous_manifest_raw=raw) is None
+    assert gate_update_review(app_id, str(repo), approve_new_permissions=False, previous_manifest_raw=raw) is None
 
 
 def _seed_git_app_with_manifest_raw(cfg: Any, repo: Path, on_disk_toml: str, manifest_raw: str) -> str:
