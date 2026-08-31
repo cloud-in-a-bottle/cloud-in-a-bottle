@@ -26,9 +26,9 @@ openhost/
 
 ## running and testing
 
-**never run the full test suite locally — that's what CI is for. use it.** it is fine to run individual new tests that are fast (<5s), e.g. a test you just wrote, but the strong default is to let CI handle the rest.
+**in general don't run the full test suite (or full sub-suites) locally — that's what CI is for.** it is fine to run individual tests or a few test files, but the strong default is to let CI handle the rest. this applies to the unit test suite also.
 
-run a single test with `-x` to fail fast, e.g.:
+run a single test file with `-x` to fail fast, e.g.:
 
 ```
 pixi run -e dev pytest -x compute_space/src/compute_space/tests/test_token_hashing.py
