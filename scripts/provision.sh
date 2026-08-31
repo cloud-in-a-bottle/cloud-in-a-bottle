@@ -25,18 +25,26 @@ BRANCH="main"
 REPO_URL="https://github.com/cloud-in-a-bottle/cloud-in-a-bottle.git"
 OPENHOST_DIR="/home/host/openhost"
 LOCAL_HTTP_ONLY="false"
+CLAIM_TOKEN_REQUIRED="true"
 
 usage() {
     echo "Usage: $0 --domain <domain> [--branch <branch>] [--repo <repo-url>] [--local-http-only]"
+    echo "          [--no-claim-token]"
     echo ""
     echo "  --domain            Required. Domain name (e.g., myhost.example.com)."
     echo "                      In --local-http-only mode this is only used for app"
-    echo "                      subdomain routing (e.g. lvh.me), not TLS/DNS."
+    echo "                      subdomain routing, not TLS/DNS -- include the port"
+    echo "                      (e.g. lvh.me:8080), since the router builds absolute"
+    echo "                      URLs from it and without it they point at :80."
     echo "  --branch            Git branch to deploy (default: main)"
     echo "  --repo              Git repo URL (default: cloud-in-a-bottle/cloud-in-a-bottle)"
     echo "  --local-http-only   HTTP-only localhost mode: no TLS, CoreDNS, or Caddy."
     echo "                      For bringing an instance up before a public domain +"
     echo "                      DNS are ready.  Reach it via an SSH tunnel to :8080."
+    echo "  --no-claim-token    Leave /setup ungated, so you can claim the instance without"
+    echo "                      the token.  Requires --local-http-only: on a reachable"
+    echo "                      instance the token is the only thing stopping a stranger"
+    echo "                      from claiming it first."
 }
 
 while [[ $# -gt 0 ]]; do
@@ -45,6 +53,7 @@ while [[ $# -gt 0 ]]; do
         --branch)           BRANCH="$2"; shift 2 ;;
         --repo)             REPO_URL="$2"; shift 2 ;;
         --local-http-only)  LOCAL_HTTP_ONLY="true"; shift ;;
+        --no-claim-token)   CLAIM_TOKEN_REQUIRED="false"; shift ;;
         -h|--help)          usage; exit 0 ;;
         *)                  echo "Unknown option: $1"; usage; exit 1 ;;
     esac
@@ -53,6 +62,12 @@ done
 if [ -z "$DOMAIN" ]; then
     echo "Error: --domain is required"
     usage
+    exit 1
+fi
+
+if [ "$CLAIM_TOKEN_REQUIRED" = "false" ] && [ "$LOCAL_HTTP_ONLY" != "true" ]; then
+    echo "Error: --no-claim-token requires --local-http-only"
+    echo "       Without the token, anyone who can reach /setup can claim this instance."
     exit 1
 fi
 
@@ -116,6 +131,7 @@ ansible-playbook ansible/local_setup.yml \
     -e "public_ip=${PUBLIC_IP:-127.0.0.1}" \
     -e "acme_directory_url=https://acme-v02.api.letsencrypt.org/directory" \
     -e "local_http_only=$LOCAL_HTTP_ONLY" \
+    -e "claim_token_required=$CLAIM_TOKEN_REQUIRED" \
     -e "skip_service_start=true" \
     --connection=local \
     -i "localhost,"
@@ -145,6 +161,9 @@ echo "=== Cloud in a Bottle provisioning complete ==="
 echo ""
 if [ "$LOCAL_HTTP_ONLY" = "true" ]; then
     echo "  Mode:      HTTP-only localhost (no TLS/CoreDNS/Caddy)"
+    if [ "$CLAIM_TOKEN_REQUIRED" = "false" ]; then
+        echo "  Claim:     /setup is ungated (--no-claim-token); no token needed"
+    fi
     echo "  Dashboard: http://localhost:8080  (SSH-tunnel to reach it:"
     echo "             ssh -L 8080:localhost:8080 host@<pi-ip>)"
 else
