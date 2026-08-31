@@ -1,12 +1,12 @@
 # Deploying on a shared machine
 
-Use this path when the machine already does something else: your laptop, a desktop, or a home server with other services on it.
+Use this path when installing on a machine that you don't necessarily want to dedicate to Cloud in a Bottle.
 
-Cloud in a Bottle wants to own system packages and ports 80, 443, and 53, which is more than you want to give it on a machine like that. So instead of installing on the host, you give it its own Ubuntu VM and install inside that. Everything it does stays in the VM's disk image. Delete the image and it is gone.
+Cloud in a Bottle wants to install directly on the host. It runs various system services, sets system-level configuration, and expects to be able to manage the system ongoing. So instead of installing on the host, you give it its own Ubuntu VM to live inside. Everything it does stays inside the VM's disk image, and it can't access your host system. If you want to install on a dedicated machine, [see this guide instead](./dedicated_machine.md).
 
-This guide starts with a local HTTP-only instance, because that needs no domain and no DNS. A VM instance is not limited to that. It can serve the public internet over HTTPS exactly like one on a dedicated machine, once traffic can reach it. [Going public](#going-public) at the end covers the difference.
+This guide starts by setting up a local-network-only instance. The local instance lives at `http://lvh.me:8080`, with apps at `http://<app>.lvh.me:8080`. `lvh.me` is a public DNS name that resolves to `127.0.0.1`, wildcard subdomains included. Cloud in a Bottle routes apps by subdomain, so this gives you working app URLs with no DNS setup on your part.
 
-The local instance lives at `http://lvh.me:8080`, with apps at `http://<app>.lvh.me:8080`. `lvh.me` is a public DNS name that resolves to `127.0.0.1`, wildcard subdomains included, which is something `localhost` does not do consistently. Cloud in a Bottle routes apps by subdomain, so this gives you working app URLs with no DNS setup on your part.
+When you're ready to take your instance public, see [going public](#going-public) at the end of this doc.
 
 ## What the VM needs
 
@@ -14,7 +14,7 @@ Cloud in a Bottle does not care which hypervisor you use. QEMU, UTM, VirtualBox,
 
 - Ubuntu 24.04.
 - Key-based SSH from your machine, as a user with sudo.
-- The VM's port 8080 reachable at `127.0.0.1:8080` on your machine, via a port forward in the VM host's NAT config or an SSH tunnel. This matters because `lvh.me` resolves to `127.0.0.1`, and that is what makes app subdomains work.
+- The VM's port 8080 reachable at `127.0.0.1:8080` on your machine, via a port forward in the VM host's NAT config or an SSH tunnel.
 - About 8 GB of RAM, 4 cores, and 40 GB of disk.
 - An ext4, xfs, or btrfs root filesystem. App containers need idmapped mounts, and install fails early with a clear error otherwise.
 
