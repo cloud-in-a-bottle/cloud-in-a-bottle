@@ -38,7 +38,7 @@
 # boot (domain → the DB `domains` table, token → the DB `settings` store), after which the DB is
 # authoritative and this file is ignored. `claim_token_required` in config.toml defaults to true,
 # so /setup rejects every caller unless their request carries a token matching the one seeded here.
-# Pass `-e claim_token_required=false` (provision.sh: `--no-claim-token`) to leave /setup ungated on
+# Pass `-e claim_token_required=false` (provision.sh: `--open-claim`) to leave /setup ungated on
 # a loopback-only instance. The token is still seeded either way, so flipping the config back to
 # true later re-gates /setup without a re-seed.
 # If the operator doesn't pass `-e claim_token=…`, we generate a fresh URL-safe random one and print
