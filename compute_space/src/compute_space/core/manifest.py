@@ -236,11 +236,23 @@ class AppManifest:
     @property
     def legacy_access_all_archive(self) -> bool:
         """Preserve archive-only access for installed manifests using the removed flag."""
-        try:
-            data = tomllib.loads(self.raw_toml).get("data", {}) or {}
-        except tomllib.TOMLDecodeError:
-            return False
-        return bool(data.get("access_all_archive"))
+        return manifest_has_legacy_access_all_archive(self.raw_toml)
+
+
+def manifest_has_legacy_access_all_archive(raw_text: str) -> bool:
+    try:
+        data = tomllib.loads(raw_text).get("data", {}) or {}
+    except tomllib.TOMLDecodeError:
+        return False
+    return bool(data.get("access_all_archive"))
+
+
+def manifest_newly_declares_legacy_access_all_archive(
+    manifest: AppManifest, previous_manifest_raw: str | None
+) -> bool:
+    return manifest.legacy_access_all_archive and not manifest_has_legacy_access_all_archive(
+        previous_manifest_raw or ""
+    )
 
 
 @functools.cache

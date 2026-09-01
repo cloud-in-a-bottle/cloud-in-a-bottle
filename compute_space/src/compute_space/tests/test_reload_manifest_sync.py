@@ -145,6 +145,23 @@ def test_reload_updates_cpu_and_memory_in_db(cfg: Any, tmp_path: Path) -> None:
     assert row["memory_mb"] == 1024
 
 
+def test_reload_does_not_persist_new_access_all_archive(cfg: Any, tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    _write_manifest(repo)
+    manifest_path = repo / "cloudinabottle.toml"
+    manifest_path.write_text(manifest_path.read_text() + "\n[data]\naccess_all_archive = true\n")
+    app_id = _seed_app(cfg, str(repo), cpu_cores=0.1, memory_mb=64)
+
+    with mock.patch.object(apps_mod, "start_app_process") as start:
+        reload_app_background(app_id, str(repo), cfg)
+
+    row = _row(cfg, app_id)
+    assert row["manifest_raw"] == "old-raw"
+    assert row["status"] == "error"
+    assert "access_all_archive has been removed" in row["error_message"]
+    start.assert_not_called()
+
+
 def test_reload_syncs_all_manifest_columns(cfg: Any, tmp_path: Path) -> None:
     """Every manifest-derived column is refreshed on reload, not just the old
     subset (public_paths/links/manifest_raw/name)."""

@@ -68,9 +68,9 @@ from compute_space.core.manifest import ACCESS_ALL_ARCHIVE_REMOVED_MESSAGE
 from compute_space.core.manifest import PermissionGrant
 from compute_space.core.manifest import all_manifest_permissions_v2
 from compute_space.core.manifest import manifest_newly_declared_permissions_v2
+from compute_space.core.manifest import manifest_newly_declares_legacy_access_all_archive
 from compute_space.core.manifest import manifest_settings_changes
 from compute_space.core.manifest import parse_manifest
-from compute_space.core.manifest import parse_manifest_from_string
 from compute_space.core.oauth import OAuthRequired
 from compute_space.core.oauth import get_oauth_token
 from compute_space.core.ports import check_port_available
@@ -650,14 +650,7 @@ def _gate_update_review(
     except ValueError:
         return None
 
-    previous_had_legacy_archive = False
-    if previous_manifest_raw:
-        try:
-            previous_had_legacy_archive = parse_manifest_from_string(previous_manifest_raw).legacy_access_all_archive
-        except ValueError:
-            # An unparseable stored manifest cannot establish a legacy entitlement.
-            pass
-    if manifest.legacy_access_all_archive and not previous_had_legacy_archive:
+    if manifest_newly_declares_legacy_access_all_archive(manifest, previous_manifest_raw):
         raise ValueError(ACCESS_ALL_ARCHIVE_REMOVED_MESSAGE)
 
     new_perms = manifest_newly_declared_permissions_v2(
@@ -826,9 +819,17 @@ async def _reload_app_impl(
     # update leaves the app untouched.
     #
     # Only applies when code is actually being pulled (update / oauth re-entry).
-    # A plain reload deploys the manifest already on disk — the one the app is
-    # currently running — so it can't introduce changes, and gating it would
-    # wrongly re-prompt for a version the owner already chose to keep running.
+    # A plain reload normally deploys the manifest already on disk, so a full
+    # settings review would wrongly re-prompt for the running version. Check the
+    # removed legacy permission separately so local drift cannot grandfather it.
+    if not update and not continue_oauth and app_row["repo_path"]:
+        try:
+            manifest = parse_manifest(app_row["repo_path"])
+        except ValueError as e:
+            raise ValidationException(detail=str(e)) from e
+        if manifest_newly_declares_legacy_access_all_archive(manifest, app_row["manifest_raw"]):
+            raise ValidationException(detail=ACCESS_ALL_ARCHIVE_REMOVED_MESSAGE)
+
     if update or continue_oauth:
         gate_error: ValueError | None = None
         try:

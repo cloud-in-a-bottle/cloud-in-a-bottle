@@ -848,3 +848,22 @@ def test_reload_route_rejects_new_access_all_archive(
     m["stop"].assert_not_called()
     m["thread"].assert_not_called()
     assert _app_status(cfg, app_id) == "running"
+
+
+def test_plain_reload_rejects_new_access_all_archive(
+    cfg: Any, client: TestClient[Litestar], cookies: dict[str, str], tmp_path: Path
+) -> None:
+    previous = _BASE.format(version="1.0.0", memory=128)
+    updated = previous + "\n[data]\naccess_all_archive = true\n"
+    repo = tmp_path / "repo"
+    app_id = _seed_git_app_with_manifest_raw(cfg, repo, updated, previous)
+
+    client.cookies.update(cookies)
+    with _mocked_reload_side_effects() as m:
+        resp = client.post(f"/reload_app/{app_id}", json={})
+
+    assert resp.status_code == 400
+    assert "access_all_archive has been removed" in resp.json()["detail"]
+    m["stop"].assert_not_called()
+    m["thread"].assert_not_called()
+    assert _app_status(cfg, app_id) == "running"
