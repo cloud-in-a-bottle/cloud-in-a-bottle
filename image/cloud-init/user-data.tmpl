@@ -60,7 +60,7 @@ runcmd:
              --branch "__BRANCH__" \
              --local-http-only \
              --bind-host 0.0.0.0 \
-             --claim-token "__CLAIM_TOKEN__" \
+             __CLAIM_ARG__ \
              --swap-size "__SWAP_SIZE_GB__" \
         && echo 'host:__HOST_PASSWORD__' | chpasswd \
         && bash /root/seal.sh \

@@ -8,8 +8,10 @@
 # uses. Output is a QEMU qcow2 and (optionally) a VirtualBox OVA.
 #
 # The image comes up out of the box in HTTP-only mode bound to 0.0.0.0, so the
-# dashboard is reachable at http://<vm-ip>:8080 with a known claim token and a
-# default console password. No domain, DNS, or TLS setup required to try it.
+# dashboard is reachable at http://<vm-ip>:8080 with a default console password.
+# No domain, DNS, or TLS setup required to try it. Claiming is open by default
+# (no token) since the image is private behind NAT and a shipped default token
+# would be a public non-secret; pass --claim-token to bake one instead.
 #
 # Usage (run on a Linux host with KVM):
 #   image/build.sh [options]
@@ -23,7 +25,10 @@
 #                         (default: this repo's scripts/provision.sh). Embedded
 #                         from the working tree, so the branch need not be pushed.
 #   --domain <domain>     App subdomain-routing domain baked in (default: lvh.me)
-#   --claim-token <tok>   Claim token baked in (default: openhost)
+#   --claim-token <tok>   Bake in a claim token gating /setup. Default: none —
+#                         claiming is open (claim_token_required=false), since
+#                         the image is private behind NAT. Set this to require a
+#                         token (e.g. for a customized image you distribute).
 #   --password <pw>       Default console password for the `host` user
 #                         (default: openhost)
 #   --ssh-pubkey <path>   Optional SSH public key file to authorize for `host`
@@ -53,7 +58,7 @@ set -euo pipefail
 BRANCH="main"
 REPO_URL="https://github.com/imbue-openhost/openhost.git"
 DOMAIN="lvh.me"
-CLAIM_TOKEN="openhost"
+CLAIM_TOKEN=""   # empty => open claim (no token required); set to bake a token
 HOST_PASSWORD="openhost"
 SSH_PUBKEY_FILE=""
 VERSION=""
@@ -141,7 +146,7 @@ echo "  Version:      $VERSION"
 echo "  Repo/branch:  $REPO_URL @ $BRANCH"
 echo "  provision.sh: $PROVISION_SCRIPT (embedded)"
 echo "  Domain:       $DOMAIN   (HTTP-only, bound 0.0.0.0)"
-echo "  Claim token:  $CLAIM_TOKEN"
+echo "  Claim:        ${CLAIM_TOKEN:+token '$CLAIM_TOKEN'}${CLAIM_TOKEN:-open (no token required)}"
 echo "  Disk size:    $DISK_SIZE"
 echo "  Output dir:   $OUTPUT_DIR"
 echo ""
@@ -169,6 +174,14 @@ if [ -n "$SSH_PUBKEY_FILE" ]; then
     SSH_KEY_CONTENT="$(cat "$SSH_PUBKEY_FILE")"
 fi
 
+# Claim mode: with no --claim-token, claiming is open (no token). Otherwise bake
+# the given token. This becomes the provision.sh argument in the seed.
+if [ -n "$CLAIM_TOKEN" ]; then
+    CLAIM_ARG="--claim-token \"$CLAIM_TOKEN\""
+else
+    CLAIM_ARG="--open-claim"
+fi
+
 # Embed provision.sh and seal.sh as single-line base64 blobs. The base64
 # alphabet is [A-Za-z0-9+/=] — none of which collide with sed's '|' delimiter.
 PROVISION_B64="$(base64 -w0 "$PROVISION_SCRIPT")"
@@ -180,7 +193,7 @@ sed \
     -e "s|__REPO_URL__|$REPO_URL|g" \
     -e "s|__BRANCH__|$BRANCH|g" \
     -e "s|__DOMAIN__|$DOMAIN|g" \
-    -e "s|__CLAIM_TOKEN__|$CLAIM_TOKEN|g" \
+    -e "s|__CLAIM_ARG__|$CLAIM_ARG|g" \
     -e "s|__HOST_PASSWORD__|$HOST_PASSWORD|g" \
     -e "s|__SSH_AUTHORIZED_KEY__|$SSH_KEY_CONTENT|g" \
     -e "s|__SWAP_SIZE_GB__|$SWAP_SIZE_GB|g" \
@@ -375,7 +388,11 @@ echo "        virtual disk larger before first boot (or write to a bigger"
 echo "        physical disk) — the root filesystem grows to fill it on boot."
 echo ""
 echo "Boot it, then reach the dashboard at:  http://<vm-ip>:8080"
-echo "Claim URL:                             http://<vm-ip>:8080/setup?claim=$CLAIM_TOKEN"
+if [ -n "$CLAIM_TOKEN" ]; then
+    echo "Claim URL:                             http://<vm-ip>:8080/setup?claim=$CLAIM_TOKEN"
+else
+    echo "Claim:                                 open — go to /setup (no token)"
+fi
 echo "Console login:                         user 'host', password '$HOST_PASSWORD'"
 echo ""
 echo "Find <vm-ip> from the VM console (\`ip addr\`) or your hypervisor's NAT/DHCP."
