@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import socket
 import ssl
@@ -45,6 +46,7 @@ def _read_token_file() -> str | None:
 _REPO_ROOT = Path(__file__).resolve().parents[4]
 _WEB_DIR = _REPO_ROOT / "compute_space" / "src" / "compute_space" / "web"
 _CSS_PATH = _WEB_DIR / "static" / "css" / "update-progress.css"
+_FAVICON_PATH = _WEB_DIR / "static" / "img" / "favicon.svg"
 _JS_PATH = _WEB_DIR / "static" / "js" / "update-progress.js"
 _BODY_PATH = _WEB_DIR / "templates" / "_update_progress_body.html"
 
@@ -76,13 +78,27 @@ def _read(path: Path, fallback: str) -> str:
 
 def _build_page() -> bytes:
     css = _read(_CSS_PATH, _FALLBACK_CSS)
+    try:
+        favicon = _FAVICON_PATH.read_bytes()
+    except OSError as exc:
+        logger.warning("could not read updater favicon at {}: {}", _FAVICON_PATH, exc)
+        favicon = b""
     body = _read(_BODY_PATH, _FALLBACK_BODY)
     js = _read(_JS_PATH, _FALLBACK_JS)
+    favicon_link = ""
+    if favicon:
+        encoded_favicon = base64.b64encode(favicon).decode("ascii")
+        favicon_link = (
+            "<link rel='icon' type='image/svg+xml' href='data:image/svg+xml;base64," + encoded_favicon + "'>"
+        )
     html = (
         "<!doctype html><html><head><meta charset='utf-8'>"
         "<meta name='robots' content='noindex'>"
         "<meta name='viewport' content='width=device-width,initial-scale=1'>"
-        "<title>Updating\u2026</title><style>" + css + "</style></head>"
+        + favicon_link
+        + "<title>Updating\u2026</title><style>"
+        + css
+        + "</style></head>"
         "<body>" + body + "<script>" + js + "</script></body></html>"
     )
     return html.encode("utf-8")

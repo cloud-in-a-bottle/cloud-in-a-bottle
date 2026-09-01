@@ -13,6 +13,7 @@ from compute_space.web.helpers.static import WEB_DIR
 from compute_space.web.helpers.static import make_static_url
 
 _STATIC_URL_CALL = re.compile(r"""static_url\(\s*['"]([^'"]+)['"]\s*\)""")
+_TEMPLATE_SOURCES = [*(WEB_DIR / "templates").rglob("*.html"), WEB_DIR / "routes" / "docs.py"]
 
 
 def test_existing_file_is_versioned_by_mtime(tmp_path: Path) -> None:
@@ -36,8 +37,8 @@ def test_missing_file_degrades_to_a_uncacheable_url(tmp_path: Path) -> None:
     assert before <= int(version) <= after
 
 
-@pytest.mark.parametrize("template", sorted(p for p in (WEB_DIR / "templates").rglob("*.html")), ids=lambda p: p.name)
-def test_every_templated_asset_exists(template: Path) -> None:
+@pytest.mark.parametrize("source", sorted(_TEMPLATE_SOURCES), ids=lambda p: p.name)
+def test_every_templated_asset_exists(source: Path) -> None:
     """A typo'd or deleted asset now only logs, so catch it here instead of in production."""
-    missing = [name for name in _STATIC_URL_CALL.findall(template.read_text()) if not (STATIC_DIR / name).is_file()]
-    assert not missing, f"{template.relative_to(WEB_DIR)} references missing static files: {missing}"
+    missing = [name for name in _STATIC_URL_CALL.findall(source.read_text()) if not (STATIC_DIR / name).is_file()]
+    assert not missing, f"{source.relative_to(WEB_DIR)} references missing static files: {missing}"

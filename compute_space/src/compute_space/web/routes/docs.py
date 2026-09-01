@@ -26,10 +26,9 @@ generator)?
     rendered HTML is stale relative to the running code (operator
     forgot to run ``mdbook build`` after ``git pull``, CI artifact
     is from a different commit than the running version, etc.).
-  * **Smaller surface area.**  No ~5 MB Rust binary on every
-    instance, no CI workflow to maintain, no ``book.toml`` to keep
-    in sync, no theme/CSS-override directory.  Markdown rendering
-    is pure-Python and pulls in ``markdown-it-py`` (already a
+  * **Smaller instance surface area.**  The in-app route needs no
+    ~5 MB Rust binary or generated book at runtime.  Markdown
+    rendering is pure-Python and pulls in ``markdown-it-py`` (already a
     transitive dep) plus ``mdit-py-plugins`` and ``pygments``
     (also already present via test deps).
   * **Easier to extend.**  Custom rendering — admonitions, mermaid
@@ -427,6 +426,7 @@ _TEMPLATE = """{% from "_components/icon_nav.html" import icon_nav %}{% from "_c
   <meta name="robots" content="noindex">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{{ page_title }} - Cloud in a Bottle Manual</title>
+  <link rel="icon" type="image/svg+xml" href="{{ static_url('img/favicon.svg') }}">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible+Mono:wght@500;600;700&display=swap">
