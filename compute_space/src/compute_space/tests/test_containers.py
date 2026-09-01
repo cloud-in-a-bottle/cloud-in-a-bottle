@@ -579,21 +579,10 @@ def test_run_container_app_archive_off_by_default(tmp_path, monkeypatch: pytest.
     assert not any("/data/app_archive" in v for v in volume_args)
 
 
-def test_run_container_access_all_archive_mounts_archive_parent(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """``access_all_archive`` mounts the parent ``/data/app_archive`` directory (full archive namespace), analogous to ``access_all_app_data`` for app_data."""
-    manifest = _basic_manifest(access_all_archive=True)
-    argv = _run_and_capture(monkeypatch, manifest=manifest, tmp_path=tmp_path)
-
-    volume_args = [arg for prev, arg in zip(argv, argv[1:], strict=False) if prev == "-v"]
-    targets = [v.rsplit(":", 2)[1] for v in volume_args]
-    assert "/data/app_archive" in targets
-    assert f"/data/app_archive/{manifest.name}" not in targets
-
-
-def test_run_container_access_all_archive_skips_archive_when_missing(
+def test_run_container_access_all_app_data_skips_archive_when_missing(
     tmp_path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """``access_all_archive`` is permissive: no archive mount when JuiceFS not configured."""
+    """Cross-app access is permissive when the JuiceFS mount is unavailable."""
     runs: list[list[str]] = []
 
     def fake_run(cmd, capture_output=False, text=False, timeout=60, **_):  # type: ignore[no-untyped-def]
@@ -604,7 +593,7 @@ def test_run_container_access_all_archive_skips_archive_when_missing(
 
     _patch_subprocess_run(monkeypatch, fake_run)
 
-    manifest = _basic_manifest(access_all_archive=True)
+    manifest = _basic_manifest(access_all_app_data=True)
     data_dir = str(tmp_path / "persistent")
     temp_data_dir = str(tmp_path / "temp")
     archive_dir = str(tmp_path / "archive-not-mounted")
@@ -629,7 +618,7 @@ def test_run_container_access_all_archive_skips_archive_when_missing(
 
 
 def test_run_container_access_all_app_data_mounts_parent_dirs(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """``access_all_app_data`` mounts the full app_data and app_temp_data parent directories, not just the per-app subdir."""
+    """Cross-app access mounts every app-owned data parent, not per-app subdirs."""
     manifest = _basic_manifest(access_all_app_data=True)
     argv = _run_and_capture(monkeypatch, manifest=manifest, tmp_path=tmp_path)
 
@@ -637,12 +626,15 @@ def test_run_container_access_all_app_data_mounts_parent_dirs(tmp_path, monkeypa
     targets = [v.rsplit(":", 2)[1] for v in volume_args]
     assert "/data/app_data" in targets
     assert "/data/app_temp_data" in targets
+    assert "/data/app_archive" in targets
     assert "/data/vm_data" not in targets
-    # No per-app subdir.
     assert f"/data/app_data/{manifest.name}" not in targets
+    assert f"/data/app_archive/{manifest.name}" not in targets
 
 
-def test_run_container_access_all_data_does_not_mount_vm_data(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_run_container_legacy_access_all_data_normalizes_to_all_app_data(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     manifest = parse_manifest_from_string(
         """\
 [app]
@@ -660,16 +652,9 @@ access_all_data = true
     argv = _run_and_capture(monkeypatch, manifest=manifest, tmp_path=tmp_path)
 
     volume_args = [arg for prev, arg in zip(argv, argv[1:], strict=False) if prev == "-v"]
-    assert not any("/data/vm_data" in v for v in volume_args)
-
-
-def test_run_container_access_all_app_data_does_not_mount_archive(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """``access_all_app_data`` alone must NOT mount the archive — archive access requires ``access_all_archive`` or ``app_archive``."""
-    manifest = _basic_manifest(access_all_app_data=True)
-    argv = _run_and_capture(monkeypatch, manifest=manifest, tmp_path=tmp_path)
-
-    volume_args = [arg for prev, arg in zip(argv, argv[1:], strict=False) if prev == "-v"]
-    assert not any("/data/app_archive" in v for v in volume_args)
+    targets = {v.rsplit(":", 2)[1] for v in volume_args}
+    assert {"/data/app_data", "/data/app_temp_data", "/data/app_archive"} <= targets
+    assert "/data/vm_data" not in targets
 
 
 def test_run_container_app_data_opt_out(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -163,7 +163,7 @@ def test_health_checks_the_mountpoint_path(db, cfg):
         ("[data]\napp_archive=false\n", False, False),
         ("[data]\naccess_all_archive=true\n", False, True),
         ("[data]\naccess_all_data=true\n", False, True),
-        ("[data]\naccess_all_app_data=true\n", False, False),
+        ("[data]\naccess_all_app_data=true\n", False, True),
         ("", False, False),
     ],
 )
@@ -506,7 +506,7 @@ def test_stop_running_archive_apps_selects_running_archive_only(db, cfg):
         ("r1", "arch-run", "running", "[data]\napp_archive=true\n", 20510),
         ("r2", "arch-stop", "stopped", "[data]\napp_archive=true\n", 20511),
         ("r3", "plain-run", "running", "[data]\napp_data=true\n", 20512),
-        ("r4", "aaa-run", "running", "[data]\naccess_all_archive=true\n", 20513),
+        ("r4", "aaa-run", "running", "[data]\naccess_all_app_data=true\n", 20513),
     ]:
         db.execute(
             "INSERT INTO apps (app_id, name, version, repo_path, local_port, status, manifest_raw, container_id) "
@@ -521,7 +521,7 @@ def test_stop_running_archive_apps_selects_running_archive_only(db, cfg):
         mock.patch.object(apps_mod, "is_container_running", return_value=False),
     ):
         stopped = apps_mod.stop_running_archive_apps(db, cfg)
-    # running archive apps: arch-run (app_archive) and aaa-run (access_all_archive)
+    # running archive apps: arch-run (app_archive) and aaa-run (access_all_app_data)
     assert set(stopped) == {"r1", "r4"}
 
 

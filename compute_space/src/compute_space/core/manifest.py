@@ -199,11 +199,7 @@ class AppManifest:
     app_data: Annotated[bool, SettingLabel("Data", "Permanent data")] = True
     app_temp_data: Annotated[bool, SettingLabel("Data", "Temporary data")] = False
     app_archive: Annotated[bool, SettingLabel("Data", "Archive data")] = False
-    # Granular cross-app data flags (preferred):
     access_all_app_data: Annotated[bool, SettingLabel("Data", "Access all app data")] = False
-    access_all_archive: Annotated[bool, SettingLabel("Data", "Access all archive")] = False
-    # Convenience shorthand: equivalent to access_all_app_data + access_all_archive.
-    access_all_data: Annotated[bool, SettingLabel("Data", "Access all data")] = False
 
     # [services.v2]
     provides_services_v2: Annotated[list[ServiceProvides], SettingLabel("Services", "Services provided")] = (
@@ -463,6 +459,9 @@ def parse_manifest_from_string(raw_text: str) -> AppManifest:
 
     app_name = app_section["name"]
 
+    if data_section.get("access_all_archive", False):
+        raise ValueError("[data].access_all_archive has been removed; use access_all_app_data = true")
+
     # Deprecated: extra_ports (raw Docker -p strings)
     if container.get("extra_ports"):
         logger.warning(
@@ -470,7 +469,6 @@ def parse_manifest_from_string(raw_text: str) -> AppManifest:
             app_name,
         )
 
-    _compat_all_data = data_section.get("access_all_data", False)
     return AppManifest(
         name=app_name,
         version=app_section["version"],
@@ -497,9 +495,9 @@ def parse_manifest_from_string(raw_text: str) -> AppManifest:
         app_data=data_section.get("app_data", True),
         app_temp_data=data_section.get("app_temp_data", False),
         app_archive=data_section.get("app_archive", False),
-        access_all_data=_compat_all_data,
-        access_all_app_data=data_section.get("access_all_app_data", False) or _compat_all_data,
-        access_all_archive=data_section.get("access_all_archive", False) or _compat_all_data,
+        # access_all_data is the legacy spelling of the same permission.
+        access_all_app_data=data_section.get("access_all_app_data", False)
+        or data_section.get("access_all_data", False),
         provides_services_v2=_parse_services_v2(data),
         consumes_services_v2=_parse_services_v2_consumes(data),
         raw_toml=raw_text,

@@ -69,9 +69,7 @@ User-facing links the app advertises for paths on its own URL that aren't the ba
 | `app_temp_data` | boolean | no | false | Request access to temporary filesystem directory (not backed up) |
 | `app_archive` | boolean | no | false | Request access to the archive directory for bulk content. Always available: backed by local disk by default, upgradable to S3 (via JuiceFS) by the operator. Apps with this flag install on any zone; on a local-backed zone the operator sees an install-time notice that the data is on non-durable local disk. |
 | `sqlite` | string[] | no | [] | SQLite database names to provision (implicitly enables `app_data`) |
-| `access_all_app_data` | boolean | no | false | Mount all apps' permanent data and temp data parent directories (rw). For admin tools like file browsers. |
-| `access_all_archive` | boolean | no | false | Mount all apps' archive parent directory. Permissive: silently skipped if the archive mount is transiently unavailable. For backup tools. |
-| `access_all_data` | boolean | no | false | Convenience shorthand for `access_all_app_data = true` + `access_all_archive = true`. |
+| `access_all_app_data` | boolean | no | false | Mount all apps' permanent, temporary, and archive data parent directories (rw). The archive mount is silently skipped if it is transiently unavailable. For admin tools like file browsers and backup tools. |
 
 
 ## Data Directory Structure
@@ -86,16 +84,16 @@ The archive tier defaults to local-disk backing and is always available. The ope
 
 The storage guard requires a minimum amount of free disk space, stopping running apps when free space drops below `storage_min_free_mb` until space is freed. It is enabled by default; the host operator can change the threshold (or disable it with `0`) in the Cloud in a Bottle config and reboot.
 
-All data dirs live under `/data/` in the container. All apps see the same path structure regardless of permissions — only the dirs they have access to are mounted. With `access_all_app_data`, the parent dirs `/data/app_data/` and `/data/app_temp_data/` are mounted so the app can see all apps' data. With `access_all_archive`, the `/data/app_archive/` parent is mounted.
+All data dirs live under `/data/` in the container. All apps see the same path structure regardless of permissions — only the dirs they have access to are mounted. With `access_all_app_data`, the parent dirs `/data/app_data/`, `/data/app_temp_data/`, and, when available, `/data/app_archive/` are mounted so the app can see all apps' data.
 
 ## Environment Variable Injection
 
 The host provisions requested data services and injects connection info as environment variables:
 
 - `OPENHOST_SQLITE_<NAME>` — filesystem path to the named sqlite database (only if `sqlite` entries requested)
-- `OPENHOST_APP_DATA_DIR` — `/data/app_data/{app_name}` (only if app_data access granted)
-- `OPENHOST_APP_TEMP_DIR` — `/data/app_temp_data/{app_name}` (only if app_temp_data access granted)
-- `OPENHOST_APP_ARCHIVE_DIR` — `/data/app_archive/{app_name}` (only if app_archive access granted)
+- `OPENHOST_APP_DATA_DIR` — `/data/app_data/{app_name}` (if `app_data`, `sqlite`, or `access_all_app_data` is requested)
+- `OPENHOST_APP_TEMP_DIR` — `/data/app_temp_data/{app_name}` (if `app_temp_data` or `access_all_app_data` is requested)
+- `OPENHOST_APP_ARCHIVE_DIR` — `/data/app_archive/{app_name}` (if `app_archive` or `access_all_app_data` is requested and the archive mount is available)
 - `OPENHOST_ROUTER_URL` — URL of the router's HTTP server, reachable from inside the container.
 - `OPENHOST_OWNER_USERNAME` — the compute space owner's chosen display name; use to seed SSO account names. Defaults to `owner` if not explicitly configured.
 
@@ -183,7 +181,6 @@ command = "/data -A"
 
 [data]
 access_all_app_data = true
-access_all_archive = true
 ```
 
 ### App advertising user-facing links

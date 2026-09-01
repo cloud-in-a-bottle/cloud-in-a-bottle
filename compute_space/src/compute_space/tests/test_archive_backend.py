@@ -1263,6 +1263,24 @@ def test_storage_summary_non_archive_app(cfg, db):
     assert s.uses_archive is False
 
 
+def test_storage_summary_access_all_app_data_includes_every_tier(cfg, db):
+    manifest = 'name="x"\n[data]\napp_data=false\naccess_all_app_data=true\n'
+    s = archive_backend.storage_summary(manifest, db)
+    assert s.app_data is True
+    assert s.app_temp_data is True
+    assert s.uses_archive is True
+    assert s.requires_archive is False
+
+
+def test_storage_summary_stored_access_all_archive_remains_archive_only(cfg, db):
+    manifest = 'name="x"\n[data]\napp_data=false\naccess_all_archive=true\n'
+    s = archive_backend.storage_summary(manifest, db)
+    assert s.app_data is False
+    assert s.app_temp_data is False
+    assert s.uses_archive is True
+    assert s.requires_archive is False
+
+
 # --- stop_running_archive_apps / start_apps_by_id --------------------------
 
 

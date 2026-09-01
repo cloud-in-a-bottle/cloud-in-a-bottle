@@ -60,8 +60,6 @@ class TestDefaults:
         assert manifest.app_temp_data is False
         assert manifest.app_archive is False
         assert manifest.access_all_app_data is False
-        assert manifest.access_all_archive is False
-        assert manifest.access_all_data is False
 
     def test_sqlite_default_empty(self):
         manifest = parse_manifest_from_string(MINIMAL)
@@ -753,33 +751,27 @@ class TestAppArchive:
         toml = MINIMAL + "\n[data]\naccess_all_app_data = true\n"
         manifest = parse_manifest_from_string(toml)
         assert manifest.access_all_app_data is True
-        assert manifest.access_all_archive is False
 
-    def test_access_all_archive_parsed(self):
+    def test_access_all_app_data_is_the_only_public_cross_app_data_field(self):
+        fields = attr.asdict(parse_manifest_from_string(MINIMAL))
+        assert "access_all_app_data" in fields
+        assert "access_all_data" not in fields
+        assert "access_all_archive" not in fields
+
+    def test_removed_access_all_archive_rejected(self):
         toml = MINIMAL + "\n[data]\naccess_all_archive = true\n"
-        manifest = parse_manifest_from_string(toml)
-        assert manifest.access_all_archive is True
-        assert manifest.access_all_app_data is False
+        with pytest.raises(ValueError, match="access_all_archive has been removed"):
+            parse_manifest_from_string(toml)
 
-    def test_access_all_data_implies_both_granular_flags(self):
-        """access_all_data = true must set both access_all_app_data and access_all_archive."""
+    def test_legacy_access_all_data_normalized(self):
         toml = MINIMAL + "\n[data]\naccess_all_data = true\n"
         manifest = parse_manifest_from_string(toml)
-        assert manifest.access_all_data is True
         assert manifest.access_all_app_data is True
-        assert manifest.access_all_archive is True
 
-    def test_access_all_data_false_by_default(self):
-        manifest = parse_manifest_from_string(MINIMAL)
-        assert manifest.access_all_data is False
-
-    def test_access_all_data_does_not_override_granular_false(self):
-        """When access_all_data is false, granular flags retain their own values."""
-        toml = MINIMAL + "\n[data]\naccess_all_data = false\naccess_all_app_data = true\n"
+    def test_legacy_flags_false_do_not_override_canonical_true(self):
+        toml = MINIMAL + "\n[data]\naccess_all_data = false\naccess_all_archive = false\naccess_all_app_data = true\n"
         manifest = parse_manifest_from_string(toml)
-        assert manifest.access_all_data is False
         assert manifest.access_all_app_data is True
-        assert manifest.access_all_archive is False
 
     def test_app_data_opt_out(self):
         toml = MINIMAL + "\n[data]\napp_data = false\n"

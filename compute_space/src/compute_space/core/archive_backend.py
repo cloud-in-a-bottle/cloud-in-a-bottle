@@ -165,7 +165,7 @@ class StorageSummary:
 
     app_data: bool  # local, backed-up permanent data
     app_temp_data: bool  # local scratch, not backed up
-    uses_archive: bool  # app_archive OR access_all_archive / access_all_data
+    uses_archive: bool  # app_archive, access_all_app_data, or a stored legacy flag
     requires_archive: bool  # hard app_archive requirement
     archive_backend: str  # "local" | "s3" | "disabled"
     archive_is_durable: bool  # True only when backend == "s3"
@@ -175,12 +175,13 @@ def storage_summary(manifest_raw: str, db: sqlite3.Connection) -> StorageSummary
     """Build the :class:`StorageSummary` for an app's manifest + current backend."""
     data = _data_section(manifest_raw)
     requires = bool(data.get("app_archive"))
-    uses = bool(data.get("app_archive") or data.get("access_all_archive") or data.get("access_all_data"))
+    access_all_app_data = bool(data.get("access_all_app_data") or data.get("access_all_data"))
+    uses = requires or access_all_app_data or bool(data.get("access_all_archive"))
     backend = read_state(db).backend
     durable = backend == "s3"
     return StorageSummary(
-        app_data=bool(data.get("app_data", True)) or bool(data.get("sqlite")) or bool(data.get("access_all_app_data")),
-        app_temp_data=bool(data.get("app_temp_data")) or bool(data.get("access_all_app_data")),
+        app_data=bool(data.get("app_data", True)) or bool(data.get("sqlite")) or access_all_app_data,
+        app_temp_data=bool(data.get("app_temp_data")) or access_all_app_data,
         uses_archive=uses,
         requires_archive=requires,
         archive_backend=backend,
@@ -603,13 +604,19 @@ def manifest_requires_archive(manifest_raw: str) -> bool:
 def manifest_uses_archive(manifest_raw: str) -> bool:
     """Return True if the app receives the archive mount.
 
-    ``app_archive`` is a hard requirement; ``access_all_archive`` and the
-    convenience alias ``access_all_data`` are permissive but still cause
-    the app to receive the archive bind-mount when the tier is live, so
-    destructive removal still needs the archive healthy to delete its bytes.
+    ``app_archive`` is a hard requirement; ``access_all_app_data`` is
+    permissive but still causes the app to receive the archive bind-mount
+    when the tier is live, so destructive removal still needs the archive
+    healthy to delete its bytes. Removed cross-app spellings remain recognized
+    here so lifecycle operations stay safe for stored manifests.
     """
     data = _data_section(manifest_raw)
-    return bool(data.get("app_archive") or data.get("access_all_archive") or data.get("access_all_data"))
+    return bool(
+        data.get("app_archive")
+        or data.get("access_all_app_data")
+        or data.get("access_all_data")
+        or data.get("access_all_archive")
+    )
 
 
 def is_archive_dir_healthy(config: Config, db: sqlite3.Connection) -> bool:

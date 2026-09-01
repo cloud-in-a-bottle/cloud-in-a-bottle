@@ -125,7 +125,7 @@ The router injects these environment variables into your app:
 | `OPENHOST_MY_REDIRECT_DOMAIN` | `my.selfhost.imbue.com` | The shared `my.*` OAuth redirect domain. This hosts a browser-local page that redirects the user to their zone. |
 | `OPENHOST_APP_DATA_DIR` | `/data/app_data/my-app` | Path to the app's persistent data directory. Set when `app_data` (default on), `sqlite`, or `access_all_app_data` is requested   |
 | `OPENHOST_APP_TEMP_DIR` | `/data/app_temp_data/my-app` | Path to the app's temporary data directory. Set when `app_temp_data` or `access_all_app_data` is requested          |
-| `OPENHOST_APP_ARCHIVE_DIR` | `/data/app_archive/my-app` | Path to the app's elastic archive directory. Set when `app_archive` or `access_all_archive` is requested |
+| `OPENHOST_APP_ARCHIVE_DIR` | `/data/app_archive/my-app` | Path to the app's elastic archive directory. Set when `app_archive` or `access_all_app_data` is requested and the archive mount is available |
 | `OPENHOST_SQLITE_<NAME>` | `/data/app_data/my-app/sqlite/main.db` (for `sqlite = ["main"]`) | Path to a provisioned SQLite database file. Set once per entry in `sqlite`                                      |
 | `OPENHOST_OWNER_USERNAME` | `alice` | The compute space owner's chosen display name. Use to seed SSO account names. Defaults to `owner` if not explicitly configured. |
 
@@ -137,9 +137,7 @@ Apps receive a persistent data directory by default. You can opt out or request 
 - **`sqlite = ["db_name"]`** — Provisions a SQLite database. Access the file at `OPENHOST_SQLITE_<NAME>`.
 - **`app_temp_data = true`** — mounts a temporary directory at `/data/app_temp_data/{app_name}/`. Not backed up, can be recreated.
 - **`app_archive = true`** — mounts an archive directory for bulk content at `/data/app_archive/{app_name}/`. Always available: local-disk backed by default, upgradable to S3 (JuiceFS) by the operator. No operator setup required to install.
-- **`access_all_app_data = true`** — full rw access to all apps' persistent and temp data parent directories. For admin tools like file browsers.
-- **`access_all_archive = true`** — full access to all apps' archive parent directory. Permissive: silently skipped if the archive mount is transiently unavailable. For backup tools.
-- **`access_all_data = true`** — convenience shorthand for `access_all_app_data = true` + `access_all_archive = true`.
+- **`access_all_app_data = true`** — full rw access to all apps' persistent, temporary, and archive data parent directories. The archive mount is silently skipped if it is transiently unavailable. For admin tools like file browsers and backup tools.
 
 
 The storage guard requires a minimum amount of free persistent storage, stopping running apps when free space drops below `storage_min_free_mb` until space is freed. It is enabled by default; the host operator can change the threshold (or disable it with `0`) in the Cloud in a Bottle config and reboot. The guard can be temporarily paused from the System page to allow starting a file-browser app for cleanup.
