@@ -18,7 +18,7 @@ acme_directory_url = "{{ acme_directory_url }}"
 coredns_enabled = {{ 'false' if http_only else 'true' }}
 public_ip = "{{ public_ip | default(inventory_hostname) }}"
 start_caddy = {{ 'false' if http_only else 'true' }}
-claim_token_required = true
+claim_token_required = {{ 'true' if (claim_token_required | default(true) | bool) else 'false' }}
 data_root_dir = "/home/host/.openhost/local_compute_space"
 apps_dir_override = "/home/host/openhost/apps"
 {% if cert_provider is defined and cert_provider == 'cert_api' %}

@@ -1,0 +1,73 @@
+#cloud-config
+# cloud-init config baked into the seed ISO that drives the image build.
+# build.sh renders the __PLACEHOLDER__ values and hands this to a throwaway
+# QEMU boot: cloud-init runs provision.sh, we set a default console password,
+# then the VM powers itself off and its disk becomes the distributed image.
+#
+# Nothing here is user-facing at runtime — it only shapes the golden image.
+
+hostname: openhost
+manage_etc_hosts: true
+
+# SSH stays key-only: provision.sh's ansible hardening disables password auth.
+# The default password below is for CONSOLE login only (VM window / virsh
+# console), which is what makes the image usable with zero customization.
+ssh_pwauth: false
+
+write_files:
+  # provision.sh copies /root/.ssh/authorized_keys onto the `host` user with
+  # remote_src, which errors if the file is absent. Ubuntu cloud images only
+  # create it when a key is injected, so we always write it here. If the image
+  # builder passed --ssh-pubkey, its value lands here and grants `host` SSH
+  # access; otherwise it's empty and access is console-password-only.
+  - path: /root/.ssh/authorized_keys
+    permissions: '0600'
+    owner: root:root
+    content: |
+      __SSH_AUTHORIZED_KEY__
+
+  # The provisioner itself, embedded (base64) straight from the build host's
+  # working tree rather than fetched from GitHub. This means the image is built
+  # from exactly the checked-out provision.sh — no need to push the branch
+  # first. The openhost app code is still cloned from __REPO_URL__ @ __BRANCH__
+  # by provision.sh below.
+  - path: /root/provision.sh
+    permissions: '0755'
+    owner: root:root
+    encoding: b64
+    content: __PROVISION_B64__
+
+  # Seal (generalize) the golden image: strip build-VM identity so every install
+  # is unique, and install a boot-time service that grows root to fill the
+  # target disk. Embedded (base64) from image/seal.sh in the working tree.
+  - path: /root/seal.sh
+    permissions: '0755'
+    owner: root:root
+    encoding: b64
+    content: __SEAL_B64__
+
+runcmd:
+  # Provision, then seal. The SUCCESS sentinel only reaches the serial console
+  # if BOTH succeeded (cloud-init's runcmd does not stop on error on its own),
+  # so a green build is a provisioned AND generalized image. build.sh greps the
+  # captured console log for these sentinels to decide whether the build worked.
+  - |
+    set -x
+    chmod 700 /root/.ssh
+    ( bash /root/provision.sh \
+             --domain "__DOMAIN__" \
+             --repo "__REPO_URL__" \
+             --branch "__BRANCH__" \
+             --local-http-only \
+             --bind-host 0.0.0.0 \
+             __CLAIM_ARG__ \
+             --swap-size "__SWAP_SIZE_GB__" \
+        && echo 'host:__HOST_PASSWORD__' | chpasswd \
+        && bash /root/seal.sh \
+        && echo "OPENHOST_IMAGE_BUILD_SUCCESS" > /dev/console ) \
+      || echo "OPENHOST_IMAGE_BUILD_FAILED" > /dev/console
+  # Explicit, deterministic poweroff (both on success and failure) so build.sh's
+  # QEMU wait returns. We do this here rather than via cloud-init's power_state
+  # module because seal.sh above runs `cloud-init clean`, which tears down the
+  # very state that module relies on.
+  - poweroff
