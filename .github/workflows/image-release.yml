@@ -84,8 +84,9 @@ jobs:
           - \`*.qcow2\` — QEMU/KVM/libvirt (and most cloud importers)
           - \`*.ova\` — VirtualBox / VMware
 
-          Boot it, then reach the dashboard at \`http://<vm-ip>:8080\`.
-          See \`image/build.sh\` and \`docs/\` for defaults (claim token, console login)."
+          Boot it, then reach the dashboard at \`http://<vm-ip>:8080\` and claim it
+          (claiming is open by default — the image is private behind NAT).
+          See \`image/build.sh\` for defaults (console login, disk sizing)."
           )
           if [ "${{ inputs.draft }}" = "true" ]; then
             create_args+=(--draft)
