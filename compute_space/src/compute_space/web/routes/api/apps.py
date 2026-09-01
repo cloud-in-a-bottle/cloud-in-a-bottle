@@ -823,11 +823,15 @@ async def _reload_app_impl(
     # settings review would wrongly re-prompt for the running version. Check the
     # removed legacy permission separately so local drift cannot grandfather it.
     if not update and not continue_oauth and app_row["repo_path"]:
+        manifest = None
         try:
             manifest = parse_manifest(app_row["repo_path"])
-        except ValueError as e:
-            raise ValidationException(detail=str(e)) from e
-        if manifest_newly_declares_legacy_access_all_archive(manifest, app_row["manifest_raw"]):
+        except ValueError:
+            # Preserve the existing background reload handling for malformed manifests.
+            pass
+        if manifest is not None and manifest_newly_declares_legacy_access_all_archive(
+            manifest, app_row["manifest_raw"]
+        ):
             raise ValidationException(detail=ACCESS_ALL_ARCHIVE_REMOVED_MESSAGE)
 
     if update or continue_oauth:
