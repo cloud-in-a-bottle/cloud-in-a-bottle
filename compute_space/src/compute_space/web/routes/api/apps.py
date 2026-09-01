@@ -64,11 +64,9 @@ from compute_space.core.git_ops import parse_repo_url
 from compute_space.core.git_ops import reset_hard
 from compute_space.core.log_stream import stream_app_logs
 from compute_space.core.logging import logger
-from compute_space.core.manifest import ACCESS_ALL_ARCHIVE_REMOVED_MESSAGE
 from compute_space.core.manifest import PermissionGrant
 from compute_space.core.manifest import all_manifest_permissions_v2
 from compute_space.core.manifest import manifest_newly_declared_permissions_v2
-from compute_space.core.manifest import manifest_newly_declares_legacy_access_all_archive
 from compute_space.core.manifest import manifest_settings_changes
 from compute_space.core.manifest import parse_manifest
 from compute_space.core.oauth import OAuthRequired
@@ -650,9 +648,6 @@ def _gate_update_review(
     except ValueError:
         return None
 
-    if manifest_newly_declares_legacy_access_all_archive(manifest, previous_manifest_raw):
-        raise ValueError(ACCESS_ALL_ARCHIVE_REMOVED_MESSAGE)
-
     new_perms = manifest_newly_declared_permissions_v2(
         manifest, get_all_permissions_v2(consumer_app_id=app_id), previous_manifest_raw
     )
@@ -819,35 +814,18 @@ async def _reload_app_impl(
     # update leaves the app untouched.
     #
     # Only applies when code is actually being pulled (update / oauth re-entry).
-    # A plain reload normally deploys the manifest already on disk, so a full
-    # settings review would wrongly re-prompt for the running version. Check the
-    # removed legacy permission separately so local drift cannot grandfather it.
-    if not update and not continue_oauth and app_row["repo_path"]:
-        manifest = None
-        try:
-            manifest = parse_manifest(app_row["repo_path"])
-        except ValueError as e:
-            # Preserve the existing background reload handling for malformed manifests.
-            logger.debug("Could not preflight manifest for {} before plain reload: {}", app_id, e)
-        if manifest is not None and manifest_newly_declares_legacy_access_all_archive(
-            manifest, app_row["manifest_raw"]
-        ):
-            raise ValidationException(detail=ACCESS_ALL_ARCHIVE_REMOVED_MESSAGE)
-
+    # A plain reload deploys the manifest already on disk — the one the app is
+    # currently running — so it can't introduce changes, and gating it would
+    # wrongly re-prompt for a version the owner already chose to keep running.
     if update or continue_oauth:
-        gate_error: ValueError | None = None
-        try:
-            review_gate = await asyncio.to_thread(
-                _gate_update_review,
-                app_id,
-                app_row["repo_path"],
-                approve_new_permissions,
-                app_row["manifest_raw"],
-            )
-        except ValueError as e:
-            review_gate = None
-            gate_error = e
-        if review_gate is not None or gate_error is not None:
+        review_gate = await asyncio.to_thread(
+            _gate_update_review,
+            app_id,
+            app_row["repo_path"],
+            approve_new_permissions,
+            app_row["manifest_raw"],
+        )
+        if review_gate is not None:
             # Roll the working tree back to the version the app is running, so the
             # pulled-but-refused code does not linger on disk where a later plain
             # reload — which is not gated, on the assumption the on-disk manifest
@@ -859,15 +837,9 @@ async def _reload_app_impl(
                     with open(log_file, "a") as lf:
                         lf.write(f"WARNING: failed to roll back refused update to {pre_pull_sha}: {e}\n")
             with open(log_file, "a") as lf:
-                if gate_error is not None:
-                    lf.write(f"Update rejected: {gate_error}\n")
-                else:
-                    lf.write("Update changes app settings requiring owner approval; not reloading.\n")
-            if gate_error is not None:
-                raise ValidationException(detail=str(gate_error)) from gate_error
+                lf.write("Update changes app settings requiring owner approval; not reloading.\n")
             if continue_oauth:
                 return Redirect(path=f"/app_detail/{app_name}")
-            assert review_gate is not None
             return Response(content=review_gate, status_code=200, media_type=MediaType.JSON)
 
     # Atomically claim the reload before touching the running container.

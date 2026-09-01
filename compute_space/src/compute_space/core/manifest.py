@@ -24,12 +24,6 @@ from compute_space.core.logging import logger
 # working without changes.
 MANIFEST_FILENAMES: tuple[str, ...] = ("cloudinabottle.toml", "openhost.toml")
 
-ACCESS_ALL_ARCHIVE_REMOVED_MESSAGE = (
-    "[data].access_all_archive has been removed and has no archive-only replacement; "
-    "use access_all_app_data = true only if the app needs read/write access to all apps' "
-    "permanent, temporary, and archive data"
-)
-
 _SHORTNAME_RE = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
 
 # Must match net.ipv4.ip_unprivileged_port_start from ansible/tasks/containers.yml.
@@ -232,28 +226,6 @@ class AppManifest:
         must raise it explicitly via ``build_memory_mb``.
         """
         return self.build_memory_mb if self.build_memory_mb is not None else self.memory_mb
-
-    @property
-    def legacy_access_all_archive(self) -> bool:
-        """Preserve archive-only access for installed manifests using the removed flag."""
-        return manifest_has_legacy_access_all_archive(self.raw_toml)
-
-
-def manifest_has_legacy_access_all_archive(raw_text: str) -> bool:
-    try:
-        data = tomllib.loads(raw_text).get("data", {}) or {}
-    except tomllib.TOMLDecodeError:
-        return False
-    return bool(data.get("access_all_archive"))
-
-
-def manifest_newly_declares_legacy_access_all_archive(
-    manifest: AppManifest, previous_manifest_raw: str | None
-) -> bool:
-    return manifest.legacy_access_all_archive and not manifest_has_legacy_access_all_archive(
-        previous_manifest_raw or ""
-    )
-
 
 @functools.cache
 def manifest_setting_labels() -> dict[str, SettingLabel]:
@@ -519,9 +491,7 @@ def parse_manifest_from_string(raw_text: str) -> AppManifest:
         app_data=data_section.get("app_data", True),
         app_temp_data=data_section.get("app_temp_data", False),
         app_archive=data_section.get("app_archive", False),
-        # access_all_data is the legacy spelling of the same permission.
-        access_all_app_data=data_section.get("access_all_app_data", False)
-        or data_section.get("access_all_data", False),
+        access_all_app_data=data_section.get("access_all_app_data", False),
         provides_services_v2=_parse_services_v2(data),
         consumes_services_v2=_parse_services_v2_consumes(data),
         raw_toml=raw_text,

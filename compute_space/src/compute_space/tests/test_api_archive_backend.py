@@ -377,8 +377,6 @@ def test_manifest_uses_archive_matches_app_archive_and_cross_app_access() -> Non
     assert archive_backend.manifest_uses_archive("[data]\naccess_all_app_data = true\n")
     assert not archive_backend.manifest_uses_archive("[data]\napp_data = true\n")
     assert not archive_backend.manifest_uses_archive("[data]\napp_archive = false\napp_data = true\n")
-    assert archive_backend.manifest_uses_archive("[data]\naccess_all_data = true\n")
-    assert archive_backend.manifest_uses_archive("[data]\naccess_all_archive = true\n")
 
 
 # --- install/reload gates (api/apps endpoints' archive backend checks) ----
@@ -418,41 +416,6 @@ def _archive_manifest(name: str, *, app_archive: bool, access_all_app_data: bool
 def apps_client(cfg: Any) -> Iterator[TestClient[Litestar]]:
     with TestClient(app=make_test_app(api_apps_routes)) as c:
         yield c
-
-
-def test_add_app_rejects_removed_access_all_archive(
-    apps_client: TestClient[Litestar], cookies: dict[str, str], tmp_path: Path
-) -> None:
-    clone_dir = tmp_path / "legacy-archive"
-    clone_dir.mkdir()
-    (clone_dir / "cloudinabottle.toml").write_text(
-        """\
-[app]
-name = "legacy-archive"
-version = "1.0"
-
-[runtime.container]
-image = "Dockerfile"
-port = 8080
-
-[data]
-access_all_archive = true
-"""
-    )
-
-    apps_client.cookies.update(cookies)
-    resp = apps_client.post(
-        "/api/add_app",
-        json={
-            "repo_url": "https://example.invalid/legacy-archive",
-            "app_name": "legacy-archive",
-            "clone_dir": str(clone_dir),
-        },
-    )
-
-    assert resp.status_code == 400
-    assert "access_all_archive has been removed" in resp.json()["detail"]
-    assert not clone_dir.exists()
 
 
 def test_add_app_allows_archive_app_on_default_local_backend(

@@ -762,28 +762,6 @@ def test_gate_passes_when_manifest_unchanged(cfg: Any, tmp_path: Path) -> None:
     assert _gate_update_review(app_id, str(repo), approve_new_permissions=False, previous_manifest_raw=raw) is None
 
 
-@pytest.mark.parametrize("approve", [False, True])
-def test_gate_rejects_new_access_all_archive(cfg: Any, tmp_path: Path, approve: bool) -> None:
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    previous = _BASE.format(version="1.0.0", memory=128)
-    (repo / "openhost.toml").write_text(previous + "\n[data]\naccess_all_archive = true\n")
-    app_id = _seed_perm_app(cfg, str(repo))
-
-    with pytest.raises(ValueError, match="access_all_archive has been removed"):
-        _gate_update_review(app_id, str(repo), approve, previous_manifest_raw=previous)
-
-
-def test_gate_allows_existing_access_all_archive(cfg: Any, tmp_path: Path) -> None:
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    raw = _BASE.format(version="1.0.0", memory=128) + "\n[data]\naccess_all_archive = true\n"
-    (repo / "openhost.toml").write_text(raw)
-    app_id = _seed_perm_app(cfg, str(repo))
-
-    assert _gate_update_review(app_id, str(repo), False, previous_manifest_raw=raw) is None
-
-
 def _seed_git_app_with_manifest_raw(cfg: Any, repo: Path, on_disk_toml: str, manifest_raw: str) -> str:
     """Seed a running git-backed app whose on-disk manifest differs from the
     stored (running) manifest_raw, so an update gates on the settings diff."""
@@ -825,45 +803,3 @@ def test_reload_route_gates_on_settings_change(
         resp = client.post(f"/reload_app/{app_id}", json={"update": True, "approve_new_permissions": True})
     assert resp.json() == {"ok": True}
     m["thread"].assert_called_once()
-
-
-@pytest.mark.parametrize("approve", [False, True])
-def test_reload_route_rejects_new_access_all_archive(
-    cfg: Any, client: TestClient[Litestar], cookies: dict[str, str], tmp_path: Path, approve: bool
-) -> None:
-    previous = _BASE.format(version="1.0.0", memory=128)
-    updated = previous + "\n[data]\naccess_all_archive = true\n"
-    repo = tmp_path / "repo"
-    app_id = _seed_git_app_with_manifest_raw(cfg, repo, updated, previous)
-
-    client.cookies.update(cookies)
-    with _mocked_reload_side_effects() as m:
-        resp = client.post(
-            f"/reload_app/{app_id}",
-            json={"update": True, "approve_new_permissions": approve},
-        )
-
-    assert resp.status_code == 400
-    assert "access_all_archive has been removed" in resp.json()["detail"]
-    m["stop"].assert_not_called()
-    m["thread"].assert_not_called()
-    assert _app_status(cfg, app_id) == "running"
-
-
-def test_plain_reload_rejects_new_access_all_archive(
-    cfg: Any, client: TestClient[Litestar], cookies: dict[str, str], tmp_path: Path
-) -> None:
-    previous = _BASE.format(version="1.0.0", memory=128)
-    updated = previous + "\n[data]\naccess_all_archive = true\n"
-    repo = tmp_path / "repo"
-    app_id = _seed_git_app_with_manifest_raw(cfg, repo, updated, previous)
-
-    client.cookies.update(cookies)
-    with _mocked_reload_side_effects() as m:
-        resp = client.post(f"/reload_app/{app_id}", json={})
-
-    assert resp.status_code == 400
-    assert "access_all_archive has been removed" in resp.json()["detail"]
-    m["stop"].assert_not_called()
-    m["thread"].assert_not_called()
-    assert _app_status(cfg, app_id) == "running"

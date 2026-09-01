@@ -102,7 +102,6 @@ def provision_data(
     # Determine if permanent data dir is needed:
     # app_data defaults true; also enabled by sqlite entries or cross-app access.
     wants_all_app_data = manifest.access_all_app_data
-    wants_all_archive = wants_all_app_data or manifest.legacy_access_all_archive
     needs_app_data = manifest.app_data or manifest.sqlite_dbs or wants_all_app_data
 
     if needs_app_data:
@@ -140,7 +139,7 @@ def provision_data(
             )
         os.makedirs(app_archive_dir, exist_ok=True)
         env_vars["OPENHOST_APP_ARCHIVE_DIR"] = app_archive_dir
-    elif wants_all_archive and archive_available:
+    elif wants_all_app_data and archive_available:
         # Cross-app access is permissive — skip the archive mount when
         # the tier isn't configured rather than refusing to provision.
         os.makedirs(app_archive_dir, exist_ok=True)

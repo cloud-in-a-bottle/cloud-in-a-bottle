@@ -161,8 +161,6 @@ def test_health_checks_the_mountpoint_path(db, cfg):
     [
         ("[data]\napp_archive=true\n", True, True),
         ("[data]\napp_archive=false\n", False, False),
-        ("[data]\naccess_all_archive=true\n", False, True),
-        ("[data]\naccess_all_data=true\n", False, True),
         ("[data]\naccess_all_app_data=true\n", False, True),
         ("", False, False),
     ],

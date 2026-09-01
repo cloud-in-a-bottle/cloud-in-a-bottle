@@ -632,56 +632,6 @@ def test_run_container_access_all_app_data_mounts_parent_dirs(tmp_path, monkeypa
     assert f"/data/app_archive/{manifest.name}" not in targets
 
 
-def test_run_container_legacy_access_all_data_normalizes_to_all_app_data(
-    tmp_path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    manifest = parse_manifest_from_string(
-        """\
-[app]
-name = "myapp"
-version = "0.1.0"
-
-[runtime.container]
-image = "Dockerfile"
-port = 8080
-
-[data]
-access_all_data = true
-"""
-    )
-    argv = _run_and_capture(monkeypatch, manifest=manifest, tmp_path=tmp_path)
-
-    volume_args = [arg for prev, arg in zip(argv, argv[1:], strict=False) if prev == "-v"]
-    targets = {v.rsplit(":", 2)[1] for v in volume_args}
-    assert {"/data/app_data", "/data/app_temp_data", "/data/app_archive"} <= targets
-    assert "/data/vm_data" not in targets
-
-
-def test_run_container_preserves_stored_access_all_archive_scope(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
-    manifest = parse_manifest_from_string(
-        """\
-[app]
-name = "myapp"
-version = "0.1.0"
-
-[runtime.container]
-image = "Dockerfile"
-port = 8080
-
-[data]
-app_data = false
-access_all_archive = true
-"""
-    )
-    argv = _run_and_capture(monkeypatch, manifest=manifest, tmp_path=tmp_path)
-
-    volume_args = [arg for prev, arg in zip(argv, argv[1:], strict=False) if prev == "-v"]
-    targets = {v.rsplit(":", 2)[1] for v in volume_args}
-    assert "/data/app_archive" in targets
-    assert "/data/app_data" not in targets
-    assert "/data/app_temp_data" not in targets
-
-
 def test_run_container_app_data_opt_out(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Apps can explicitly opt out of app_data with ``app_data = false``."""
     manifest = _basic_manifest(app_data=False)
