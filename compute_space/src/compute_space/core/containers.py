@@ -4,7 +4,8 @@ Every container runs under the unprivileged ``host`` user in podman's
 default rootless user namespace.  Host bind mounts use ``:idmap`` so
 container-root writes land on disk owned by the ``host`` user. Each app
 sees only its own ``/data/...`` subdirectory unless it requests
-``access_all_app_data``.
+``access_all_app_data``. Installed manifests using the removed
+``access_all_archive`` flag retain archive-only access.
 
 Security defaults: ``--cap-drop=ALL`` then re-add ``DEFAULT_CAPABILITIES``
 (Docker's default set) plus anything the manifest requests from

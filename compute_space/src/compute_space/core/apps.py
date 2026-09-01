@@ -40,6 +40,7 @@ from compute_space.core.git_ops import is_github_repo_url
 from compute_space.core.git_ops import is_ssh_url
 from compute_space.core.git_ops import parse_repo_url
 from compute_space.core.logging import logger
+from compute_space.core.manifest import ACCESS_ALL_ARCHIVE_REMOVED_MESSAGE
 from compute_space.core.manifest import AppLink
 from compute_space.core.manifest import AppManifest
 from compute_space.core.manifest import PermissionGrant
@@ -264,11 +265,7 @@ async def clone_with_github_fallback(
 def validate_manifest(manifest: AppManifest, db: sqlite3.Connection, app_name: str | None = None) -> str | None:
     """Check reserved names and duplicates. Returns error string or None."""
     if manifest.legacy_access_all_archive:
-        return (
-            "[data].access_all_archive has been removed and has no archive-only replacement; "
-            "use access_all_app_data = true only if the app needs read/write access to all apps' "
-            "permanent, temporary, and archive data"
-        )
+        return ACCESS_ALL_ARCHIVE_REMOVED_MESSAGE
 
     if app_name is None:
         app_name = manifest.name

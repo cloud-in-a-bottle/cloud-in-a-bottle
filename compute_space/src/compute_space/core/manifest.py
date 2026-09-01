@@ -24,6 +24,12 @@ from compute_space.core.logging import logger
 # working without changes.
 MANIFEST_FILENAMES: tuple[str, ...] = ("cloudinabottle.toml", "openhost.toml")
 
+ACCESS_ALL_ARCHIVE_REMOVED_MESSAGE = (
+    "[data].access_all_archive has been removed and has no archive-only replacement; "
+    "use access_all_app_data = true only if the app needs read/write access to all apps' "
+    "permanent, temporary, and archive data"
+)
+
 _SHORTNAME_RE = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
 
 # Must match net.ipv4.ip_unprivileged_port_start from ansible/tasks/containers.yml.

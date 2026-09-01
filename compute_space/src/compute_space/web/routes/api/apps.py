@@ -64,11 +64,13 @@ from compute_space.core.git_ops import parse_repo_url
 from compute_space.core.git_ops import reset_hard
 from compute_space.core.log_stream import stream_app_logs
 from compute_space.core.logging import logger
+from compute_space.core.manifest import ACCESS_ALL_ARCHIVE_REMOVED_MESSAGE
 from compute_space.core.manifest import PermissionGrant
 from compute_space.core.manifest import all_manifest_permissions_v2
 from compute_space.core.manifest import manifest_newly_declared_permissions_v2
 from compute_space.core.manifest import manifest_settings_changes
 from compute_space.core.manifest import parse_manifest
+from compute_space.core.manifest import parse_manifest_from_string
 from compute_space.core.oauth import OAuthRequired
 from compute_space.core.oauth import get_oauth_token
 from compute_space.core.ports import check_port_available
@@ -648,6 +650,16 @@ def _gate_update_review(
     except ValueError:
         return None
 
+    previous_had_legacy_archive = False
+    if previous_manifest_raw:
+        try:
+            previous_had_legacy_archive = parse_manifest_from_string(previous_manifest_raw).legacy_access_all_archive
+        except ValueError:
+            # An unparseable stored manifest cannot establish a legacy entitlement.
+            pass
+    if manifest.legacy_access_all_archive and not previous_had_legacy_archive:
+        raise ValueError(ACCESS_ALL_ARCHIVE_REMOVED_MESSAGE)
+
     new_perms = manifest_newly_declared_permissions_v2(
         manifest, get_all_permissions_v2(consumer_app_id=app_id), previous_manifest_raw
     )
@@ -818,14 +830,19 @@ async def _reload_app_impl(
     # currently running — so it can't introduce changes, and gating it would
     # wrongly re-prompt for a version the owner already chose to keep running.
     if update or continue_oauth:
-        review_gate = await asyncio.to_thread(
-            _gate_update_review,
-            app_id,
-            app_row["repo_path"],
-            approve_new_permissions,
-            app_row["manifest_raw"],
-        )
-        if review_gate is not None:
+        gate_error: ValueError | None = None
+        try:
+            review_gate = await asyncio.to_thread(
+                _gate_update_review,
+                app_id,
+                app_row["repo_path"],
+                approve_new_permissions,
+                app_row["manifest_raw"],
+            )
+        except ValueError as e:
+            review_gate = None
+            gate_error = e
+        if review_gate is not None or gate_error is not None:
             # Roll the working tree back to the version the app is running, so the
             # pulled-but-refused code does not linger on disk where a later plain
             # reload — which is not gated, on the assumption the on-disk manifest
@@ -837,9 +854,15 @@ async def _reload_app_impl(
                     with open(log_file, "a") as lf:
                         lf.write(f"WARNING: failed to roll back refused update to {pre_pull_sha}: {e}\n")
             with open(log_file, "a") as lf:
-                lf.write("Update changes app settings requiring owner approval; not reloading.\n")
+                if gate_error is not None:
+                    lf.write(f"Update rejected: {gate_error}\n")
+                else:
+                    lf.write("Update changes app settings requiring owner approval; not reloading.\n")
+            if gate_error is not None:
+                raise ValidationException(detail=str(gate_error)) from gate_error
             if continue_oauth:
                 return Redirect(path=f"/app_detail/{app_name}")
+            assert review_gate is not None
             return Response(content=review_gate, status_code=200, media_type=MediaType.JSON)
 
     # Atomically claim the reload before touching the running container.
