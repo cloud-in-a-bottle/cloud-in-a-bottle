@@ -131,16 +131,15 @@ The router injects these environment variables into your app:
 
 ### Data storage
 
-Apps receive a persistent data directory by default. You can opt out or request additional storage in the `[data]` section of your manifest:
+Apps have three storage areas, each with different durability + size + latency tradeoffs. By default, apps receive a permanent data directory (`app_data`). Other tiers must be explicitly requested via the `[data]` section of their manifest:
 
-- **`app_data = true`** (default) — mounts a persistent directory at `/data/app_data/{app_name}/`. Backed up. Set `false` to opt out.
-- **`sqlite = ["db_name"]`** — Provisions a SQLite database. Access the file at `OPENHOST_SQLITE_<NAME>`.
-- **`app_temp_data = true`** — mounts a temporary directory at `/data/app_temp_data/{app_name}/`. Not backed up, can be recreated.
-- **`app_archive = true`** — mounts an archive directory for bulk content at `/data/app_archive/{app_name}/`. Always available: local-disk backed by default, upgradable to S3 (JuiceFS) by the operator. No operator setup required to install.
-- **`access_all_app_data = true`** — full rw access to all apps' persistent, temporary, and archive data parent directories. The archive mount is silently skipped if it is transiently unavailable. For admin tools like file browsers and backup tools.
+- **Permanent data** (mounted at `BOTTLE_APP_DATA_DIR`) — local disk. Small, fast, backed up. Enabled by default.
+- **Temporary data** (mounted at `BOTTLE_APP_TEMP_DIR`) — local disk scratch. Not backed up, recreatable. Enabled by `app_temp_data = true`.
+- **Archive data** (mounted at `BOTTLE_APP_ARCHIVE_DIR`) — bulk content storage. Backed by local disk by default, but the owner can configure a S3 bucket (which is mounted with JuiceFS as a POSIX-compatible filesystem) from the dashboard for elastic, durable object storage. Higher-latency on uncached reads once on S3, although JuiceFS yields relatively performant access once cached. Intended for apps that store bulk content (videos, photos, attachments) that may overload local storage, and where low latency isn't critical. Enabled by `app_archive = true`.
 
+Apps can additionally request `access_all_app_data`, giving read/write access to every app's permanent, temporary, and archive data. This is necessary for apps like file browsers or backup apps. The retired `access_all_data` and `access_all_archive` fields are deprecated aliases for this permission.
 
-The storage guard requires a minimum amount of free persistent storage, stopping running apps when free space drops below `storage_min_free_mb` until space is freed. It is enabled by default; the host operator can change the threshold (or disable it with `0`) in the Cloud in a Bottle config and reboot. The guard can be temporarily paused from the System page to allow starting a file-browser app for cleanup.
+All data dirs are mounted under `/data/` in the container. All apps see the same path structure regardless of permissions — only the dirs they have access to are mounted. The directory structure contains folders like `/data/app_data/{app_name}`, `/data/app_temp_data/{app_name}`, `/data/app_archive/{app_name}`. The env vars `BOTTLE_APP_*_DIR` should be preferred to hardcoding paths.
 
 See the [manifest spec](manifest_spec.md) for the full reference.
 
