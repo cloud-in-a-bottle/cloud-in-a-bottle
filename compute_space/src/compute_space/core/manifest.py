@@ -466,6 +466,14 @@ def parse_manifest_from_string(raw_text: str) -> AppManifest:
             app_name,
         )
 
+    for deprecated_flag in ("access_all_data", "access_all_archive"):
+        if deprecated_flag in data_section:
+            logger.warning(
+                "App '{}' uses deprecated '{}' in [data]. Use 'access_all_app_data' instead.",
+                app_name,
+                deprecated_flag,
+            )
+
     return AppManifest(
         name=app_name,
         version=app_section["version"],
@@ -492,7 +500,11 @@ def parse_manifest_from_string(raw_text: str) -> AppManifest:
         app_data=data_section.get("app_data", True),
         app_temp_data=data_section.get("app_temp_data", False),
         app_archive=data_section.get("app_archive", False),
-        access_all_app_data=data_section.get("access_all_app_data", False),
+        access_all_app_data=(
+            data_section.get("access_all_app_data", False)
+            or data_section.get("access_all_data", False)
+            or data_section.get("access_all_archive", False)
+        ),
         provides_services_v2=_parse_services_v2(data),
         consumes_services_v2=_parse_services_v2_consumes(data),
         raw_toml=raw_text,

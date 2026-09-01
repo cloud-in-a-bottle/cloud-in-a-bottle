@@ -175,7 +175,9 @@ def storage_summary(manifest_raw: str, db: sqlite3.Connection) -> StorageSummary
     """Build the :class:`StorageSummary` for an app's manifest + current backend."""
     data = _data_section(manifest_raw)
     requires = bool(data.get("app_archive"))
-    access_all_app_data = bool(data.get("access_all_app_data"))
+    access_all_app_data = bool(
+        data.get("access_all_app_data") or data.get("access_all_data") or data.get("access_all_archive")
+    )
     uses = requires or access_all_app_data
     backend = read_state(db).backend
     durable = backend == "s3"
@@ -610,7 +612,12 @@ def manifest_uses_archive(manifest_raw: str) -> bool:
     healthy to delete its bytes.
     """
     data = _data_section(manifest_raw)
-    return bool(data.get("app_archive") or data.get("access_all_app_data"))
+    return bool(
+        data.get("app_archive")
+        or data.get("access_all_app_data")
+        or data.get("access_all_data")
+        or data.get("access_all_archive")
+    )
 
 
 def is_archive_dir_healthy(config: Config, db: sqlite3.Connection) -> bool:

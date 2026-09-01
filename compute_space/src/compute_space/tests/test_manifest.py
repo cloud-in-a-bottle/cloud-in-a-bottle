@@ -1,6 +1,7 @@
 """Unit tests for the cloudinabottle.toml manifest parser."""
 
 import json
+from unittest import mock
 
 import attr
 import pytest
@@ -757,6 +758,19 @@ class TestAppArchive:
         assert "access_all_app_data" in fields
         assert "access_all_data" not in fields
         assert "access_all_archive" not in fields
+
+    @pytest.mark.parametrize("deprecated_flag", ["access_all_data", "access_all_archive"])
+    def test_deprecated_cross_app_flags_normalize_to_access_all_app_data(self, deprecated_flag: str):
+        toml = MINIMAL + f"\n[data]\n{deprecated_flag} = true\n"
+        with mock.patch("compute_space.core.manifest.logger.warning") as warning:
+            manifest = parse_manifest_from_string(toml)
+
+        assert manifest.access_all_app_data is True
+        warning.assert_called_once_with(
+            "App '{}' uses deprecated '{}' in [data]. Use 'access_all_app_data' instead.",
+            "test-app",
+            deprecated_flag,
+        )
 
     def test_app_data_opt_out(self):
         toml = MINIMAL + "\n[data]\napp_data = false\n"

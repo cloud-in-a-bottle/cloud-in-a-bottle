@@ -375,6 +375,8 @@ def test_manifest_requires_archive_only_matches_app_archive_true() -> None:
 def test_manifest_uses_archive_matches_app_archive_and_cross_app_access() -> None:
     assert archive_backend.manifest_uses_archive("[data]\napp_archive = true\n")
     assert archive_backend.manifest_uses_archive("[data]\naccess_all_app_data = true\n")
+    assert archive_backend.manifest_uses_archive("[data]\naccess_all_data = true\n")
+    assert archive_backend.manifest_uses_archive("[data]\naccess_all_archive = true\n")
     assert not archive_backend.manifest_uses_archive("[data]\napp_data = true\n")
     assert not archive_backend.manifest_uses_archive("[data]\napp_archive = false\napp_data = true\n")
 
