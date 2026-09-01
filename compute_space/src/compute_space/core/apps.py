@@ -955,10 +955,6 @@ def reload_app_background(app_id: str, repo_path: str, config: Config) -> None:
         if repo_path and os.path.isdir(repo_path):
             try:
                 manifest = parse_manifest(repo_path)
-            except ValueError:
-                logger.warning("Failed to re-read manifest for {} during reload", app_id)
-
-            if manifest is not None:
                 # Re-sync ALL manifest-derived columns (resource limits,
                 # health_check, container_port, version, etc.), not just a
                 # subset, so the DB reflects what the reloaded container is
@@ -979,6 +975,8 @@ def reload_app_background(app_id: str, repo_path: str, config: Config) -> None:
                 register_v2_service_providers(app_id, manifest, db)
 
                 db.commit()
+            except ValueError:
+                logger.warning("Failed to re-read manifest for {} during reload", app_id)
             # Permissions are not touched here. New permissions declared in an
             # updated manifest are gated before this background reload even
             # starts: _reload_app_impl refuses to rebuild until the owner has
