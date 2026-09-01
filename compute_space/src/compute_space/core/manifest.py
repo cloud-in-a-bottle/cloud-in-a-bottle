@@ -227,6 +227,7 @@ class AppManifest:
         """
         return self.build_memory_mb if self.build_memory_mb is not None else self.memory_mb
 
+
 @functools.cache
 def manifest_setting_labels() -> dict[str, SettingLabel]:
     """``{field_name: SettingLabel}`` for every :class:`AppManifest` field annotated
