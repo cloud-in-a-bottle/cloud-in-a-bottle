@@ -7,12 +7,30 @@ for each server we set up 2 DNS records:
 - NS record pointing `host`(.imbue.com) to `ns.host`(.imbue.com). this says "the DNS server handling `host.` requests is at this location".
 - "glue" A record pointing ns.host to the IP of the server. the NS record can't take an IP, so this resolves ns.host.imbue.com to the specific IP of the server.
 
-on the server, we run CoreDNS (started by the router process). this serves authoritative DNS for the zone:
-- A record for `host.imbue.com` -> server IP
-- wildcard A record for `*.host.imbue.com` -> server IP (so app subdomains resolve)
-- TXT records for `_acme-challenge.host.imbue.com` (written dynamically during ACME DNS-01 cert acquisition)
+on the server, the router owns CoreDNS through a single `InternalDnsProvider`
+(`core/dns/coredns_provider/`): it holds the CoreDNS process, the set of zones the instance is
+authoritative for, and the records those zones serve. everything that wants to publish a record
+goes through it, so there is one way to write DNS.
 
-CoreDNS watches the zone file for SOA serial changes and auto-reloads. the router writes TXT records during cert acquisition and removes them afterward.
+it serves authoritative DNS for each zone:
+- A record for `host.imbue.com` -> server IP
+- A record for `ns.host.imbue.com` -> server IP (glue for the NS the SOA points at)
+- wildcard A record for `*.host.imbue.com` -> server IP (so app subdomains resolve)
+- TXT records for `_acme-challenge.host.imbue.com` (written during ACME DNS-01 cert acquisition)
+
+**records live in memory, not on disk.** the provider holds them and re-renders the zone files
+whenever they change; nothing is persisted, because every record is re-published on each boot
+(`publish_router_addresses` for the three above, cert acquisition for the challenge tokens), so a
+copy on disk could only go stale.
+
+records carry no zone. every zone the space answers on is an alias for the same set of apps, so a
+record lands in all of them — which is also why a zone added later needs no backfill.
+
+zone files are outputs, never inputs: nothing reads them back, so any change is a whole-file
+rewrite (via a temp file and rename, since CoreDNS re-reads on mtime change and a partial write
+would leave the zone unparseable). every render bumps the SOA serial, which is what makes CoreDNS
+reload. a *new* zone needs a new Corefile server block, so it needs a CoreDNS restart rather than
+just a reload.
 
 ## TLS certs
 
@@ -21,7 +39,7 @@ we use wildcard certs: one cert covers both `host.imbue.com` and `*.host.imbue.c
 certs are acquired via ACME DNS-01 challenge:
 1. router creates an ACME order for `[domain, *.domain]`
 2. ACME server asks us to prove we control the domain by setting a TXT record
-3. router writes the TXT record to the CoreDNS zone file
+3. router publishes the TXT record through the DNS provider, which renders it into every zone file
 4. ACME server queries our CoreDNS, sees the TXT record, issues the cert
 5. router clears the TXT record
 

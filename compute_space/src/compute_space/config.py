@@ -228,16 +228,6 @@ class Config:
         """Directory for per-domain CoreDNS zone files (domains beyond the primary)."""
         return self.openhost_data_path / "zones"
 
-    def coredns_zonefile_path_for(self, domain_name: str, is_primary: bool) -> Path:
-        """Zone file for a domain.  The primary keeps the legacy ``zonefile`` path for backward
-        compatibility; additional public domains get a per-domain file under ``zones/``.  Each
-        public domain is a separate authoritative zone, so its ACME DNS-01 ``_acme-challenge``
-        TXT records must land in its own zone file (not the primary's)."""
-        if is_primary:
-            return self.coredns_zonefile_path
-        # Strip any port so no ``:`` ends up in a filename.
-        return self.zones_dir / f"{domain_name.split(':')[0]}.zone"
-
     @property
     def caddyfile_path(self) -> Path:
         return self.openhost_data_path / "Caddyfile"

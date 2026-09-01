@@ -123,7 +123,7 @@ async def test_renew_skips_valid_cert(tmp_path: Path) -> None:
     renewed = await renew_cert_if_needed(
         config,
         _async(lambda c, db: calls.append("restart")),
-        provision=_async(lambda c, db: calls.append("provision")),
+        provision=_async(lambda c, db, dns: calls.append("provision")),
     )
     assert renewed is False
     assert calls == []
@@ -144,7 +144,7 @@ async def test_renew_provisions_and_restarts_caddy(tmp_path: Path, expires_in: d
     renewed = await renew_cert_if_needed(
         config,
         _async(lambda c, db: calls.append("restart")),
-        provision=_async(lambda c, db: calls.append("provision")),
+        provision=_async(lambda c, db, dns: calls.append("provision")),
     )
     assert renewed is True
     assert calls == ["provision", "restart"]
@@ -155,7 +155,7 @@ async def test_renew_failure_does_not_restart_caddy(tmp_path: Path) -> None:
     config = _config(tmp_path)
     calls: list[str] = []
 
-    async def _failing_provision(config: Config, db: sqlite3.Connection) -> None:
+    async def _failing_provision(config: Config, db: sqlite3.Connection, dns: None) -> None:
         raise RuntimeError("ACME is down")
 
     with pytest.raises(RuntimeError, match="ACME is down"):
@@ -184,8 +184,8 @@ async def test_renew_acquires_stale_secondary_domain(tmp_path: Path) -> None:
     renewed = await renew_cert_if_needed(
         config,
         _async(lambda c, db: calls.append("restart")),
-        provision=_async(lambda c, db: calls.append("provision")),
-        acquire=_async(lambda c, name, cp, kp, db: acquired.append(name)),
+        provision=_async(lambda c, db, dns: calls.append("provision")),
+        acquire=_async(lambda c, name, cp, kp, db, dns: acquired.append(name)),
     )
     assert renewed is True
     assert acquired == ["second.example.com"]
@@ -205,8 +205,8 @@ async def test_renew_acquires_secondary_under_non_tls_primary(tmp_path: Path) ->
     renewed = await renew_cert_if_needed(
         config,
         _async(lambda c, db: calls.append("restart")),
-        provision=_async(lambda c, db: calls.append("provision")),
-        acquire=_async(lambda c, name, cp, kp, db: acquired.append(name)),
+        provision=_async(lambda c, db, dns: calls.append("provision")),
+        acquire=_async(lambda c, name, cp, kp, db, dns: acquired.append(name)),
     )
     assert renewed is True
     assert acquired == ["public.example.com"]
@@ -219,14 +219,19 @@ async def test_renew_isolates_a_failing_secondary(tmp_path: Path) -> None:
     config = _multidomain_config(tmp_path, "bad.example.com", "good.example.com")
     acquired: list[str] = []
 
-    async def _acquire(c: Config, name: str, cert_path: Path, key_path: Path, db: sqlite3.Connection) -> None:
+    async def _acquire(
+        c: Config, name: str, cert_path: Path, key_path: Path, db: sqlite3.Connection, dns: None
+    ) -> None:
         if name == "bad.example.com":
             raise RuntimeError("DNS not delegated")
         acquired.append(name)
 
     calls: list[str] = []
     renewed = await renew_cert_if_needed(
-        config, _async(lambda c, db: calls.append("restart")), provision=_async(lambda c, db: None), acquire=_acquire
+        config,
+        _async(lambda c, db: calls.append("restart")),
+        provision=_async(lambda c, db, dns: None),
+        acquire=_acquire,
     )
     assert renewed is True
     assert acquired == ["good.example.com"]  # bad one failed but didn't abort the loop
@@ -240,7 +245,9 @@ async def test_renew_reload_regenerates_caddyfile_for_new_secondary_cert(tmp_pat
     # restart re-read the stale Caddyfile and left the domain on Caddy's self-signed cert forever.
     config = _multidomain_config(tmp_path, "second.example.com")
 
-    async def _acquire(c: Config, name: str, cert_path: Path, key_path: Path, db: sqlite3.Connection) -> None:
+    async def _acquire(
+        c: Config, name: str, cert_path: Path, key_path: Path, db: sqlite3.Connection, dns: None
+    ) -> None:
         cert_path.write_text("cert")  # generate_caddyfile only checks the files exist, not validity
         key_path.write_text("key")
 
@@ -249,7 +256,7 @@ async def test_renew_reload_regenerates_caddyfile_for_new_secondary_cert(tmp_pat
     async def _reload(c: Config, db: sqlite3.Connection) -> None:
         caddyfile.write_text(generate_caddyfile(effective_domains(db), c.port, config_cert_resolver(c, db)))
 
-    renewed = await renew_cert_if_needed(config, _reload, provision=_async(lambda c, db: None), acquire=_acquire)
+    renewed = await renew_cert_if_needed(config, _reload, provision=_async(lambda c, db, dns: None), acquire=_acquire)
     assert renewed is True
     content = caddyfile.read_text()
     # The secondary now serves its acquired file cert rather than falling back to `tls internal`.
@@ -301,7 +308,7 @@ async def test_renew_marks_primary_active_same_cycle(tmp_path: Path) -> None:
         cfg.tls_cert_path, cfg.tls_key_path, datetime.datetime.now(datetime.UTC) - datetime.timedelta(days=1)
     )
 
-    async def _provision(c: Config, db: sqlite3.Connection) -> None:
+    async def _provision(c: Config, db: sqlite3.Connection, dns: None) -> None:
         _write_self_signed_cert(c.tls_cert_path, c.tls_key_path, datetime.datetime(2100, 1, 1, tzinfo=datetime.UTC))
 
     renewed = await renew_cert_if_needed(cfg, _async(lambda c, db: None), provision=_provision)

@@ -3,7 +3,7 @@ from pathlib import Path
 
 from compute_space.config import CERT_PROVIDER_ACME
 from compute_space.config import Config
-from compute_space.core.domains import is_primary_domain
+from compute_space.core.dns.coredns_provider.interface import InternalDnsProvider
 from compute_space.core.domains import primary_domain
 from compute_space.core.identity_store import get_instance_identity
 from compute_space.core.tls.acquire_cert import acquire_tls_cert
@@ -13,21 +13,27 @@ from compute_space.core.tls.keycloak import KeycloakTokenProvider
 
 
 async def acquire_cert_for_domain(
-    config: Config, domain: str, cert_path: Path, key_path: Path, db: sqlite3.Connection
+    config: Config,
+    domain: str,
+    cert_path: Path,
+    key_path: Path,
+    db: sqlite3.Connection,
+    dns: InternalDnsProvider | None,
 ) -> None:
     """Acquire a TLS cert (apex + wildcard) for ``domain`` with the configured provider and
     install it at ``cert_path``/``key_path``.
 
     The provider dispatch (BYO-ACME vs the openhost-cert-api broker) and DNS-01 mechanics are
     identical for every domain; only the domain name and output paths vary.  The DNS-01 challenge
-    TXT records go into ``domain``'s own zone file (each public domain is a separate authoritative
-    zone), so the challenge is answerable for secondary domains too.  Caller must ensure CoreDNS is
-    running and authoritative for ``domain``, and that ``cert_path``'s parent directory exists.
+    TXT records go into every zone ``dns`` serves, so the challenge is answerable for secondary
+    domains too.  Caller must ensure ``dns`` is authoritative for ``domain`` and that
+    ``cert_path``'s parent directory exists.
 
     The cert_provider value and its required settings are validated when the Config is constructed
     (Config.__attrs_post_init__), so here we only narrow the optional fields for the type checker.
     """
-    zonefile_path = config.coredns_zonefile_path_for(domain, is_primary_domain(db, domain))
+    if dns is None:
+        raise RuntimeError("CoreDNS must be enabled to acquire a TLS cert via DNS-01 challenge")
     if config.cert_provider == CERT_PROVIDER_ACME:
         if not config.acme_account_key_path:
             raise RuntimeError("ACME account key path must be set in config to acquire TLS cert")
@@ -36,7 +42,7 @@ async def acquire_cert_for_domain(
             cert_path=cert_path,
             key_path=key_path,
             acme_account_key_path=Path(config.acme_account_key_path),
-            coredns_zonefile_path=zonefile_path,
+            dns=dns,
             acme_email=config.acme_email,
             directory_url=config.acme_directory_url,
         )
@@ -56,15 +62,15 @@ async def acquire_cert_for_domain(
                     domain=domain,
                     cert_path=cert_path,
                     key_path=key_path,
-                    coredns_zonefile_path=zonefile_path,
+                    dns=dns,
                     client=client,
                 )
 
 
-async def provision_cert(config: Config, db: sqlite3.Connection) -> None:
+async def provision_cert(config: Config, db: sqlite3.Connection, dns: InternalDnsProvider | None) -> None:
     """Acquire the primary domain's TLS cert and install it at the config's cert/key paths.
 
     Used both for the initial acquisition at startup and for renewals.  Thin wrapper over
     ``acquire_cert_for_domain`` for the primary domain."""
     primary = primary_domain(db)
-    await acquire_cert_for_domain(config, primary.name, config.tls_cert_path, config.tls_key_path, db)
+    await acquire_cert_for_domain(config, primary.name, config.tls_cert_path, config.tls_key_path, db, dns)

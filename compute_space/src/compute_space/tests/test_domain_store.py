@@ -136,7 +136,7 @@ async def test_ensure_cert_for_noop_on_mdns(tmp_path: Path, monkeypatch) -> None
     monkeypatch.setattr(domain_certs, "acquire_cert_for_domain", lambda *a, **k: called.append(a))
     cfg = _cfg(tmp_path)
     with closing(open_db(cfg)) as db:
-        await domain_certs.ensure_cert_for(cfg, Domain("myhost.local", tls=False, mdns=True), db)
+        await domain_certs.ensure_cert_for(cfg, Domain("myhost.local", tls=False, mdns=True), db, None)
     assert called == []  # mDNS never touches ACME
 
 
@@ -144,7 +144,7 @@ async def test_ensure_cert_for_noop_on_mdns(tmp_path: Path, monkeypatch) -> None
 async def test_ensure_cert_for_acquires_tls_to_per_domain_path(tmp_path: Path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
     captured = {}
 
-    async def fake_acquire(config, domain, cert_path, key_path, db):  # type: ignore[no-untyped-def]
+    async def fake_acquire(config, domain, cert_path, key_path, db, dns):  # type: ignore[no-untyped-def]
         captured["domain"] = domain
         captured["cert_path"] = cert_path
 
@@ -152,7 +152,7 @@ async def test_ensure_cert_for_acquires_tls_to_per_domain_path(tmp_path: Path, m
     cfg = _cfg(tmp_path)
     with closing(open_db(cfg)) as db:
         seed_domains(db, PRIMARY, [])  # host.example.com is the primary; host.example.org is not
-        await domain_certs.ensure_cert_for(cfg, Domain("host.example.org", tls=True), db)
+        await domain_certs.ensure_cert_for(cfg, Domain("host.example.org", tls=True), db, None)
     assert captured["domain"] == "host.example.org"
     # per-domain path under certs/, NOT the primary's legacy cert file
     assert captured["cert_path"] == cfg.certs_dir / "host.example.org.pem"

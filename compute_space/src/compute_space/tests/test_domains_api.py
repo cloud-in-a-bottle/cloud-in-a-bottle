@@ -26,6 +26,9 @@ from compute_space.config import provide_config
 from compute_space.core import caddy
 from compute_space.core.auth.auth import SESSION_COOKIE_NAME
 from compute_space.core.auth.auth import create_session
+from compute_space.core.dns.coredns_provider.interface import DnsSettings
+from compute_space.core.dns.coredns_provider.interface import InternalDnsProvider
+from compute_space.core.dns.coredns_provider.interface import ManagedZone
 from compute_space.core.domains import Domain
 from compute_space.core.domains import DomainCertStatus
 from compute_space.core.domains import seed_domains
@@ -63,12 +66,15 @@ def _write_cert(cert_path: Path, key_path: Path, *, days_valid: int = 60) -> Non
     )
 
 
-def _make_app() -> Litestar:
+def _make_app(dns: Any = None) -> Litestar:
     return Litestar(
         route_handlers=[api_domains_routes],
         dependencies={
             "config": Provide(provide_config, sync_to_thread=False),
             "db": Provide(provide_db),
+            # Mirrors create_app: the routes are handed the running provider, or None when the
+            # router isn't serving DNS.
+            "dns": Provide(lambda: dns, sync_to_thread=False, use_cache=True),
         },
         openapi_config=None,
     )
@@ -103,7 +109,24 @@ def client(cfg: Any) -> Iterator[TestClient[Litestar]]:
         yield c
 
 
-async def _acquired(config: Any, domain: Any, db: Any) -> None:
+@pytest.fixture
+def dns_client(cfg: Any, tmp_path: Path) -> Iterator[tuple[InternalDnsProvider, TestClient[Litestar]]]:
+    """A real provider, never started, so the routes drive the same zone set production would."""
+    dns = InternalDnsProvider(
+        settings=DnsSettings(
+            corefile_path=tmp_path / "Corefile",
+            zonefile_path=tmp_path / "zonefile",
+            zones_dir=tmp_path / "zones",
+            public_ip="203.0.113.10",
+        ),
+        zones=(ManagedZone(PRIMARY.name, is_primary=True),),
+    )
+    with TestClient(app=_make_app(dns)) as c:
+        c.cookies.update(_auth_cookie(cfg.db_path))
+        yield dns, c
+
+
+async def _acquired(config: Any, domain: Any, db: Any, dns: Any) -> None:
     """ensure_cert_for is async now; a stub has to be too."""
 
 
@@ -182,7 +205,7 @@ def test_add_tls_domain_acquires_and_becomes_active(
 def test_add_tls_domain_records_acquisition_error(
     cfg: Any, client: TestClient[Litestar], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    async def boom(config: Any, domain: Any, db: Any) -> None:
+    async def boom(config: Any, domain: Any, db: Any, dns: Any) -> None:
         raise RuntimeError("DNS not delegated")
 
     monkeypatch.setattr(domains, "ensure_cert_for", boom)
@@ -191,6 +214,33 @@ def test_add_tls_domain_records_acquisition_error(
     info = next(d for d in client.get("/api/domains").json()["domains"] if d["name"] == "host.example.org")
     assert info["cert_status"] == DomainCertStatus.ERROR
     assert "DNS not delegated" in info["error_message"]
+
+
+def test_a_new_public_domain_is_served_by_the_dns_provider(
+    dns_client: tuple[InternalDnsProvider, TestClient[Litestar]], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The provider has to be authoritative for the zone *before* acquisition, since DNS-01 answers
+    # the challenge out of that zone's file.
+    monkeypatch.setattr(domains, "ensure_cert_for", _acquired)
+    dns, client = dns_client
+
+    client.post("/api/domains", json={"name": "host.example.org", "tls": True})
+    assert [z.zone for z in dns.zones] == [PRIMARY.name, "host.example.org"]
+
+    client.delete("/api/domains/host.example.org")
+    assert [z.zone for z in dns.zones] == [PRIMARY.name]
+
+
+def test_an_mdns_domain_never_reaches_the_dns_provider(
+    dns_client: tuple[InternalDnsProvider, TestClient[Litestar]],
+) -> None:
+    # .local is served by the wildcard mDNS responder; CoreDNS never sees it.
+    dns, client = dns_client
+
+    client.post("/api/domains", json={"name": "myhost.local", "mdns": True})
+    client.delete("/api/domains/myhost.local")
+
+    assert [z.zone for z in dns.zones] == [PRIMARY.name]
 
 
 # --- validation ---------------------------------------------------------------------

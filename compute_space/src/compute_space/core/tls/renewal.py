@@ -11,6 +11,7 @@ from cryptography import x509
 
 from compute_space.config import Config
 from compute_space.config import get_config
+from compute_space.core.dns.coredns_provider.interface import InternalDnsProvider
 from compute_space.core.domains import DomainCertStatus
 from compute_space.core.domains import effective_domains
 from compute_space.core.domains import get_record
@@ -25,6 +26,17 @@ from compute_space.db import get_db
 RENEW_BEFORE = datetime.timedelta(days=7)
 CHECK_INTERVAL = datetime.timedelta(hours=12)
 RETRY_INTERVAL = datetime.timedelta(hours=1)
+
+# First failures back off from seconds, not straight to an hour.  A failure is often something
+# that clears on its own in a moment -- a zone that hasn't finished reloading, a registrar's API
+# having a bad minute -- and an hour of no cert over a few seconds of skew would be a poor trade.
+INITIAL_RETRY_INTERVAL = datetime.timedelta(seconds=15)
+
+
+# The two injection points renew_cert_if_needed offers, spelled out so a test double has to match
+# the real signature.
+ProvisionPrimary = Callable[[Config, sqlite3.Connection, "InternalDnsProvider | None"], Awaitable[None]]
+AcquireDomain = Callable[[Config, str, Path, Path, sqlite3.Connection, "InternalDnsProvider | None"], Awaitable[None]]
 
 
 class CertStatus(enum.Enum):
@@ -91,8 +103,9 @@ def _mark_cert_active(name: str) -> None:
 async def renew_cert_if_needed(
     config: Config,
     reload_caddy: Callable[[Config, sqlite3.Connection], Awaitable[object]],
-    provision: Callable[[Config, sqlite3.Connection], Awaitable[None]] = provision_cert,
-    acquire: Callable[[Config, str, Path, Path, sqlite3.Connection], Awaitable[None]] = acquire_cert_for_domain,
+    dns: InternalDnsProvider | None = None,
+    provision: ProvisionPrimary = provision_cert,
+    acquire: AcquireDomain = acquire_cert_for_domain,
 ) -> bool:
     """Renew every TLS cert that is missing, expired, or inside the renewal window.
 
@@ -113,7 +126,7 @@ async def renew_cert_if_needed(
             status = get_cert_status(config.tls_cert_path, config.tls_key_path)
             if status != CertStatus.OK:
                 logger.info(f"TLS cert for {primary.name} is {status.value}; renewing")
-                await provision(config, db)
+                await provision(config, db, dns)
                 _mark_cert_active(primary.name_no_port)
                 renewed = True
 
@@ -131,7 +144,7 @@ async def renew_cert_if_needed(
             try:
                 logger.info(f"TLS cert for {name} is {status.value}; renewing")
                 cert_path.parent.mkdir(parents=True, exist_ok=True)
-                await acquire(config, name, cert_path, key_path, db)
+                await acquire(config, name, cert_path, key_path, db, dns)
                 _mark_cert_active(name)
                 renewed = True
             except Exception:
@@ -144,6 +157,7 @@ async def renew_cert_if_needed(
 
 def start_renewal_task(
     reload_caddy: Callable[[Config, sqlite3.Connection], Awaitable[object]],
+    dns: InternalDnsProvider | None = None,
 ) -> asyncio.Task[None]:
     """Run renew_cert_if_needed periodically on the caller's event loop, retrying sooner after failures.
 
@@ -151,17 +165,24 @@ def start_renewal_task(
     /api/domains after startup is picked up by renewal rather than frozen out by a stale snapshot.
     ``reload_caddy`` regenerates the Caddyfile so a renewed/newly-acquired cert is actually served.
 
+    A failed cycle retries after ``INITIAL_RETRY_INTERVAL`` and backs off towards
+    ``RETRY_INTERVAL``, so a transient failure costs seconds while a persistently broken setup
+    isn't hammering an ACME server.
+
     The caller must keep the returned task alive — the loop holds only a weak reference.
     """
 
     async def _run() -> None:
+        retry = INITIAL_RETRY_INTERVAL
         while True:
-            interval = CHECK_INTERVAL
             try:
-                await renew_cert_if_needed(get_config(), reload_caddy)
+                await renew_cert_if_needed(get_config(), reload_caddy, dns)
             except Exception:
-                logger.exception(f"TLS cert renewal failed; retrying in {RETRY_INTERVAL}")
-                interval = RETRY_INTERVAL
-            await asyncio.sleep(interval.total_seconds())
+                logger.exception(f"TLS cert renewal failed; retrying in {retry}")
+                await asyncio.sleep(retry.total_seconds())
+                retry = min(retry * 2, RETRY_INTERVAL)
+                continue
+            retry = INITIAL_RETRY_INTERVAL
+            await asyncio.sleep(CHECK_INTERVAL.total_seconds())
 
     return asyncio.create_task(_run(), name="tls-cert-renewal")
