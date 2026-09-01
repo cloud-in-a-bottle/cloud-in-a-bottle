@@ -119,6 +119,31 @@ def test_provision_data_archive_subdir_under_access_all_app_data(tmp_path) -> No
     assert env["OPENHOST_APP_ARCHIVE_DIR"] == str(archive_dir / manifest.name)
 
 
+def test_provision_data_preserves_stored_access_all_archive(tmp_path) -> None:
+    data_dir = tmp_path / "persistent"
+    temp_dir = tmp_path / "temp"
+    archive_dir = tmp_path / "archive"
+    for directory in (data_dir, temp_dir, archive_dir):
+        directory.mkdir()
+
+    manifest = _manifest(raw_toml="[data]\naccess_all_archive = true\n")
+    env = provision_data(
+        app_id="archiveapp-id",
+        app_name=manifest.name,
+        manifest=manifest,
+        data_dir=str(data_dir),
+        temp_data_dir=str(temp_dir),
+        archive_dir=str(archive_dir),
+        my_openhost_redirect_domain="my.example.com",
+        zone_domain="example.com",
+        port=8080,
+        owner_username="owner",
+    )
+
+    assert (archive_dir / manifest.name).is_dir()
+    assert env["OPENHOST_APP_ARCHIVE_DIR"] == str(archive_dir / manifest.name)
+
+
 def test_provision_data_refuses_when_archive_dir_missing(tmp_path) -> None:
     """When the configured archive root doesn't exist (e.g. the S3 backend's JuiceFS mount has dropped), provisioning must fail loudly rather than silently creating a local-disk ghost path that JuiceFS shadows when the mount eventually attaches."""
     data_dir = tmp_path / "persistent"

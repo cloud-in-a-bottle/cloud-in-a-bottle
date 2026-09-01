@@ -227,6 +227,15 @@ class AppManifest:
         """
         return self.build_memory_mb if self.build_memory_mb is not None else self.memory_mb
 
+    @property
+    def legacy_access_all_archive(self) -> bool:
+        """Preserve archive-only access for installed manifests using the removed flag."""
+        try:
+            data = tomllib.loads(self.raw_toml).get("data", {}) or {}
+        except tomllib.TOMLDecodeError:
+            return False
+        return bool(data.get("access_all_archive"))
+
 
 @functools.cache
 def manifest_setting_labels() -> dict[str, SettingLabel]:
@@ -458,9 +467,6 @@ def parse_manifest_from_string(raw_text: str) -> AppManifest:
     data_section = data.get("data", {})
 
     app_name = app_section["name"]
-
-    if data_section.get("access_all_archive", False):
-        raise ValueError("[data].access_all_archive has been removed; use access_all_app_data = true")
 
     # Deprecated: extra_ports (raw Docker -p strings)
     if container.get("extra_ports"):

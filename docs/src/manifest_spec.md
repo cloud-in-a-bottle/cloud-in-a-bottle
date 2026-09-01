@@ -71,6 +71,8 @@ User-facing links the app advertises for paths on its own URL that aren't the ba
 | `sqlite` | string[] | no | [] | SQLite database names to provision (implicitly enables `app_data`) |
 | `access_all_app_data` | boolean | no | false | Mount all apps' permanent, temporary, and archive data parent directories (rw). The archive mount is silently skipped if it is transiently unavailable. For admin tools like file browsers and backup tools. |
 
+`access_all_data` remains accepted as a legacy spelling of `access_all_app_data`. The archive-only `access_all_archive` flag has been removed for new installs; already-installed apps retain its previous behavior until their manifests are migrated.
+
 
 ## Data Directory Structure
 

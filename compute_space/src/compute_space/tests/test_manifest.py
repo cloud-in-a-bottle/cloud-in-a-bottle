@@ -5,6 +5,7 @@ import json
 import attr
 import pytest
 
+from compute_space.core.apps import validate_manifest
 from compute_space.core.manifest import MANIFEST_FILENAMES
 from compute_space.core.manifest import SAFE_CAPABILITIES
 from compute_space.core.manifest import SAFE_DEVICE_PATHS
@@ -758,10 +759,15 @@ class TestAppArchive:
         assert "access_all_data" not in fields
         assert "access_all_archive" not in fields
 
-    def test_removed_access_all_archive_rejected(self):
+    def test_removed_access_all_archive_is_internal_only(self, db):
         toml = MINIMAL + "\n[data]\naccess_all_archive = true\n"
-        with pytest.raises(ValueError, match="access_all_archive has been removed"):
-            parse_manifest_from_string(toml)
+        manifest = parse_manifest_from_string(toml)
+        assert manifest.access_all_app_data is False
+        assert manifest.legacy_access_all_archive is True
+
+        error = validate_manifest(manifest, db)
+        assert error is not None
+        assert "access_all_archive has been removed" in error
 
     def test_legacy_access_all_data_normalized(self):
         toml = MINIMAL + "\n[data]\naccess_all_data = true\n"

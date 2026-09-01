@@ -293,10 +293,11 @@ def run_container(
     container_name = f"openhost-{app_name}"
 
     wants_all_app_data = manifest.access_all_app_data
+    wants_all_archive = wants_all_app_data or manifest.legacy_access_all_archive
 
     has_app_data = manifest.app_data or manifest.sqlite_dbs or wants_all_app_data
     has_app_temp = manifest.app_temp_data or wants_all_app_data
-    has_app_archive = manifest.app_archive or wants_all_app_data
+    has_app_archive = manifest.app_archive or wants_all_archive
 
     c_app_data = f"{CONTAINER_ROOT}/app_data/{app_name}"
     c_app_temp = f"{CONTAINER_ROOT}/app_temp_data/{app_name}"
@@ -405,7 +406,7 @@ def run_container(
         if has_app_temp:
             cmd.extend(["-v", _bind_mount_arg(app_temp_dir, c_app_temp)])
 
-    if wants_all_app_data:
+    if wants_all_archive:
         # Cross-app access is permissive — skip the archive mount when
         # the tier isn't configured rather than refusing to start.
         if os.path.isdir(archive_dir):
