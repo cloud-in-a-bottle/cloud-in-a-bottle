@@ -48,13 +48,29 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y qemu-system-x86 qemu-utils cloud-image-utils
 
-      - name: Report KVM availability
+      - name: Enable KVM access
         run: |
-          if [ -w /dev/kvm ]; then
-            echo "KVM is available — build will use hardware acceleration."
-          else
-            echo "::warning::/dev/kvm not writable; build falls back to slow TCG emulation."
+          # GitHub's 2-vCPU+ Linux runners (incl. ubuntu-latest) ship /dev/kvm,
+          # but it's root:kvm 0660 — not writable by the runner user. Grant
+          # access via udev so build.sh uses hardware acceleration instead of
+          # the (much slower) TCG fallback. Same rule android-emulator-runner
+          # uses. See https://github.com/actions/runner-images/issues/7541.
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Require KVM
+        run: |
+          ls -l /dev/kvm || true
+          if [ ! -w /dev/kvm ]; then
+            echo "::error::/dev/kvm is not usable. The build needs KVM; a TCG"
+            echo "fallback would exceed the boot timeout, so failing fast. If this"
+            echo "persists, the runner may lack nested virtualization — use a"
+            echo "larger runner or a self-hosted KVM runner."
+            exit 1
           fi
+          echo "KVM available — build will use hardware acceleration."
 
       - name: Build VM images
         run: |
