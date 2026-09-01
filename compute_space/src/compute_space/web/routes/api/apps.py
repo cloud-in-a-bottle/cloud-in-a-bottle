@@ -826,9 +826,9 @@ async def _reload_app_impl(
         manifest = None
         try:
             manifest = parse_manifest(app_row["repo_path"])
-        except ValueError:
+        except ValueError as e:
             # Preserve the existing background reload handling for malformed manifests.
-            pass
+            logger.debug("Could not preflight manifest for {} before plain reload: {}", app_id, e)
         if manifest is not None and manifest_newly_declares_legacy_access_all_archive(
             manifest, app_row["manifest_raw"]
         ):
