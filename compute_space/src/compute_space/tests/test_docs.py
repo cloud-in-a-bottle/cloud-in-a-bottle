@@ -112,6 +112,8 @@ def _client(repo_root: Path) -> tuple[TestClient[Litestar], Any]:
     ``get_config().openhost_repo_path`` so we install the fake as the active config."""
     cfg = _FakeCfg(openhost_repo_path=repo_root)
     set_active_config(cfg)  # type: ignore[arg-type]
+    # make_test_app's zone middleware opens the DB on every request, so point get_db() at a temp one.
+    init_db(str(repo_root.parent / "router.db"))
     return TestClient(app=make_test_app(docs_router)), cfg
 
 

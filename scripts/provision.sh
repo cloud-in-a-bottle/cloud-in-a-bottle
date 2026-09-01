@@ -32,10 +32,13 @@ OPEN_CLAIM="false"
 
 usage() {
     echo "Usage: $0 --domain <domain> [--branch <branch>] [--repo <repo-url>] [--local-http-only]"
+    echo "          [--bind-host <addr>] [--claim-token <token>] [--swap-size <gb>] [--open-claim]"
     echo ""
     echo "  --domain            Required. Domain name (e.g., myhost.example.com)."
     echo "                      In --local-http-only mode this is only used for app"
-    echo "                      subdomain routing (e.g. lvh.me), not TLS/DNS."
+    echo "                      subdomain routing, not TLS/DNS -- include the port"
+    echo "                      (e.g. lvh.me:8080), since the router builds absolute"
+    echo "                      URLs from it and without it they point at :80."
     echo "  --branch            Git branch to deploy (default: main)"
     echo "  --repo              Git repo URL (default: cloud-in-a-bottle/cloud-in-a-bottle)"
     echo "  --local-http-only   HTTP-only localhost mode: no TLS, CoreDNS, or Caddy."
@@ -50,12 +53,14 @@ usage() {
     echo "                      distributable image with a predictable claim URL."
     echo "  --swap-size         Swap file size in GiB (default: playbook default,"
     echo "                      16). Smaller values suit constrained local VMs."
-    echo "  --open-claim        Don't require a claim token at /setup"
-    echo "                      (claim_token_required = false). For a private,"
-    echo "                      unexposed instance (e.g. the distributed VM image"
-    echo "                      behind NAT) where a shipped default token would be"
-    echo "                      a public non-secret. Re-enable via config if you"
-    echo "                      later expose the instance on a network."
+    echo "  --open-claim        Leave /setup ungated (claim_token_required = false), so you"
+    echo "                      can claim the instance without a token. For a private,"
+    echo "                      unexposed instance (e.g. the distributed VM image behind"
+    echo "                      NAT) where a shipped default token would be a public"
+    echo "                      non-secret. Requires --local-http-only: on a reachable"
+    echo "                      instance the token is the only thing stopping a stranger"
+    echo "                      from claiming it first. Re-enable via config if you later"
+    echo "                      expose the instance on a network."
 }
 
 while [[ $# -gt 0 ]]; do
@@ -76,6 +81,12 @@ done
 if [ -z "$DOMAIN" ]; then
     echo "Error: --domain is required"
     usage
+    exit 1
+fi
+
+if [ "$OPEN_CLAIM" = "true" ] && [ "$LOCAL_HTTP_ONLY" != "true" ]; then
+    echo "Error: --open-claim requires --local-http-only"
+    echo "       Without the token, anyone who can reach /setup can claim this instance."
     exit 1
 fi
 
@@ -186,6 +197,9 @@ echo "=== Cloud in a Bottle provisioning complete ==="
 echo ""
 if [ "$LOCAL_HTTP_ONLY" = "true" ]; then
     echo "  Mode:      HTTP-only localhost (no TLS/CoreDNS/Caddy)"
+    if [ "$OPEN_CLAIM" = "true" ]; then
+        echo "  Claim:     /setup is ungated (--open-claim); no token needed"
+    fi
     echo "  Dashboard: http://localhost:8080  (SSH-tunnel to reach it:"
     echo "             ssh -L 8080:localhost:8080 host@<pi-ip>)"
 else

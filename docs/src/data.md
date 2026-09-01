@@ -71,3 +71,7 @@ The same `sync` + `config` mechanism also drives an `s3` → `s3` migration (rot
 ## Router-level data
 
 the router stores its own state (database, TLS certs, etc.) in the configured data directory alongside app data. This state is only accessible through the terminal or SSH, not from app containers.
+
+## Storage Guard
+
+Instances come with a "storage guard" that enforces a minimum amount of free disk space, to avoid running out of disk space in an uncontrolled manner. The storage guard stops running apps when free space drops below `storage_min_free_mb` (default 500 MB) until space is freed. It is enabled by default; the owner can change the threshold (or disable it with `0`) in the Cloud in a Bottle config file and reboot.
