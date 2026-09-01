@@ -104,9 +104,9 @@ def test_match_domain_empty_name_never_matches() -> None:
     assert matched is not None and matched.name == "host.example.com"
 
 
-def test_coredns_zonefile_path_for_primary_ignores_port() -> None:
-    # The primary must map to the legacy zonefile even when its name carries a port, and no
+def test_coredns_zonefile_path_for_legacy_owner_ignores_port() -> None:
+    # The legacy owner must map to the legacy zonefile even when its name carries a port, and no
     # ':' may leak into a per-domain filename.
     cfg = DefaultConfig()
-    assert cfg.coredns_zonefile_path_for("host.example.com:8443", is_primary=True) == cfg.coredns_zonefile_path
-    assert ":" not in cfg.coredns_zonefile_path_for("other.example.com:99", is_primary=False).name
+    assert cfg.coredns_zonefile_path_for("host.example.com:8443", uses_legacy_paths=True) == cfg.coredns_zonefile_path
+    assert ":" not in cfg.coredns_zonefile_path_for("other.example.com:99", uses_legacy_paths=False).name

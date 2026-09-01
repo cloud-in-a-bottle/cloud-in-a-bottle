@@ -1,7 +1,6 @@
 // ─── Domains ───
 // Owner-facing UI over /api/domains: list the hostnames this instance answers on,
-// add a secondary public domain (auto-acquires a TLS cert) or a local .local name,
-// and remove non-primary domains.
+// add domains, choose which one is primary, and remove non-primary domains.
 
 var DOMAINS_URL = '/api/domains';
 
@@ -29,7 +28,25 @@ function removeDomainButton(name) {
                    width: '14', height: '14', alt: '', 'aria-hidden': 'true'}));
 }
 
-// Repaint the table from a domain list (as returned by GET/POST/DELETE /api/domains).
+function makePrimaryButton(domain, currentPrimary) {
+  var label = 'Make ' + domain.name + ' primary';
+  var ready = !domain.tls || domain.cert_status === 'active';
+  return dom.el('button', {
+    class: 'btn', type: 'button', text: 'Make primary', title: label, 'aria-label': label,
+    disabled: !ready,
+    onclick: function() { makePrimaryDomain(domain.name, currentPrimary); },
+  });
+}
+
+function domainActions(d, currentPrimary) {
+  if (d.is_primary) return dom.el('span', {class: 'muted', text: '—'});
+  return dom.el('span', {class: 'domain-actions'}, [
+    makePrimaryButton(d, currentPrimary),
+    removeDomainButton(d.name),
+  ]);
+}
+
+// Repaint the table from the full domain list returned by every domains endpoint.
 function renderDomains(domains) {
   var tbody = document.getElementById('domains-body');
   var wrap = document.getElementById('domains-table-wrap');
@@ -42,6 +59,8 @@ function renderDomains(domains) {
   }
   wrap.hidden = false;
   none.hidden = true;
+  var primary = domains.find(function(d) { return d.is_primary; });
+  var primaryName = primary ? primary.name : '';
   var anyAcquiring = false;
   dom.replace(tbody, domains.map(function(d) {
     if (d.tls && d.cert_status === 'acquiring') anyAcquiring = true;
@@ -53,9 +72,7 @@ function renderDomains(domains) {
       dom.el('td', {text: d.scheme}),
       dom.el('td', {text: d.mdns ? 'mDNS (.local)' : 'Public DNS'}),
       dom.el('td', null, domainCertCell(d)),
-      dom.el('td', {class: 'col-actions'}, d.is_primary
-        ? dom.el('span', {class: 'muted', text: '—'})
-        : removeDomainButton(d.name)),
+      dom.el('td', {class: 'col-actions'}, domainActions(d, primaryName)),
     ]);
   }));
   // A cert acquisition (DNS-01) runs in the background; poll until it settles.
@@ -64,9 +81,54 @@ function renderDomains(domains) {
 
 function loadDomains() {
   // no-store so a poll reflects the current set, not a cached copy.
-  fetch(DOMAINS_URL, {credentials: 'same-origin', cache: 'no-store'})
-    .then(function(r) { return r.json(); })
-    .then(function(data) { renderDomains((data && data.domains) || []); });
+  fetch(DOMAINS_URL, {
+    credentials: 'same-origin', cache: 'no-store', headers: {'Accept': 'application/json'},
+  })
+    .then(readJsonResponse)
+    .then(function(res) {
+      if (res.status === 401) {
+        window.location.assign('/login?next=/settings');
+        return;
+      }
+      if (!res.ok) {
+        alert(responseErrorMessage(res.data, 'Failed to load domains.'));
+        return;
+      }
+      renderDomains((res.data && res.data.domains) || []);
+    })
+    .catch(function() { alert('Failed to load domains.'); });
+}
+
+function makePrimaryDomain(name, currentPrimary) {
+  var warning = 'Make ' + name + ' the primary domain? New links and future app starts will use it. ' +
+    'Running apps keep their current domain until they are reloaded, so keep the previous domain until then. ' +
+    'You will be redirected and may need to sign in again.';
+  if (!confirm(warning)) { return; }
+  fetch(DOMAINS_URL + '/' + encodeURIComponent(name) + '/primary', {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: {'Accept': 'application/json', 'Content-Type': 'application/json'},
+    body: JSON.stringify({expected_primary: currentPrimary}),
+  })
+    .then(readJsonResponse)
+    .then(function(res) {
+      if (!res.ok) {
+        alert(responseErrorMessage(res.data, 'Failed to change primary domain.'));
+        loadDomains();
+        return;
+      }
+      var updated = (res.data && res.data.domains) || [];
+      var primary = updated.find(function(d) { return d.is_primary; });
+      if (primary) {
+        window.location.assign(primary.scheme + '://' + primary.name + '/settings');
+      } else {
+        renderDomains(updated);
+      }
+    })
+    .catch(function() {
+      alert('The primary-domain request did not return a readable response. Reloading the domain list.');
+      loadDomains();
+    });
 }
 
 function addDomain() {
@@ -78,7 +140,7 @@ function addDomain() {
   fetch(DOMAINS_URL, {
     method: 'POST',
     credentials: 'same-origin',
-    headers: {'Content-Type': 'application/json'},
+    headers: {'Accept': 'application/json', 'Content-Type': 'application/json'},
     body: JSON.stringify(body),
   })
     .then(readJsonResponse)
@@ -100,7 +162,9 @@ function addDomain() {
 
 function removeDomain(name) {
   if (!confirm('Remove ' + name + '? This instance will stop answering on it.')) { return; }
-  fetch(DOMAINS_URL + '/' + encodeURIComponent(name), {method: 'DELETE', credentials: 'same-origin'})
+  fetch(DOMAINS_URL + '/' + encodeURIComponent(name), {
+    method: 'DELETE', credentials: 'same-origin', headers: {'Accept': 'application/json'},
+  })
     .then(readJsonResponse)
     .then(function(res) {
       if (!res.ok) { alert(responseErrorMessage(res.data, 'Failed to remove domain.')); return; }

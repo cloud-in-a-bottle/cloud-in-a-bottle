@@ -20,6 +20,7 @@ from compute_space.core.dns import set_active_coredns
 from compute_space.core.domains import Domain
 from compute_space.core.domains import DomainRecord
 from compute_space.core.domains import seed_domains
+from compute_space.core.domains import set_primary_domain
 from compute_space.core.domains import upsert_record
 from compute_space.db import init_db
 from compute_space.tests.conftest import open_db
@@ -292,6 +293,19 @@ def test_public_dns_zones_covers_every_public_domain_and_skips_mdns(tmp_path: Pa
     # Primary keeps the legacy zonefile path; the secondary gets a per-domain file under zones/.
     assert zones[0].zonefile_path == config.coredns_zonefile_path
     assert zones[1].zonefile_path == config.zones_dir / "host.example.org.zone"
+
+
+def test_public_dns_zone_paths_do_not_move_with_primary(tmp_path: Path) -> None:
+    config = _seed_dns_cfg(
+        tmp_path,
+        Domain(name="host.example.com", tls=True),
+        Domain(name="host.example.org", tls=True),
+    )
+    with closing(open_db(config)) as db:
+        before = {z.domain: z.zonefile_path for z in public_dns_zones(config, db)}
+        set_primary_domain(db, "host.example.org", expected_primary="host.example.com")
+        after = {z.domain: z.zonefile_path for z in public_dns_zones(config, db)}
+    assert after == before
 
 
 @pytest.mark.asyncio

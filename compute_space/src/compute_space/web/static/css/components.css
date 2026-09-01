@@ -1511,6 +1511,12 @@ select {
   text-align: right;
 }
 
+.domain-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
 /* An inline-flex button sits on the text baseline, which leaves a descender's
    worth of dead space under it and grows the row. */
 td.col-actions,

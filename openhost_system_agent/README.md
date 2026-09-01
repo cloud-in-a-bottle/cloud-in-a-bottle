@@ -15,8 +15,8 @@ It runs as root (via `sudo`) and handles three concerns:
    JSONL progress log (`<data dir>/updater/progress.jsonl`) that the dashboard's
    `/updating` page streams, and just before the final restart it launches a
    detached downtime mini-server (a transient systemd unit,
-   `openhost-updater.service`) that holds 80/443 with the on-disk TLS certs and
-   serves the update page until the new compute_space is back.
+   `openhost-updater.service`) that holds port 80 and, for an HTTPS primary,
+   port 443 with its on-disk certificate until the new compute_space is back.
 
 ## Running
 

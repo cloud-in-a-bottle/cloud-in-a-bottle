@@ -19,6 +19,7 @@ from compute_space.core.domains import DomainRecord
 from compute_space.core.domains import effective_domains
 from compute_space.core.domains import get_record
 from compute_space.core.domains import seed_domains
+from compute_space.core.domains import set_primary_domain
 from compute_space.core.tls.renewal import RENEW_BEFORE
 from compute_space.core.tls.renewal import CertStatus
 from compute_space.core.tls.renewal import _sync_cert_statuses
@@ -32,6 +33,7 @@ _NOW = datetime.datetime(2026, 7, 9, tzinfo=datetime.UTC)
 
 
 def _write_self_signed_cert(cert_path: Path, key_path: Path, not_valid_after: datetime.datetime) -> None:
+    cert_path.parent.mkdir(parents=True, exist_ok=True)
     key = ec.generate_private_key(ec.SECP256R1())
     name = x509.Name([x509.NameAttribute(x509.oid.NameOID.COMMON_NAME, "test.example.com")])
     cert = (
@@ -234,6 +236,37 @@ async def test_renew_isolates_a_failing_secondary(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_demoted_original_primary_renews_at_legacy_path(tmp_path: Path) -> None:
+    config = _multidomain_config(tmp_path, "second.example.com")
+    with closing(open_db(config)) as db:
+        second_cert, second_key = config.cert_key_paths_for(db, "second.example.com")
+        set_primary_domain(db, "second.example.com", expected_primary="test.example.com")
+    _write_self_signed_cert(
+        second_cert,
+        second_key,
+        datetime.datetime.now(datetime.UTC) + datetime.timedelta(days=60),
+    )
+    _write_self_signed_cert(
+        config.tls_cert_path,
+        config.tls_key_path,
+        datetime.datetime.now(datetime.UTC) - datetime.timedelta(days=1),
+    )
+    acquired: list[tuple[str, Path, Path]] = []
+
+    async def _acquire(c: Config, name: str, cert_path: Path, key_path: Path, db: sqlite3.Connection) -> None:
+        acquired.append((name, cert_path, key_path))
+
+    renewed = await renew_cert_if_needed(
+        config,
+        _async(lambda c, db: None),
+        provision=_async(lambda c, db: None),
+        acquire=_acquire,
+    )
+    assert renewed is True
+    assert acquired == [("test.example.com", config.tls_cert_path, config.tls_key_path)]
+
+
+@pytest.mark.asyncio
 async def test_renew_reload_regenerates_caddyfile_for_new_secondary_cert(tmp_path: Path) -> None:
     # Regression: after a secondary cert is acquired, the reload must *regenerate* the Caddyfile so
     # the domain's `tls internal` fallback block is rewritten to point at the acquired cert.  A bare
@@ -253,7 +286,7 @@ async def test_renew_reload_regenerates_caddyfile_for_new_secondary_cert(tmp_pat
     assert renewed is True
     content = caddyfile.read_text()
     # The secondary now serves its acquired file cert rather than falling back to `tls internal`.
-    assert str(config.cert_path_for("second.example.com", is_primary=False)) in content
+    assert str(config.cert_path_for("second.example.com", uses_legacy_paths=False)) in content
     assert "tls internal" not in content
 
 

@@ -2,9 +2,9 @@
 
 Adding a TLS domain kicks off ACME acquisition in the background (the same
 ``ensure_cert_for`` routine used at initial setup); the domain is served immediately via
-Caddy's internal CA and flips to its real cert when acquisition completes.  Adding an mDNS
-`.local` domain is active immediately (served over http).  All changes update the active
-config (so routing sees them) and regenerate + restart Caddy (so it terminates/serves them).
+Caddy's internal CA and flips to its real cert when acquisition completes. Adding an mDNS
+`.local` domain is active immediately (served over http). Adding and removing domains update
+the active DNS and Caddy configuration; changing the primary is an atomic DB-only operation.
 """
 
 from __future__ import annotations
@@ -33,20 +33,24 @@ from compute_space.core.caddy import reload_caddy_for_domains
 from compute_space.core.dns import reload_coredns_for_domains
 from compute_space.core.domains import Domain
 from compute_space.core.domains import DomainCertStatus
+from compute_space.core.domains import DomainNotFoundError
 from compute_space.core.domains import DomainRecord
+from compute_space.core.domains import PrimaryDomainChangedError
 from compute_space.core.domains import effective_domains
 from compute_space.core.domains import get_record
 from compute_space.core.domains import load_records
-from compute_space.core.domains import primary_domain
-from compute_space.core.domains import remove_record
+from compute_space.core.domains import remove_non_primary_record
+from compute_space.core.domains import set_primary_domain
 from compute_space.core.domains import set_record_status
 from compute_space.core.domains import upsert_record
 from compute_space.core.logging import logger
 from compute_space.core.tls.domain_certs import ensure_cert_for
 from compute_space.core.tls.renewal import CertStatus
 from compute_space.core.tls.renewal import get_cert_status
+from compute_space.core.updates import is_shutdown_pending
 from compute_space.db import get_db
 from compute_space.web.auth.auth import require_owner_auth
+from compute_space.web.exceptions import ConflictException
 
 # A DNS label per RFC 1123 (letters/digits/hyphen, not starting/ending with hyphen), and a
 # name is one-or-more labels joined by dots (so it has at least one dot: `foo.local`, not `foo`).
@@ -59,6 +63,11 @@ class AddDomainRequest:
     name: str
     tls: bool = False
     mdns: bool = False
+
+
+@attr.s(auto_attribs=True, frozen=True)
+class SetPrimaryDomainRequest:
+    expected_primary: str
 
 
 @attr.s(auto_attribs=True, frozen=True)
@@ -78,11 +87,12 @@ class DomainListResponse:
 
 
 def _tls_cert_display(
-    config: Config, name: str, record: DomainRecord | None, is_primary: bool
+    config: Config, name: str, record: DomainRecord | None, db: sqlite3.Connection
 ) -> tuple[DomainCertStatus, str | None]:
     """Cert status for a TLS domain, derived from the cert actually on disk (what Caddy serves) so an
     expired/unreadable cert is never shown 'active'; falls back to the stored in-flight state."""
-    status = get_cert_status(config.cert_path_for(name, is_primary), config.key_path_for(name, is_primary))
+    cert_path, key_path = config.cert_key_paths_for(db, name)
+    status = get_cert_status(cert_path, key_path)
     if status in (CertStatus.OK, CertStatus.EXPIRING_SOON):
         return DomainCertStatus.ACTIVE, None  # a valid cert is on disk
     if status == CertStatus.EXPIRED:
@@ -95,15 +105,15 @@ def _tls_cert_display(
     return DomainCertStatus.NONE, None
 
 
-def _domain_info(config: Config, domain: Domain, record: DomainRecord | None) -> DomainInfo:
-    name = domain.name_no_port
+def _domain_info(config: Config, domain: Domain, record: DomainRecord | None, db: sqlite3.Connection) -> DomainInfo:
+    hostname = domain.name_no_port
     is_primary = record.is_primary if record is not None else False
     if not domain.tls:
         cert_status, error = DomainCertStatus.ACTIVE, None  # http, nothing to acquire
     else:
-        cert_status, error = _tls_cert_display(config, name, record, is_primary)
+        cert_status, error = _tls_cert_display(config, hostname, record, db)
     return DomainInfo(
-        name=name,
+        name=domain.name,
         tls=domain.tls,
         mdns=domain.mdns,
         scheme=domain.scheme,
@@ -115,7 +125,7 @@ def _domain_info(config: Config, domain: Domain, record: DomainRecord | None) ->
 
 def _domain_list(config: Config, db: sqlite3.Connection) -> list[DomainInfo]:
     """The API view of the full domain set, loading all records in one query."""
-    return [_domain_info(config, r.to_domain(), r) for r in load_records(db)]
+    return [_domain_info(config, r.to_domain(), r, db) for r in load_records(db)]
 
 
 async def _reload_caddy_after_response() -> None:
@@ -205,6 +215,50 @@ async def add_domain(
     )
 
 
+@post(
+    "/api/domains/{name:str}/primary",
+    status_code=200,
+    guards=[require_owner_auth],
+    raises=[NotFoundException, ConflictException],
+)
+async def make_primary_domain(
+    name: FromPath[str],
+    data: SetPrimaryDomainRequest,
+    config: NamedDependency[Config],
+    db: NamedDependency[sqlite3.Connection],
+) -> DomainListResponse:
+    """Make an existing, working domain the canonical domain for links and app configuration."""
+    if is_shutdown_pending():
+        raise ConflictException(
+            detail="the instance is shutting down; retry after it restarts",
+            extra={"code": "shutdown_pending"},
+        )
+    name = name.strip().lower()
+    record = get_record(db, name)
+    if record is None:
+        raise NotFoundException(detail="domain not found")
+    if not record.is_primary and record.tls:
+        cert_path, key_path = config.cert_key_paths_for(db, name)
+        if not config.start_caddy or get_cert_status(cert_path, key_path) not in (
+            CertStatus.OK,
+            CertStatus.EXPIRING_SOON,
+        ):
+            raise ConflictException(
+                detail="domain must be serving with an active TLS certificate before it can be made primary",
+                extra={"code": "domain_not_ready"},
+            )
+    try:
+        set_primary_domain(db, name, data.expected_primary)
+    except DomainNotFoundError as exc:
+        raise NotFoundException(detail="domain not found") from exc
+    except PrimaryDomainChangedError as exc:
+        raise ConflictException(
+            detail=f"primary domain changed to {exc.current_primary}; reload and try again",
+            extra={"code": "primary_changed", "current_primary": exc.current_primary},
+        ) from exc
+    return DomainListResponse(domains=_domain_list(config, db))
+
+
 @delete(
     "/api/domains/{name:str}",
     status_code=200,
@@ -217,10 +271,13 @@ async def remove_domain(
     db: NamedDependency[sqlite3.Connection],
 ) -> Response[DomainListResponse]:
     name = name.strip().lower()
-    if name == primary_domain(db).name_no_port:
-        raise ValidationException(detail="cannot remove the primary domain")
     removed = get_record(db, name)
-    if not remove_record(db, name):
+    if removed is None:
+        raise NotFoundException(detail="domain not found")
+    if not remove_non_primary_record(db, removed.name):
+        current = get_record(db, name)
+        if current is not None and current.is_primary:
+            raise ValidationException(detail="cannot remove the primary domain")
         raise NotFoundException(detail="domain not found")
     if removed is not None and not removed.mdns:
         # Drop the zone from CoreDNS so it stops answering for the removed public domain.
@@ -234,4 +291,4 @@ async def remove_domain(
     )
 
 
-api_domains_routes = Router(path="/", route_handlers=[list_domains, add_domain, remove_domain])
+api_domains_routes = Router(path="/", route_handlers=[list_domains, add_domain, make_primary_domain, remove_domain])

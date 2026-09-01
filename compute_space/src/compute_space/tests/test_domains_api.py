@@ -1,4 +1,4 @@
-"""Phase 3b: the /api/domains endpoint — owner-authed add/list/remove of domains on a live
+"""Phase 3b: the /api/domains endpoint — owner-authed add/list/promote/remove on a live
 instance, with the TLS-domain acquisition state machine (acquiring → active|error).  ACME is
 stubbed, and TestClient drains the response's background tasks before returning, so acquisition
 has settled by the time POST comes back; no Caddy runs (reload is a no-op in tests)."""
@@ -22,13 +22,19 @@ from litestar import Litestar
 from litestar.di import Provide
 from litestar.testing import TestClient
 
+from compute_space.config import Config
 from compute_space.config import provide_config
+from compute_space.config import set_active_config
 from compute_space.core import caddy
 from compute_space.core.auth.auth import SESSION_COOKIE_NAME
 from compute_space.core.auth.auth import create_session
 from compute_space.core.domains import Domain
 from compute_space.core.domains import DomainCertStatus
+from compute_space.core.domains import DomainRecord
+from compute_space.core.domains import legacy_domain_asset_owner
+from compute_space.core.domains import primary_domain
 from compute_space.core.domains import seed_domains
+from compute_space.core.domains import upsert_record
 from compute_space.db import provide_db
 from compute_space.db.connection import init_db
 from compute_space.tests.conftest import _make_test_config
@@ -217,6 +223,154 @@ def test_add_mdns_with_tls_rejected(cfg: Any, client: TestClient[Litestar]) -> N
     resp = client.post("/api/domains", json={"name": "myhost.local", "tls": True, "mdns": True})
     assert resp.status_code == 400
     assert resp.json()["detail"] == "mDNS (.local) domains are served over http; set tls=false"
+
+
+# --- make primary -------------------------------------------------------------------
+
+
+def test_make_primary_requires_auth(client: TestClient[Litestar]) -> None:
+    resp = client.post(
+        "/api/domains/myhost.local/primary",
+        json={"expected_primary": "host.example.com"},
+    )
+    assert resp.status_code == 401
+
+
+def test_make_primary_rejected_during_shutdown(
+    cfg: Config, client: TestClient[Litestar], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with closing(open_db(cfg)) as db:
+        upsert_record(db, DomainRecord("myhost.local", tls=False, mdns=True))
+    monkeypatch.setattr(domains, "is_shutdown_pending", lambda: True)
+    client.cookies.update(_auth_cookie(cfg.db_path))
+
+    resp = client.post(
+        "/api/domains/myhost.local/primary",
+        json={"expected_primary": "host.example.com"},
+    )
+    assert resp.status_code == 409
+    assert resp.json()["extra"]["code"] == "shutdown_pending"
+
+
+def test_make_http_domain_primary_and_remove_previous(cfg: Config, client: TestClient[Litestar]) -> None:
+    with closing(open_db(cfg)) as db:
+        upsert_record(db, DomainRecord("myhost.local", tls=False, mdns=True, cert_status=DomainCertStatus.ACTIVE))
+    client.cookies.update(_auth_cookie(cfg.db_path))
+
+    resp = client.post(
+        "/api/domains/myhost.local/primary",
+        json={"expected_primary": "host.example.com"},
+    )
+    assert resp.status_code == 200
+    assert [d["name"] for d in resp.json()["domains"]] == ["myhost.local", "host.example.com"]
+    assert resp.json()["domains"][0]["is_primary"] is True
+
+    with closing(open_db(cfg)) as db:
+        assert primary_domain(db).name == "myhost.local"
+        assert legacy_domain_asset_owner(db) == "host.example.com"
+
+    # The demoted domain can now be removed through the supported API.
+    assert client.delete("/api/domains/host.example.com").status_code == 200
+
+
+def test_promoting_domain_allows_removing_demoted_primary_with_port(tmp_path: Path) -> None:
+    port_primary = Domain("host.example.com:8080", tls=False)
+    config = _make_test_config(tmp_path, zone_domain=port_primary.name, domains=(port_primary,))
+    init_db(config.db_path)
+    with closing(open_db(config)) as db:
+        seed_domains(db, port_primary, [])
+        upsert_record(db, DomainRecord("myhost.local", tls=False, mdns=True))
+    caddy.set_active_caddy(None)
+
+    with TestClient(app=_make_app()) as local_client:
+        local_client.cookies.update(_auth_cookie(config.db_path))
+        listed = local_client.get("/api/domains").json()["domains"]
+        assert next(d for d in listed if d["is_primary"])["name"] == "host.example.com:8080"
+        assert (
+            local_client.post(
+                "/api/domains/myhost.local/primary",
+                json={"expected_primary": "host.example.com"},
+            ).status_code
+            == 200
+        )
+        assert local_client.delete("/api/domains/host.example.com%3A8080").status_code == 200
+
+
+def test_make_tls_domain_primary_requires_active_cert(cfg: Config, client: TestClient[Litestar]) -> None:
+    with closing(open_db(cfg)) as db:
+        upsert_record(db, DomainRecord("second.example.com", tls=True, mdns=False))
+    client.cookies.update(_auth_cookie(cfg.db_path))
+
+    resp = client.post(
+        "/api/domains/second.example.com/primary",
+        json={"expected_primary": "host.example.com"},
+    )
+    assert resp.status_code == 409
+    assert resp.json()["extra"]["code"] == "domain_not_ready"
+
+
+def test_make_tls_domain_primary_requires_caddy(cfg: Config, client: TestClient[Litestar]) -> None:
+    with closing(open_db(cfg)) as db:
+        upsert_record(db, DomainRecord("second.example.com", tls=True, mdns=False))
+        cert_path, key_path = cfg.cert_key_paths_for(db, "second.example.com")
+    _write_cert(cert_path, key_path)
+    client.cookies.update(_auth_cookie(cfg.db_path))
+
+    resp = client.post(
+        "/api/domains/second.example.com/primary",
+        json={"expected_primary": "host.example.com"},
+    )
+    assert resp.status_code == 409
+    assert resp.json()["extra"]["code"] == "domain_not_ready"
+
+
+def test_make_tls_domain_primary_preserves_cert_path(cfg: Config, client: TestClient[Litestar]) -> None:
+    cfg = cfg.evolve(start_caddy=True)
+    set_active_config(cfg)
+    with closing(open_db(cfg)) as db:
+        upsert_record(db, DomainRecord("second.example.com", tls=True, mdns=False))
+        cert_path, key_path = cfg.cert_key_paths_for(db, "second.example.com")
+    _write_cert(cert_path, key_path)
+    client.cookies.update(_auth_cookie(cfg.db_path))
+
+    resp = client.post(
+        "/api/domains/second.example.com/primary",
+        json={"expected_primary": "host.example.com"},
+    )
+    assert resp.status_code == 200
+    with closing(open_db(cfg)) as db:
+        assert primary_domain(db).name == "second.example.com"
+        assert cfg.cert_key_paths_for(db, "second.example.com") == (cert_path, key_path)
+
+
+def test_make_primary_rejects_stale_request(cfg: Config, client: TestClient[Litestar]) -> None:
+    with closing(open_db(cfg)) as db:
+        upsert_record(db, DomainRecord("one.local", tls=False, mdns=True))
+        upsert_record(db, DomainRecord("two.local", tls=False, mdns=True))
+    client.cookies.update(_auth_cookie(cfg.db_path))
+    assert (
+        client.post(
+            "/api/domains/one.local/primary",
+            json={"expected_primary": "host.example.com"},
+        ).status_code
+        == 200
+    )
+
+    resp = client.post(
+        "/api/domains/two.local/primary",
+        json={"expected_primary": "host.example.com"},
+    )
+    assert resp.status_code == 409
+    assert resp.json()["extra"] == {"code": "primary_changed", "current_primary": "one.local"}
+
+
+def test_make_primary_unknown_domain_404(cfg: Config, client: TestClient[Litestar]) -> None:
+    client.cookies.update(_auth_cookie(cfg.db_path))
+    resp = client.post(
+        "/api/domains/missing.example.com/primary",
+        json={"expected_primary": "host.example.com"},
+    )
+    assert resp.status_code == 404
 
 
 # --- remove -------------------------------------------------------------------------

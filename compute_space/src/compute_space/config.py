@@ -10,7 +10,7 @@ import cattrs
 import tomli_w
 import typed_settings
 
-from compute_space.core.domains import is_primary_domain
+from compute_space.core.domains import domain_uses_legacy_paths
 
 # TLS cert provider selection (see Config.cert_provider).
 # "acme" is the default bring-your-own-ACME-credentials path (unchanged, fully
@@ -195,25 +195,24 @@ class Config:
 
     @property
     def certs_dir(self) -> Path:
-        """Directory for per-domain TLS certs (domains beyond the primary)."""
+        """Directory for TLS certs that do not use the legacy primary paths."""
         return self.openhost_data_path / "certs"
 
-    def cert_path_for(self, domain_name: str, is_primary: bool) -> Path:
-        """Cert file for a domain.  The primary keeps the legacy path for backward
-        compatibility; additional domains get a per-domain file under ``certs/``."""
-        if is_primary:
+    def cert_path_for(self, domain_name: str, uses_legacy_paths: bool) -> Path:
+        """Cert file for a domain, preserving the original primary's legacy location."""
+        if uses_legacy_paths:
             return self.tls_cert_path
-        return self.certs_dir / f"{domain_name}.pem"
+        return self.certs_dir / f"{domain_name.split(':')[0]}.pem"
 
-    def key_path_for(self, domain_name: str, is_primary: bool) -> Path:
-        if is_primary:
+    def key_path_for(self, domain_name: str, uses_legacy_paths: bool) -> Path:
+        if uses_legacy_paths:
             return self.tls_key_path
-        return self.certs_dir / f"{domain_name}.key"
+        return self.certs_dir / f"{domain_name.split(':')[0]}.key"
 
     def cert_key_paths_for(self, db: sqlite3.Connection, domain_name: str) -> tuple[Path, Path]:
-        """Cert+key paths for a domain, resolving primary-vs-secondary from the DB."""
-        is_primary = is_primary_domain(db, domain_name)
-        return self.cert_path_for(domain_name, is_primary), self.key_path_for(domain_name, is_primary)
+        """Cert+key paths for a domain, preserving their ownership across primary changes."""
+        uses_legacy_paths = domain_uses_legacy_paths(db, domain_name)
+        return self.cert_path_for(domain_name, uses_legacy_paths), self.key_path_for(domain_name, uses_legacy_paths)
 
     @property
     def coredns_corefile_path(self) -> Path:
@@ -225,15 +224,12 @@ class Config:
 
     @property
     def zones_dir(self) -> Path:
-        """Directory for per-domain CoreDNS zone files (domains beyond the primary)."""
+        """Directory for CoreDNS zones that do not use the legacy primary path."""
         return self.openhost_data_path / "zones"
 
-    def coredns_zonefile_path_for(self, domain_name: str, is_primary: bool) -> Path:
-        """Zone file for a domain.  The primary keeps the legacy ``zonefile`` path for backward
-        compatibility; additional public domains get a per-domain file under ``zones/``.  Each
-        public domain is a separate authoritative zone, so its ACME DNS-01 ``_acme-challenge``
-        TXT records must land in its own zone file (not the primary's)."""
-        if is_primary:
+    def coredns_zonefile_path_for(self, domain_name: str, uses_legacy_paths: bool) -> Path:
+        """Zone file for a domain, preserving the original primary's legacy location."""
+        if uses_legacy_paths:
             return self.coredns_zonefile_path
         # Strip any port so no ``:`` ends up in a filename.
         return self.zones_dir / f"{domain_name.split(':')[0]}.zone"

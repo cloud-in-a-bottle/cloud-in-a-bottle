@@ -3,7 +3,7 @@ from pathlib import Path
 
 from compute_space.config import CERT_PROVIDER_ACME
 from compute_space.config import Config
-from compute_space.core.domains import is_primary_domain
+from compute_space.core.domains import domain_uses_legacy_paths
 from compute_space.core.domains import primary_domain
 from compute_space.core.identity_store import get_instance_identity
 from compute_space.core.tls.acquire_cert import acquire_tls_cert
@@ -27,7 +27,8 @@ async def acquire_cert_for_domain(
     The cert_provider value and its required settings are validated when the Config is constructed
     (Config.__attrs_post_init__), so here we only narrow the optional fields for the type checker.
     """
-    zonefile_path = config.coredns_zonefile_path_for(domain, is_primary_domain(db, domain))
+    domain = domain.split(":")[0]
+    zonefile_path = config.coredns_zonefile_path_for(domain, domain_uses_legacy_paths(db, domain))
     if config.cert_provider == CERT_PROVIDER_ACME:
         if not config.acme_account_key_path:
             raise RuntimeError("ACME account key path must be set in config to acquire TLS cert")
@@ -67,4 +68,7 @@ async def provision_cert(config: Config, db: sqlite3.Connection) -> None:
     Used both for the initial acquisition at startup and for renewals.  Thin wrapper over
     ``acquire_cert_for_domain`` for the primary domain."""
     primary = primary_domain(db)
-    await acquire_cert_for_domain(config, primary.name, config.tls_cert_path, config.tls_key_path, db)
+    name = primary.name_no_port
+    cert_path, key_path = config.cert_key_paths_for(db, name)
+    cert_path.parent.mkdir(parents=True, exist_ok=True)
+    await acquire_cert_for_domain(config, name, cert_path, key_path, db)

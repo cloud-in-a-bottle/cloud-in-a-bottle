@@ -28,6 +28,7 @@ from compute_space.core.dns import set_active_coredns
 from compute_space.core.dns import start_coredns
 from compute_space.core.domains import Domain
 from compute_space.core.domains import effective_domains
+from compute_space.core.domains import primary_domain
 from compute_space.core.first_boot import owner_exists
 from compute_space.core.first_boot import seed_first_boot
 from compute_space.core.logging import logger
@@ -76,9 +77,11 @@ def _require_configured_domain(domains: tuple[Domain, ...]) -> None:
 
 async def _ensure_tls_cert(config: Config, db: sqlite3.Connection) -> None:
     """Make sure a usable cert+key pair is on disk before Caddy starts, acquiring or renewing as configured."""
-    status = get_cert_status(config.tls_cert_path, config.tls_key_path)
+    primary = primary_domain(db)
+    cert_path, key_path = config.cert_key_paths_for(db, primary.name_no_port)
+    status = get_cert_status(cert_path, key_path)
     if status == CertStatus.OK:
-        logger.info(f"Using existing TLS cert from {config.tls_cert_path}")
+        logger.info(f"Using existing TLS cert from {cert_path}")
         return
     if not config.coredns_enabled or not config.acquire_tls_cert_if_missing:
         # A cert nearing expiry still works, so don't block startup over it.

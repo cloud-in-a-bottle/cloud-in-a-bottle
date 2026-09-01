@@ -58,7 +58,7 @@ def _http_domain_block(name: str, web_server_port: int) -> str:
 
 def config_cert_resolver(config: Config, db: sqlite3.Connection) -> CertResolver:
     """A CertResolver backed by the config's on-disk cert layout: a domain uses its file
-    cert (the primary's legacy path, or a per-domain ``certs/<name>`` pair) when both files
+    cert (the original primary's legacy path, or a per-domain ``certs/<name>`` pair) when both files
     exist, otherwise falls back to ``tls internal``."""
 
     def resolve(name: str) -> tuple[Path, Path] | None:

@@ -1,5 +1,5 @@
 """Tiny accessor over the DB ``settings`` key/value table — the router's store for singleton
-runtime values.  First user: the first-boot ``claim_token`` (moved off its standalone file)."""
+runtime values."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ import sqlite3
 
 # Setting keys.
 CLAIM_TOKEN_KEY = "claim_token"
+LEGACY_DOMAIN_ASSET_OWNER_KEY = "legacy_domain_asset_owner"
 
 
 def get_setting(db: sqlite3.Connection, key: str) -> str | None:

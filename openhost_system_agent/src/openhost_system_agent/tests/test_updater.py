@@ -4,6 +4,7 @@ import datetime as _dt
 import json
 import os
 import socket
+import sqlite3
 import ssl
 import subprocess
 import time
@@ -86,6 +87,57 @@ def _request(port: int, path: str, extra_headers: str = "") -> tuple[int, dict[s
 def _get(port: int, path: str, extra_headers: str = "") -> tuple[int, bytes]:
     status, _headers, body = _request(port, path, extra_headers)
     return status, body
+
+
+def _write_primary_domain(data_dir: Path, name: str, *, tls: bool, legacy_owner: str | None = None) -> None:
+    with sqlite3.connect(data_dir / "router.db") as db:
+        db.execute("CREATE TABLE domains (name TEXT PRIMARY KEY, tls INTEGER, is_primary INTEGER)")
+        db.execute("CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT)")
+        db.execute("INSERT INTO domains (name, tls, is_primary) VALUES (?, ?, 1)", (name, int(tls)))
+        if legacy_owner is not None:
+            db.execute("INSERT INTO settings (key, value) VALUES ('legacy_domain_asset_owner', ?)", (legacy_owner,))
+
+
+def test_updater_tls_paths_follow_promoted_primary(data_dir: Path) -> None:
+    _write_primary_domain(data_dir, "new.example.com:8443", tls=True, legacy_owner="old.example.com")
+    assert paths.primary_tls_paths() == (
+        data_dir / "certs" / "new.example.com.pem",
+        data_dir / "certs" / "new.example.com.key",
+    )
+
+
+def test_updater_omits_https_for_http_primary(data_dir: Path) -> None:
+    _write_primary_domain(data_dir, "private.local", tls=False, legacy_owner="old.example.com")
+    assert paths.primary_tls_paths() is None
+
+
+def test_updater_command_passes_no_cert_for_http_primary(data_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _write_primary_domain(data_dir, "private.local", tls=False, legacy_owner="old.example.com")
+    calls: list[tuple[Path, Path] | None] = []
+    monkeypatch.setattr("openhost_system_agent.cli.run_updater_server", lambda resolve: calls.append(resolve()))
+    UpdaterCmd().serve()
+    assert calls == [None]
+
+
+def test_updater_tls_paths_fall_back_to_legacy_owner(data_dir: Path) -> None:
+    _write_primary_domain(data_dir, "old.example.com", tls=True)
+    assert paths.primary_tls_paths() == (data_dir / "openhost-tls-cert.pem", data_dir / "openhost-tls-key.pem")
+
+
+def test_updater_tls_paths_fall_back_before_domains_schema_exists(data_dir: Path) -> None:
+    with sqlite3.connect(data_dir / "router.db") as db:
+        db.execute("CREATE TABLE legacy (id INTEGER)")
+    assert paths.primary_tls_paths() == (data_dir / "openhost-tls-cert.pem", data_dir / "openhost-tls-key.pem")
+
+
+def test_updater_does_not_serve_wrong_cert_on_database_error(data_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    (data_dir / "router.db").touch()
+
+    def fail(*_args: object, **_kwargs: object) -> object:
+        raise sqlite3.DatabaseError("database is corrupt")
+
+    monkeypatch.setattr(sqlite3, "connect", fail)
+    assert paths.primary_tls_paths() is None
 
 
 def _launch_recorder(calls: list[list[str]]) -> object:
@@ -351,8 +403,16 @@ def test_acquire_waits_until_downtime_then_binds(monkeypatch: pytest.MonkeyPatch
     monkeypatch.setattr(server, "_compute_space_ready", ready)
     monkeypatch.setattr(server, "_try_bind", lambda h, p: fake if state["free"] and p == 443 else None)
     monkeypatch.setattr("openhost_system_agent.updater.server.time.sleep", lambda _: None)
-    https, _ = server._acquire_ports_during_downtime(ssl_ctx=object())  # type: ignore[arg-type]
+    loaded_at: list[int] = []
+    fake_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+
+    def load_ssl_context() -> ssl.SSLContext:
+        loaded_at.append(state["polls"])
+        return fake_ctx
+
+    https, _, _ = server._acquire_ports_during_downtime(load_ssl_context)
     assert https is fake and state["polls"] >= 4
+    assert loaded_at == [4]
 
 
 def test_acquire_returns_none_if_recovered_before_bind(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -362,7 +422,7 @@ def test_acquire_returns_none_if_recovered_before_bind(monkeypatch: pytest.Monke
     monkeypatch.setattr(server, "_compute_space_ready", lambda: next(seq, True))
     monkeypatch.setattr(server, "_try_bind", lambda h, p: None)
     monkeypatch.setattr("openhost_system_agent.updater.server.time.sleep", lambda _: None)
-    https, http = server._acquire_ports_during_downtime(ssl_ctx=object())  # type: ignore[arg-type]
+    https, http, _ = server._acquire_ports_during_downtime(lambda: ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER))
     assert https is None and http is None
 
 
@@ -373,7 +433,7 @@ def test_acquire_gives_up_after_bind_window(monkeypatch: pytest.MonkeyPatch) -> 
     monkeypatch.setattr(server, "_compute_space_ready", lambda: False)
     monkeypatch.setattr(server, "_try_bind", lambda h, p: None)
     monkeypatch.setattr("openhost_system_agent.updater.server.time.sleep", lambda _: None)
-    https, http = server._acquire_ports_during_downtime(ssl_ctx=object())  # type: ignore[arg-type]
+    https, http, _ = server._acquire_ports_during_downtime(lambda: ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER))
     assert https is None and http is None
 
 
@@ -386,7 +446,7 @@ def test_acquire_closes_partial_bind_on_giveup(monkeypatch: pytest.MonkeyPatch) 
     monkeypatch.setattr(server, "_compute_space_ready", lambda: False)
     monkeypatch.setattr(server, "_try_bind", lambda h, p: None if p == 443 else real80)
     monkeypatch.setattr("openhost_system_agent.updater.server.time.sleep", lambda _: None)
-    https, http = server._acquire_ports_during_downtime(ssl_ctx=object())  # type: ignore[arg-type]
+    https, http, _ = server._acquire_ports_during_downtime(lambda: ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER))
     assert https is None and http is None
     assert real80.fileno() == -1  # closed, not leaked
 
@@ -397,7 +457,7 @@ def test_acquire_no_tls_uses_port80(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(server, "_compute_space_ready", lambda: False)
     monkeypatch.setattr(server, "_try_bind", lambda h, p: fake80 if p == 80 else None)
     monkeypatch.setattr("openhost_system_agent.updater.server.time.sleep", lambda _: None)
-    https, http = server._acquire_ports_during_downtime(ssl_ctx=None)
+    https, http, _ = server._acquire_ports_during_downtime(lambda: None)
     assert https is None and http is fake80
 
 
@@ -411,10 +471,11 @@ def test_run_serves_then_releases_when_ready(data_dir: Path, monkeypatch: pytest
     real = server._try_bind("127.0.0.1", 0)
     assert real is not None
     port = int(real.getsockname()[1])
-    monkeypatch.setattr(server, "_acquire_ports_during_downtime", lambda ctx: (real, None))
+    ctx = server._make_ssl_context(cert, key)
+    monkeypatch.setattr(server, "_acquire_ports_during_downtime", lambda load: (real, None, ctx))
     monkeypatch.setattr(server, "_compute_space_ready", lambda: True)  # already back
     monkeypatch.setattr("openhost_system_agent.updater.server.time.sleep", lambda _: None)
-    server.run(cert, key)
+    server.run(lambda: (cert, key))
     # The port must actually be free again (the wrapped listener was closed);
     # checking fileno() on `real` would be vacuous — wrap_socket detaches it.
     rebound = server._try_bind("127.0.0.1", port)
@@ -423,10 +484,9 @@ def test_run_serves_then_releases_when_ready(data_dir: Path, monkeypatch: pytest
 
 
 def test_run_returns_when_no_ports_acquired(data_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(server, "_make_ssl_context", lambda *a: None)
-    monkeypatch.setattr(server, "_acquire_ports_during_downtime", lambda ctx: (None, None))
+    monkeypatch.setattr(server, "_acquire_ports_during_downtime", lambda load: (None, None, None))
     start = time.monotonic()
-    server.run(data_dir / "c.pem", data_dir / "c.key")
+    server.run(lambda: (data_dir / "c.pem", data_dir / "c.key"))
     assert time.monotonic() - start < 2
 
 
@@ -598,6 +658,6 @@ def test_updater_gives_up_when_the_service_never_goes_down(data_dir: Path, monke
     monkeypatch.setattr("openhost_system_agent.updater.server.time.sleep", lambda _s: None)
     monkeypatch.setattr(server, "_try_bind", lambda *_a: pytest.fail("must not bind while the router is up"))
 
-    https_sock, http_sock = server._acquire_ports_during_downtime(None)
+    https_sock, http_sock, ssl_ctx = server._acquire_ports_during_downtime(lambda: None)
 
-    assert https_sock is None and http_sock is None
+    assert https_sock is None and http_sock is None and ssl_ctx is None

@@ -8,6 +8,7 @@ import socket
 import ssl
 import threading
 import time
+from collections.abc import Callable
 from http.server import BaseHTTPRequestHandler
 from http.server import ThreadingHTTPServer
 from pathlib import Path
@@ -183,7 +184,9 @@ def _compute_space_ready() -> bool:
         return False
 
 
-def _make_ssl_context(cert_path: Path, key_path: Path) -> ssl.SSLContext | None:
+def _make_ssl_context(cert_path: Path | None, key_path: Path | None) -> ssl.SSLContext | None:
+    if cert_path is None or key_path is None:
+        return None
     try:
         ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         ctx.load_cert_chain(certfile=str(cert_path), keyfile=str(key_path))
@@ -235,12 +238,16 @@ def _serve_on(sock: socket.socket, ssl_ctx: ssl.SSLContext | None) -> ThreadingH
     return httpd
 
 
-def run(cert_path: Path, key_path: Path) -> None:
+def run(resolve_tls_paths: Callable[[], tuple[Path, Path] | None]) -> None:
     # Snapshot the page before touching the ports: the tree is quiet now, and it
     # must not be read once the restart is in flight.
     snapshot_page()
-    ssl_ctx = _make_ssl_context(cert_path, key_path)
-    https_sock, http_sock = _acquire_ports_during_downtime(ssl_ctx)
+
+    def load_ssl_context() -> ssl.SSLContext | None:
+        tls_paths = resolve_tls_paths()
+        return _make_ssl_context(*(tls_paths or (None, None)))
+
+    https_sock, http_sock, ssl_ctx = _acquire_ports_during_downtime(load_ssl_context)
 
     servers: list[ThreadingHTTPServer] = []
     if https_sock is not None:
@@ -280,13 +287,14 @@ def run(cert_path: Path, key_path: Path) -> None:
 
 
 def _acquire_ports_during_downtime(
-    ssl_ctx: ssl.SSLContext | None,
-) -> tuple[socket.socket | None, socket.socket | None]:
+    load_ssl_context: Callable[[], ssl.SSLContext | None],
+) -> tuple[socket.socket | None, socket.socket | None, ssl.SSLContext | None]:
     # Grab 80/443 once the restart frees them. The bind-wait window only starts
     # after compute_space is first seen offline, so a still-up instance isn't
     # mistaken for "recovered".
     https_sock: socket.socket | None = None
     http_sock: socket.socket | None = None
+    ssl_ctx: ssl.SSLContext | None = None
 
     _touch_ready_marker()
 
@@ -303,27 +311,29 @@ def _acquire_ports_during_downtime(
                 http_sock = _try_bind("0.0.0.0", 80)
 
             if https_sock is not None or (ssl_ctx is None and http_sock is not None):
-                return https_sock, http_sock
+                return https_sock, http_sock, ssl_ctx
 
         ready = _compute_space_ready()
         if not ready and not downtime_seen:
             downtime_seen = True
+            # Once the router is offline, no promotion request can complete and this snapshot is stable.
+            ssl_ctx = load_ssl_context()
             bind_deadline = time.monotonic() + _BIND_WAIT_SECONDS
         elif downtime_seen and ready:
             _close(https_sock, http_sock)
-            return None, None
+            return None, None, ssl_ctx
         elif bind_deadline is not None and time.monotonic() > bind_deadline:
             logger.warning(f"updater never got 80/443 within {_BIND_WAIT_SECONDS}s of the downtime; giving up")
             _close(https_sock, http_sock)
-            return None, None
+            return None, None, ssl_ctx
         elif not downtime_seen and time.monotonic() - start > _DOWNTIME_WAIT_SECONDS:
             logger.warning(f"compute_space never went down within {_DOWNTIME_WAIT_SECONDS}s; the apply must be gone")
-            return None, None
+            return None, None, None
 
         time.sleep(_BIND_RETRY_INTERVAL)
 
     logger.warning(f"updater hit its {_MAX_LIFETIME_SECONDS}s lifetime while waiting for the ports")
-    return https_sock, http_sock
+    return https_sock, http_sock, ssl_ctx
 
 
 def _touch_ready_marker() -> None:

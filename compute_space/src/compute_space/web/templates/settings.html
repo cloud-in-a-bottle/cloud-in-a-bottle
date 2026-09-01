@@ -96,10 +96,11 @@
 <section class="section">
   {% call section_head("Domains") %}{% endcall %}
   <div class="panel">
-    <p class="hint">Hostnames this instance answers on. The primary is set at provisioning. Add a
-      secondary <strong>public</strong> domain (its DNS must be delegated to this instance — it then
-      acquires a TLS certificate automatically) or a local <code>.local</code> name served over plain
-      HTTP. Removing a domain takes effect immediately; the primary can't be removed.</p>
+    <p class="hint">Hostnames this instance answers on. The primary is used for canonical links and
+      app configuration. Add a <strong>public</strong> domain (its DNS must be delegated to this instance
+      for automatic TLS) or a local <code>.local</code> name served over plain HTTP. A primary domain
+      can't be removed; make another domain primary first. Reload running apps before removing the
+      previous primary so they receive the new domain.</p>
 
     <div class="field-row field-row--add">
       <label class="field" for="domain-name">
@@ -115,7 +116,7 @@
       </label>
       {{ button("Add domain", variant="primary", id="add-domain-btn", onclick="addDomain()", disabled=true) }}
     </div>
-    <p id="domain-msg" class="msg" hidden></p>
+    <p id="domain-msg" class="msg" role="status" aria-live="polite" hidden></p>
 
     <div class="table-scroll" id="domains-table-wrap" hidden>
       <table>

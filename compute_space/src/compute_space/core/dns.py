@@ -29,8 +29,8 @@ from jinja2 import StrictUndefined
 
 from compute_space.config import Config
 from compute_space.core.containers import CONTAINER_GATEWAY_IP
-from compute_space.core.domains import effective_domains
-from compute_space.core.domains import primary_domain_or_none
+from compute_space.core.domains import legacy_domain_asset_owner
+from compute_space.core.domains import load_records
 from compute_space.core.logging import logger
 
 _TEMPLATES_DIR = Path(__file__).parent / "templates"
@@ -124,18 +124,16 @@ def public_dns_zones(config: Config, db: sqlite3.Connection) -> tuple[DnsZone, .
     """The zones CoreDNS is authoritative for: every non-mDNS domain the instance answers on.
 
     mDNS ``.local`` domains are served by the wildcard mDNS responder, never CoreDNS/ACME, so
-    they are excluded.  The primary keeps the legacy ``zonefile`` path; additional public domains
-    get a per-domain file under ``zones/`` (see ``Config.coredns_zonefile_path_for``)."""
-    primary = primary_domain_or_none(db)
-    primary_no_port = primary.name_no_port if primary else None
-    return tuple(
-        DnsZone(
-            domain=d.name_no_port,
-            zonefile_path=config.coredns_zonefile_path_for(d.name_no_port, d.name_no_port == primary_no_port),
-        )
-        for d in effective_domains(db)
-        if not d.mdns
-    )
+    they are excluded.  The original primary keeps the legacy ``zonefile`` path across primary
+    changes; other public domains use per-domain files under ``zones/``."""
+    legacy_owner = legacy_domain_asset_owner(db)
+    zones: list[DnsZone] = []
+    for record in load_records(db):
+        if record.mdns:
+            continue
+        name = record.to_domain().name_no_port
+        zones.append(DnsZone(name, config.coredns_zonefile_path_for(name, name == legacy_owner)))
+    return tuple(zones)
 
 
 def _write_coredns_config(

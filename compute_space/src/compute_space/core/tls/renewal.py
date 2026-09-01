@@ -96,21 +96,20 @@ async def renew_cert_if_needed(
 ) -> bool:
     """Renew every TLS cert that is missing, expired, or inside the renewal window.
 
-    The primary keeps its legacy cert paths and dedicated ``provision`` routine (behavior
-    unchanged).  Each additional TLS domain uses its own ``certs/<name>`` paths; a failure on one
-    (e.g. its DNS isn't delegated to this instance) is logged and skipped so it can't starve the
-    primary or the other domains.  Because this re-acquires any non-OK cert, it also re-drives a
-    domain left mid-acquisition by a restart.  Returns True if any cert was (re)installed.
+    The canonical domain uses the dedicated ``provision`` routine, while failures renewing aliases
+    are isolated. Certificate paths remain attached to their domains when the primary changes.
+    Because this re-acquires any non-OK cert, it also re-drives a domain left mid-acquisition by a
+    restart. Returns True if any cert was (re)installed.
     """
     _sync_cert_statuses(config)  # keep the stored cert_status honest (e.g. the seeded-'none' primary)
     renewed = False
 
     with closing(get_db()) as db:
         primary = primary_domain_or_none(db)
-        # Primary — legacy cert paths + injectable ``provision``, but only when the primary is itself a
-        # TLS domain (a non-TLS/.local primary has no cert to provision).  A failure here propagates.
+        # A failure renewing the canonical domain propagates; failures on aliases remain isolated.
         if primary is not None and primary.tls:
-            status = get_cert_status(config.tls_cert_path, config.tls_key_path)
+            cert_path, key_path = config.cert_key_paths_for(db, primary.name_no_port)
+            status = get_cert_status(cert_path, key_path)
             if status != CertStatus.OK:
                 logger.info(f"TLS cert for {primary.name} is {status.value}; renewing")
                 await provision(config, db)
@@ -124,7 +123,7 @@ async def renew_cert_if_needed(
             name = domain.name_no_port
             if not domain.tls or name == primary_no_port:
                 continue
-            cert_path, key_path = config.cert_path_for(name, False), config.key_path_for(name, False)
+            cert_path, key_path = config.cert_key_paths_for(db, name)
             status = get_cert_status(cert_path, key_path)
             if status == CertStatus.OK:
                 continue

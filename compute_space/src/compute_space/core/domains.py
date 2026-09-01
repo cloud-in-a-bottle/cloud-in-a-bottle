@@ -6,6 +6,8 @@ from enum import StrEnum
 import attr
 
 from compute_space.core.logging import logger
+from compute_space.core.settings_store import LEGACY_DOMAIN_ASSET_OWNER_KEY
+from compute_space.core.settings_store import get_setting
 
 
 def _lowercase(s: str) -> str:
@@ -72,6 +74,16 @@ class DomainCertStatus(StrEnum):
     ERROR = "error"  # acquisition failed (see error_message)
 
 
+class DomainNotFoundError(ValueError):
+    pass
+
+
+class PrimaryDomainChangedError(RuntimeError):
+    def __init__(self, current_primary: str) -> None:
+        super().__init__(f"primary domain is now {current_primary}")
+        self.current_primary = current_primary
+
+
 _COLS = "name, tls, mdns, is_primary, cert_status, error_message"
 
 
@@ -109,8 +121,12 @@ def load_records(db: sqlite3.Connection) -> tuple[DomainRecord, ...]:
 
 
 def get_record(db: sqlite3.Connection, name: str) -> DomainRecord | None:
-    row = db.execute(f"SELECT {_COLS} FROM domains WHERE name = ?", (name.lower(),)).fetchone()
-    return _row_to_record(row) if row is not None else None
+    """Look up a domain case- and port-insensitively, matching ``Domain.owns`` semantics."""
+    name_no_port = name.split(":")[0].lower()
+    for row in db.execute(f"SELECT {_COLS} FROM domains"):
+        if str(row["name"]).split(":")[0].lower() == name_no_port:
+            return _row_to_record(row)
+    return None
 
 
 def upsert_record(db: sqlite3.Connection, record: DomainRecord) -> None:
@@ -135,6 +151,13 @@ def upsert_record(db: sqlite3.Connection, record: DomainRecord) -> None:
 def remove_record(db: sqlite3.Connection, name: str) -> bool:
     """Delete a domain; True if a row was removed.  (Refusing to remove the primary is the API's job.)"""
     cur = db.execute("DELETE FROM domains WHERE name = ?", (name.lower(),))
+    db.commit()
+    return cur.rowcount > 0
+
+
+def remove_non_primary_record(db: sqlite3.Connection, name: str) -> bool:
+    """Delete a domain only while it is non-primary, closing the promotion/removal race."""
+    cur = db.execute("DELETE FROM domains WHERE name = ? AND is_primary = 0", (name.lower(),))
     db.commit()
     return cur.rowcount > 0
 
@@ -172,10 +195,65 @@ def primary_domain(db: sqlite3.Connection) -> Domain:
     return primary
 
 
-def is_primary_domain(db: sqlite3.Connection, name: str) -> bool:
-    """True if ``name`` (port stripped) is the DB's primary domain."""
+def legacy_domain_asset_owner(db: sqlite3.Connection) -> str | None:
+    """Domain that owns the legacy primary cert and zone paths.
+
+    Before the first primary-domain change this is the current primary. The change transaction
+    persists that original owner so later promotions only change the canonical domain, never which
+    domain's certificate and DNS zone live in the legacy paths.
+    """
+    if owner := get_setting(db, LEGACY_DOMAIN_ASSET_OWNER_KEY):
+        return owner.lower()
     primary = primary_domain_or_none(db)
-    return primary is not None and name.split(":")[0] == primary.name_no_port
+    return primary.name_no_port if primary is not None else None
+
+
+def domain_uses_legacy_paths(db: sqlite3.Connection, name: str) -> bool:
+    owner = legacy_domain_asset_owner(db)
+    return owner is not None and owner == name.split(":")[0].lower()
+
+
+def set_primary_domain(db: sqlite3.Connection, name: str, expected_primary: str) -> bool:
+    """Atomically make an existing domain primary; return whether anything changed.
+
+    ``expected_primary`` provides compare-and-swap semantics for the settings UI. The original
+    primary remains the owner of legacy certificate and zone files, allowing the DB role change to
+    commit without any filesystem operation or service reload.
+    """
+    normalized_name = name.lower()
+    normalized_expected = expected_primary.split(":")[0].lower()
+    db.execute("BEGIN IMMEDIATE")
+    try:
+        target = get_record(db, normalized_name)
+        if target is None:
+            raise DomainNotFoundError(normalized_name)
+
+        current = db.execute(f"SELECT {_COLS} FROM domains WHERE is_primary = 1").fetchone()
+        if current is None:
+            raise RuntimeError("No primary domain configured")
+        current_name = str(current["name"])
+        current_name_no_port = current_name.split(":")[0]
+        target_name = target.name
+        if current_name_no_port == target.to_domain().name_no_port:
+            db.execute("COMMIT")
+            return False
+        if current_name_no_port != normalized_expected:
+            raise PrimaryDomainChangedError(current_name_no_port)
+
+        db.execute(
+            "INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)",
+            (LEGACY_DOMAIN_ASSET_OWNER_KEY, current_name_no_port),
+        )
+        demoted = db.execute("UPDATE domains SET is_primary = 0 WHERE name = ? AND is_primary = 1", (current_name,))
+        promoted = db.execute("UPDATE domains SET is_primary = 1 WHERE name = ? AND is_primary = 0", (target_name,))
+        if demoted.rowcount != 1 or promoted.rowcount != 1:
+            raise RuntimeError("Primary domain changed concurrently")
+        db.execute("COMMIT")
+        return True
+    except BaseException:
+        if db.in_transaction:
+            db.execute("ROLLBACK")
+        raise
 
 
 # --- first-boot seeding ----------------------------------------------------------------------
