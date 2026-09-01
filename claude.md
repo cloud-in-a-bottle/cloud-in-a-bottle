@@ -1,7 +1,6 @@
 - read the style guide in style_guide.md
 - on first init, ensure pre-commit hooks are installed (`pre-commit install`). this runs ruff and mypy on commit.
 - please ask before doing anything that affects low level system stuff on this machine, or anything using sudo.
-- prefer to run only tests specifically covering the files you're working on, instead of eg. the full unit test suite. all tests run in CI on each PR, and the test suite is large, so running large portions of it repeatedly during development just slows things down unnecessarily.
 
 ## project structure
 
