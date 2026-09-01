@@ -125,7 +125,7 @@ The router injects these environment variables into your app:
 | `OPENHOST_MY_REDIRECT_DOMAIN` | `my.selfhost.imbue.com` | The shared `my.*` OAuth redirect domain. This hosts a browser-local page that redirects the user to their zone. |
 | `OPENHOST_APP_DATA_DIR` | `/data/app_data/my-app` | Path to the app's persistent data directory. Set when `app_data` (default on), `sqlite`, or `access_all_app_data` is requested   |
 | `OPENHOST_APP_TEMP_DIR` | `/data/app_temp_data/my-app` | Path to the app's temporary data directory. Set when `app_temp_data` or `access_all_app_data` is requested          |
-| `OPENHOST_APP_ARCHIVE_DIR` | `/data/app_archive/my-app` | Path to the app's elastic archive directory. Set when `app_archive` or `access_all_archive` is requested |
+| `OPENHOST_APP_ARCHIVE_DIR` | `/data/app_archive/my-app` | Path to the app's elastic archive directory. Set when `app_archive` or `access_all_app_data` is requested and the archive mount is available |
 | `OPENHOST_SQLITE_<NAME>` | `/data/app_data/my-app/sqlite/main.db` (for `sqlite = ["main"]`) | Path to a provisioned SQLite database file. Set once per entry in `sqlite`                                      |
 | `OPENHOST_OWNER_USERNAME` | `alice` | The compute space owner's chosen display name. Use to seed SSO account names. Defaults to `owner` if not explicitly configured. |
 
@@ -137,7 +137,7 @@ Apps have three storage areas, each with different durability + size + latency t
 - **Temporary data** (mounted at `BOTTLE_APP_TEMP_DIR`) — local disk scratch. Not backed up, recreatable. Enabled by `app_temp_data = true`.
 - **Archive data** (mounted at `BOTTLE_APP_ARCHIVE_DIR`) — bulk content storage. Backed by local disk by default, but the owner can configure a S3 bucket (which is mounted with JuiceFS as a POSIX-compatible filesystem) from the dashboard for elastic, durable object storage. Higher-latency on uncached reads once on S3, although JuiceFS yields relatively performant access once cached. Intended for apps that store bulk content (videos, photos, attachments) that may overload local storage, and where low latency isn't critical. Enabled by `app_archive = true`.
 
-Apps can additionally request `access_all_app_data`, giving access (if granted by the owner) to the data directories of all other apps on the system. This is necessary for apps like file browsers or backup apps.
+Apps can additionally request `access_all_app_data`, giving read/write access to every app's permanent, temporary, and archive data. This is necessary for apps like file browsers or backup apps. The retired `access_all_data` and `access_all_archive` fields are deprecated aliases for this permission.
 
 All data dirs are mounted under `/data/` in the container. All apps see the same path structure regardless of permissions — only the dirs they have access to are mounted. The directory structure contains folders like `/data/app_data/{app_name}`, `/data/app_temp_data/{app_name}`, `/data/app_archive/{app_name}`. The env vars `BOTTLE_APP_*_DIR` should be preferred to hardcoding paths.
 

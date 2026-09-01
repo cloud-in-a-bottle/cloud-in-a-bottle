@@ -92,11 +92,12 @@ In general it's better to expose these links from within your app; this is mainl
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
 | `app_data` | boolean | no | true | Provision a directory for this app on the instance's file system, intended for persistent app state. This data will be included in backups and instance migrations. Exposed to the app via `BOTTLE_APP_DATA_DIR`. |
-| `app_temp_data` | boolean | no | false | Provision a directory for this app on the instance's file system, intended for ephemeral app data. This data will persist between container or instance boots, but will not be included in backups / instance migrations. Exposed to the app via `BOTTLE_APP_TEMP_DIR`.|
+| `app_temp_data` | boolean | no | false | Provision a directory for this app on the instance's file system, intended for ephemeral app data. This data will persist between container or instance boots, but will not be included in backups / instance migrations. Exposed to the app via `BOTTLE_APP_TEMP_DIR`. |
 | `app_archive` | boolean | no | false | Provision a directory for this app in the instance's "archive storage", intended for persistent but bulky content. Archive storage is backed by local disk by default, but can be configured by the owner to be served by remote S3 backend to enable larger and more reliable storage than the instance's local disk. Exposed to the app via `BOTTLE_APP_ARCHIVE_DIR`. |
 | `sqlite` | string[] | no | [] | SQLite databases to provision. These get created in `app_data` as `{name}.sqlite` and are explicitly checkpointed when backups run. Enabling implicitly enables `app_data`. Exposed to the app via `BOTTLE_SQLITE_<NAME>` vars. |
-| `access_all_data` | boolean | no | false | Mount the parent dir for all other apps' permanent, temp, and archive data directories (rw). For admin / file browser / backup apps. Mounted into `/data` in the container. |
+| `access_all_app_data` | boolean | no | false | Mount the parent dirs for all apps' permanent, temporary, and archive data (rw). For admin, file browser, and backup apps. Mounted under `/data` in the container. |
 
+The retired `access_all_data` and `access_all_archive` fields are deprecated aliases for `access_all_app_data`. Manifests using either receive the full permanent, temporary, and archive data permission and emit a deprecation warning.
 
 ## More Examples
 
@@ -157,7 +158,6 @@ command = "/data -A"
 
 [data]
 access_all_app_data = true
-access_all_archive = true
 ```
 
 ### App advertising user-facing links
