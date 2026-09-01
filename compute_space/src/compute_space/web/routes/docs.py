@@ -26,10 +26,9 @@ generator)?
     rendered HTML is stale relative to the running code (operator
     forgot to run ``mdbook build`` after ``git pull``, CI artifact
     is from a different commit than the running version, etc.).
-  * **Smaller surface area.**  No ~5 MB Rust binary on every
-    instance, no CI workflow to maintain, no ``book.toml`` to keep
-    in sync, no theme/CSS-override directory.  Markdown rendering
-    is pure-Python and pulls in ``markdown-it-py`` (already a
+  * **Smaller instance surface area.**  The in-app route needs no
+    ~5 MB Rust binary or generated book at runtime.  Markdown
+    rendering is pure-Python and pulls in ``markdown-it-py`` (already a
     transitive dep) plus ``mdit-py-plugins`` and ``pygments``
     (also already present via test deps).
   * **Easier to extend.**  Custom rendering — admonitions, mermaid

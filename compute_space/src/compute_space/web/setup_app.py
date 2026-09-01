@@ -43,12 +43,15 @@ from compute_space.core.updates import is_shutdown_pending
 from compute_space.core.updates import trigger_restart
 from compute_space.db import get_db
 from compute_space.web.auth.cookies import build_session_cookie
+from compute_space.web.helpers.static import STATIC_DIR
 from compute_space.web.helpers.static import make_static_url
 
 # Set when setup_post succeeds. /health flips to 503 immediately so clients
 # polling for the post-restart main app don't see a stale 200 from the setup
 # app during the brief window before hypercorn actually drops the listener.
 _setup_completed: bool = False
+_static_url = make_static_url(STATIC_DIR)
+_favicon_url = _static_url("img/favicon.svg")
 
 
 def _verify_claim_token(claim_token: str) -> bool:
@@ -152,6 +155,7 @@ async def setup_post(request: Request[Any, Any, Any], config: NamedDependency[Co
     body = (
         "<!doctype html><html><head><meta http-equiv=refresh content='2; url=/'>"
         "<meta name=robots content=noindex>"
+        f"<link rel='icon' type='image/svg+xml' href='{_favicon_url}'>"
         "<title>Cloud in a Bottle — restarting</title></head>"
         "<body style='font-family:system-ui;text-align:center;margin-top:4em;'>"
         "<p>Setup complete. Restarting…</p></body></html>"
@@ -195,7 +199,7 @@ def create_setup_app(config: Config) -> Litestar:
     del config  # unused; the config singleton is set in start.py before this is called
     web_dir = Path(__file__).parent
     template_dir = web_dir / "templates"
-    static_dir = web_dir / "static"
+    static_dir = STATIC_DIR
 
     template_config: TemplateConfig[JinjaTemplateEngine] = TemplateConfig(
         directory=template_dir,
@@ -209,7 +213,7 @@ def create_setup_app(config: Config) -> Litestar:
         # Jinja the templates won't render at all, so assert rather than
         # silently skipping the globals and 500ing on the first render.
         assert isinstance(engine, JinjaTemplateEngine), f"expected a Jinja engine, got {type(engine)}"
-        engine.engine.globals["static_url"] = make_static_url(static_dir)
+        engine.engine.globals["static_url"] = _static_url
 
     return Litestar(
         route_handlers=[root_redirect, setup_get, setup_post, health, static_router],

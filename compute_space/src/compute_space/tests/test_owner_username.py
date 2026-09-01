@@ -372,6 +372,8 @@ def test_setup_persists_custom_username_and_creates_session(cfg: Any, setup_clie
         data={"username": "zack", "password": "secretpass1", "confirm_password": "secretpass1"},
     )
     assert resp.status_code == 200, resp.text
+    assert "rel='icon' type='image/svg+xml'" in resp.text
+    assert "/static/img/favicon.svg?v=" in resp.text
     assert _read_username_direct(cfg.db_path) == "zack"
     assert _session_username_after(cfg.db_path) == "zack"
 
