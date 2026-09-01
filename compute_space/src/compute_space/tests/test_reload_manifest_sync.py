@@ -162,6 +162,45 @@ def test_reload_does_not_persist_new_access_all_archive(cfg: Any, tmp_path: Path
     start.assert_not_called()
 
 
+def test_start_rejects_new_access_all_archive_before_provisioning(cfg: Any, tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    _write_manifest(repo)
+    manifest_path = repo / "cloudinabottle.toml"
+    manifest_path.write_text(manifest_path.read_text() + "\n[data]\naccess_all_archive = true\n")
+    app_id = _seed_app(cfg, str(repo), cpu_cores=0.1, memory_mb=64)
+
+    db = sqlite3.connect(cfg.db_path)
+    db.row_factory = sqlite3.Row
+    try:
+        with mock.patch.object(apps_mod, "provision_data") as provision:
+            with pytest.raises(ValueError, match="access_all_archive has been removed"):
+                apps_mod.start_app_process(app_id, db, cfg)
+        provision.assert_not_called()
+    finally:
+        db.close()
+
+
+def test_start_preserves_stored_access_all_archive(cfg: Any, tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    _write_manifest(repo)
+    manifest_path = repo / "cloudinabottle.toml"
+    raw = manifest_path.read_text() + "\n[data]\naccess_all_archive = true\n"
+    manifest_path.write_text(raw)
+    app_id = _seed_app(cfg, str(repo), cpu_cores=0.1, memory_mb=64)
+
+    db = sqlite3.connect(cfg.db_path)
+    db.row_factory = sqlite3.Row
+    try:
+        db.execute("UPDATE apps SET manifest_raw = ? WHERE app_id = ?", (raw, app_id))
+        db.commit()
+        with mock.patch.object(apps_mod, "provision_data", side_effect=RuntimeError("provision reached")) as provision:
+            with pytest.raises(RuntimeError, match="provision reached"):
+                apps_mod.start_app_process(app_id, db, cfg)
+        provision.assert_called_once()
+    finally:
+        db.close()
+
+
 def test_reload_syncs_all_manifest_columns(cfg: Any, tmp_path: Path) -> None:
     """Every manifest-derived column is refreshed on reload, not just the old
     subset (public_paths/links/manifest_raw/name)."""
