@@ -781,17 +781,23 @@ class TestSelfHost:
         passes; remove once the root cause is understood.
         """
         # 1) Reproduce the original failure over HTTP (the path 13e used to use).
+        #    Probe the ROOT too: if `/` also 404s, the router isn't routing
+        #    file-browser at all; if `/` works but `/app_data/*` 404s, it's dufs.
         fb_url = f"https://file-browser.{domain}"
-        try:
-            r = session.get(f"{fb_url}/app_data/minio/config/root-credentials.txt", timeout=15)
-            print(f"\nDIAG file-browser HTTP GET creds -> status={r.status_code} bytes={len(r.content)}")
-            # Control: can file-browser serve ANYTHING under minio's tree / its own?
-            r2 = session.get(f"{fb_url}/app_data/minio/config/", timeout=15)
-            print(f"DIAG file-browser HTTP GET minio/config/ dir -> status={r2.status_code} bytes={len(r2.content)}")
-            r3 = session.get(f"{fb_url}/app_data/", timeout=15)
-            print(f"DIAG file-browser HTTP GET app_data/ dir -> status={r3.status_code} bytes={len(r3.content)}")
-        except Exception as e:  # noqa: BLE001 - diagnostic only
-            print(f"DIAG file-browser HTTP probe raised: {e!r}")
+        for path in (
+            "/",
+            "/app_data/",
+            "/app_data/minio/",
+            "/app_data/minio/config/",
+            "/app_data/minio/config/root-credentials.txt",
+        ):
+            try:
+                r = session.get(f"{fb_url}{path}", timeout=15)
+                print(
+                    f"DIAG router GET {path} -> {r.status_code} bytes={len(r.content)} server={r.headers.get('server')!r} body={r.text[:80]!r}"
+                )
+            except Exception as e:  # noqa: BLE001 - diagnostic only
+                print(f"DIAG router GET {path} raised: {e!r}")
 
         # 2) Inspect the on-disk / cross-namespace ownership reality via SSH.
         hd = "/home/host/.openhost/local_compute_space/persistent_data/app_data"
@@ -820,16 +826,28 @@ echo "=== DIAG MOUNTS ==="
 podman inspect openhost-minio --format "{{{{json .Mounts}}}}" 2>&1
 podman inspect openhost-file-browser --format "{{{{json .Mounts}}}}" 2>&1
 echo "=== DIAG DUFS: what is it actually serving? ==="
-echo "--- dufs process args (pid 1) ---"
-podman exec openhost-file-browser ps -o pid,args 2>&1 | head
-podman exec openhost-file-browser dufs --version 2>&1
+echo "--- dufs cmdline (pid 1) ---"
+podman exec openhost-file-browser cat /proc/1/cmdline 2>&1 | tr '\\0' ' '; echo
+echo "--- dufs exe + version ---"
+podman exec openhost-file-browser sh -c 'ls -l /proc/1/exe; /proc/1/exe --version' 2>&1
 echo "--- container /data listing (dufs root) ---"
 podman exec openhost-file-browser ls -la /data 2>&1
-echo "--- statfs of /data vs /data/app_data (different fs?) ---"
-podman exec openhost-file-browser stat -f /data 2>&1
-podman exec openhost-file-browser stat -f /data/app_data 2>&1
-echo "--- direct dufs HTTP on container :5000 (bypasses router) ---"
-podman exec openhost-file-browser sh -c "echo '[GET /]'; wget -qO- http://127.0.0.1:5000/ 2>&1 | head -c 400; echo; echo '[GET /app_data/]'; wget -qO- http://127.0.0.1:5000/app_data/ 2>&1 | head -c 400; echo; echo '[GET /app_data/minio/config/root-credentials.txt]'; wget -qO- http://127.0.0.1:5000/app_data/minio/config/root-credentials.txt 2>&1 | head -c 400; echo" 2>&1
+echo "--- statfs /data vs /data/app_data ---"
+podman exec openhost-file-browser stat -f /data /data/app_data 2>&1
+echo "=== DIAG DIRECT-TO-DUFS (bypass router via host-published port) ==="
+podman port openhost-file-browser 2>&1
+FBPORT=$(podman port openhost-file-browser 2>/dev/null | sed -n 's/.*:\\([0-9][0-9]*\\)$/\\1/p' | head -1)
+echo "fbport=$FBPORT"
+python - "$FBPORT" <<'PYEOF' 2>&1
+import sys, urllib.request as u
+port = sys.argv[1]
+for path in ["/", "/app_data/", "/app_data/minio/config/root-credentials.txt"]:
+    try:
+        r = u.urlopen("http://127.0.0.1:%s%s" % (port, path), timeout=8)
+        print("direct-dufs", path, "->", r.status, "bytes=%d" % len(r.read()))
+    except Exception as e:
+        print("direct-dufs", path, "-> ERR", repr(e))
+PYEOF
 echo "=== DIAG END ==="
 """
         result = ssh_host(
