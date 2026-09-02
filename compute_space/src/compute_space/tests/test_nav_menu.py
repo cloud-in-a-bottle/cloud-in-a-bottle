@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import re
 import sqlite3
+import types
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -32,8 +33,7 @@ from compute_space.core.domains import Domain
 from compute_space.db import provide_db
 from compute_space.db.connection import init_db
 from compute_space.web.app import _template_globals
-from compute_space.web.helpers.zone import RequestOrigin
-from compute_space.web.helpers.zone import set_request_origin
+from compute_space.web.helpers.zone import ZONE_SCOPE_KEY
 from compute_space.web.routes.pages.apps import CATALOG_APP_NAME
 from compute_space.web.routes.pages.apps import dashboard
 
@@ -190,14 +190,11 @@ def test_menu_links_add_app_when_catalog_missing(cfg: Any) -> None:
     assert '<li><a href="/add_app">Catalog</a></li>' in body
 
 
-def test_app_url_carries_origin_without_request_in_context(cfg: Any) -> None:
-    """app_url must carry the arriving domain *and* access port even when the Jinja
-    context has no ``request`` — the situation for links rendered inside *imported*
-    macros (app_row, nav_menu), which is where the domain and port silently went
-    missing.
-
-    It reads the origin the middleware records, not ``context["request"]``, so a plain
-    render with no request still gets it.
+def test_app_url_carries_origin_from_request_in_context(cfg: Any) -> None:
+    """app_url reads the arriving domain + access port off the ``request`` in the Jinja
+    context.  Inside imported macros (app_row, nav_menu) ``request`` is present only
+    because they are imported ``{% ... with context %}``; that is what keeps app links on
+    the arriving domain and port instead of silently falling back to the primary.
     """
     set_active_config(cfg)
     web_dir = Path(web_app.__file__).resolve().parent
@@ -205,13 +202,14 @@ def test_app_url_carries_origin_without_request_in_context(cfg: Any) -> None:
     env.globals.update(_template_globals(cfg, web_dir / "static"))
 
     # Arrived on a non-default port (SSH tunnel / NAT forward): links carry it.
-    set_request_origin(
-        RequestOrigin(zone=Domain("alice-zone.example.com", tls=False), netloc="alice-zone.example.com:8088")
+    request = types.SimpleNamespace(
+        scope={ZONE_SCOPE_KEY: Domain("alice-zone.example.com", tls=False)},
+        url=types.SimpleNamespace(netloc="alice-zone.example.com:8088"),
     )
-    out = env.from_string('{{ app_url("foo") }}').render()  # no `request` in context
+    out = env.from_string('{{ app_url("foo") }}').render(request=request)
     assert out == "http://foo.alice-zone.example.com:8088/"
 
-    # No origin recorded: fall back to the live primary, no port appended.
-    set_request_origin(None)
+    # No request in context (the pre-seed / macro-without-context case): fall back to the
+    # live primary, no port appended.
     out_default = env.from_string('{{ app_url("foo") }}').render()
     assert out_default == "http://foo.alice-zone.example.com/"

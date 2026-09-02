@@ -27,6 +27,7 @@ from compute_space.core import archive_backend
 from compute_space.core.auth.auth import read_owner_username
 from compute_space.core.auth.identity import load_identity_keys
 from compute_space.core.domains import Domain
+from compute_space.core.domains import host_with_request_port
 from compute_space.core.domains import primary_domain_or_none
 from compute_space.core.first_boot import seed_first_boot
 from compute_space.core.git_ops import SOURCE_URL
@@ -43,7 +44,7 @@ from compute_space.db import get_db
 from compute_space.db import provide_db
 from compute_space.web.auth.auth import login_required_redirect
 from compute_space.web.helpers.static import make_static_url
-from compute_space.web.helpers.zone import request_origin
+from compute_space.web.helpers.zone import ZONE_SCOPE_KEY
 from compute_space.web.middleware.subdomain_proxy import SubdomainProxyMiddleware
 from compute_space.web.routes.api.apps import api_apps_routes
 from compute_space.web.routes.api.archive_backend import api_archive_backend_routes
@@ -68,16 +69,21 @@ def _template_globals(config: Config, static_dir: Path) -> dict[str, Any]:
             return primary_domain_or_none(db)
 
     @pass_context
-    def app_url(_context: Context, app_name: str) -> str:
-        """Absolute URL to an app, on the domain the current request arrived on.  Falls
-        back to the live primary when the render had no request."""
-        origin = request_origin()
-        if origin is not None:
-            return f"{origin.scheme}://{origin.subdomain_host(app_name)}/"
+    def app_url(context: Context, app_name: str) -> str:
+        """Absolute URL to an app, on the domain (and access port) the current request arrived
+        on.  Falls back to the live primary when the render had no request.
+
+        Reads ``request`` off the Jinja context — present inside the imported macros (app_row,
+        nav_menu) only because they are imported ``{% ... with context %}``."""
+        request = context.get("request")
+        stashed = request.scope.get(ZONE_SCOPE_KEY) if request is not None else None
+        if isinstance(stashed, Domain):
+            host = host_with_request_port(f"{app_name}.{stashed.name_no_port}", request.url.netloc)
+            return f"{stashed.scheme}://{host}/"
         zone = primary()
         if zone is None:
             return f"//{app_name}/"  # pre-seed only: no primary yet, emit a scheme/host-relative link
-        return f"{zone.scheme}://{app_name}.{zone.name_no_port}/"
+        return f"{zone.scheme}://{app_name}.{zone.name}/"
 
     def zone_domain() -> str:
         p = primary()

@@ -17,6 +17,8 @@ from compute_space.config import Config
 from compute_space.core.app_id import is_valid_app_name
 from compute_space.core.apps import deserialize_links
 from compute_space.core.auth.permissions_v2 import get_all_permissions_v2
+from compute_space.core.domains import Domain
+from compute_space.core.domains import host_with_request_port
 from compute_space.core.git_ops import get_head_sha
 from compute_space.core.git_ops import get_remote_url
 from compute_space.core.git_ops import parse_repo_url
@@ -26,8 +28,7 @@ from compute_space.core.manifest import parse_manifest_from_string
 from compute_space.core.service_interface.provider import ProviderUnavailable
 from compute_space.core.service_interface.resolve import resolve_provider
 from compute_space.web.auth.auth import require_owner_auth
-from compute_space.web.helpers.zone import RequestOrigin
-from compute_space.web.helpers.zone import require_request_origin
+from compute_space.web.helpers.zone import zone_for_request
 
 EDIT_APP_SERVICE_URL = "github.com/cloud-in-a-bottle/claude-code-container/services/open-workspace"
 EDIT_APP_VERSION_SPEC = "<1.0"
@@ -111,7 +112,9 @@ async def app_detail(
         except Exception:
             logger.opt(exception=True).warning("Failed to parse manifest for permission display (app {})", app_id)
 
-    edit_app = await _resolve_edit_app(app_row["repo_url"], app_row["repo_path"], db, config, require_request_origin())
+    edit_app = await _resolve_edit_app(
+        app_row["repo_url"], app_row["repo_path"], db, config, zone_for_request(request), request.url.netloc
+    )
 
     return Template(
         template_name="app_detail.html",
@@ -134,7 +137,8 @@ async def _resolve_edit_app(
     repo_path: str,
     db: sqlite3.Connection,
     config: Config,
-    origin: RequestOrigin,
+    zone: Domain,
+    netloc: str,
 ) -> dict[str, str] | None:
     """Describe an "Edit this app" affordance for the template.
 
@@ -192,7 +196,8 @@ async def _resolve_edit_app(
     # Build the provider URL on the domain the operator is currently browsing, so the POST
     # stays same-domain (and any login bounce stays on that domain) rather than jumping to
     # the canonical one.
-    action = f"{origin.scheme}://{origin.subdomain_host(provider.app_name)}{provider.endpoint}?{qs}"
+    host = host_with_request_port(f"{provider.app_name}.{zone.name_no_port}", netloc)
+    action = f"{zone.scheme}://{host}{provider.endpoint}?{qs}"
     return {"mode": "service", "action": action, "repo": base_url, "ref": ref}
 
 

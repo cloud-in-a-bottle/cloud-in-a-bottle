@@ -70,7 +70,7 @@ async def login_post(
     # Scope the cookie to the domain the login arrived on (covers its `*.domain` app
     # subdomains too), so a login on `.local` stays on `.local` and one on the public
     # domain stays there — rather than always the canonical zone.
-    response.set_cookie(build_session_cookie(session_token, zone_for_request()))
+    response.set_cookie(build_session_cookie(session_token, zone_for_request(request)))
     return response
 
 
@@ -86,7 +86,7 @@ async def logout(
         db.commit()
 
     response: Response[Any] = Redirect(path="/login")
-    response.set_cookie(clear_session_cookie(zone_for_request()))
+    response.set_cookie(clear_session_cookie(zone_for_request(request)))
     return response
 
 

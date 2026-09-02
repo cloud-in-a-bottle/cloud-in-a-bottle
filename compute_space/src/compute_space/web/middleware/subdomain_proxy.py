@@ -26,8 +26,7 @@ from compute_space.web.auth.auth import login_required_redirect
 from compute_space.web.auth.auth import verify_owner_auth
 from compute_space.web.helpers.proxy import proxy_http_request
 from compute_space.web.helpers.proxy import proxy_websocket_request
-from compute_space.web.helpers.zone import RequestOrigin
-from compute_space.web.helpers.zone import set_request_origin
+from compute_space.web.helpers.zone import ZONE_SCOPE_KEY
 
 IS_OWNER_HEADER = ("X-OpenHost-Is-Owner", "true")
 
@@ -132,12 +131,6 @@ class SubdomainProxyMiddleware:
         # note: we don't need to handle CORS here because cross-origin requests are not allowed (those go thru services which handles its own CORS).
         connection: ASGIConnection[Any, Any, Any, Any] = ASGIConnection(scope, receive, send)
 
-        # Clear any origin inherited from a prior request on this connection; we
-        # record the real one below once the domain is resolved.  Requests that
-        # never match a configured domain (internal-host service calls, rejects)
-        # leave it None, so link builders fall back rather than reuse a stale value.
-        set_request_origin(None)
-
         try:
             netloc = connection.url.netloc
         except ValueError:
@@ -164,11 +157,9 @@ class SubdomainProxyMiddleware:
             await _send_not_found(scope, receive, send)
             return
 
-        # Record the arriving origin.  It lives in a ContextVar (not the request scope)
-        # because app_url() runs inside imported Jinja macros that have no `request`;
-        # login redirects, cookies, and the other absolute-URL builders then read the same
-        # origin so everything stays on the arriving domain rather than the canonical one.
-        set_request_origin(RequestOrigin(zone=zone, netloc=netloc))
+        # Stash the arriving Domain so downstream handlers (login redirect, cookies, absolute-URL
+        # building) stay on it rather than the single canonical domain.
+        scope[ZONE_SCOPE_KEY] = zone  # type: ignore[literal-required]
 
         if app is None:
             if looks_like_app:

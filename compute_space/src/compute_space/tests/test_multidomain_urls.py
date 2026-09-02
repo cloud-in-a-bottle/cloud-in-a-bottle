@@ -8,13 +8,12 @@ import sqlite3
 
 from compute_space.core.domains import Domain
 from compute_space.core.domains import DomainRecord
+from compute_space.core.domains import host_with_request_port
 from compute_space.core.domains import seed_domains
 from compute_space.db.schema import schema_path
 from compute_space.web.auth.auth import build_login_url
 from compute_space.web.auth.cookies import build_session_cookie
 from compute_space.web.auth.cookies import clear_session_cookie
-from compute_space.web.helpers.zone import RequestOrigin
-from compute_space.web.helpers.zone import host_with_request_port
 from compute_space.web.routes.pages.login import _validated_next
 
 PUBLIC = Domain("host.example.com", tls=True)
@@ -25,12 +24,12 @@ LOCAL = Domain("myhost.local", tls=False, mdns=True)
 
 
 def test_login_url_on_local_domain_is_http_and_local() -> None:
-    url = build_login_url(RequestOrigin(zone=LOCAL, netloc="myapp.myhost.local"), "/private", "")
+    url = build_login_url(LOCAL, "myapp.myhost.local", "/private", "")
     assert url == "http://myhost.local/login?next=http%3A%2F%2Fmyapp.myhost.local%2Fprivate"
 
 
 def test_login_url_on_public_domain_is_https_and_public() -> None:
-    url = build_login_url(RequestOrigin(zone=PUBLIC, netloc="myapp.host.example.com"), "/x", "a=b")
+    url = build_login_url(PUBLIC, "myapp.host.example.com", "/x", "a=b")
     assert url.startswith("https://host.example.com/login?next=")
     assert "https%3A%2F%2Fmyapp.host.example.com%2Fx%3Fa%3Db" in url
 
@@ -42,18 +41,18 @@ def test_login_url_on_public_domain_is_https_and_public() -> None:
 
 
 def test_login_url_preserves_request_port() -> None:
-    url = build_login_url(RequestOrigin(zone=LOCAL, netloc="myhost.local:8088"), "/private", "")
+    url = build_login_url(LOCAL, "myhost.local:8088", "/private", "")
     assert url == "http://myhost.local:8088/login?next=http%3A%2F%2Fmyhost.local%3A8088%2Fprivate"
 
 
 def test_login_url_preserves_port_from_app_subdomain() -> None:
     # Arrived on an app subdomain with a port; /login goes to the router host, same port.
-    url = build_login_url(RequestOrigin(zone=PUBLIC, netloc="app.host.example.com:8443"), "/x", "")
+    url = build_login_url(PUBLIC, "app.host.example.com:8443", "/x", "")
     assert url.startswith("https://host.example.com:8443/login?next=")
 
 
 def test_login_url_no_port_when_default() -> None:
-    url = build_login_url(RequestOrigin(zone=PUBLIC, netloc="app.host.example.com"), "/x", "")
+    url = build_login_url(PUBLIC, "app.host.example.com", "/x", "")
     assert url.startswith("https://host.example.com/login?next=")
 
 
@@ -64,18 +63,6 @@ def test_host_with_request_port() -> None:
     assert host_with_request_port("foo.lvh.me", "bar.lvh.me:8080") == "foo.lvh.me:8080"
     assert host_with_request_port("lvh.me", "") == "lvh.me"
     assert host_with_request_port("lvh.me", "[::1]") == "lvh.me"  # non-numeric tail → no port
-
-
-def test_request_origin_builds_hosts_with_port() -> None:
-    # The bare router host and any app subdomain both carry the arriving access port.
-    origin = RequestOrigin(zone=PUBLIC, netloc="app.host.example.com:8443")
-    assert origin.scheme == "https"
-    assert origin.host == "host.example.com:8443"
-    assert origin.subdomain_host("catalog") == "catalog.host.example.com:8443"
-    # Default port (none on the request) → nothing appended.
-    plain = RequestOrigin(zone=LOCAL, netloc="myhost.local")
-    assert plain.host == "myhost.local"
-    assert plain.subdomain_host("catalog") == "catalog.myhost.local"
 
 
 # --- _validated_next: accepts any configured domain -------------------------------

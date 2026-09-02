@@ -1,3 +1,8 @@
+from __future__ import annotations
+
+import types
+from typing import Any
+
 import pytest
 
 from compute_space.core.app_id import new_app_id
@@ -12,8 +17,7 @@ from compute_space.core.service_interface.headers import approve_grant_url
 from compute_space.core.service_interface.resolve import resolve_provider
 from compute_space.core.service_interface.services import default_provider_id_for_service
 from compute_space.core.service_interface.services import lookup_service_by_manifest_shortname
-from compute_space.web.helpers.zone import RequestOrigin
-from compute_space.web.helpers.zone import set_request_origin
+from compute_space.web.helpers.zone import ZONE_SCOPE_KEY
 from compute_space.web.routes.api.apps import _oauth_return_host
 
 SVC_SECRETS = "github.com/org/repo/services/secrets"
@@ -429,12 +433,16 @@ class TestAccessedDomainUrls:
         url = approve_grant_url("consumer-id", SVC_SECRETS, {"x": 1}, db, "consumer.lvh.me:8088")
         assert url.startswith("/approve-permissions-v2?")
 
+    def _request(self, netloc: str, zone: Domain | None) -> Any:
+        scope = {ZONE_SCOPE_KEY: zone} if zone is not None else {}
+        return types.SimpleNamespace(scope=scope, url=types.SimpleNamespace(netloc=netloc))
+
     def test_oauth_return_host_uses_browsing_origin(self, db):
         self._seed_primary(db)
-        set_request_origin(RequestOrigin(zone=Domain(name="lvh.me", tls=False), netloc="lvh.me:8088"))
-        assert _oauth_return_host(db) == "lvh.me:8088"
+        request = self._request("lvh.me:8088", Domain(name="lvh.me", tls=False))
+        assert _oauth_return_host(db, request) == "lvh.me:8088"
 
     def test_oauth_return_host_falls_back_to_primary(self, db):
         self._seed_primary(db)
-        set_request_origin(None)
-        assert _oauth_return_host(db) == "lvh.me"
+        request = self._request("lvh.me", None)  # middleware stashed no zone
+        assert _oauth_return_host(db, request) == "lvh.me"

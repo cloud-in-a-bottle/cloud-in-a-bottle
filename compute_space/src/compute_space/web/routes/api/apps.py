@@ -13,6 +13,7 @@ from typing import Any
 
 import attr
 from litestar import MediaType
+from litestar import Request
 from litestar import Response
 from litestar import Router
 from litestar import WebSocket
@@ -55,6 +56,8 @@ from compute_space.core.containers import stop_app_process
 from compute_space.core.containers import stop_container
 from compute_space.core.diagnostics import AppDiagnostics
 from compute_space.core.diagnostics import collect_app_diagnostics
+from compute_space.core.domains import Domain
+from compute_space.core.domains import host_with_request_port
 from compute_space.core.domains import primary_domain
 from compute_space.core.git_ops import get_branch_name
 from compute_space.core.git_ops import get_head_sha
@@ -77,17 +80,19 @@ from compute_space.db.connection import get_db
 from compute_space.web.auth.auth import require_owner_auth
 from compute_space.web.auth.auth import verify_owner_ws
 from compute_space.web.exceptions import ConflictException
-from compute_space.web.helpers.zone import request_origin
+from compute_space.web.helpers.zone import ZONE_SCOPE_KEY
 
 
-def _oauth_return_host(db: sqlite3.Connection) -> str:
+def _oauth_return_host(db: sqlite3.Connection, request: Request[Any, Any, Any]) -> str:
     """The host an OAuth-return redirect should come back to.
 
     The operator kicks these flows off from a browser, so bring them back to the domain
-    they are on rather than the canonical primary.  Fall back to the primary only if there
-    is somehow no request origin recorded."""
-    origin = request_origin()
-    return origin.host if origin is not None else primary_domain(db).name
+    (and access port) they are on rather than the canonical primary.  Fall back to the
+    primary only if the middleware stashed no Domain on the request."""
+    zone = request.scope.get(ZONE_SCOPE_KEY)
+    if not isinstance(zone, Domain):
+        return primary_domain(db).name
+    return host_with_request_port(zone.name_no_port, request.url.netloc)
 
 
 # ─── attrs request / response models ──────────────────────────────────────
@@ -288,13 +293,14 @@ async def clone_and_get_app_info(
     data: CloneRequest,
     db: NamedDependency[sqlite3.Connection],
     config: NamedDependency[Config],
+    request: Request[Any, Any, Any],
 ) -> Response[CloneInfoResponse]:
     """Clone a repo and return its manifest info + temp clone dir."""
     repo_url = data.repo_url.strip()
     if not repo_url:
         raise ValidationException(detail="No repository URL provided")
 
-    add_app_url = f"//{_oauth_return_host(db)}/add_app?repo={repo_url}"
+    add_app_url = f"//{_oauth_return_host(db, request)}/add_app?repo={repo_url}"
     manifest, clone_dir, error, authorize_url = await clone_with_github_fallback(repo_url, return_to=add_app_url)
 
     if authorize_url:
@@ -696,6 +702,7 @@ async def _reload_app_impl(
     approve_new_permissions: bool,
     db: sqlite3.Connection,
     config: Config,
+    request: Request[Any, Any, Any],
 ) -> Response[OkResponse] | Response[UpdateReviewRequiredResponse] | Redirect:
     """Shared body for the POST (user-initiated reload) and GET (OAuth callback)
     entry points to ``/reload_app/{app_id}``."""
@@ -770,7 +777,7 @@ async def _reload_app_impl(
             if not pull_ok and is_github_repo_url(repo_url):
                 lf.write("Attempting git pull with github oauth\n")
                 lf.flush()
-                return_to = f"//{_oauth_return_host(db)}/reload_app/{app_id}?continue_oauth_update=1"
+                return_to = f"//{_oauth_return_host(db, request)}/reload_app/{app_id}?continue_oauth_update=1"
                 try:
                     token = await get_oauth_token("github", ["repo"], return_to=return_to)
                 except OAuthRequired as e:
@@ -894,6 +901,7 @@ async def reload_app(
     app_id: FromPath[str],
     db: NamedDependency[sqlite3.Connection],
     config: NamedDependency[Config],
+    request: Request[Any, Any, Any],
     data: ReloadAppRequest = ReloadAppRequest(),  # noqa: B008 — Litestar resolves this at dependency-injection time
 ) -> Response[OkResponse] | Response[UpdateReviewRequiredResponse] | Redirect:
     """User-initiated reload, optionally pulling latest code via ``update``."""
@@ -904,6 +912,7 @@ async def reload_app(
         approve_new_permissions=data.approve_new_permissions,
         db=db,
         config=config,
+        request=request,
     )
 
 
@@ -916,6 +925,7 @@ async def reload_app_after_oauth(
     app_id: FromPath[str],
     db: NamedDependency[sqlite3.Connection],
     config: NamedDependency[Config],
+    request: Request[Any, Any, Any],
     continue_oauth_update: FromQuery[bool] = False,
 ) -> Response[OkResponse] | Response[UpdateReviewRequiredResponse] | Redirect:
     """OAuth callback re-entry: the secrets app redirected the user back here
@@ -934,6 +944,7 @@ async def reload_app_after_oauth(
         approve_new_permissions=False,
         db=db,
         config=config,
+        request=request,
     )
 
 
