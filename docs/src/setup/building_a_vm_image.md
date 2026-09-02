@@ -62,12 +62,12 @@ Without `--acme-key`, the build generates and registers a fresh Let's Encrypt ac
 ```bash
 image/build.sh \
   --public \
-  --domain host.example.com \
+  --domain mycooldomain.com \
   --public-ip 203.0.113.4 \
   --ssh-pubkey ~/.ssh/id_ed25519.pub
 ```
 
-The build does not get a TLS certificate issued - That can only happen once it's running and has DNS pointing at it. Once it boots with the right public ip `--public-ip`, delegate DNS and open ports 53 / 80 / 443 to it — see [Exposing a server with a static IP](./static_ip.md) or [Exposing a home server](./home_network.md) — and the instance will acquire its wildcard certificate and start serving at `https://host.example.com/`.
+The build does not get a TLS certificate issued - That can only happen once it's running and has DNS pointing at it. Once it boots with the right public ip `--public-ip`, delegate DNS and open ports 53 / 80 / 443 to it — see [Exposing a server with a static IP](./static_ip.md) or [Exposing a home server](./home_network.md) — and the instance will acquire its wildcard certificate and start serving at `https://mycooldomain.com/`.
 
 ## Run it
 
