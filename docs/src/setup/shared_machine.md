@@ -211,6 +211,8 @@ ssh -p $SSH_PORT $VM_USER@$VM_HOST 'sudo journalctl -u openhost -f'
 - Throw it away: delete the VM. Under QEMU that is `rm -rf "$VM_DIR"`, and nothing was installed on your machine except QEMU itself.
 - Upgrade Cloud in a Bottle: use the update button on the dashboard's settings page.
 
+The systemd service, logs and diagnostics are in [Debugging](../operation/debugging.md).
+
 ## Going public
 
 An instance in a VM is a real deployment, not just a test rig. Serving it on the internet takes three things beyond the walkthrough above.
@@ -232,7 +234,7 @@ ansible-playbook ansible/setup.yml \
   -e ansible_connection=ssh \
   -e ansible_port=$SSH_PORT \
   -e initial_user=$VM_USER \
-  -e domain=host.example.com \
+  -e domain=mycooldomain.com \
   -e public_ip=<your public IPv4> \
   -e acme_directory_url=https://acme-v02.api.letsencrypt.org/directory \
   --private-key=$SSH_KEY \
@@ -241,6 +243,6 @@ ansible-playbook ansible/setup.yml \
 
 Set `acme_directory_url` to Let's Encrypt, which is what the key you just generated is registered with. The built-in default is Google Trust Services, which needs an account binding you have to request separately.
 
-The instance gets a wildcard certificate covering `host.example.com` and `*.host.example.com` over DNS-01, and comes up at `https://host.example.com/`.
+The instance gets a wildcard certificate covering `mycooldomain.com` and `*.mycooldomain.com` over DNS-01, and comes up at `https://mycooldomain.com/`.
 
 Easiest is to do this from the start, on a VM you have not claimed yet. Converting an instance you already claimed at `lvh.me` is more work: the playbook preserves an existing config, so you have to re-run it with `-e overwrite_existing=true` to switch the instance out of HTTP-only mode, and the primary domain is fixed in the database at claim time, so you add the public domain from the dashboard's domain settings rather than replacing it.

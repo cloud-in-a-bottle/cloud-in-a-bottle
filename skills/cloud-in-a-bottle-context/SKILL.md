@@ -118,7 +118,7 @@ contract, injected env vars, data storage, auth, cross-app services):
   always matches the Cloud in a Bottle version you're running.
 - Or read the source docs at
   `github.com/cloud-in-a-bottle/cloud-in-a-bottle/tree/main/docs/src` (start with
-  `creating_an_app.md` and `manifest_spec.md`).
+  `creating_an_app/overview.md` and `creating_an_app/manifest_spec.md`).
 - You can also always clone `github.com/cloud-in-a-bottle/cloud-in-a-bottle
 
 To reference Cloud in a Bottle's code and docs directly, you can always just clone the openhost repo locally:

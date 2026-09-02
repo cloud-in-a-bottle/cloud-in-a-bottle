@@ -6,7 +6,7 @@ Cloud in a Bottle installs directly on the host. It runs various system services
 
 This page is in two parts. [Part 1](#part-1-core-instance-setup) gets a working instance running on the machine. [Part 2](#part-2-taking-it-public) covers the networking needed to put it on the public internet.
 
-The end state is a public instance with HTTPS: a dashboard at `https://host.example.com/`, and each app on its own subdomain at `https://<app>.host.example.com/`.
+The end state is a public instance with HTTPS: a dashboard at `https://mycooldomain.com/`, and each app on its own subdomain at `https://<app>.mycooldomain.com/`.
 
 ## Prerequisites
 
@@ -60,15 +60,7 @@ sudo systemctl status openhost
 sudo journalctl -u openhost -f
 ```
 
-| What                | Where                                        |
-|---------------------|----------------------------------------------|
-| Service             | `openhost` (systemd)                          |
-| Code                | `/home/host/openhost`                         |
-| Config              | `/home/host/.openhost/local_compute_space/config.toml` |
-| Persistent app data | `/home/host/.openhost/local_compute_space/`   |
-| Runs as             | the unprivileged `host` user                  |
-
-To upgrade to a newer Cloud in a Bottle release, use the update button on the dashboard's settings page. It pulls new code, syncs dependencies, and restarts the service.
+The service runs as the unprivileged `host` user, with code at `/home/host/openhost` and config and data under `/home/host/.openhost/local_compute_space/`. Upgrades are a button on the dashboard's settings page. If you want to poke around further, see [Debugging](../operation/debugging.md) and [The bottle CLI](../operation/cli.md).
 
 
 ## Part 2: taking it public
@@ -87,6 +79,6 @@ See [Exposing a server with a static IP](./static_ip.md).
 
 At home you typically have no static IP, and your router is not forwarding anything yet. Sometimes you have no usable public IP at all, because your ISP puts you behind CGNAT. Option A does not apply, and the workarounds have real tradeoffs.
 
-See [Exposing a home server](./home_network.md) for the options — an HTTP(s) tunnel such as Cloudflare Tunnels, a forthcoming IPv4 tunnel service, or port-forwarding a dynamic ISP address.
+See [Exposing a home server](./home_network.md) for the options: an HTTP(s) tunnel such as Cloudflare Tunnels, a forthcoming IPv4 tunnel service, or port-forwarding a dynamic ISP address.
 
-Nothing in part 1 changes on a home machine — the instance is already running and reachable over the tunnel. Pick a path from that page to give it a public address.
+Nothing in part 1 changes on a home machine; the instance is already running and reachable over the tunnel. Pick a path from that page to give it a public address.

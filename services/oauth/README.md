@@ -1,15 +1,24 @@
 # OAuth Token Service
 
-The OAuth provider app (`oauth-provider`, in `apps/oauth_provider/`) provides OAuth tokens to other apps via the cross-app service system. Apps request tokens by provider and scopes, and the OAuth provider handles the OAuth flow — either authorization code (Google) or device flow (GitHub), depending on the provider. Multiple accounts per provider are supported.
+**Service URL:** `github.com/imbue-openhost/openhost/services/oauth` · **Version:** 0.1.0
+
+Apps that need to act on the owner's behalf at Google or GitHub do not implement OAuth themselves. They ask the OAuth provider app for a token through the [cross-app service system](https://cloudinabottle.org/docs/creating_an_app/cross_app_services.html), and it owns the flow, the refresh, and the storage.
+
+Request a token by provider and scopes; you get one back, or a URL to send the user to. Multiple accounts per provider are supported, and the flow differs by provider (authorization code for Google, device flow for GitHub) without the consumer having to care.
 
 (Note: this is distinct from the `secrets` key-value service. The OAuth provider app *consumes* the secrets service to fetch its own Google client credentials, but the OAuth functionality described here is provided by the `oauth-provider` app, not a "secrets app".)
 
 ## Deployment
 
-The OAuth provider ships as a **default app**: every new instance auto-installs it at `/setup` completion (it is listed in `Config.default_apps` alongside `secrets`, `filestash`, `openhost-catalog`, and `openhost-backup`). No manual install is required — consumer apps can request OAuth tokens as soon as the zone is set up.
+The OAuth provider is one of the apps [installed with every instance](https://cloudinabottle.org/docs/operation/overview.html#what-is-already-there), so consumer apps can request tokens as soon as the instance is set up.
 
-- **GitHub** works out of the box (it uses the device flow with bundled client credentials).
-- **Google** requires the zone owner to store `GOOGLE_OAUTH_CLIENT_ID` and `GOOGLE_OAUTH_CLIENT_SECRET` in the `secrets` app; the provider fetches them lazily, so its container starts cleanly even before those secrets exist.
+- **GitHub** works out of the box. The provider ships with the client credentials of a Cloud in a Bottle GitHub OAuth app, and the device flow does not depend on those credentials being secret, so nothing is asked of the instance owner. The flip side is that they are not swappable: bringing your own GitHub OAuth app means editing `PROVIDERS` in the provider app, since only Google's credentials are read from the `secrets` service.
+- **Google** needs the instance owner to bring their own OAuth client. It works, but it is a real errand, and worth knowing before you promise it to a user:
+
+  1. Create a Google Cloud project, enable the APIs the scopes belong to (Gmail, Calendar, ...), and create an OAuth client of type **Web application**.
+  2. Register the redirect URI. It is not on your own domain: the provider always sends Google to the shared redirect domain, `https://my.selfhost.imbue.com/api/services/v2/oauth_callback` unless `BOTTLE_MY_REDIRECT_DOMAIN` says otherwise. That page is static and bounces the browser on to your instance. Google's console may want the domain listed as an authorized domain, which is awkward for a domain you do not control.
+  3. Store `GOOGLE_OAUTH_CLIENT_ID` and `GOOGLE_OAUTH_CLIENT_SECRET` in the `secrets` app. The provider fetches them lazily, so its container starts cleanly before they exist and fails only when a Google token is actually requested.
+  4. Gmail and the other sensitive scopes need Google to verify your app before anyone outside your test-user list can consent. Until then, expect the unverified-app warning and add yourself as a test user on the consent screen.
 
 ## How it works
 
@@ -21,23 +30,23 @@ The OAuth provider ships as a **default app**: every new instance auto-installs 
 
 3. **Token expired?** If a refresh token exists, refreshes automatically and returns the new access token.
 
-4. **No token?** Returns `401` with `{"status": "authorization_required", "authorize_url": "..."}`. The app should redirect/popup the user to this URL. The `authorize_url` handles everything — permissions approval (if needed) and OAuth consent.
+4. **No token?** Returns `401` with `{"status": "authorization_required", "authorize_url": "..."}`. The app should redirect/popup the user to this URL. The `authorize_url` handles everything: permissions approval (if needed) and OAuth consent.
 
 ### Multiple accounts
 
-Tokens are stored with an `account` label, keyed by `(provider, scopes, account)`. The account name is resolved automatically after OAuth — for Google it's the email address, for GitHub it's the username.
+Tokens are stored with an `account` label, keyed by `(provider, scopes, account)`. The account name is resolved automatically after OAuth: for Google it's the email address, for GitHub it's the username.
 
 - **Connecting a new account:** Request a token with `"account": "NEW"`. After OAuth, the OAuth provider resolves the identity (e.g. `user@gmail.com`) and stores the token under that name.
 - **Using a specific account:** Request with `"account": "user@gmail.com"` to get that account's token.
-- **Default fallback:** Request with `"account": "default"` (or omit it — the request body defaults to `"default"`). If there's exactly one token for that provider+scopes, it's returned regardless of account name.
+- **Default fallback:** Request with `"account": "default"` (or omit it, since the request body defaults to `"default"`). If there's exactly one token for that provider+scopes, it's returned regardless of account name.
 - **Listing accounts:** `POST /api/services/v2/call/<shortname>/accounts` with `{"provider": "google", "scopes": [...]}` returns `{"accounts": ["user1@gmail.com", "user2@gmail.com"]}`.
 
 ### Authorization code flow (Google)
 
 The `authorize_url` points directly to Google's consent page. After the user authorizes:
 
-1. Google redirects to `https://my.<base_domain>/api/services/v2/oauth_callback?code=...&state=...`
-2. The `my.` provider redirect sends the user to `<zone_domain>/api/services/v2/oauth_callback?code=...&state=...`
+1. Google redirects to the shared redirect domain (`BOTTLE_MY_REDIRECT_DOMAIN`, `my.selfhost.imbue.com` by default): `https://my.selfhost.imbue.com/api/services/v2/oauth_callback?code=...&state=...`
+2. That page is static and browser-local: it knows which instance this browser belongs to and forwards to `<zone_domain>/api/services/v2/oauth_callback?code=...&state=...`
 3. The router has an explicit route for `/api/services/v2/oauth_callback` that proxies to the OAuth provider app
 4. The OAuth provider exchanges the code for tokens, fetches the user's identity (email), stores the token under that account name, and redirects to `return_to`
 
@@ -45,7 +54,7 @@ Google tokens always request `email` and `openid` scopes in addition to the requ
 
 ### Device flow (GitHub)
 
-The `authorize_url` points to `oauth-provider.<zone_domain>/device?...` — a page on the OAuth provider app that:
+The `authorize_url` points to `oauth-provider.<zone_domain>/device?...`, a page on the OAuth provider app that:
 
 1. Starts the device flow with GitHub, getting a user code and verification URL
 2. Shows the user the code + a link to GitHub's verification page + a copy button
@@ -140,13 +149,15 @@ The `oauth.js` library handles the popup lifecycle, postMessage communication, a
 
 - OAuth client type: **Web application**
 - Created at https://console.cloud.google.com/apis/credentials
-- Redirect URIs: `https://my.<base_domain>/api/services/v2/oauth_callback`
+- Redirect URI: the shared redirect domain, `https://my.selfhost.imbue.com/api/services/v2/oauth_callback` by default
 - Enable needed APIs at https://console.cloud.google.com/apis/library
 - No authorized JavaScript origins needed (server-side flow)
 - Tokens expire (~1 hour) but have refresh tokens for automatic renewal
 - Note: Google's device flow only supports a very limited set of scopes (no Gmail, Calendar, etc.), which is why we use the auth code flow
 
 ### GitHub (device flow)
+
+Credentials for this one are bundled with the provider app; the notes below are what registering your own would involve.
 
 - OAuth app created at https://github.com/settings/developers (or org settings)
 - Enable "Device Flow" in the app settings
@@ -189,18 +200,6 @@ To support identity resolution (account names), add a case in `fetch_account_ide
 
 If the provider has a non-standard revocation API (like GitHub), add a case in the `revoke_token()` function.
 
-## Files
+## Source
 
-- `apps/oauth_provider/src/oauth_provider/` — OAuth provider app (v2 service interface)
-  - `core/permissions.py` — v2 grant parsing, permission checking, app-scoped grant helper
-  - `core/providers.py` — provider configs, auth URL builder, code exchange, device flow, token revocation, `fetch_account_identity()`, `revoke_token()`
-  - `core/tokens.py` — token storage, caching, expiry checks, and refresh
-  - `core/credentials.py` — fetches the provider's own client credentials from the `secrets` service
-- `compute_space/src/compute_space/web/routes/services_v2.py` — v2 service proxy with shortname routing, permission header injection, CORS, OAuth callback proxy
-- `compute_space/src/compute_space/web/routes/api/permissions_v2.py` — permission management API (grant, revoke, pending requests)
-- `compute_space/src/compute_space/core/auth/permissions_v2.py` — core permission DB operations
-- `apps/oauth_demo/src/oauth_demo/` — example app with two demo modes:
-  - `server_demo.py` — server-side OAuth with full-page redirects
-  - `client_demo.py` — client-side SPA using `static/oauth.js` and popups
-  - `oauth.py` — shared Python OAuth helpers (`get_oauth_token`, `get_accounts`, `AuthRedirectRequired`)
-  - `static/oauth.js` — client-side OAuth library (`OAuthClient` class)
+The machine-readable spec for this service is [`openapi.yaml`](./openapi.yaml), alongside this file. The provider app lives in [`apps/oauth_provider/`](../../apps/oauth_provider/), and [`apps/oauth_demo/`](../../apps/oauth_demo/) is a working consumer with both a server-side and a browser-side demo. Copy from the demo rather than from this page if you want something that runs.
