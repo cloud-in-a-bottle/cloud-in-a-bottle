@@ -216,7 +216,7 @@ def test_add_mdns_with_tls_rejected(cfg: Any, client: TestClient[Litestar]) -> N
     client.cookies.update(_auth_cookie(cfg.db_path))
     resp = client.post("/api/domains", json={"name": "myhost.local", "tls": True, "mdns": True})
     assert resp.status_code == 400
-    assert resp.json()["detail"] == "mDNS (.local) domains are served over http; set tls=false"
+    assert resp.json()["detail"] == "Local domains are served over HTTP; set tls=false"
 
 
 # --- remove -------------------------------------------------------------------------
