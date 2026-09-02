@@ -74,6 +74,32 @@ def healthy_router(router_url):
 
 
 # ---------------------------------------------------------------------------
+# Host SSH helper
+# ---------------------------------------------------------------------------
+
+
+def ssh_host(command: str, *, timeout: int = 60) -> subprocess.CompletedProcess:
+    """Run ``command`` on the deployed host as the ``host`` user over SSH.
+
+    The e2e workflow exports OPENHOST_SSH_KEY / OPENHOST_PUBLIC_IP; tests that
+    need to reach the host directly (to read a per-app file that lives inside
+    another app's rootless-podman user namespace, or to run the podman-owning
+    ``host`` user's tooling) go through here rather than the app HTTP surface.
+    """
+    ssh_key = os.environ.get("OPENHOST_SSH_KEY", "")
+    public_ip = os.environ.get("OPENHOST_PUBLIC_IP", "")
+    assert ssh_key and public_ip, "SSH credentials not available (OPENHOST_SSH_KEY/OPENHOST_PUBLIC_IP)"
+    ssh_opts = f"-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -i {ssh_key}"
+    return subprocess.run(
+        f"ssh {ssh_opts} host@{public_ip} {shlex.quote(command)}",
+        shell=True,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Tests -- executed in order (test_01, test_02, ...)
 # ---------------------------------------------------------------------------
 
@@ -747,19 +773,25 @@ class TestSelfHost:
         assert r.status_code == 200, f"add_app file-browser failed: {r.status_code}: {r.text[:500]}"
         wait_app_running(session, router_url, "file-browser", timeout=APP_DEPLOY_TIMEOUT_S)
 
-    def test_13e_read_minio_credentials(self, session, domain):
-        """Read MinIO root credentials via file-browser."""
-        fb_url = f"https://file-browser.{domain}"
-        # file-browser (dufs) serves files directly; credentials are at
-        # /app_data/minio/config/root-credentials.txt
-        r = poll_endpoint(
-            session,
-            f"{fb_url}/app_data/minio/config/root-credentials.txt",
+    def test_13e_read_minio_credentials(self):
+        """Read MinIO root credentials from the minio container via SSH.
+
+        MinIO writes root-credentials.txt with ``umask 077`` (mode 0600), owned
+        by its container-root.  Each app runs in its own rootless-podman user
+        namespace with ``:idmap`` bind mounts, so whether *another* app
+        (file-browser) can read that 0600 file across namespaces depends on
+        podman/crun's idmap behaviour — fragile, and it broke the whole
+        archive-test chain when a host podman bump changed that mapping.
+        Reading the file from *inside* minio's own namespace (podman exec, where
+        it is always container-root-readable) is namespace-independent and
+        deterministic.
+        """
+        result = ssh_host(
+            "podman exec openhost-minio cat /data/app_data/minio/config/root-credentials.txt",
             timeout=60,
-            interval=5,
-            fail_msg="Could not read MinIO credentials via file-browser",
         )
-        cred_text = r.text
+        assert result.returncode == 0, f"Could not read MinIO credentials: {result.stderr or result.stdout}"
+        cred_text = result.stdout
         # Parse: lines like "export MINIO_ROOT_USER='...'"
         creds = {}
         for line in cred_text.splitlines():
@@ -782,11 +814,7 @@ class TestSelfHost:
         bucket = "openhost-e2e-archive"
         # MinIO S3 API is on port 9106 (host-mapped), accessible as localhost on the host
         endpoint = "http://localhost:9106"
-        ssh_key = os.environ.get("OPENHOST_SSH_KEY", "")
-        public_ip = os.environ.get("OPENHOST_PUBLIC_IP", "")
-        assert ssh_key and public_ip, "SSH credentials not available for bucket creation"
 
-        ssh_opts = f"-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -i {ssh_key}"
         # Install mc (MinIO client), configure alias, create bucket.
         # Detect the VM's arch so this works on both amd64 and arm64 hosts.
         commands = (
@@ -797,13 +825,7 @@ class TestSelfHost:
             # Second bucket for the later s3->s3 migration test (13k).
             f"/tmp/mc mb --ignore-existing e2e/{bucket}-2"
         )
-        result = subprocess.run(
-            f"ssh {ssh_opts} host@{public_ip} {shlex.quote(commands)}",
-            shell=True,
-            capture_output=True,
-            text=True,
-            timeout=60,
-        )
+        result = ssh_host(commands, timeout=60)
         assert result.returncode == 0, f"Bucket creation failed: {result.stderr}"
         TestSelfHost._minio_bucket = bucket
         TestSelfHost._minio_bucket_2 = f"{bucket}-2"
