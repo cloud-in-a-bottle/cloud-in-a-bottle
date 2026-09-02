@@ -786,9 +786,15 @@ class TestSelfHost:
         it is always container-root-readable) is namespace-independent and
         deterministic.
         """
+        # podman is installed inside the pixi env, not on the login PATH, and a
+        # non-interactive SSH shell never sources .bashrc — so a bare `podman`
+        # is "command not found".  Run it the way the openhost service does:
+        # `pixi run` from the code dir, which puts the pixi env's podman on PATH
+        # and loads its containers.conf / OCI-runtime config from the prefix.
         result = ssh_host(
+            "cd /home/host/openhost && /home/host/.pixi/bin/pixi run "
             "podman exec openhost-minio cat /data/app_data/minio/config/root-credentials.txt",
-            timeout=60,
+            timeout=120,
         )
         assert result.returncode == 0, f"Could not read MinIO credentials: {result.stderr or result.stdout}"
         cred_text = result.stdout
