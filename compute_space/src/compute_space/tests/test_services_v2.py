@@ -18,7 +18,7 @@ from compute_space.core.service_interface.resolve import resolve_provider
 from compute_space.core.service_interface.services import default_provider_id_for_service
 from compute_space.core.service_interface.services import lookup_service_by_manifest_shortname
 from compute_space.web.helpers.zone import ZONE_SCOPE_KEY
-from compute_space.web.routes.api.apps import _oauth_return_host
+from compute_space.web.routes.api.apps import _oauth_return_origin
 
 SVC_SECRETS = "github.com/org/repo/services/secrets"
 SVC_OAUTH = "github.com/org/repo/services/oauth"
@@ -423,10 +423,17 @@ class TestAccessedDomainUrls:
         assert url.startswith("http://lvh.me:8088/approve-permissions-v2?")
 
     def test_grant_url_falls_back_to_primary_without_origin(self, db):
-        # A server-side call has no Origin: stay on the primary, port-less (prior behavior).
+        # A server-side call has no Origin: stay on the primary (prior behavior).
         self._seed_primary(db)
         url = approve_grant_url("consumer-id", SVC_SECRETS, {"x": 1}, db, None)
         assert url.startswith("http://lvh.me/approve-permissions-v2?")
+
+    def test_grant_url_server_side_preserves_configured_primary_port(self, db):
+        # Documented `lvh.me:8080` setup: the primary's configured name carries the port. A
+        # server-side call (no Origin) must keep it rather than dropping to bare `lvh.me`.
+        seed_domains(db, Domain(name="lvh.me:8080", tls=False), [])
+        url = approve_grant_url("consumer-id", SVC_SECRETS, {"x": 1}, db, None)
+        assert url.startswith("http://lvh.me:8080/approve-permissions-v2?")
 
     def test_grant_url_is_relative_when_no_domain_known(self, db):
         # No configured domains at all → a relative path rather than a broken absolute URL.
@@ -437,12 +444,13 @@ class TestAccessedDomainUrls:
         scope = {ZONE_SCOPE_KEY: zone} if zone is not None else {}
         return types.SimpleNamespace(scope=scope, url=types.SimpleNamespace(netloc=netloc))
 
-    def test_oauth_return_host_uses_browsing_origin(self, db):
+    def test_oauth_return_origin_carries_browsing_scheme_and_port(self, db):
         self._seed_primary(db)
         request = self._request("lvh.me:8088", Domain(name="lvh.me", tls=False))
-        assert _oauth_return_host(db, request) == "lvh.me:8088"
+        # Absolute (with scheme), not protocol-relative — GitHub's device flow redirects from https.
+        assert _oauth_return_origin(db, request) == "http://lvh.me:8088"
 
-    def test_oauth_return_host_falls_back_to_primary(self, db):
+    def test_oauth_return_origin_falls_back_to_primary(self, db):
         self._seed_primary(db)
         request = self._request("lvh.me", None)  # middleware stashed no zone
-        assert _oauth_return_host(db, request) == "lvh.me"
+        assert _oauth_return_origin(db, request) == "http://lvh.me"

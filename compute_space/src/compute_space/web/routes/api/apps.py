@@ -83,16 +83,20 @@ from compute_space.web.exceptions import ConflictException
 from compute_space.web.helpers.zone import ZONE_SCOPE_KEY
 
 
-def _oauth_return_host(db: sqlite3.Connection, request: Request[Any, Any, Any]) -> str:
-    """The host an OAuth-return redirect should come back to.
+def _oauth_return_origin(db: sqlite3.Connection, request: Request[Any, Any, Any]) -> str:
+    """The ``scheme://host[:port]`` an OAuth-return redirect should come back to.
 
-    The operator kicks these flows off from a browser, so bring them back to the domain
-    (and access port) they are on rather than the canonical primary.  Fall back to the
-    primary only if the middleware stashed no Domain on the request."""
+    Carries the scheme rather than a protocol-relative ``//host``: GitHub's device flow
+    redirects from an HTTPS page, so ``//host`` would resolve as HTTPS and break an OAuth
+    flow started on an http ``.local``/``lvh.me`` domain.  The operator kicks these off from
+    a browser, so return to the domain (and access port) they are on; fall back to the
+    canonical primary (its configured name verbatim) only if the middleware stashed no
+    Domain."""
     zone = request.scope.get(ZONE_SCOPE_KEY)
-    if not isinstance(zone, Domain):
-        return primary_domain(db).name
-    return host_with_request_port(zone.name_no_port, request.url.netloc)
+    if isinstance(zone, Domain):
+        return f"{zone.scheme}://{host_with_request_port(zone.name_no_port, request.url.netloc)}"
+    primary = primary_domain(db)
+    return f"{primary.scheme}://{primary.name}"
 
 
 # ─── attrs request / response models ──────────────────────────────────────
@@ -300,7 +304,7 @@ async def clone_and_get_app_info(
     if not repo_url:
         raise ValidationException(detail="No repository URL provided")
 
-    add_app_url = f"//{_oauth_return_host(db, request)}/add_app?repo={repo_url}"
+    add_app_url = f"{_oauth_return_origin(db, request)}/add_app?repo={repo_url}"
     manifest, clone_dir, error, authorize_url = await clone_with_github_fallback(repo_url, return_to=add_app_url)
 
     if authorize_url:
@@ -777,7 +781,7 @@ async def _reload_app_impl(
             if not pull_ok and is_github_repo_url(repo_url):
                 lf.write("Attempting git pull with github oauth\n")
                 lf.flush()
-                return_to = f"//{_oauth_return_host(db, request)}/reload_app/{app_id}?continue_oauth_update=1"
+                return_to = f"{_oauth_return_origin(db, request)}/reload_app/{app_id}?continue_oauth_update=1"
                 try:
                     token = await get_oauth_token("github", ["repo"], return_to=return_to)
                 except OAuthRequired as e:

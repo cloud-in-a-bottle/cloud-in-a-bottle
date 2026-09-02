@@ -81,8 +81,14 @@ def approve_grant_url(
     # and '"' — all of which break query-string parsing if interpolated raw.
     query = urlencode({"app": consumer_app_id, "service": service_url, "grant": json.dumps(grant, sort_keys=True)})
     approve_path = f"/approve-permissions-v2?{query}"
-    zone = (Domain.match(db, browsing_netloc) if browsing_netloc else None) or primary_domain_or_none(db)
-    if zone is None:
+    matched = Domain.match(db, browsing_netloc) if browsing_netloc else None
+    if matched is not None:
+        # Browser-driven: keep the owner's domain and the access port they arrived on.
+        host = host_with_request_port(matched.name_no_port, browsing_netloc or "")
+        return f"{matched.scheme}://{host}{approve_path}"
+    # Server-side (or an origin we don't recognize): the canonical primary, its configured name
+    # verbatim so a port baked into the primary (e.g. `lvh.me:8080`) is preserved.
+    primary = primary_domain_or_none(db)
+    if primary is None:
         return approve_path
-    host = host_with_request_port(zone.name_no_port, browsing_netloc or "")
-    return f"{zone.scheme}://{host}{approve_path}"
+    return f"{primary.scheme}://{primary.name}{approve_path}"
