@@ -90,12 +90,17 @@ def _claim_archive_migration(db: sqlite3.Connection, operation_id: str) -> tuple
                 db.execute("ROLLBACK")
                 return "archive_migration", False
         if not recovery_claim:
-            busy_app = db.execute(
-                "SELECT 1 FROM apps WHERE status IN ('building', 'starting', 'removing') "
-                "OR (status = 'error' AND error_message = ?) LIMIT 1",
+            busy_rows = db.execute(
+                "SELECT status, error_message, manifest_raw FROM apps "
+                "WHERE status IN ('building', 'starting', 'removing') "
+                "OR (status = 'error' AND error_message = ?)",
                 (INTERRUPTED_APP_REMOVAL_MESSAGE,),
-            ).fetchone()
-            if busy_app is not None:
+            ).fetchall()
+            if any(
+                row["error_message"] == INTERRUPTED_APP_REMOVAL_MESSAGE
+                or archive_backend.manifest_uses_archive(row["manifest_raw"] or "")
+                for row in busy_rows
+            ):
                 db.execute("ROLLBACK")
                 return "apps_busy", False
         if recovery_claim:

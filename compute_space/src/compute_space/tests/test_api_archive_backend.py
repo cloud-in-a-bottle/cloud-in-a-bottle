@@ -112,6 +112,23 @@ def test_archive_recovery_claim_bypasses_stale_transient_app(cfg: Any) -> None:
         db.close()
 
 
+def test_archive_migration_claim_allows_nonarchive_app_startup(cfg: Any) -> None:
+    db = sqlite3.connect(cfg.db_path)
+    db.row_factory = sqlite3.Row
+    try:
+        db.execute(
+            "INSERT INTO apps (app_id, name, version, repo_path, local_port, status, manifest_raw) "
+            "VALUES (?, 'nonarchive', '1', '/tmp/repo', 19001, 'starting', ?)",
+            (new_app_id(), 'name = "nonarchive"\n[data]\napp_data = true\n'),
+        )
+        db.commit()
+
+        assert archive_routes._claim_archive_migration(db, "archive-id") == (None, False)
+        archive_routes._release_archive_migration(db, "archive-id")
+    finally:
+        db.close()
+
+
 @pytest.mark.asyncio
 async def test_cancelled_archive_request_leaves_worker_to_cleanup(cfg: Any) -> None:
     started = threading.Event()
