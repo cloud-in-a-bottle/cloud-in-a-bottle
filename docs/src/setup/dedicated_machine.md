@@ -6,7 +6,7 @@ Cloud in a Bottle installs directly on the host. It runs various system services
 
 This page is in two parts. [Part 1](#part-1-core-instance-setup) gets a working instance running on the machine. [Part 2](#part-2-taking-it-public) covers the networking needed to put it on the public internet.
 
-The end state is a public instance with HTTPS: a dashboard at `https://host.example.com/`, and each app on its own subdomain at `https://<app>.host.example.com/`.
+The end state is a public instance with HTTPS: a dashboard at `https://mycooldomain.com/`, and each app on its own subdomain at `https://<app>.mycooldomain.com/`.
 
 ## Prerequisites
 

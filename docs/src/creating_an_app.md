@@ -149,11 +149,6 @@ See [Cross-App Services](./cross_app_services.md) for how services work.
 
 See [OAuth in Apps](./oauth.md) for an example - getting oauth tokens to external services (eg gmail or github).
 
-### Identity
-
-For apps that should be available to multiple users and require more than trivial publicly routes or token-protected public routes, see [User Identity](./user_identity.md) for how to implement this with the Cloud in a Bottle user identity provider.
-
-
 ## Development / Debugging workflow
 
 In general, the debugging flow is something like:

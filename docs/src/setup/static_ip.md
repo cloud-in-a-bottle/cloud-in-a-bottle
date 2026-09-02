@@ -11,24 +11,24 @@ If the machine is at home you probably have neither; see [Exposing a home server
 
 ## Delegate DNS to the machine
 
-Cloud in a Bottle runs an authoritative DNS server for your zone. It serves the wildcard `*.host.example.com`, so every app gets a subdomain without you touching DNS again, and it answers the ACME DNS-01 challenge used to issue the wildcard TLS certificate.
+Cloud in a Bottle runs an authoritative DNS server for your zone. It serves the wildcard `*.mycooldomain.com`, so every app gets a subdomain without you touching DNS again, and it answers the ACME DNS-01 challenge used to issue the wildcard TLS certificate.
 
-So you delegate the whole zone to the machine rather than pointing an `A` record at it. For zone `host.example.com` on a server at `203.0.113.10`, create two records at your DNS provider:
+So you delegate the whole zone to the machine rather than pointing an `A` record at it. For zone `mycooldomain.com` on a server at `203.0.113.10`, create two records at your DNS provider:
 
 | Type | Name                   | Value                  |
 |------|------------------------|------------------------|
-| `A`  | `ns1.host.example.com` | `203.0.113.10`         |
-| `NS` | `host.example.com`     | `ns1.host.example.com` |
+| `A`  | `ns1.mycooldomain.com` | `203.0.113.10`         |
+| `NS` | `mycooldomain.com`     | `ns1.mycooldomain.com` |
 
 The `A` record is glue. An `NS` record can only name a host, not an IP, so something has to resolve `ns1` first.
 
 Check the delegation before continuing. It can take a while to propagate.
 
 ```bash
-dig +short NS host.example.com     # -> ns1.host.example.com.
+dig +short NS mycooldomain.com     # -> ns1.mycooldomain.com.
 ```
 
-The instance now answers for everything at or below `host.example.com`. You never create per-app records.
+The instance now answers for everything at or below `mycooldomain.com`. You never create per-app records.
 
 ## Switch to TLS
 
@@ -38,7 +38,7 @@ This takes two steps, because the HTTP-only install left the pieces that do the 
 
 ### 1. Add the domain
 
-In the dashboard, open **Settings → Domains**, enter `host.example.com`, leave the type as **Public (HTTPS)**, and click **Add domain**.
+In the dashboard, open **Settings → Domains**, enter `mycooldomain.com`, leave the type as **Public (HTTPS)**, and click **Add domain**.
 
 The domain is recorded immediately, and the instance kicks off certificate acquisition in the background. That attempt will fail, and the domain will show an error in the table — acquisition answers a DNS-01 challenge out of CoreDNS, and CoreDNS is not running yet in HTTP-only mode. Leave it; the next step re-drives it.
 
@@ -60,7 +60,7 @@ coredns_enabled = true
 start_caddy = true
 
 acme_account_key_path = "/home/host/openhost/ansible/secrets/certbot_private_key.json"
-acme_email = "openhost@host.example.com"
+acme_email = "openhost@mycooldomain.com"
 acme_directory_url = "https://acme-v02.api.letsencrypt.org/directory"
 ```
 
@@ -72,16 +72,16 @@ sudo systemctl restart openhost
 
 Make the edit before restarting. A TLS domain in the database with `start_caddy = false` is a configuration the router rejects outright, so a restart in between fails with *"A TLS domain is configured but start_caddy is False."*
 
-On this boot the instance starts CoreDNS authoritative for `host.example.com`, starts Caddy on 443, notices the domain's certificate is missing, acquires it, and reloads Caddy to serve it. Watch it happen:
+On this boot the instance starts CoreDNS authoritative for `mycooldomain.com`, starts Caddy on 443, notices the domain's certificate is missing, acquires it, and reloads Caddy to serve it. Watch it happen:
 
 ```bash
 sudo journalctl -u openhost -f
 ```
 
-The domain flips to active in the settings table once the certificate lands. The dashboard is then reachable at `https://host.example.com/`, apps at `https://<app>.host.example.com/`, and you can drop the SSH tunnel:
+The domain flips to active in the settings table once the certificate lands. The dashboard is then reachable at `https://mycooldomain.com/`, apps at `https://<app>.mycooldomain.com/`, and you can drop the SSH tunnel:
 
 ```bash
-curl https://host.example.com/health        # -> {"status":"ok"}
+curl https://mycooldomain.com/health        # -> {"status":"ok"}
 ```
 
-The domain you installed with stays the instance's primary and keeps working; the dashboard cannot change which domain is primary, and the primary is what background tasks and outbound links use. If you want `host.example.com` to be the primary, provision the machine with it from the start rather than converting.
+The domain you installed with stays the instance's primary and keeps working; the dashboard cannot change which domain is primary, and the primary is what background tasks and outbound links use. If you want `mycooldomain.com` to be the primary, provision the machine with it from the start rather than converting.

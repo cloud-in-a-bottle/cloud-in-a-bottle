@@ -48,7 +48,7 @@ URL, and the whole manual — every page, concatenated — is served at
 [`/docs/all.md`](/docs/all.md):
 
 ```bash
-curl https://your-zone.example.com/docs/routing.md
+curl https://your-zone.example.com/docs/how_it_works/routing.md
 curl https://your-zone.example.com/docs/all.md
 ```
 

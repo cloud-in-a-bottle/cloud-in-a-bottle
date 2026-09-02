@@ -13,10 +13,10 @@
 
 # How it Works
 
-- [Routing](./routing.md)
-- [User Identity](./user_identity.md)
-- [Persistent Data & Archive](./data.md)
-- [Logs](./logs.md)
+- [Overview](how_it_works/overview.md)
+- [Routing](how_it_works/routing.md)
+- [Data](how_it_works/data.md)
+- [Logs](how_it_works/logs.md)
 
 # Creating an App
 
