@@ -25,7 +25,13 @@ def lookup_service_by_manifest_shortname(
 
 
 def register_services_provided_by_app(app_id: str, manifest: AppManifest, db: sqlite3.Connection) -> None:
-    """Register V2 service providers from manifest. Sets default if none exists."""
+    """Sync the set of services this app provides to match its manifest.
+
+    Registering says only what an app *can* serve, never what it *does* serve: a row in
+    ``service_defaults`` means the owner chose that provider, and nothing else may write one.
+    This runs on every install, start and reload, so a registration that also claimed the default
+    would silently undo the owner's choice the next time the app booted.
+    """
     with make_atomic_with_savepoint(db):
         db.execute("DELETE FROM service_providers_v2 WHERE app_id = ?", (app_id,))
         for svc in manifest.provides_services_v2:
@@ -33,15 +39,6 @@ def register_services_provided_by_app(app_id: str, manifest: AppManifest, db: sq
                 "INSERT OR REPLACE INTO service_providers_v2 (service_url, app_id, service_version, endpoint) VALUES (?, ?, ?, ?)",
                 (svc.service, app_id, svc.version, svc.endpoint),
             )
-            existing_default = db.execute(
-                "SELECT 1 FROM service_defaults WHERE service_url = ?",
-                (svc.service,),
-            ).fetchone()
-            if not existing_default:
-                db.execute(
-                    "INSERT INTO service_defaults (service_url, app_id) VALUES (?, ?)",
-                    (svc.service, app_id),
-                )
 
 
 def list_all_service_providers(db: sqlite3.Connection, service_url: str | None = None) -> list[ServiceProvider]:
@@ -80,9 +77,10 @@ def default_provider_id_for_service(service_url: str, db: sqlite3.Connection) ->
     1. the app the owner picked;
     2. the router's builtin, which holds the service until an app is picked and takes it back when
        the owner clears that;
-    3. the highest version otherwise registered — a service keeps working when its default app is
-       uninstalled (the default row cascades away with it) or was never chosen.
+    3. the incumbent app otherwise — a service keeps working when its default app is uninstalled
+       (the default row cascades away with it) or was never chosen.
 
+    Only 1 is stored; 2 and 3 are derived, so nothing has to be written to keep a service served.
     Returns None only if nothing provides the service at all.
     ROUTER_APP_ID is never stored in service_defaults — the column is a foreign key into apps.
     """
@@ -91,17 +89,30 @@ def default_provider_id_for_service(service_url: str, db: sqlite3.Connection) ->
         return str(row["app_id"])
     if builtin_services.builtin_by_url(service_url) is not None:
         return ROUTER_APP_ID
-    return _highest_version_provider_id(service_url, db)
+    return _incumbent_provider_id(service_url, db)
 
 
-def _highest_version_provider_id(service_url: str, db: sqlite3.Connection) -> str | None:
+def _incumbent_provider_id(service_url: str, db: sqlite3.Connection) -> str | None:
+    """Of the apps providing a service nobody has chosen between, the one installed longest ago.
+
+    Two providers of a service are not interchangeable — each holds its own data — so installing
+    a second one must not move the service off the first.  Version breaks a tie only between apps
+    installed in the same second: it says which revision of the spec an app implements, nothing
+    about which app has the data.
+    """
     rows = db.execute(
-        "SELECT app_id, service_version FROM service_providers_v2 WHERE service_url = ?", (service_url,)
+        """SELECT sp.app_id, sp.service_version, a.created_at
+           FROM service_providers_v2 sp
+           JOIN apps a ON a.app_id = sp.app_id
+           WHERE sp.service_url = ?""",
+        (service_url,),
     ).fetchall()
     if not rows:
         return None
+    oldest = min(r["created_at"] for r in rows)
+    tied = [r for r in rows if r["created_at"] == oldest]
     # Versions are validated when the manifest is parsed, so they are all comparable here.
-    return str(max(rows, key=lambda r: Version(r["service_version"]))["app_id"])
+    return str(max(tied, key=lambda r: (Version(r["service_version"]), r["app_id"]))["app_id"])
 
 
 def set_default(service_url: str, app_id: str, db: sqlite3.Connection) -> None:

@@ -65,7 +65,7 @@ that ref.
            run("systemctl", "restart", "some-service")
    ```
 
-3. Register the migration in `services.py` by appending an instance to `REGISTRY`.
+3. Register the migration in `registry.py` by appending an instance to `REGISTRY`.
    Versions must be contiguous starting at 2 — the validator will error if they're not.
 
 ## Helpers

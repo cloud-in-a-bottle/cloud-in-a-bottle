@@ -14,13 +14,20 @@ SVC_SECRETS = "github.com/org/repo/services/secrets"
 SVC_OAUTH = "github.com/org/repo/services/oauth"
 
 
-def _add_provider(db, service_url, app_name, version, endpoint, port=9000, status="running", default=True) -> str:
-    """Insert a provider app row + service_providers_v2 entry. Returns the minted app_id."""
+def _add_provider(
+    db, service_url, app_name, version, endpoint, port=9000, status="running", default=True, installed_at="2020-01-01"
+) -> str:
+    """Insert a provider app row + service_providers_v2 entry. Returns the minted app_id.
+
+    ``installed_at`` sets ``apps.created_at``, which is what decides between providers the owner
+    has not chosen between; it defaults to a shared timestamp so callers that don't care about
+    install order get a tie.
+    """
     app_id = new_app_id()
     db.execute(
-        """INSERT OR REPLACE INTO apps (app_id, name, version, repo_path, local_port, status)
-           VALUES (?, ?, ?, ?, ?, ?)""",
-        (app_id, app_name, "0.0.0", f"/tmp/{app_name}", port, status),
+        """INSERT OR REPLACE INTO apps (app_id, name, version, repo_path, local_port, status, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+        (app_id, app_name, "0.0.0", f"/tmp/{app_name}", port, status, installed_at),
     )
     db.execute(
         "INSERT INTO service_providers_v2 (service_url, app_id, service_version, endpoint) VALUES (?, ?, ?, ?)",
@@ -53,13 +60,30 @@ class TestVersionResolution:
         _add_provider(db, SVC_SECRETS, "secrets", "1.0.0", "/_svc/")
         assert resolve_provider(SVC_SECRETS, "==1.0.0", db).service_version == "1.0.0"
 
-    def test_highest_version_serves_when_no_default_is_set(self, db):
+    def test_a_provider_serves_when_no_default_is_set(self, db):
         # The default row goes away with the app it named (ON DELETE CASCADE), and the owner can
         # clear it outright — neither should leave the service dead while a provider exists.
+        a_id = _add_provider(db, SVC_SECRETS, "secrets-a", "0.1.0", "/_a/", port=9001, default=False)
+        assert default_provider_id_for_service(SVC_SECRETS, db) == a_id
+        assert resolve_provider(SVC_SECRETS, ">=0.1.0", db).app_id == a_id
+
+    def test_installing_a_second_provider_does_not_take_the_service_off_the_first(self, db):
+        # Providers of a service hold their own data, so a newer or higher-versioned one appearing
+        # alongside the incumbent must not silently redirect consumers at its empty store.
+        a_id = _add_provider(
+            db, SVC_SECRETS, "secrets-a", "0.1.0", "/_a/", port=9001, default=False, installed_at="2020-01-01"
+        )
+        _add_provider(
+            db, SVC_SECRETS, "secrets-b", "9.0.0", "/_b/", port=9002, default=False, installed_at="2020-06-01"
+        )
+        assert default_provider_id_for_service(SVC_SECRETS, db) == a_id
+
+    def test_version_breaks_a_tie_between_providers_installed_at_the_same_time(self, db):
+        # created_at is second-granular, so two providers can tie; the answer still has to be
+        # stable rather than whatever the query happens to return first.
         _add_provider(db, SVC_SECRETS, "secrets-a", "0.1.0", "/_a/", port=9001, default=False)
         b_id = _add_provider(db, SVC_SECRETS, "secrets-b", "0.2.0", "/_b/", port=9002, default=False)
         assert default_provider_id_for_service(SVC_SECRETS, db) == b_id
-        assert resolve_provider(SVC_SECRETS, ">=0.1.0", db).app_id == b_id
 
     def test_a_default_naming_a_non_provider_is_reported_not_silently_replaced(self, db):
         # An app that drops a service on update loses its service_providers_v2 row, but the

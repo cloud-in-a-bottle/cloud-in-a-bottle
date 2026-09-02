@@ -15,6 +15,7 @@ from litestar import post
 
 from compute_space.config import DefaultConfig
 from compute_space.core.app_id import ROUTER_APP_ID
+from compute_space.core.manifest import parse_manifest_from_string
 from compute_space.core.proxy_target import InProcess
 from compute_space.core.proxy_target import LocalPort
 from compute_space.core.service_interface import builtin_services
@@ -26,6 +27,7 @@ from compute_space.core.service_interface.service_client import ServiceCallError
 from compute_space.core.service_interface.service_client import call_service
 from compute_space.core.service_interface.services import default_provider_id_for_service
 from compute_space.core.service_interface.services import list_all_service_providers
+from compute_space.core.service_interface.services import register_services_provided_by_app
 from compute_space.core.service_interface.services import set_default
 from compute_space.db import init_db
 from compute_space.tests.conftest import open_db
@@ -130,6 +132,22 @@ def test_the_router_can_be_chosen_as_the_default_like_any_other_provider(registe
     assert default_provider_id_for_service(SERVICE_URL, conn) == ROUTER_APP_ID
 
 
+def test_choosing_the_router_survives_the_provider_app_restarting(registered: BuiltinService, db: Any) -> None:
+    # Registration runs on every install, start and reload.  If it claimed the service whenever no
+    # default row existed, choosing the router — which is stored as the absence of that row — would
+    # last exactly until the next reboot.
+    _, conn = db
+    _install_app(conn, "someapp")
+    set_default(SERVICE_URL, "someapp", conn)
+    set_default(SERVICE_URL, ROUTER_APP_ID, conn)
+
+    register_services_provided_by_app("someapp", _manifest_providing(SERVICE_URL), conn)
+    conn.commit()
+
+    assert default_provider_id_for_service(SERVICE_URL, conn) == ROUTER_APP_ID
+    assert resolve_provider(SERVICE_URL, ">=0", conn).target == InProcess(registered.app)
+
+
 def test_the_router_cannot_be_made_default_for_a_service_it_does_not_provide(db: Any) -> None:
     _, conn = db
     with pytest.raises(LookupError, match="does not provide"):
@@ -202,6 +220,26 @@ async def test_no_provider_at_all_is_a_clear_error(db: Any) -> None:
     _, conn = db
     with pytest.raises(ServiceCallError, match="no usable provider"):
         await call_service("github.com/example/missing", "/echo", {}, [], conn)
+
+
+def _manifest_providing(service_url: str) -> Any:
+    """The manifest an installed provider app registers from."""
+    return parse_manifest_from_string(
+        f"""
+[app]
+name = "someapp"
+version = "0.1.0"
+
+[runtime.container]
+image = "Dockerfile"
+port = 8080
+
+[[services.v2.provides]]
+service = "{service_url}"
+version = "1.0.0"
+endpoint = "/"
+"""
+    )
 
 
 def _install_app(conn: sqlite3.Connection, app_id: str) -> None:

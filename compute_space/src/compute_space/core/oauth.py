@@ -2,26 +2,21 @@
 
 The router occasionally needs to act as an OAuth client itself — most notably to clone or pull private GitHub repos
 on behalf of the operator. It does this by calling the v2 oauth service (provider app
-``github.com/imbue-openhost/openhost/services/oauth``) over HTTP loopback, authenticating as a synthetic ``OPENHOST``
-consumer with a hard-coded grant for the requested provider+scopes.
+``github.com/imbue-openhost/openhost/services/oauth``) over HTTP loopback, authenticating as the router's own
+identity (``ROUTER_APP_ID``) with a hard-coded grant for the requested provider+scopes.
 """
 
-import json
 import sqlite3
 
 import httpx
 
 from compute_space.core.proxy_target import client_for
+from compute_space.core.service_interface.headers import router_consumer_headers
 from compute_space.core.service_interface.resolve import resolve_provider
 from compute_space.core.util import assert_str
 from compute_space.db import get_db
 
 OAUTH_SERVICE_URL = "github.com/imbue-openhost/openhost/services/oauth"
-
-# Synthetic identity used in the X-OpenHost-Consumer-* headers when the router itself is the consumer.
-# Real apps have non-zero base58 ids.
-ROUTER_CONSUMER_ID = "0"
-ROUTER_CONSUMER_NAME = "OPENHOST"
 
 
 class OAuthRequired(RuntimeError):
@@ -51,7 +46,8 @@ async def get_oauth_token(
     # post-filter shape the proxy would produce. The oauth service only honours app-scoped grants
     # (see services/oauth/openapi.yaml).
     grant_payload = {"provider": provider, "scopes": list(scopes)}
-    permissions_header = json.dumps([{"grant": grant_payload, "scope": "app"}])
+    headers = dict(router_consumer_headers([{"grant": grant_payload, "scope": "app"}]))
+    headers["Accept"] = "application/json"
     client, base_url = client_for(oauth_provider.target, 5)
     url = f"{base_url}{oauth_provider.endpoint.rstrip('/')}/token"
     try:
@@ -59,12 +55,7 @@ async def get_oauth_token(
             resp = await client.post(
                 url,
                 json={"provider": provider, "scopes": list(scopes), "return_to": return_to},
-                headers={
-                    "Accept": "application/json",
-                    "X-OpenHost-Consumer-Id": ROUTER_CONSUMER_ID,
-                    "X-OpenHost-Consumer-Name": ROUTER_CONSUMER_NAME,
-                    "X-OpenHost-Permissions": permissions_header,
-                },
+                headers=headers,
             )
     except httpx.HTTPError as e:
         raise RuntimeError(f"OAuth service is not responding: {e}") from e

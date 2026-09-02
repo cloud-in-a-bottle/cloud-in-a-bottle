@@ -192,7 +192,8 @@
   <div class="panel">
     <p class="hint">When more than one installed app provides the same service, choose which one is
       used by default. Consumer apps that don't pin a specific provider get the default; with no
-      default set, the highest version wins.</p>
+      default set, Cloud in a Bottle's own implementation serves the service if it has one, and
+      otherwise the app that has provided it the longest.</p>
     <div id="services-status">
       <div class="muted">Loading&hellip;</div>
     </div>
