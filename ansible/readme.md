@@ -115,4 +115,3 @@ ssh host@<IP> journalctl -u openhost -f
 # verify
 curl https://<domain>/health
 ```
-

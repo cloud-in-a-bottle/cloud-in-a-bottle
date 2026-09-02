@@ -24,14 +24,6 @@ This repo contains a Python 3.12 server using Litestar and Hypercorn, managed wi
 The template is recommended when starting a new app from scratch. Existing projects can also be deployed to Cloud in a Bottle directly via their own Dockerfile without using this template.
 
 
-### Rootless constraints
-
-A few things that work under classical Docker don't work here:
-
-- `[[ports]].host_port` values below 25 are rejected at manifest parse time: rootless podman cannot bind to privileged ports under 25 (the router lowers the unprivileged-port floor from 1024 to 25 so SMTP, HTTP, and HTTPS all work).
-- `[runtime.container].capabilities` is a tight allowlist.  Safe caps for rootless user namespaces (`NET_ADMIN`, `NET_RAW`, `NET_BIND_SERVICE`, `CHOWN`, `DAC_OVERRIDE`, `SETUID`, `SETGID`, `KILL`, `MKNOD`, `SYS_CHROOT`, `IPC_LOCK`, a few others) are accepted; capabilities that require real host privilege (`SYS_ADMIN`, `SYS_MODULE`, `SYS_PTRACE`, ...) are rejected.  The exact list lives in `compute_space.core.manifest.SAFE_CAPABILITIES`.
-- `[runtime.container].devices` declares **extra** host devices to pass through on top of the OCI baseline.  The character devices `/dev/null`, `/dev/zero`, `/dev/random`, `/dev/urandom`, `/dev/full`, `/dev/tty` and `/dev/console` are mounted inside every container automatically and do **not** need to be listed.  Extras are restricted to a tight allowlist (`/dev/net/tun`, `/dev/fuse`, `/dev/ttyS*`, `/dev/ttyUSB*`, `/dev/ttyACM*`).  Requests for anything outside the list (`/dev/mem`, `/dev/kvm`, raw block devices, etc.) are rejected at manifest parse time.
-
 Here's an example of a simple app:
 
 ### Directory structure
@@ -113,7 +105,7 @@ if __name__ == "__main__":
 
 ### Environment variables
 
-The router injects these environment variables into your app. Every one is also present under the legacy `OPENHOST_` prefix, from before the project was renamed; prefer the `BOTTLE_` names.
+The router injects these environment variables into your app.
 
 | Variable | Example | Description                                                                                                     |
 |----------|---------|-----------------------------------------------------------------------------------------------------------------|
@@ -148,8 +140,6 @@ See the [manifest spec](manifest_spec.md) for the full reference.
 
 See [Cross-App Services](./cross_app_services.md) for how services work.
 
-For a worked example, the [oauth service](https://github.com/cloud-in-a-bottle/cloud-in-a-bottle/blob/main/services/oauth/README.md) gets your app tokens for external APIs like Gmail or GitHub.
-
 ## Development / Debugging workflow
 
 In general, the debugging flow is something like:
@@ -160,39 +150,4 @@ In general, the debugging flow is something like:
 5. "Update and reload" from the app details page (pulls new code and rebuilds)
 6. Retest and repeat
 
-We find AI tools work best when they can directly reference Cloud in a Bottle code+docs. So we'd suggest:
-```cd some_dir && git clone https://github.com/cloud-in-a-bottle/cloud-in-a-bottle.git```
-then point them at that checkout and tell them to read this doc.
-
-## CLI
-
 There is a CLI interface, `bottle`, that can be used for interacting with your compute space, if you prefer that style of workflow. See [The bottle CLI](../operation/cli.md) to install it and log in.
-
-## AI Agent Development
-
-We'd suggest letting your AI agent do the full "fix bugs, commit+push, update and reload, test" loop. The `bottle` CLI makes this easy to automate, although the CLI will need to be logged in by the user manually first.
-
-Here's some example `bottle` commands, although you should run `bottle --help` to get the most up-to-date command list.
-
-```bash
-bottle status                                    # check if compute space is reachable
-
-bottle app list                                  # list apps and status
-bottle app deploy https://github.com/you/myapp   # deploy from git repo
-bottle app deploy https://github.com/you/myapp --name cool-app --wait
-bottle app status cool-app                       # check status
-bottle app logs cool-app                         # view logs
-bottle app logs cool-app --follow                # tail logs
-bottle app reload cool-app                       # rebuild + restart
-bottle app reload cool-app --update --wait       # git pull, rebuild, wait
-bottle app stop cool-app                         # stop app
-bottle app remove cool-app                       # remove app + data
-bottle app remove cool-app --keep-data           # remove but keep data
-bottle app rename cool-app new-name              # rename app
-
-bottle tokens list                               # list API tokens
-bottle tokens create --name "ci" --expiry-hours 72
-bottle tokens delete 3                           # delete by token ID
-```
-
-Note: cloning a private GitHub repo for the first time requires an OAuth flow in the browser. The CLI will print a link to authorize. After that, subsequent deploys and updates work without browser interaction.
