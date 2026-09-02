@@ -1,5 +1,6 @@
 {% extends "layout.html" %}
-{% from "_components/app_row.html" import app_row %}
+{# with context: app_row calls app_url(), which reads `request` to keep app links on the arriving domain + port #}
+{% from "_components/app_row.html" import app_row with context %}
 {% from "_components/card.html" import card %}
 {% from "_components/icon.html" import icon %}
 {% from "_components/section.html" import section_head %}
