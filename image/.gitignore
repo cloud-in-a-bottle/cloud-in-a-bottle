@@ -1,0 +1,3 @@
+# Build artifacts and the cached Ubuntu base image.
+out/
+cache/

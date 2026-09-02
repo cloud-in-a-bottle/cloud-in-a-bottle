@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import datetime as _dt
 import json
 import os
@@ -496,15 +497,28 @@ def test_page_is_snapshotted_not_reread_per_request(monkeypatch: pytest.MonkeyPa
     # non-atomically) or drift if the tree moves again while we're still up.
     body = tmp_path / "_update_progress_body.html"
     body.write_text("<h1>Updating this instance</h1>", encoding="utf-8")
+    favicon = tmp_path / "favicon.svg"
+    favicon_bytes = b'<svg viewBox="0 0 26 18"></svg>'
+    favicon.write_bytes(favicon_bytes)
     monkeypatch.setattr(server, "_BODY_PATH", body)
+    monkeypatch.setattr(server, "_FAVICON_PATH", favicon)
     monkeypatch.setattr(server, "_page_snapshot", None)
 
-    assert b"Updating this instance" in server.snapshot_page()
+    page = server.snapshot_page()
+    assert b"Updating this instance" in page
+    marker = b"data:image/svg+xml;base64,"
+    assert marker in page
+    encoded_favicon, separator, _ = page.split(marker, 1)[1].partition(b"'")
+    assert separator
+    assert base64.b64decode(encoded_favicon) == favicon_bytes
 
     body.write_text("<h1>truncated mid-checkou", encoding="utf-8")
+    favicon.write_bytes(b"<svg")
     assert b"Updating this instance" in server._page()
+    assert server._page() == page
 
     body.unlink()
+    favicon.unlink()
     assert b"Updating this instance" in server._page()
 
 

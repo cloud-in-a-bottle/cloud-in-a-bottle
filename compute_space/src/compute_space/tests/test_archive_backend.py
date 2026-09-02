@@ -1263,6 +1263,16 @@ def test_storage_summary_non_archive_app(cfg, db):
     assert s.uses_archive is False
 
 
+@pytest.mark.parametrize("flag", ["access_all_app_data", "access_all_data", "access_all_archive"])
+def test_storage_summary_cross_app_access_includes_every_tier(cfg, db, flag):
+    manifest = f'name="x"\n[data]\napp_data=false\n{flag}=true\n'
+    s = archive_backend.storage_summary(manifest, db)
+    assert s.app_data is True
+    assert s.app_temp_data is True
+    assert s.uses_archive is True
+    assert s.requires_archive is False
+
+
 # --- stop_running_archive_apps / start_apps_by_id --------------------------
 
 

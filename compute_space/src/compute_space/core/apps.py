@@ -55,7 +55,7 @@ from compute_space.core.oauth import OAuthRequired
 from compute_space.core.oauth import get_oauth_token
 from compute_space.core.ports import allocate_port
 from compute_space.core.ports import resolve_port_mappings
-from compute_space.core.service_interface.services_v2 import register_v2_service_providers
+from compute_space.core.service_interface.services import register_services_provided_by_app
 from compute_space.db import get_db
 
 RESERVED_PATHS = {
@@ -388,7 +388,7 @@ def insert_and_deploy(
             (app_id, app_token_hash),
         )
 
-    register_v2_service_providers(app_id, manifest, db)
+    register_services_provided_by_app(app_id, manifest, db)
 
     db.commit()
 
@@ -696,7 +696,7 @@ def _prepare_app_runtime(
         )
 
     if register_services:
-        register_v2_service_providers(app_id, manifest, db)
+        register_services_provided_by_app(app_id, manifest, db)
 
     return env_vars, _load_port_mappings_from_db(app_id, db)
 
@@ -1237,7 +1237,7 @@ def reload_app_background(app_id: str, repo_path: str, config: Config) -> None:
                 _sync_port_mappings(app_id, manifest.port_mappings, db, config)
 
                 # Re-register v2 service providers from the new manifest.
-                register_v2_service_providers(app_id, manifest, db)
+                register_services_provided_by_app(app_id, manifest, db)
 
                 db.commit()
             except ValueError:

@@ -312,7 +312,7 @@ def test_rename_rollback_continues_when_a_rollback_rename_itself_fails(cfg_facto
 
 def test_rename_non_archive_app_works_with_disabled_backend(cfg_factory: Any) -> None:
     """An app that doesn't use the archive tier (no app_archive, no
-    access_all_archive) must rename successfully on a fresh zone where the
+    access_all_app_data) must rename successfully on a fresh zone where the
     archive backend is the default 'disabled'.  Pre-fix, the gate
     blocked all renames whenever the backend was unhealthy."""
     cfg = cfg_factory(20305)

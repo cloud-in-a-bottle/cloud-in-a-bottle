@@ -25,18 +25,42 @@ BRANCH="main"
 REPO_URL="https://github.com/cloud-in-a-bottle/cloud-in-a-bottle.git"
 OPENHOST_DIR="/home/host/openhost"
 LOCAL_HTTP_ONLY="false"
+BIND_HOST=""
+CLAIM_TOKEN=""
+SWAP_SIZE_GB=""
+OPEN_CLAIM="false"
 
 usage() {
     echo "Usage: $0 --domain <domain> [--branch <branch>] [--repo <repo-url>] [--local-http-only]"
+    echo "          [--bind-host <addr>] [--claim-token <token>] [--swap-size <gb>] [--open-claim]"
     echo ""
     echo "  --domain            Required. Domain name (e.g., myhost.example.com)."
     echo "                      In --local-http-only mode this is only used for app"
-    echo "                      subdomain routing (e.g. lvh.me), not TLS/DNS."
+    echo "                      subdomain routing, not TLS/DNS -- include the port"
+    echo "                      (e.g. lvh.me:8080), since the router builds absolute"
+    echo "                      URLs from it and without it they point at :80."
     echo "  --branch            Git branch to deploy (default: main)"
     echo "  --repo              Git repo URL (default: cloud-in-a-bottle/cloud-in-a-bottle)"
     echo "  --local-http-only   HTTP-only localhost mode: no TLS, CoreDNS, or Caddy."
     echo "                      For bringing an instance up before a public domain +"
     echo "                      DNS are ready.  Reach it via an SSH tunnel to :8080."
+    echo "  --bind-host         Router bind address (default: config default,"
+    echo "                      127.0.0.1). Pass 0.0.0.0 to reach :8080 over the LAN"
+    echo "                      (used by the VM image build so the dashboard is"
+    echo "                      reachable from the host machine)."
+    echo "  --claim-token       Fixed claim token to bake in (default: random,"
+    echo "                      printed at the end). Set a known value for a"
+    echo "                      distributable image with a predictable claim URL."
+    echo "  --swap-size         Swap file size in GiB (default: playbook default,"
+    echo "                      16). Smaller values suit constrained local VMs."
+    echo "  --open-claim        Leave /setup ungated (claim_token_required = false), so you"
+    echo "                      can claim the instance without a token. For a private,"
+    echo "                      unexposed instance (e.g. the distributed VM image behind"
+    echo "                      NAT) where a shipped default token would be a public"
+    echo "                      non-secret. Requires --local-http-only: on a reachable"
+    echo "                      instance the token is the only thing stopping a stranger"
+    echo "                      from claiming it first. Re-enable via config if you later"
+    echo "                      expose the instance on a network."
 }
 
 while [[ $# -gt 0 ]]; do
@@ -45,6 +69,10 @@ while [[ $# -gt 0 ]]; do
         --branch)           BRANCH="$2"; shift 2 ;;
         --repo)             REPO_URL="$2"; shift 2 ;;
         --local-http-only)  LOCAL_HTTP_ONLY="true"; shift ;;
+        --bind-host)        BIND_HOST="$2"; shift 2 ;;
+        --claim-token)      CLAIM_TOKEN="$2"; shift 2 ;;
+        --swap-size)        SWAP_SIZE_GB="$2"; shift 2 ;;
+        --open-claim)       OPEN_CLAIM="true"; shift ;;
         -h|--help)          usage; exit 0 ;;
         *)                  echo "Unknown option: $1"; usage; exit 1 ;;
     esac
@@ -53,6 +81,12 @@ done
 if [ -z "$DOMAIN" ]; then
     echo "Error: --domain is required"
     usage
+    exit 1
+fi
+
+if [ "$OPEN_CLAIM" = "true" ] && [ "$LOCAL_HTTP_ONLY" != "true" ]; then
+    echo "Error: --open-claim requires --local-http-only"
+    echo "       Without the token, anyone who can reach /setup can claim this instance."
     exit 1
 fi
 
@@ -111,12 +145,30 @@ echo "  Public IP: ${PUBLIC_IP:-unknown}"
 # ---- Run ansible (but skip the service start — we need ACME key first) ----
 echo "--- Running setup playbook ---"
 cd "$OPENHOST_DIR"
+
+# Optional passthrough vars. Only add the -e when set, so we don't override the
+# config template's defaults (e.g. bind_host defaults to 127.0.0.1) with empties.
+EXTRA_VARS=()
+if [ -n "$BIND_HOST" ]; then
+    EXTRA_VARS+=(-e "bind_host=$BIND_HOST")
+fi
+if [ -n "$CLAIM_TOKEN" ]; then
+    EXTRA_VARS+=(-e "claim_token=$CLAIM_TOKEN")
+fi
+if [ -n "$SWAP_SIZE_GB" ]; then
+    EXTRA_VARS+=(-e "swap_size_gb=$SWAP_SIZE_GB")
+fi
+if [ "$OPEN_CLAIM" = "true" ]; then
+    EXTRA_VARS+=(-e "claim_token_required=false")
+fi
+
 ansible-playbook ansible/local_setup.yml \
     -e "domain=$DOMAIN" \
     -e "public_ip=${PUBLIC_IP:-127.0.0.1}" \
     -e "acme_directory_url=https://acme-v02.api.letsencrypt.org/directory" \
     -e "local_http_only=$LOCAL_HTTP_ONLY" \
     -e "skip_service_start=true" \
+    "${EXTRA_VARS[@]}" \
     --connection=local \
     -i "localhost,"
 
@@ -145,6 +197,9 @@ echo "=== Cloud in a Bottle provisioning complete ==="
 echo ""
 if [ "$LOCAL_HTTP_ONLY" = "true" ]; then
     echo "  Mode:      HTTP-only localhost (no TLS/CoreDNS/Caddy)"
+    if [ "$OPEN_CLAIM" = "true" ]; then
+        echo "  Claim:     /setup is ungated (--open-claim); no token needed"
+    fi
     echo "  Dashboard: http://localhost:8080  (SSH-tunnel to reach it:"
     echo "             ssh -L 8080:localhost:8080 host@<pi-ip>)"
 else

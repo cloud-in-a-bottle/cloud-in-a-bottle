@@ -1,0 +1,111 @@
+name: image-release
+
+# Build the OpenHost VM images (qcow2 + optional VirtualBox OVA) for a chosen
+# git tag and publish them as a GitHub release. Manually triggered for now —
+# run it from the Actions tab once the version tag has been pushed.
+#
+# The build recipe (image/build.sh) boots the tag's provision.sh once under
+# QEMU/KVM and freezes the result; the app code baked into the image is cloned
+# from this repo at the same tag (build.sh --branch also accepts a tag ref).
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Git tag to build and release (e.g. v0.1.4). Must already exist and be pushed."
+        required: true
+        type: string
+      make_ova:
+        description: "Also build the VirtualBox OVA alongside the qcow2"
+        required: false
+        type: boolean
+        default: true
+      draft:
+        description: "Publish the release as a draft (review before it goes public)"
+        required: false
+        type: boolean
+        default: true
+
+# gh release create needs write access to create the release and upload assets.
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    # The build boots a VM and provisions it end to end; give it plenty of room.
+    # build.sh has its own 30-min boot timeout inside this budget.
+    timeout-minutes: 90
+    steps:
+      - name: Check out the release tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+          fetch-depth: 0
+
+      - name: Install image build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qemu-system-x86 qemu-utils cloud-image-utils
+
+      - name: Enable KVM access
+        run: |
+          # GitHub's 2-vCPU+ Linux runners (incl. ubuntu-latest) ship /dev/kvm,
+          # but it's root:kvm 0660 — not writable by the runner user. Grant
+          # access via udev so build.sh uses hardware acceleration instead of
+          # the (much slower) TCG fallback. Same rule android-emulator-runner
+          # uses. See https://github.com/actions/runner-images/issues/7541.
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Require KVM
+        run: |
+          ls -l /dev/kvm || true
+          if [ ! -w /dev/kvm ]; then
+            echo "::error::/dev/kvm is not usable. The build needs KVM; a TCG"
+            echo "fallback would exceed the boot timeout, so failing fast. If this"
+            echo "persists, the runner may lack nested virtualization — use a"
+            echo "larger runner or a self-hosted KVM runner."
+            exit 1
+          fi
+          echo "KVM available — build will use hardware acceleration."
+
+      - name: Build VM images
+        run: |
+          args=(--branch "${{ inputs.tag }}" --version "${{ inputs.tag }}")
+          if [ "${{ inputs.make_ova }}" != "true" ]; then
+            args+=(--no-ova)
+          fi
+          image/build.sh "${args[@]}"
+
+      - name: List built artifacts
+        run: ls -lh image/out/
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          assets=(image/out/openhost-*.qcow2)
+          for ova in image/out/openhost-*.ova; do
+            [ -e "$ova" ] && assets+=("$ova")
+          done
+
+          create_args=(
+            "${{ inputs.tag }}"
+            --title "OpenHost ${{ inputs.tag }}"
+            --notes "OpenHost VM images for ${{ inputs.tag }}.
+
+          - \`*.qcow2\` — QEMU/KVM/libvirt (and most cloud importers)
+          - \`*.ova\` — VirtualBox / VMware
+
+          Boot it, then reach the dashboard at \`http://<vm-ip>:8080\` and claim it
+          (claiming is open by default — the image is private behind NAT).
+          See \`image/build.sh\` for defaults (console login, disk sizing)."
+          )
+          if [ "${{ inputs.draft }}" = "true" ]; then
+            create_args+=(--draft)
+          fi
+
+          gh release create "${create_args[@]}" "${assets[@]}"
