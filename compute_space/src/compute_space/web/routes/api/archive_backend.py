@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import re
 import sqlite3
 import uuid
@@ -25,6 +26,7 @@ from compute_space.core import archive_backend
 from compute_space.core.archive_backend import BackendState
 from compute_space.core.domains import INTERRUPTED_APP_REMOVAL_MESSAGE
 from compute_space.core.logging import logger
+from compute_space.core.manifest import parse_manifest
 from compute_space.core.settings_store import ARCHIVE_MIGRATION_IN_PROGRESS_KEY
 from compute_space.core.settings_store import ARCHIVE_MIGRATION_RECOVERY_REQUIRED_VALUE
 from compute_space.core.settings_store import PRIMARY_DOMAIN_RESTART_APP_IDS_KEY
@@ -69,6 +71,19 @@ class TestConnectionOk:
 _archive_migration_tasks: set[asyncio.Task[None]] = set()
 
 
+def _app_operation_uses_archive(row: sqlite3.Row) -> bool:
+    if archive_backend.manifest_uses_archive(row["manifest_raw"] or ""):
+        return True
+    repo_path = row["repo_path"]
+    if row["status"] not in ("building", "starting") or not repo_path or not os.path.isdir(repo_path):
+        return False
+    try:
+        manifest = parse_manifest(repo_path)
+    except (OSError, ValueError):
+        return True
+    return manifest.app_archive or manifest.access_all_app_data
+
+
 def _claim_archive_migration(db: sqlite3.Connection, operation_id: str) -> tuple[str | None, bool]:
     """Claim archive migration unless app recreation or another migration is active."""
     db.execute("BEGIN IMMEDIATE")
@@ -91,14 +106,13 @@ def _claim_archive_migration(db: sqlite3.Connection, operation_id: str) -> tuple
                 return "archive_migration", False
         if not recovery_claim:
             busy_rows = db.execute(
-                "SELECT status, error_message, manifest_raw FROM apps "
+                "SELECT status, error_message, manifest_raw, repo_path FROM apps "
                 "WHERE status IN ('building', 'starting', 'removing') "
                 "OR (status = 'error' AND error_message = ?)",
                 (INTERRUPTED_APP_REMOVAL_MESSAGE,),
             ).fetchall()
             if any(
-                row["error_message"] == INTERRUPTED_APP_REMOVAL_MESSAGE
-                or archive_backend.manifest_uses_archive(row["manifest_raw"] or "")
+                row["error_message"] == INTERRUPTED_APP_REMOVAL_MESSAGE or _app_operation_uses_archive(row)
                 for row in busy_rows
             ):
                 db.execute("ROLLBACK")

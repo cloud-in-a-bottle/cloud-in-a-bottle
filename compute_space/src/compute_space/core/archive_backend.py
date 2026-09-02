@@ -1260,6 +1260,7 @@ def configure_backend(
     else:
         volume = juicefs_volume_name or s3_prefix or default_volume_name_for_zone(db)
 
+    quiesce_completed = False
     try:
         if not is_juicefs_installed(config):
             install_juicefs(config)
@@ -1278,6 +1279,7 @@ def configure_backend(
             # The caller restarts them after we return.
             if quiesce_archive_apps is not None:
                 quiesce_archive_apps()
+            quiesce_completed = True
             # Copy objects into S3 and re-point the volume's storage.  On any
             # failure here the volume still reads from the local store.
             _migrate_local_to_s3(
@@ -1300,6 +1302,7 @@ def configure_backend(
             # FUSE mount blocks the later restart).
             if quiesce_archive_apps is not None:
                 quiesce_archive_apps()
+            quiesce_completed = True
             # Copy objects OLD bucket -> NEW bucket and re-point the volume.
             # On any failure the volume still reads from the intact old bucket.
             assert state.s3_bucket is not None
@@ -1365,7 +1368,11 @@ def configure_backend(
         # the intact local object store so the operator keeps working.  We
         # only ever re-pointed storage; the local objects were never
         # touched, so restore the storage config + remount local.
-        if migrating_from_local:
+        if not quiesce_completed and (migrating_from_local or migrating_from_s3):
+            # Storage has not been touched, and a writer may still hold the
+            # existing mount. Leave both alone.
+            pass
+        elif migrating_from_local:
             try:
                 _reconfigure_volume_storage(
                     config,

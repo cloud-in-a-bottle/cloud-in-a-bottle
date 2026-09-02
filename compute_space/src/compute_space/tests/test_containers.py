@@ -17,6 +17,7 @@ import pytest
 from compute_space.core import containers
 from compute_space.core.containers import DEFAULT_CAPABILITIES
 from compute_space.core.containers import _bind_mount_arg
+from compute_space.core.containers import _redact_container_command
 from compute_space.core.containers import build_image
 from compute_space.core.containers import get_docker_logs
 from compute_space.core.containers import is_container_running
@@ -33,6 +34,24 @@ class _FakeCompleted:
         self.returncode = returncode
         self.stdout = stdout
         self.stderr = stderr
+
+
+def test_redact_container_command_hides_all_environment_values() -> None:
+    rendered = _redact_container_command(
+        [
+            "podman",
+            "run",
+            "-e",
+            "OPENHOST_APP_TOKEN=top-secret",
+            "-e",
+            "PUBLIC_SETTING=also-hidden",
+            "image:latest",
+        ]
+    )
+
+    assert rendered == "podman run -e OPENHOST_APP_TOKEN=<redacted> -e PUBLIC_SETTING=<redacted> image:latest"
+    assert "top-secret" not in rendered
+    assert "also-hidden" not in rendered
 
 
 def _patch_subprocess_run(monkeypatch: pytest.MonkeyPatch, handler):

@@ -129,6 +129,29 @@ def test_archive_migration_claim_allows_nonarchive_app_startup(cfg: Any) -> None
         db.close()
 
 
+def test_archive_migration_claim_blocks_reload_adopting_archive(cfg: Any, tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "cloudinabottle.toml").write_text(
+        '[app]\nname = "adopting-archive"\nversion = "1"\n'
+        '[runtime.container]\nimage = "Dockerfile"\nport = 8080\n'
+        "[data]\napp_archive = true\n"
+    )
+    db = sqlite3.connect(cfg.db_path)
+    db.row_factory = sqlite3.Row
+    try:
+        db.execute(
+            "INSERT INTO apps (app_id, name, version, repo_path, local_port, status, manifest_raw) "
+            "VALUES (?, 'adopting-archive', '1', ?, 19001, 'building', ?)",
+            (new_app_id(), str(repo), 'name = "adopting-archive"\n[data]\napp_data = true\n'),
+        )
+        db.commit()
+
+        assert archive_routes._claim_archive_migration(db, "archive-id") == ("apps_busy", False)
+    finally:
+        db.close()
+
+
 @pytest.mark.asyncio
 async def test_cancelled_archive_request_leaves_worker_to_cleanup(cfg: Any) -> None:
     started = threading.Event()

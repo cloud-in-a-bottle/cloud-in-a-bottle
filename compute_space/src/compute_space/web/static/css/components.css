@@ -1476,6 +1476,11 @@ select {
   font-weight: var(--weight-semibold);
 }
 
+.path-value {
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
 /* An explainer inside a cell annotates 12px table text; at the prose size it
    outweighs the value it belongs to. */
 .panel table .hint {

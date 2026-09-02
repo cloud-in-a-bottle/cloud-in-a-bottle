@@ -437,25 +437,25 @@ function renderArchiveBackend(state) {
     var bucketLine = escSettingsHtml(state.s3_bucket || '?')
       + (state.s3_prefix ? '/' + escSettingsHtml(state.s3_prefix) : '')
       + (state.s3_region ? ' <span class="hint">(' + escSettingsHtml(state.s3_region) + ')</span>' : '');
-    rows += '<tr><th>S3 bucket</th><td><code>' + bucketLine + '</code></td></tr>';
+    rows += '<tr><th>S3 bucket</th><td><code class="path-value">' + bucketLine + '</code></td></tr>';
     if (state.s3_access_key_id) {
       rows += '<tr><th>Access key</th><td><code>' + escSettingsHtml(state.s3_access_key_id.slice(0, 4)) + '…</code></td></tr>';
     }
     if (state.archive_dir) {
-      rows += '<tr><th>Host path</th><td><code>' + escSettingsHtml(state.archive_dir) + '</code></td></tr>';
+      rows += '<tr><th>Host path</th><td><code class="path-value">' + escSettingsHtml(state.archive_dir) + '</code></td></tr>';
     }
     if (state.meta_db_path) {
-      rows += '<tr><th>Metadata DB</th><td><code>' + escSettingsHtml(state.meta_db_path) + '</code>'
+      rows += '<tr><th>Metadata DB</th><td><code class="path-value">' + escSettingsHtml(state.meta_db_path) + '</code>'
         + ' <span class="error">(must back up to survive disk loss)</span></td></tr>';
     }
     var dumps = state.meta_dumps;
     var dumpLine;
     if (dumps && dumps.count > 0) {
-      dumpLine = '<code>' + escSettingsHtml(dumps.latest_at || '?') + '</code> <span class="hint">(' + dumps.count + ' in bucket, hourly cadence)</span>';
+      dumpLine = '<code class="path-value">' + escSettingsHtml(dumps.latest_at || '?') + '</code> <span class="hint">(' + dumps.count + ' in bucket, hourly cadence)</span>';
     } else if (dumps && dumps.count === 0) {
       dumpLine = '<span class="error">No metadata dumps in bucket yet.</span> <span class="hint">JuiceFS writes one within an hour of mount.</span>';
     } else {
-      dumpLine = '<span class="hint">unavailable; could not list <code>'
+      dumpLine = '<span class="hint">unavailable; could not list <code class="path-value">'
         + escSettingsHtml((state.juicefs_volume_name ? state.juicefs_volume_name + '/' : '') + 'meta/')
         + '</code></span>';
     }
@@ -466,7 +466,7 @@ function renderArchiveBackend(state) {
       + (state.state_message ? ' <span class="error">' + escSettingsHtml(state.state_message) + '</span>' : '')
       + '</td></tr>';
     if (state.archive_dir) {
-      rows += '<tr><th>Host path</th><td><code>' + escSettingsHtml(state.archive_dir) + '</code></td></tr>';
+      rows += '<tr><th>Host path</th><td><code class="path-value">' + escSettingsHtml(state.archive_dir) + '</code></td></tr>';
     }
     rows += '<tr><th>Durability</th><td><span class="status-text status-text--warn">Local disk only</span> '
       + 'The archive is a JuiceFS volume whose objects live on this instance\u2019s local disk '
@@ -524,7 +524,7 @@ function showConfigureForm(state) {
       + 'After a successful migration the local copy is removed and the switch to S3 is <strong>one-way</strong>.'
       + appsLine + '</p>';
   } else if (state.backend === 's3') {
-    migrateNote = '<p class="notice notice--warn"><strong>This migrates your archive from the current bucket (<code>'
+    migrateNote = '<p class="notice notice--warn"><strong>This migrates your archive from the current bucket (<code class="path-value">'
       + escSettingsHtml(state.s3_bucket || '?') + '</code>) to the NEW bucket below.</strong> '
       + 'JuiceFS copies every archive object to the new bucket (verified with <code>--check-all</code>) and re-points the volume; if anything fails the switch is aborted and your current bucket is left intact (fail-open). '
       + 'After a successful migration the old bucket\u2019s objects (under this zone\u2019s prefix only) are reclaimed.</p>';

@@ -17,6 +17,7 @@ from compute_space.core import archive_backend
 from compute_space.core.archive_backend import configure_backend
 from compute_space.core.archive_backend import juicefs_mount_dir
 from compute_space.core.archive_backend import read_state
+from compute_space.core.manifest import parse_manifest_from_string
 from compute_space.db.connection import init_db
 from compute_space.tests.conftest import _make_test_config
 
@@ -1063,6 +1064,36 @@ def test_configure_backend_quiesces_apps_before_sync(cfg, db):
     assert order == ["mount", "quiesce", "migrate", "umount", "mount"]
 
 
+def test_configure_backend_does_not_remount_after_quiesce_failure(cfg, db):
+    def fail_quiesce() -> None:
+        raise RuntimeError("could not stop archive app")
+
+    with (
+        mock.patch.object(archive_backend, "is_juicefs_installed", return_value=True),
+        mock.patch.object(archive_backend, "_ensure_local_volume_formatted"),
+        mock.patch.object(archive_backend, "mount"),
+        mock.patch.object(archive_backend, "_migrate_local_to_s3") as migrate,
+        mock.patch.object(archive_backend, "_reconfigure_volume_storage") as reconfigure,
+        mock.patch.object(archive_backend, "_remount") as remount,
+    ):
+        with pytest.raises(RuntimeError, match="could not stop archive app"):
+            configure_backend(
+                cfg,
+                db,
+                s3_bucket="b",
+                s3_region="us-east-1",
+                s3_endpoint=None,
+                s3_prefix=None,
+                s3_access_key_id="ak",
+                s3_secret_access_key="sk",
+                quiesce_archive_apps=fail_quiesce,
+            )
+
+    migrate.assert_not_called()
+    reconfigure.assert_not_called()
+    remount.assert_not_called()
+
+
 def test_configure_backend_migration_failopen_restores_local(cfg, db):
     """Fail-open: if the migration step fails, the backend stays 'local' and
     the volume is re-pointed back to the (intact) local file store + remounted."""
@@ -1310,7 +1341,8 @@ def test_stop_running_archive_apps_aborts_if_container_cannot_stop(cfg, db):
     with mock.patch.object(apps_mod, "stop_container", side_effect=RuntimeError("stop failed")):
         with pytest.raises(RuntimeError, match="could not stop archive-using app"):
             apps_mod.stop_running_archive_apps(db, cfg, stopped_out=recorded)
-    assert recorded == []
+    # The caller retries every app whose stop may have partially succeeded.
+    assert recorded == ["stubborn"]
 
 
 def test_stop_running_archive_apps_marks_verified_stops_as_starting(cfg, db):
@@ -1353,3 +1385,26 @@ def test_start_apps_by_id_records_restart_failure(cfg, db):
 
     row = db.execute("SELECT status, error_message FROM apps WHERE app_id = 'failed-app'").fetchone()
     assert tuple(row) == ("error", "restart failed")
+
+
+def test_archive_app_launch_waits_for_active_maintenance(monkeypatch, db):
+    manifest = parse_manifest_from_string(
+        '[app]\nname="archive-app"\nversion="1"\n'
+        '[runtime.container]\nimage="Dockerfile"\nport=8080\n'
+        "[data]\napp_archive=true\n"
+    )
+    db.execute("INSERT INTO settings (key, value) VALUES ('archive_migration_in_progress', 'operation-id')")
+    db.commit()
+    sleeps: list[int] = []
+
+    def finish_maintenance(seconds: int) -> None:
+        sleeps.append(seconds)
+        db.execute("DELETE FROM settings WHERE key = 'archive_migration_in_progress'")
+        db.commit()
+
+    monkeypatch.setattr(apps_mod.time, "sleep", finish_maintenance)
+    monkeypatch.setattr(apps_mod.archive_backend, "is_archive_dir_healthy", lambda _config, _db: True)
+
+    apps_mod._wait_for_archive_maintenance(db, manifest, cfg)
+
+    assert sleeps == [1]

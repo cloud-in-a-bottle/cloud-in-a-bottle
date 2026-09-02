@@ -35,6 +35,13 @@ from compute_space.core.manifest import PortMapping
 
 CONTAINER_ROOT = "/data"
 
+
+class ContainerStartTimeout(RuntimeError):
+    def __init__(self, container_name: str) -> None:
+        self.container_name = container_name
+        super().__init__("Container start timed out after 60 seconds")
+
+
 # Env-var naming contract.  The project was renamed OpenHost -> Cloud in a
 # Bottle; every OPENHOST_* variable stamped into an app container is now also
 # exposed under BOTTLE_*.  The legacy names are kept indefinitely for backward
@@ -275,6 +282,21 @@ def _bind_mount_arg(host_path: str, container_path: str, *, read_only: bool = Fa
     return f"{host_path}:{container_path}:{options}"
 
 
+def _redact_container_command(cmd: list[str]) -> str:
+    """Render a Podman command without logging app environment values."""
+    rendered: list[str] = []
+    redact_next = False
+    for arg in cmd:
+        if redact_next:
+            key, separator, _value = arg.partition("=")
+            rendered.append(f"{key}=<redacted>" if separator else "<redacted>")
+            redact_next = False
+            continue
+        rendered.append(arg)
+        redact_next = arg == "-e"
+    return " ".join(rendered)
+
+
 def run_container(
     app_name: str,
     image_tag: str,
@@ -452,7 +474,7 @@ def run_container(
     else:
         cmd.append(image_tag)
 
-    logger.info("Running container: {}", " ".join(cmd))
+    logger.info("Running container: {}", _redact_container_command(cmd))
     _append_log(app_name, temp_data_dir, f"=== Starting container: {container_name} ===\n")
 
     # Remove any stale container with the same name so podman run doesn't
@@ -463,7 +485,18 @@ def run_container(
         timeout=30,
     )
 
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+    except subprocess.TimeoutExpired:
+        try:
+            stop_container(container_name)
+        except Exception:
+            logger.warning("Could not clean up timed-out container {}", container_name)
+        try:
+            _append_log(app_name, temp_data_dir, "ERROR: Container start timed out after 60 seconds\n")
+        except Exception:
+            logger.warning("Could not append timeout to container log for {}", app_name)
+        raise ContainerStartTimeout(container_name) from None
     if result.returncode != 0:
         _append_log(app_name, temp_data_dir, f"ERROR: {result.stderr}\n")
         raise RuntimeError(f"Container start failed:\n{result.stderr}")

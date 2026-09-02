@@ -21,6 +21,7 @@ from compute_space.core.auth.auth import DEFAULT_OWNER_USERNAME
 from compute_space.core.auth.auth import read_owner_username
 from compute_space.core.auth.permissions_v2 import grant_permission_v2
 from compute_space.core.containers import BUILD_CACHE_CORRUPT_MARKER
+from compute_space.core.containers import ContainerStartTimeout
 from compute_space.core.containers import build_image
 from compute_space.core.containers import is_container_running
 from compute_space.core.containers import remove_image
@@ -56,6 +57,7 @@ from compute_space.core.oauth import get_oauth_token
 from compute_space.core.ports import allocate_port
 from compute_space.core.ports import resolve_port_mappings
 from compute_space.core.service_interface.services import register_services_provided_by_app
+from compute_space.core.settings_store import ARCHIVE_MIGRATION_IN_PROGRESS_KEY
 from compute_space.db import get_db
 
 RESERVED_PATHS = {
@@ -474,6 +476,7 @@ def deploy_app_background(
         # The image build runs outside the request transaction. Re-read the canonical domain now
         # so an install that began just before a primary change cannot launch with stale identity.
         env_vars["OPENHOST_ZONE_DOMAIN"] = primary_domain(db).name
+        _wait_for_archive_maintenance(db, manifest, config)
         container_id = run_container(
             app_name,
             image_tag,
@@ -504,10 +507,16 @@ def deploy_app_background(
         db.commit()
     except Exception as e:
         logger.exception("Failed to deploy {}", app_name)
-        db.execute(
-            "UPDATE apps SET status = 'error', error_message = ? WHERE app_id = ?",
-            (str(e), app_id),
-        )
+        if isinstance(e, ContainerStartTimeout):
+            db.execute(
+                "UPDATE apps SET status = 'error', container_id = ?, error_message = ? WHERE app_id = ?",
+                (e.container_name, str(e), app_id),
+            )
+        else:
+            db.execute(
+                "UPDATE apps SET status = 'error', error_message = ? WHERE app_id = ?",
+                (str(e), app_id),
+            )
         db.commit()
     finally:
         db.close()
@@ -531,6 +540,22 @@ def wait_for_ready(local_port: int, timeout: int = 60) -> bool:
             pass
         time.sleep(1)
     return False
+
+
+def _wait_for_archive_maintenance(db: sqlite3.Connection, manifest: AppManifest, config: Config) -> None:
+    if not (manifest.app_archive or manifest.access_all_app_data):
+        return
+    logged = False
+    while db.execute(
+        "SELECT 1 FROM settings WHERE key = ?",
+        (ARCHIVE_MIGRATION_IN_PROGRESS_KEY,),
+    ).fetchone():
+        if not logged:
+            logger.info("Waiting for archive maintenance before launching app {}", manifest.name)
+            logged = True
+        time.sleep(1)
+    if not archive_backend.is_archive_dir_healthy(config, db):
+        raise RuntimeError("Cannot launch archive-using app while archive storage is unavailable")
 
 
 def _load_port_mappings_from_db(app_id: str, db: sqlite3.Connection) -> list[PortMapping]:
@@ -617,34 +642,35 @@ def stop_running_archive_apps(
     even if this function later raises (the return value is lost on ``raise``).
     """
     recorded: list[str] = stopped_out if stopped_out is not None else []
+    verified_stopped: list[str] = []
     rows = db.execute("SELECT app_id, name, container_id, status, manifest_raw FROM apps").fetchall()
     still_running: list[str] = []
     for row in rows:
         if not archive_backend.manifest_uses_archive(row["manifest_raw"] or ""):
             continue
         container_id = row["container_id"]
-        should_stop = row["status"] == "running" or bool(container_id and is_container_running(container_id))
+        should_stop = row["status"] == "running" or bool(container_id)
         if not should_stop:
             continue
         logger.info("stopping archive-using app {} before archive migration", row["name"])
+        recorded.append(row["app_id"])
         try:
             stop_container(container_id or f"openhost-{row['name']}")
         except Exception:
             logger.exception("failed to stop app {} before archive migration", row["name"])
             still_running.append(row["name"])
             continue
-        recorded.append(row["app_id"])
-        db.execute(
-            "UPDATE apps SET status = 'starting', container_id = NULL, error_message = NULL WHERE app_id = ?",
-            (row["app_id"],),
-        )
-
+        verified_stopped.append(row["app_id"])
+    db.executemany(
+        "UPDATE apps SET status = 'starting', container_id = NULL, error_message = NULL WHERE app_id = ?",
+        ((app_id,) for app_id in verified_stopped),
+    )
     db.commit()
 
     if still_running:
         raise RuntimeError(
             f"could not stop archive-using app(s) before migration: {', '.join(still_running)}; "
-            "aborting so the sync can't race a live writer (local backend left intact)"
+            "aborting so the sync cannot race a live writer"
         )
     return recorded
 
@@ -725,17 +751,25 @@ def _launch_app_image(
             (app_id,),
         )
     db.commit()
-    container_id = run_container(
-        app_name,
-        image_tag,
-        manifest,
-        app_row["local_port"],
-        env_vars,
-        config.persistent_data_dir,
-        config.temporary_data_dir,
-        archive_backend.effective_archive_dir(config, db),
-        port_mappings=port_mappings,
-    )
+    try:
+        container_id = run_container(
+            app_name,
+            image_tag,
+            manifest,
+            app_row["local_port"],
+            env_vars,
+            config.persistent_data_dir,
+            config.temporary_data_dir,
+            archive_backend.effective_archive_dir(config, db),
+            port_mappings=port_mappings,
+        )
+    except ContainerStartTimeout as exc:
+        db.execute(
+            "UPDATE apps SET container_id = ? WHERE app_id = ?",
+            (exc.container_name, app_id),
+        )
+        db.commit()
+        raise
     try:
         db.execute(
             "UPDATE apps SET container_id = ? WHERE app_id = ?",
@@ -1255,6 +1289,8 @@ def reload_app_background(app_id: str, repo_path: str, config: Config) -> None:
             # explicitly approved them (mirroring the install-time approval),
             # so by the time we get here the required grants already exist.
 
+        if manifest is not None:
+            _wait_for_archive_maintenance(db, manifest, config)
         start_app_process(app_id, db, config)
     except Exception as e:
         logger.exception("Failed to reload {}", app_id)
