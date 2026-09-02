@@ -79,6 +79,6 @@ See [Exposing a server with a static IP](./static_ip.md).
 
 At home you typically have no static IP, and your router is not forwarding anything yet. Sometimes you have no usable public IP at all, because your ISP puts you behind CGNAT. Option A does not apply, and the workarounds have real tradeoffs.
 
-See [Exposing a home server](./home_network.md) for the options — an HTTP(s) tunnel such as Cloudflare Tunnels, a forthcoming IPv4 tunnel service, or port-forwarding a dynamic ISP address.
+See [Exposing a home server](./home_network.md) for the options: an HTTP(s) tunnel such as Cloudflare Tunnels, a forthcoming IPv4 tunnel service, or port-forwarding a dynamic ISP address.
 
-Nothing in part 1 changes on a home machine — the instance is already running and reachable over the tunnel. Pick a path from that page to give it a public address.
+Nothing in part 1 changes on a home machine; the instance is already running and reachable over the tunnel. Pick a path from that page to give it a public address.

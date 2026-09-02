@@ -24,7 +24,7 @@ sqlite = ["main"]
 
 ## Field Reference
 
-### `[app]` — required
+### `[app]` (required)
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
@@ -33,17 +33,17 @@ sqlite = ["main"]
 | `description` | string | no | Short description |
 | `authors` | string[] | no | List of author names |
 
-### `[runtime.container]` — required
+### `[runtime.container]` (required)
 
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
-| `image` | string | yes | — | Path to Dockerfile relative to repo root |
-| `port` | integer | yes | — | Port the app responds to HTTP on |
-| `command` | string | no | — | Override container CMD |
+| `image` | string | yes | - | Path to Dockerfile relative to repo root |
+| `port` | integer | yes | - | Port the app responds to HTTP on |
+| `command` | string | no | - | Override container CMD |
 | `capabilities` | string[] | no | `[]` | **Additional** Linux capabilities to grant inside the container, on top of the Docker-default baseline (CHOWN, DAC_OVERRIDE, FOWNER, FSETID, KILL, NET_BIND_SERVICE, SETFCAP, SETGID, SETPCAP, SETUID, SYS_CHROOT, NET_RAW, MKNOD, AUDIT_WRITE) that every container receives automatically. Restricted to a rootless-safe allowlist (see `compute_space.core.manifest.SAFE_CAPABILITIES`); disallowed entries like `"SYS_ADMIN"` are rejected at parse time. Accepts names with or without the `CAP_` prefix. |
 | `devices` | string[] | no | `[]` | Host devices to pass through (e.g., `"/dev/net/tun"`). Restricted to a rootless-safe allowlist (see `compute_space.core.manifest.SAFE_DEVICE_PATHS`); disallowed paths like `/dev/mem`, `/dev/kvm`, or raw block devices are rejected at parse time. |
 
-### `[[ports]]` — optional, repeatable
+### `[[ports]]` (optional, repeatable)
 
 Declares additional port mappings for the container. Each entry binds a container port to a host port (TCP+UDP on 0.0.0.0). Set `host_port = 0` for auto-assignment from the 9000-9999 range.
 
@@ -57,18 +57,18 @@ Multiple apps requesting the same host port can't be installed at the same time,
 
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
-| `label` | string | yes | — | Unique label for this port mapping (e.g., `"metrics"`) |
-| `container_port` | integer | yes | — | Port inside the container |
+| `label` | string | yes | - | Unique label for this port mapping (e.g., `"metrics"`) |
+| `container_port` | integer | yes | - | Port inside the container |
 | `host_port` | integer | no | `0` | Port on the host (0 = auto-assign) |
 
-### `[routing]` — optional
+### `[routing]` (optional)
 
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
-| `health_check` | string | no | — | Health check path. Used to determine when the app has finished booting up. |
+| `health_check` | string | no | - | Health check path. Used to determine when the app has finished booting up. |
 | `public_paths` | string[] | no | `[]` | Route prefixes accessible without authentication |
 
-### `[[links]]` — optional, repeatable
+### `[[links]]` (optional, repeatable)
 
 A convenience feature to display additional links to the instance owner on the app detail page. By default we just link to your app's root at `{app_name}.{zone_url}`. This feature allows additional links to be displayed, eg to an admin console at `/_openhost/admin`. The `path` is taken at face value and is not verified in any way.
 
@@ -76,10 +76,10 @@ In general it's better to expose these links from within your app; this is mainl
 
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
-| `name` | string | yes | — | Display name for the link (e.g., `"admin"`) |
-| `path` | string | yes | — | Path on the app's URL (e.g., `"/_openhost/admin"`) |
+| `name` | string | yes | - | Display name for the link (e.g., `"admin"`) |
+| `path` | string | yes | - | Path on the app's URL (e.g., `"/_openhost/admin"`) |
 
-### `[resources]` — optional
+### `[resources]` (optional)
 
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
@@ -87,7 +87,7 @@ In general it's better to expose these links from within your app; this is mainl
 | `build_memory_mb` | integer | no | `memory_mb` | Memory limit (MB) for the image build step. Defaults to the app's `memory_mb`; a build that needs more must set this explicitly. |
 | `cpu_cores` | float | no | 0.1 | CPU allocation in cores (1.0 = 1 core) |
 
-### `[data]` — optional
+### `[data]` (optional)
 
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|

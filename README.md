@@ -70,7 +70,7 @@ uv tool install "cloud-in-a-bottle-cli @ git+https://github.com/cloud-in-a-bottl
 bottle instance login
 ```
 
-Once set up, ask your coding agent to package any existing project for Cloud in a Bottle and deploy it directly — no manual manifest editing required.
+Once set up, ask your coding agent to package any existing project for Cloud in a Bottle and deploy it directly, with no manual manifest editing required.
 
 ---
 
@@ -78,7 +78,7 @@ Once set up, ask your coding agent to package any existing project for Cloud in 
 
 Cloud in a Bottle is provided under the [AGPL-3.0 license](LICENSE).
 
-We may move to a different license in the future — something like a [fair source license](https://fair.io/licenses/) — with the intent that personal use will always be unrestricted, while commercial use may be scoped to support a sustainable project.
+We may move to a different license in the future, something like a [fair source license](https://fair.io/licenses/), with the intent that personal use will always be unrestricted, while commercial use may be scoped to support a sustainable project.
 
 ---
 

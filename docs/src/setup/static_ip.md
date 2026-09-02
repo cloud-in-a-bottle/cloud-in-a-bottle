@@ -40,7 +40,7 @@ This takes two steps, because the HTTP-only install left the pieces that do the 
 
 In the dashboard, open **Settings → Domains**, enter `mycooldomain.com`, leave the type as **Public (HTTPS)**, and click **Add domain**.
 
-The domain is recorded immediately, and the instance kicks off certificate acquisition in the background. That attempt will fail, and the domain will show an error in the table — acquisition answers a DNS-01 challenge out of CoreDNS, and CoreDNS is not running yet in HTTP-only mode. Leave it; the next step re-drives it.
+The domain is recorded immediately, and the instance kicks off certificate acquisition in the background. That attempt will fail, and the domain will show an error in the table: acquisition answers a DNS-01 challenge out of CoreDNS, and CoreDNS is not running yet in HTTP-only mode. Leave it; the next step re-drives it.
 
 ### 2. Turn on TLS and restart
 

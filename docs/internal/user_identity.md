@@ -1,6 +1,6 @@
 # User identity
 
-Federated identity between zones: the design, and the parts that exist today. Internal — not in the manual, and not production ready.
+Federated identity between zones: the design, and the parts that exist today. Internal: not in the manual, and not production ready.
 
 ## What exists today
 
@@ -23,11 +23,11 @@ https://<their-domain>/identity/approve
   &requesting_domain=host.example.com
 ```
 
-Their instance checks they are logged in to it, shows a page naming the app that is asking, and — if they approve — redirects back to `callback` with an `identity_token` query parameter. That token is an RS256 JWT signed by their instance, with `sub` set to their domain and `aud` set to the callback URL, expiring after five minutes.
+Their instance checks they are logged in to it, shows a page naming the app that is asking, and, if they approve, redirects back to `callback` with an `identity_token` query parameter. That token is an RS256 JWT signed by their instance, with `sub` set to their domain and `aud` set to the callback URL, expiring after five minutes.
 
 The app verifies it by fetching the public key from their `/.well-known/openhost-identity` and checking the signature, audience and expiry. A valid token means: the person controlling `<their-domain>` approved a login to this exact callback, just now.
 
-Nothing wraps this on the app side yet — no client library, no worked example, no revocation story — which is why it is not documented in the manual.
+Nothing wraps this on the app side yet (no client library, no worked example, no revocation story), which is why it is not documented in the manual.
 
 ## Design notes
 ### Specific design

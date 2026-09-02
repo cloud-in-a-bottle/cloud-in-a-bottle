@@ -28,9 +28,9 @@ The template is recommended when starting a new app from scratch. Existing proje
 
 A few things that work under classical Docker don't work here:
 
-- `[[ports]].host_port` values below 25 are rejected at manifest parse time — rootless podman cannot bind to privileged ports under 25 (the router lowers the unprivileged-port floor from 1024 to 25 so SMTP, HTTP, and HTTPS all work).
+- `[[ports]].host_port` values below 25 are rejected at manifest parse time: rootless podman cannot bind to privileged ports under 25 (the router lowers the unprivileged-port floor from 1024 to 25 so SMTP, HTTP, and HTTPS all work).
 - `[runtime.container].capabilities` is a tight allowlist.  Safe caps for rootless user namespaces (`NET_ADMIN`, `NET_RAW`, `NET_BIND_SERVICE`, `CHOWN`, `DAC_OVERRIDE`, `SETUID`, `SETGID`, `KILL`, `MKNOD`, `SYS_CHROOT`, `IPC_LOCK`, a few others) are accepted; capabilities that require real host privilege (`SYS_ADMIN`, `SYS_MODULE`, `SYS_PTRACE`, ...) are rejected.  The exact list lives in `compute_space.core.manifest.SAFE_CAPABILITIES`.
-- `[runtime.container].devices` declares **extra** host devices to pass through on top of the OCI baseline.  The character devices `/dev/null`, `/dev/zero`, `/dev/random`, `/dev/urandom`, `/dev/full`, `/dev/tty` and `/dev/console` are mounted inside every container automatically and do **not** need to be listed.  Extras are restricted to a tight allowlist (`/dev/net/tun`, `/dev/fuse`, `/dev/ttyS*`, `/dev/ttyUSB*`, `/dev/ttyACM*`).  Requests for anything outside the list — `/dev/mem`, `/dev/kvm`, raw block devices, etc. — are rejected at manifest parse time.
+- `[runtime.container].devices` declares **extra** host devices to pass through on top of the OCI baseline.  The character devices `/dev/null`, `/dev/zero`, `/dev/random`, `/dev/urandom`, `/dev/full`, `/dev/tty` and `/dev/console` are mounted inside every container automatically and do **not** need to be listed.  Extras are restricted to a tight allowlist (`/dev/net/tun`, `/dev/fuse`, `/dev/ttyS*`, `/dev/ttyUSB*`, `/dev/ttyACM*`).  Requests for anything outside the list (`/dev/mem`, `/dev/kvm`, raw block devices, etc.) are rejected at manifest parse time.
 
 Here's an example of a simple app:
 
@@ -133,13 +133,13 @@ The router injects these environment variables into your app:
 
 Apps have three storage areas, each with different durability + size + latency tradeoffs. By default, apps receive a permanent data directory (`app_data`). Other tiers must be explicitly requested via the `[data]` section of their manifest:
 
-- **Permanent data** (mounted at `BOTTLE_APP_DATA_DIR`) — local disk. Small, fast, backed up. Enabled by default.
-- **Temporary data** (mounted at `BOTTLE_APP_TEMP_DIR`) — local disk scratch. Not backed up, recreatable. Enabled by `app_temp_data = true`.
-- **Archive data** (mounted at `BOTTLE_APP_ARCHIVE_DIR`) — bulk content storage. Backed by local disk by default, but the owner can configure a S3 bucket (which is mounted with JuiceFS as a POSIX-compatible filesystem) from the dashboard for elastic, durable object storage. Higher-latency on uncached reads once on S3, although JuiceFS yields relatively performant access once cached. Intended for apps that store bulk content (videos, photos, attachments) that may overload local storage, and where low latency isn't critical. Enabled by `app_archive = true`.
+- **Permanent data** (mounted at `BOTTLE_APP_DATA_DIR`): local disk. Small, fast, backed up. Enabled by default.
+- **Temporary data** (mounted at `BOTTLE_APP_TEMP_DIR`): local disk scratch. Not backed up, recreatable. Enabled by `app_temp_data = true`.
+- **Archive data** (mounted at `BOTTLE_APP_ARCHIVE_DIR`): bulk content storage. Backed by local disk by default, but the owner can configure a S3 bucket (which is mounted with JuiceFS as a POSIX-compatible filesystem) from the dashboard for elastic, durable object storage. Higher-latency on uncached reads once on S3, although JuiceFS yields relatively performant access once cached. Intended for apps that store bulk content (videos, photos, attachments) that may overload local storage, and where low latency isn't critical. Enabled by `app_archive = true`.
 
 Apps can additionally request `access_all_app_data`, giving read/write access to every app's permanent, temporary, and archive data. This is necessary for apps like file browsers or backup apps. The retired `access_all_data` and `access_all_archive` fields are deprecated aliases for this permission.
 
-All data dirs are mounted under `/data/` in the container. All apps see the same path structure regardless of permissions — only the dirs they have access to are mounted. The directory structure contains folders like `/data/app_data/{app_name}`, `/data/app_temp_data/{app_name}`, `/data/app_archive/{app_name}`. The env vars `BOTTLE_APP_*_DIR` should be preferred to hardcoding paths.
+All data dirs are mounted under `/data/` in the container. All apps see the same path structure regardless of permissions; only the dirs they have access to are mounted. The directory structure contains folders like `/data/app_data/{app_name}`, `/data/app_temp_data/{app_name}`, `/data/app_archive/{app_name}`. The env vars `BOTTLE_APP_*_DIR` should be preferred to hardcoding paths.
 
 See the [manifest spec](manifest_spec.md) for the full reference.
 

@@ -24,8 +24,8 @@ The journal is capped at 500 MB (`SystemMaxUse` in `/etc/systemd/journald.conf.d
 
 Each app has two log files, both under `<data dir>/temporary_data/app_temp_data/<app>/`:
 
-- `docker.log` — build output from `podman build`, plus container start and stop events.
-- `container.log` — the container's own stdout and stderr.
+- `docker.log`: build output from `podman build`, plus container start and stop events.
+- `container.log`: the container's own stdout and stderr.
 
 `bottle app logs <app>` shows the build log followed by the live container log, which is usually what you want while a deploy is in flight. The dashboard shows the same thing.
 

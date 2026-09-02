@@ -7,7 +7,7 @@ When something is wrong and the dashboard isn't telling you enough.
 | Symptom | Look at |
 |---|---|
 | Dashboard unreachable | `sudo systemctl status openhost`, then `sudo journalctl -u openhost -n 200` |
-| An app won't build | `bottle app logs <app>` — the build log is the first half of it |
+| An app won't build | `bottle app logs <app>` (the build log is the first half of it) |
 | An app builds but 502s | The app's own container log, same command; check it binds the port from its manifest |
 | Apps stopped on their own | Free disk. The [storage guard](../how_it_works/data.md#storage-guard) stops apps below 500 MB free |
 | A domain has no certificate | `journalctl -u openhost -f` during acquisition; DNS-01 needs the zone delegated (see [Routing](../how_it_works/routing.md#tls-certificates)) |
@@ -27,7 +27,7 @@ sudo journalctl -u openhost -f
 | Service | `openhost` (systemd) |
 | Code | `/home/host/openhost` |
 | Config | `/home/host/.openhost/local_compute_space/config.toml` |
-| Data | `/home/host/.openhost/local_compute_space/` — see [Overview](../how_it_works/overview.md#on-the-machine) |
+| Data | `/home/host/.openhost/local_compute_space/`, see [Overview](../how_it_works/overview.md#on-the-machine) |
 
 Config changes take effect on restart. Caddy and CoreDNS are children of this unit, so restarting it restarts them too.
 

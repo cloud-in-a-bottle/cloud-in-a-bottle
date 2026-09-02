@@ -1,12 +1,12 @@
 # OAuth Token Service
 
-The OAuth provider app (`oauth-provider`, in `apps/oauth_provider/`) provides OAuth tokens to other apps via the cross-app service system. Apps request tokens by provider and scopes, and the OAuth provider handles the OAuth flow — either authorization code (Google) or device flow (GitHub), depending on the provider. Multiple accounts per provider are supported.
+The OAuth provider app (`oauth-provider`, in `apps/oauth_provider/`) provides OAuth tokens to other apps via the cross-app service system. Apps request tokens by provider and scopes, and the OAuth provider handles the OAuth flow: either authorization code (Google) or device flow (GitHub), depending on the provider. Multiple accounts per provider are supported.
 
 (Note: this is distinct from the `secrets` key-value service. The OAuth provider app *consumes* the secrets service to fetch its own Google client credentials, but the OAuth functionality described here is provided by the `oauth-provider` app, not a "secrets app".)
 
 ## Deployment
 
-The OAuth provider ships as a **default app**: every new instance auto-installs it at `/setup` completion (it is listed in `Config.default_apps` alongside `secrets`, `filestash`, `openhost-catalog`, and `openhost-backup`). No manual install is required — consumer apps can request OAuth tokens as soon as the zone is set up.
+The OAuth provider ships as a **default app**: every new instance auto-installs it at `/setup` completion (it is listed in `Config.default_apps` alongside `secrets`, `filestash`, `openhost-catalog`, and `openhost-backup`). No manual install is required; consumer apps can request OAuth tokens as soon as the zone is set up.
 
 - **GitHub** works out of the box (it uses the device flow with bundled client credentials).
 - **Google** requires the zone owner to store `GOOGLE_OAUTH_CLIENT_ID` and `GOOGLE_OAUTH_CLIENT_SECRET` in the `secrets` app; the provider fetches them lazily, so its container starts cleanly even before those secrets exist.
@@ -21,15 +21,15 @@ The OAuth provider ships as a **default app**: every new instance auto-installs 
 
 3. **Token expired?** If a refresh token exists, refreshes automatically and returns the new access token.
 
-4. **No token?** Returns `401` with `{"status": "authorization_required", "authorize_url": "..."}`. The app should redirect/popup the user to this URL. The `authorize_url` handles everything — permissions approval (if needed) and OAuth consent.
+4. **No token?** Returns `401` with `{"status": "authorization_required", "authorize_url": "..."}`. The app should redirect/popup the user to this URL. The `authorize_url` handles everything: permissions approval (if needed) and OAuth consent.
 
 ### Multiple accounts
 
-Tokens are stored with an `account` label, keyed by `(provider, scopes, account)`. The account name is resolved automatically after OAuth — for Google it's the email address, for GitHub it's the username.
+Tokens are stored with an `account` label, keyed by `(provider, scopes, account)`. The account name is resolved automatically after OAuth: for Google it's the email address, for GitHub it's the username.
 
 - **Connecting a new account:** Request a token with `"account": "NEW"`. After OAuth, the OAuth provider resolves the identity (e.g. `user@gmail.com`) and stores the token under that name.
 - **Using a specific account:** Request with `"account": "user@gmail.com"` to get that account's token.
-- **Default fallback:** Request with `"account": "default"` (or omit it — the request body defaults to `"default"`). If there's exactly one token for that provider+scopes, it's returned regardless of account name.
+- **Default fallback:** Request with `"account": "default"` (or omit it, since the request body defaults to `"default"`). If there's exactly one token for that provider+scopes, it's returned regardless of account name.
 - **Listing accounts:** `POST /api/services/v2/call/<shortname>/accounts` with `{"provider": "google", "scopes": [...]}` returns `{"accounts": ["user1@gmail.com", "user2@gmail.com"]}`.
 
 ### Authorization code flow (Google)
@@ -45,7 +45,7 @@ Google tokens always request `email` and `openid` scopes in addition to the requ
 
 ### Device flow (GitHub)
 
-The `authorize_url` points to `oauth-provider.<zone_domain>/device?...` — a page on the OAuth provider app that:
+The `authorize_url` points to `oauth-provider.<zone_domain>/device?...`, a page on the OAuth provider app that:
 
 1. Starts the device flow with GitHub, getting a user code and verification URL
 2. Shows the user the code + a link to GitHub's verification page + a copy button
@@ -191,16 +191,16 @@ If the provider has a non-standard revocation API (like GitHub), add a case in t
 
 ## Files
 
-- `apps/oauth_provider/src/oauth_provider/` — OAuth provider app (v2 service interface)
-  - `core/permissions.py` — v2 grant parsing, permission checking, app-scoped grant helper
-  - `core/providers.py` — provider configs, auth URL builder, code exchange, device flow, token revocation, `fetch_account_identity()`, `revoke_token()`
-  - `core/tokens.py` — token storage, caching, expiry checks, and refresh
-  - `core/credentials.py` — fetches the provider's own client credentials from the `secrets` service
-- `compute_space/src/compute_space/web/routes/services_v2.py` — v2 service proxy with shortname routing, permission header injection, CORS, OAuth callback proxy
-- `compute_space/src/compute_space/web/routes/api/permissions_v2.py` — permission management API (grant, revoke, pending requests)
-- `compute_space/src/compute_space/core/auth/permissions_v2.py` — core permission DB operations
-- `apps/oauth_demo/src/oauth_demo/` — example app with two demo modes:
-  - `server_demo.py` — server-side OAuth with full-page redirects
-  - `client_demo.py` — client-side SPA using `static/oauth.js` and popups
-  - `oauth.py` — shared Python OAuth helpers (`get_oauth_token`, `get_accounts`, `AuthRedirectRequired`)
-  - `static/oauth.js` — client-side OAuth library (`OAuthClient` class)
+- `apps/oauth_provider/src/oauth_provider/`: OAuth provider app (v2 service interface)
+  - `core/permissions.py`: v2 grant parsing, permission checking, app-scoped grant helper
+  - `core/providers.py`: provider configs, auth URL builder, code exchange, device flow, token revocation, `fetch_account_identity()`, `revoke_token()`
+  - `core/tokens.py`: token storage, caching, expiry checks, and refresh
+  - `core/credentials.py`: fetches the provider's own client credentials from the `secrets` service
+- `compute_space/src/compute_space/web/routes/services_v2.py`: v2 service proxy with shortname routing, permission header injection, CORS, OAuth callback proxy
+- `compute_space/src/compute_space/web/routes/api/permissions_v2.py`: permission management API (grant, revoke, pending requests)
+- `compute_space/src/compute_space/core/auth/permissions_v2.py`: core permission DB operations
+- `apps/oauth_demo/src/oauth_demo/`: example app with two demo modes:
+  - `server_demo.py`: server-side OAuth with full-page redirects
+  - `client_demo.py`: client-side SPA using `static/oauth.js` and popups
+  - `oauth.py`: shared Python OAuth helpers (`get_oauth_token`, `get_accounts`, `AuthRedirectRequired`)
+  - `static/oauth.js`: client-side OAuth library (`OAuthClient` class)

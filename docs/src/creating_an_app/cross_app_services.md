@@ -1,6 +1,6 @@
 ## Cross-App Services
 
-Apps can expose services that other apps consume. The router (compute_space) mediates all cross-app communication — apps never talk directly to each other.
+Apps can expose services that other apps consume. The router (compute_space) mediates all cross-app communication; apps never talk directly to each other.
 
 A **service** is identified by a URL (typically a git URL pointing at a spec) plus a SemVer version. Multiple apps can implement the same service; the router resolves which provider to use per call.
 
@@ -14,8 +14,8 @@ You should put documentation on the service specification at the service URL - i
 Versions follow SemVer. Providers declare a specific version; consumers declare a SemVer specifier (e.g. `>=0.1.0`). Major version indicate breaking changes; minor versions indicate backward-compatible changes. The git repo should have tags for each version (eg v1.1.1, or sub/dir:v1.1.1 if at a subdir).
 
 Some example specs live in this repo's `services/` folder:
-- **secrets** (`github.com/imbue-openhost/openhost/services/secrets`) — key-value secret storage. Grant payload: `{"key": "<NAME>"}` or `{"key": "*"}` for full access. Provider returns only the values for keys in the granted set.
-- **oauth** (`github.com/imbue-openhost/openhost/services/oauth`) — OAuth token acquisition/refresh for third-party APIs. Grant payload: `{"provider": "<name>", "scopes": [...]}`.
+- **secrets** (`github.com/imbue-openhost/openhost/services/secrets`): key-value secret storage. Grant payload: `{"key": "<NAME>"}` or `{"key": "*"}` for full access. Provider returns only the values for keys in the granted set.
+- **oauth** (`github.com/imbue-openhost/openhost/services/oauth`): OAuth token acquisition/refresh for third-party APIs. Grant payload: `{"provider": "<name>", "scopes": [...]}`.
 
 ### Provider apps
 
@@ -45,7 +45,7 @@ grants = [
 ]
 ```
 
-Each entry in `grants` is either an opaque string (e.g. `"read"`) or a TOML/JSON object (e.g. `{key = "DB_URL"}`). Strings work well for simple flag-style permissions; objects are for grants with structured fields. The shape is defined by the service, not the router — providers receive the raw grants verbatim and decide what they mean.
+Each entry in `grants` is either an opaque string (e.g. `"read"`) or a TOML/JSON object (e.g. `{key = "DB_URL"}`). Strings work well for simple flag-style permissions; objects are for grants with structured fields. The shape is defined by the service, not the router: providers receive the raw grants verbatim and decide what they mean.
 
 `shortname` must match `^[a-z][a-z0-9_-]{0,31}$` and be unique within the manifest.
 
@@ -61,7 +61,7 @@ This endpoint is app-specific - the router loads the consumer's manifest, finds 
 
 The router identifies and authenticates the calling app two ways:
 - **Server-side calls:** must include `Authorization: Bearer $OPENHOST_APP_TOKEN`. Each app gets a unique `OPENHOST_APP_TOKEN` injected as an env var at deploy time.
-- **Browser calls:** the request's `Origin` is matched against the app's subdomain, with the owner session cookie authenticating the user. No bearer token is needed for these — the browser provides the cookie automatically.
+- **Browser calls:** the request's `Origin` is matched against the app's subdomain, with the owner session cookie authenticating the user. No bearer token is needed for these; the browser provides the cookie automatically.
 
 Service calls should be API-only - the user's browser should never be redirected to a service endpoint, with the exception of permission grant pages.
 
@@ -75,13 +75,13 @@ Each service URL has one default provider, resolved in this order:
 2. the router's builtin, if the router implements the service itself (see below);
 3. the app that has provided the service the longest.
 
-Only the owner's choice is stored — steps 2 and 3 are derived on each call, so a service starts working the moment something provides it and keeps working when the app that was serving it is uninstalled. Installing a provider never makes it the default on its own: a second provider of a service holds its own data, so it sits alongside the incumbent (reachable via `X-OpenHost-Provider`) until the owner switches over.
+Only the owner's choice is stored; steps 2 and 3 are derived on each call, so a service starts working the moment something provides it and keeps working when the app that was serving it is uninstalled. Installing a provider never makes it the default on its own: a second provider of a service holds its own data, so it sits alongside the incumbent (reachable via `X-OpenHost-Provider`) until the owner switches over.
 
 If nothing provides the service at all, or the resolved default's version doesn't satisfy the consumer's version specifier, the router returns 503 `service_not_available`.
 
 #### Builtin providers
 
-The router can provide a service itself instead of proxying to an app. A builtin looks like any other provider to a consumer — same call path, same headers, same permission model — and appears in the provider listings under the app ID `_openhost_router`. It holds a service until the owner points that service at an app, and takes it back over when the owner clears that choice.
+The router can provide a service itself instead of proxying to an app. A builtin looks like any other provider to a consumer (same call path, same headers, same permission model), and appears in the provider listings under the app ID `_openhost_router`. It holds a service until the owner points that service at an app, and takes it back over when the owner clears that choice.
 
 #### Calling a specific provider
 
@@ -101,7 +101,7 @@ Apps can list all providers for a service using the discovery endpoint (see Mana
 
 ### Permissions
 
-Permissions are **opaque grant payloads** (strings or JSON objects), scoped per `(consumer_app, service_url)`. The router stores grants and forwards the granted set (those that apply to the calling app and service URL) to the provider on every call — but **the provider is what enforces access**, not the router. This lets services define whatever permission shape they need.
+Permissions are **opaque grant payloads** (strings or JSON objects), scoped per `(consumer_app, service_url)`. The router stores grants and forwards the granted set (those that apply to the calling app and service URL) to the provider on every call, but **the provider is what enforces access**, not the router. This lets services define whatever permission shape they need.
 
 **Grant scope** is one of:
 - `global`: applies to **all providers** of the given service. This is the scope for manifest-declared permission grants.
@@ -137,7 +137,7 @@ The consumer redirects the owner to `grant_url`; after approval, the call can be
 
 #### Provider-app-scoped permissions
 
-Because app-scoped grants are often data-dependent — "this consumer may access photos in *this* folder", "*this* email inbox", "*this* set of files" — the provider is responsible for the whole approval UX. The router only stores the resulting grant. This also allows a provider to ensure that its data can't be accessed by a permission granted to a different provider of this service, if that's desired. It gives this provider full control over access to its own data.
+Because app-scoped grants are often data-dependent ("this consumer may access photos in *this* folder", "*this* email inbox", "*this* set of files"), the provider is responsible for the whole approval UX. The router only stores the resulting grant. This also allows a provider to ensure that its data can't be accessed by a permission granted to a different provider of this service, if that's desired. It gives this provider full control over access to its own data.
 
 There's currently no way to grant these at install time of a consumer app (since consumers can potentially interact with multiple providers).
 
@@ -159,10 +159,10 @@ Note for `scope: "app"`, the provider must include its own `grant_url`.
 
 1. **Consumer hands the user off.** The consumer redirects the user's browser to the `grant_url` returned in the 403. The consumer should arrange for a `return_to` URL on its own subdomain to be propagated to that page (typical convention: include `return_to=https://<consumer>.<zone>/...` on the request to `grant_url`)
 
-2. **Provider renders a consent page.** This is a normal page in the provider app — the user is on `<provider_app>.<zone>` with the owner cookie. The page should:
+2. **Provider renders a consent page.** This is a normal page in the provider app: the user is on `<provider_app>.<zone>` with the owner cookie. The page should:
    - State plainly *which consumer app* is asking and *exactly what data* it's asking for. The narrower and more concrete, the better ("Grant *photos-app* read access to the folder `Vacation/Italy`?" beats "Grant *photos-app* read access?").
    - Let the user shape the grant where it makes sense (pick which folder, which inbox, which subset of items, etc.).
-   - Run any side flows the grant needs — e.g. an OAuth dance with a third party, picking a row from the provider's own DB, prompting for a passphrase.
+   - Run any side flows the grant needs, e.g. an OAuth dance with a third party, picking a row from the provider's own DB, prompting for a passphrase.
 
 3. **Provider creates the grant.** Once the user confirms (and any side flow has completed), the provider's backend calls:
 
@@ -174,9 +174,9 @@ Note for `scope: "app"`, the provider must include its own `grant_url`.
    {"consumer_app_name": "<consumer_app_name>", "service_url": "<url>", "grant": <grant>}
    ```
 
-   Identify the consumer by **name** — the value from the `X-OpenHost-Consumer-Name` header, which is also what your consent page should have shown the user. Keying the grant to the name is what makes that page trustworthy: the field the user read is the field the access is granted to, so a page that names the wrong app grants to the wrong app instead of to itself. An unknown name is a 404.
+   Identify the consumer by **name**: the value from the `X-OpenHost-Consumer-Name` header, which is also what your consent page should have shown the user. Keying the grant to the name is what makes that page trustworthy: the field the user read is the field the access is granted to, so a page that names the wrong app grants to the wrong app instead of to itself. An unknown name is a 404.
 
-   The router takes the provider's own app ID from the bearer token, so the provider can only grant permissions *for itself* — it can't create grants attributed to another provider. The grant body is the same shape the provider will later see in `X-OpenHost-Permissions`. str or json can be used.
+   The router takes the provider's own app ID from the bearer token, so the provider can only grant permissions *for itself*; it can't create grants attributed to another provider. The grant body is the same shape the provider will later see in `X-OpenHost-Permissions`. str or json can be used.
 
 4. **Provider sends the user back.** After the grant call succeeds, the provider should redirect the user's browser to the consumer-supplied `return_to`. The consumer can then retry the original service call, which will now succeed. If the user declines, the provider should also redirect to `return_to` (without creating a grant) so the consumer can show its own "permission denied" UI rather than leaving the user stranded on the provider's page.
 
@@ -187,12 +187,12 @@ These endpoints back the owner-facing UI and are authenticated by the owner logi
 
 **Permissions**
 
-- `GET /api/permissions/v2[?app_id=<consumer_app_id>]` — list grants, optionally filtered to one consumer app. Returns an array of `{consumer_app_id, service_url, grant, scope, provider_app_id}`.
-- `POST /api/permissions/v2/grant_global_scoped` — grant a global-scoped permission. Body: `{app_id, service_url, grant}`.
-- `POST /api/permissions/v2/grant_app_scoped` — grant an app-scoped permission. **Authenticated with the calling provider's app token** (not the owner cookie); the provider's app ID is taken from the token. Body: `{consumer_app_name, service_url, grant}` (404 if no app has that name). Used by provider apps after running their own user-facing approval flow (e.g. an OAuth dance).
-- `POST /api/permissions/v2/revoke` — revoke a permission. Body: `{app_id, service_url, grant, scope?, provider_app_id?}`. `scope` defaults to `"global"`. 404 if no matching row.
+- `GET /api/permissions/v2[?app_id=<consumer_app_id>]`: list grants, optionally filtered to one consumer app. Returns an array of `{consumer_app_id, service_url, grant, scope, provider_app_id}`.
+- `POST /api/permissions/v2/grant_global_scoped`: grant a global-scoped permission. Body: `{app_id, service_url, grant}`.
+- `POST /api/permissions/v2/grant_app_scoped`: grant an app-scoped permission. **Authenticated with the calling provider's app token** (not the owner cookie); the provider's app ID is taken from the token. Body: `{consumer_app_name, service_url, grant}` (404 if no app has that name). Used by provider apps after running their own user-facing approval flow (e.g. an OAuth dance).
+- `POST /api/permissions/v2/revoke`: revoke a permission. Body: `{app_id, service_url, grant, scope?, provider_app_id?}`. `scope` defaults to `"global"`. 404 if no matching row.
 
-The `grant` field on these endpoints is whatever shape the service defines — passed through the router verbatim.
+The `grant` field on these endpoints is whatever shape the service defines, and is passed through the router verbatim.
 
 **Default provider**
 
@@ -200,10 +200,10 @@ Each service URL has at most one default provider. Calls without an explicit pro
 
 Both listing endpoints return an array of `{service_url, app_id, app_name, service_version, endpoint, status, is_default}`, with the router's builtins included as providers (`app_id: "_openhost_router"`, always `running`).
 
-- `GET /api/services/v2` — list every provider of every service.
-- `GET /api/services/v2/providers?service=<url>` — the same, narrowed to one service. Accepts both owner auth and app bearer tokens, so consumer apps can discover providers at runtime.
-- `POST /api/services/v2/defaults` — set the default. Body: `{service_url, app_id}`. Pass `_openhost_router` to hand the service to the router's builtin. 404 if that provider doesn't actually provide the service.
-- `DELETE /api/services/v2/defaults` — clear the owner's choice. Body: `{service_url}`. Selection then falls back to the builtin, or to the longest-serving provider app if there isn't one; calls return 503 if nothing is left to serve them.
+- `GET /api/services/v2`: list every provider of every service.
+- `GET /api/services/v2/providers?service=<url>`: the same, narrowed to one service. Accepts both owner auth and app bearer tokens, so consumer apps can discover providers at runtime.
+- `POST /api/services/v2/defaults`: set the default. Body: `{service_url, app_id}`. Pass `_openhost_router` to hand the service to the router's builtin. 404 if that provider doesn't actually provide the service.
+- `DELETE /api/services/v2/defaults`: clear the owner's choice. Body: `{service_url}`. Selection then falls back to the builtin, or to the longest-serving provider app if there isn't one; calls return 503 if nothing is left to serve them.
 
 ### Retrofitting existing apps
 

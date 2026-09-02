@@ -1,6 +1,6 @@
 # The bottle CLI
 
-`bottle` does what the dashboard does, without a browser. Nothing needs it — it exists for people who prefer a terminal, for scripting, and for handing an instance to an AI agent.
+`bottle` does what the dashboard does, without a browser. Nothing needs it; it exists for people who prefer a terminal, for scripting, and for handing an instance to an AI agent.
 
 ## Install and log in
 
