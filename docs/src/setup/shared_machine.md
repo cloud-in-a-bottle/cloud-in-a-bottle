@@ -55,6 +55,6 @@ Then browse to the dashboard at `http://lvh.me:8088/` and an app named `foo` at 
 
 ## Part 2: taking it public
 
-The released images are HTTP-only; To serve an instance at your own domain from a VM, you will need to **build your own image** with the domain baked in and HTTPS turned on — see [Building your own VM image](./building_a_vm_image.md).
+A VM is just a machine, so taking it public works the same as any install: expose it on the internet and add your domain. Delegate a DNS zone to the VM's public IP, open ports 53, 80, and 443, and add the domain from the dashboard — follow [Exposing a server with a static IP](./static_ip.md) for a VPS/static-IP host, or [Exposing a home server](./home_network.md) for a home connection.
 
-From there, putting it on the internet is the same networking as any install: delegate a DNS zone to the VM's public IP and open ports 53, 80, and 443 to it. See [Exposing a server with a static IP](./static_ip.md) for a VPS/static-IP host, or [Exposing a home server](./home_network.md) for a home connection.
+One wrinkle when you take a *downloaded* image public this way: the domain you add is served, but the instance's primary domain stays `lvh.me` (the dashboard can't repoint the primary). Your apps and dashboard work at the new domain — only things that build outbound links from the primary keep pointing at `lvh.me`. If you want your domain to be the primary, which is the cleaner setup for a real public instance, [build your own image](./building_a_vm_image.md) with it baked in instead.

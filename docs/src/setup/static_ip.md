@@ -52,17 +52,21 @@ sudo -u host bash -c "cd /home/host/openhost && /home/host/.pixi/bin/pixi run py
 sudo chmod 600 "$KEY"
 ```
 
-Then edit `/home/host/.openhost/local_compute_space/config.toml`. Under `[openhost]`, flip three settings and add three more:
+Then edit `/home/host/.openhost/local_compute_space/config.toml`. Under `[openhost]`, flip three settings on, add the three ACME settings, and make sure `public_ip` is your server's real public IPv4 — CoreDNS answers every app subdomain with it:
 
 ```toml
 acquire_tls_cert_if_missing = true
 coredns_enabled = true
 start_caddy = true
 
+public_ip = "203.0.113.10"
+
 acme_account_key_path = "/home/host/openhost/ansible/secrets/certbot_private_key.json"
 acme_email = "openhost@mycooldomain.com"
 acme_directory_url = "https://acme-v02.api.letsencrypt.org/directory"
 ```
+
+`public_ip` is already in the file. A normal install detected it correctly at install time, but a downloaded VM image ships with a placeholder from the build machine, so set it to this server's address.
 
 Restart:
 

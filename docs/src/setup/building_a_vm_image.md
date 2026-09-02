@@ -48,6 +48,8 @@ image/build.sh \
 
 By default the image is HTTP-only and not suitable for exposing publicly. Pass `--public` to bake a TLS image instead: one provisioned with CoreDNS, Caddy, and Let's Encrypt for `--domain`, ready to serve at `https://<domain>` once it's on the network.
 
+You don't have to build a public image to go public — you can take an HTTP-only instance public in place by adding your domain from the dashboard, per [Exposing a server with a static IP](./static_ip.md). The reason to build with `--public` is that it provisions for your domain from the start, so that domain is the instance's **primary** — whereas converting a running HTTP-only instance leaves the install-time domain as the primary.
+
 | Option | Purpose |
 | --- | --- |
 | `--public` | build a TLS image (claiming is token-gated) |
