@@ -211,6 +211,8 @@ ssh -p $SSH_PORT $VM_USER@$VM_HOST 'sudo journalctl -u openhost -f'
 - Throw it away: delete the VM. Under QEMU that is `rm -rf "$VM_DIR"`, and nothing was installed on your machine except QEMU itself.
 - Upgrade Cloud in a Bottle: use the update button on the dashboard's settings page.
 
+The systemd service, logs and diagnostics are in [Debugging](../operation/debugging.md).
+
 ## Going public
 
 An instance in a VM is a real deployment, not just a test rig. Serving it on the internet takes three things beyond the walkthrough above.

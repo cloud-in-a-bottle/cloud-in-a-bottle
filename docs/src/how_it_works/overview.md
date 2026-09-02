@@ -34,19 +34,19 @@ There are three ways a request can authenticate:
 |---|---|---|
 | Session cookie | Browsers | `session_token`, set at login. Opaque and stored in the router's database, so it can be revoked. Valid four weeks, and scoped to the domain, so one login covers the dashboard and every app on it. |
 | API token | The `bottle` CLI, scripts, agents | `Authorization: Bearer <token>`. Created and revoked in the dashboard or with `bottle tokens`. |
-| App token | App containers | `OPENHOST_APP_TOKEN`, injected into each container and used to authenticate [cross-app service calls](../cross_app_services.md). |
+| App token | App containers | `OPENHOST_APP_TOKEN`, injected into each container and used to authenticate [cross-app service calls](../creating_an_app/cross_app_services.md). |
 
 Apps can open up specific routes by listing them in `public_paths` in their manifest. Those routes are proxied without authentication, and it is then the app's job to decide who may do what. To help, the router sets `X-OpenHost-Is-Owner: true` on requests that do carry a valid owner session — an app can serve a public page and still show the owner an edit button. Any `X-OpenHost-*` header supplied by the client is stripped before the app sees it.
 
 ## On the machine
 
-The instance keeps everything under one data directory — `data_root_dir` in `config.toml`, which is `/home/host/.openhost/local_compute_space/` on a standard install.
+The instance keeps everything under one data directory — `data_root_dir` in `config.toml`, which is `~/.openhost/local_compute_space/` for the user the service runs as (`/home/host/...` on a provisioned server).
 
 | Path | Contents |
 |------|----------|
 | `/home/host/openhost` | The checkout the service runs from |
 | `<data dir>/config.toml` | Instance configuration |
-| `<data dir>/persistent_data/` | App permanent data, the router database, TLS certificates, identity keys |
+| `<data dir>/persistent_data/` | App permanent data, and `openhost/` — the router database, TLS certificates and keys, the generated Caddy and CoreDNS config |
 | `<data dir>/temporary_data/` | App scratch space, build and container logs |
 | `<data dir>/app_archive/` | The archive tier mount |
 

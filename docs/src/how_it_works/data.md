@@ -10,7 +10,7 @@ Each app gets its own directories, mounted into its container under `/data/`. Ap
 | Temporary | `/data/app_temp_data/<app>` | Local disk | No | Thumbnails, transcodes, build artifacts, anything recreatable |
 | Archive | `/data/app_archive/<app>` | JuiceFS, local or S3 | See below | Bulk content: photos, video, attachments, model weights |
 
-Apps get permanent data by default and request the other two in their manifest (`app_temp_data`, `app_archive`). They should read the paths from `OPENHOST_APP_DATA_DIR`, `OPENHOST_APP_TEMP_DIR` and `OPENHOST_APP_ARCHIVE_DIR` rather than hardcoding them. See [Creating an App](../creating_an_app.md#data-storage) for the app author's view.
+Apps get permanent data by default and request the other two in their manifest (`app_temp_data`, `app_archive`). They should read the paths from `OPENHOST_APP_DATA_DIR`, `OPENHOST_APP_TEMP_DIR` and `OPENHOST_APP_ARCHIVE_DIR` rather than hardcoding them. See [Creating an App](../creating_an_app/overview.md#data-storage) for the app author's view.
 
 The split between permanent and archive matters more than it looks. Permanent data is local disk with real `fsync` and strict POSIX semantics, which is what an embedded database needs — SQLite, LMDB, RocksDB and friends belong there and nowhere else. The archive tier is a network-shaped filesystem: fine for whole files, wrong for a write-ahead log or for `fcntl` locks used for correctness. An app that stores bulk content normally uses both, keeping its index in permanent data and the bytes in the archive.
 
@@ -27,13 +27,13 @@ Switching from local to S3, or from one bucket to another, is done from the dash
 
 ## Where it lives on disk
 
-Everything sits under the instance's data directory (`data_root_dir` in `config.toml`):
+Everything sits under the instance's data directory (`data_root_dir` in `config.toml`, normally `~/.openhost/local_compute_space/`):
 
 | Path | Contents |
 |---|---|
 | `persistent_data/app_data/<app>/` | Permanent app data |
 | `persistent_data/app_archive_local_objects/` | JuiceFS objects, on the local backend only |
-| `persistent_data/openhost/` | Router database, TLS certificates, identity keys |
+| `persistent_data/openhost/` | Router database, TLS certificates and keys |
 | `temporary_data/app_temp_data/<app>/` | Temporary app data, plus that app's build and container logs |
 | `app_archive/` | The JuiceFS mount |
 

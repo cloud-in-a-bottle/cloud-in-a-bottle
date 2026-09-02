@@ -60,15 +60,7 @@ sudo systemctl status openhost
 sudo journalctl -u openhost -f
 ```
 
-| What                | Where                                        |
-|---------------------|----------------------------------------------|
-| Service             | `openhost` (systemd)                          |
-| Code                | `/home/host/openhost`                         |
-| Config              | `/home/host/.openhost/local_compute_space/config.toml` |
-| Persistent app data | `/home/host/.openhost/local_compute_space/`   |
-| Runs as             | the unprivileged `host` user                  |
-
-To upgrade to a newer Cloud in a Bottle release, use the update button on the dashboard's settings page. It pulls new code, syncs dependencies, and restarts the service.
+The service runs as the unprivileged `host` user, with code at `/home/host/openhost` and config and data under `/home/host/.openhost/local_compute_space/`. Upgrades are a button on the dashboard's settings page. If you want to poke around further, see [Debugging](../operation/debugging.md) and [The bottle CLI](../operation/cli.md).
 
 
 ## Part 2: taking it public

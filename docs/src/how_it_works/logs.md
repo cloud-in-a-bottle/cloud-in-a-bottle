@@ -1,7 +1,5 @@
 # Logs
 
-There are two kinds of logs on an instance: the router's own, and each app's. They are kept apart on purpose — a chatty app can't bury a startup failure.
-
 ## Router logs
 
 The router writes to two places at once.
@@ -20,7 +18,7 @@ The router writes to two places at once.
 - Survives restarts, so this is where to look when the router died or failed to start before file logging was up.
 - Read it with `journalctl -u openhost`, or `-f` to follow. `systemctl status openhost` shows the last few lines.
 
-The journal is capped at 500 MB (`SystemMaxUse` in `/etc/systemd/journald.conf.d/10-openhost.conf`) so it can't fill the disk. To change that, add a higher-numbered drop-in such as `20-local.conf` rather than editing the managed file.
+The journal is capped at 500 MB (`SystemMaxUse` in `/etc/systemd/journald.conf.d/10-openhost.conf`) so it can't fill the disk.
 
 ## App logs
 

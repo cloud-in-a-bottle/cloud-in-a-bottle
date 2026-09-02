@@ -10,6 +10,11 @@
 - [Exposing a server with a static IP](setup/static_ip.md)
 - [Exposing a home server](setup/home_network.md)
 
+# Operation
+
+- [The bottle CLI](operation/cli.md)
+- [Debugging](operation/debugging.md)
+- [Use by AI agents](operation/ai_agents.md)
 
 # How it Works
 
@@ -20,7 +25,7 @@
 
 # Creating an App
 
-- [Creating an App](./creating_an_app.md)
-- [App Manifest Spec](./manifest_spec.md)
-- [OAuth in Apps](./oauth.md)
-- [Cross-App Services](./cross_app_services.md)
+- [Creating an App](creating_an_app/overview.md)
+- [App Manifest Spec](creating_an_app/manifest_spec.md)
+- [Cross-App Services](creating_an_app/cross_app_services.md)
+- [OAuth in Apps](creating_an_app/oauth.md)

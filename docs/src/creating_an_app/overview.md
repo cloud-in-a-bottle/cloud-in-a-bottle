@@ -165,19 +165,7 @@ then point them at that checkout and tell them to read this doc.
 
 ## CLI
 
-There is a CLI interface, `bottle`, that can be used for interacting with your compute space, if you prefer that style of workflow.
-
-If you have a local clone, do
-```bash
-cd OPENHOST_CLONE_DIR/compute_space_cli && uv tool install --editable .
-```
-this will automatically get updates if you pull new changes from the openhost repo.
-
-or if not,
-```bash
-uv tool install "cloud-in-a-bottle-cli @ git+https://github.com/cloud-in-a-bottle/cloud-in-a-bottle.git#subdirectory=compute_space_cli"
-```
-Run `bottle instance login` to login to your compute space.
+There is a CLI interface, `bottle`, that can be used for interacting with your compute space, if you prefer that style of workflow. See [The bottle CLI](../operation/cli.md) to install it and log in.
 
 ## AI Agent Development
 
