@@ -282,7 +282,7 @@ def test_reload_update_pins_resolved_default_branch(cfg: Any, tmp_path: Path) ->
 
     cookies = auth_cookie(cfg)
     with (
-        mock.patch.object(apps_routes, "stop_app_process"),
+        mock.patch.object(apps_routes, "stop_container"),
         mock.patch.object(apps_routes, "reload_app_background"),
         TestClient(app=make_test_app(api_apps_routes)) as client,
     ):

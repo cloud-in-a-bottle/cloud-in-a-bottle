@@ -427,7 +427,7 @@ def _mocked_reload_side_effects() -> Iterator[dict[str, Any]]:
     with (
         patch("compute_space.web.routes.api.apps.git_pull", return_value=(True, None)),
         patch("compute_space.web.routes.api.apps._pin_refless_to_landed_branch", return_value=None),
-        patch("compute_space.web.routes.api.apps.stop_app_process") as stop,
+        patch("compute_space.web.routes.api.apps.stop_container") as stop,
         patch("compute_space.web.routes.api.apps.Thread") as thread,
     ):
         yield {"stop": stop, "thread": thread}
@@ -518,7 +518,7 @@ def test_plain_reload_does_not_gate_declared_but_ungranted_permission(
     )
 
     with (
-        patch("compute_space.web.routes.api.apps.stop_app_process") as stop,
+        patch("compute_space.web.routes.api.apps.stop_container") as stop,
         patch("compute_space.web.routes.api.apps.Thread") as thread,
     ):
         client.cookies.update(cookies)
@@ -668,7 +668,7 @@ def test_refused_update_rolls_back_working_tree(
     with (
         patch("compute_space.web.routes.api.apps.git_pull", side_effect=_fake_pull),
         patch("compute_space.web.routes.api.apps._pin_refless_to_landed_branch", return_value=None),
-        patch("compute_space.web.routes.api.apps.stop_app_process") as stop,
+        patch("compute_space.web.routes.api.apps.stop_container") as stop,
         patch("compute_space.web.routes.api.apps.Thread") as thread,
     ):
         # sanity: the pulled v2 really does declare a new consume

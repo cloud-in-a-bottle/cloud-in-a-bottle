@@ -768,7 +768,7 @@ def test_reload_app_allows_access_all_app_data_when_archive_unhealthy(
     finally:
         db.close()
     with (
-        mock.patch("compute_space.web.routes.api.apps.stop_app_process"),
+        mock.patch("compute_space.web.routes.api.apps.stop_container"),
         mock.patch("compute_space.web.routes.api.apps.reload_app_background"),
     ):
         apps_client.cookies.update(cookies)

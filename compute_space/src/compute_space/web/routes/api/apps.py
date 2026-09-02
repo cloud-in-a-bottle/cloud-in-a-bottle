@@ -920,7 +920,7 @@ async def _reload_app_impl(
     # too: the initial request returned before this UPDATE when it handed the
     # browser to OAuth, and another operation may now own the row.
     cursor = db.execute(
-        "UPDATE apps SET status = 'building', container_id = NULL, error_message = NULL "
+        "UPDATE apps SET status = 'building', error_message = NULL "
         "WHERE app_id = ? AND status NOT IN ('building', 'starting', 'removing') "
         "AND container_id IS ? "
         "AND NOT EXISTS (SELECT 1 FROM settings WHERE key IN (?, ?))",
@@ -935,7 +935,27 @@ async def _reload_app_impl(
     if cursor.rowcount == 0:
         raise ConflictException(detail="App is already reloading")
 
-    await asyncio.to_thread(stop_app_process, app_row)
+    try:
+        await asyncio.to_thread(
+            stop_container,
+            app_row["container_id"] or f"openhost-{app_name}",
+        )
+    except Exception as exc:
+        db.execute(
+            "UPDATE apps SET status = 'error', error_message = ? "
+            "WHERE app_id = ? AND status = 'building' AND container_id IS ?",
+            (f"Could not stop app before reload: {exc}", app_id, app_row["container_id"]),
+        )
+        db.commit()
+        raise ServiceUnavailableException(detail="Could not stop app before reload; try again.") from exc
+
+    cleared = db.execute(
+        "UPDATE apps SET container_id = NULL WHERE app_id = ? AND status = 'building' AND container_id IS ?",
+        (app_id, app_row["container_id"]),
+    )
+    db.commit()
+    if cleared.rowcount != 1:
+        raise ConflictException(detail="Another app maintenance operation took ownership")
 
     try:
         Thread(
@@ -946,9 +966,8 @@ async def _reload_app_impl(
     except Exception as exc:
         logger.exception("Could not spawn reload worker for {}", app_id)
         db.execute(
-            "UPDATE apps SET status = 'error', container_id = ?, error_message = ? "
-            "WHERE app_id = ? AND status = 'building'",
-            (app_row["container_id"], f"Could not start reload worker: {exc}", app_id),
+            "UPDATE apps SET status = 'error', error_message = ? WHERE app_id = ? AND status = 'building'",
+            (f"Could not start reload worker: {exc}", app_id),
         )
         db.commit()
         raise ServiceUnavailableException(detail="Could not start reload worker; try again.") from exc

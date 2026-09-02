@@ -649,7 +649,7 @@ def stop_running_archive_apps(
         if not archive_backend.manifest_uses_archive(row["manifest_raw"] or ""):
             continue
         container_id = row["container_id"]
-        should_stop = row["status"] == "running" or bool(container_id)
+        should_stop = row["status"] == "running" or (row["status"] != "stopped" and bool(container_id))
         if not should_stop:
             continue
         logger.info("stopping archive-using app {} before archive migration", row["name"])

@@ -82,7 +82,7 @@ def test_plain_reload_claims_building_and_spawns_worker(
 
     with (
         patch("compute_space.web.routes.api.apps.Thread") as Thread,
-        patch("compute_space.web.routes.api.apps.stop_app_process") as stop,
+        patch("compute_space.web.routes.api.apps.stop_container") as stop,
     ):
         client.cookies.update(cookies)
         resp = client.post(f"/reload_app/{app_id}")
@@ -106,7 +106,7 @@ def test_reload_worker_spawn_failure_marks_app_error(
 
     with (
         patch("compute_space.web.routes.api.apps.Thread") as Thread,
-        patch("compute_space.web.routes.api.apps.stop_app_process"),
+        patch("compute_space.web.routes.api.apps.stop_container"),
     ):
         Thread.return_value.start.side_effect = RuntimeError("thread unavailable")
         client.cookies.update(cookies)
@@ -117,7 +117,31 @@ def test_reload_worker_spawn_failure_marks_app_error(
     db = sqlite3.connect(cfg.db_path)
     container_id = db.execute("SELECT container_id FROM apps WHERE app_id = ?", (app_id,)).fetchone()[0]
     db.close()
-    assert container_id == "old-container"
+    assert container_id is None
+
+
+def test_reload_stop_failure_preserves_container_reference(
+    cfg: Any, client: TestClient[Litestar], cookies: dict[str, str]
+) -> None:
+    app_id = _seed_app(cfg.db_path, "myapp")
+    db = sqlite3.connect(cfg.db_path)
+    db.execute("UPDATE apps SET container_id = 'old-container' WHERE app_id = ?", (app_id,))
+    db.commit()
+    db.close()
+
+    with (
+        patch("compute_space.web.routes.api.apps.Thread") as Thread,
+        patch("compute_space.web.routes.api.apps.stop_container", side_effect=RuntimeError("remove failed")),
+    ):
+        client.cookies.update(cookies)
+        resp = client.post(f"/reload_app/{app_id}")
+
+    assert resp.status_code == 503
+    Thread.assert_not_called()
+    db = sqlite3.connect(cfg.db_path)
+    row = db.execute("SELECT status, container_id FROM apps WHERE app_id = ?", (app_id,)).fetchone()
+    db.close()
+    assert row == ("error", "old-container")
 
 
 @pytest.mark.parametrize("busy_status", ["building", "starting"])
@@ -131,7 +155,7 @@ def test_reload_refused_while_transient(
 
     with (
         patch("compute_space.web.routes.api.apps.Thread") as Thread,
-        patch("compute_space.web.routes.api.apps.stop_app_process") as stop,
+        patch("compute_space.web.routes.api.apps.stop_container") as stop,
     ):
         client.cookies.update(cookies)
         resp = client.post(f"/reload_app/{app_id}")
@@ -151,7 +175,7 @@ def test_reload_refused_while_removing(cfg: Any, client: TestClient[Litestar], c
 
     with (
         patch("compute_space.web.routes.api.apps.Thread") as Thread,
-        patch("compute_space.web.routes.api.apps.stop_app_process") as stop,
+        patch("compute_space.web.routes.api.apps.stop_container") as stop,
     ):
         client.cookies.update(cookies)
         resp = client.post(f"/reload_app/{app_id}")
@@ -171,7 +195,7 @@ def test_reload_allowed_from_settled_states(
 
     with (
         patch("compute_space.web.routes.api.apps.Thread") as Thread,
-        patch("compute_space.web.routes.api.apps.stop_app_process"),
+        patch("compute_space.web.routes.api.apps.stop_container"),
     ):
         client.cookies.update(cookies)
         resp = client.post(f"/reload_app/{app_id}")
@@ -237,7 +261,7 @@ def test_reload_refuses_stale_container_generation(
     monkeypatch.setattr(apps_routes.archive_backend, "is_archive_dir_healthy", replace_container)
     with (
         patch("compute_space.web.routes.api.apps.Thread") as Thread,
-        patch("compute_space.web.routes.api.apps.stop_app_process") as stop,
+        patch("compute_space.web.routes.api.apps.stop_container") as stop,
     ):
         client.cookies.update(cookies)
         resp = client.post(f"/reload_app/{app_id}")
