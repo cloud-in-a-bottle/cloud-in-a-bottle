@@ -29,6 +29,9 @@ BIND_HOST=""
 CLAIM_TOKEN=""
 SWAP_SIZE_GB=""
 OPEN_CLAIM="false"
+PUBLIC_IP_OVERRIDE=""
+ACME_KEY_SRC=""
+ACME_EMAIL=""
 
 usage() {
     echo "Usage: $0 --domain <domain> [--branch <branch>] [--repo <repo-url>] [--local-http-only]"
@@ -53,6 +56,14 @@ usage() {
     echo "                      distributable image with a predictable claim URL."
     echo "  --swap-size         Swap file size in GiB (default: playbook default,"
     echo "                      16). Smaller values suit constrained local VMs."
+    echo "  --public-ip         Public IPv4 to bake into the config for DNS records,"
+    echo "                      overriding auto-detection. Use when the box running"
+    echo "                      provision.sh isn't the box that'll serve the domain"
+    echo "                      (e.g. building a distributable image)."
+    echo "  --acme-key          Path to a pre-registered ACME account key to install"
+    echo "                      instead of generating one (TLS mode only)."
+    echo "  --acme-email        Email for the generated ACME account (TLS mode, when"
+    echo "                      no --acme-key is given)."
     echo "  --open-claim        Leave /setup ungated (claim_token_required = false), so you"
     echo "                      can claim the instance without a token. For a private,"
     echo "                      unexposed instance (e.g. the distributed VM image behind"
@@ -72,6 +83,9 @@ while [[ $# -gt 0 ]]; do
         --bind-host)        BIND_HOST="$2"; shift 2 ;;
         --claim-token)      CLAIM_TOKEN="$2"; shift 2 ;;
         --swap-size)        SWAP_SIZE_GB="$2"; shift 2 ;;
+        --public-ip)        PUBLIC_IP_OVERRIDE="$2"; shift 2 ;;
+        --acme-key)         ACME_KEY_SRC="$2"; shift 2 ;;
+        --acme-email)       ACME_EMAIL="$2"; shift 2 ;;
         --open-claim)       OPEN_CLAIM="true"; shift ;;
         -h|--help)          usage; exit 0 ;;
         *)                  echo "Unknown option: $1"; usage; exit 1 ;;
@@ -134,11 +148,13 @@ else
 fi
 chown -R host:host "$OPENHOST_DIR"
 
-# ---- Detect public IP ----
-PUBLIC_IP=""
-PUBLIC_IP=$(hostname -I 2>/dev/null | awk '{print $1}' || true)
-if [ -z "$PUBLIC_IP" ] || echo "$PUBLIC_IP" | grep -qE '^(10\.|172\.(1[6-9]|2[0-9]|3[01])\.|192\.168\.)'; then
-    PUBLIC_IP=$(curl -sf --max-time 5 https://ifconfig.me 2>/dev/null || true)
+# ---- Public IP (explicit override, else auto-detect) ----
+PUBLIC_IP="$PUBLIC_IP_OVERRIDE"
+if [ -z "$PUBLIC_IP" ]; then
+    PUBLIC_IP=$(hostname -I 2>/dev/null | awk '{print $1}' || true)
+    if [ -z "$PUBLIC_IP" ] || echo "$PUBLIC_IP" | grep -qE '^(10\.|172\.(1[6-9]|2[0-9]|3[01])\.|192\.168\.)'; then
+        PUBLIC_IP=$(curl -sf --max-time 5 https://ifconfig.me 2>/dev/null || true)
+    fi
 fi
 echo "  Public IP: ${PUBLIC_IP:-unknown}"
 
@@ -172,13 +188,23 @@ ansible-playbook ansible/local_setup.yml \
     --connection=local \
     -i "localhost,"
 
-# ---- Generate ACME account key if missing (TLS mode only) ----
+# ---- ACME account key (TLS mode only): install the provided one, else generate ----
 if [ "$LOCAL_HTTP_ONLY" != "true" ]; then
     ACME_KEY_PATH="$OPENHOST_DIR/ansible/secrets/certbot_private_key.json"
-    if [ ! -f "$ACME_KEY_PATH" ]; then
+    ACME_KEY_DIR="$(dirname "$ACME_KEY_PATH")"
+    if [ -n "$ACME_KEY_SRC" ]; then
+        echo "--- Installing provided ACME account key ---"
+        mkdir -p "$ACME_KEY_DIR"
+        cp "$ACME_KEY_SRC" "$ACME_KEY_PATH"
+        chmod 600 "$ACME_KEY_PATH"
+        chown host:host "$ACME_KEY_PATH"
+    elif [ ! -f "$ACME_KEY_PATH" ]; then
         echo "--- Generating ACME account key ---"
-        mkdir -p "$(dirname "$ACME_KEY_PATH")"
-        su host -c "cd $OPENHOST_DIR && /home/host/.pixi/bin/pixi run python3 scripts/generate_acme_key.py $ACME_KEY_PATH"
+        mkdir -p "$ACME_KEY_DIR"
+        chown host:host "$ACME_KEY_DIR"
+        gen="/home/host/.pixi/bin/pixi run python3 scripts/generate_acme_key.py $ACME_KEY_PATH"
+        [ -n "$ACME_EMAIL" ] && gen="$gen --email $ACME_EMAIL"
+        su host -c "cd $OPENHOST_DIR && $gen"
         chmod 600 "$ACME_KEY_PATH"
         chown host:host "$ACME_KEY_PATH"
     fi
