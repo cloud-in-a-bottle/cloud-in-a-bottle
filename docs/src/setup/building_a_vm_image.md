@@ -24,7 +24,7 @@ Run from a checkout of the openhost repo, on the Linux/KVM host:
 image/build.sh
 ```
 
-With no options this builds `main` into `image/out/openhost-<version>-amd64.qcow2` and a matching `.ova`, in HTTP-only mode on `lvh.me`, with open claiming and a default console password. The build boots a VM and runs the full provisioning, so it takes a while; the guest console is streamed to `image/out/build-console.log` so a failed build is diagnosable.
+With no options this builds `main` into `image/out/openhost-<version>-amd64.qcow2` and a matching `.ova`, in HTTP-only mode on `lvh.me`, with no claim token and a default console password. The build boots a VM and runs the full provisioning, so it takes a while; Logs go into `image/out/build-console.log`.
 
 ### Common options
 
@@ -46,7 +46,7 @@ image/build.sh \
 
 ### Building a public (TLS) image
 
-By default the image is HTTP-only — the easy, behind-NAT on-ramp. Pass `--public` to bake a TLS image instead: one provisioned with CoreDNS, Caddy, and Let's Encrypt for `--domain`, ready to serve at `https://<domain>` once it's on the network.
+By default the image is HTTP-only and not suitable for exposing publicly. Pass `--public` to bake a TLS image instead: one provisioned with CoreDNS, Caddy, and Let's Encrypt for `--domain`, ready to serve at `https://<domain>` once it's on the network.
 
 | Option | Purpose |
 | --- | --- |
@@ -65,8 +65,8 @@ image/build.sh \
   --ssh-pubkey ~/.ssh/id_ed25519.pub
 ```
 
-The build validates provisioning, but the TLS certificate is issued later, at your site — the build VM has no DNS pointing at it. Boot the image where its domain resolves to `--public-ip`, [delegate DNS and open ports 53 / 80 / 443](./shared_machine.md#part-2-taking-it-public), and the instance acquires its wildcard certificate and comes up at `https://host.example.com/`.
+The build does not get a TLS certificate issued - That can only happen once it's running and has DNS pointing at it. Once it boots with the right public ip `--public-ip`, delegate DNS and open ports 53 / 80 / 443 to it — see [Exposing a server with a static IP](./static_ip.md) or [Exposing a home server](./home_network.md) — and the instance will acquire its wildcard certificate and start serving at `https://host.example.com/`.
 
 ## Run it
 
-Boot the resulting qcow2 (QEMU / KVM / libvirt) or `.ova` (VirtualBox). An HTTP-only image is reached and claimed exactly like a release image — see [Deploying on a shared machine](./shared_machine.md#part-1-download-and-run-the-vm-image). A `--public` image instead follows [taking it public](./shared_machine.md#part-2-taking-it-public): delegate DNS, open the ports, then claim at `https://<domain>`. Either way, the build prints the dashboard URL, the claim mode, and the console login when it finishes.
+Boot the resulting qcow2 (QEMU / KVM / libvirt) or `.ova` (VirtualBox). An HTTP-only image is reached and claimed exactly like a release image — see [Deploying on a shared machine](./shared_machine.md#part-1-download-and-run-the-vm-image). A `--public` image instead needs its networking in place first (delegate DNS, open the ports, as above), then you claim at `https://<domain>`. Either way, the build prints the dashboard URL, the claim mode, and the console login when it finishes.

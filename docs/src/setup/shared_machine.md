@@ -11,8 +11,8 @@ This page is in two parts. Part 1 gets a working instance running inside a VM fr
 The release image is a self-contained Ubuntu 24.04 appliance with Cloud in a Bottle already provisioned by the same `scripts/provision.sh` a production deploy uses. It is deliberately configured for the easy on-ramp:
 
 - **HTTP only, no domain required.** The router binds `0.0.0.0:8080` with no TLS, CoreDNS, or Caddy in front of it. Boot the VM and the dashboard is at `http://<vm-ip>:8080/`.
-- **Open claiming.** There is no claim token to copy around — the first person to reach the dashboard claims the instance. This is safe precisely *because* the appliance sits behind your NAT: nothing reaches `:8080` unless you forward a port to it yourself.
-- **No baked-in SSH key.** Access is console-only until you add your own key. The image ships no credentials shared across every download.
+- **No claim token** There is no claim token to copy around — the first person to reach the dashboard claims the instance. This is safe only because the VM sits behind your NAT: nothing reaches `:8080` unless you forward a port to it yourself.
+- **No baked-in SSH key.** Access is console-only until you add your own key. The image ships no shared credentials.
 - **Grow-to-fill disk.** On first boot a systemd oneshot (`openhost-prepare.service`) expands the root filesystem to fill whatever disk you gave the VM (20 GB floor), regenerates the SSH host keys, and assigns a fresh machine-id — so every install is distinct.
 
 Two formats are published per release, both x86_64:
