@@ -819,6 +819,17 @@ podman exec openhost-file-browser cat {cfg}/root-credentials.txt >/dev/null 2>&1
 echo "=== DIAG MOUNTS ==="
 podman inspect openhost-minio --format "{{{{json .Mounts}}}}" 2>&1
 podman inspect openhost-file-browser --format "{{{{json .Mounts}}}}" 2>&1
+echo "=== DIAG DUFS: what is it actually serving? ==="
+echo "--- dufs process args (pid 1) ---"
+podman exec openhost-file-browser ps -o pid,args 2>&1 | head
+podman exec openhost-file-browser dufs --version 2>&1
+echo "--- container /data listing (dufs root) ---"
+podman exec openhost-file-browser ls -la /data 2>&1
+echo "--- statfs of /data vs /data/app_data (different fs?) ---"
+podman exec openhost-file-browser stat -f /data 2>&1
+podman exec openhost-file-browser stat -f /data/app_data 2>&1
+echo "--- direct dufs HTTP on container :5000 (bypasses router) ---"
+podman exec openhost-file-browser sh -c "echo '[GET /]'; wget -qO- http://127.0.0.1:5000/ 2>&1 | head -c 400; echo; echo '[GET /app_data/]'; wget -qO- http://127.0.0.1:5000/app_data/ 2>&1 | head -c 400; echo; echo '[GET /app_data/minio/config/root-credentials.txt]'; wget -qO- http://127.0.0.1:5000/app_data/minio/config/root-credentials.txt 2>&1 | head -c 400; echo" 2>&1
 echo "=== DIAG END ==="
 """
         result = ssh_host(
