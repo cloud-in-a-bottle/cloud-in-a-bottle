@@ -152,6 +152,35 @@ def test_rename_skips_missing_tier_without_error(cfg_factory: Any) -> None:
     assert not (_archive_parent(cfg) / "new-name").exists()
 
 
+def test_rename_does_not_overwrite_primary_restart_claim(cfg_factory: Any) -> None:
+    cfg = cfg_factory(20211)
+    app_id = _seed_app_row(cfg.db_path, "old-name", status="running")
+
+    def claim_primary_restart(_row: sqlite3.Row) -> None:
+        db = sqlite3.connect(cfg.db_path)
+        db.execute(
+            "INSERT INTO settings (key, value) VALUES ('primary_domain_restart_app_ids', ?)",
+            (f'["{app_id}"]',),
+        )
+        db.commit()
+        db.close()
+
+    cookies = auth_cookie(cfg)
+    with (
+        mock.patch.object(apps_routes, "stop_app_process", side_effect=claim_primary_restart),
+        mock.patch.object(apps_routes.archive_backend, "is_archive_dir_healthy", return_value=True),
+        _client(cfg) as client,
+    ):
+        client.cookies.update(cookies)
+        resp = client.post(f"/rename_app/{app_id}", json={"name": "new-name"})
+
+    assert resp.status_code == 409
+    db = sqlite3.connect(cfg.db_path)
+    row = db.execute("SELECT name, status FROM apps WHERE app_id = ?", (app_id,)).fetchone()
+    db.close()
+    assert row == ("old-name", "running")
+
+
 def test_rename_rollback_on_archive_failure(cfg_factory: Any) -> None:
     """If the archive-tier rename fails partway through (e.g. JuiceFS mount transiently unhealthy), the previously-renamed app_data and app_temp_data dirs must be rolled back so on-disk state matches the unchanged DB rows."""
     cfg = cfg_factory(20202)

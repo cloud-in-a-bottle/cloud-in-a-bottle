@@ -100,9 +100,8 @@ function loadDomains() {
 }
 
 function makePrimaryDomain(name, currentPrimary) {
-  var warning = 'Make ' + name + ' the primary domain? New links and future app starts will use it. ' +
-    'Running apps keep their current domain until they are reloaded, so keep the previous domain until then. ' +
-    'You will be redirected and may need to sign in again.';
+  var warning = 'Make ' + name + ' the primary domain? Running apps will restart automatically and may be ' +
+    'briefly unavailable. You will be redirected and may need to sign in again.';
   if (!confirm(warning)) { return; }
   fetch(DOMAINS_URL + '/' + encodeURIComponent(name) + '/primary', {
     method: 'POST',

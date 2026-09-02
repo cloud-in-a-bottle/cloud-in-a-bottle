@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import re
 import sqlite3
+import uuid
 from typing import Annotated
 
 import attr
@@ -22,6 +23,11 @@ from litestar.params import Body
 from compute_space.config import Config
 from compute_space.core import archive_backend
 from compute_space.core.archive_backend import BackendState
+from compute_space.core.domains import INTERRUPTED_APP_REMOVAL_MESSAGE
+from compute_space.core.logging import logger
+from compute_space.core.settings_store import ARCHIVE_MIGRATION_IN_PROGRESS_KEY
+from compute_space.core.settings_store import ARCHIVE_MIGRATION_RECOVERY_REQUIRED_VALUE
+from compute_space.core.settings_store import PRIMARY_DOMAIN_RESTART_APP_IDS_KEY
 from compute_space.web.auth.auth import require_owner_auth
 from compute_space.web.exceptions import ConflictException
 
@@ -58,6 +64,86 @@ class BackendStateResponse:
 @attr.s(auto_attribs=True, frozen=True)
 class TestConnectionOk:
     ok: bool  # always True
+
+
+_archive_migration_tasks: set[asyncio.Task[None]] = set()
+
+
+def _claim_archive_migration(db: sqlite3.Connection, operation_id: str) -> tuple[str | None, bool]:
+    """Claim archive migration unless app recreation or another migration is active."""
+    db.execute("BEGIN IMMEDIATE")
+    try:
+        pending_restarts = db.execute(
+            "SELECT 1 FROM settings WHERE key = ?",
+            (PRIMARY_DOMAIN_RESTART_APP_IDS_KEY,),
+        ).fetchone()
+        if pending_restarts is not None:
+            db.execute("ROLLBACK")
+            return "primary_domain_restarts", False
+        existing = db.execute(
+            "SELECT value FROM settings WHERE key = ?",
+            (ARCHIVE_MIGRATION_IN_PROGRESS_KEY,),
+        ).fetchone()
+        recovery_claim = existing is not None and existing[0] == ARCHIVE_MIGRATION_RECOVERY_REQUIRED_VALUE
+        if existing is not None:
+            if not recovery_claim:
+                db.execute("ROLLBACK")
+                return "archive_migration", False
+        if not recovery_claim:
+            busy_app = db.execute(
+                "SELECT 1 FROM apps WHERE status IN ('building', 'starting', 'removing') "
+                "OR (status = 'error' AND error_message = ?) LIMIT 1",
+                (INTERRUPTED_APP_REMOVAL_MESSAGE,),
+            ).fetchone()
+            if busy_app is not None:
+                db.execute("ROLLBACK")
+                return "apps_busy", False
+        if recovery_claim:
+            claimed = db.execute(
+                "UPDATE settings SET value = ? WHERE key = ? AND value = ?",
+                (
+                    operation_id,
+                    ARCHIVE_MIGRATION_IN_PROGRESS_KEY,
+                    ARCHIVE_MIGRATION_RECOVERY_REQUIRED_VALUE,
+                ),
+            )
+        else:
+            claimed = db.execute(
+                "INSERT INTO settings (key, value) VALUES (?, ?)",
+                (ARCHIVE_MIGRATION_IN_PROGRESS_KEY, operation_id),
+            )
+        if claimed.rowcount != 1:
+            db.execute("ROLLBACK")
+            return "archive_migration", False
+        db.execute("COMMIT")
+        return None, recovery_claim
+    except BaseException:
+        if db.in_transaction:
+            db.execute("ROLLBACK")
+        raise
+
+
+def _release_archive_migration(
+    db: sqlite3.Connection,
+    operation_id: str,
+    *,
+    recovery_required: bool = False,
+) -> None:
+    if recovery_required:
+        db.execute(
+            "UPDATE settings SET value = ? WHERE key = ? AND value = ?",
+            (
+                ARCHIVE_MIGRATION_RECOVERY_REQUIRED_VALUE,
+                ARCHIVE_MIGRATION_IN_PROGRESS_KEY,
+                operation_id,
+            ),
+        )
+    else:
+        db.execute(
+            "DELETE FROM settings WHERE key = ? AND value = ?",
+            (ARCHIVE_MIGRATION_IN_PROGRESS_KEY, operation_id),
+        )
+    db.commit()
 
 
 def _state_to_response(
@@ -216,47 +302,6 @@ async def configure_archive_backend(
     default — migrates local archive data into the bucket), the legacy
     ``'disabled'`` state (fresh format), or ``'s3'`` (migrates the archive from
     the current bucket to a new bucket/provider)."""
-    state = archive_backend.read_state(db)
-
-    # Guard the local->S3 migration behind an explicit acknowledgement when
-    # there is actually local data to migrate.  The dashboard shows which
-    # apps have data (from local_archive_apps in the GET state) and the
-    # fail-open/one-way semantics before ticking the confirm box; the API
-    # refuses to proceed (409, listing the apps) until the operator confirms.
-    local_apps_with_data = archive_backend.local_archive_apps_with_data(config, db) if state.backend == "local" else []
-    if local_apps_with_data:
-        if not data.confirm_migrate_local:
-            apps = local_apps_with_data
-            raise ConflictException(
-                detail=(
-                    "The archive tier currently uses LOCAL disk and these "
-                    f"apps have data on it: {', '.join(apps)}.  Configuring "
-                    "S3 will migrate that data into the bucket and then "
-                    "remove the local copy.  This switch is one-way.  "
-                    "Re-submit with confirm_migrate_local=true to proceed."
-                ),
-                status_code=409,
-                extra={"code": "confirm_migrate_local_required"},
-            )
-
-    # Guard the s3->s3 migration behind its own explicit acknowledgement: the
-    # archive is already on S3, and configuring a new bucket copies the data to
-    # the new bucket, re-points the volume, and reclaims the old bucket.  It is
-    # fail-open, but it moves live data, so require confirm_migrate_s3.
-    if state.backend == "s3" and not data.confirm_migrate_s3:
-        raise ConflictException(
-            detail=(
-                "The archive tier is already on S3 (bucket "
-                f"{state.s3_bucket!r}).  Configuring a new bucket will MIGRATE the "
-                "archive to it (copy + verify), re-point the volume, and then reclaim "
-                "the old bucket's objects.  This is fail-open (the old bucket is kept "
-                "intact if anything fails), but it moves live data.  Re-submit with "
-                "confirm_migrate_s3=true to proceed."
-            ),
-            status_code=409,
-            extra={"code": "confirm_migrate_s3_required"},
-        )
-
     try:
         prefix = _normalise_s3_prefix(data.s3_prefix or None)
     except ValueError as exc:
@@ -265,6 +310,60 @@ async def configure_archive_backend(
     region = data.s3_region.strip() or None
     endpoint = data.s3_endpoint.strip() or None
     volume_name = data.juicefs_volume_name.strip() or None
+    operation_id = uuid.uuid4().hex
+    conflict, recovery_claim = _claim_archive_migration(db, operation_id)
+    if conflict:
+        if conflict == "primary_domain_restarts":
+            raise ConflictException(
+                detail="wait for apps to restart after the primary domain change",
+                extra={"code": "primary_domain_restarts"},
+            )
+        if conflict == "apps_busy":
+            raise ConflictException(
+                detail="wait for current app operations to finish before migrating archive storage",
+                extra={"code": "apps_busy"},
+            )
+        raise ConflictException(detail="archive migration is already in progress", extra={"code": conflict})
+
+    try:
+        state = archive_backend.read_state(db)
+
+        # Guard the local->S3 migration behind an explicit acknowledgement when
+        # there is actually local data to migrate. The state must be read after
+        # claiming the migration marker so another migration cannot change the
+        # required confirmation type between validation and execution.
+        local_apps_with_data = (
+            archive_backend.local_archive_apps_with_data(config, db) if state.backend == "local" else []
+        )
+        if local_apps_with_data and not data.confirm_migrate_local:
+            raise ConflictException(
+                detail=(
+                    "The archive tier currently uses LOCAL disk and these "
+                    f"apps have data on it: {', '.join(local_apps_with_data)}.  Configuring "
+                    "S3 will migrate that data into the bucket and then "
+                    "remove the local copy.  This switch is one-way.  "
+                    "Re-submit with confirm_migrate_local=true to proceed."
+                ),
+                status_code=409,
+                extra={"code": "confirm_migrate_local_required"},
+            )
+
+        if state.backend == "s3" and not data.confirm_migrate_s3:
+            raise ConflictException(
+                detail=(
+                    "The archive tier is already on S3 (bucket "
+                    f"{state.s3_bucket!r}).  Configuring a new bucket will MIGRATE the "
+                    "archive to it (copy + verify), re-point the volume, and then reclaim "
+                    "the old bucket's objects.  This is fail-open (the old bucket is kept "
+                    "intact if anything fails), but it moves live data.  Re-submit with "
+                    "confirm_migrate_s3=true to proceed."
+                ),
+                status_code=409,
+                extra={"code": "confirm_migrate_s3_required"},
+            )
+    except BaseException:
+        _release_archive_migration(db, operation_id, recovery_required=recovery_claim)
+        raise
 
     # The format+mount steps can take 10-30s.  Run off-loop so the event
     # loop doesn't block.  ``db`` from ``provide_db()`` is request-thread-bound
@@ -275,6 +374,7 @@ async def configure_archive_backend(
     def _run() -> None:
         worker_db = sqlite3.connect(db_path)
         worker_db.row_factory = sqlite3.Row
+        migration_succeeded = False
         try:
             # A migration (local->S3 or s3->s3) must restart the JuiceFS mount
             # (juicefs config re-points the volume) and must not let apps write
@@ -314,6 +414,7 @@ async def configure_archive_backend(
                     juicefs_volume_name=volume_name,
                     quiesce_archive_apps=_quiesce if migrating else None,
                 )
+                migration_succeeded = True
             finally:
                 # Only restart the quiesced apps if the archive mount is
                 # actually LIVE (either the new S3 mount after success, or the
@@ -328,11 +429,49 @@ async def configure_archive_backend(
                 if quiesced and archive_backend.is_mounted(archive_backend.juicefs_mount_dir(config)):
                     start_apps_by_id(quiesced, worker_db, config)
         finally:
-            worker_db.close()
+            try:
+                if recovery_claim and not migration_succeeded:
+                    _release_archive_migration(worker_db, operation_id, recovery_required=True)
+                elif not recovery_claim:
+                    _release_archive_migration(worker_db, operation_id)
+            finally:
+                worker_db.close()
 
+    migration_task = asyncio.create_task(asyncio.to_thread(_run))
+    _archive_migration_tasks.add(migration_task)
+    migration_task.add_done_callback(_archive_migration_tasks.discard)
     try:
-        await asyncio.to_thread(_run)
+        await asyncio.shield(migration_task)
+    except asyncio.CancelledError:
+
+        def _report_cancelled_migration(done: asyncio.Task[None]) -> None:
+            try:
+                done.result()
+            except Exception:
+                logger.exception("Archive migration failed after its request was cancelled")
+                cleanup_db = sqlite3.connect(db_path)
+                try:
+                    _release_archive_migration(
+                        cleanup_db,
+                        operation_id,
+                        recovery_required=recovery_claim,
+                    )
+                except Exception:
+                    logger.exception("Failed to release archive migration claim after request cancellation")
+                finally:
+                    cleanup_db.close()
+            else:
+                if recovery_claim:
+                    cleanup_db = sqlite3.connect(db_path)
+                    try:
+                        _release_archive_migration(cleanup_db, operation_id, recovery_required=True)
+                    finally:
+                        cleanup_db.close()
+
+        migration_task.add_done_callback(_report_cancelled_migration)
+        raise
     except RuntimeError as exc:
+        _release_archive_migration(db, operation_id, recovery_required=recovery_claim)
         # 409 if it was a TOCTOU race against another configure attempt;
         # 500 for genuine bring-up failures (detail is masked, so it rides in extra).
         if "already configured" in str(exc):
@@ -340,6 +479,31 @@ async def configure_archive_backend(
         raise InternalServerException(
             detail="Failed to configure archive backend", extra={"output": str(exc)}
         ) from exc
+    except Exception:
+        _release_archive_migration(db, operation_id, recovery_required=recovery_claim)
+        raise
+
+    if recovery_claim:
+        app_recovery_succeeded = False
+        try:
+            from compute_space.core.startup import check_app_status  # noqa: PLC0415
+
+            check_app_status(
+                config,
+                recover_quiesced_archive_apps=True,
+                restart_synchronously=True,
+            )
+            app_recovery_succeeded = True
+        except Exception:
+            logger.exception("Archive repair succeeded but deferred app recovery failed")
+        finally:
+            _release_archive_migration(
+                db,
+                operation_id,
+                recovery_required=not app_recovery_succeeded,
+            )
+        if not app_recovery_succeeded:
+            raise InternalServerException(detail="Archive repaired, but deferred app recovery failed")
 
     state = archive_backend.read_state(db)
     archive_dir = archive_backend.juicefs_mount_dir(config) if state.backend == "s3" else None

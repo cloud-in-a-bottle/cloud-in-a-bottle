@@ -1332,3 +1332,19 @@ def test_start_apps_by_id_continues_on_failure(cfg, db):
     with mock.patch.object(apps_mod, "start_app_process", side_effect=[RuntimeError("boom"), None]) as start:
         apps_mod.start_apps_by_id(["a", "b"], db, cfg)
     assert start.call_count == 2
+
+
+def test_start_apps_by_id_records_restart_failure(cfg, db):
+    db.row_factory = sqlite3.Row
+    _seed_app(db, "failed-app", "failed-app", "running", 'name="a"\n', 20410)
+
+    def fail_after_marking_starting(app_id, worker_db, _config):
+        worker_db.execute("UPDATE apps SET status = 'starting' WHERE app_id = ?", (app_id,))
+        worker_db.commit()
+        raise RuntimeError("restart failed")
+
+    with mock.patch.object(apps_mod, "start_app_process", side_effect=fail_after_marking_starting):
+        apps_mod.start_apps_by_id(["failed-app"], db, cfg)
+
+    row = db.execute("SELECT status, error_message FROM apps WHERE app_id = 'failed-app'").fetchone()
+    assert tuple(row) == ("error", "restart failed")

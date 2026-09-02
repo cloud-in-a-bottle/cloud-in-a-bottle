@@ -35,11 +35,14 @@ from compute_space.core.git_ops import get_branch_name
 from compute_space.core.git_ops import get_head_sha
 from compute_space.core.git_ops import is_dirty
 from compute_space.core.logging import get_log_path
+from compute_space.core.settings_store import ARCHIVE_MIGRATION_IN_PROGRESS_KEY
+from compute_space.core.settings_store import PRIMARY_DOMAIN_RESTART_APP_IDS_KEY
 from compute_space.core.storage import is_guard_paused
 from compute_space.core.storage import set_guard_paused
 from compute_space.core.storage import storage_status
 from compute_space.core.updates import is_shutdown_pending
 from compute_space.web.auth.auth import require_owner_auth
+from compute_space.web.exceptions import ConflictException
 
 DEFAULT_TOKEN_EXPIRY_HOURS: float = 8.0
 
@@ -298,10 +301,15 @@ def toggle_ssh() -> SshStatusResponse:
     status_code=200,
     guards=[require_owner_auth],
     sync_to_thread=False,
-    raises=[InternalServerException],
+    raises=[ConflictException, InternalServerException],
 )
-def drop_docker_cache() -> Response[DropCacheOk]:
+def drop_docker_cache(db: NamedDependency[sqlite3.Connection]) -> Response[DropCacheOk]:
     """Drop the container build cache to free disk space."""
+    if db.execute(
+        "SELECT 1 FROM settings WHERE key IN (?, ?)",
+        (PRIMARY_DOMAIN_RESTART_APP_IDS_KEY, ARCHIVE_MIGRATION_IN_PROGRESS_KEY),
+    ).fetchone():
+        raise ConflictException(detail="Container images are in use by app or archive maintenance")
     try:
         output = drop_docker_build_cache()
     except RuntimeError as e:

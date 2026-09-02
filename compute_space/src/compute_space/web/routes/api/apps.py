@@ -35,6 +35,7 @@ from compute_space.config import Config
 from compute_space.core import archive_backend
 from compute_space.core.app_id import is_valid_app_id
 from compute_space.core.apps import RESERVED_PATHS
+from compute_space.core.apps import AppWorkerStartError
 from compute_space.core.apps import app_container_log_path
 from compute_space.core.apps import app_log_path
 from compute_space.core.apps import clone_with_github_fallback
@@ -55,6 +56,8 @@ from compute_space.core.containers import stop_app_process
 from compute_space.core.containers import stop_container
 from compute_space.core.diagnostics import AppDiagnostics
 from compute_space.core.diagnostics import collect_app_diagnostics
+from compute_space.core.domains import INTERRUPTED_APP_REMOVAL_MESSAGE
+from compute_space.core.domains import pending_primary_domain_restart_app_ids
 from compute_space.core.domains import primary_domain
 from compute_space.core.git_ops import get_branch_name
 from compute_space.core.git_ops import get_head_sha
@@ -72,6 +75,8 @@ from compute_space.core.manifest import parse_manifest
 from compute_space.core.oauth import OAuthRequired
 from compute_space.core.oauth import get_oauth_token
 from compute_space.core.ports import check_port_available
+from compute_space.core.settings_store import ARCHIVE_MIGRATION_IN_PROGRESS_KEY
+from compute_space.core.settings_store import PRIMARY_DOMAIN_RESTART_APP_IDS_KEY
 from compute_space.core.updates import wait_for_shutdown
 from compute_space.db.connection import get_db
 from compute_space.web.auth.auth import require_owner_auth
@@ -223,7 +228,24 @@ def _is_removing(app_row: sqlite3.Row | None) -> bool:
     status != 'removing' instead of this helper to avoid a TOCTOU race
     on concurrent removal requests.
     """
-    return app_row is not None and app_row["status"] == "removing"
+    return app_row is not None and (
+        app_row["status"] == "removing"
+        or (app_row["status"] == "error" and app_row["error_message"] == INTERRUPTED_APP_REMOVAL_MESSAGE)
+    )
+
+
+def _is_starting_or_building(app_row: sqlite3.Row | None) -> bool:
+    return app_row is not None and app_row["status"] in ("starting", "building")
+
+
+def _require_app_changes_available(db: sqlite3.Connection) -> None:
+    if pending_primary_domain_restart_app_ids(db):
+        raise ConflictException(detail="Apps are restarting after a primary domain change")
+    if db.execute(
+        "SELECT 1 FROM settings WHERE key = ?",
+        (ARCHIVE_MIGRATION_IN_PROGRESS_KEY,),
+    ).fetchone():
+        raise ConflictException(detail="Apps cannot be changed during an archive migration")
 
 
 def _resolve_app(app_id: str, db: sqlite3.Connection) -> sqlite3.Row:
@@ -331,7 +353,7 @@ async def check_port(
     "/api/add_app",
     status_code=200,
     guards=[require_owner_auth],
-    raises=[ValidationException, NotAuthorizedException, ServiceUnavailableException],
+    raises=[ValidationException, NotAuthorizedException, ServiceUnavailableException, ConflictException],
 )
 async def api_add_app(
     data: AddAppRequest,
@@ -339,6 +361,7 @@ async def api_add_app(
     config: NamedDependency[Config],
 ) -> Response[AddAppResponse]:
     """Install an app. Optionally takes a clone_dir from a prior clone_and_get_app_info call."""
+    _require_app_changes_available(db)
     repo_url = data.repo_url.strip()
     app_name: str | None = (data.app_name.strip() or None) if data.app_name else None
     clone_dir: str | None = (data.clone_dir.strip() or None) if data.clone_dir else None
@@ -412,6 +435,11 @@ async def api_add_app(
         grants = all_manifest_permissions_v2(manifest)
 
     try:
+        try:
+            _require_app_changes_available(db)
+        except ConflictException:
+            shutil.rmtree(final_dir, ignore_errors=True)
+            raise
         app_id = insert_and_deploy(
             manifest,
             final_dir,
@@ -422,6 +450,8 @@ async def api_add_app(
             repo_url=repo_url,
             port_overrides=port_overrides,
         )
+    except AppWorkerStartError as e:
+        raise ServiceUnavailableException(detail=str(e)) from e
     except (RuntimeError, ValueError) as e:
         # ValueError covers uid_map pool exhaustion (see compute_uid_map_base)
         # and other manifest-validation errors raised at insert time; both
@@ -621,17 +651,30 @@ async def app_logs_stream(
     raises=[ValidationException, NotFoundException, ConflictException],
 )
 async def stop_app(app_id: FromPath[str], db: NamedDependency[sqlite3.Connection]) -> Response[OkResponse]:
+    _require_app_changes_available(db)
     app_row = _resolve_app(app_id, db)
     if _is_removing(app_row):
         raise ConflictException(detail="App is being removed")
+    if _is_starting_or_building(app_row):
+        raise ConflictException(detail="App is being started or reloaded")
 
     stop_app_process(app_row)
     stop_container(f"openhost-{app_row['name']}")
-    db.execute(
-        "UPDATE apps SET status = 'stopped', container_id = NULL WHERE app_id = ?",
-        (app_id,),
+    stopped = db.execute(
+        "UPDATE apps SET status = 'stopped', container_id = NULL WHERE app_id = ? "
+        "AND status = ? AND container_id IS ? "
+        "AND NOT EXISTS (SELECT 1 FROM settings WHERE key IN (?, ?))",
+        (
+            app_id,
+            app_row["status"],
+            app_row["container_id"],
+            PRIMARY_DOMAIN_RESTART_APP_IDS_KEY,
+            ARCHIVE_MIGRATION_IN_PROGRESS_KEY,
+        ),
     )
     db.commit()
+    if stopped.rowcount != 1:
+        raise ConflictException(detail="Another app maintenance operation took ownership")
     return Response(content=OkResponse(ok=True), status_code=200, media_type=MediaType.JSON)
 
 
@@ -677,6 +720,29 @@ def _gate_update_review(
     )
 
 
+def _record_reload_error_if_unclaimed(
+    db: sqlite3.Connection,
+    app_id: str,
+    expected_container_id: str | None,
+    message: str,
+) -> bool:
+    """Record a pre-claim reload failure without overwriting a domain-restart claim."""
+    recorded = db.execute(
+        "UPDATE apps SET status = 'error', error_message = ? WHERE app_id = ? "
+        "AND container_id IS ? AND status NOT IN ('building', 'starting', 'removing') "
+        "AND NOT EXISTS (SELECT 1 FROM settings WHERE key IN (?, ?))",
+        (
+            message,
+            app_id,
+            expected_container_id,
+            PRIMARY_DOMAIN_RESTART_APP_IDS_KEY,
+            ARCHIVE_MIGRATION_IN_PROGRESS_KEY,
+        ),
+    )
+    db.commit()
+    return recorded.rowcount == 1
+
+
 async def _reload_app_impl(
     app_id: str,
     update: bool,
@@ -687,6 +753,7 @@ async def _reload_app_impl(
 ) -> Response[OkResponse] | Response[UpdateReviewRequiredResponse] | Redirect:
     """Shared body for the POST (user-initiated reload) and GET (OAuth callback)
     entry points to ``/reload_app/{app_id}``."""
+    _require_app_changes_available(db)
     app_row = _resolve_app(app_id, db)
     if _is_removing(app_row):
         raise ConflictException(detail="App is being removed")
@@ -725,14 +792,14 @@ async def _reload_app_impl(
 
         if update or continue_oauth:
             if not app_row["repo_path"] or not os.path.isdir(os.path.join(app_row["repo_path"], ".git")):
-                db.execute(
-                    "UPDATE apps SET status = 'error', error_message = ? WHERE app_id = ?",
-                    (
-                        "No git repository found to update. If this is a builtin app, git-based updates are not possible.",
-                        app_id,
-                    ),
+                recorded = _record_reload_error_if_unclaimed(
+                    db,
+                    app_id,
+                    app_row["container_id"],
+                    "No git repository found to update. If this is a builtin app, git-based updates are not possible.",
                 )
-                db.commit()
+                if not recorded:
+                    raise ConflictException(detail="Another app maintenance operation took ownership")
                 return Response(content=OkResponse(ok=True), status_code=200, media_type=MediaType.JSON)
 
             try:
@@ -766,11 +833,9 @@ async def _reload_app_impl(
                     return Redirect(path=e.authorize_url)
                 except RuntimeError as e:
                     lf.write(f"Secrets service unavailable: {str(e)}\n")
-                    db.execute(
-                        "UPDATE apps SET status = 'error', error_message = ? WHERE app_id = ?",
-                        (str(e), app_id),
-                    )
-                    db.commit()
+                    recorded = _record_reload_error_if_unclaimed(db, app_id, app_row["container_id"], str(e))
+                    if not recorded:
+                        raise ConflictException(detail="Another app maintenance operation took ownership") from e
                     if continue_oauth:
                         return Redirect(path=f"/app_detail/{app_name}")
                     return Response(content=OkResponse(ok=True), status_code=200, media_type=MediaType.JSON)
@@ -785,11 +850,14 @@ async def _reload_app_impl(
                 )
 
             if not pull_ok:
-                db.execute(
-                    "UPDATE apps SET status = 'error', error_message = ? WHERE app_id = ?",
-                    (f"Git pull failed: {pull_err}", app_id),
+                recorded = _record_reload_error_if_unclaimed(
+                    db,
+                    app_id,
+                    app_row["container_id"],
+                    f"Git pull failed: {pull_err}",
                 )
-                db.commit()
+                if not recorded:
+                    raise ConflictException(detail="Another app maintenance operation took ownership")
                 if continue_oauth:
                     return Redirect(path=f"/app_detail/{app_name}")
                 return Response(content=OkResponse(ok=True), status_code=200, media_type=MediaType.JSON)
@@ -848,26 +916,42 @@ async def _reload_app_impl(
     # worker; a second one gets rowcount=0 and is refused. Without this,
     # spamming "Reload" spawns several reload_app_background threads that race
     # to create the same ``openhost-<name>`` container and fail with
-    # "container name is already in use". ``continue_oauth`` resumes a reload
-    # this same request already began on its initial POST (status is still the
-    # pre-reload one, since the POST bounced to OAuth before claiming), so it
-    # proceeds regardless of the rowcount.
+    # "container name is already in use". An OAuth callback must claim the app
+    # too: the initial request returned before this UPDATE when it handed the
+    # browser to OAuth, and another operation may now own the row.
     cursor = db.execute(
         "UPDATE apps SET status = 'building', container_id = NULL, error_message = NULL "
-        "WHERE app_id = ? AND status NOT IN ('building', 'starting', 'removing')",
-        (app_id,),
+        "WHERE app_id = ? AND status NOT IN ('building', 'starting', 'removing') "
+        "AND container_id IS ? "
+        "AND NOT EXISTS (SELECT 1 FROM settings WHERE key IN (?, ?))",
+        (
+            app_id,
+            app_row["container_id"],
+            PRIMARY_DOMAIN_RESTART_APP_IDS_KEY,
+            ARCHIVE_MIGRATION_IN_PROGRESS_KEY,
+        ),
     )
     db.commit()
-    if cursor.rowcount == 0 and not continue_oauth:
+    if cursor.rowcount == 0:
         raise ConflictException(detail="App is already reloading")
 
     await asyncio.to_thread(stop_app_process, app_row)
 
-    Thread(
-        target=reload_app_background,
-        args=(app_id, app_row["repo_path"], config),
-        daemon=True,
-    ).start()
+    try:
+        Thread(
+            target=reload_app_background,
+            args=(app_id, app_row["repo_path"], config),
+            daemon=True,
+        ).start()
+    except Exception as exc:
+        logger.exception("Could not spawn reload worker for {}", app_id)
+        db.execute(
+            "UPDATE apps SET status = 'error', container_id = ?, error_message = ? "
+            "WHERE app_id = ? AND status = 'building'",
+            (app_row["container_id"], f"Could not start reload worker: {exc}", app_id),
+        )
+        db.commit()
+        raise ServiceUnavailableException(detail="Could not start reload worker; try again.") from exc
 
     return Response(content=OkResponse(ok=True), status_code=200, media_type=MediaType.JSON)
 
@@ -929,7 +1013,7 @@ async def reload_app_after_oauth(
     "/remove_app/{app_id:str}",
     status_code=202,
     guards=[require_owner_auth],
-    raises=[ValidationException, NotFoundException, ServiceUnavailableException],
+    raises=[ValidationException, NotFoundException, ConflictException, ServiceUnavailableException],
 )
 async def remove_app(
     app_id: FromPath[str],
@@ -944,7 +1028,11 @@ async def remove_app(
     so reloading the page or opening a second tab still shows the
     in-flight state.
     """
+    _require_app_changes_available(db)
     app_row = _resolve_app(app_id, db)
+
+    if _is_starting_or_building(app_row):
+        raise ConflictException(detail="App is being started or reloaded")
 
     keep_data = data.keep_data
 
@@ -961,16 +1049,22 @@ async def remove_app(
                 )
             )
 
-    # Atomic claim: ``WHERE status != 'removing'`` makes concurrent
+    # Atomic claim: the status guard makes concurrent
     # POSTs safe — only the first one gets rowcount=1 and spawns a
     # worker; later ones short-circuit to the already_removing branch.
     cursor = db.execute(
-        "UPDATE apps SET status = 'removing', error_message = NULL WHERE app_id = ? AND status != 'removing'",
-        (app_id,),
+        "UPDATE apps SET status = 'removing', error_message = NULL "
+        "WHERE app_id = ? AND status NOT IN ('removing', 'building', 'starting') "
+        "AND NOT EXISTS (SELECT 1 FROM settings WHERE key IN (?, ?))",
+        (app_id, PRIMARY_DOMAIN_RESTART_APP_IDS_KEY, ARCHIVE_MIGRATION_IN_PROGRESS_KEY),
     )
     db.commit()
 
     if cursor.rowcount == 0:
+        _require_app_changes_available(db)
+        current = _resolve_app(app_id, db)
+        if _is_starting_or_building(current):
+            raise ConflictException(detail="App is being started or reloaded")
         return Response(
             content=RemoveAppAlreadyRemoving(ok=True, already_removing=True),
             status_code=202,
@@ -1063,6 +1157,7 @@ async def rename_app(
     config: NamedDependency[Config],
 ) -> Response[RenameAppResponse]:
     """Rename an app's label and subdomain. The app_id (cross-table identity) stays the same."""
+    _require_app_changes_available(db)
     new_name = data.name.strip()
 
     if not new_name:
@@ -1077,6 +1172,8 @@ async def rename_app(
     app_row = _resolve_app(app_id, db)
     if _is_removing(app_row):
         raise ConflictException(detail="App is being removed")
+    if _is_starting_or_building(app_row):
+        raise ConflictException(detail="App is being started or reloaded")
     old_name = app_row["name"]
 
     # Refuse rename on an unhealthy archive ONLY if this app actually
@@ -1105,11 +1202,23 @@ async def rename_app(
     prior_container_id = app_row["container_id"]
     was_running = prior_status in ("running", "starting", "building")
     stop_app_process(app_row)
-    db.execute(
-        "UPDATE apps SET status = 'stopped', container_id = NULL WHERE app_id = ?",
-        (app_id,),
+    claimed = db.execute(
+        "UPDATE apps SET status = ?, container_id = NULL WHERE app_id = ? "
+        "AND status = ? AND container_id IS ? "
+        "AND NOT EXISTS (SELECT 1 FROM settings WHERE key IN (?, ?))",
+        (
+            "building" if was_running else "stopped",
+            app_id,
+            prior_status,
+            prior_container_id,
+            PRIMARY_DOMAIN_RESTART_APP_IDS_KEY,
+            ARCHIVE_MIGRATION_IN_PROGRESS_KEY,
+        ),
     )
     db.commit()
+    if claimed.rowcount != 1:
+        _require_app_changes_available(db)
+        raise ConflictException(detail="Another app operation took ownership")
 
     # Off-loop because JuiceFS renames can take hundreds of ms.
     rename_error = await asyncio.to_thread(

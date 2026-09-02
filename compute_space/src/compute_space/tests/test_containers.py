@@ -764,7 +764,7 @@ def test_stop_container_calls_podman(monkeypatch: pytest.MonkeyPatch) -> None:
     stop_container("abc123")
     assert calls == [
         ["podman", "stop", "-t", "10", "abc123"],
-        ["podman", "rm", "-f", "abc123"],
+        ["podman", "rm", "-f", "--ignore", "abc123"],
     ]
 
 
@@ -783,7 +783,7 @@ def test_stop_container_escalates_to_kill_on_failure(monkeypatch: pytest.MonkeyP
     assert calls == [
         ["podman", "stop", "-t", "10", "abc123"],
         ["podman", "kill", "abc123"],
-        ["podman", "rm", "-f", "abc123"],
+        ["podman", "rm", "-f", "--ignore", "abc123"],
     ]
 
 
@@ -802,8 +802,20 @@ def test_stop_container_escalates_to_kill_on_timeout(monkeypatch: pytest.MonkeyP
     assert calls == [
         ["podman", "stop", "-t", "10", "abc123"],
         ["podman", "kill", "abc123"],
-        ["podman", "rm", "-f", "abc123"],
+        ["podman", "rm", "-f", "--ignore", "abc123"],
     ]
+
+
+def test_stop_container_raises_when_force_remove_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fake_run(cmd, **_):  # type: ignore[no-untyped-def]
+        if cmd[:2] == ["podman", "rm"]:
+            return _FakeCompleted(125, stderr="remove failed")
+        return _FakeCompleted(0)
+
+    _patch_subprocess_run(monkeypatch, fake_run)
+
+    with pytest.raises(RuntimeError, match="remove failed"):
+        stop_container("abc123")
 
 
 def test_remove_image_calls_podman_rmi(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -494,7 +494,15 @@ def stop_container(container_id: str) -> None:
     except subprocess.TimeoutExpired:
         logger.warning("podman stop {} timed out, escalating to kill", container_id)
         subprocess.run(["podman", "kill", container_id], capture_output=True, timeout=10)
-    subprocess.run(["podman", "rm", "-f", container_id], capture_output=True, timeout=30)
+    removed = subprocess.run(
+        ["podman", "rm", "-f", "--ignore", container_id],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    if removed.returncode != 0:
+        output = (removed.stderr or removed.stdout).strip()
+        raise RuntimeError(output or f"podman could not remove container {container_id}")
 
 
 def stop_app_process(app_row: sqlite3.Row) -> None:

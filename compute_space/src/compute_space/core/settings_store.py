@@ -8,6 +8,9 @@ import sqlite3
 # Setting keys.
 CLAIM_TOKEN_KEY = "claim_token"
 LEGACY_DOMAIN_ASSET_OWNER_KEY = "legacy_domain_asset_owner"
+PRIMARY_DOMAIN_RESTART_APP_IDS_KEY = "primary_domain_restart_app_ids"
+ARCHIVE_MIGRATION_IN_PROGRESS_KEY = "archive_migration_in_progress"
+ARCHIVE_MIGRATION_RECOVERY_REQUIRED_VALUE = "recovery-required"
 
 
 def get_setting(db: sqlite3.Connection, key: str) -> str | None:

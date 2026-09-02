@@ -14,6 +14,7 @@ from litestar import Litestar
 from litestar.testing import TestClient
 
 from compute_space.core.app_id import new_app_id
+from compute_space.core.domains import INTERRUPTED_APP_REMOVAL_MESSAGE
 from compute_space.db.connection import init_db
 from compute_space.tests._litestar_helpers import auth_cookie
 from compute_space.tests._litestar_helpers import make_test_app
@@ -136,6 +137,66 @@ def test_concurrent_removes_only_spawn_one_worker(
     assert Thread.call_count == 1
 
 
+def test_remove_refuses_while_app_is_starting(cfg: Any, client: TestClient[Litestar], cookies: dict[str, str]) -> None:
+    app_id = _seed_app(cfg.db_path, "myapp", status="starting")
+    with patch("compute_space.web.routes.api.apps.Thread") as Thread:
+        client.cookies.update(cookies)
+        resp = client.post(f"/remove_app/{app_id}")
+    assert resp.status_code == 409
+    Thread.assert_not_called()
+
+
+def test_remove_refuses_during_primary_domain_restarts(
+    cfg: Any, client: TestClient[Litestar], cookies: dict[str, str]
+) -> None:
+    app_id = _seed_app(cfg.db_path, "myapp")
+    db = sqlite3.connect(cfg.db_path)
+    try:
+        db.execute(
+            "INSERT INTO settings (key, value) VALUES ('primary_domain_restart_app_ids', ?)", (f'["{app_id}"]',)
+        )
+        db.commit()
+    finally:
+        db.close()
+    client.cookies.update(cookies)
+    resp = client.post(f"/remove_app/{app_id}")
+    assert resp.status_code == 409
+
+
+def test_remove_does_not_claim_after_primary_restart_begins(
+    cfg: Any,
+    client: TestClient[Litestar],
+    cookies: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app_id = _seed_app(cfg.db_path, "myapp")
+
+    def claim_primary_restart(_config: Any, _db: sqlite3.Connection) -> bool:
+        claim_db = sqlite3.connect(cfg.db_path)
+        claim_db.execute(
+            "INSERT INTO settings (key, value) VALUES ('primary_domain_restart_app_ids', ?)",
+            (f'["{app_id}"]',),
+        )
+        claim_db.commit()
+        claim_db.close()
+        return True
+
+    monkeypatch.setattr(
+        "compute_space.web.routes.api.apps.archive_backend.is_archive_dir_healthy",
+        claim_primary_restart,
+    )
+    with patch("compute_space.web.routes.api.apps.Thread") as Thread:
+        client.cookies.update(cookies)
+        resp = client.post(f"/remove_app/{app_id}")
+
+    assert resp.status_code == 409
+    Thread.assert_not_called()
+    db = sqlite3.connect(cfg.db_path)
+    status = db.execute("SELECT status FROM apps WHERE app_id = ?", (app_id,)).fetchone()[0]
+    db.close()
+    assert status == "running"
+
+
 # Guards on sibling routes (stop, reload, rename) while a removal is in flight.
 
 
@@ -145,6 +206,63 @@ def test_stop_app_refuses_when_removing(cfg: Any, client: TestClient[Litestar], 
     resp = client.post(f"/stop_app/{app_id}")
     assert resp.status_code == 409
     assert "removed" in resp.json()["detail"].lower()
+
+
+def test_stop_app_refuses_after_interrupted_removal(
+    cfg: Any, client: TestClient[Litestar], cookies: dict[str, str]
+) -> None:
+    app_id = _seed_app(cfg.db_path, "myapp", status="error")
+    db = sqlite3.connect(cfg.db_path)
+    db.execute(
+        "UPDATE apps SET error_message = ? WHERE app_id = ?",
+        (INTERRUPTED_APP_REMOVAL_MESSAGE, app_id),
+    )
+    db.commit()
+    db.close()
+
+    client.cookies.update(cookies)
+    resp = client.post(f"/stop_app/{app_id}")
+
+    assert resp.status_code == 409
+
+
+def test_stop_app_refuses_while_starting(cfg: Any, client: TestClient[Litestar], cookies: dict[str, str]) -> None:
+    app_id = _seed_app(cfg.db_path, "myapp", status="starting")
+    client.cookies.update(cookies)
+    resp = client.post(f"/stop_app/{app_id}")
+    assert resp.status_code == 409
+
+
+def test_stop_app_does_not_overwrite_primary_restart_claim(
+    cfg: Any, client: TestClient[Litestar], cookies: dict[str, str]
+) -> None:
+    app_id = _seed_app(cfg.db_path, "myapp")
+    db = sqlite3.connect(cfg.db_path)
+    db.execute("UPDATE apps SET container_id = 'old-container' WHERE app_id = ?", (app_id,))
+    db.commit()
+    db.close()
+
+    def claim_primary_restart(_container: str) -> None:
+        claim_db = sqlite3.connect(cfg.db_path)
+        claim_db.execute(
+            "INSERT INTO settings (key, value) VALUES ('primary_domain_restart_app_ids', ?)",
+            (f'["{app_id}"]',),
+        )
+        claim_db.commit()
+        claim_db.close()
+
+    with (
+        patch("compute_space.web.routes.api.apps.stop_app_process"),
+        patch("compute_space.web.routes.api.apps.stop_container", side_effect=claim_primary_restart),
+    ):
+        client.cookies.update(cookies)
+        resp = client.post(f"/stop_app/{app_id}")
+
+    assert resp.status_code == 409
+    db = sqlite3.connect(cfg.db_path)
+    row = db.execute("SELECT status, container_id FROM apps WHERE app_id = ?", (app_id,)).fetchone()
+    db.close()
+    assert row == ("running", "old-container")
 
 
 def test_reload_app_refuses_when_removing(cfg: Any, client: TestClient[Litestar], cookies: dict[str, str]) -> None:
@@ -161,3 +279,10 @@ def test_rename_app_refuses_when_removing(cfg: Any, client: TestClient[Litestar]
     resp = client.post(f"/rename_app/{app_id}", json={"name": "newname"})
     assert resp.status_code == 409
     assert "removed" in resp.json()["detail"].lower()
+
+
+def test_rename_app_refuses_while_starting(cfg: Any, client: TestClient[Litestar], cookies: dict[str, str]) -> None:
+    app_id = _seed_app(cfg.db_path, "myapp", status="starting")
+    client.cookies.update(cookies)
+    resp = client.post(f"/rename_app/{app_id}", json={"name": "newname"})
+    assert resp.status_code == 409

@@ -26,11 +26,15 @@ from compute_space.core.containers import is_container_running
 from compute_space.core.containers import remove_image
 from compute_space.core.containers import run_container
 from compute_space.core.containers import stop_app_process
+from compute_space.core.containers import stop_container
 from compute_space.core.data import deprovision_data
 from compute_space.core.data import deprovision_temp_data
 from compute_space.core.data import provision_data
 from compute_space.core.data import rmtree_with_sudo_fallback
+from compute_space.core.domains import PRIMARY_DOMAIN_APP_RESTART_MARKER
 from compute_space.core.domains import Domain
+from compute_space.core.domains import complete_primary_domain_app_restart
+from compute_space.core.domains import pending_primary_domain_restart_app_ids
 from compute_space.core.domains import primary_domain
 from compute_space.core.git_ops import CloneFailed
 from compute_space.core.git_ops import clone_repo
@@ -46,6 +50,7 @@ from compute_space.core.manifest import PermissionGrant
 from compute_space.core.manifest import PortMapping
 from compute_space.core.manifest import find_manifest_path
 from compute_space.core.manifest import parse_manifest
+from compute_space.core.manifest import parse_manifest_from_string
 from compute_space.core.oauth import OAuthRequired
 from compute_space.core.oauth import get_oauth_token
 from compute_space.core.ports import allocate_port
@@ -74,6 +79,10 @@ RESERVED_PATHS = {
     "/system",
     "/docs",
 }
+
+
+class AppWorkerStartError(RuntimeError):
+    pass
 
 
 def _serialize_links(links: list[AppLink]) -> str:
@@ -391,12 +400,20 @@ def insert_and_deploy(
                 grant_payload=entry.grant,
             )
 
-    threading.Thread(
-        target=deploy_app_background,
-        args=(manifest, repo_path, local_port, env_vars, config),
-        kwargs={"app_id": app_id, "app_name": app_name, "port_mappings": resolved_mappings},
-        daemon=True,
-    ).start()
+    try:
+        threading.Thread(
+            target=deploy_app_background,
+            args=(manifest, repo_path, local_port, env_vars, config),
+            kwargs={"app_id": app_id, "app_name": app_name, "port_mappings": resolved_mappings},
+            daemon=True,
+        ).start()
+    except Exception as exc:
+        db.execute(
+            "UPDATE apps SET status = 'error', error_message = ? WHERE app_id = ?",
+            (f"Could not start app deployment worker: {exc}", app_id),
+        )
+        db.commit()
+        raise AppWorkerStartError("Could not start app deployment worker") from exc
 
     return app_id
 
@@ -454,6 +471,9 @@ def deploy_app_background(
             (app_id,),
         )
         db.commit()
+        # The image build runs outside the request transaction. Re-read the canonical domain now
+        # so an install that began just before a primary change cannot launch with stale identity.
+        env_vars["OPENHOST_ZONE_DOMAIN"] = primary_domain(db).name
         container_id = run_container(
             app_name,
             image_tag,
@@ -603,9 +623,11 @@ def stop_running_archive_apps(
     rows = db.execute("SELECT app_id, name, container_id, status, manifest_raw FROM apps").fetchall()
     still_running: list[str] = []
     for row in rows:
-        if row["status"] != "running":
-            continue
         if not archive_backend.manifest_uses_archive(row["manifest_raw"] or ""):
+            continue
+        container_id = row["container_id"]
+        should_stop = row["status"] == "running" or bool(container_id and is_container_running(container_id))
+        if not should_stop:
             continue
         logger.info("stopping archive-using app {} before archive migration", row["name"])
         try:
@@ -615,7 +637,6 @@ def stop_running_archive_apps(
         recorded.append(row["app_id"])
         # Verify against the real container state (stop_app_process is
         # best-effort and doesn't touch the DB).
-        container_id = row["container_id"]
         if container_id and is_container_running(container_id):
             still_running.append(row["name"])
 
@@ -633,17 +654,26 @@ def start_apps_by_id(app_ids: list[str], db: sqlite3.Connection, config: Config)
     for app_id in app_ids:
         try:
             start_app_process(app_id, db, config)
-        except Exception:
+        except Exception as exc:
             logger.exception("failed to restart app {} after archive migration remount", app_id)
+            db.execute(
+                "UPDATE apps SET status = 'error', error_message = ? WHERE app_id = ?",
+                (str(exc), app_id),
+            )
+            db.commit()
 
 
-def start_app_process(app_id: str, db: sqlite3.Connection, config: Config) -> None:
-    """Start the process for an app. Updates DB with status and container id."""
-    app_row = db.execute("SELECT * FROM apps WHERE app_id = ?", (app_id,)).fetchone()
-    storage.check_before_deploy(config)
+def _prepare_app_runtime(
+    app_row: sqlite3.Row,
+    manifest: AppManifest,
+    db: sqlite3.Connection,
+    config: Config,
+    *,
+    register_services: bool = True,
+) -> tuple[dict[str, str], list[PortMapping]]:
+    """Generate fresh app credentials/environment and load its stable port mappings."""
+    app_id = app_row["app_id"]
     app_name = app_row["name"]
-
-    manifest = parse_manifest(app_row["repo_path"])
     env_vars = provision_data(
         app_id=app_id,
         app_name=app_name,
@@ -665,24 +695,35 @@ def start_app_process(app_id: str, db: sqlite3.Connection, config: Config) -> No
             (app_id, app_token_hash),
         )
 
-    register_v2_service_providers(app_id, manifest, db)
+    if register_services:
+        register_v2_service_providers(app_id, manifest, db)
 
-    # Load resolved port mappings from DB (preserves host_port assignments)
-    port_mappings = _load_port_mappings_from_db(app_id, db)
+    return env_vars, _load_port_mappings_from_db(app_id, db)
 
-    db.execute(
-        "UPDATE apps SET status = 'starting', error_message = NULL WHERE app_id = ?",
-        (app_id,),
-    )
+
+def _launch_app_image(
+    app_row: sqlite3.Row,
+    manifest: AppManifest,
+    image_tag: str,
+    env_vars: dict[str, str],
+    port_mappings: list[PortMapping],
+    db: sqlite3.Connection,
+    config: Config,
+    *,
+    preserve_error_message: bool = False,
+) -> None:
+    """Launch an app's selected image and update its runtime state."""
+    app_id = app_row["app_id"]
+    app_name = app_row["name"]
+
+    if preserve_error_message:
+        db.execute("UPDATE apps SET status = 'starting' WHERE app_id = ?", (app_id,))
+    else:
+        db.execute(
+            "UPDATE apps SET status = 'starting', error_message = NULL WHERE app_id = ?",
+            (app_id,),
+        )
     db.commit()
-
-    image_tag = build_image(
-        app_name,
-        app_row["repo_path"],
-        manifest.container_image,
-        temp_data_dir=config.temporary_data_dir,
-        memory_mb=manifest.effective_build_memory_mb,
-    )
     container_id = run_container(
         app_name,
         image_tag,
@@ -694,23 +735,247 @@ def start_app_process(app_id: str, db: sqlite3.Connection, config: Config) -> No
         archive_backend.effective_archive_dir(config, db),
         port_mappings=port_mappings,
     )
-    db.execute(
-        "UPDATE apps SET container_id = ? WHERE app_id = ?",
-        (container_id, app_id),
-    )
-    db.commit()
+    try:
+        db.execute(
+            "UPDATE apps SET container_id = ? WHERE app_id = ?",
+            (container_id, app_id),
+        )
+        db.commit()
+    except BaseException:
+        if db.in_transaction:
+            db.rollback()
+        try:
+            stop_container(container_id)
+        except Exception:
+            logger.exception("Failed to clean up untracked container {} for app {}", container_id, app_name)
+        raise
 
     if wait_for_ready(app_row["local_port"]):
-        db.execute(
-            "UPDATE apps SET status = 'running' WHERE app_id = ?",
-            (app_id,),
-        )
+        if preserve_error_message:
+            db.execute("UPDATE apps SET status = 'running' WHERE app_id = ?", (app_id,))
+        else:
+            db.execute(
+                "UPDATE apps SET status = 'running', error_message = NULL WHERE app_id = ?",
+                (app_id,),
+            )
     else:
         db.execute(
             "UPDATE apps SET status = 'error', error_message = ? WHERE app_id = ?",
             ("App started but not responding to HTTP", app_id),
         )
     db.commit()
+
+
+def start_app_process(app_id: str, db: sqlite3.Connection, config: Config) -> None:
+    """Build and start an app, updating its status and container ID."""
+    app_row = db.execute("SELECT * FROM apps WHERE app_id = ?", (app_id,)).fetchone()
+    storage.check_before_deploy(config)
+    manifest = parse_manifest(app_row["repo_path"])
+    env_vars, port_mappings = _prepare_app_runtime(app_row, manifest, db, config)
+    db.execute(
+        "UPDATE apps SET status = 'starting', error_message = NULL WHERE app_id = ?",
+        (app_id,),
+    )
+    db.commit()
+    image_tag = build_image(
+        app_row["name"],
+        app_row["repo_path"],
+        manifest.container_image,
+        temp_data_dir=config.temporary_data_dir,
+        memory_mb=manifest.effective_build_memory_mb,
+    )
+    _launch_app_image(app_row, manifest, image_tag, env_vars, port_mappings, db, config)
+
+
+_primary_domain_restart_lock = threading.Lock()
+_PRIMARY_DOMAIN_RESTART_RETRY_SECONDS = 2
+
+
+def recreate_apps_after_primary_change(config: Config, recover_interrupted: bool = False) -> None:
+    """Sequentially recreate queued app containers with the new primary-domain environment."""
+    _primary_domain_restart_lock.acquire()
+    db: sqlite3.Connection | None = None
+    retry_needed = False
+    try:
+        db = sqlite3.connect(config.db_path, check_same_thread=False)
+        db.row_factory = sqlite3.Row
+        db.execute("PRAGMA journal_mode=WAL")
+        for app_id in pending_primary_domain_restart_app_ids(db):
+            app_row = db.execute("SELECT * FROM apps WHERE app_id = ?", (app_id,)).fetchone()
+            if app_row is None:
+                complete_primary_domain_app_restart(db, app_id)
+                continue
+            if (
+                app_row["status"] == "running"
+                and app_row["error_message"] == PRIMARY_DOMAIN_APP_RESTART_MARKER
+                and app_row["container_id"]
+                and is_container_running(app_row["container_id"])
+            ):
+                complete_primary_domain_app_restart(db, app_id)
+                continue
+
+            already_claimed = (
+                app_row["status"] == "starting" and app_row["error_message"] == PRIMARY_DOMAIN_APP_RESTART_MARKER
+            )
+            if not already_claimed:
+                if recover_interrupted and app_row["status"] in ("building", "starting"):
+                    claimed = db.execute(
+                        "UPDATE apps SET status = 'starting', error_message = ? WHERE app_id = ? AND status = ?",
+                        (PRIMARY_DOMAIN_APP_RESTART_MARKER, app_id, app_row["status"]),
+                    )
+                else:
+                    claimed = db.execute(
+                        "UPDATE apps SET status = 'starting', error_message = ? WHERE app_id = ? "
+                        "AND status IN ('running', 'error')",
+                        (PRIMARY_DOMAIN_APP_RESTART_MARKER, app_id),
+                    )
+                db.commit()
+                if claimed.rowcount != 1:
+                    current = db.execute(
+                        "SELECT status, container_id FROM apps WHERE app_id = ?",
+                        (app_id,),
+                    ).fetchone()
+                    if (
+                        current is None
+                        or current["status"] == "stopped"
+                        or (current["status"] == "error" and current["container_id"] is None)
+                    ):
+                        complete_primary_domain_app_restart(db, app_id)
+                    else:
+                        # An operation that began just before promotion still owns this app. Its
+                        # eventual launch uses the new domain, but retry so the durable queue is
+                        # only cleared after that ownership transition is complete.
+                        retry_needed = True
+                    continue
+                app_row = db.execute("SELECT * FROM apps WHERE app_id = ?", (app_id,)).fetchone()
+                assert app_row is not None
+
+            app_name = app_row["name"]
+            previous_container_id = app_row["container_id"]
+            stop_completed = False
+            try:
+                stop_container(previous_container_id or f"openhost-{app_name}")
+                if previous_container_id and is_container_running(previous_container_id):
+                    raise RuntimeError("Could not stop the old app container")
+                stop_completed = True
+                current = db.execute(
+                    "SELECT status, error_message FROM apps WHERE app_id = ?",
+                    (app_id,),
+                ).fetchone()
+                if (
+                    current is None
+                    or current["status"] != "starting"
+                    or current["error_message"] != PRIMARY_DOMAIN_APP_RESTART_MARKER
+                ):
+                    complete_primary_domain_app_restart(db, app_id)
+                    continue
+                db.execute("UPDATE apps SET container_id = NULL WHERE app_id = ?", (app_id,))
+                db.commit()
+                manifest_raw = app_row["manifest_raw"]
+                if not manifest_raw:
+                    raise RuntimeError("Cannot restart app after domain change: deployed manifest is missing")
+                manifest = parse_manifest_from_string(manifest_raw)
+                if archive_backend.manifest_uses_archive(manifest_raw):
+                    if not archive_backend.is_archive_dir_healthy(config, db):
+                        raise RuntimeError("Cannot restart app while archive storage is unavailable")
+                storage.check_before_deploy(config)
+                env_vars, port_mappings = _prepare_app_runtime(
+                    app_row,
+                    manifest,
+                    db,
+                    config,
+                    register_services=False,
+                )
+                _launch_app_image(
+                    app_row,
+                    manifest,
+                    f"openhost-{app_name}:latest",
+                    env_vars,
+                    port_mappings,
+                    db,
+                    config,
+                    preserve_error_message=True,
+                )
+                try:
+                    complete_primary_domain_app_restart(db, app_id)
+                except Exception:
+                    logger.exception("Failed to record completed primary-domain restart for app {}", app_name)
+                    retry_needed = True
+                    continue
+                logger.info("Recreated app {} after primary domain change", app_name)
+            except Exception as exc:
+                logger.exception("Failed to recreate app {} after primary domain change", app_name)
+                if db.in_transaction:
+                    db.rollback()
+                old_container_alive = not stop_completed or (
+                    bool(previous_container_id) and is_container_running(previous_container_id)
+                )
+                current = db.execute("SELECT container_id FROM apps WHERE app_id = ?", (app_id,)).fetchone()
+                tracked_container_id = current["container_id"] if current is not None else None
+                if stop_completed:
+                    try:
+                        stop_container(f"openhost-{app_name}")
+                        tracked_container_id = None
+                    except Exception:
+                        logger.exception("Failed to clean up replacement container for app {}", app_name)
+                        tracked_container_id = tracked_container_id or f"openhost-{app_name}"
+                db.execute(
+                    "UPDATE apps SET status = 'error', container_id = ?, error_message = ? "
+                    "WHERE app_id = ? AND status = 'starting'",
+                    (
+                        previous_container_id if old_container_alive else tracked_container_id,
+                        str(exc),
+                        app_id,
+                    ),
+                )
+                db.commit()
+                if old_container_alive:
+                    # Keep the durable queue entry and retry transient stop failures in-process.
+                    retry_needed = True
+                    continue
+                complete_primary_domain_app_restart(db, app_id)
+    except Exception:
+        logger.exception("Primary-domain app restart worker failed; scheduling a retry")
+        retry_needed = True
+    finally:
+        try:
+            if db is not None:
+                db.close()
+        finally:
+            _primary_domain_restart_lock.release()
+    if retry_needed:
+        timer = threading.Timer(
+            _PRIMARY_DOMAIN_RESTART_RETRY_SECONDS,
+            recreate_apps_after_primary_change,
+            args=(config, True) if recover_interrupted else (config,),
+        )
+        timer.daemon = True
+        try:
+            timer.start()
+        except RuntimeError:
+            logger.exception("Could not schedule primary-domain app restart retry")
+    elif recover_interrupted:
+        try:
+            from compute_space.core.startup import resume_deferred_cache_recovery  # noqa: PLC0415
+
+            resume_deferred_cache_recovery(config)
+        except Exception:
+            logger.exception("Could not resume deferred startup app recovery")
+
+
+def resume_primary_domain_app_restarts(config: Config) -> None:
+    """Resume a durable primary-domain restart queue after process startup."""
+    db = sqlite3.connect(config.db_path)
+    db.row_factory = sqlite3.Row
+    try:
+        pending = pending_primary_domain_restart_app_ids(db)
+    finally:
+        db.close()
+    if pending:
+        try:
+            threading.Thread(target=recreate_apps_after_primary_change, args=(config, True), daemon=True).start()
+        except RuntimeError:
+            logger.exception("Could not resume primary-domain app restarts")
 
 
 def app_log_path(app_name: str, config: Config) -> str:

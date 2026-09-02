@@ -83,7 +83,7 @@
     {{ info_row("Repo path", app.repo_path) }}
     {{ info_row("Created", app.created_at) }}
     {#- Always rendered so app-detail.js can reveal it when an error streams in. -#}
-    <tr id="app-error-row"{% if not app.error_message %} hidden{% endif %}>
+    <tr id="app-error-row"{% if app.status != "error" or not app.error_message %} hidden{% endif %}>
       <th scope="row">Error</th>
       <td class="error" id="app-error-cell" style="white-space: pre-wrap;">{{ app.error_message or "" }}</td>
     </tr>

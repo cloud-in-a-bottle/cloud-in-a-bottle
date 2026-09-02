@@ -6,6 +6,7 @@ The endpoint runs ``podman image prune --all --force`` via
 
 from __future__ import annotations
 
+import sqlite3
 import subprocess
 from collections.abc import Iterator
 from pathlib import Path
@@ -116,3 +117,21 @@ def test_drop_docker_cache_endpoint_failure(
     body = resp.json()
     assert body["detail"] == "Internal Server Error"
     assert body["extra"] == {"output": "podman engine error"}
+
+
+def test_drop_docker_cache_refuses_during_primary_domain_restarts(
+    cfg: Any,
+    monkeypatch: pytest.MonkeyPatch,
+    client: TestClient[Litestar],
+    cookies: dict[str, str],
+) -> None:
+    db = sqlite3.connect(cfg.db_path)
+    db.execute("INSERT INTO settings (key, value) VALUES ('primary_domain_restart_app_ids', '[\"app-id\"]')")
+    db.commit()
+    db.close()
+    monkeypatch.setattr(system_routes, "drop_docker_build_cache", lambda: pytest.fail("must not prune"))
+
+    client.cookies.update(cookies)
+    resp = client.post("/api/drop-docker-cache")
+
+    assert resp.status_code == 409

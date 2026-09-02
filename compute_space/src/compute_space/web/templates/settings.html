@@ -99,8 +99,8 @@
     <p class="hint">Hostnames this instance answers on. The primary is used for canonical links and
       app configuration. Add a <strong>public</strong> domain (its DNS must be delegated to this instance
       for automatic TLS) or a local <code>.local</code> name served over plain HTTP. A primary domain
-      can't be removed; make another domain primary first. Reload running apps before removing the
-      previous primary so they receive the new domain.</p>
+      can't be removed; make another domain primary first. Running apps restart automatically when
+      the primary changes.</p>
 
     <div class="field-row field-row--add">
       <label class="field" for="domain-name">

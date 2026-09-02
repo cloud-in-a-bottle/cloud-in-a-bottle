@@ -15,6 +15,7 @@ from typing import Any
 import compute_space.core.startup as startup
 from compute_space.core.app_id import new_app_id
 from compute_space.core.containers import BUILD_CACHE_CORRUPT_MARKER
+from compute_space.core.domains import PRIMARY_DOMAIN_APP_RESTART_MARKER
 from compute_space.db.connection import init_db
 
 from .conftest import _make_test_config
@@ -202,6 +203,115 @@ def test_starting_app_with_no_container_from_previous_process_is_restarted(tmp_p
     assert done.wait(5), "restart sweep was never scheduled for abandoned 'starting' app with no container"
     assert app_id in restarted
     assert _status(cfg, app_id) == "starting"
+
+
+def test_primary_domain_restart_marker_recovers_even_at_process_start(tmp_path: Path, monkeypatch: Any) -> None:
+    cfg = _make_test_config(tmp_path, port=20750)
+    init_db(cfg.db_path)
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    monkeypatch.setattr(startup, "_PROCESS_START_UTC", "2020-01-01 00:00:00")
+    app_id = _seed_app(
+        cfg,
+        name="domain-restart",
+        status="starting",
+        port=20760,
+        container_id=None,
+        repo_path=str(repo),
+        created_at="2020-01-01 00:00:00",
+    )
+    db = sqlite3.connect(cfg.db_path)
+    try:
+        db.execute(
+            "UPDATE apps SET error_message = ? WHERE app_id = ?",
+            (PRIMARY_DOMAIN_APP_RESTART_MARKER, app_id),
+        )
+        db.commit()
+    finally:
+        db.close()
+    restarted, done = _capture_restart_sweep(monkeypatch)
+
+    startup.check_app_status(cfg)
+
+    assert done.wait(5)
+    assert restarted == [app_id]
+
+
+def test_pending_primary_domain_restart_is_reserved_for_resume_worker(tmp_path: Path, monkeypatch: Any) -> None:
+    cfg = _make_test_config(tmp_path, port=20770)
+    init_db(cfg.db_path)
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    app_id = _seed_app(
+        cfg,
+        name="domain-restart",
+        status="starting",
+        port=20780,
+        container_id="old-container",
+        repo_path=str(repo),
+    )
+    db = sqlite3.connect(cfg.db_path)
+    try:
+        db.execute(
+            "UPDATE apps SET error_message = ? WHERE app_id = ?",
+            (PRIMARY_DOMAIN_APP_RESTART_MARKER, app_id),
+        )
+        db.execute(
+            "INSERT INTO settings (key, value) VALUES ('primary_domain_restart_app_ids', ?)",
+            (f'["{app_id}"]',),
+        )
+        db.commit()
+    finally:
+        db.close()
+    normal_restarts, normal_done = _capture_restart_sweep(monkeypatch)
+    resumed: list[str] = []
+    monkeypatch.setattr(startup, "resume_primary_domain_app_restarts", lambda config: resumed.append(config.db_path))
+
+    startup.check_app_status(cfg)
+
+    assert not normal_done.is_set()
+    assert normal_restarts == []
+    assert resumed == [cfg.db_path]
+
+
+def test_pending_primary_domain_restart_defers_global_cache_recovery(tmp_path: Path, monkeypatch: Any) -> None:
+    cfg = _make_test_config(tmp_path, port=20790)
+    init_db(cfg.db_path)
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    queued_id = _seed_app(
+        cfg,
+        name="domain-restart",
+        status="starting",
+        port=20800,
+        container_id="old-container",
+        repo_path=str(repo),
+    )
+    corrupt_id = _seed_error_app(
+        cfg,
+        name="corrupt",
+        port=20801,
+        repo_path=str(repo),
+        error_message=f"{BUILD_CACHE_CORRUPT_MARKER} corrupted",
+    )
+    db = sqlite3.connect(cfg.db_path)
+    db.execute(
+        "INSERT INTO settings (key, value) VALUES ('primary_domain_restart_app_ids', ?)",
+        (f'["{queued_id}"]',),
+    )
+    db.commit()
+    db.close()
+    cache_drops: list[bool] = []
+    monkeypatch.setattr(startup, "drop_docker_build_cache", lambda: cache_drops.append(True))
+    monkeypatch.setattr(startup, "resume_primary_domain_app_restarts", lambda _config: None)
+    restarted, done = _capture_restart_sweep(monkeypatch)
+
+    startup.check_app_status(cfg)
+
+    assert not done.is_set()
+    assert restarted == []
+    assert cache_drops == []
+    assert _status(cfg, corrupt_id) == "error"
 
 
 def test_building_app_with_no_container_from_previous_process_is_restarted(tmp_path: Path, monkeypatch: Any) -> None:
@@ -519,9 +629,7 @@ def test_stopped_app_is_left_untouched(tmp_path: Path, monkeypatch: Any) -> None
     assert _status(cfg, app_id) == "stopped"
 
 
-def test_removing_app_is_left_untouched(tmp_path: Path, monkeypatch: Any) -> None:
-    # 'removing' is a teardown-in-progress state outside the sweep's scan set;
-    # reviving it would race the removal thread.
+def test_interrupted_removal_becomes_retryable_error(tmp_path: Path, monkeypatch: Any) -> None:
     cfg = _make_test_config(tmp_path, port=21500)
     init_db(cfg.db_path)
     repo = tmp_path / "repo"
@@ -535,7 +643,38 @@ def test_removing_app_is_left_untouched(tmp_path: Path, monkeypatch: Any) -> Non
 
     assert not done.is_set()
     assert app_id not in restarted
-    assert _status(cfg, app_id) == "removing"
+    assert _status(cfg, app_id) == "error"
+    assert "retry removal" in (_error_message(cfg, app_id) or "")
+
+
+def test_interrupted_archive_migration_recovers_quiesced_error_app(tmp_path: Path, monkeypatch: Any) -> None:
+    cfg = _make_test_config(tmp_path, port=21520)
+    init_db(cfg.db_path)
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    app_id = _seed_app(
+        cfg,
+        name="archive-error",
+        status="error",
+        port=21530,
+        container_id="stopped-container",
+        repo_path=str(repo),
+    )
+    db = sqlite3.connect(cfg.db_path)
+    db.execute(
+        "UPDATE apps SET manifest_raw = ? WHERE app_id = ?",
+        ('name = "archive-error"\n[data]\napp_archive = true\n', app_id),
+    )
+    db.commit()
+    db.close()
+    monkeypatch.setattr(startup, "is_container_running", lambda _container: False)
+    restarted, done = _capture_restart_sweep(monkeypatch)
+
+    startup.check_app_status(cfg, recover_quiesced_archive_apps=True)
+
+    assert done.wait(5)
+    assert restarted == [app_id]
+    assert _status(cfg, app_id) == "starting"
 
 
 def test_inflight_starting_from_current_process_is_not_restarted(tmp_path: Path, monkeypatch: Any) -> None:

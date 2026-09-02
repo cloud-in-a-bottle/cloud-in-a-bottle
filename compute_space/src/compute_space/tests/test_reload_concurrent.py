@@ -20,7 +20,9 @@ import pytest
 from litestar import Litestar
 from litestar.testing import TestClient
 
+import compute_space.web.routes.api.apps as apps_routes
 from compute_space.core.app_id import new_app_id
+from compute_space.core.domains import PRIMARY_DOMAIN_APP_RESTART_MARKER
 from compute_space.db.connection import init_db
 from compute_space.tests._litestar_helpers import auth_cookie
 from compute_space.tests._litestar_helpers import make_test_app
@@ -93,6 +95,31 @@ def test_plain_reload_claims_building_and_spawns_worker(
     assert _status(cfg.db_path, app_id) == "building"
 
 
+def test_reload_worker_spawn_failure_marks_app_error(
+    cfg: Any, client: TestClient[Litestar], cookies: dict[str, str]
+) -> None:
+    app_id = _seed_app(cfg.db_path, "myapp")
+    db = sqlite3.connect(cfg.db_path)
+    db.execute("UPDATE apps SET container_id = 'old-container' WHERE app_id = ?", (app_id,))
+    db.commit()
+    db.close()
+
+    with (
+        patch("compute_space.web.routes.api.apps.Thread") as Thread,
+        patch("compute_space.web.routes.api.apps.stop_app_process"),
+    ):
+        Thread.return_value.start.side_effect = RuntimeError("thread unavailable")
+        client.cookies.update(cookies)
+        resp = client.post(f"/reload_app/{app_id}")
+
+    assert resp.status_code == 503
+    assert _status(cfg.db_path, app_id) == "error"
+    db = sqlite3.connect(cfg.db_path)
+    container_id = db.execute("SELECT container_id FROM apps WHERE app_id = ?", (app_id,)).fetchone()[0]
+    db.close()
+    assert container_id == "old-container"
+
+
 @pytest.mark.parametrize("busy_status", ["building", "starting"])
 def test_reload_refused_while_transient(
     cfg: Any, client: TestClient[Litestar], cookies: dict[str, str], busy_status: str
@@ -152,3 +179,73 @@ def test_reload_allowed_from_settled_states(
     assert resp.status_code == 200
     Thread.assert_called_once()
     assert _status(cfg.db_path, app_id) == "building"
+
+
+def test_preclaim_reload_error_does_not_overwrite_domain_restart(cfg: Any) -> None:
+    app_id = _seed_app(cfg.db_path, "claimed", status="starting")
+    db = sqlite3.connect(cfg.db_path)
+    try:
+        db.execute(
+            "UPDATE apps SET error_message = ? WHERE app_id = ?",
+            (PRIMARY_DOMAIN_APP_RESTART_MARKER, app_id),
+        )
+        db.commit()
+        recorded = apps_routes._record_reload_error_if_unclaimed(db, app_id, None, "git failed")
+        row = db.execute("SELECT status, error_message FROM apps WHERE app_id = ?", (app_id,)).fetchone()
+    finally:
+        db.close()
+    assert row == ("starting", PRIMARY_DOMAIN_APP_RESTART_MARKER)
+    assert recorded is False
+
+
+def test_preclaim_reload_error_does_not_overwrite_replacement_container(cfg: Any) -> None:
+    app_id = _seed_app(cfg.db_path, "replaced")
+    db = sqlite3.connect(cfg.db_path)
+    try:
+        db.execute("UPDATE apps SET container_id = 'new-container' WHERE app_id = ?", (app_id,))
+        db.commit()
+        recorded = apps_routes._record_reload_error_if_unclaimed(db, app_id, "old-container", "git failed")
+        row = db.execute(
+            "SELECT status, container_id, error_message FROM apps WHERE app_id = ?",
+            (app_id,),
+        ).fetchone()
+    finally:
+        db.close()
+    assert row == ("running", "new-container", None)
+    assert recorded is False
+
+
+def test_reload_refuses_stale_container_generation(
+    cfg: Any,
+    client: TestClient[Litestar],
+    cookies: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app_id = _seed_app(cfg.db_path, "replaced")
+    db = sqlite3.connect(cfg.db_path)
+    db.execute("UPDATE apps SET container_id = 'old-container' WHERE app_id = ?", (app_id,))
+    db.commit()
+    db.close()
+
+    def replace_container(_config: Any, _db: sqlite3.Connection) -> bool:
+        replacement_db = sqlite3.connect(cfg.db_path)
+        replacement_db.execute("UPDATE apps SET container_id = 'new-container' WHERE app_id = ?", (app_id,))
+        replacement_db.commit()
+        replacement_db.close()
+        return True
+
+    monkeypatch.setattr(apps_routes.archive_backend, "is_archive_dir_healthy", replace_container)
+    with (
+        patch("compute_space.web.routes.api.apps.Thread") as Thread,
+        patch("compute_space.web.routes.api.apps.stop_app_process") as stop,
+    ):
+        client.cookies.update(cookies)
+        resp = client.post(f"/reload_app/{app_id}")
+
+    assert resp.status_code == 409
+    Thread.assert_not_called()
+    stop.assert_not_called()
+    db = sqlite3.connect(cfg.db_path)
+    row = db.execute("SELECT status, container_id FROM apps WHERE app_id = ?", (app_id,)).fetchone()
+    db.close()
+    assert row == ("running", "new-container")

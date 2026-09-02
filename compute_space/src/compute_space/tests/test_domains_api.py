@@ -32,6 +32,7 @@ from compute_space.core.domains import Domain
 from compute_space.core.domains import DomainCertStatus
 from compute_space.core.domains import DomainRecord
 from compute_space.core.domains import legacy_domain_asset_owner
+from compute_space.core.domains import pending_primary_domain_restart_app_ids
 from compute_space.core.domains import primary_domain
 from compute_space.core.domains import seed_domains
 from compute_space.core.domains import upsert_record
@@ -271,6 +272,84 @@ def test_make_http_domain_primary_and_remove_previous(cfg: Config, client: TestC
 
     # The demoted domain can now be removed through the supported API.
     assert client.delete("/api/domains/host.example.com").status_code == 200
+
+
+def test_make_primary_restarts_running_apps(
+    cfg: Config, client: TestClient[Litestar], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with closing(open_db(cfg)) as db:
+        upsert_record(db, DomainRecord("myhost.local", tls=False, mdns=True))
+        db.execute(
+            "INSERT INTO apps (app_id, name, version, repo_path, local_port, status, manifest_raw, container_id) "
+            "VALUES ('app-id', 'my-app', '1', '/tmp/repo', 19001, 'running', '[app]', 'old-container')"
+        )
+        db.commit()
+    restarted: list[str] = []
+    monkeypatch.setattr(
+        domains,
+        "recreate_apps_after_primary_change",
+        lambda config: restarted.append(config.db_path),
+    )
+    client.cookies.update(_auth_cookie(cfg.db_path))
+
+    resp = client.post(
+        "/api/domains/myhost.local/primary",
+        json={"expected_primary": "host.example.com"},
+    )
+
+    assert resp.status_code == 200
+    assert restarted == [cfg.db_path]
+    with closing(open_db(cfg)) as db:
+        app = db.execute("SELECT status, container_id FROM apps WHERE app_id = 'app-id'").fetchone()
+        assert tuple(app) == ("running", "old-container")
+        assert pending_primary_domain_restart_app_ids(db) == ("app-id",)
+    blocked_remove = client.delete("/api/domains/host.example.com")
+    assert blocked_remove.status_code == 409
+    assert blocked_remove.json()["extra"]["code"] == "primary_domain_restarts"
+
+    retry = client.post(
+        "/api/domains/myhost.local/primary",
+        json={"expected_primary": "host.example.com"},
+    )
+    assert retry.status_code == 200
+    assert restarted == [cfg.db_path, cfg.db_path]
+
+
+def test_make_primary_rejects_inflight_app_operation(cfg: Config, client: TestClient[Litestar]) -> None:
+    with closing(open_db(cfg)) as db:
+        upsert_record(db, DomainRecord("myhost.local", tls=False, mdns=True))
+        db.execute(
+            "INSERT INTO apps (app_id, name, version, repo_path, local_port, status) "
+            "VALUES ('app-id', 'my-app', '1', '/tmp/repo', 19001, 'building')"
+        )
+        db.commit()
+    client.cookies.update(_auth_cookie(cfg.db_path))
+
+    resp = client.post(
+        "/api/domains/myhost.local/primary",
+        json={"expected_primary": "host.example.com"},
+    )
+
+    assert resp.status_code == 409
+    assert resp.json()["extra"] == {"code": "apps_busy", "apps": ["my-app"]}
+    with closing(open_db(cfg)) as db:
+        assert primary_domain(db).name == "host.example.com"
+
+
+def test_make_primary_rejects_archive_migration(cfg: Config, client: TestClient[Litestar]) -> None:
+    with closing(open_db(cfg)) as db:
+        upsert_record(db, DomainRecord("myhost.local", tls=False, mdns=True))
+        db.execute("INSERT INTO settings (key, value) VALUES ('archive_migration_in_progress', 'operation-id')")
+        db.commit()
+    client.cookies.update(_auth_cookie(cfg.db_path))
+
+    resp = client.post(
+        "/api/domains/myhost.local/primary",
+        json={"expected_primary": "host.example.com"},
+    )
+
+    assert resp.status_code == 409
+    assert resp.json()["extra"]["code"] == "archive_migration"
 
 
 def test_promoting_domain_allows_removing_demoted_primary_with_port(tmp_path: Path) -> None:

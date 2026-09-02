@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 import sqlite3
+import threading
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -14,9 +16,12 @@ from litestar import Litestar
 from litestar.testing import TestClient
 
 import compute_space.web.routes.api.apps as apps_routes
+import compute_space.web.routes.api.archive_backend as archive_routes
 from compute_space.core import archive_backend
 from compute_space.core.app_id import new_app_id
+from compute_space.core.domains import INTERRUPTED_APP_REMOVAL_MESSAGE
 from compute_space.core.manifest import AppManifest
+from compute_space.core.settings_store import ARCHIVE_MIGRATION_RECOVERY_REQUIRED_VALUE
 from compute_space.db.connection import init_db
 from compute_space.tests._litestar_helpers import auth_cookie
 from compute_space.tests._litestar_helpers import make_test_app
@@ -44,6 +49,105 @@ def cookies(cfg: Any) -> dict[str, str]:
 
 
 # --- GET state ------------------------------------------------------------
+
+
+def test_archive_migration_claim_excludes_primary_domain_restarts(cfg: Any) -> None:
+    db = sqlite3.connect(cfg.db_path)
+    db.row_factory = sqlite3.Row
+    try:
+        db.execute("INSERT INTO settings (key, value) VALUES ('primary_domain_restart_app_ids', '[\"app-id\"]')")
+        db.commit()
+        assert archive_routes._claim_archive_migration(db, "archive-id") == ("primary_domain_restarts", False)
+        db.execute("DELETE FROM settings WHERE key = 'primary_domain_restart_app_ids'")
+        db.commit()
+        assert archive_routes._claim_archive_migration(db, "archive-id") == (None, False)
+        assert archive_routes._claim_archive_migration(db, "other-id") == ("archive_migration", False)
+        archive_routes._release_archive_migration(db, "archive-id")
+        assert archive_routes._claim_archive_migration(db, "next-id") == (None, False)
+        archive_routes._release_archive_migration(db, "next-id")
+        db.execute(
+            "INSERT INTO settings (key, value) VALUES ('archive_migration_in_progress', ?)",
+            (ARCHIVE_MIGRATION_RECOVERY_REQUIRED_VALUE,),
+        )
+        db.commit()
+        assert archive_routes._claim_archive_migration(db, "recovery-id") == (None, True)
+        archive_routes._release_archive_migration(db, "recovery-id")
+    finally:
+        db.close()
+
+
+def test_archive_migration_claim_rejects_interrupted_removal(cfg: Any) -> None:
+    db = sqlite3.connect(cfg.db_path)
+    db.row_factory = sqlite3.Row
+    try:
+        db.execute(
+            "INSERT INTO apps (app_id, name, version, repo_path, local_port, status, error_message) "
+            "VALUES (?, 'going-away', '1', '/tmp/repo', 19001, 'error', ?)",
+            (new_app_id(), INTERRUPTED_APP_REMOVAL_MESSAGE),
+        )
+        db.commit()
+        assert archive_routes._claim_archive_migration(db, "archive-id") == ("apps_busy", False)
+    finally:
+        db.close()
+
+
+def test_archive_recovery_claim_bypasses_stale_transient_app(cfg: Any) -> None:
+    db = sqlite3.connect(cfg.db_path)
+    db.row_factory = sqlite3.Row
+    try:
+        db.execute(
+            "INSERT INTO apps (app_id, name, version, repo_path, local_port, status) "
+            "VALUES (?, 'interrupted', '1', '/tmp/repo', 19001, 'starting')",
+            (new_app_id(),),
+        )
+        db.execute(
+            "INSERT INTO settings (key, value) VALUES ('archive_migration_in_progress', ?)",
+            (ARCHIVE_MIGRATION_RECOVERY_REQUIRED_VALUE,),
+        )
+        db.commit()
+
+        assert archive_routes._claim_archive_migration(db, "recovery-id") == (None, True)
+        archive_routes._release_archive_migration(db, "recovery-id")
+    finally:
+        db.close()
+
+
+@pytest.mark.asyncio
+async def test_cancelled_archive_request_leaves_worker_to_cleanup(cfg: Any) -> None:
+    started = threading.Event()
+    release = threading.Event()
+
+    def wait_for_release(_config: Any, _db: sqlite3.Connection, **_kwargs: Any) -> None:
+        started.set()
+        release.wait(timeout=5)
+
+    db = sqlite3.connect(cfg.db_path)
+    db.row_factory = sqlite3.Row
+    data = archive_routes.ConfigureArchiveRequest(
+        s3_bucket="bucket",
+        s3_access_key_id="access",
+        s3_secret_access_key="secret",
+    )
+    try:
+        with mock.patch.object(archive_backend, "configure_backend", side_effect=wait_for_release):
+            task = asyncio.create_task(archive_routes.configure_archive_backend.fn(data, db, cfg))
+            assert await asyncio.to_thread(started.wait, 5)
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+            assert (
+                db.execute("SELECT 1 FROM settings WHERE key = 'archive_migration_in_progress'").fetchone() is not None
+            )
+            release.set()
+            for _ in range(100):
+                if db.execute("SELECT 1 FROM settings WHERE key = 'archive_migration_in_progress'").fetchone() is None:
+                    break
+                await asyncio.sleep(0.01)
+
+        assert db.execute("SELECT 1 FROM settings WHERE key = 'archive_migration_in_progress'").fetchone() is None
+    finally:
+        release.set()
+        db.close()
 
 
 def test_get_returns_seeded_local_state(client: TestClient[Litestar], cookies: dict[str, str]) -> None:
@@ -224,6 +328,39 @@ def test_configure_s3_requires_confirm_migrate_s3(
     assert "confirm_migrate_s3" in resp.json()["detail"]
     assert "oldbucket" in resp.json()["detail"]
     assert resp.json()["extra"] == {"code": "confirm_migrate_s3_required"}
+    db = sqlite3.connect(cfg.db_path)
+    try:
+        assert db.execute("SELECT 1 FROM settings WHERE key = 'archive_migration_in_progress'").fetchone() is None
+    finally:
+        db.close()
+
+
+def test_archive_recovery_confirmation_failure_restores_marker(
+    cfg: Any, client: TestClient[Litestar], cookies: dict[str, str]
+) -> None:
+    db = sqlite3.connect(cfg.db_path)
+    db.execute(
+        "UPDATE archive_backend SET backend='s3', s3_bucket='oldbucket', "
+        "s3_access_key_id='ak', s3_secret_access_key='sk' WHERE id=1"
+    )
+    db.execute(
+        "INSERT INTO settings (key, value) VALUES ('archive_migration_in_progress', ?)",
+        (ARCHIVE_MIGRATION_RECOVERY_REQUIRED_VALUE,),
+    )
+    db.commit()
+    db.close()
+
+    client.cookies.update(cookies)
+    resp = client.post(
+        "/api/storage/archive_backend/configure",
+        json={"s3_bucket": "newbucket", "s3_access_key_id": "a", "s3_secret_access_key": "s"},
+    )
+
+    assert resp.status_code == 409
+    db = sqlite3.connect(cfg.db_path)
+    marker = db.execute("SELECT value FROM settings WHERE key = 'archive_migration_in_progress'").fetchone()[0]
+    db.close()
+    assert marker == ARCHIVE_MIGRATION_RECOVERY_REQUIRED_VALUE
 
 
 def test_configure_s3_to_s3_happy_path(cfg: Any, client: TestClient[Litestar], cookies: dict[str, str]) -> None:
@@ -270,6 +407,66 @@ def test_configure_s3_to_s3_happy_path(cfg: Any, client: TestClient[Litestar], c
     _, kwargs = mock_configure.call_args
     assert kwargs["s3_bucket"] == "newbucket"
     assert kwargs["s3_access_key_id"] == "newak"
+
+
+def test_failed_archive_recovery_restores_recovery_marker(
+    cfg: Any, client: TestClient[Litestar], cookies: dict[str, str]
+) -> None:
+    db = sqlite3.connect(cfg.db_path)
+    db.execute(
+        "INSERT INTO settings (key, value) VALUES ('archive_migration_in_progress', ?)",
+        (ARCHIVE_MIGRATION_RECOVERY_REQUIRED_VALUE,),
+    )
+    db.commit()
+    db.close()
+
+    with mock.patch.object(archive_backend, "configure_backend", side_effect=RuntimeError("repair failed")):
+        client.cookies.update(cookies)
+        resp = client.post(
+            "/api/storage/archive_backend/configure",
+            json={"s3_bucket": "bucket", "s3_access_key_id": "access", "s3_secret_access_key": "secret"},
+        )
+
+    assert resp.status_code == 500
+    db = sqlite3.connect(cfg.db_path)
+    marker = db.execute("SELECT value FROM settings WHERE key = 'archive_migration_in_progress'").fetchone()[0]
+    db.close()
+    assert marker == ARCHIVE_MIGRATION_RECOVERY_REQUIRED_VALUE
+
+
+def test_successful_archive_recovery_resumes_deferred_app_sweep(
+    cfg: Any, client: TestClient[Litestar], cookies: dict[str, str]
+) -> None:
+    db = sqlite3.connect(cfg.db_path)
+    db.execute(
+        "INSERT INTO settings (key, value) VALUES ('archive_migration_in_progress', ?)",
+        (ARCHIVE_MIGRATION_RECOVERY_REQUIRED_VALUE,),
+    )
+    db.commit()
+    db.close()
+
+    def configure(_config: Any, worker_db: sqlite3.Connection, **_kwargs: Any) -> None:
+        worker_db.execute("UPDATE archive_backend SET backend = 's3', s3_bucket = 'bucket' WHERE id = 1")
+        worker_db.commit()
+
+    with (
+        mock.patch.object(archive_backend, "configure_backend", side_effect=configure),
+        mock.patch("compute_space.core.startup.check_app_status") as check_app_status,
+    ):
+        client.cookies.update(cookies)
+        resp = client.post(
+            "/api/storage/archive_backend/configure",
+            json={"s3_bucket": "bucket", "s3_access_key_id": "access", "s3_secret_access_key": "secret"},
+        )
+
+    assert resp.status_code == 200
+    check_app_status.assert_called_once()
+    called_config = check_app_status.call_args.args[0]
+    assert called_config.db_path == cfg.db_path
+    assert check_app_status.call_args.kwargs == {
+        "recover_quiesced_archive_apps": True,
+        "restart_synchronously": True,
+    }
 
 
 def test_configure_happy_path(client: TestClient[Litestar], cookies: dict[str, str]) -> None:
@@ -565,6 +762,11 @@ def test_configure_requires_confirm_when_local_has_data(
     assert resp.status_code == 409, resp.text
     assert "nextcloud" in resp.json()["detail"]
     assert resp.json()["extra"] == {"code": "confirm_migrate_local_required"}
+    db = sqlite3.connect(cfg.db_path)
+    try:
+        assert db.execute("SELECT 1 FROM settings WHERE key = 'archive_migration_in_progress'").fetchone() is None
+    finally:
+        db.close()
 
     # With confirm -> proceeds (configure_backend is mocked to flip state).
     with (

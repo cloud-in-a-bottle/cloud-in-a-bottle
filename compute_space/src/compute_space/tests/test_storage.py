@@ -198,6 +198,7 @@ def _init_apps_db(db_path: str) -> None:
             )
             """
         )
+        db.execute("CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT)")
         db.commit()
     finally:
         db.close()
@@ -267,6 +268,62 @@ def test_enforce_guard_skips_when_paused(tmp_path, monkeypatch):
     db.close()
 
     assert row[0] == "running"
+
+
+def test_enforce_guard_defers_during_primary_domain_restarts(tmp_path, monkeypatch):
+    config = _make_test_config(tmp_path, seed_primary=False, storage_min_free_mb=1000)
+    _init_apps_db(config.db_path)
+    db = sqlite3.connect(config.db_path)
+    db.execute(
+        "INSERT INTO apps (app_id, name, version, repo_path, local_port, container_id, status, error_message) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (new_app_id(), "notes", "1", "/tmp/notes", 9100, "cid-1", "running", None),
+    )
+    db.execute("INSERT INTO settings (key, value) VALUES ('primary_domain_restart_app_ids', '[\"app-id\"]')")
+    db.commit()
+    db.close()
+    monkeypatch.setattr(storage, "storage_low", lambda _c: True)
+    monkeypatch.setattr(storage, "disk_free_bytes", lambda _c: 50 * 1024 * 1024)
+    stopped = []
+    monkeypatch.setattr(storage, "_stop_app_process_safe", lambda row: stopped.append(row["name"]))
+
+    storage.enforce_storage_guard(config)
+
+    assert stopped == []
+
+
+def test_enforce_guard_does_not_overwrite_replacement_container(tmp_path, monkeypatch):
+    config = _make_test_config(tmp_path, seed_primary=False, storage_min_free_mb=1000)
+    _init_apps_db(config.db_path)
+    app_id = new_app_id()
+    db = sqlite3.connect(config.db_path)
+    db.execute(
+        "INSERT INTO apps (app_id, name, version, repo_path, local_port, container_id, status, error_message) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (app_id, "notes", "1", "/tmp/notes", 9100, "old-container", "running", None),
+    )
+    db.commit()
+    db.close()
+    monkeypatch.setattr(storage, "storage_low", lambda _c: True)
+    monkeypatch.setattr(storage, "disk_free_bytes", lambda _c: 50 * 1024 * 1024)
+
+    def replace_container(_row):
+        replacement_db = sqlite3.connect(config.db_path)
+        replacement_db.execute(
+            "UPDATE apps SET status = 'running', container_id = 'new-container' WHERE app_id = ?",
+            (app_id,),
+        )
+        replacement_db.commit()
+        replacement_db.close()
+
+    monkeypatch.setattr(storage, "_stop_app_process_safe", replace_container)
+
+    storage.enforce_storage_guard(config)
+
+    db = sqlite3.connect(config.db_path)
+    row = db.execute("SELECT status, container_id, error_message FROM apps WHERE app_id = ?", (app_id,)).fetchone()
+    db.close()
+    assert row == ("running", "new-container", None)
 
 
 def test_start_storage_guard_noop_without_threshold(tmp_path, monkeypatch):

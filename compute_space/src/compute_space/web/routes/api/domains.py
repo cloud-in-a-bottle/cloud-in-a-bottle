@@ -4,7 +4,8 @@ Adding a TLS domain kicks off ACME acquisition in the background (the same
 ``ensure_cert_for`` routine used at initial setup); the domain is served immediately via
 Caddy's internal CA and flips to its real cert when acquisition completes. Adding an mDNS
 `.local` domain is active immediately (served over http). Adding and removing domains update
-the active DNS and Caddy configuration; changing the primary is an atomic DB-only operation.
+the active DNS and Caddy configuration; changing the primary atomically updates the DB and then
+recreates active app containers in the background.
 """
 
 from __future__ import annotations
@@ -29,8 +30,11 @@ from litestar.params import FromPath
 
 from compute_space.config import Config
 from compute_space.config import get_config
+from compute_space.core.apps import recreate_apps_after_primary_change
 from compute_space.core.caddy import reload_caddy_for_domains
 from compute_space.core.dns import reload_coredns_for_domains
+from compute_space.core.domains import AppsBusyForPrimaryChangeError
+from compute_space.core.domains import ArchiveMigrationInProgressError
 from compute_space.core.domains import Domain
 from compute_space.core.domains import DomainCertStatus
 from compute_space.core.domains import DomainNotFoundError
@@ -39,6 +43,7 @@ from compute_space.core.domains import PrimaryDomainChangedError
 from compute_space.core.domains import effective_domains
 from compute_space.core.domains import get_record
 from compute_space.core.domains import load_records
+from compute_space.core.domains import pending_primary_domain_restart_app_ids
 from compute_space.core.domains import remove_non_primary_record
 from compute_space.core.domains import set_primary_domain
 from compute_space.core.domains import set_record_status
@@ -226,7 +231,7 @@ async def make_primary_domain(
     data: SetPrimaryDomainRequest,
     config: NamedDependency[Config],
     db: NamedDependency[sqlite3.Connection],
-) -> DomainListResponse:
+) -> Response[DomainListResponse]:
     """Make an existing, working domain the canonical domain for links and app configuration."""
     if is_shutdown_pending():
         raise ConflictException(
@@ -248,7 +253,7 @@ async def make_primary_domain(
                 extra={"code": "domain_not_ready"},
             )
     try:
-        set_primary_domain(db, name, data.expected_primary)
+        change = set_primary_domain(db, name, data.expected_primary)
     except DomainNotFoundError as exc:
         raise NotFoundException(detail="domain not found") from exc
     except PrimaryDomainChangedError as exc:
@@ -256,14 +261,31 @@ async def make_primary_domain(
             detail=f"primary domain changed to {exc.current_primary}; reload and try again",
             extra={"code": "primary_changed", "current_primary": exc.current_primary},
         ) from exc
-    return DomainListResponse(domains=_domain_list(config, db))
+    except AppsBusyForPrimaryChangeError as exc:
+        raise ConflictException(
+            detail="wait for current app operations to finish before changing the primary domain",
+            extra={"code": "apps_busy", "apps": list(exc.app_names)},
+        ) from exc
+    except ArchiveMigrationInProgressError as exc:
+        raise ConflictException(
+            detail="wait for the archive migration to finish before changing the primary domain",
+            extra={"code": "archive_migration"},
+        ) from exc
+
+    background = BackgroundTask(recreate_apps_after_primary_change, config) if change.restart_app_ids else None
+    return Response(
+        DomainListResponse(domains=_domain_list(config, db)),
+        status_code=200,
+        media_type=MediaType.JSON,
+        background=background,
+    )
 
 
 @delete(
     "/api/domains/{name:str}",
     status_code=200,
     guards=[require_owner_auth],
-    raises=[ValidationException, NotFoundException],
+    raises=[ValidationException, NotFoundException, ConflictException],
 )
 async def remove_domain(
     name: FromPath[str],
@@ -271,10 +293,20 @@ async def remove_domain(
     db: NamedDependency[sqlite3.Connection],
 ) -> Response[DomainListResponse]:
     name = name.strip().lower()
+    if pending_primary_domain_restart_app_ids(db):
+        raise ConflictException(
+            detail="wait for apps to restart before removing a domain",
+            extra={"code": "primary_domain_restarts"},
+        )
     removed = get_record(db, name)
     if removed is None:
         raise NotFoundException(detail="domain not found")
     if not remove_non_primary_record(db, removed.name):
+        if pending_primary_domain_restart_app_ids(db):
+            raise ConflictException(
+                detail="wait for apps to restart before removing a domain",
+                extra={"code": "primary_domain_restarts"},
+            )
         current = get_record(db, name)
         if current is not None and current.is_primary:
             raise ValidationException(detail="cannot remove the primary domain")

@@ -9,6 +9,9 @@ from pathlib import Path
 
 import pytest
 
+from compute_space.core.domains import INTERRUPTED_APP_REMOVAL_MESSAGE
+from compute_space.core.domains import AppsBusyForPrimaryChangeError
+from compute_space.core.domains import ArchiveMigrationInProgressError
 from compute_space.core.domains import Domain
 from compute_space.core.domains import DomainCertStatus
 from compute_space.core.domains import DomainNotFoundError
@@ -19,6 +22,7 @@ from compute_space.core.domains import effective_domains
 from compute_space.core.domains import get_record
 from compute_space.core.domains import legacy_domain_asset_owner
 from compute_space.core.domains import load_records
+from compute_space.core.domains import pending_primary_domain_restart_app_ids
 from compute_space.core.domains import primary_domain
 from compute_space.core.domains import remove_non_primary_record
 from compute_space.core.domains import remove_record
@@ -134,14 +138,14 @@ def test_set_primary_domain_preserves_legacy_asset_owner(tmp_path: Path) -> None
         upsert_record(db, DomainRecord("myhost.local", tls=False, mdns=True))
 
         assert legacy_domain_asset_owner(db) == "host.example.com"
-        assert set_primary_domain(db, "myhost.local", expected_primary="host.example.com") is True
+        assert set_primary_domain(db, "myhost.local", expected_primary="host.example.com").changed is True
         assert primary_domain(db).name == "myhost.local"
         assert legacy_domain_asset_owner(db) == "host.example.com"
         assert domain_uses_legacy_paths(db, "host.example.com") is True
         assert domain_uses_legacy_paths(db, "myhost.local") is False
 
         # Repeating a completed request is idempotent, even if its expected-primary value is stale.
-        assert set_primary_domain(db, "myhost.local", expected_primary="host.example.com") is False
+        assert set_primary_domain(db, "myhost.local", expected_primary="host.example.com").changed is False
 
 
 def test_set_primary_domain_rejects_stale_and_unknown_targets(tmp_path: Path) -> None:
@@ -177,6 +181,108 @@ def test_set_primary_domain_rolls_back_every_write_on_failure(tmp_path: Path) ->
 
         assert primary_domain(db).name == "host.example.com"
         assert db.execute("SELECT value FROM settings WHERE key = 'legacy_domain_asset_owner'").fetchone() is None
+
+
+def test_set_primary_domain_queues_active_apps_and_leaves_stopped_apps_alone(tmp_path: Path) -> None:
+    cfg = _cfg(tmp_path)
+    with closing(open_db(cfg)) as db:
+        seed_domains(db, PRIMARY, [])
+        upsert_record(db, DomainRecord("myhost.local", tls=False, mdns=True))
+        db.executemany(
+            "INSERT INTO apps (app_id, name, version, repo_path, local_port, status, container_id) "
+            "VALUES (?, ?, '1', '/tmp/repo', ?, ?, ?)",
+            [
+                ("running-id", "alpha", 19001, "running", "alpha-container"),
+                ("stopped-id", "beta", 19002, "stopped", None),
+                ("error-id", "gamma", 19003, "error", "gamma-container"),
+                ("dead-error-id", "omega", 19004, "error", None),
+            ],
+        )
+        db.commit()
+
+        change = set_primary_domain(db, "myhost.local", expected_primary="host.example.com")
+
+        assert change.restart_app_ids == ("running-id", "error-id")
+        assert pending_primary_domain_restart_app_ids(db) == change.restart_app_ids
+        rows = {
+            row["app_id"]: (row["status"], row["container_id"])
+            for row in db.execute("SELECT app_id, status, container_id FROM apps")
+        }
+        assert rows == {
+            "running-id": ("running", "alpha-container"),
+            "stopped-id": ("stopped", None),
+            "error-id": ("error", "gamma-container"),
+            "dead-error-id": ("error", None),
+        }
+
+
+def test_set_primary_domain_rejects_apps_with_inflight_operations(tmp_path: Path) -> None:
+    cfg = _cfg(tmp_path)
+    with closing(open_db(cfg)) as db:
+        seed_domains(db, PRIMARY, [])
+        upsert_record(db, DomainRecord("myhost.local", tls=False, mdns=True))
+        db.execute(
+            "INSERT INTO apps (app_id, name, version, repo_path, local_port, status) "
+            "VALUES ('busy-id', 'busy-app', '1', '/tmp/repo', 19001, 'building')"
+        )
+        db.commit()
+
+        with pytest.raises(AppsBusyForPrimaryChangeError, match="busy-app"):
+            set_primary_domain(db, "myhost.local", expected_primary="host.example.com")
+
+        assert primary_domain(db).name == "host.example.com"
+        assert db.execute("SELECT status FROM apps WHERE app_id = 'busy-id'").fetchone()[0] == "building"
+        assert db.execute("SELECT value FROM settings WHERE key = 'legacy_domain_asset_owner'").fetchone() is None
+
+
+def test_set_primary_domain_rejects_interrupted_app_removal(tmp_path: Path) -> None:
+    cfg = _cfg(tmp_path)
+    with closing(open_db(cfg)) as db:
+        seed_domains(db, PRIMARY, [])
+        upsert_record(db, DomainRecord("myhost.local", tls=False, mdns=True))
+        db.execute(
+            "INSERT INTO apps (app_id, name, version, repo_path, local_port, status, container_id, error_message) "
+            "VALUES ('removal-id', 'going-away', '1', '/tmp/repo', 19001, 'error', 'old-container', ?)",
+            (INTERRUPTED_APP_REMOVAL_MESSAGE,),
+        )
+        db.commit()
+
+        with pytest.raises(AppsBusyForPrimaryChangeError, match="going-away"):
+            set_primary_domain(db, "myhost.local", expected_primary="host.example.com")
+
+        assert primary_domain(db).name == "host.example.com"
+
+
+def test_set_primary_domain_rejects_cache_corrupt_app(tmp_path: Path) -> None:
+    cfg = _cfg(tmp_path)
+    with closing(open_db(cfg)) as db:
+        seed_domains(db, PRIMARY, [])
+        upsert_record(db, DomainRecord("myhost.local", tls=False, mdns=True))
+        db.execute(
+            "INSERT INTO apps (app_id, name, version, repo_path, local_port, status, container_id, error_message) "
+            "VALUES ('corrupt-id', 'corrupt-app', '1', '/tmp/repo', 19001, 'error', 'old-container', "
+            "'[BUILD_CACHE_CORRUPT] repair required')"
+        )
+        db.commit()
+
+        with pytest.raises(AppsBusyForPrimaryChangeError, match="corrupt-app"):
+            set_primary_domain(db, "myhost.local", expected_primary="host.example.com")
+
+        assert primary_domain(db).name == "host.example.com"
+
+
+def test_set_primary_domain_rejects_archive_migration(tmp_path: Path) -> None:
+    cfg = _cfg(tmp_path)
+    with closing(open_db(cfg)) as db:
+        seed_domains(db, PRIMARY, [])
+        upsert_record(db, DomainRecord("myhost.local", tls=False, mdns=True))
+        db.execute("INSERT INTO settings (key, value) VALUES ('archive_migration_in_progress', 'operation-id')")
+        db.commit()
+
+        with pytest.raises(ArchiveMigrationInProgressError):
+            set_primary_domain(db, "myhost.local", expected_primary="host.example.com")
+
+        assert primary_domain(db).name == "host.example.com"
 
 
 def test_removal_cannot_delete_a_domain_promoted_after_lookup(tmp_path: Path) -> None:

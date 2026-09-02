@@ -35,6 +35,11 @@ from compute_space.core.logging import logger
 from compute_space.core.memory_guard import ensure_memory_guard
 from compute_space.core.org_rename import reconcile_app_repo_urls
 from compute_space.core.process_stream import cleanup_all as cleanup_process_streams
+from compute_space.core.settings_store import ARCHIVE_MIGRATION_IN_PROGRESS_KEY
+from compute_space.core.settings_store import ARCHIVE_MIGRATION_RECOVERY_REQUIRED_VALUE
+from compute_space.core.settings_store import delete_setting
+from compute_space.core.settings_store import get_setting
+from compute_space.core.settings_store import set_setting
 from compute_space.core.startup import check_app_status
 from compute_space.core.startup import retry_pending_default_apps
 from compute_space.core.storage import start_storage_guard
@@ -120,9 +125,23 @@ def _full_app_bootstrap(config: Config) -> None:
     DB / keys / logging are already initialized in ``start.py``; this only covers the
     heavier setup steps that don't make sense for the setup-only app.
     """
+    interrupted_archive_recovered = True
+    migration_was_interrupted = False
     db = get_db()  # row_factory=Row; the archive derives its per-zone volume from the domains store
     try:
+        # A process cannot survive an interrupted in-process migration. Keep its marker in place
+        # while archive recovery runs so app/domain mutations remain fenced until reconciliation.
+        migration_was_interrupted = get_setting(db, ARCHIVE_MIGRATION_IN_PROGRESS_KEY) is not None
         archive_backend.attach_on_startup(config, db)
+        if migration_was_interrupted:
+            interrupted_archive_recovered = archive_backend.is_archive_dir_healthy(config, db)
+            if not interrupted_archive_recovered:
+                set_setting(
+                    db,
+                    ARCHIVE_MIGRATION_IN_PROGRESS_KEY,
+                    ARCHIVE_MIGRATION_RECOVERY_REQUIRED_VALUE,
+                )
+                logger.error("Archive migration recovery failed; leaving apps stopped and maintenance fenced")
         # Move any app repo URLs still pointing at the pre-rename GitHub owner.
         # Idempotent, and inert until org_rename.ORG_RENAME_COMPLETE is flipped;
         # see that module for why this is a per-boot reconcile rather than a
@@ -130,12 +149,40 @@ def _full_app_bootstrap(config: Config) -> None:
         reconcile_app_repo_urls(db)
     finally:
         db.close()
-    check_app_status(config)
+    if interrupted_archive_recovered:
+        if migration_was_interrupted:
+            try:
+                check_app_status(
+                    config,
+                    recover_quiesced_archive_apps=True,
+                    restart_synchronously=True,
+                )
+            except Exception:
+                logger.exception("Archive attached but interrupted app recovery failed")
+                interrupted_archive_recovered = False
+                db = get_db()
+                try:
+                    set_setting(
+                        db,
+                        ARCHIVE_MIGRATION_IN_PROGRESS_KEY,
+                        ARCHIVE_MIGRATION_RECOVERY_REQUIRED_VALUE,
+                    )
+                finally:
+                    db.close()
+            else:
+                db = get_db()
+                try:
+                    delete_setting(db, ARCHIVE_MIGRATION_IN_PROGRESS_KEY)
+                finally:
+                    db.close()
+        else:
+            check_app_status(config)
     load_identity_keys(config.persistent_data_dir)
     start_storage_guard(config)
     start_image_pruner(config)
     ensure_memory_guard(config)
-    retry_pending_default_apps(config)
+    if interrupted_archive_recovered:
+        retry_pending_default_apps(config)
     # The DB `domains` table is the source of truth.  Seed it once (+ claim token) from
     # first_boot.toml; everything reads the primary live from the DB thereafter.
     seed_first_boot(config)

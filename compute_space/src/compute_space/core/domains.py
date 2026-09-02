@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 from enum import StrEnum
 
 import attr
 
 from compute_space.core.logging import logger
+from compute_space.core.settings_store import ARCHIVE_MIGRATION_IN_PROGRESS_KEY
 from compute_space.core.settings_store import LEGACY_DOMAIN_ASSET_OWNER_KEY
+from compute_space.core.settings_store import PRIMARY_DOMAIN_RESTART_APP_IDS_KEY
 from compute_space.core.settings_store import get_setting
 
 
@@ -84,7 +87,25 @@ class PrimaryDomainChangedError(RuntimeError):
         self.current_primary = current_primary
 
 
+class AppsBusyForPrimaryChangeError(RuntimeError):
+    def __init__(self, app_names: tuple[str, ...]) -> None:
+        super().__init__(f"apps are busy: {', '.join(app_names)}")
+        self.app_names = app_names
+
+
+class ArchiveMigrationInProgressError(RuntimeError):
+    pass
+
+
+@attr.s(auto_attribs=True, frozen=True)
+class PrimaryDomainChange:
+    changed: bool
+    restart_app_ids: tuple[str, ...] = ()
+
+
 _COLS = "name, tls, mdns, is_primary, cert_status, error_message"
+PRIMARY_DOMAIN_APP_RESTART_MARKER = "Restarting after primary domain change"
+INTERRUPTED_APP_REMOVAL_MESSAGE = "App removal was interrupted by a restart; retry removal."
 
 
 @attr.s(auto_attribs=True, frozen=True)
@@ -157,7 +178,10 @@ def remove_record(db: sqlite3.Connection, name: str) -> bool:
 
 def remove_non_primary_record(db: sqlite3.Connection, name: str) -> bool:
     """Delete a domain only while it is non-primary, closing the promotion/removal race."""
-    cur = db.execute("DELETE FROM domains WHERE name = ? AND is_primary = 0", (name.lower(),))
+    cur = db.execute(
+        "DELETE FROM domains WHERE name = ? AND is_primary = 0 AND NOT EXISTS (SELECT 1 FROM settings WHERE key = ?)",
+        (name.lower(), PRIMARY_DOMAIN_RESTART_APP_IDS_KEY),
+    )
     db.commit()
     return cur.rowcount > 0
 
@@ -213,12 +237,46 @@ def domain_uses_legacy_paths(db: sqlite3.Connection, name: str) -> bool:
     return owner is not None and owner == name.split(":")[0].lower()
 
 
-def set_primary_domain(db: sqlite3.Connection, name: str, expected_primary: str) -> bool:
-    """Atomically make an existing domain primary; return whether anything changed.
+def pending_primary_domain_restart_app_ids(db: sqlite3.Connection) -> tuple[str, ...]:
+    raw = get_setting(db, PRIMARY_DOMAIN_RESTART_APP_IDS_KEY)
+    if raw is None:
+        return ()
+    app_ids = json.loads(raw)
+    if not isinstance(app_ids, list) or any(not isinstance(app_id, str) for app_id in app_ids):
+        raise ValueError("invalid pending primary-domain app restart state")
+    return tuple(app_ids)
+
+
+def complete_primary_domain_app_restart(db: sqlite3.Connection, app_id: str) -> None:
+    """Remove one app from the durable primary-domain restart queue."""
+    db.execute("BEGIN IMMEDIATE")
+    try:
+        remaining = [pending for pending in pending_primary_domain_restart_app_ids(db) if pending != app_id]
+        if remaining:
+            db.execute(
+                "UPDATE settings SET value = ? WHERE key = ?",
+                (json.dumps(remaining), PRIMARY_DOMAIN_RESTART_APP_IDS_KEY),
+            )
+        else:
+            db.execute("DELETE FROM settings WHERE key = ?", (PRIMARY_DOMAIN_RESTART_APP_IDS_KEY,))
+        db.execute(
+            "UPDATE apps SET error_message = NULL WHERE app_id = ? AND error_message = ?",
+            (app_id, PRIMARY_DOMAIN_APP_RESTART_MARKER),
+        )
+        db.execute("COMMIT")
+    except BaseException:
+        if db.in_transaction:
+            db.execute("ROLLBACK")
+        raise
+
+
+def set_primary_domain(db: sqlite3.Connection, name: str, expected_primary: str) -> PrimaryDomainChange:
+    """Atomically make an existing domain primary and claim active apps for recreation.
 
     ``expected_primary`` provides compare-and-swap semantics for the settings UI. The original
     primary remains the owner of legacy certificate and zone files, allowing the DB role change to
-    commit without any filesystem operation or service reload.
+    commit without any filesystem operation or service reload. Apps already stopped stay stopped;
+    active apps enter a durable recreation queue processed one at a time after the response.
     """
     normalized_name = name.lower()
     normalized_expected = expected_primary.split(":")[0].lower()
@@ -235,10 +293,43 @@ def set_primary_domain(db: sqlite3.Connection, name: str, expected_primary: str)
         current_name_no_port = current_name.split(":")[0]
         target_name = target.name
         if current_name_no_port == target.to_domain().name_no_port:
+            pending = pending_primary_domain_restart_app_ids(db)
             db.execute("COMMIT")
-            return False
+            return PrimaryDomainChange(changed=False, restart_app_ids=pending)
         if current_name_no_port != normalized_expected:
             raise PrimaryDomainChangedError(current_name_no_port)
+
+        pending = pending_primary_domain_restart_app_ids(db)
+        if pending:
+            rows = db.execute(
+                f"SELECT name FROM apps WHERE app_id IN ({', '.join('?' for _ in pending)}) ORDER BY name",
+                pending,
+            ).fetchall()
+            names = tuple(row["name"] for row in rows) or pending
+            raise AppsBusyForPrimaryChangeError(names)
+        if get_setting(db, ARCHIVE_MIGRATION_IN_PROGRESS_KEY) is not None:
+            raise ArchiveMigrationInProgressError("archive migration is in progress")
+
+        busy_apps = tuple(
+            row["name"]
+            for row in db.execute(
+                "SELECT name FROM apps WHERE status IN ('building', 'starting', 'removing') "
+                "OR (status = 'error' AND (error_message = ? OR error_message LIKE '%[BUILD_CACHE_CORRUPT]%')) "
+                "ORDER BY name",
+                (INTERRUPTED_APP_REMOVAL_MESSAGE,),
+            )
+        )
+        if busy_apps:
+            raise AppsBusyForPrimaryChangeError(busy_apps)
+
+        restart_app_ids = tuple(
+            row["app_id"]
+            for row in db.execute(
+                "SELECT app_id FROM apps "
+                "WHERE status = 'running' OR (status = 'error' AND container_id IS NOT NULL) "
+                "ORDER BY name"
+            )
+        )
 
         db.execute(
             "INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)",
@@ -248,8 +339,14 @@ def set_primary_domain(db: sqlite3.Connection, name: str, expected_primary: str)
         promoted = db.execute("UPDATE domains SET is_primary = 1 WHERE name = ? AND is_primary = 0", (target_name,))
         if demoted.rowcount != 1 or promoted.rowcount != 1:
             raise RuntimeError("Primary domain changed concurrently")
+        if restart_app_ids:
+            db.execute(
+                "INSERT INTO settings (key, value) VALUES (?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                (PRIMARY_DOMAIN_RESTART_APP_IDS_KEY, json.dumps(restart_app_ids)),
+            )
         db.execute("COMMIT")
-        return True
+        return PrimaryDomainChange(changed=True, restart_app_ids=restart_app_ids)
     except BaseException:
         if db.in_transaction:
             db.execute("ROLLBACK")

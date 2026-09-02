@@ -22,6 +22,8 @@ from compute_space.config import Config
 from compute_space.core.containers import container_image_storage_bytes
 from compute_space.core.containers import stop_app_process
 from compute_space.core.logging import logger
+from compute_space.core.settings_store import ARCHIVE_MIGRATION_IN_PROGRESS_KEY
+from compute_space.core.settings_store import PRIMARY_DOMAIN_RESTART_APP_IDS_KEY
 
 _MIB = 1024 * 1024
 
@@ -252,17 +254,32 @@ def enforce_storage_guard(config: Config) -> None:
     db = sqlite3.connect(config.db_path)
     db.row_factory = sqlite3.Row
     try:
+        operation_in_progress = db.execute(
+            "SELECT 1 FROM settings WHERE key IN (?, ?)",
+            (PRIMARY_DOMAIN_RESTART_APP_IDS_KEY, ARCHIVE_MIGRATION_IN_PROGRESS_KEY),
+        ).fetchone()
+        if operation_in_progress:
+            logger.info("Storage guard deferred while app or archive maintenance is in progress")
+            return
         rows = db.execute("SELECT * FROM apps WHERE status IN ('running', 'starting')").fetchall()
         if not rows:
             return
 
         for row in rows:
+            operation_in_progress = db.execute(
+                "SELECT 1 FROM settings WHERE key IN (?, ?)",
+                (PRIMARY_DOMAIN_RESTART_APP_IDS_KEY, ARCHIVE_MIGRATION_IN_PROGRESS_KEY),
+            ).fetchone()
+            if operation_in_progress:
+                logger.info("Storage guard deferred while app or archive maintenance is in progress")
+                return
             detail = "Storage too low. Free space by removing app data or resizing disks."
             logger.warning("Stopping app {} due to low storage", row["name"])
             _stop_app_process_safe(row)
             db.execute(
-                "UPDATE apps SET status = 'error', error_message = ?, container_id = NULL WHERE app_id = ?",
-                (detail, row["app_id"]),
+                "UPDATE apps SET status = 'error', error_message = ?, container_id = NULL "
+                "WHERE app_id = ? AND status = ? AND container_id IS ?",
+                (detail, row["app_id"], row["status"], row["container_id"]),
             )
             db.commit()
     finally:
