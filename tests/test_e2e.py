@@ -773,6 +773,62 @@ class TestSelfHost:
         assert r.status_code == 200, f"add_app file-browser failed: {r.status_code}: {r.text[:500]}"
         wait_app_running(session, router_url, "file-browser", timeout=APP_DEPLOY_TIMEOUT_S)
 
+    def test_13d9_diagnose_creds_visibility(self, session, domain):
+        """TEMPORARY diagnostic: figure out WHY file-browser can no longer read
+        minio's 0600 creds file.  Reproduces the file-browser HTTP 404 and dumps
+        the idmap/ownership state from all three views (host disk, minio
+        container, file-browser container) plus host env versions.  Always
+        passes; remove once the root cause is understood.
+        """
+        # 1) Reproduce the original failure over HTTP (the path 13e used to use).
+        fb_url = f"https://file-browser.{domain}"
+        try:
+            r = session.get(f"{fb_url}/app_data/minio/config/root-credentials.txt", timeout=15)
+            print(f"\nDIAG file-browser HTTP GET creds -> status={r.status_code} bytes={len(r.content)}")
+            # Control: can file-browser serve ANYTHING under minio's tree / its own?
+            r2 = session.get(f"{fb_url}/app_data/minio/config/", timeout=15)
+            print(f"DIAG file-browser HTTP GET minio/config/ dir -> status={r2.status_code} bytes={len(r2.content)}")
+            r3 = session.get(f"{fb_url}/app_data/", timeout=15)
+            print(f"DIAG file-browser HTTP GET app_data/ dir -> status={r3.status_code} bytes={len(r3.content)}")
+        except Exception as e:  # noqa: BLE001 - diagnostic only
+            print(f"DIAG file-browser HTTP probe raised: {e!r}")
+
+        # 2) Inspect the on-disk / cross-namespace ownership reality via SSH.
+        hd = "/home/host/.openhost/local_compute_space/persistent_data/app_data"
+        cfg = "/data/app_data/minio/config"
+        script = f"""
+set +e
+echo "=== DIAG uname ==="; uname -a
+echo "=== DIAG podman version ==="; podman --version
+echo "=== DIAG crun version ==="; crun --version 2>&1 | head -2
+echo "=== DIAG podman info (idmap/driver/kernel) ==="
+podman info 2>&1 | grep -iE "graphdrivername|kernelversion|rootless|idmap|overlay|driver" | head -40
+echo "=== DIAG subuid/subgid ==="; grep -H host /etc/subuid /etc/subgid
+echo "=== DIAG HOST DISK VIEW (as host user) ==="; id
+ls -lnd {hd} {hd}/minio {hd}/minio/config 2>&1
+ls -ln {hd}/minio/config 2>&1
+echo "=== DIAG MINIO CONTAINER VIEW ==="
+podman exec openhost-minio id 2>&1
+podman exec openhost-minio cat /proc/self/uid_map 2>&1
+podman exec openhost-minio ls -ln {cfg} 2>&1
+echo "=== DIAG FILE-BROWSER CONTAINER VIEW ==="
+podman exec openhost-file-browser id 2>&1
+podman exec openhost-file-browser cat /proc/self/uid_map 2>&1
+podman exec openhost-file-browser ls -ln {cfg} 2>&1
+podman exec openhost-file-browser cat {cfg}/root-credentials.txt >/dev/null 2>&1; echo "fb-cat-rc=$?"
+echo "=== DIAG MOUNTS ==="
+podman inspect openhost-minio --format "{{{{json .Mounts}}}}" 2>&1
+podman inspect openhost-file-browser --format "{{{{json .Mounts}}}}" 2>&1
+echo "=== DIAG END ==="
+"""
+        result = ssh_host(
+            "cd /home/host/openhost && /home/host/.pixi/bin/pixi run bash -c " + shlex.quote(script),
+            timeout=180,
+        )
+        print("\n----- DIAG SSH stdout -----\n" + result.stdout)
+        if result.stderr.strip():
+            print("----- DIAG SSH stderr -----\n" + result.stderr)
+
     def test_13e_read_minio_credentials(self):
         """Read MinIO root credentials from the minio container via SSH.
 
