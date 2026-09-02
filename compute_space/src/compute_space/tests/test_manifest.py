@@ -529,6 +529,16 @@ grants = [
         with pytest.raises(ValueError, match="version"):
             parse_manifest_from_string(toml)
 
+    def test_services_v2_provides_unparseable_version_raises(self):
+        # A provider's version is ordered against other providers' when picking a service default,
+        # so an uncomparable one has to be refused before it reaches the DB.
+        toml = (
+            MINIMAL
+            + '\n[[services.v2.provides]]\nservice = "github.com/x"\nversion = "not a version"\nendpoint = "/"\n'
+        )
+        with pytest.raises(ValueError, match="version"):
+            parse_manifest_from_string(toml)
+
     def test_services_v2_missing_version_raises(self):
         toml = MINIMAL + '\n[[services.v2.provides]]\nservice = "github.com/x"\nendpoint = "/"\n'
         with pytest.raises(ValueError, match=r"services\.v2"):

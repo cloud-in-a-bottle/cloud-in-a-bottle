@@ -9,40 +9,12 @@ from litestar.di import NamedDependency
 from litestar.exceptions import NotFoundException
 from litestar.params import FromQuery
 
+from compute_space.core.service_interface.provider import ServiceProvider
+from compute_space.core.service_interface.services import clear_default
+from compute_space.core.service_interface.services import list_all_service_providers
+from compute_space.core.service_interface.services import set_default
 from compute_space.web.auth.auth import require_owner_auth
 from compute_space.web.auth.auth import require_owner_or_app_auth
-
-
-@attr.s(auto_attribs=True, frozen=True)
-class ProviderV2:
-    service_url: str
-    app_id: str
-    app_name: str
-    service_version: str
-    endpoint: str
-    status: str
-
-
-@attr.s(auto_attribs=True, frozen=True)
-class DiscoveredProvider:
-    app_id: str
-    app_name: str
-    service_version: str
-    endpoint: str
-    status: str
-    is_default: bool
-
-
-@attr.s(auto_attribs=True, frozen=True)
-class DiscoverProvidersResponse:
-    providers: list[DiscoveredProvider]
-
-
-@attr.s(auto_attribs=True, frozen=True)
-class DefaultEntry:
-    service_url: str
-    app_id: str
-    app_name: str
 
 
 @attr.s(auto_attribs=True, frozen=True)
@@ -62,99 +34,36 @@ class RemoveDefaultRequest:
 
 
 @get("/api/services/v2", guards=[require_owner_auth])
-async def list_services_v2(db: NamedDependency[sqlite3.Connection]) -> list[ProviderV2]:
+async def list_services_v2(db: NamedDependency[sqlite3.Connection]) -> list[ServiceProvider]:
     """List all registered V2 service providers."""
-    rows = db.execute(
-        """SELECT sp.service_url, sp.app_id, a.name AS app_name, sp.service_version, sp.endpoint, a.status
-           FROM service_providers_v2 sp
-           JOIN apps a ON a.app_id = sp.app_id"""
-    ).fetchall()
-    return [
-        ProviderV2(
-            service_url=r["service_url"],
-            app_id=r["app_id"],
-            app_name=r["app_name"],
-            service_version=r["service_version"],
-            endpoint=r["endpoint"],
-            status=r["status"],
-        )
-        for r in rows
-    ]
+    return list_all_service_providers(db)
 
 
 @get("/api/services/v2/providers", guards=[require_owner_or_app_auth])
 async def discover_providers(
     db: NamedDependency[sqlite3.Connection], service: FromQuery[str]
-) -> DiscoverProvidersResponse:
-    """Discover providers for a service, optionally filtered by version specifier."""
-
-    rows = db.execute(
-        """SELECT sp.app_id, a.name AS app_name, sp.service_version, sp.endpoint, a.status
-           FROM service_providers_v2 sp
-           JOIN apps a ON a.app_id = sp.app_id
-           WHERE sp.service_url = ?""",
-        (service,),
-    ).fetchall()
-
-    default = db.execute(
-        "SELECT app_id FROM service_defaults WHERE service_url = ?",
-        (service,),
-    ).fetchone()
-    default_app_id = default["app_id"] if default else None
-
-    return DiscoverProvidersResponse(
-        providers=[
-            DiscoveredProvider(
-                app_id=r["app_id"],
-                app_name=r["app_name"],
-                service_version=r["service_version"],
-                endpoint=r["endpoint"],
-                status=r["status"],
-                is_default=r["app_id"] == default_app_id,
-            )
-            for r in rows
-        ]
-    )
-
-
-@get("/api/services/v2/defaults", guards=[require_owner_auth])
-async def list_defaults(db: NamedDependency[sqlite3.Connection]) -> list[DefaultEntry]:
-    """List all default provider settings."""
-    rows = db.execute(
-        """SELECT sd.service_url, sd.app_id, a.name AS app_name
-           FROM service_defaults sd
-           JOIN apps a ON a.app_id = sd.app_id"""
-    ).fetchall()
-    return [DefaultEntry(service_url=r["service_url"], app_id=r["app_id"], app_name=r["app_name"]) for r in rows]
+) -> list[ServiceProvider]:
+    return list_all_service_providers(db, service)
 
 
 @post("/api/services/v2/defaults", status_code=200, guards=[require_owner_auth], raises=[NotFoundException])
-async def set_default(data: SetDefaultRequest, db: NamedDependency[sqlite3.Connection]) -> OkResponse:
+async def set_default_route(data: SetDefaultRequest, db: NamedDependency[sqlite3.Connection]) -> OkResponse:
     """Set the default provider for a service."""
-    row = db.execute(
-        "SELECT 1 FROM service_providers_v2 WHERE service_url = ? AND app_id = ?",
-        (data.service_url, data.app_id),
-    ).fetchone()
-    if not row:
-        raise NotFoundException(detail="No such provider")
-
-    db.execute(
-        "INSERT OR REPLACE INTO service_defaults (service_url, app_id) VALUES (?, ?)",
-        (data.service_url, data.app_id),
-    )
-    db.commit()
+    try:
+        set_default(data.service_url, data.app_id, db)
+    except LookupError as e:
+        raise NotFoundException(detail="No such provider") from e
     return OkResponse(ok=True)
 
 
 @delete("/api/services/v2/defaults", status_code=200, guards=[require_owner_auth])
 async def remove_default(data: RemoveDefaultRequest, db: NamedDependency[sqlite3.Connection]) -> OkResponse:
-    """Remove the default provider for a service (falls back to highest version)."""
-    db.execute("DELETE FROM service_defaults WHERE service_url = ?", (data.service_url,))
-    db.commit()
+    """Remove the default provider for a service, handing it back to the builtin if there is one."""
+    clear_default(data.service_url, db)
     return OkResponse(ok=True)
 
 
 api_services_v2_routes = Router(
     path="/",
-    route_handlers=[list_services_v2, discover_providers, list_defaults, set_default, remove_default],
+    route_handlers=[list_services_v2, discover_providers, set_default_route, remove_default],
 )

@@ -69,9 +69,19 @@ If permission is needed to access the service, a 403 is returned - see the Permi
 
 ### Provider selection
 
-Each service URL has a configured default provider - by default it's first app installed providing that service, but can be configured in Cloud in a Bottle's settings.
+Each service URL has one default provider, resolved in this order:
 
-If the resolved default's version doesn't satisfy the consumer's version specifier, the router returns 503 `service_not_available`.
+1. the provider the owner picked in Cloud in a Bottle's settings;
+2. the router's builtin, if the router implements the service itself (see below);
+3. the app that has provided the service the longest.
+
+Only the owner's choice is stored — steps 2 and 3 are derived on each call, so a service starts working the moment something provides it and keeps working when the app that was serving it is uninstalled. Installing a provider never makes it the default on its own: a second provider of a service holds its own data, so it sits alongside the incumbent (reachable via `X-OpenHost-Provider`) until the owner switches over.
+
+If nothing provides the service at all, or the resolved default's version doesn't satisfy the consumer's version specifier, the router returns 503 `service_not_available`.
+
+#### Builtin providers
+
+The router can provide a service itself instead of proxying to an app. A builtin looks like any other provider to a consumer — same call path, same headers, same permission model — and appears in the provider listings under the app ID `_openhost_router`. It holds a service until the owner points that service at an app, and takes it back over when the owner clears that choice.
 
 #### Calling a specific provider
 
@@ -186,12 +196,14 @@ The `grant` field on these endpoints is whatever shape the service defines — p
 
 **Default provider**
 
-Each service URL has at most one default provider (set automatically to the first app to register; the owner can change it). Calls without an explicit provider use this default.
+Each service URL has at most one default provider. Calls without an explicit provider use it; see Provider selection above for how it's resolved when the owner hasn't picked one.
 
-- `GET /api/services/v2/defaults` — list all defaults; each entry includes `service_url`, `app_id`, and `app_name`.
-- `GET /api/services/v2/providers?service=<url>` — list every registered provider for a service, with `is_default`, `service_version`, `endpoint`, and app `status`. Accepts both owner auth and app bearer tokens, so consumer apps can discover providers at runtime.
-- `POST /api/services/v2/defaults` — set the default. Body: `{service_url, app_id}`. 404 if that app doesn't actually provide the service.
-- `DELETE /api/services/v2/defaults` — clear the default. Body: `{service_url}`. After this, calls to the service return 503 until a new default is set (or another provider is installed).
+Both listing endpoints return an array of `{service_url, app_id, app_name, service_version, endpoint, status, is_default}`, with the router's builtins included as providers (`app_id: "_openhost_router"`, always `running`).
+
+- `GET /api/services/v2` — list every provider of every service.
+- `GET /api/services/v2/providers?service=<url>` — the same, narrowed to one service. Accepts both owner auth and app bearer tokens, so consumer apps can discover providers at runtime.
+- `POST /api/services/v2/defaults` — set the default. Body: `{service_url, app_id}`. Pass `_openhost_router` to hand the service to the router's builtin. 404 if that provider doesn't actually provide the service.
+- `DELETE /api/services/v2/defaults` — clear the owner's choice. Body: `{service_url}`. Selection then falls back to the builtin, or to the longest-serving provider app if there isn't one; calls return 503 if nothing is left to serve them.
 
 ### Retrofitting existing apps
 

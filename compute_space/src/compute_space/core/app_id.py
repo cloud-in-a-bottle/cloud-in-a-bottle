@@ -13,6 +13,11 @@ _BASE58_SET = frozenset(_BASE58_ALPHABET)
 
 APP_ID_LENGTH = 12
 
+# The router's own identity, for when it provides or consumes a service itself.  App ids are
+# base58 (see the alphabet above), so the underscore cannot collide with a real one.
+ROUTER_APP_ID = "_openhost_router"
+ROUTER_APP_NAME = "OpenHost Router"
+
 
 def _encode_base58_padded(n: int) -> str:
     chars = []

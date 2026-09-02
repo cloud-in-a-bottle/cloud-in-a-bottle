@@ -13,6 +13,8 @@ import attr
 import cattrs
 from packaging.specifiers import InvalidSpecifier
 from packaging.specifiers import SpecifierSet
+from packaging.version import InvalidVersion
+from packaging.version import Version
 
 from compute_space.core.auth.permissions_v2 import Grant
 from compute_space.core.auth.permissions_v2 import PermissionRecord
@@ -382,7 +384,17 @@ def _structure_list(data: list[Any], cls: type[Any], label: str) -> list[Any]:
 
 def _parse_services_v2(data: dict[str, Any]) -> list[ServiceProvides]:
     entries = data.get("services", {}).get("v2", {}).get("provides", [])
-    return _structure_list(entries, ServiceProvides, "services.v2.provides")
+    provides = _structure_list(entries, ServiceProvides, "services.v2.provides")
+    for p in provides:
+        # This version is written to the DB and then ordered against the other providers' when
+        # picking a service default, so an uncomparable one is refused before it gets in.
+        try:
+            Version(p.version)
+        except InvalidVersion as e:
+            raise ValueError(
+                f"Invalid [[services.v2.provides]] version {p.version!r} for service {p.service!r}: {e}"
+            ) from e
+    return provides
 
 
 def _parse_services_v2_consumes(data: dict[str, Any]) -> list[ServiceConsumes]:
