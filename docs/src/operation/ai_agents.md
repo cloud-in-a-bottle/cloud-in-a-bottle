@@ -21,10 +21,10 @@ If you have more than one instance, tell the agent which: every command takes `-
 Any page is served as its own Markdown source by adding `.md` to its URL, and the whole manual (every page, concatenated) is served at [`/docs/all.md`](/docs/all.md):
 
 ```bash
-curl https://your-zone.example.com/docs/how_it_works/routing.md
-curl https://your-zone.example.com/docs/all.md
+curl https://mycooldomain.com/docs/how_it_works/routing.md
+curl https://mycooldomain.com/docs/all.md
 ```
 
 The copy icons put the same text on your clipboard: the one beside each page's heading copies that page, and the one beside **Cloud in a Bottle Manual** in the sidebar copies the whole thing.
 
- An agent reading the manual off your own instance gets the version you are actually running.
+An agent reading the manual off your own instance gets the version you are actually running, not whatever is on the web.

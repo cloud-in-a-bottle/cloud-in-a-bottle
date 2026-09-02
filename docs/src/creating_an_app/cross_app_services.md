@@ -4,6 +4,29 @@ Apps can expose services that other apps consume. The router (compute_space) med
 
 A **service** is identified by a URL (typically a git URL pointing at a spec) plus a SemVer version. Multiple apps can implement the same service; the router resolves which provider to use per call.
 
+### Quick start
+
+Declare what you want in your manifest:
+
+```toml
+[[services.v2.consumes]]
+service = "github.com/imbue-openhost/openhost/services/secrets"
+shortname = "secrets"
+version = ">=0.1.0"
+grants = [{key = "MY_API_KEY"}]
+```
+
+The owner approves those grants when they install your app. Then call the service through the router, which resolves the provider and forwards your grants with the request:
+
+```bash
+curl -X POST "$BOTTLE_ROUTER_URL/api/services/v2/call/secrets/get" \
+  -H "Authorization: Bearer $BOTTLE_APP_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"keys": ["MY_API_KEY"]}'
+```
+
+That is the whole consumer side. The rest of this page is the detail: how providers are selected, how permissions work, and how to write a provider.
+
 ### Service identity + spec
 
 Services are identified by URL, e.g. `github.com/imbue-openhost/openhost/services/secrets`. The URL is a git path (and optional subdirectory).
@@ -13,9 +36,12 @@ You should put documentation on the service specification at the service URL - i
 
 Versions follow SemVer. Providers declare a specific version; consumers declare a SemVer specifier (e.g. `>=0.1.0`). Major version indicate breaking changes; minor versions indicate backward-compatible changes. The git repo should have tags for each version (eg v1.1.1, or sub/dir:v1.1.1 if at a subdir).
 
-Some example specs live in this repo's `services/` folder:
-- **secrets** (`github.com/imbue-openhost/openhost/services/secrets`): key-value secret storage. Grant payload: `{"key": "<NAME>"}` or `{"key": "*"}` for full access. Provider returns only the values for keys in the granted set.
-- **oauth** (`github.com/imbue-openhost/openhost/services/oauth`): OAuth token acquisition/refresh for third-party APIs. Grant payload: `{"provider": "<name>", "scopes": [...]}`.
+The services that ship with Cloud in a Bottle are specified in the repo's `services/` folder, each at its own service URL:
+
+| Service | URL | Spec |
+|---|---|---|
+| **secrets** | `github.com/imbue-openhost/openhost/services/secrets` | [openapi.yaml](https://github.com/cloud-in-a-bottle/cloud-in-a-bottle/blob/main/services/secrets/openapi.yaml) |
+| **oauth** | `github.com/imbue-openhost/openhost/services/oauth` | [README](https://github.com/cloud-in-a-bottle/cloud-in-a-bottle/blob/main/services/oauth/README.md), [openapi.yaml](https://github.com/cloud-in-a-bottle/cloud-in-a-bottle/blob/main/services/oauth/openapi.yaml) |
 
 ### Provider apps
 
@@ -52,15 +78,15 @@ Each entry in `grants` is either an opaque string (e.g. `"read"`) or a TOML/JSON
 ### Calling a service
 
 ```
-GET|POST|WS|... [OPENHOST_ROUTER_URL]/api/services/v2/call/<shortname>/<rest>
+GET|POST|WS|... [BOTTLE_ROUTER_URL]/api/services/v2/call/<shortname>/<rest>
 ```
-along with `Authorization: Bearer $OPENHOST_APP_TOKEN` header for server-side requests.
-`OPENHOST_ROUTER_URL` is provided to apps as an env var.
+along with `Authorization: Bearer $BOTTLE_APP_TOKEN` header for server-side requests.
+`BOTTLE_ROUTER_URL` is provided to apps as an env var.
 
-This endpoint is app-specific - the router loads the consumer's manifest, finds the `[[services.v2.consumes]]` entry matching `<shortname>`, resolves the correct provider of the requested service, and proxies to `provider_app.OPENHOST_ROUTER_URL/<provider_endpoint>/<rest>`.
+This endpoint is app-specific - the router loads the consumer's manifest, finds the `[[services.v2.consumes]]` entry matching `<shortname>`, resolves the correct provider of the requested service, and proxies to `provider_app.BOTTLE_ROUTER_URL/<provider_endpoint>/<rest>`.
 
 The router identifies and authenticates the calling app two ways:
-- **Server-side calls:** must include `Authorization: Bearer $OPENHOST_APP_TOKEN`. Each app gets a unique `OPENHOST_APP_TOKEN` injected as an env var at deploy time.
+- **Server-side calls:** must include `Authorization: Bearer $BOTTLE_APP_TOKEN`. Each app gets a unique `BOTTLE_APP_TOKEN` injected as an env var at deploy time.
 - **Browser calls:** the request's `Origin` is matched against the app's subdomain, with the owner session cookie authenticating the user. No bearer token is needed for these; the browser provides the cookie automatically.
 
 Service calls should be API-only - the user's browser should never be redirected to a service endpoint, with the exception of permission grant pages.
@@ -88,8 +114,8 @@ The router can provide a service itself instead of proxying to an app. A builtin
 To call a non-default provider, include the `X-OpenHost-Provider` header with the target app's `app_id`:
 
 ```
-GET [OPENHOST_ROUTER_URL]/api/services/v2/call/<shortname>/<rest>
-Authorization: Bearer $OPENHOST_APP_TOKEN
+GET [BOTTLE_ROUTER_URL]/api/services/v2/call/<shortname>/<rest>
+Authorization: Bearer $BOTTLE_APP_TOKEN
 X-OpenHost-Provider: <provider_app_id>
 ```
 
@@ -167,8 +193,8 @@ Note for `scope: "app"`, the provider must include its own `grant_url`.
 3. **Provider creates the grant.** Once the user confirms (and any side flow has completed), the provider's backend calls:
 
    ```
-   POST [OPENHOST_ROUTER_URL]/api/permissions/v2/grant_app_scoped
-   Authorization: Bearer $OPENHOST_APP_TOKEN
+   POST [BOTTLE_ROUTER_URL]/api/permissions/v2/grant_app_scoped
+   Authorization: Bearer $BOTTLE_APP_TOKEN
    Content-Type: application/json
 
    {"consumer_app_name": "<consumer_app_name>", "service_url": "<url>", "grant": <grant>}
@@ -216,11 +242,11 @@ Consumer apps need to include the `Authorization` header on server-side requests
 ```sh
 # <shortname> matches the [[services.v2.consumes]] entry in your manifest.
 mitmdump -p 9000 \
-  --mode reverse:$OPENHOST_ROUTER_URL/api/services/v2/call/<shortname> \
-  --set "modify_headers=/~q/Authorization/Bearer $OPENHOST_APP_TOKEN"
+  --mode reverse:$BOTTLE_ROUTER_URL/api/services/v2/call/<shortname> \
+  --set "modify_headers=/~q/Authorization/Bearer $BOTTLE_APP_TOKEN"
 ```
 
-Then point the app at `http://localhost:9000` and a request to `http://localhost:9000/target_api_endpoint` will reach `$OPENHOST_ROUTER_URL/api/services/v2/call/<shortname>/target_api_endpoint` with the bearer token attached.
+Then point the app at `http://localhost:9000` and a request to `http://localhost:9000/target_api_endpoint` will reach `$BOTTLE_ROUTER_URL/api/services/v2/call/<shortname>/target_api_endpoint` with the bearer token attached.
 
 #### Provider apps
 

@@ -6,7 +6,7 @@ This guide walks through building an app that runs on Cloud in a Bottle.
 
 From the dashboard, click "Deploy New App" and provide a git repo URL (public or private - private GitHub repos will prompt for auth).
 
-The router reads `cloudinabottle.toml`, builds the container image from your `Dockerfile` using rootless podman, and starts routing requests to it. Apps are accessible at `https://{app_name}.{zone_domain}/` (e.g., `https://my-app.user.host.imbue.com/`).
+The router reads `cloudinabottle.toml`, builds the container image from your `Dockerfile` using rootless podman, and starts routing requests to it. Apps are accessible at `https://{app_name}.{zone_domain}/` (e.g. `https://my-app.mycooldomain.com/`).
 
 
 ## Writing an app to run on Cloud in a Bottle
@@ -113,21 +113,22 @@ if __name__ == "__main__":
 
 ### Environment variables
 
-The router injects these environment variables into your app:
+The router injects these environment variables into your app. Every one is also present under the legacy `OPENHOST_` prefix, from before the project was renamed; prefer the `BOTTLE_` names.
 
 | Variable | Example | Description                                                                                                     |
 |----------|---------|-----------------------------------------------------------------------------------------------------------------|
-| `OPENHOST_APP_NAME` | `my-app` | Your app's name, as registered with Cloud in a Bottle. This will be the subdomain the app is routeable at.               |
-| `OPENHOST_APP_ID` | `4Hm9pX2Qk7Lt` (12-char base58) | Opaque, immutable per-app identity. Stable across renames; safe to key persistent state on. |
-| `OPENHOST_APP_TOKEN` | `kF3xP_2qA-bN4...` (43-char url-safe token) | Random per-app token used to authenticate cross-app service calls                                               |
-| `OPENHOST_ROUTER_URL` | `http://host.containers.internal:8080` | internal URL of the router, used for constructing service requests. |
-| `OPENHOST_ZONE_DOMAIN` | `user.host.imbue.com` | The compute space's domain                                                                                      |
-| `OPENHOST_MY_REDIRECT_DOMAIN` | `my.selfhost.imbue.com` | The shared `my.*` OAuth redirect domain. This hosts a browser-local page that redirects the user to their zone. |
-| `OPENHOST_APP_DATA_DIR` | `/data/app_data/my-app` | Path to the app's persistent data directory. Set when `app_data` (default on), `sqlite`, or `access_all_app_data` is requested   |
-| `OPENHOST_APP_TEMP_DIR` | `/data/app_temp_data/my-app` | Path to the app's temporary data directory. Set when `app_temp_data` or `access_all_app_data` is requested          |
-| `OPENHOST_APP_ARCHIVE_DIR` | `/data/app_archive/my-app` | Path to the app's elastic archive directory. Set when `app_archive` or `access_all_app_data` is requested and the archive mount is available |
-| `OPENHOST_SQLITE_<NAME>` | `/data/app_data/my-app/sqlite/main.db` (for `sqlite = ["main"]`) | Path to a provisioned SQLite database file. Set once per entry in `sqlite`                                      |
-| `OPENHOST_OWNER_USERNAME` | `alice` | The compute space owner's chosen display name. Use to seed SSO account names. Defaults to `owner` if not explicitly configured. |
+| `BOTTLE_APP_NAME` | `my-app` | Your app's name, as registered with Cloud in a Bottle. This will be the subdomain the app is routeable at.               |
+| `BOTTLE_APP_ID` | `4Hm9pX2Qk7Lt` (12-char base58) | Opaque, immutable per-app identity. Stable across renames; safe to key persistent state on. |
+| `BOTTLE_APP_TOKEN` | `kF3xP_2qA-bN4...` (43-char url-safe token) | Random per-app token used to authenticate cross-app service calls                                               |
+| `BOTTLE_ROUTER_URL` | `http://host.containers.internal:8080` | internal URL of the router, used for constructing service requests. |
+| `BOTTLE_LOCAL_PORT` | `9137` | The host port the router expects the app on. Set only for `network_host` apps, which must bind this instead of their manifest port |
+| `BOTTLE_ZONE_DOMAIN` | `mycooldomain.com` | The instance's domain                                                                                      |
+| `BOTTLE_MY_REDIRECT_DOMAIN` | `my.selfhost.imbue.com` | The shared `my.*` OAuth redirect domain. This hosts a browser-local page that redirects the user to their zone. |
+| `BOTTLE_APP_DATA_DIR` | `/data/app_data/my-app` | Path to the app's persistent data directory. Set when `app_data` (default on), `sqlite`, or `access_all_app_data` is requested   |
+| `BOTTLE_APP_TEMP_DIR` | `/data/app_temp_data/my-app` | Path to the app's temporary data directory. Set when `app_temp_data` or `access_all_app_data` is requested          |
+| `BOTTLE_APP_ARCHIVE_DIR` | `/data/app_archive/my-app` | Path to the app's elastic archive directory. Set when `app_archive` or `access_all_app_data` is requested and the archive mount is available |
+| `BOTTLE_SQLITE_<NAME>` | `/data/app_data/my-app/sqlite/main.db` (for `sqlite = ["main"]`) | Path to a provisioned SQLite database file. Set once per entry in `sqlite`                                      |
+| `BOTTLE_OWNER_USERNAME` | `alice` | The compute space owner's chosen display name. Use to seed SSO account names. Defaults to `owner` if not explicitly configured. |
 
 ### Data storage
 
@@ -147,7 +148,7 @@ See the [manifest spec](manifest_spec.md) for the full reference.
 
 See [Cross-App Services](./cross_app_services.md) for how services work.
 
-See [OAuth in Apps](./oauth.md) for an example - getting oauth tokens to external services (eg gmail or github).
+For a worked example, the [oauth service](https://github.com/cloud-in-a-bottle/cloud-in-a-bottle/blob/main/services/oauth/README.md) gets your app tokens for external APIs like Gmail or GitHub.
 
 ## Development / Debugging workflow
 

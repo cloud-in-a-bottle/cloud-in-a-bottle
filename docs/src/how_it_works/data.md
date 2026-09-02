@@ -7,7 +7,7 @@ Each app gets its own directories, mounted into its container under `/data/`. Ap
 | Tier | In the container | Backing | Backed up | For |
 |---|---|---|---|---|
 | Permanent | `/data/app_data/<app>` | Local disk | Yes | SQLite databases, notes, config, small assets |
-| Temporary | `/data/app_temp_data/<app>` | Local disk | No | Thumbnails, transcodes, build artifacts, anything recreatable |
+| Temporary | `/data/app_temp_data/<app>` | Local disk | Not guaranteed | Thumbnails, transcodes, build artifacts, anything recreatable |
 | Archive | `/data/app_archive/<app>` | JuiceFS, local or S3 | See below | Bulk content: photos, video, attachments, model weights |
 
 Apps get permanent data by default and request the other two in their manifest (`app_temp_data`, `app_archive`). They should read the paths from `OPENHOST_APP_DATA_DIR`, `OPENHOST_APP_TEMP_DIR` and `OPENHOST_APP_ARCHIVE_DIR` rather than hardcoding them. See [Creating an App](../creating_an_app/overview.md#data-storage) for the app author's view.
@@ -20,8 +20,8 @@ An app can also request `access_all_app_data`, which mounts every app's director
 
 The archive is always a JuiceFS volume, so an app that asks for it installs anywhere. Only the object storage underneath differs:
 
-- **Local (default)**: objects live on the instance's own disk. Nothing to configure, and the data is included in backups, but there is no off-machine copy.
-- **S3**: objects live in a bucket you supply, configured in the dashboard. Elastic and durable, at the cost of tens to hundreds of milliseconds on an uncached first read. The mount is excluded from backups, since the bytes already live in the bucket.
+- **Local (default)**: objects live on the instance's own disk. Nothing to configure, but there is no copy anywhere else, and the bundled backup app skips the archive tier.
+- **S3**: objects live in a bucket you supply, configured in the dashboard. Elastic and durable, at the cost of tens to hundreds of milliseconds on an uncached first read. Backups skip it, since the bytes already live in the bucket.
 
 Switching from local to S3, or from one bucket to another, is done from the dashboard behind a confirmation. The objects are copied and verified, then the same volume is re-pointed at the new store; the metadata database is untouched, so every file, permission and owner is preserved. It fails open: if anything goes wrong before the switch commits, the volume keeps reading from the store it was already using.
 
@@ -37,7 +37,7 @@ Everything sits under the instance's data directory (`data_root_dir` in `config.
 | `temporary_data/app_temp_data/<app>/` | Temporary app data, plus that app's build and container logs |
 | `app_archive/` | The JuiceFS mount |
 
-The bundled backup app covers `persistent_data/` and skips the rest, which is the whole reason for the split. Router state is never mounted into any container; reaching it means SSH or the terminal in the dashboard.
+The [bundled backup app](../operation/backups.md) copies the app data under `persistent_data/`, which is the point of the split. It does not copy `persistent_data/openhost/`: router state is never mounted into any container, so no app can see it, and reaching it means SSH or the terminal in the dashboard.
 
 ## Storage guard
 

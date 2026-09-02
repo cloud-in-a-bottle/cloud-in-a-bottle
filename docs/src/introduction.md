@@ -4,9 +4,9 @@ This is the Cloud in a Bottle Manual. It documents the platform from the perspec
 
 ## For owners
 
-Sections about running a zone, deploying apps, managing data, and debugging when things go wrong.
+Sections about installing an instance, running apps on it, keeping the data safe, and debugging when things go wrong.
 
-Most of this is in the dashboard at [https://your-zone-domain/](./). This manual fills in the *conceptual* model behind what you see in the UI.
+Most of the day-to-day is in the dashboard at [https://mycooldomain.com/](./); this manual fills in the model behind what you see there. If your instance is already up, start at [Using your instance](./operation/overview.md), then set up [Backups](./operation/backups.md).
 
 ## For app authors
 
