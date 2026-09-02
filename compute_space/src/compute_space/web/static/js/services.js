@@ -66,9 +66,9 @@ function renderServices(providers) {
       + '</tr>';
   });
 
-  el.innerHTML = '<table>'
+  el.innerHTML = '<div class="table-scroll"><table>'
     + '<thead><tr><th>Service</th><th>Default provider</th><th></th></tr></thead>'
-    + '<tbody>' + rows + '</tbody></table>';
+    + '<tbody>' + rows + '</tbody></table></div>';
 }
 
 function saveDefaultProvider(btn) {

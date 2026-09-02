@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import sqlite3
+import subprocess
 from contextlib import closing
 from pathlib import Path
 
@@ -283,6 +284,32 @@ def test_primary_change_restart_continues_after_one_app_fails(tmp_path: Path, mo
     assert rows["good-app"] == ("running", "good-container", None)
     with closing(open_db(cfg)) as db:
         assert pending_primary_domain_restart_app_ids(db) == ()
+
+
+def test_primary_change_does_not_persist_token_bearing_timeout_command(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cfg = _make_test_config(tmp_path)
+    _seed_running_app(cfg, "app-id", "my-app", 19001)
+    with closing(open_db(cfg)) as db:
+        upsert_record(db, DomainRecord("new.local", tls=False, mdns=True))
+        set_primary_domain(db, "new.local", expected_primary="testzone.local")
+
+    def timeout_run(*_args: object, **_kwargs: object) -> str:
+        raise subprocess.TimeoutExpired(
+            ["podman", "run", "-e", "OPENHOST_APP_TOKEN=top-secret"],
+            60,
+        )
+
+    monkeypatch.setattr(apps, "stop_container", lambda _container: None)
+    monkeypatch.setattr(apps, "run_container", timeout_run)
+
+    apps.recreate_apps_after_primary_change(cfg)
+
+    with closing(open_db(cfg)) as db:
+        error = db.execute("SELECT error_message FROM apps WHERE app_id = 'app-id'").fetchone()[0]
+    assert error == "Container operation timed out after 60 seconds"
+    assert "top-secret" not in error
 
 
 def test_primary_change_refuses_to_launch_archive_wide_app_when_mount_is_unhealthy(

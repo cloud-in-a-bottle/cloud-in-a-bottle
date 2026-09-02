@@ -98,6 +98,15 @@ def test_heading_uses_zone_name_when_no_username(cfg: Any) -> None:
     assert "owner's personal compute space" not in resp.text
 
 
+@pytest.mark.asyncio
+async def test_dashboard_passes_arriving_request_to_app_url_template_global(cfg: Any) -> None:
+    set_active_config(cfg)
+    request = object()
+    with closing(get_db()) as db:
+        response = await dashboard.fn(request, db)  # type: ignore[arg-type]
+    assert response.context["request"] is request
+
+
 def test_heading_uses_owner_username_when_set(cfg: Any) -> None:
     set_active_config(cfg)
     cookie = auth_cookie(cfg, username="owner")

@@ -607,13 +607,10 @@ def stop_running_archive_apps(
     container still has the mount open.  The caller restarts these apps once
     the mount is back (via ``start_apps_by_id``).
 
-    ``stop_app_process`` stops the container but does NOT update the DB status
-    and never raises, so we verify quiescence against the real container state
-    (``is_container_running``), NOT the ``apps.status`` column.  If any archive
-    container is still running after the stop attempt we raise: proceeding
-    while a container may still be writing to the archive risks silent data
-    loss, so we abort and let the caller fail-open (the local backend stays
-    intact).
+    ``stop_container`` raises unless Podman successfully force-removes the
+    container (or confirms it is already absent). If any archive container
+    cannot be removed we abort: proceeding while it may still be writing to the
+    archive risks silent data loss.
 
     ``stopped_out``, when provided, is appended to incrementally as each
     container is stopped, so the caller can restart the already-stopped apps
@@ -631,14 +628,18 @@ def stop_running_archive_apps(
             continue
         logger.info("stopping archive-using app {} before archive migration", row["name"])
         try:
-            stop_app_process(row)
+            stop_container(container_id or f"openhost-{row['name']}")
         except Exception:
             logger.exception("failed to stop app {} before archive migration", row["name"])
-        recorded.append(row["app_id"])
-        # Verify against the real container state (stop_app_process is
-        # best-effort and doesn't touch the DB).
-        if container_id and is_container_running(container_id):
             still_running.append(row["name"])
+            continue
+        recorded.append(row["app_id"])
+        db.execute(
+            "UPDATE apps SET status = 'starting', container_id = NULL, error_message = NULL WHERE app_id = ?",
+            (row["app_id"],),
+        )
+
+    db.commit()
 
     if still_running:
         raise RuntimeError(
@@ -791,6 +792,12 @@ _primary_domain_restart_lock = threading.Lock()
 _PRIMARY_DOMAIN_RESTART_RETRY_SECONDS = 2
 
 
+def _primary_domain_restart_error(exc: Exception) -> str:
+    if isinstance(exc, subprocess.TimeoutExpired):
+        return f"Container operation timed out after {exc.timeout} seconds"
+    return str(exc)
+
+
 def recreate_apps_after_primary_change(config: Config, recover_interrupted: bool = False) -> None:
     """Sequentially recreate queued app containers with the new primary-domain environment."""
     _primary_domain_restart_lock.acquire()
@@ -924,7 +931,7 @@ def recreate_apps_after_primary_change(config: Config, recover_interrupted: bool
                     "WHERE app_id = ? AND status = 'starting'",
                     (
                         previous_container_id if old_container_alive else tracked_container_id,
-                        str(exc),
+                        _primary_domain_restart_error(exc),
                         app_id,
                     ),
                 )

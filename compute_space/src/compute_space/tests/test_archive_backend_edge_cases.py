@@ -515,18 +515,14 @@ def test_stop_running_archive_apps_selects_running_archive_only(db, cfg):
         )
     db.commit()
 
-    # Quiescence is verified against real container state; stopped -> gone.
-    with (
-        mock.patch.object(apps_mod, "stop_app_process"),
-        mock.patch.object(apps_mod, "is_container_running", return_value=False),
-    ):
+    with mock.patch.object(apps_mod, "stop_container"):
         stopped = apps_mod.stop_running_archive_apps(db, cfg)
     # running archive apps: arch-run (app_archive) and aaa-run (access_all_app_data)
     assert set(stopped) == {"r1", "r4"}
 
 
 def test_stop_running_archive_apps_none_when_empty(db, cfg):
-    with mock.patch.object(apps_mod, "stop_app_process"):
+    with mock.patch.object(apps_mod, "stop_container"):
         assert apps_mod.stop_running_archive_apps(db, cfg) == []
 
 

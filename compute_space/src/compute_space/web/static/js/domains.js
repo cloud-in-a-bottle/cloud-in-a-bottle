@@ -67,7 +67,7 @@ function renderDomains(domains) {
     return dom.el('tr', null, [
       dom.el('td', null, [
         d.name,
-        d.is_primary ? dom.el('span', {class: 'muted', text: ' (primary)'}) : null,
+        d.is_primary ? dom.el('span', {class: 'domain-primary-label', text: ' (primary)'}) : null,
       ]),
       dom.el('td', {text: d.scheme}),
       dom.el('td', {text: d.mdns ? 'mDNS (.local)' : 'Public DNS'}),

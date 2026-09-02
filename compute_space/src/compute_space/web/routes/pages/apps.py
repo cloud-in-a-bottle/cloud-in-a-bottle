@@ -39,12 +39,16 @@ CATALOG_REPO_URL = "https://github.com/cloud-in-a-bottle/app-catalog"
 
 
 @get(["/", "/dashboard"], guards=[require_owner_auth])
-async def dashboard(db: NamedDependency[sqlite3.Connection]) -> Template:
+async def dashboard(
+    request: Request[Any, Any, Any],
+    db: NamedDependency[sqlite3.Connection],
+) -> Template:
     apps_list = db.execute("SELECT * FROM apps ORDER BY name").fetchall()
     catalog_installed = db.execute("SELECT 1 FROM apps WHERE name = ?", (CATALOG_APP_NAME,)).fetchone() is not None
     return Template(
         template_name="dashboard.html",
         context={
+            "request": request,
             "apps": apps_list,
             "catalog_installed": catalog_installed,
             "catalog_app_name": CATALOG_APP_NAME,

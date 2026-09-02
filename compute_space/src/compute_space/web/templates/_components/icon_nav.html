@@ -13,7 +13,7 @@
 
     The way home is not here — see _components/nav_back.html. -#}
 {% from "_components/icon.html" import icon %}
-{% from "_components/nav_menu.html" import nav_menu %}
+{% from "_components/nav_menu.html" import nav_menu with context %}
 
 {% macro icon_nav(on_dashboard=False, catalog_app_name=None, catalog_installed=False) -%}
 <div class="icon-nav{% if not on_dashboard %} icon-nav--icons-only{% endif %}">

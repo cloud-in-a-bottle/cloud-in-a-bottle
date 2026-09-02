@@ -1471,6 +1471,11 @@ select {
   box-shadow: none;
 }
 
+.domain-primary-label {
+  color: var(--color-text-subtle);
+  font-weight: var(--weight-semibold);
+}
+
 /* An explainer inside a cell annotates 12px table text; at the prose size it
    outweighs the value it belongs to. */
 .panel table .hint {
