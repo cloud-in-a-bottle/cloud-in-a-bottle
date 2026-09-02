@@ -14,6 +14,12 @@ This isn't ideal, because there are some non-HTTP protocols that we would like C
 
 TODO: include instructions on how to actually set this up.
 
+## Tailscale: private HTTP or HTTPS
+
+For a fresh tailnet-only installation, the simplest option is HTTP over [Tailscale](https://tailscale.com/). Use DNS you control to point a base domain and its wildcard (`*.<base-domain>`) at the server's Tailscale IP, then provision with `--domain <base-domain>:8080 --local-http-only --bind-host <tailscale-ip>`. [MagicDNS cannot create arbitrary records](https://tailscale.com/docs/reference/dns-in-tailscale), so use public DNS or a private resolver configured as Tailscale split DNS. Tailscale encrypts traffic between tailnet devices, but browsers still treat the resulting `http://` URLs as an insecure context and may disable HTTPS-only features.
+
+[Tailscale Serve](https://tailscale.com/kb/1242/tailscale-serve) provides an HTTPS machine hostname within the tailnet, while [Tailscale Funnel](https://tailscale.com/kb/1223/tailscale-funnel) makes that hostname public. Neither is currently a drop-in Cloud in a Bottle front end: they expose one `machine.tailnet.ts.net` hostname, while Cloud in a Bottle expects wildcard `<app>.<domain>` hostnames and generates redirects from the configured domain scheme. HTTPS for every app therefore requires a separate wildcard DNS and TLS proxy arrangement that preserves each request's original host.
+
 ## IPv4 tunnel service
 
 IPv4 addresses aren't free, but also aren't that expensive (see spot lease prices eg [here](https://www.ipxo.com/lease-ips/)). It ought to be possible to operate a service that attaches an IP address to a server and forwards any traffic arriving at that IP to your firewalled Bottle instance over a reverse proxy connection, thus avoiding any need for an IP from your ISP and fiddling with router settings.
