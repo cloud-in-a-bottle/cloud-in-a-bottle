@@ -14,11 +14,45 @@ This isn't ideal, because there are some non-HTTP protocols that we would like C
 
 TODO: include instructions on how to actually set this up.
 
-## Tailscale: private HTTP or HTTPS
+## Tailscale: HTTP or HTTPS
 
-For a fresh tailnet-only installation, the simplest option is HTTP over [Tailscale](https://tailscale.com/). Use DNS you control to point a base domain and its wildcard (`*.<base-domain>`) at the server's Tailscale IP, then provision with `--domain <base-domain>:8080 --local-http-only --bind-host <tailscale-ip>`. [MagicDNS cannot create arbitrary records](https://tailscale.com/docs/reference/dns-in-tailscale), so use public DNS or a private resolver configured as Tailscale split DNS. Tailscale encrypts traffic between tailnet devices, but browsers still treat the resulting `http://` URLs as an insecure context and may disable HTTPS-only features.
+First choose a base domain, such as `bottle.example.com`, and point both that domain and `*.bottle.example.com` at the server's Tailscale IPv4 address (`tailscale ip -4`). The wildcard record gives every app its own working subdomain.
 
-[Tailscale Serve](https://tailscale.com/kb/1242/tailscale-serve) provides an HTTPS machine hostname within the tailnet, while [Tailscale Funnel](https://tailscale.com/kb/1223/tailscale-funnel) makes that hostname public. Neither is currently a drop-in Cloud in a Bottle front end: they expose one `machine.tailnet.ts.net` hostname, while Cloud in a Bottle expects wildcard `<app>.<domain>` hostnames and generates redirects from the configured domain scheme. HTTPS for every app therefore requires a separate wildcard DNS and TLS proxy arrangement that preserves each request's original host.
+### Option 1: HTTP
+
+Provision a fresh instance in HTTP-only mode, including port 8080 in the domain because the browser connects directly to the router:
+
+```bash
+TAILSCALE_IP=$(tailscale ip -4)
+test -n "$TAILSCALE_IP"
+curl -fsSL https://raw.githubusercontent.com/cloud-in-a-bottle/cloud-in-a-bottle/main/scripts/provision.sh \
+  | sudo bash -s -- --domain bottle.example.com:8080 --local-http-only --bind-host "$TAILSCALE_IP"
+```
+
+Open the Claim URL printed by the installer. The dashboard uses `http://bottle.example.com:8080` and apps use `http://<app>.bottle.example.com:8080`.
+
+### Option 2: HTTPS
+
+Use the same DNS records, then use [acme.sh](https://github.com/acmesh-official/acme.sh) with your DNS provider's [DNS API plugin](https://github.com/acmesh-official/acme.sh/wiki/dnsapi) to complete the DNS-01 challenge and issue a wildcard certificate:
+
+```bash
+DOMAIN=bottle.example.com
+CERT_DIR=/home/host/.openhost/local_compute_space/persistent_data/openhost
+sudo install -d "$CERT_DIR"
+curl -fsSL https://get.acme.sh | sh -s email=you@example.com
+# Export the credentials required by your DNS provider's plugin first.
+~/.acme.sh/acme.sh --issue --server letsencrypt --dns dns_yourprovider \
+  -d "$DOMAIN" -d "*.$DOMAIN"
+~/.acme.sh/acme.sh --install-cert -d "$DOMAIN" \
+  --fullchain-file "$CERT_DIR/openhost-tls-cert.pem" \
+  --key-file "$CERT_DIR/openhost-tls-key.pem" \
+  --reloadcmd "sudo systemctl restart openhost"
+sudo chown host:host "$CERT_DIR/openhost-tls-cert.pem" "$CERT_DIR/openhost-tls-key.pem"
+sudo chmod 0644 "$CERT_DIR/openhost-tls-cert.pem"
+sudo chmod 0600 "$CERT_DIR/openhost-tls-key.pem"
+```
+
+In `/home/host/.openhost/local_compute_space/config.toml`, set `host = "127.0.0.1"`, `start_caddy = true`, `coredns_enabled = true`, and `acquire_tls_cert_if_missing = false`. Mark the primary domain as HTTPS, remove `:8080` from its name, and restart OpenHost. The dashboard then uses `https://bottle.example.com`, apps use `https://<app>.bottle.example.com`, and acme.sh renews and installs the certificate through the same DNS API.
 
 ## IPv4 tunnel service
 
