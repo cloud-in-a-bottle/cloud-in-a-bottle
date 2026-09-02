@@ -43,7 +43,7 @@ from compute_space.db import get_db
 from compute_space.db import provide_db
 from compute_space.web.auth.auth import login_required_redirect
 from compute_space.web.helpers.static import make_static_url
-from compute_space.web.helpers.zone import ZONE_SCOPE_KEY
+from compute_space.web.helpers.zone import request_origin
 from compute_space.web.middleware.subdomain_proxy import SubdomainProxyMiddleware
 from compute_space.web.routes.api.apps import api_apps_routes
 from compute_space.web.routes.api.archive_backend import api_archive_backend_routes
@@ -68,15 +68,16 @@ def _template_globals(config: Config, static_dir: Path) -> dict[str, Any]:
             return primary_domain_or_none(db)
 
     @pass_context
-    def app_url(context: Context, app_name: str) -> str:
-        """Absolute URL to an app, on the domain the current request arrived on.
-        Falls back to the live primary when the render had no proxied request."""
-        request = context.get("request")
-        stashed = request.scope.get(ZONE_SCOPE_KEY) if request is not None else None
-        zone = stashed if isinstance(stashed, Domain) else primary()
+    def app_url(_context: Context, app_name: str) -> str:
+        """Absolute URL to an app, on the domain the current request arrived on.  Falls
+        back to the live primary when the render had no request."""
+        origin = request_origin()
+        if origin is not None:
+            return f"{origin.scheme}://{origin.subdomain_host(app_name)}/"
+        zone = primary()
         if zone is None:
             return f"//{app_name}/"  # pre-seed only: no primary yet, emit a scheme/host-relative link
-        return f"{zone.scheme}://{app_name}.{zone.name}/"
+        return f"{zone.scheme}://{app_name}.{zone.name_no_port}/"
 
     def zone_domain() -> str:
         p = primary()
@@ -191,12 +192,8 @@ def _reject_app_subdomain_requests(request: Request[Any, Any, Any]) -> Response[
     serve a router route (like /health) under the app's hostname.
     """
     netloc = request.url.netloc
-    stashed = request.scope.get(ZONE_SCOPE_KEY)
-    if isinstance(stashed, Domain):
-        matched: Domain | None = stashed
-    else:
-        with closing(get_db()) as db:
-            matched = Domain.match(db, netloc)
+    with closing(get_db()) as db:
+        matched = Domain.match(db, netloc)
     if matched is not None and matched.is_app_subdomain(netloc):
         return Response(content=None, status_code=404)
     return None

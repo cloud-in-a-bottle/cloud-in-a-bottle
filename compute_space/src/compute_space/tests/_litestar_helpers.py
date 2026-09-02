@@ -11,6 +11,7 @@ from typing import Any
 
 import bcrypt
 from litestar import Litestar
+from litestar.connection import ASGIConnection
 from litestar.di import Provide
 from litestar.handlers.base import BaseRouteHandler
 from litestar.types import ASGIApp
@@ -24,18 +25,22 @@ from compute_space.core.auth.auth import create_session
 from compute_space.core.domains import primary_domain_or_none
 from compute_space.db import get_db
 from compute_space.db import provide_db
-from compute_space.web.helpers.zone import ZONE_SCOPE_KEY
+from compute_space.web.helpers.zone import RequestOrigin
+from compute_space.web.helpers.zone import set_request_origin
 
 
 def stash_zone_middleware(app: ASGIApp) -> ASGIApp:
-    """Test stand-in for the zone-stashing half of ``SubdomainProxyMiddleware``: put the DB primary
-    in the request scope so ``zone_for_request`` resolves in minimal test apps that omit the full
-    proxy middleware (the real middleware is required on every request in production)."""
+    """Test stand-in for the origin-recording half of ``SubdomainProxyMiddleware``: record the DB
+    primary (with the request's authority) so ``zone_for_request`` / ``app_url`` resolve in minimal
+    test apps that omit the full proxy middleware (the real middleware is required on every request
+    in production)."""
 
     async def middleware(scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] in ("http", "websocket"):
             with closing(get_db()) as db:
-                scope[ZONE_SCOPE_KEY] = primary_domain_or_none(db)
+                primary = primary_domain_or_none(db)
+            netloc = ASGIConnection(scope).url.netloc
+            set_request_origin(RequestOrigin(zone=primary, netloc=netloc) if primary is not None else None)
         await app(scope, receive, send)
 
     return middleware

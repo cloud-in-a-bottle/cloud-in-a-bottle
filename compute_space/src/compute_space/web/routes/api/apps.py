@@ -77,6 +77,18 @@ from compute_space.db.connection import get_db
 from compute_space.web.auth.auth import require_owner_auth
 from compute_space.web.auth.auth import verify_owner_ws
 from compute_space.web.exceptions import ConflictException
+from compute_space.web.helpers.zone import request_origin
+
+
+def _oauth_return_host(db: sqlite3.Connection) -> str:
+    """The host an OAuth-return redirect should come back to.
+
+    The operator kicks these flows off from a browser, so bring them back to the domain
+    they are on rather than the canonical primary.  Fall back to the primary only if there
+    is somehow no request origin recorded."""
+    origin = request_origin()
+    return origin.host if origin is not None else primary_domain(db).name
+
 
 # ─── attrs request / response models ──────────────────────────────────────
 
@@ -282,7 +294,7 @@ async def clone_and_get_app_info(
     if not repo_url:
         raise ValidationException(detail="No repository URL provided")
 
-    add_app_url = f"//{primary_domain(db).name}/add_app?repo={repo_url}"
+    add_app_url = f"//{_oauth_return_host(db)}/add_app?repo={repo_url}"
     manifest, clone_dir, error, authorize_url = await clone_with_github_fallback(repo_url, return_to=add_app_url)
 
     if authorize_url:
@@ -758,7 +770,7 @@ async def _reload_app_impl(
             if not pull_ok and is_github_repo_url(repo_url):
                 lf.write("Attempting git pull with github oauth\n")
                 lf.flush()
-                return_to = f"//{primary_domain(db).name}/reload_app/{app_id}?continue_oauth_update=1"
+                return_to = f"//{_oauth_return_host(db)}/reload_app/{app_id}?continue_oauth_update=1"
                 try:
                     token = await get_oauth_token("github", ["repo"], return_to=return_to)
                 except OAuthRequired as e:

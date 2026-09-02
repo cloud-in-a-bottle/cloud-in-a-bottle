@@ -28,9 +28,12 @@ from litestar.testing import TestClient
 import compute_space.web.app as web_app
 from compute_space.config import provide_config
 from compute_space.config import set_active_config
+from compute_space.core.domains import Domain
 from compute_space.db import provide_db
 from compute_space.db.connection import init_db
 from compute_space.web.app import _template_globals
+from compute_space.web.helpers.zone import RequestOrigin
+from compute_space.web.helpers.zone import set_request_origin
 from compute_space.web.routes.pages.apps import CATALOG_APP_NAME
 from compute_space.web.routes.pages.apps import dashboard
 
@@ -185,3 +188,30 @@ def test_menu_links_add_app_when_catalog_missing(cfg: Any) -> None:
     assert "catalog.alice-zone.example.com" not in body
     # In-space page, so no new tab and no external marker.
     assert '<li><a href="/add_app">Catalog</a></li>' in body
+
+
+def test_app_url_carries_origin_without_request_in_context(cfg: Any) -> None:
+    """app_url must carry the arriving domain *and* access port even when the Jinja
+    context has no ``request`` — the situation for links rendered inside *imported*
+    macros (app_row, nav_menu), which is where the domain and port silently went
+    missing.
+
+    It reads the origin the middleware records, not ``context["request"]``, so a plain
+    render with no request still gets it.
+    """
+    set_active_config(cfg)
+    web_dir = Path(web_app.__file__).resolve().parent
+    env = Environment(loader=FileSystemLoader(str(web_dir / "templates")), autoescape=True)
+    env.globals.update(_template_globals(cfg, web_dir / "static"))
+
+    # Arrived on a non-default port (SSH tunnel / NAT forward): links carry it.
+    set_request_origin(
+        RequestOrigin(zone=Domain("alice-zone.example.com", tls=False), netloc="alice-zone.example.com:8088")
+    )
+    out = env.from_string('{{ app_url("foo") }}').render()  # no `request` in context
+    assert out == "http://foo.alice-zone.example.com:8088/"
+
+    # No origin recorded: fall back to the live primary, no port appended.
+    set_request_origin(None)
+    out_default = env.from_string('{{ app_url("foo") }}').render()
+    assert out_default == "http://foo.alice-zone.example.com/"

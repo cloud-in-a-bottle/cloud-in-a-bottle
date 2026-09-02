@@ -21,7 +21,8 @@ from compute_space.db import init_db
 from compute_space.tests.conftest import _make_test_config
 from compute_space.tests.conftest import open_db
 from compute_space.web.app import _reject_app_subdomain_requests
-from compute_space.web.helpers.zone import ZONE_SCOPE_KEY
+from compute_space.web.helpers.zone import RequestOrigin
+from compute_space.web.helpers.zone import set_request_origin
 from compute_space.web.helpers.zone import zone_for_request
 
 PRIMARY = Domain(name="host.example.com", tls=True)
@@ -134,25 +135,17 @@ def test_reject_app_subdomain_across_domains(multi_domain_config: Any) -> None:
 # --- zone_for_request -------------------------------------------------------------
 
 
-def _fake_conn(netloc: str, scope: dict[str, Any] | None = None) -> Any:
-    return types.SimpleNamespace(
-        scope=scope if scope is not None else {},
-        url=types.SimpleNamespace(netloc=netloc),
-    )
+def test_zone_for_request_reads_recorded_origin(multi_domain_config: Any) -> None:
+    set_request_origin(RequestOrigin(zone=LOCAL, netloc="anything.at.all"))
+    assert zone_for_request() == LOCAL
 
 
-def test_zone_for_request_prefers_stashed_domain(multi_domain_config: Any) -> None:
-    conn = _fake_conn("anything.at.all", scope={ZONE_SCOPE_KEY: LOCAL})
-    assert zone_for_request(conn) == LOCAL
-
-
-def test_zone_for_request_raises_when_unstashed(multi_domain_config: Any) -> None:
-    # SubdomainProxyMiddleware always stashes a Domain; reaching a handler without one is a bug, not a
-    # silent fallback.
+def test_zone_for_request_raises_when_no_origin(multi_domain_config: Any) -> None:
+    # SubdomainProxyMiddleware records an origin on every request; reaching a handler without one is a
+    # bug, not a silent fallback.
+    set_request_origin(None)
     with pytest.raises(RuntimeError, match="SubdomainProxyMiddleware is required"):
-        zone_for_request(_fake_conn("myapp.myhost.local"))
-    with pytest.raises(RuntimeError):
-        zone_for_request(_fake_conn("x", scope={ZONE_SCOPE_KEY: None}))
+        zone_for_request()
 
 
 def test_single_domain_config_unchanged(tmp_path: Path) -> None:
@@ -162,6 +155,5 @@ def test_single_domain_config_unchanged(tmp_path: Path) -> None:
     assert _looks("app.solo.example.com") is True
     assert _looks("solo.example.com") is False
     solo = Domain(name="solo.example.com", tls=True)
-    assert (
-        zone_for_request(_fake_conn("app.solo.example.com", scope={ZONE_SCOPE_KEY: solo})).name == "solo.example.com"
-    )
+    set_request_origin(RequestOrigin(zone=solo, netloc="app.solo.example.com"))
+    assert zone_for_request().name == "solo.example.com"

@@ -23,9 +23,9 @@ from compute_space.core.auth.auth import AuthenticatedUser
 from compute_space.core.auth.auth import validate_api_token
 from compute_space.core.auth.auth import validate_app_token
 from compute_space.core.auth.auth import validate_session_token
-from compute_space.core.domains import Domain
 from compute_space.db import get_db
-from compute_space.web.helpers.zone import zone_for_request
+from compute_space.web.helpers.zone import RequestOrigin
+from compute_space.web.helpers.zone import require_request_origin
 
 AnyConnection = ASGIConnection[Any, Any, Any, Any]
 
@@ -196,25 +196,25 @@ def require_same_origin(connection: AnyConnection, _route_handler: BaseRouteHand
     verify_same_origin(connection)
 
 
-def build_login_url(zone: Domain, netloc: str, path: str, query: str) -> str:
-    """Build an absolute ``/login?next=<original>`` URL on ``zone`` — the domain the
+def build_login_url(origin: RequestOrigin, path: str, query: str) -> str:
+    """Build an absolute ``/login?next=<original>`` URL on ``origin`` — the domain the
     request arrived on.
 
     Redirecting to the arriving domain (rather than always the canonical one) is what
     lets login happen on ``myhost.local`` when the user came in on ``myhost.local`` and
     on the public domain when they came in there — no forced bounce to a single domain.
 
-    Caller passes URL parts so this works from either a Litestar ``Request`` or a raw ASGI
-    scope.  The redirect target is absolute so it works from an app-subdomain request — a
+    The redirect target is absolute so it works from an app-subdomain request — a
     relative ``/login`` would otherwise resolve against the app's host, not the router's.
     """
-    proto = zone.scheme
+    proto = origin.scheme
     # `request.url` always reports HTTP because Caddy terminated TLS before forwarding to
     # hypercorn — rebuild with the arriving domain's scheme.
-    next_url = f"{proto}://{netloc}{path}"
+    next_url = f"{proto}://{origin.netloc}{path}"
     if query:
         next_url = f"{next_url}?{query}"
-    return f"{proto}://{zone.name}/login?next={quote(next_url, safe='')}"
+    # /login lives on the router (the bare domain).
+    return f"{proto}://{origin.host}/login?next={quote(next_url, safe='')}"
 
 
 def login_required_redirect(request: Request[Any, Any, Any]) -> Response[Any]:
@@ -223,5 +223,4 @@ def login_required_redirect(request: Request[Any, Any, Any]) -> Response[Any]:
     This should only be called for non-API HTTP requests.
     In general you should just raise a NotAuthorizedException and let litestar call this for you.
     """
-    zone = zone_for_request(request)
-    return Redirect(path=build_login_url(zone, request.url.netloc, request.url.path, request.url.query))
+    return Redirect(path=build_login_url(require_request_origin(), request.url.path, request.url.query))

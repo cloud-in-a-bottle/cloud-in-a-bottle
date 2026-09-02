@@ -27,6 +27,7 @@ from compute_space.tests.utils import make_router_env
 from compute_space.tests.utils import managed_router
 from compute_space.tests.utils import router_cmd
 from compute_space.tests.utils import write_first_boot_beside
+from compute_space.web.helpers.zone import set_request_origin
 
 ROUTER_PORT = 18080
 OWNER_PASSWORD = "testpass123"
@@ -55,6 +56,19 @@ def _resolve_test_zone_to_localhost() -> Iterator[None]:
         yield
     finally:
         socket.getaddrinfo = real_getaddrinfo
+
+
+@pytest.fixture(autouse=True)
+def _reset_request_origin() -> Iterator[None]:
+    """Clear the request-origin ContextVar around every test.
+
+    Production sets it per request in the middleware, but tests that poke it directly
+    (or drive minimal apps) would otherwise leak a value into whatever runs next."""
+    set_request_origin(None)
+    try:
+        yield
+    finally:
+        set_request_origin(None)
 
 
 def open_db(config: Config) -> sqlite3.Connection:

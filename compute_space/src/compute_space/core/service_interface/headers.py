@@ -14,6 +14,8 @@ from urllib.parse import urlencode
 from compute_space.core.app_id import ROUTER_APP_ID
 from compute_space.core.app_id import ROUTER_APP_NAME
 from compute_space.core.auth.permissions_v2 import get_granted_permissions_v2
+from compute_space.core.domains import Domain
+from compute_space.core.domains import host_with_request_port
 from compute_space.core.domains import primary_domain_or_none
 from compute_space.core.service_interface.builtin_services import Permissions
 
@@ -64,16 +66,23 @@ def grants_for_provider(consumer_app_id: str, service_url: str, provider_app_id:
     ]
 
 
-def approve_grant_url(consumer_app_id: str, service_url: str, grant: Any, db: sqlite3.Connection) -> str:
-    """The owner-facing page for approving a grant a provider asked for."""
+def approve_grant_url(
+    consumer_app_id: str, service_url: str, grant: Any, db: sqlite3.Connection, browsing_netloc: str | None = None
+) -> str:
+    """The owner-facing page (on the router) for approving a grant a provider asked for.
+
+    Built on the domain the owner is actually browsing — ``browsing_netloc`` is the consumer
+    app's ``Origin`` authority on a browser-driven call — so it stays on their domain rather
+    than jumping to the canonical primary.  A server-side call has no Origin, so
+    ``browsing_netloc`` is None and we fall back to the primary.  Scheme follows the zone so a
+    plain-http (``.local``) instance builds a correct URL.
+    """
     # urlencode each value: service_url contains "/" and ":", grant is JSON with "{", "}", ","
     # and '"' — all of which break query-string parsing if interpolated raw.
     query = urlencode({"app": consumer_app_id, "service": service_url, "grant": json.dumps(grant, sort_keys=True)})
     approve_path = f"/approve-permissions-v2?{query}"
-    # Cross-app approval is server-side (no browsing request in hand), so this stays on the
-    # canonical/primary domain; use its scheme rather than a hardcoded https so a plain-http
-    # primary (e.g. a `.local` instance) builds a correct URL.
-    primary = primary_domain_or_none(db)
-    if primary is None:
+    zone = (Domain.match(db, browsing_netloc) if browsing_netloc else None) or primary_domain_or_none(db)
+    if zone is None:
         return approve_path
-    return f"{primary.scheme}://{primary.name}{approve_path}"
+    host = host_with_request_port(zone.name_no_port, browsing_netloc or "")
+    return f"{zone.scheme}://{host}{approve_path}"
