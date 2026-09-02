@@ -14,6 +14,46 @@ This isn't ideal, because there are some non-HTTP protocols that we would like C
 
 TODO: include instructions on how to actually set this up.
 
+## Tailscale: HTTP or HTTPS
+
+Choose a domain you control the DNS for. We'll use `bottle.example.com` for this purpose. Point both that domain and `*.bottle.example.com` at the server's Tailscale IPv4 address (`tailscale ip -4`). The wildcard record gives every app its own working subdomain.
+
+### Option 1: HTTP
+
+Provision a fresh instance in HTTP-only mode, including port 8080 in the domain because the browser connects directly to the router:
+
+```bash
+TAILSCALE_IP=$(tailscale ip -4)
+test -n "$TAILSCALE_IP"
+curl -fsSL https://raw.githubusercontent.com/cloud-in-a-bottle/cloud-in-a-bottle/main/scripts/provision.sh \
+  | sudo bash -s -- --domain bottle.example.com:8080 --local-http-only --bind-host "$TAILSCALE_IP"
+```
+
+Open the Claim URL printed by the installer. The dashboard uses `http://bottle.example.com:8080` and apps use `http://<app>.bottle.example.com:8080`.
+
+### Option 2: HTTPS
+
+Use the same DNS records, then use [acme.sh](https://github.com/acmesh-official/acme.sh) with your DNS provider's [DNS API plugin](https://github.com/acmesh-official/acme.sh/wiki/dnsapi) to complete the DNS-01 challenge and issue a wildcard certificate:
+
+```bash
+DOMAIN=bottle.example.com
+CERT_DIR=/home/host/.openhost/local_compute_space/persistent_data/openhost
+sudo install -d "$CERT_DIR"
+curl -fsSL https://get.acme.sh | sh -s email=you@example.com
+# Export the credentials required by your DNS provider's plugin first.
+~/.acme.sh/acme.sh --issue --server letsencrypt --dns dns_yourprovider \
+  -d "$DOMAIN" -d "*.$DOMAIN"
+~/.acme.sh/acme.sh --install-cert -d "$DOMAIN" \
+  --fullchain-file "$CERT_DIR/openhost-tls-cert.pem" \
+  --key-file "$CERT_DIR/openhost-tls-key.pem" \
+  --reloadcmd "sudo systemctl restart openhost"
+sudo chown host:host "$CERT_DIR/openhost-tls-cert.pem" "$CERT_DIR/openhost-tls-key.pem"
+sudo chmod 0644 "$CERT_DIR/openhost-tls-cert.pem"
+sudo chmod 0600 "$CERT_DIR/openhost-tls-key.pem"
+```
+
+In `/home/host/.openhost/local_compute_space/config.toml`, set `host = "127.0.0.1"`, `start_caddy = true`, `coredns_enabled = true`, and `acquire_tls_cert_if_missing = false`. Mark the primary domain as HTTPS, remove `:8080` from its name, and restart OpenHost. The dashboard then uses `https://bottle.example.com`, apps use `https://<app>.bottle.example.com`, and acme.sh renews and installs the certificate through the same DNS API.
+
 ## IPv4 tunnel service
 
 IPv4 addresses aren't free, but also aren't that expensive (see spot lease prices eg [here](https://www.ipxo.com/lease-ips/)). It ought to be possible to operate a service that attaches an IP address to a server and forwards any traffic arriving at that IP to your firewalled Bottle instance over a reverse proxy connection, thus avoiding any need for an IP from your ISP and fiddling with router settings.
