@@ -26,10 +26,9 @@ generator)?
     rendered HTML is stale relative to the running code (operator
     forgot to run ``mdbook build`` after ``git pull``, CI artifact
     is from a different commit than the running version, etc.).
-  * **Smaller surface area.**  No ~5 MB Rust binary on every
-    instance, no CI workflow to maintain, no ``book.toml`` to keep
-    in sync, no theme/CSS-override directory.  Markdown rendering
-    is pure-Python and pulls in ``markdown-it-py`` (already a
+  * **Smaller instance surface area.**  The in-app route needs no
+    ~5 MB Rust binary or generated book at runtime.  Markdown
+    rendering is pure-Python and pulls in ``markdown-it-py`` (already a
     transitive dep) plus ``mdit-py-plugins`` and ``pygments``
     (also already present via test deps).
   * **Easier to extend.**  Custom rendering — admonitions, mermaid
@@ -57,6 +56,7 @@ This is the only security-sensitive surface in the route.
 
 from __future__ import annotations
 
+import posixpath
 import re
 import threading
 from contextlib import closing
@@ -307,22 +307,21 @@ def _parse_summary(summary_text: str) -> tuple[_SidebarSection, ...]:
     return tuple(sections)
 
 
-def _slug_from_href(href: str) -> str | None:
-    """Convert a SUMMARY.md href like ``./manifest_spec.md`` into a
-    slug like ``manifest_spec``.  Returns None for anything that's
-    not a sibling .md file (e.g. external URLs)."""
+def _slug_from_href(href: str, base_dir: str = "") -> str | None:
+    """Convert a doc href like ``./manifest_spec.md`` or ``../setup/static_ip.md`` into a slug
+    like ``manifest_spec`` or ``setup/static_ip``.  ``base_dir`` is the directory of the page the
+    href was written in, so relative links from a nested page resolve correctly.  Returns None
+    for anything that isn't a ``.md`` file under ``docs/src/`` (external URLs, absolute paths,
+    or a path that climbs out of the source tree)."""
     href = href.strip()
     if "://" in href or href.startswith("/"):
         return None
-    if href.startswith("./"):
-        href = href[2:]
     if not href.endswith(".md"):
         return None
-    name = href[:-3]
-    # Reject anything with a directory component — our docs are flat.
-    if "/" in name:
+    slug = posixpath.normpath(posixpath.join(base_dir, href[:-3]))
+    if slug.startswith("..") or slug.startswith("/"):
         return None
-    return name
+    return slug
 
 
 # ─── Mtime-keyed render cache ───────────────────────────────────────
@@ -347,14 +346,14 @@ def _cached_render(slug: str, path: Path) -> str:
         if cached and cached[0] == mtime:
             return cached[1]
     html = _MD.render(path.read_text(encoding="utf-8"))
-    html = _rewrite_internal_links(html)
+    html = _rewrite_internal_links(html, posixpath.dirname(slug))
     with _render_cache_lock:
         _render_cache[slug] = (mtime, html)
     return html
 
 
-def _rewrite_internal_links(html: str) -> str:
-    """Rewrite ``href="./foo.md"`` (and ``foo.md``) in rendered
+def _rewrite_internal_links(html: str, base_dir: str = "") -> str:
+    """Rewrite ``href="./foo.md"`` (and ``foo.md``, ``../setup/foo.md``) in rendered
     HTML to point at our route paths (``/docs/foo``) instead.
 
     Without this rewrite the sibling-page links inside the
@@ -363,8 +362,8 @@ def _rewrite_internal_links(html: str) -> str:
     ``[manifest spec](./manifest_spec.md)`` would emit
     ``href="./manifest_spec.md"`` verbatim.
 
-    We only rewrite hrefs that look like flat ``.md`` files (no
-    ``://`` schemes, no leading ``/``).  External links and
+    ``base_dir`` is the directory of the page being rendered, so a relative link written from a
+    nested page resolves the same way it does on disk.  External links, absolute paths and
     in-page fragments (``#section``) are left alone.
     """
 
@@ -374,12 +373,8 @@ def _rewrite_internal_links(html: str) -> str:
         if "#" in href:
             href, _, anchor = href.partition("#")
             anchor = "#" + anchor
-        if "://" in href or href.startswith("/") or not href.endswith(".md"):
-            return match.group(0)
-        if href.startswith("./"):
-            href = href[2:]
-        slug = href[:-3]
-        if "/" in slug:
+        slug = _slug_from_href(href, base_dir)
+        if slug is None:
             return match.group(0)
         return f'href="/docs/{slug}{anchor}"'
 
@@ -389,7 +384,7 @@ def _rewrite_internal_links(html: str) -> str:
 # ─── Path resolution + safety ───────────────────────────────────────
 
 
-_SLUG_RE = re.compile(r"^[A-Za-z0-9_-]+$")
+_SLUG_RE = re.compile(r"^[A-Za-z0-9_-]+(?:/[A-Za-z0-9_-]+)*$")
 
 
 def _resolve_doc_path(slug: str) -> Path:
@@ -427,6 +422,7 @@ _TEMPLATE = """{% from "_components/icon_nav.html" import icon_nav %}{% from "_c
   <meta name="robots" content="noindex">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{{ page_title }} - Cloud in a Bottle Manual</title>
+  <link rel="icon" type="image/svg+xml" href="{{ static_url('img/favicon.svg') }}">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible+Mono:wght@500;600;700&display=swap">
@@ -826,7 +822,7 @@ def _page_title(slug: str, path: Path) -> str:
     for line in path.read_text(encoding="utf-8").splitlines():
         if line.startswith("# "):
             return line[2:].strip()
-    return slug.replace("_", " ").title()
+    return slug.rsplit("/", 1)[-1].replace("_", " ").title()
 
 
 # ─── Routes ─────────────────────────────────────────────────────────
@@ -853,18 +849,20 @@ def docs_all_markdown() -> Response[str]:
 
 
 @get(
-    "/docs/{slug:str}",
+    "/docs/{slug:path}",
     sync_to_thread=False,
     raises=[NotFoundException, ServiceUnavailableException],
 )
 def docs_slug(slug: FromPath[str]) -> Response[str]:
     """``/docs/routing`` renders the page; ``/docs/routing.md`` returns its source.
 
-    The suffix is stripped here rather than routed separately because Litestar matches path
-    parameters per whole segment: a ``/docs/{slug:str}.md`` handler registers without complaint
-    but never matches, since this handler's bare ``{slug}`` claims the segment first.  The slug
+    A ``path`` parameter (not ``str``) so pages in subdirectories — ``/docs/setup/static_ip`` —
+    resolve; Litestar hands it to us with a leading slash.  The ``.md`` suffix is stripped here
+    rather than routed separately because Litestar matches path parameters per whole segment: a
+    ``/docs/{slug:str}.md`` handler registers without complaint but never matches.  The slug
     regex still runs after stripping, so ``foo.md.bak`` and ``../secrets.md`` stay 404s.
     """
+    slug = slug.lstrip("/")
     if slug.endswith(".md"):
         return _raw_doc(slug.removesuffix(".md"))
     return _render_doc(slug)

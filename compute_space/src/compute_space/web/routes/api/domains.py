@@ -158,7 +158,7 @@ def _validate_new_domain(
     if not _DOMAIN_RE.match(name):
         return "invalid domain name"
     if mdns and tls:
-        return "mDNS (.local) domains are served over http; set tls=false"
+        return "Local domains are served over HTTP; set tls=false"
     if any(d.name_no_port == name for d in effective_domains(db)):
         return "domain is already configured"
     return None

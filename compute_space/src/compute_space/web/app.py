@@ -28,6 +28,7 @@ from compute_space.core.auth.auth import read_owner_username
 from compute_space.core.auth.identity import load_identity_keys
 from compute_space.core.dns.coredns_provider.interface import InternalDnsProvider
 from compute_space.core.domains import Domain
+from compute_space.core.domains import host_with_request_port
 from compute_space.core.domains import primary_domain_or_none
 from compute_space.core.first_boot import seed_first_boot
 from compute_space.core.git_ops import SOURCE_URL
@@ -70,11 +71,17 @@ def _template_globals(config: Config, static_dir: Path) -> dict[str, Any]:
 
     @pass_context
     def app_url(context: Context, app_name: str) -> str:
-        """Absolute URL to an app, on the domain the current request arrived on.
-        Falls back to the live primary when the render had no proxied request."""
+        """Absolute URL to an app, on the domain (and access port) the current request arrived
+        on.  Falls back to the live primary when the render had no request.
+
+        Reads ``request`` off the Jinja context — present inside the imported macros (app_row,
+        nav_menu) only because they are imported ``{% ... with context %}``."""
         request = context.get("request")
         stashed = request.scope.get(ZONE_SCOPE_KEY) if request is not None else None
-        zone = stashed if isinstance(stashed, Domain) else primary()
+        if isinstance(stashed, Domain):
+            host = host_with_request_port(f"{app_name}.{stashed.name_no_port}", request.url.netloc)
+            return f"{stashed.scheme}://{host}/"
+        zone = primary()
         if zone is None:
             return f"//{app_name}/"  # pre-seed only: no primary yet, emit a scheme/host-relative link
         return f"{zone.scheme}://{app_name}.{zone.name}/"
@@ -192,12 +199,8 @@ def _reject_app_subdomain_requests(request: Request[Any, Any, Any]) -> Response[
     serve a router route (like /health) under the app's hostname.
     """
     netloc = request.url.netloc
-    stashed = request.scope.get(ZONE_SCOPE_KEY)
-    if isinstance(stashed, Domain):
-        matched: Domain | None = stashed
-    else:
-        with closing(get_db()) as db:
-            matched = Domain.match(db, netloc)
+    with closing(get_db()) as db:
+        matched = Domain.match(db, netloc)
     if matched is not None and matched.is_app_subdomain(netloc):
         return Response(content=None, status_code=404)
     return None

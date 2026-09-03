@@ -1,6 +1,7 @@
 """Unit tests for the cloudinabottle.toml manifest parser."""
 
 import json
+from unittest import mock
 
 import attr
 import pytest
@@ -60,8 +61,6 @@ class TestDefaults:
         assert manifest.app_temp_data is False
         assert manifest.app_archive is False
         assert manifest.access_all_app_data is False
-        assert manifest.access_all_archive is False
-        assert manifest.access_all_data is False
 
     def test_sqlite_default_empty(self):
         manifest = parse_manifest_from_string(MINIMAL)
@@ -530,6 +529,16 @@ grants = [
         with pytest.raises(ValueError, match="version"):
             parse_manifest_from_string(toml)
 
+    def test_services_v2_provides_unparseable_version_raises(self):
+        # A provider's version is ordered against other providers' when picking a service default,
+        # so an uncomparable one has to be refused before it reaches the DB.
+        toml = (
+            MINIMAL
+            + '\n[[services.v2.provides]]\nservice = "github.com/x"\nversion = "not a version"\nendpoint = "/"\n'
+        )
+        with pytest.raises(ValueError, match="version"):
+            parse_manifest_from_string(toml)
+
     def test_services_v2_missing_version_raises(self):
         toml = MINIMAL + '\n[[services.v2.provides]]\nservice = "github.com/x"\nendpoint = "/"\n'
         with pytest.raises(ValueError, match=r"services\.v2"):
@@ -753,33 +762,25 @@ class TestAppArchive:
         toml = MINIMAL + "\n[data]\naccess_all_app_data = true\n"
         manifest = parse_manifest_from_string(toml)
         assert manifest.access_all_app_data is True
-        assert manifest.access_all_archive is False
 
-    def test_access_all_archive_parsed(self):
-        toml = MINIMAL + "\n[data]\naccess_all_archive = true\n"
-        manifest = parse_manifest_from_string(toml)
-        assert manifest.access_all_archive is True
-        assert manifest.access_all_app_data is False
+    def test_access_all_app_data_is_the_only_public_cross_app_data_field(self):
+        fields = attr.asdict(parse_manifest_from_string(MINIMAL))
+        assert "access_all_app_data" in fields
+        assert "access_all_data" not in fields
+        assert "access_all_archive" not in fields
 
-    def test_access_all_data_implies_both_granular_flags(self):
-        """access_all_data = true must set both access_all_app_data and access_all_archive."""
-        toml = MINIMAL + "\n[data]\naccess_all_data = true\n"
-        manifest = parse_manifest_from_string(toml)
-        assert manifest.access_all_data is True
+    @pytest.mark.parametrize("deprecated_flag", ["access_all_data", "access_all_archive"])
+    def test_deprecated_cross_app_flags_normalize_to_access_all_app_data(self, deprecated_flag: str):
+        toml = MINIMAL + f"\n[data]\n{deprecated_flag} = true\n"
+        with mock.patch("compute_space.core.manifest.logger.warning") as warning:
+            manifest = parse_manifest_from_string(toml)
+
         assert manifest.access_all_app_data is True
-        assert manifest.access_all_archive is True
-
-    def test_access_all_data_false_by_default(self):
-        manifest = parse_manifest_from_string(MINIMAL)
-        assert manifest.access_all_data is False
-
-    def test_access_all_data_does_not_override_granular_false(self):
-        """When access_all_data is false, granular flags retain their own values."""
-        toml = MINIMAL + "\n[data]\naccess_all_data = false\naccess_all_app_data = true\n"
-        manifest = parse_manifest_from_string(toml)
-        assert manifest.access_all_data is False
-        assert manifest.access_all_app_data is True
-        assert manifest.access_all_archive is False
+        warning.assert_called_once_with(
+            "App '{}' uses deprecated '{}' in [data]. Use 'access_all_app_data' instead.",
+            "test-app",
+            deprecated_flag,
+        )
 
     def test_app_data_opt_out(self):
         toml = MINIMAL + "\n[data]\napp_data = false\n"

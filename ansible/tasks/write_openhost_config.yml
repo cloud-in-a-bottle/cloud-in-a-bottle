@@ -36,8 +36,11 @@
 
 # First-boot seed: domain + claim token → first_boot.toml, consumed once by the router on first
 # boot (domain → the DB `domains` table, token → the DB `settings` store), after which the DB is
-# authoritative and this file is ignored. `claim_token_required = true` is baked into config.toml,
+# authoritative and this file is ignored. `claim_token_required` in config.toml defaults to true,
 # so /setup rejects every caller unless their request carries a token matching the one seeded here.
+# Pass `-e claim_token_required=false` (provision.sh: `--open-claim`) to leave /setup ungated on
+# a loopback-only instance. The token is still seeded either way, so flipping the config back to
+# true later re-gates /setup without a re-seed.
 # If the operator doesn't pass `-e claim_token=…`, we generate a fresh URL-safe random one and print
 # the claim URL at the end of the play — handing the secret to the human who will claim the
 # workspace. vm-manager passes the var to control the value. setup_app clears the token from the DB
@@ -67,6 +70,15 @@
   when: (overwrite_existing | default(false) | bool) or not existing_first_boot.stat.exists
 
 - name: Show claim URL
+  vars:
+    # In HTTP-only mode the domain usually carries its own port (e.g. `lvh.me:8080`, which the
+    # router needs to build absolute URLs); fall back to :8080 only when it doesn't.
+    base_url: >-
+      {{ ('http://' + domain + ('' if ':' in domain else ':8080'))
+         if (local_http_only | default(false) | bool) else ('https://' + domain) }}
   debug:
-    msg: "Claim URL: {{ ('http://' + domain + ':8080') if (local_http_only | default(false) | bool) else ('https://' + domain) }}/setup?claim={{ effective_claim_token }}"
+    msg: >-
+      {{ ('Setup URL (ungated): ' + base_url + '/setup')
+         if not (claim_token_required | default(true) | bool)
+         else ('Claim URL: ' + base_url + '/setup?claim=' + effective_claim_token) }}
   when: (overwrite_existing | default(false) | bool) or not existing_first_boot.stat.exists

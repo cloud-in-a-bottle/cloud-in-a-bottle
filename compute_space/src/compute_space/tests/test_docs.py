@@ -112,6 +112,8 @@ def _client(repo_root: Path) -> tuple[TestClient[Litestar], Any]:
     ``get_config().openhost_repo_path`` so we install the fake as the active config."""
     cfg = _FakeCfg(openhost_repo_path=repo_root)
     set_active_config(cfg)  # type: ignore[arg-type]
+    # make_test_app's zone middleware opens the DB on every request, so point get_db() at a temp one.
+    init_db(str(repo_root.parent / "router.db"))
     return TestClient(app=make_test_app(docs_router)), cfg
 
 
@@ -252,7 +254,7 @@ def test_unknown_slug_404(client_with_docs: TestClient[Litestar]) -> None:
     ],
 )
 def test_path_traversal_blocked(client_with_docs: TestClient[Litestar], evil_slug: str) -> None:
-    """The slug regex rejects anything outside ``[A-Za-z0-9_-]+``.
+    """The slug regex allows ``[A-Za-z0-9_-]+`` segments joined by ``/`` and rejects the rest.
 
     Whether the framework returns 404 directly or 308-rewrites and then 404s,
     the response must NOT be 200 and must NOT echo a sensitive
@@ -380,6 +382,51 @@ def test_page_without_an_h1_gets_a_floated_copy_control(tmp_path: Path) -> None:
             'aria-label="Copy The &#34;big&#34; &lt;b&gt;spec&lt;/b&gt; as Markdown"'
             in c.get("/docs/creating_an_app").text
         )
+
+
+# -- pages in subdirectories ----------------------------------------
+
+
+def _populate_nested_docs(src_dir: Path) -> None:
+    """The fake tree plus a ``guides/`` subdirectory listed in SUMMARY.md."""
+    _populate_fake_docs(src_dir)
+    (src_dir / "SUMMARY.md").write_text(
+        "# Summary\n"
+        "\n"
+        "[Introduction](./introduction.md)\n"
+        "\n"
+        "# Guides\n"
+        "\n"
+        "- [Nested](guides/nested.md)\n"
+        "- [Manifest Spec](./manifest_spec.md)\n"
+    )
+    (src_dir / "guides").mkdir()
+    (src_dir / "guides" / "nested.md").write_text(
+        "# Nested\n\nNested prose. See the [manifest spec](../manifest_spec.md).\n"
+    )
+
+
+def test_nested_page_renders_and_links_out(tmp_path: Path) -> None:
+    """A page in a subdirectory is routable at its full slug, and a relative link written from
+    it resolves against its own directory rather than the docs root."""
+    repo_root = tmp_path / "repo"
+    _populate_nested_docs(repo_root / "docs" / "src")
+    client, _cfg = _client(repo_root)
+    with client as c:
+        body = c.get("/docs/guides/nested").text
+        assert "Nested prose." in body
+        assert 'href="/docs/manifest_spec"' in body
+        assert c.get("/docs/guides/nested.md").text.startswith("# Nested")
+
+
+def test_nested_page_in_sidebar_and_export(tmp_path: Path) -> None:
+    """SUMMARY.md entries with a directory component reach the sidebar and ``/docs/all.md``."""
+    repo_root = tmp_path / "repo"
+    _populate_nested_docs(repo_root / "docs" / "src")
+    client, _cfg = _client(repo_root)
+    with client as c:
+        assert 'href="/docs/guides/nested"' in c.get("/docs/introduction").text
+        assert "Nested prose." in c.get("/docs/all.md").text
 
 
 # -- RESERVED_PATHS regression --------------------------------------

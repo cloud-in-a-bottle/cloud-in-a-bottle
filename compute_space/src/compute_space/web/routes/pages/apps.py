@@ -18,13 +18,15 @@ from compute_space.core.app_id import is_valid_app_name
 from compute_space.core.apps import deserialize_links
 from compute_space.core.auth.permissions_v2 import get_all_permissions_v2
 from compute_space.core.domains import Domain
+from compute_space.core.domains import host_with_request_port
 from compute_space.core.git_ops import get_head_sha
 from compute_space.core.git_ops import get_remote_url
 from compute_space.core.git_ops import parse_repo_url
 from compute_space.core.logging import logger
 from compute_space.core.manifest import manifest_ungranted_permissions_v2
 from compute_space.core.manifest import parse_manifest_from_string
-from compute_space.core.service_interface.services_v2 import resolve_provider
+from compute_space.core.service_interface.provider import ProviderUnavailable
+from compute_space.core.service_interface.resolve import resolve_provider
 from compute_space.web.auth.auth import require_owner_auth
 from compute_space.web.helpers.zone import zone_for_request
 
@@ -111,7 +113,7 @@ async def app_detail(
             logger.opt(exception=True).warning("Failed to parse manifest for permission display (app {})", app_id)
 
     edit_app = await _resolve_edit_app(
-        app_row["repo_url"], app_row["repo_path"], db, config, zone_for_request(request)
+        app_row["repo_url"], app_row["repo_path"], db, config, zone_for_request(request), request.url.netloc
     )
 
     return Template(
@@ -136,6 +138,7 @@ async def _resolve_edit_app(
     db: sqlite3.Connection,
     config: Config,
     zone: Domain,
+    netloc: str,
 ) -> dict[str, str] | None:
     """Describe an "Edit this app" affordance for the template.
 
@@ -178,16 +181,11 @@ async def _resolve_edit_app(
             logger.opt(exception=True).warning("Failed to read HEAD sha for {}", repo_path)
 
     try:
-        provider_app_id, _, _, endpoint = resolve_provider(EDIT_APP_SERVICE_URL, EDIT_APP_VERSION_SPEC, db)
-    except RuntimeError:
+        provider = resolve_provider(EDIT_APP_SERVICE_URL, EDIT_APP_VERSION_SPEC, db)
+    except ProviderUnavailable:
         return repo_link_fallback
 
     if not ref:
-        return repo_link_fallback
-
-    provider_row = db.execute("SELECT name FROM apps WHERE app_id = ?", (provider_app_id,)).fetchone()
-    if not provider_row:
-        logger.warning("resolve_provider returned unknown app_id {}", provider_app_id)
         return repo_link_fallback
 
     # Pass repo+ref in the query string too: the Cloud in a Bottle router 302's
@@ -195,10 +193,11 @@ async def _resolve_edit_app(
     # as a GET (only 307/308 preserve method), dropping the form body. Query
     # params survive the bounce, and the provider falls back to them.
     qs = urlencode({"repo": base_url, "ref": ref})
-    # Build the provider URL on the domain the operator is currently browsing, so the
-    # POST stays same-domain (and any login bounce stays on that domain) rather than
-    # jumping to the canonical one.
-    action = f"{zone.scheme}://{provider_row['name']}.{zone.name}{endpoint}?{qs}"
+    # Build the provider URL on the domain the operator is currently browsing, so the POST
+    # stays same-domain (and any login bounce stays on that domain) rather than jumping to
+    # the canonical one.
+    host = host_with_request_port(f"{provider.app_name}.{zone.name_no_port}", netloc)
+    action = f"{zone.scheme}://{host}{provider.endpoint}?{qs}"
     return {"mode": "service", "action": action, "repo": base_url, "ref": ref}
 
 

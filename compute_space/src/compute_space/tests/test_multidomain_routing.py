@@ -134,25 +134,20 @@ def test_reject_app_subdomain_across_domains(multi_domain_config: Any) -> None:
 # --- zone_for_request -------------------------------------------------------------
 
 
-def _fake_conn(netloc: str, scope: dict[str, Any] | None = None) -> Any:
-    return types.SimpleNamespace(
-        scope=scope if scope is not None else {},
-        url=types.SimpleNamespace(netloc=netloc),
-    )
+def _fake_conn(netloc: str, zone: Domain | None = None) -> Any:
+    scope = {ZONE_SCOPE_KEY: zone} if zone is not None else {}
+    return types.SimpleNamespace(scope=scope, url=types.SimpleNamespace(netloc=netloc))
 
 
-def test_zone_for_request_prefers_stashed_domain(multi_domain_config: Any) -> None:
-    conn = _fake_conn("anything.at.all", scope={ZONE_SCOPE_KEY: LOCAL})
-    assert zone_for_request(conn) == LOCAL
+def test_zone_for_request_reads_stashed_domain(multi_domain_config: Any) -> None:
+    assert zone_for_request(_fake_conn("anything.at.all", LOCAL)) == LOCAL
 
 
 def test_zone_for_request_raises_when_unstashed(multi_domain_config: Any) -> None:
-    # SubdomainProxyMiddleware always stashes a Domain; reaching a handler without one is a bug, not a
-    # silent fallback.
+    # SubdomainProxyMiddleware stashes a Domain on every request; reaching a handler without one is a
+    # bug, not a silent fallback.
     with pytest.raises(RuntimeError, match="SubdomainProxyMiddleware is required"):
         zone_for_request(_fake_conn("myapp.myhost.local"))
-    with pytest.raises(RuntimeError):
-        zone_for_request(_fake_conn("x", scope={ZONE_SCOPE_KEY: None}))
 
 
 def test_single_domain_config_unchanged(tmp_path: Path) -> None:
@@ -162,6 +157,4 @@ def test_single_domain_config_unchanged(tmp_path: Path) -> None:
     assert _looks("app.solo.example.com") is True
     assert _looks("solo.example.com") is False
     solo = Domain(name="solo.example.com", tls=True)
-    assert (
-        zone_for_request(_fake_conn("app.solo.example.com", scope={ZONE_SCOPE_KEY: solo})).name == "solo.example.com"
-    )
+    assert zone_for_request(_fake_conn("app.solo.example.com", solo)).name == "solo.example.com"

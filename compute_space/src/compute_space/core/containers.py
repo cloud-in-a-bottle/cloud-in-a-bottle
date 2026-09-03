@@ -2,10 +2,9 @@
 
 Every container runs under the unprivileged ``host`` user in podman's
 default rootless user namespace.  Host bind mounts use ``:idmap`` so
-container-root writes land on disk owned by the ``host`` user.  Each
-app sees only its own ``/data/...`` subdirectory unless it requests
-``access_all_app_data``, ``access_all_archive``, or the convenience
-shorthand ``access_all_data`` (which implies both).
+container-root writes land on disk owned by the ``host`` user. Each app
+sees only its own ``/data/...`` subdirectory unless it requests
+``access_all_app_data``.
 
 Security defaults: ``--cap-drop=ALL`` then re-add ``DEFAULT_CAPABILITIES``
 (Docker's default set) plus anything the manifest requests from
@@ -294,11 +293,10 @@ def run_container(
     container_name = f"openhost-{app_name}"
 
     wants_all_app_data = manifest.access_all_app_data
-    wants_all_archive = manifest.access_all_archive
 
     has_app_data = manifest.app_data or manifest.sqlite_dbs or wants_all_app_data
     has_app_temp = manifest.app_temp_data or wants_all_app_data
-    has_app_archive = manifest.app_archive or wants_all_archive
+    has_app_archive = manifest.app_archive or wants_all_app_data
 
     c_app_data = f"{CONTAINER_ROOT}/app_data/{app_name}"
     c_app_temp = f"{CONTAINER_ROOT}/app_temp_data/{app_name}"
@@ -390,7 +388,7 @@ def run_container(
         cmd.extend(["--cap-add", cap])
 
     if wants_all_app_data:
-        # Mount the full parent dirs so the app can see all apps' data/temp.
+        # Mount the permanent and temporary parent dirs for all apps.
         cmd.extend(["-v", _bind_mount_arg(os.path.join(data_dir, "app_data"), f"{CONTAINER_ROOT}/app_data")])
         cmd.extend(
             [
@@ -407,8 +405,8 @@ def run_container(
         if has_app_temp:
             cmd.extend(["-v", _bind_mount_arg(app_temp_dir, c_app_temp)])
 
-    if wants_all_archive:
-        # access_all_archive is permissive — skip the archive mount when
+    if wants_all_app_data:
+        # Cross-app access is permissive — skip the archive mount when
         # the tier isn't configured rather than refusing to start.
         if os.path.isdir(archive_dir):
             cmd.extend(["-v", _bind_mount_arg(archive_dir, f"{CONTAINER_ROOT}/app_archive")])

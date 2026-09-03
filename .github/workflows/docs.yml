@@ -38,7 +38,10 @@ jobs:
             | tar -xz -C "$HOME/.local/bin"
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
       - name: Build docs
-        run: mdbook build docs
+        run: |
+          mdbook build docs
+          cmp docs/theme/favicon.svg docs/book/favicon.svg
+          cmp docs/theme/favicon.png docs/book/favicon.png
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:

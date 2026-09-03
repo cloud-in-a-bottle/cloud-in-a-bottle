@@ -93,15 +93,15 @@ def test_provision_data_skips_archive_when_not_opted_in(tmp_path) -> None:
     assert not (archive_dir / manifest.name).exists()
 
 
-def test_provision_data_archive_subdir_under_access_all_archive(tmp_path) -> None:
-    """Under ``access_all_archive``, provision_data must still create the per-app subdir so the app's files have a stable location inside the archive namespace; the parent bind-mount in the container exposes that subdir at its existing path."""
+def test_provision_data_archive_subdir_under_access_all_app_data(tmp_path) -> None:
+    """Cross-app access still provisions the app's own stable archive path."""
     data_dir = tmp_path / "persistent"
     temp_dir = tmp_path / "temp"
     archive_dir = tmp_path / "archive"
     for d in (data_dir, temp_dir, archive_dir):
         d.mkdir()
 
-    manifest = _manifest(access_all_archive=True)
+    manifest = _manifest(access_all_app_data=True)
     env = provision_data(
         app_id="archiveapp-id",
         app_name=manifest.name,
@@ -143,15 +143,15 @@ def test_provision_data_refuses_when_archive_dir_missing(tmp_path) -> None:
         )
 
 
-def test_provision_data_skips_archive_for_access_all_archive_when_archive_dir_missing(tmp_path) -> None:
-    """``access_all_archive`` is permissive: provisioning must not fail when the archive backend is disabled or the mount has dropped, in contrast to ``app_archive = true`` which is a hard requirement."""
+def test_provision_data_skips_archive_for_access_all_app_data_when_archive_dir_missing(tmp_path) -> None:
+    """Cross-app access is permissive when the archive mount is unavailable."""
     data_dir = tmp_path / "persistent"
     temp_dir = tmp_path / "temp"
     archive_dir = tmp_path / "doesnt-exist"
     data_dir.mkdir()
     temp_dir.mkdir()
 
-    manifest = _manifest(access_all_archive=True)
+    manifest = _manifest(access_all_app_data=True)
     env = provision_data(
         app_id="archiveapp-id",
         app_name=manifest.name,

@@ -22,7 +22,6 @@ import json
 import sqlite3
 from collections.abc import Iterable
 from typing import Any
-from urllib.parse import urlencode
 
 import attr
 from litestar import HttpMethod
@@ -45,13 +44,17 @@ from litestar.params import FromPath
 from litestar.response import Response
 from litestar.response.base import ASGIResponse
 
-from compute_space.config import Config
 from compute_space.core.apps import find_app_by_name
 from compute_space.core.apps import get_app_from_hostname
-from compute_space.core.auth.permissions_v2 import get_granted_permissions_v2
-from compute_space.core.domains import primary_domain_or_none
-from compute_space.core.service_interface.services_v2 import lookup_shortname
-from compute_space.core.service_interface.services_v2 import resolve_provider
+from compute_space.core.proxy_target import InProcess
+from compute_space.core.proxy_target import LocalPort
+from compute_space.core.proxy_target import ProxyTarget
+from compute_space.core.service_interface.headers import app_consumer_headers
+from compute_space.core.service_interface.headers import approve_grant_url
+from compute_space.core.service_interface.provider import ProviderUnavailable
+from compute_space.core.service_interface.resolve import resolve_provider
+from compute_space.core.service_interface.services import lookup_service_by_manifest_shortname
+from compute_space.web.auth.auth import get_connection_origin
 from compute_space.web.auth.auth import require_app_auth
 from compute_space.web.auth.auth import verify_app_auth
 from compute_space.web.helpers.proxy import proxy_http_request
@@ -68,39 +71,12 @@ _HTTP_METHODS = [
 ]
 
 
-def _build_permissions_header(consumer_app_id: str, service_url: str, provider_app_id: str) -> str:
-    """JSON for ``X-OpenHost-Permissions`` — the consumer's grants applicable to this provider.
-
-    Includes global-scoped grants and any app-scoped grants targeting this
-    provider.  ``provider_app_id`` is stripped from each entry since the
-    provider already knows it's the addressee.
-    """
-    grants = get_granted_permissions_v2(consumer_app_id, service_url)
-    forwarded = [
-        {"grant": g.grant, "scope": g.scope}
-        for g in grants
-        if g.scope == "global" or g.provider_app_id == provider_app_id
-    ]
-    return json.dumps(forwarded)
-
-
-def _consumer_identity_headers(consumer_app_id: str, db: sqlite3.Connection) -> dict[str, str]:
-    """X-OpenHost-Consumer-Name + X-OpenHost-Consumer-Id headers for a consumer.
-
-    Providers get both: the human-readable name (good for logs/UI) and the
-    stable app_id (good for keying stored data that should survive renames).
-    """
-    row = db.execute("SELECT name FROM apps WHERE app_id = ?", (consumer_app_id,)).fetchone()
-    assert row is not None
-    return {"X-OpenHost-Consumer-Name": row["name"], "X-OpenHost-Consumer-Id": consumer_app_id}
-
-
 def _inject_grant_url_if_global(
     response: ASGIResponse,
     service_url: str,
     consumer_app_id: str,
-    config: Config,
     db: sqlite3.Connection,
+    request: Request[Any, Any, Any],
 ) -> ASGIResponse:
     """If the provider's 403 body is ``permission_required`` with a global-scoped
     grant request, decorate it with ``grant_url`` pointing at the owner-facing
@@ -121,7 +97,12 @@ def _inject_grant_url_if_global(
     if not isinstance(grant, (str, dict)):
         return response
 
-    required_grant["grant_url"] = _approve_grant_url(consumer_app_id, service_url, grant, db)
+    # The browsing authority comes from the consumer app's Origin header on a browser-driven
+    # call, so the approval URL keeps the owner's domain + access port; a server-side call has
+    # no Origin and falls back to the primary (see ``approve_grant_url``).
+    required_grant["grant_url"] = approve_grant_url(
+        consumer_app_id, service_url, grant, db, get_connection_origin(request)
+    )
 
     return ASGIResponse(
         body=json.dumps(body).encode(),
@@ -137,20 +118,6 @@ def _carry_response_headers(headers: MutableScopeHeaders) -> Iterable[tuple[str,
         if k.lower() in ("content-length", "content-type"):
             continue
         yield k, v
-
-
-def _approve_grant_url(consumer_app_id: str, service_url: str, grant: Any, db: sqlite3.Connection) -> str:
-    # urlencode each value: service_url contains "/" and ":", grant is JSON with "{", "}",
-    # ",", '"' — all of which break query-string parsing if interpolated raw.
-    query = urlencode({"app": consumer_app_id, "service": service_url, "grant": json.dumps(grant, sort_keys=True)})
-    approve_path = f"/approve-permissions-v2?{query}"
-    # Cross-app approval is server-side (no browsing request in hand), so this stays on
-    # the canonical/primary domain; use its scheme rather than a hardcoded https so a
-    # plain-http primary (e.g. a `.local` instance) builds a correct URL.
-    primary = primary_domain_or_none(db)
-    if primary is None:
-        return approve_path
-    return f"{primary.scheme}://{primary.name}{approve_path}"
 
 
 def _cors_headers(origin: str) -> dict[str, str]:
@@ -188,9 +155,7 @@ async def service_call_cors(
 @attr.s(auto_attribs=True, frozen=True)
 class ServiceRequest:
     service_url: str
-    version_spec: str
-    provider_app_id: str
-    provider_port: int
+    target: ProxyTarget
     target_path: str
     extra_headers: list[tuple[str, str]]
 
@@ -207,29 +172,20 @@ def _service_call_common(
     Only the two resolution calls are translated, so an accidental lookup bug still surfaces as a 500.
     """
     try:
-        service_url, version_spec = lookup_shortname(consumer_app_id, shortname, db)
+        service_url, version_spec = lookup_service_by_manifest_shortname(consumer_app_id, shortname, db)
     except LookupError as e:
         raise NotFoundException(detail=str(e), extra={"code": "shortname_not_declared"}) from e
 
     try:
-        provider_app_id, provider_port, _, provider_endpoint = resolve_provider(
-            service_url, version_spec, db, provider_app_id=provider_app_id
-        )
-    except RuntimeError as e:
+        provider = resolve_provider(service_url, version_spec, db, provider_app_id=provider_app_id)
+    except ProviderUnavailable as e:
         raise ServiceUnavailableException(detail=str(e), extra={"code": "service_not_available"}) from e
-    # `rest` is captured as "/sub/path" (leading slash); fold into the provider's endpoint.
-    target_path = provider_endpoint.rstrip("/") + "/" + rest.lstrip("/")
-    extra_headers = [
-        ("X-OpenHost-Permissions", _build_permissions_header(consumer_app_id, service_url, provider_app_id)),
-        *_consumer_identity_headers(consumer_app_id, db).items(),
-    ]
     return ServiceRequest(
         service_url=service_url,
-        version_spec=version_spec,
-        provider_app_id=provider_app_id,
-        provider_port=provider_port,
-        target_path=target_path,
-        extra_headers=extra_headers,
+        target=provider.target,
+        # `rest` is captured as "/sub/path" (leading slash); fold into the provider's endpoint.
+        target_path=provider.endpoint.rstrip("/") + "/" + rest.lstrip("/"),
+        extra_headers=app_consumer_headers(consumer_app_id, service_url, provider.app_id, db),
     )
 
 
@@ -256,7 +212,6 @@ async def service_call(
     rest: FromPath[str],
     request: Request[Any, Any, Any],
     db: NamedDependency[sqlite3.Connection],
-    config: NamedDependency[Config],
 ) -> ASGIResponse:
     """Proxy a request to the provider declared under <shortname> in the
     consumer's manifest.
@@ -268,13 +223,13 @@ async def service_call(
 
     response = await proxy_http_request(
         request,
-        target_port=resolved.provider_port,
+        target=resolved.target,
         override_path=resolved.target_path,
         extra_headers=resolved.extra_headers,
     )
 
     if response.status_code == 403:
-        response = _inject_grant_url_if_global(response, resolved.service_url, consumer_app_id, config, db)
+        response = _inject_grant_url_if_global(response, resolved.service_url, consumer_app_id, db, request)
 
     _add_cors_response_headers(response, request)
     return response
@@ -309,9 +264,14 @@ async def service_call_ws(
         await socket.close(code=4503, reason=e.detail)
         return
 
+    if isinstance(resolved.target, InProcess):
+        await socket.accept()
+        await socket.close(code=4503, reason="This service is provided in-process and has no websocket endpoint")
+        return
+
     await proxy_websocket_request(
         socket,
-        target_port=resolved.provider_port,
+        target_port=resolved.target.port,
         override_path=resolved.target_path,
         extra_headers=resolved.extra_headers,
     )
@@ -364,7 +324,7 @@ async def oauth_callback_proxy_v2(request: Request[Any, Any, Any]) -> ASGIRespon
             detail=f"App '{app_name}' is not running", extra={"code": "service_not_available"}
         )
 
-    return await proxy_http_request(request, target_port=app_row.local_port, override_path="/callback")
+    return await proxy_http_request(request, target=LocalPort(app_row.local_port), override_path="/callback")
 
 
 # ─── Router ─────────────────────────────────────────────────────────────────

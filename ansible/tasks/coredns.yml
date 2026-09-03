@@ -9,7 +9,7 @@
 - name: Pin CoreDNS release
   set_fact:
     coredns_version: "1.14.4"
-    coredns_arch: "{{ 'arm64' if ansible_architecture in ['aarch64', 'arm64'] else 'amd64' }}"
+    coredns_arch: "{{ 'arm64' if ansible_facts['architecture'] in ['aarch64', 'arm64'] else 'amd64' }}"
     coredns_sha256:
       amd64: "5b0e6a6a8b97bdcaec65baa70e83ca88ce03ab852355c656e3f7953405cfe36e"
       arm64: "b3491ed0fbe530a549640a4073d90037ffafa483f007936e1943c1ae0def7325"
