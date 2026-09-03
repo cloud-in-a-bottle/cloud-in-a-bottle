@@ -22,6 +22,8 @@ This approach does not make the instance publicly accessible. It makes the insta
 
 ### 1. Install and connect Tailscale
 
+Run the commands in this guide from the terminal in the Cloud in a Bottle dashboard or over SSH to the instance.
+
 First, install Tailscale on the instance:
 
 ```bash
