@@ -199,7 +199,9 @@ def _compute_space_ready() -> bool:
         return False
 
 
-def _make_ssl_context(cert_path: Path, key_path: Path) -> ssl.SSLContext | None:
+def _make_ssl_context(cert_path: Path | None, key_path: Path | None) -> ssl.SSLContext | None:
+    if cert_path is None or key_path is None:
+        return None
     try:
         ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         ctx.load_cert_chain(certfile=str(cert_path), keyfile=str(key_path))
@@ -251,7 +253,7 @@ def _serve_on(sock: socket.socket, ssl_ctx: ssl.SSLContext | None) -> ThreadingH
     return httpd
 
 
-def run(cert_path: Path, key_path: Path) -> None:
+def run(cert_path: Path | None, key_path: Path | None) -> None:
     # Snapshot the page before touching the ports: the tree is quiet now, and it
     # must not be read once the restart is in flight.
     snapshot_page()

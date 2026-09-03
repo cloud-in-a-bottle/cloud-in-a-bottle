@@ -22,6 +22,7 @@ from litestar.params import Body
 from compute_space.config import Config
 from compute_space.core import archive_backend
 from compute_space.core.archive_backend import BackendState
+from compute_space.core.operation_locks import archive_configuration
 from compute_space.web.auth.auth import require_owner_auth
 from compute_space.web.exceptions import ConflictException
 
@@ -330,16 +331,30 @@ async def configure_archive_backend(
         finally:
             worker_db.close()
 
+    if not archive_configuration.acquire(blocking=False):
+        raise ConflictException(detail="Archive configuration is already in progress.", extra={"code": "archive_busy"})
     try:
-        await asyncio.to_thread(_run)
-    except RuntimeError as exc:
-        # 409 if it was a TOCTOU race against another configure attempt;
-        # 500 for genuine bring-up failures (detail is masked, so it rides in extra).
-        if "already configured" in str(exc):
-            raise ConflictException(detail=str(exc), extra={"code": "already_configured"}) from exc
-        raise InternalServerException(
-            detail="Failed to configure archive backend", extra={"output": str(exc)}
-        ) from exc
+        if db.execute("SELECT 1 FROM apps WHERE status IN ('building', 'starting', 'removing') LIMIT 1").fetchone():
+            raise ConflictException(
+                detail="Wait for active app operations to finish before configuring archive storage.",
+                extra={"code": "apps_busy"},
+            )
+        worker = asyncio.create_task(asyncio.to_thread(_run))
+        try:
+            await asyncio.shield(worker)
+        except asyncio.CancelledError:
+            await worker
+            raise
+        except RuntimeError as exc:
+            # 409 if it was a TOCTOU race against another configure attempt;
+            # 500 for genuine bring-up failures (detail is masked, so it rides in extra).
+            if "already configured" in str(exc):
+                raise ConflictException(detail=str(exc), extra={"code": "already_configured"}) from exc
+            raise InternalServerException(
+                detail="Failed to configure archive backend", extra={"output": str(exc)}
+            ) from exc
+    finally:
+        archive_configuration.release()
 
     state = archive_backend.read_state(db)
     archive_dir = archive_backend.juicefs_mount_dir(config) if state.backend == "s3" else None

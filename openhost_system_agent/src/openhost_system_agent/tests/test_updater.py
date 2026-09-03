@@ -5,6 +5,7 @@ import datetime as _dt
 import json
 import os
 import socket
+import sqlite3
 import ssl
 import subprocess
 import time
@@ -104,6 +105,27 @@ def _open_fds() -> list[str]:
         return os.listdir("/proc/self/fd")
     except OSError:
         return []
+
+
+def _write_domain_db(data_dir: Path, primary: str, *, tls: bool, legacy_owner: str) -> None:
+    with sqlite3.connect(data_dir / "router.db") as db:
+        db.execute("CREATE TABLE domains (name TEXT PRIMARY KEY, tls INTEGER, is_primary INTEGER)")
+        db.execute("CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT)")
+        db.execute("INSERT INTO domains VALUES (?, ?, 1)", (primary, int(tls)))
+        db.execute("INSERT INTO settings VALUES ('legacy_cert_domain', ?)", (legacy_owner,))
+
+
+def test_updater_uses_promoted_primary_per_domain_certificate(data_dir: Path) -> None:
+    _write_domain_db(data_dir, "new.example.com", tls=True, legacy_owner="old.example.com")
+    assert paths.primary_tls_paths() == (
+        data_dir / "certs" / "new.example.com.pem",
+        data_dir / "certs" / "new.example.com.key",
+    )
+
+
+def test_updater_disables_tls_for_http_primary(data_dir: Path) -> None:
+    _write_domain_db(data_dir, "new.local", tls=False, legacy_owner="old.example.com")
+    assert paths.primary_tls_paths() is None
 
 
 # ── progress log: record / reset ───────────────────────────────────────────────

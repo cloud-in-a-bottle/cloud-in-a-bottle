@@ -7,6 +7,7 @@ import sqlite3
 
 # Setting keys.
 CLAIM_TOKEN_KEY = "claim_token"
+LEGACY_CERT_DOMAIN_KEY = "legacy_cert_domain"
 
 
 def get_setting(db: sqlite3.Connection, key: str) -> str | None:

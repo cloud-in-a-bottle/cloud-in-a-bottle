@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 import sqlite3
+import threading
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -17,12 +19,15 @@ import compute_space.web.routes.api.apps as apps_routes
 from compute_space.core import archive_backend
 from compute_space.core.app_id import new_app_id
 from compute_space.core.manifest import AppManifest
+from compute_space.core.operation_locks import archive_configuration
 from compute_space.db.connection import init_db
 from compute_space.tests._litestar_helpers import auth_cookie
 from compute_space.tests._litestar_helpers import make_test_app
 from compute_space.tests.conftest import _make_test_config
 from compute_space.web.routes.api.apps import api_apps_routes
+from compute_space.web.routes.api.archive_backend import ConfigureArchiveRequest
 from compute_space.web.routes.api.archive_backend import api_archive_backend_routes
+from compute_space.web.routes.api.archive_backend import configure_archive_backend
 
 
 @pytest.fixture
@@ -306,6 +311,66 @@ def test_configure_happy_path(client: TestClient[Litestar], cookies: dict[str, s
     assert body["backend"] == "s3"
     assert body["s3_bucket"] == "mybucket"
     assert "s3_secret_access_key" not in body
+
+
+def test_configure_rejects_active_app_operation(
+    cfg: Any, client: TestClient[Litestar], cookies: dict[str, str]
+) -> None:
+    with sqlite3.connect(cfg.db_path) as db:
+        db.execute(
+            "INSERT INTO apps (app_id, name, version, repo_path, local_port, status) "
+            "VALUES ('app-id', 'busy', '1', '/tmp/repo', 21000, 'starting')"
+        )
+
+    with mock.patch.object(archive_backend, "configure_backend") as configure:
+        client.cookies.update(cookies)
+        resp = client.post(
+            "/api/storage/archive_backend/configure",
+            json={
+                "s3_bucket": "mybucket",
+                "s3_access_key_id": "AKIA",
+                "s3_secret_access_key": "secret",
+                "s3_prefix": "andrew-3",
+            },
+        )
+
+    assert resp.status_code == 409
+    assert resp.json()["extra"]["code"] == "apps_busy"
+    configure.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_cancelled_configure_holds_lock_until_worker_exits(cfg: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    started = threading.Event()
+    release = threading.Event()
+
+    def configure(*_args: Any, **_kwargs: Any) -> None:
+        started.set()
+        assert release.wait(5)
+
+    monkeypatch.setattr(archive_backend, "configure_backend", configure)
+    db = sqlite3.connect(cfg.db_path)
+    db.row_factory = sqlite3.Row
+    task = asyncio.create_task(
+        configure_archive_backend.fn(
+            ConfigureArchiveRequest("bucket", "key", "secret", s3_prefix="andrew-3"),
+            db,
+            cfg,
+        )
+    )
+    try:
+        assert await asyncio.to_thread(started.wait, 5)
+        task.cancel()
+        await asyncio.sleep(0.05)
+        assert not archive_configuration.acquire(blocking=False)
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert archive_configuration.acquire(blocking=False)
+        archive_configuration.release()
+    finally:
+        release.set()
+        db.close()
 
 
 # --- test_connection ------------------------------------------------------

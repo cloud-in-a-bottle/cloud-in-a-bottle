@@ -11,7 +11,10 @@ from compute_space.core.tls.renewal import get_cert_status
 async def ensure_cert_for(
     config: Config, domain: Domain, db: sqlite3.Connection, dns_provider: InternalDnsProvider
 ) -> None:
-    """Idempotently ensure a usable TLS cert exists for ``domain`` at its per-domain path.
+    """Idempotently ensure a usable TLS cert exists at the domain's stable path.
+
+    The provisioning-time domain keeps the legacy top-level certificate paths; every other domain
+    uses its named pair under ``certs/``. Promotion changes neither domain's path ownership.
 
     This is the single acquisition entry point shared by initial setup and later domain
     addition (via /api/domains).  No-op for non-TLS domains (mDNS ``.local`` is served over

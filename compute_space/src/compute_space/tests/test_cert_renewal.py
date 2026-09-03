@@ -274,7 +274,7 @@ async def test_renew_reload_regenerates_caddyfile_for_new_secondary_cert(
     assert renewed is True
     content = caddyfile.read_text()
     # The secondary now serves its acquired file cert rather than falling back to `tls internal`.
-    assert str(config.cert_path_for("second.example.com", is_primary=False)) in content
+    assert str(config.cert_path_for("second.example.com", False)) in content
     assert "tls internal" not in content
 
 

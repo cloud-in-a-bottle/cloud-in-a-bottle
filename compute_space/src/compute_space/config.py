@@ -10,7 +10,7 @@ import cattrs
 import tomli_w
 import typed_settings
 
-from compute_space.core.domains import is_primary_domain
+from compute_space.core.domains import domain_uses_legacy_cert_paths
 
 # TLS cert provider selection (see Config.cert_provider).
 # "acme" is the default bring-your-own-ACME-credentials path (unchanged, fully
@@ -195,25 +195,24 @@ class Config:
 
     @property
     def certs_dir(self) -> Path:
-        """Directory for per-domain TLS certs (domains beyond the primary)."""
+        """Directory for TLS certs other than the provisioning-time legacy pair."""
         return self.openhost_data_path / "certs"
 
-    def cert_path_for(self, domain_name: str, is_primary: bool) -> Path:
-        """Cert file for a domain.  The primary keeps the legacy path for backward
-        compatibility; additional domains get a per-domain file under ``certs/``."""
-        if is_primary:
+    def cert_path_for(self, domain_name: str, uses_legacy_path: bool) -> Path:
+        """Cert file for a domain, preserving the provisioning-time domain's legacy path."""
+        if uses_legacy_path:
             return self.tls_cert_path
-        return self.certs_dir / f"{domain_name}.pem"
+        return self.certs_dir / f"{domain_name.split(':')[0]}.pem"
 
-    def key_path_for(self, domain_name: str, is_primary: bool) -> Path:
-        if is_primary:
+    def key_path_for(self, domain_name: str, uses_legacy_path: bool) -> Path:
+        if uses_legacy_path:
             return self.tls_key_path
-        return self.certs_dir / f"{domain_name}.key"
+        return self.certs_dir / f"{domain_name.split(':')[0]}.key"
 
     def cert_key_paths_for(self, db: sqlite3.Connection, domain_name: str) -> tuple[Path, Path]:
-        """Cert+key paths for a domain, resolving primary-vs-secondary from the DB."""
-        is_primary = is_primary_domain(db, domain_name)
-        return self.cert_path_for(domain_name, is_primary), self.key_path_for(domain_name, is_primary)
+        """Cert+key paths for a domain, preserving ownership across primary changes."""
+        legacy = domain_uses_legacy_cert_paths(db, domain_name)
+        return self.cert_path_for(domain_name, legacy), self.key_path_for(domain_name, legacy)
 
     @property
     def coredns_corefile_path(self) -> Path:

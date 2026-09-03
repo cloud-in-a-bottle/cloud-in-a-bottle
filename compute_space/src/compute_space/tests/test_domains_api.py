@@ -315,3 +315,53 @@ def test_remove_unknown_domain_404(cfg: Any, client: TestClient[Litestar]) -> No
     resp = client.delete("/api/domains/nope.example.net")
     assert resp.status_code == 404
     assert resp.json()["detail"] == "domain not found"
+
+
+def test_make_primary_requires_auth(cfg: Any, client: TestClient[Litestar]) -> None:
+    with closing(open_db(cfg)) as db:
+        domains.upsert_record(db, domains.DomainRecord("new.local", tls=False, mdns=True))
+    assert (
+        client.post("/api/domains/new.local/primary", json={"expected_primary": "host.example.com"}).status_code == 401
+    )
+
+
+def test_make_primary_requires_usable_tls_certificate(cfg: Any, client: TestClient[Litestar]) -> None:
+    with closing(open_db(cfg)) as db:
+        domains.upsert_record(db, domains.DomainRecord("new.example.com", tls=True, mdns=False))
+    client.cookies.update(_auth_cookie(cfg.db_path))
+    resp = client.post("/api/domains/new.example.com/primary", json={"expected_primary": "host.example.com"})
+    assert resp.status_code == 409
+    assert resp.json()["extra"]["code"] == "domain_not_ready"
+
+
+def test_make_primary_returns_updated_list_then_schedules_restart(
+    cfg: Any, client: TestClient[Litestar], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with closing(open_db(cfg)) as db:
+        domains.upsert_record(db, domains.DomainRecord("new.local", tls=False, mdns=True))
+    restarts: list[str] = []
+    monkeypatch.setattr(domains, "trigger_restart", lambda: restarts.append("restart"))
+    client.cookies.update(_auth_cookie(cfg.db_path))
+
+    resp = client.post("/api/domains/new.local/primary", json={"expected_primary": "host.example.com"})
+
+    assert resp.status_code == 200
+    assert next(d for d in resp.json()["domains"] if d["name"] == "new.local")["is_primary"] is True
+    assert restarts == ["restart"]
+
+
+def test_make_primary_rejects_stale_expected_primary(cfg: Any, client: TestClient[Litestar]) -> None:
+    with closing(open_db(cfg)) as db:
+        domains.upsert_record(db, domains.DomainRecord("new.local", tls=False, mdns=True))
+    client.cookies.update(_auth_cookie(cfg.db_path))
+    resp = client.post("/api/domains/new.local/primary", json={"expected_primary": "stale.local"})
+    assert resp.status_code == 409
+    assert resp.json()["extra"]["code"] == "primary_changed"
+
+
+def test_domains_ui_outputs_promotion_confirmation_and_expected_primary() -> None:
+    source = (Path(__file__).parents[1] / "web" / "static" / "js" / "domains.js").read_text()
+    assert "Make primary" in source
+    assert "Running apps will restart" in source
+    assert "expected_primary: currentPrimary" in source
+    assert "window.location.assign(promoted.scheme" in source

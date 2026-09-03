@@ -6,6 +6,9 @@ from enum import StrEnum
 import attr
 
 from compute_space.core.logging import logger
+from compute_space.core.operation_locks import archive_configuration
+from compute_space.core.settings_store import LEGACY_CERT_DOMAIN_KEY
+from compute_space.core.settings_store import get_setting
 
 
 def _lowercase(s: str) -> str:
@@ -83,6 +86,26 @@ class DomainCertStatus(StrEnum):
     ERROR = "error"  # acquisition failed (see error_message)
 
 
+class DomainNotFoundError(ValueError):
+    pass
+
+
+class PrimaryDomainChangedError(RuntimeError):
+    def __init__(self, current_primary: str) -> None:
+        super().__init__(f"primary domain is now {current_primary}")
+        self.current_primary = current_primary
+
+
+class AppsBusyForPrimaryChangeError(RuntimeError):
+    def __init__(self, app_names: tuple[str, ...]) -> None:
+        super().__init__(f"apps are busy: {', '.join(app_names)}")
+        self.app_names = app_names
+
+
+class ArchiveMigrationInProgressError(RuntimeError):
+    pass
+
+
 _COLS = "name, tls, mdns, is_primary, cert_status, error_message"
 
 
@@ -120,8 +143,11 @@ def load_records(db: sqlite3.Connection) -> tuple[DomainRecord, ...]:
 
 
 def get_record(db: sqlite3.Connection, name: str) -> DomainRecord | None:
-    row = db.execute(f"SELECT {_COLS} FROM domains WHERE name = ?", (name.lower(),)).fetchone()
-    return _row_to_record(row) if row is not None else None
+    name_no_port = name.split(":")[0].lower()
+    for row in db.execute(f"SELECT {_COLS} FROM domains"):
+        if str(row["name"]).split(":")[0].lower() == name_no_port:
+            return _row_to_record(row)
+    return None
 
 
 def upsert_record(db: sqlite3.Connection, record: DomainRecord) -> None:
@@ -146,6 +172,13 @@ def upsert_record(db: sqlite3.Connection, record: DomainRecord) -> None:
 def remove_record(db: sqlite3.Connection, name: str) -> bool:
     """Delete a domain; True if a row was removed.  (Refusing to remove the primary is the API's job.)"""
     cur = db.execute("DELETE FROM domains WHERE name = ?", (name.lower(),))
+    db.commit()
+    return cur.rowcount > 0
+
+
+def remove_non_primary_record(db: sqlite3.Connection, name: str) -> bool:
+    """Delete only while the domain is non-primary, closing the promotion/removal race."""
+    cur = db.execute("DELETE FROM domains WHERE name = ? AND is_primary = 0", (name.lower(),))
     db.commit()
     return cur.rowcount > 0
 
@@ -187,6 +220,76 @@ def is_primary_domain(db: sqlite3.Connection, name: str) -> bool:
     """True if ``name`` (port stripped) is the DB's primary domain."""
     primary = primary_domain_or_none(db)
     return primary is not None and name.split(":")[0] == primary.name_no_port
+
+
+def domain_uses_legacy_cert_paths(db: sqlite3.Connection, name: str) -> bool:
+    """Whether ``name`` owns the provisioning-time certificate files.
+
+    Before the first promotion, the current primary is the implicit owner. The promotion
+    transaction persists that original domain so certificate ownership never follows the role.
+    """
+    owner = get_setting(db, LEGACY_CERT_DOMAIN_KEY)
+    if owner is None:
+        primary = primary_domain_or_none(db)
+        owner = primary.name_no_port if primary is not None else None
+    return owner is not None and owner.lower() == name.split(":")[0].lower()
+
+
+def set_primary_domain(db: sqlite3.Connection, name: str, expected_primary: str) -> bool:
+    """Atomically promote an existing domain and hand active apps to startup recovery."""
+    target_name = name.split(":")[0].lower()
+    expected_name = expected_primary.split(":")[0].lower()
+    db.execute("BEGIN IMMEDIATE")
+    archive_lock_acquired = False
+    try:
+        target = get_record(db, target_name)
+        if target is None:
+            raise DomainNotFoundError(target_name)
+
+        current = db.execute("SELECT name FROM domains WHERE is_primary = 1").fetchone()
+        if current is None:
+            raise RuntimeError("No primary domain configured")
+        current_name = str(current["name"])
+        current_name_no_port = current_name.split(":")[0].lower()
+        if current_name_no_port != expected_name:
+            raise PrimaryDomainChangedError(current_name_no_port)
+        if target.name == current_name:
+            db.execute("COMMIT")
+            return False
+
+        busy_apps = tuple(
+            row["name"]
+            for row in db.execute(
+                "SELECT name FROM apps WHERE status IN ('building', 'starting', 'removing') ORDER BY name"
+            )
+        )
+        if busy_apps:
+            raise AppsBusyForPrimaryChangeError(busy_apps)
+        archive_lock_acquired = archive_configuration.acquire(blocking=False)
+        if not archive_lock_acquired:
+            raise ArchiveMigrationInProgressError("archive migration is in progress")
+
+        db.execute(
+            "INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)",
+            (LEGACY_CERT_DOMAIN_KEY, current_name_no_port),
+        )
+        demoted = db.execute("UPDATE domains SET is_primary = 0 WHERE name = ? AND is_primary = 1", (current_name,))
+        promoted = db.execute("UPDATE domains SET is_primary = 1 WHERE name = ? AND is_primary = 0", (target.name,))
+        if demoted.rowcount != 1 or promoted.rowcount != 1:
+            raise RuntimeError("Primary domain changed concurrently")
+        db.execute(
+            "UPDATE apps SET status = 'starting', error_message = NULL "
+            "WHERE status = 'running' OR (status = 'error' AND container_id IS NOT NULL)"
+        )
+        db.execute("COMMIT")
+        return True
+    except BaseException:
+        if db.in_transaction:
+            db.execute("ROLLBACK")
+        raise
+    finally:
+        if archive_lock_acquired:
+            archive_configuration.release()
 
 
 # --- first-boot seeding ----------------------------------------------------------------------

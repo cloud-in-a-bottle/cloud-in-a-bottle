@@ -12,6 +12,7 @@ import pytest
 from compute_space.core.domains import Domain
 from compute_space.core.domains import DomainCertStatus
 from compute_space.core.domains import DomainRecord
+from compute_space.core.domains import domain_uses_legacy_cert_paths
 from compute_space.core.domains import effective_domains
 from compute_space.core.domains import get_record
 from compute_space.core.domains import load_records
@@ -20,6 +21,7 @@ from compute_space.core.domains import remove_record
 from compute_space.core.domains import seed_domains
 from compute_space.core.domains import set_record_status
 from compute_space.core.domains import upsert_record
+from compute_space.core.settings_store import LEGACY_CERT_DOMAIN_KEY
 from compute_space.core.tls import domain_certs
 from compute_space.db.versioned import apply_migrations
 from compute_space.tests.conftest import _make_test_config
@@ -157,3 +159,21 @@ async def test_ensure_cert_for_acquires_tls_to_per_domain_path(tmp_path: Path, m
     # per-domain path under certs/, NOT the primary's legacy cert file
     assert captured["cert_path"] == cfg.certs_dir / "host.example.org.pem"
     assert captured["cert_path"].parent.exists()  # ensure_cert_for created certs/
+
+
+def test_certificate_paths_stay_with_original_domain_after_role_change(tmp_path: Path) -> None:
+    cfg = _cfg(tmp_path)
+    with closing(open_db(cfg)) as db:
+        seed_domains(db, PRIMARY, [])
+        upsert_record(db, DomainRecord("host.example.org", tls=True, mdns=False))
+        db.execute("INSERT INTO settings (key, value) VALUES (?, ?)", (LEGACY_CERT_DOMAIN_KEY, PRIMARY.name))
+        db.execute("UPDATE domains SET is_primary = 0 WHERE name = ?", (PRIMARY.name,))
+        db.execute("UPDATE domains SET is_primary = 1 WHERE name = 'host.example.org'")
+        db.commit()
+
+        assert domain_uses_legacy_cert_paths(db, PRIMARY.name)
+        assert cfg.cert_key_paths_for(db, PRIMARY.name) == (cfg.tls_cert_path, cfg.tls_key_path)
+        assert cfg.cert_key_paths_for(db, "host.example.org") == (
+            cfg.certs_dir / "host.example.org.pem",
+            cfg.certs_dir / "host.example.org.key",
+        )

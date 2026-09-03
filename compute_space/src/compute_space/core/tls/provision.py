@@ -75,4 +75,6 @@ async def provision_cert(config: Config, db: sqlite3.Connection, dns_provider: I
     Used both for the initial acquisition at startup and for renewals.  Thin wrapper over
     ``acquire_cert_for_domain`` for the primary domain."""
     primary = primary_domain(db)
-    await acquire_cert_for_domain(config, primary.name, config.tls_cert_path, config.tls_key_path, db, dns_provider)
+    cert_path, key_path = config.cert_key_paths_for(db, primary.name_no_port)
+    cert_path.parent.mkdir(parents=True, exist_ok=True)
+    await acquire_cert_for_domain(config, primary.name_no_port, cert_path, key_path, db, dns_provider)
