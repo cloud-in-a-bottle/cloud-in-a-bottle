@@ -16,43 +16,69 @@ TODO: include instructions on how to actually set this up.
 
 ## Tailscale: HTTP or HTTPS
 
-Choose a domain you control the DNS for. We'll use `bottle.example.com` for this purpose. Point both that domain and `*.bottle.example.com` at the server's Tailscale IPv4 address (`tailscale ip -4`). The wildcard record gives every app its own working subdomain.
+These steps assume you have already provisioned an instance and can access its dashboard.
 
-### Option 1: HTTP
+This approach does not make the instance publicly accessible. It makes the instance available only to devices on your tailnet, wherever those devices are connected to the internet.
 
-Provision a fresh instance in HTTP-only mode, including port 8080 in the domain because the browser connects directly to the router:
+### 1. Install and connect Tailscale
+
+Run the commands in this guide from the terminal in the Cloud in a Bottle dashboard or over SSH to the instance.
+
+First, install Tailscale on the instance:
 
 ```bash
-TAILSCALE_IP=$(tailscale ip -4)
-test -n "$TAILSCALE_IP"
-curl -fsSL https://raw.githubusercontent.com/cloud-in-a-bottle/cloud-in-a-bottle/main/scripts/provision.sh \
-  | sudo bash -s -- --domain bottle.example.com:8080 --local-http-only --bind-host "$TAILSCALE_IP"
+sudo snap install tailscale --classic
 ```
 
-Open the Claim URL printed by the installer. The dashboard uses `http://bottle.example.com:8080` and apps use `http://<app>.bottle.example.com:8080`.
+Then log in to Tailscale:
 
-### Option 2: HTTPS
+```bash
+sudo tailscale up
+```
 
-Use the same DNS records, then use [acme.sh](https://github.com/acmesh-official/acme.sh) with your DNS provider's [DNS API plugin](https://github.com/acmesh-official/acme.sh/wiki/dnsapi) to complete the DNS-01 challenge and issue a wildcard certificate:
+For a long-running server, you may also want to disable key expiry for this machine in the Tailscale admin console so it does not require periodic reauthentication.
+
+### 2. Point a domain to the Tailscale IP
+
+Choose a domain you control the DNS for. We'll use `bottle.example.com`. Run `tailscale ip -4` on the instance, then create these records at your DNS provider using the address it prints:
+
+| Type | Name                   | Value                |
+|------|------------------------|----------------------|
+| `A`  | `bottle.example.com`   | `<tailscale-ip>`     |
+| `A`  | `*.bottle.example.com` | `<tailscale-ip>`     |
+
+The wildcard record gives every app its own working subdomain.
+
+### 3. Add the domain
+
+Using your existing connection to the dashboard, open **Settings → Domains** and enter `bottle.example.com`. Choose **HTTP** to continue serving plain HTTP, or **HTTPS** to serve the domain with a certificate.
+
+#### HTTP
+
+Choose **HTTP** and click **Add domain**.
+
+#### HTTPS
+
+Choose **HTTPS** and click **Add domain**. The initial automatic certificate attempt may fail because this setup keeps DNS at your provider rather than delegating it to the instance. Use [acme.sh](https://github.com/acmesh-official/acme.sh) with your DNS provider's [DNS API plugin](https://github.com/acmesh-official/acme.sh/wiki/dnsapi) to complete the DNS-01 challenge and issue a wildcard certificate:
 
 ```bash
 DOMAIN=bottle.example.com
-CERT_DIR=/home/host/.openhost/local_compute_space/persistent_data/openhost
-sudo install -d "$CERT_DIR"
+CERT_DIR=/home/host/.openhost/local_compute_space/persistent_data/openhost/certs
+sudo install -d -o host -g host "$CERT_DIR"
 curl -fsSL https://get.acme.sh | sh -s email=you@example.com
 # Export the credentials required by your DNS provider's plugin first.
 ~/.acme.sh/acme.sh --issue --server letsencrypt --dns dns_yourprovider \
   -d "$DOMAIN" -d "*.$DOMAIN"
 ~/.acme.sh/acme.sh --install-cert -d "$DOMAIN" \
-  --fullchain-file "$CERT_DIR/openhost-tls-cert.pem" \
-  --key-file "$CERT_DIR/openhost-tls-key.pem" \
+  --fullchain-file "$CERT_DIR/$DOMAIN.pem" \
+  --key-file "$CERT_DIR/$DOMAIN.key" \
   --reloadcmd "sudo systemctl restart openhost"
-sudo chown host:host "$CERT_DIR/openhost-tls-cert.pem" "$CERT_DIR/openhost-tls-key.pem"
-sudo chmod 0644 "$CERT_DIR/openhost-tls-cert.pem"
-sudo chmod 0600 "$CERT_DIR/openhost-tls-key.pem"
+sudo chown host:host "$CERT_DIR/$DOMAIN.pem" "$CERT_DIR/$DOMAIN.key"
+sudo chmod 0644 "$CERT_DIR/$DOMAIN.pem"
+sudo chmod 0600 "$CERT_DIR/$DOMAIN.key"
 ```
 
-In `/home/host/.openhost/local_compute_space/config.toml`, set `host = "127.0.0.1"`, `start_caddy = true`, `coredns_enabled = true`, and `acquire_tls_cert_if_missing = false`. Mark the primary domain as HTTPS, remove `:8080` from its name, and restart the service. The dashboard then uses `https://bottle.example.com`, apps use `https://<app>.bottle.example.com`, and acme.sh renews and installs the certificate through the same DNS API.
+The dashboard then uses `https://bottle.example.com`, apps use `https://<app>.bottle.example.com`, and acme.sh renews and installs the certificate through the same DNS API.
 
 ## IPv4 tunnel service
 
