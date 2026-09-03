@@ -1,0 +1,127 @@
+name: release
+
+# The one true OpenHost release process. Pushing a version tag (vMAJOR.MINOR.PATCH)
+# does everything: it verifies the tree's pyproject version matches the tag, builds
+# the VM image artifacts, and publishes a GitHub release whose notes are the
+# auto-generated "What's Changed" changelog with the VM-image usage notes on top.
+#
+# To cut a release (the version lives in the root pyproject.toml — the openhost
+# distribution bundles the sub-packages, so that one field is the version of record):
+#   uv version 0.1.4                   # or edit pyproject.toml's [project] version
+#   git commit -am "Release v0.1.4" && git push
+#   git tag v0.1.4 && git push origin v0.1.4
+#
+# The release is created as a draft so a human can review the changelog before it
+# goes public. The same vX.Y.Z tags drive the host auto-updater
+# (openhost_system_agent/update.py), so there is exactly one tag scheme.
+
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+
+# gh release create needs write access to create the release and upload assets.
+permissions:
+  contents: write
+
+jobs:
+  # Fast gate: refuse to build if the root pyproject version doesn't match the tag.
+  # This is what turns "we forgot to bump pyproject" into a loud, immediate failure.
+  verify-version:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify pyproject version matches the tag
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          want="${TAG#v}"
+          got="$(sed -n 's/^version = "\([^"]*\)"/\1/p' pyproject.toml | head -1)"
+          if [ "$got" != "$want" ]; then
+            echo "::error::pyproject.toml is at '$got' but the tag is '$TAG'."
+            echo "Bump the [project] version in pyproject.toml to $want, commit, then re-tag."
+            exit 1
+          fi
+          echo "version ok: pyproject.toml $got matches $TAG"
+
+  release:
+    needs: verify-version
+    runs-on: ubuntu-latest
+    # The build boots a VM and provisions it end to end; give it plenty of room.
+    # build.sh has its own 30-min boot timeout inside this budget.
+    timeout-minutes: 90
+    steps:
+      - name: Check out the release tag
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install image build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qemu-system-x86 qemu-utils cloud-image-utils
+
+      - name: Enable KVM access
+        run: |
+          # GitHub's 2-vCPU+ Linux runners (incl. ubuntu-latest) ship /dev/kvm,
+          # but it's root:kvm 0660 — not writable by the runner user. Grant
+          # access via udev so build.sh uses hardware acceleration instead of
+          # the (much slower) TCG fallback. Same rule android-emulator-runner
+          # uses. See https://github.com/actions/runner-images/issues/7541.
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Require KVM
+        run: |
+          ls -l /dev/kvm || true
+          if [ ! -w /dev/kvm ]; then
+            echo "::error::/dev/kvm is not usable. The build needs KVM; a TCG"
+            echo "fallback would exceed the boot timeout, so failing fast. If this"
+            echo "persists, the runner may lack nested virtualization — use a"
+            echo "larger runner or a self-hosted KVM runner."
+            exit 1
+          fi
+          echo "KVM available — build will use hardware acceleration."
+
+      - name: Build VM images
+        run: |
+          image/build.sh --branch "${GITHUB_REF_NAME}" --version "${GITHUB_REF_NAME}"
+
+      - name: List built artifacts
+        run: ls -lh image/out/
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          assets=(image/out/openhost-*.qcow2)
+          for ova in image/out/openhost-*.ova; do
+            [ -e "$ova" ] && assets+=("$ova")
+          done
+
+          # The VM-image usage notes ride on top of GitHub's auto-generated
+          # "What's Changed" changelog. gh can't emit both at once, so create with
+          # --generate-notes, then prepend our blurb to whatever it produced.
+          gh release create "$TAG" \
+            --title "OpenHost $TAG" \
+            --generate-notes \
+            --draft \
+            "${assets[@]}"
+
+          changelog="$(gh release view "$TAG" --json body --jq .body)"
+          preamble="OpenHost $TAG — VM images below.
+
+          - \`*.qcow2\` — QEMU/KVM/libvirt (and most cloud importers)
+          - \`*.ova\` — VirtualBox / VMware
+
+          Boot it, then reach the dashboard at \`http://<vm-ip>:8080\` and claim it
+          (claiming is open by default — the image is private behind NAT).
+          See \`image/build.sh\` for defaults (console login, disk sizing).
+
+          ---
+          "
+          gh release edit "$TAG" --notes "${preamble}
+          ${changelog}"
