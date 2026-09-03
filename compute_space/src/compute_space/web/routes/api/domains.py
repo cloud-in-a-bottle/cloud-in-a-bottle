@@ -31,7 +31,6 @@ from compute_space.config import Config
 from compute_space.config import get_config
 from compute_space.core.caddy import reload_caddy_for_domains
 from compute_space.core.dns.coredns_provider.interface import InternalDnsProvider
-from compute_space.core.dns.coredns_provider.interface import ManagedZone
 from compute_space.core.domains import Domain
 from compute_space.core.domains import DomainCertStatus
 from compute_space.core.domains import DomainRecord
@@ -191,7 +190,7 @@ async def add_domain(
         # Make CoreDNS authoritative for the new zone *before* acquisition: DNS-01 writes the
         # _acme-challenge TXT into every zone file, and it only resolves for this domain once
         # CoreDNS serves its zone.  (mDNS domains never touch CoreDNS.)
-        await dns.add_zone(ManagedZone(zone=name, is_primary=False))
+        await dns.add_zone(name)
     # Return the full updated list so the client repaints the table without a follow-up GET, and
     # regenerate Caddy (serving the new site) only after this response has been sent — see
     # _reload_caddy_after_response.  BackgroundTasks runs these in order, so the new site is being

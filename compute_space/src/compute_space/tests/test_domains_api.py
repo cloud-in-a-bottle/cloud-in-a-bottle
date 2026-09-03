@@ -26,9 +26,7 @@ from compute_space.config import provide_config
 from compute_space.core import caddy
 from compute_space.core.auth.auth import SESSION_COOKIE_NAME
 from compute_space.core.auth.auth import create_session
-from compute_space.core.dns.coredns_provider.interface import DnsSettings
 from compute_space.core.dns.coredns_provider.interface import InternalDnsProvider
-from compute_space.core.dns.coredns_provider.interface import ManagedZone
 from compute_space.core.domains import Domain
 from compute_space.core.domains import DomainCertStatus
 from compute_space.core.domains import seed_domains
@@ -113,13 +111,10 @@ def client(cfg: Any) -> Iterator[TestClient[Litestar]]:
 def dns_client(cfg: Any, tmp_path: Path) -> Iterator[tuple[InternalDnsProvider, TestClient[Litestar]]]:
     """A real provider, never started, so the routes drive the same zone set production would."""
     dns = InternalDnsProvider(
-        settings=DnsSettings(
-            corefile_path=tmp_path / "Corefile",
-            zonefile_path=tmp_path / "zonefile",
-            zones_dir=tmp_path / "zones",
-            public_ip="203.0.113.10",
-        ),
-        zones=(ManagedZone(PRIMARY.name, is_primary=True),),
+        corefile_path=tmp_path / "Corefile",
+        zones_dir=tmp_path / "zones",
+        bind_ip="203.0.113.10",
+        zones=(PRIMARY.name,),
     )
     with TestClient(app=_make_app(dns)) as c:
         c.cookies.update(_auth_cookie(cfg.db_path))
@@ -225,10 +220,10 @@ def test_a_new_public_domain_is_served_by_the_dns_provider(
     dns, client = dns_client
 
     client.post("/api/domains", json={"name": "host.example.org", "tls": True})
-    assert [z.zone for z in dns.zones] == [PRIMARY.name, "host.example.org"]
+    assert list(dns.zones) == [PRIMARY.name, "host.example.org"]
 
     client.delete("/api/domains/host.example.org")
-    assert [z.zone for z in dns.zones] == [PRIMARY.name]
+    assert list(dns.zones) == [PRIMARY.name]
 
 
 def test_an_mdns_domain_never_reaches_the_dns_provider(
@@ -240,7 +235,7 @@ def test_an_mdns_domain_never_reaches_the_dns_provider(
     client.post("/api/domains", json={"name": "myhost.local", "mdns": True})
     client.delete("/api/domains/myhost.local")
 
-    assert [z.zone for z in dns.zones] == [PRIMARY.name]
+    assert list(dns.zones) == [PRIMARY.name]
 
 
 # --- validation ---------------------------------------------------------------------

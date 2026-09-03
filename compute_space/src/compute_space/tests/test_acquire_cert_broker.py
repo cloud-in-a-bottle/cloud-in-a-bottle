@@ -17,9 +17,7 @@ from cryptography import x509
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 
-from compute_space.core.dns.coredns_provider.interface import DnsSettings
 from compute_space.core.dns.coredns_provider.interface import InternalDnsProvider
-from compute_space.core.dns.coredns_provider.interface import ManagedZone
 from compute_space.core.tls.acquire_cert_broker import CertAcquisitionTimeoutError
 from compute_space.core.tls.acquire_cert_broker import acquire_tls_cert_via_broker
 from compute_space.core.tls.cert_api_client import CertApiClient
@@ -46,14 +44,14 @@ class FakeClock:
 def _dns(tmp_path: Path) -> tuple[InternalDnsProvider, Path]:
     """A provider serving one zone, rendering to a real file.  Never started, so no CoreDNS runs;
     the zone file is what the broker flow actually has to get right."""
-    zonefile = tmp_path / "zonefile"
-    settings = DnsSettings(
+    zonefile = tmp_path / "zones" / f"{DOMAIN}.zone"
+    dns = InternalDnsProvider(
         corefile_path=tmp_path / "Corefile",
-        zonefile_path=zonefile,
         zones_dir=tmp_path / "zones",
-        public_ip="203.0.113.10",
+        bind_ip="203.0.113.10",
+        zones=(DOMAIN,),
     )
-    return InternalDnsProvider(settings=settings, zones=(ManagedZone(DOMAIN, is_primary=True),)), zonefile
+    return dns, zonefile
 
 
 def _order_payload() -> dict[str, object]:

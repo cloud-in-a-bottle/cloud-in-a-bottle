@@ -20,13 +20,6 @@ APEX = "@"
 
 
 class RecordType(StrEnum):
-    """The record types the router writes into its own zones.
-
-    Only what we actually publish: addresses for the space itself, and TXT for DNS-01 challenge
-    tokens.  Add to this when something needs another type — the rendering below is generic, the
-    enum is the deliberate part.
-    """
-
     A = "A"
     TXT = "TXT"
 

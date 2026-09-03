@@ -33,9 +33,7 @@ from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.asymmetric import rsa as rsa_module
 from josepy import JWKRSA
 
-from compute_space.core.dns.coredns_provider.interface import DnsSettings
 from compute_space.core.dns.coredns_provider.interface import InternalDnsProvider
-from compute_space.core.dns.coredns_provider.interface import ManagedZone
 from compute_space.core.dns.router_records import publish_router_addresses
 from compute_space.core.tls.acquire_cert import acquire_tls_cert
 from compute_space.core.tls.util import _acquire_cert_dns01
@@ -159,13 +157,10 @@ def dns_provider(tls_tmpdir):
     here to write records into the zone file.
     """
     provider = InternalDnsProvider(
-        settings=DnsSettings(
-            corefile_path=tls_tmpdir / "provider-Corefile",  # unused; the test writes its own
-            zonefile_path=tls_tmpdir / "zonefile",
-            zones_dir=tls_tmpdir / "zones",
-            public_ip="127.0.0.1",
-        ),
-        zones=(ManagedZone(ZONE_DOMAIN, is_primary=True),),
+        corefile_path=tls_tmpdir / "provider-Corefile",  # unused; the test writes its own
+        zones_dir=tls_tmpdir / "zones",
+        bind_ip="127.0.0.1",
+        zones=(ZONE_DOMAIN,),
     )
     publish_router_addresses(provider, "127.0.0.1")
     return provider

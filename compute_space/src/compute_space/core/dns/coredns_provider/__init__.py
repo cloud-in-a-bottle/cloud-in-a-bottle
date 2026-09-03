@@ -1,6 +1,3 @@
-"""The router's own DNS: CoreDNS, the zones it answers for, and the records it serves.
-
-Import from ``interface`` — it is the whole of what this package offers.  Nothing in here reaches
-back into the application: the compute space hands the provider its settings and its zone set, and
-gets an object it can start, stop, and write records to.
-"""
+# this package is intentionally separated from the rest of the code, to keep things simpler to reason about.
+# users should only use InternalDnsProvider.
+# and this package should not import from the rest of the codebase, other than trivial things like logging and side-effect-free utils.

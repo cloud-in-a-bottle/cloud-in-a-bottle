@@ -22,10 +22,9 @@ from compute_space.core.caddy import reload_caddy_for_domains
 from compute_space.core.caddy import set_active_caddy
 from compute_space.core.caddy import start_caddy
 from compute_space.core.caddy import unix_admin_address
+from compute_space.core.containers import CONTAINER_GATEWAY_IP
 from compute_space.core.dns.coredns_provider.interface import InternalDnsProvider
 from compute_space.core.dns.router_records import publish_router_addresses
-from compute_space.core.dns.settings import dns_settings_for
-from compute_space.core.dns.settings import zones_for_domains
 from compute_space.core.domains import Domain
 from compute_space.core.domains import effective_domains
 from compute_space.core.first_boot import owner_exists
@@ -99,6 +98,23 @@ async def _ensure_tls_cert(config: Config, db: sqlite3.Connection, dns: Internal
         await provision_cert(config, db, dns)
 
 
+def _dns_bind_ip(public_ip: str) -> str:
+    """The local address CoreDNS binds for authoritative DNS.
+
+    Wildcard :53 conflicts with podman's aardvark-dns.  The configured public IP works where it is
+    assigned to an interface but fails on AWS/GCP, where public IPs are NATed to a private address;
+    the default-route source is the local address that actually receives that traffic.  Connecting
+    a UDP socket sends nothing -- it just asks the kernel which source address the route would use.
+    """
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            sock.connect(("8.8.8.8", 80))
+            return str(sock.getsockname()[0])
+    except OSError:
+        logger.warning(f"Default-route probe failed; binding DNS to the configured public IP {public_ip}")
+        return public_ip
+
+
 def _ensure_coredns_binary(config: Config) -> str:
     """Return the CoreDNS binary to launch, self-healing a missing one."""
     if found := shutil.which("coredns"):
@@ -139,8 +155,13 @@ async def _main() -> None:
             # Authoritative for every public (non-mDNS) domain the instance answers on, so a
             # secondary domain delegated to this box resolves too — not just the primary.
             dns = InternalDnsProvider(
-                settings=dns_settings_for(config, config.public_ip),
-                zones=zones_for_domains(db),
+                corefile_path=config.coredns_corefile_path,
+                zones_dir=config.zones_dir,
+                bind_ip=_dns_bind_ip(config.public_ip),
+                container_gateway_ip=CONTAINER_GATEWAY_IP,
+                # mDNS `.local` domains are excluded: the wildcard mDNS responder serves them, and
+                # they never reach CoreDNS or ACME.
+                zones=tuple(d.name_no_port for d in domains if not d.mdns),
                 coredns_bin=_ensure_coredns_binary(config),
             )
             await dns.start()

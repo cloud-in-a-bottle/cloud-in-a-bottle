@@ -220,10 +220,6 @@ class Config:
         return self.openhost_data_path / "Corefile"
 
     @property
-    def coredns_zonefile_path(self) -> Path:
-        return self.openhost_data_path / "zonefile"
-
-    @property
     def zones_dir(self) -> Path:
         """Directory for per-domain CoreDNS zone files (domains beyond the primary)."""
         return self.openhost_data_path / "zones"
