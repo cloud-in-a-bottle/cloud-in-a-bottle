@@ -54,33 +54,38 @@ def _gateway_ip_is_bindable(gateway_ip: str) -> bool:
         return False
 
 
-@attr.s(auto_attribs=True, frozen=True)
-class DnsZone:
-    """A public domain plus its zone file.  The container view's file lives next to it."""
-
-    domain: str
-    zonefile_path: Path
-
-    @property
-    def container_zonefile_path(self) -> Path:
-        return self.zonefile_path.with_name(self.zonefile_path.name + ".container")
-
-
-def public_dns_zones(zones_dir: Path, zones: Sequence[str]) -> tuple[DnsZone, ...]:
-    """Pair each zone with the file it renders to.
+def _zonefile_path(zones_dir: Path, zone: str) -> Path:
+    """Where a zone's generated file goes.
 
     Each zone needs its own file, since a zone is only authoritative for what is in it.  Any port
     is stripped so none ends up in a filename.
     """
-    return tuple(DnsZone(domain=z, zonefile_path=zones_dir / f"{z.split(':')[0]}.zone") for z in zones)
+    return zones_dir / f"{zone.split(':')[0]}.zone"
+
+
+def _container_zonefile_path(zones_dir: Path, zone: str) -> Path:
+    """The container view's copy, alongside the public one."""
+    public = _zonefile_path(zones_dir, zone)
+    return public.with_name(public.name + ".container")
+
+
+def discard_zone_files(zones_dir: Path, zone: str) -> None:
+    """Drop a removed zone's rendered files.
+
+    Only litter once the Corefile stops referencing them, but litter that a later re-add would
+    serve stale if it raced the re-render.
+    """
+    for path in (_zonefile_path(zones_dir, zone), _container_zonefile_path(zones_dir, zone)):
+        path.unlink(missing_ok=True)
 
 
 def write_coredns_config(
-    zones: Sequence[DnsZone],
+    zones: Sequence[str],
     records: Sequence[DnsRecord],
     serial: int,
     *,
     corefile_path: Path,
+    zones_dir: Path,
     bind_ip: str,
     container_gateway_ip: str | None = None,
     default_ttl: int = ADDRESS_TTL_SECONDS,
@@ -94,10 +99,20 @@ def write_coredns_config(
         logger.info("Container gateway {} not bindable; skipping container-facing DNS view", container_gateway_ip)
         container_gateway_ip = None
 
+    # The Corefile names a file per zone per view, so pair each zone up with its paths once.
+    zone_files = [
+        {
+            "domain": zone,
+            "zonefile_path": _zonefile_path(zones_dir, zone),
+            "container_zonefile_path": _container_zonefile_path(zones_dir, zone),
+        }
+        for zone in zones
+    ]
+
     corefile_path.parent.mkdir(parents=True, exist_ok=True)
     corefile_path.write_text(
         _jinja_env.get_template("Corefile").render(
-            zones=zones,
+            zones=zone_files,
             bind_ip=bind_ip,
             container_gateway_ip=container_gateway_ip,
             upstream_dns=" ".join(UPSTREAM_DNS),
@@ -105,20 +120,21 @@ def write_coredns_config(
     )
 
     for zone in zones:
-        _write_zone_file(zone, records, serial, default_ttl)
+        _write_zone_file(zone, _zonefile_path(zones_dir, zone), records, serial, default_ttl)
 
     # this is for the hairpin
     for zone in zones if container_gateway_ip else ():
         _write_rendered(
-            zone.container_zonefile_path,
+            _container_zonefile_path(zones_dir, zone),
             _jinja_env.get_template("zonefile_container").render(
-                zone_domain=zone.domain, gateway_ip=container_gateway_ip, serial=serial
+                zone_domain=zone, gateway_ip=container_gateway_ip, serial=serial
             ),
         )
 
 
 def _write_zone_file(
-    zone: DnsZone,
+    zone: str,
+    path: Path,
     records: Sequence[DnsRecord],
     serial: int,
     default_ttl: int = ADDRESS_TTL_SECONDS,
@@ -130,9 +146,9 @@ def _write_zone_file(
     with, the addresses routing the space included, is a record.
     """
     _write_rendered(
-        zone.zonefile_path,
+        path,
         _jinja_env.get_template("zonefile").render(
-            zone_domain=zone.domain, serial=serial, default_ttl=default_ttl, records=records
+            zone_domain=zone, serial=serial, default_ttl=default_ttl, records=records
         ),
     )
 

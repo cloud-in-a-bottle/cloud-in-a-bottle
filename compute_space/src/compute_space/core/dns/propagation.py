@@ -23,7 +23,7 @@ _DIG_TIMEOUT_SECONDS = 10.0
 
 
 async def wait_for_records(
-    fqdn: str, rrtype: RecordType, expected_values: Sequence[str], timeout: float, interval: float = 5
+    fqdn: str, record_type: RecordType, expected_values: Sequence[str], timeout: float, interval: float = 5
 ) -> bool:
     """Poll an external resolver until every expected value is visible at ``fqdn``.
 
@@ -34,7 +34,7 @@ async def wait_for_records(
     expected = set(expected_values)
 
     while time.monotonic() < deadline:
-        if await _dig_sees(fqdn, rrtype, expected):
+        if await _dig_sees(fqdn, record_type, expected):
             logger.info(f"DNS propagation confirmed for {fqdn}")
             return True
         logger.info(f"Waiting for DNS propagation of {fqdn} ({deadline - time.monotonic():.0f}s remaining)")
@@ -44,7 +44,7 @@ async def wait_for_records(
     return False
 
 
-async def _dig_sees(fqdn: str, rrtype: RecordType, expected: set[str]) -> bool:
+async def _dig_sees(fqdn: str, record_type: RecordType, expected: set[str]) -> bool:
     """One dig, or False if it fails -- a resolver hiccup is indistinguishable from not-yet-visible
     and both mean keep waiting."""
     try:
@@ -52,7 +52,7 @@ async def _dig_sees(fqdn: str, rrtype: RecordType, expected: set[str]) -> bool:
             "dig",
             f"@{_PROPAGATION_RESOLVER}",
             fqdn,
-            rrtype,
+            record_type,
             "+short",
             "+timeout=5",
             "+tries=1",

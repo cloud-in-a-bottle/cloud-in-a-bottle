@@ -13,11 +13,9 @@ import pytest
 import compute_space.core.dns.coredns_provider.coredns as dns_mod
 from compute_space.config import DefaultConfig
 from compute_space.core.containers import CONTAINER_GATEWAY_IP
-from compute_space.core.dns.coredns_provider.interface import DnsZone
 from compute_space.core.dns.coredns_provider.interface import DnsZoneError
 from compute_space.core.dns.coredns_provider.interface import InternalDnsProvider
 from compute_space.core.dns.coredns_provider.interface import RecordType
-from compute_space.core.dns.coredns_provider.interface import public_dns_zones
 from compute_space.core.dns.router_records import publish_router_addresses
 from compute_space.core.domains import Domain
 from compute_space.core.domains import DomainRecord
@@ -31,6 +29,7 @@ from compute_space.tests.conftest import open_db
 PUBLIC_IP = "203.0.113.10"
 # The local address CoreDNS binds; the compute space works it out and passes it in.
 BIND_IP = "10.0.0.5"
+APP_ZONE = "app.example.com"
 
 
 def _seed_dns_cfg(tmp_path: Path, *domains: Domain, **kw: Any) -> DefaultConfig:
@@ -51,13 +50,14 @@ def _render(tmp_path: Path, container_gateway_ip: str | None = None) -> dict[str
     """Rendering kwargs pointing at ``tmp_path``, with no compute space behind them."""
     return {
         "corefile_path": tmp_path / "Corefile",
+        "zones_dir": tmp_path / "zones",
         "bind_ip": BIND_IP,
         "container_gateway_ip": container_gateway_ip,
     }
 
 
-def _app_zone(tmp_path: Path) -> DnsZone:
-    return public_dns_zones(tmp_path / "zones", ("app.example.com",))[0]
+def _app_zonefile(tmp_path: Path) -> Path:
+    return tmp_path / "zones" / f"{APP_ZONE}.zone"
 
 
 def _zones(db: sqlite3.Connection) -> tuple[str, ...]:
@@ -118,8 +118,7 @@ def test_container_dns_view_rendered_when_gateway_bindable(tmp_path: Path, monke
     monkeypatch.setattr(dns_mod, "_gateway_ip_is_bindable", lambda ip: True)
 
     render = _render(tmp_path, container_gateway_ip="10.200.0.1")
-    zone = _app_zone(tmp_path)
-    dns_mod.write_coredns_config((zone,), (), serial=1, **render)
+    dns_mod.write_coredns_config((APP_ZONE,), (), serial=1, **render)
 
     cf = render["corefile_path"].read_text()
     # Public view binds the discovered local IP; container view binds the gateway.
@@ -128,7 +127,7 @@ def test_container_dns_view_rendered_when_gateway_bindable(tmp_path: Path, monke
     assert f"forward . {' '.join(dns_mod.UPSTREAM_DNS)}" in cf
 
     # The container zonefile answers the wildcard with the gateway, never the public IP.
-    cz = zone.container_zonefile_path.read_text()
+    cz = _app_zonefile(tmp_path).with_suffix(".zone.container").read_text()
     assert "*   IN A    10.200.0.1" in cz
     assert PUBLIC_IP not in cz
 
@@ -137,13 +136,12 @@ def test_container_dns_view_skipped_when_gateway_not_bindable(tmp_path: Path, mo
     monkeypatch.setattr(dns_mod, "_gateway_ip_is_bindable", lambda ip: False)
 
     render = _render(tmp_path, container_gateway_ip="10.200.0.1")
-    zone = _app_zone(tmp_path)
-    dns_mod.write_coredns_config((zone,), (), serial=1, **render)
+    dns_mod.write_coredns_config((APP_ZONE,), (), serial=1, **render)
 
     cf = render["corefile_path"].read_text()
     assert "bind 10.200.0.1" not in cf
     assert "forward" not in cf
-    assert not zone.container_zonefile_path.exists()
+    assert not _app_zonefile(tmp_path).with_suffix(".zone.container").exists()
 
 
 def test_container_view_forward_and_distinct_bind(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -152,7 +150,7 @@ def test_container_view_forward_and_distinct_bind(tmp_path: Path, monkeypatch: p
     monkeypatch.setattr(dns_mod, "_gateway_ip_is_bindable", lambda ip: True)
 
     render = _render(tmp_path, container_gateway_ip=CONTAINER_GATEWAY_IP)
-    dns_mod.write_coredns_config((_app_zone(tmp_path),), (), serial=1, **render)
+    dns_mod.write_coredns_config((APP_ZONE,), (), serial=1, **render)
     cf = render["corefile_path"].read_text()
 
     assert "bind 10.0.0.5" in cf  # public/authoritative view
@@ -176,12 +174,14 @@ def test_zone_set_covers_every_public_domain_and_skips_mdns(tmp_path: Path) -> N
         Domain(name="myhost.local", tls=False, mdns=True),
     )
     with closing(open_db(config)) as db:
-        zones = public_dns_zones(config.zones_dir, _zones(db))
+        zones = _zones(db)
     # The mDNS domain is excluded (served by the responder, not CoreDNS).
-    assert [z.domain for z in zones] == ["host.example.com", "host.example.org"]
-    # Primary keeps the legacy zonefile path; the secondary gets a per-domain file under zones/.
-    assert zones[0].zonefile_path == _zonefile(config, "host.example.com")
-    assert zones[1].zonefile_path == _zonefile(config, "host.example.org")
+    assert list(zones) == ["host.example.com", "host.example.org"]
+    # Each zone renders to its own file under zones/.
+    assert [dns_mod._zonefile_path(config.zones_dir, z) for z in zones] == [
+        _zonefile(config, "host.example.com"),
+        _zonefile(config, "host.example.org"),
+    ]
 
 
 @pytest.mark.asyncio
@@ -412,9 +412,8 @@ def test_zone_caches_addresses_long_but_negative_answers_briefly(tmp_path: Path)
     # visitor able to reach the instance while CoreDNS is down during an update -- so it is
     # deliberately long. Negative caching stays short (RFC 2308 uses min(SOA MINIMUM, SOA TTL)),
     # which is what lets the NODATA left by a cleared challenge expire before the next renewal.
-    zone = _app_zone(tmp_path)
-    dns_mod.write_coredns_config((zone,), (), serial=1, **_render(tmp_path))
+    dns_mod.write_coredns_config((APP_ZONE,), (), serial=1, **_render(tmp_path))
 
-    content = zone.zonefile_path.read_text()
+    content = _app_zonefile(tmp_path).read_text()
     assert "$TTL 300" in content
     assert "60    ; minimum" in content

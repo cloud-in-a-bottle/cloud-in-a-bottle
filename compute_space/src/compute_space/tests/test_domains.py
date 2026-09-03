@@ -10,7 +10,7 @@ from __future__ import annotations
 import sqlite3
 
 from compute_space.config import DefaultConfig
-from compute_space.core.dns.coredns_provider.interface import public_dns_zones
+from compute_space.core.dns.coredns_provider import coredns as dns_mod
 from compute_space.core.domains import Domain
 from compute_space.core.domains import DomainRecord
 from compute_space.core.domains import effective_domains
@@ -108,6 +108,5 @@ def test_match_domain_empty_name_never_matches() -> None:
 def test_zonefile_path_strips_port() -> None:
     # Every zone gets a file under zones_dir, and no ':' may leak into the filename.
     cfg = DefaultConfig()
-    zones = public_dns_zones(cfg.zones_dir, ("host.example.com:8443", "other.example.com:99"))
-    assert zones[0].zonefile_path == cfg.zones_dir / "host.example.com.zone"
-    assert ":" not in zones[1].zonefile_path.name
+    assert dns_mod._zonefile_path(cfg.zones_dir, "host.example.com:8443") == cfg.zones_dir / "host.example.com.zone"
+    assert ":" not in dns_mod._zonefile_path(cfg.zones_dir, "other.example.com:99").name

@@ -1,10 +1,3 @@
-"""Everything outside this package may use, and nothing else.
-
-The compute space talks to the router's DNS through as narrow a surface as it can: construct an
-:class:`InternalDnsProvider`, start it, write records to it, and tell it when the zone set changes.
-Import from here rather than from a module inside the package.
-"""
-
 from __future__ import annotations
 
 import time
@@ -15,8 +8,7 @@ import attr
 
 from compute_space.core.dns.coredns_provider.coredns import ADDRESS_TTL_SECONDS
 from compute_space.core.dns.coredns_provider.coredns import CoreDnsProcess
-from compute_space.core.dns.coredns_provider.coredns import DnsZone
-from compute_space.core.dns.coredns_provider.coredns import public_dns_zones
+from compute_space.core.dns.coredns_provider.coredns import discard_zone_files
 from compute_space.core.dns.coredns_provider.coredns import write_coredns_config
 from compute_space.core.dns.coredns_provider.records import APEX
 from compute_space.core.dns.coredns_provider.records import DnsRecord
@@ -24,15 +16,14 @@ from compute_space.core.dns.coredns_provider.records import RecordType
 from compute_space.core.dns.coredns_provider.records import normalize_zone
 from compute_space.core.logging import logger
 
+# Submodule types/consts are re-exported here so users can only import from this file.
 __all__ = [
     "ADDRESS_TTL_SECONDS",
     "APEX",
-    "DnsZoneError",
     "DnsRecord",
-    "DnsZone",
+    "DnsZoneError",
     "InternalDnsProvider",
     "RecordType",
-    "public_dns_zones",
 ]
 
 
@@ -66,26 +57,9 @@ class InternalDnsProvider:
     _coredns: CoreDnsProcess | None = attr.ib(default=None, init=False)
     _serial: int = attr.ib(default=0, init=False)
 
-    @property
-    def zones(self) -> tuple[str, ...]:
-        return self._zones
-
-    @property
-    def is_running(self) -> bool:
-        return self._coredns is not None
-
-    @property
-    def rendered_zones(self) -> tuple[DnsZone, ...]:
-        return public_dns_zones(self.zones_dir, self.zones)
-
-    @property
-    def records(self) -> tuple[DnsRecord, ...]:
-        flat = [r for rrset in self._records.values() for r in rrset]
-        return tuple(sorted(flat, key=lambda r: (r.name, r.type, r.data)))
-
     async def start(self) -> None:
         self._write_config()
-        logger.info(f"Starting CoreDNS for {', '.join(z.domain for z in self.rendered_zones) or 'no zones'}")
+        logger.info(f"Starting CoreDNS for {', '.join(self._zones) or 'no zones'}")
         self._coredns = await CoreDnsProcess.start(self.corefile_path, coredns_bin=self.coredns_bin)
 
     async def stop(self) -> None:
@@ -93,7 +67,32 @@ class InternalDnsProvider:
             await self._coredns.stop()
             self._coredns = None
 
-    # ─── records ───
+    @property
+    def is_running(self) -> bool:
+        return self._coredns is not None
+
+    @property
+    def zones(self) -> tuple[str, ...]:
+        return self._zones
+
+    async def add_zone(self, zone: str) -> None:
+        # Normalize on the way in, not just for the comparison, so the stored set and a later
+        # lookup agree on how a zone is spelled.
+        added = normalize_zone(zone)
+        if added in self._zones:
+            raise DnsZoneError(f"Already authoritative for {added!r}")
+        await self._reconcile((*self._zones, added))
+
+    async def remove_zone(self, zone: str) -> None:
+        name = normalize_zone(zone)
+        if name not in self._zones:
+            raise DnsZoneError(f"Not authoritative for {name!r}")
+        await self._reconcile(tuple(z for z in self._zones if z != name))
+
+    @property
+    def records(self) -> tuple[DnsRecord, ...]:
+        flat = [r for rrset in self._records.values() for r in rrset]
+        return tuple(sorted(flat, key=lambda r: (r.name, r.type, r.data)))
 
     def set_records(
         self, name: str, record_type: RecordType, values: Sequence[str], ttl: int = ADDRESS_TTL_SECONDS
@@ -121,43 +120,24 @@ class InternalDnsProvider:
         self._write_config()
         logger.info(f"Cleared {record_type} records at {name!r} in every zone")
 
-    # ─── zones ───
-
-    async def add_zone(self, zone: str) -> None:
-        # Normalize on the way in, not just for the comparison, so the stored set and a later
-        # lookup agree on how a zone is spelled.
-        added = normalize_zone(zone)
-        if added in self._zones:
-            raise DnsZoneError(f"Already authoritative for {added!r}")
-        await self._reconcile((*self._zones, added))
-
-    async def remove_zone(self, zone: str) -> None:
-        name = normalize_zone(zone)
-        if name not in self._zones:
-            raise DnsZoneError(f"Not authoritative for {name!r}")
-        await self._reconcile(tuple(z for z in self._zones if z != name))
-
     async def _reconcile(self, zones: tuple[str, ...]) -> None:
         """Move the managed set to ``zones``, then re-render and restart CoreDNS.
 
         A restart, not just a re-render, because a zone appearing or disappearing means a
         different set of Corefile server blocks, which a running process won't pick up.
         """
-        before = {z.domain: z for z in self.rendered_zones}
+        before = set(self._zones)
         self._zones = zones
-        after = {z.domain for z in self.rendered_zones}
 
-        for name in before.keys() - after:
-            _discard_zone_files(before[name])
-        logger.info(f"DNS zones are now {sorted(after) or 'none'}")
+        for name in before - set(zones):
+            discard_zone_files(self.zones_dir, name)
+        logger.info(f"DNS zones are now {sorted(zones) or 'none'}")
 
         # Re-render whether or not anything is serving the files right now: a later start reads
         # them as they are.
         self._write_config()
         if self._coredns is not None:
             await self._coredns.restart()
-
-    # ─── rendering ───
 
     def _write_config(self) -> None:
         """The Corefile and every zone file, rendered from scratch.
@@ -168,10 +148,11 @@ class InternalDnsProvider:
         files (``reload 2s``), not the Corefile, and picks the data up once the serial moves.
         """
         write_coredns_config(
-            self.rendered_zones,
+            self._zones,
             self.records,
             self._next_serial(),
             corefile_path=self.corefile_path,
+            zones_dir=self.zones_dir,
             bind_ip=self.bind_ip,
             container_gateway_ip=self.container_gateway_ip,
         )
@@ -186,13 +167,3 @@ class InternalDnsProvider:
         # Serials are unsigned 32-bit and wrap; RFC 1982 arithmetic makes the wrapped value newer.
         self._serial = max(self._serial + 1, int(time.time())) % 2**32
         return self._serial
-
-
-def _discard_zone_files(zone: DnsZone) -> None:
-    """Drop a removed zone's rendered files.
-
-    Only litter once the Corefile stops referencing them, but litter that a later re-add would
-    serve stale if it raced the re-render.
-    """
-    for path in (zone.zonefile_path, zone.container_zonefile_path):
-        path.unlink(missing_ok=True)

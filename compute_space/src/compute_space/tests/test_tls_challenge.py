@@ -18,11 +18,11 @@ class _RecordingDns:
 
     calls: list[tuple[str, ...]] = attr.ib(factory=list)
 
-    def set_records(self, name: str, rrtype: RecordType, values: Sequence[str], ttl: int = 300) -> None:
-        self.calls.append(("set", name, rrtype, ",".join(values), str(ttl)))
+    def set_records(self, name: str, record_type: RecordType, values: Sequence[str], ttl: int = 300) -> None:
+        self.calls.append(("set", name, record_type, ",".join(values), str(ttl)))
 
-    def delete_records(self, name: str, rrtype: RecordType) -> None:
-        self.calls.append(("delete", name, rrtype))
+    def delete_records(self, name: str, record_type: RecordType) -> None:
+        self.calls.append(("delete", name, record_type))
 
 
 def test_a_wildcard_order_validates_against_the_base_domain() -> None:
@@ -58,10 +58,10 @@ async def test_the_wait_has_a_bounded_timeout(monkeypatch: pytest.MonkeyPatch) -
     # Bounded, so a delegation that never propagates fails the order instead of hanging the renewal.
     seen: dict[str, Any] = {}
 
-    async def record(fqdn: str, rrtype: str, values: Sequence[str], timeout: float) -> bool:
-        seen.update(fqdn=fqdn, rrtype=rrtype, timeout=timeout)
+    async def record(fqdn: str, record_type: str, values: Sequence[str], timeout: float) -> bool:
+        seen.update(fqdn=fqdn, record_type=record_type, timeout=timeout)
         return True
 
     monkeypatch.setattr(challenge, "wait_for_records", record)
     await challenge.wait_until_visible("example.com", ["tok"])
-    assert seen == {"fqdn": "_acme-challenge.example.com", "rrtype": "TXT", "timeout": 90}
+    assert seen == {"fqdn": "_acme-challenge.example.com", "record_type": "TXT", "timeout": 90}
