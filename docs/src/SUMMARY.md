@@ -8,7 +8,6 @@
 - [Deploying on a cloud instance](setup/cloud_instance.md)
 - [Deploying on a dedicated home server](setup/dedicated_homeserver.md)
 - [Deploying on a shared home machine](setup/shared_homeserver.md)
-- [Building your own VM image](setup/building_a_vm_image.md)
 - [Exposing a server with a static IP](setup/static_ip.md)
 - [Exposing a home server](setup/home_network.md)
 

@@ -1,6 +1,6 @@
 # Building your own VM image
 
-The [release images](./shared_homeserver.md#part-1-download-and-run-the-vm-image) are produced by `image/build.sh` in the [Cloud in a Bottle repo](https://github.com/cloud-in-a-bottle/cloud-in-a-bottle). Build your own to bake in a custom branch, an SSH key, or a claim token, or, with `--public`, [a TLS image for your own domain](#building-a-public-tls-image). The output is the same qcow2 + OVA pair the releases ship, which you then boot and claim exactly as in [Deploying on a shared home machine](./shared_homeserver.md#part-1-download-and-run-the-vm-image).
+The [release images](../src/setup/shared_homeserver.md#part-1-download-and-run-the-vm-image) are produced by `../../image/build.sh` in the [Cloud in a Bottle repo](https://github.com/cloud-in-a-bottle/cloud-in-a-bottle). Build your own to bake in a custom branch, an SSH key, or a claim token, or, with `--public`, [a TLS image for your own domain](#building-a-public-tls-image). The output is the same qcow2 + OVA pair the releases ship, which you then boot and claim exactly as in [Deploying on a shared home machine](../src/setup/shared_homeserver.md#part-1-download-and-run-the-vm-image).
 
 ## What you need
 
@@ -48,7 +48,7 @@ image/build.sh \
 
 By default the image is HTTP-only and not suitable for exposing publicly. Pass `--public` to bake a TLS image instead: one provisioned with CoreDNS, Caddy, and Let's Encrypt for `--domain`, ready to serve at `https://<domain>` once it's on the network.
 
-You don't have to build a public image to go public: you can take an HTTP-only instance public in place by adding your domain from the dashboard, per [Exposing a server with a static IP](./static_ip.md). The reason to build with `--public` is that it provisions for your domain from the start, so that domain is the instance's **primary**, whereas converting a running HTTP-only instance leaves the install-time domain as the primary.
+You don't have to build a public image to go public: you can take an HTTP-only instance public in place by adding your domain from the dashboard, per [Exposing a server with a static IP](../src/setup/static_ip.md). The reason to build with `--public` is that it provisions for your domain from the start, so that domain is the instance's **primary**, whereas converting a running HTTP-only instance leaves the install-time domain as the primary.
 
 | Option | Purpose |
 | --- | --- |
@@ -67,8 +67,8 @@ image/build.sh \
   --ssh-pubkey ~/.ssh/id_ed25519.pub
 ```
 
-The build does not get a TLS certificate issued - That can only happen once it's running and has DNS pointing at it. Once it boots with the right public ip `--public-ip`, delegate DNS and open ports 53 / 80 / 443 to it (see [Exposing a server with a static IP](./static_ip.md) or [Exposing a home server](./home_network.md)), and the instance will acquire its wildcard certificate and start serving at `https://mycooldomain.com/`.
+The build does not get a TLS certificate issued - That can only happen once it's running and has DNS pointing at it. Once it boots with the right public ip `--public-ip`, delegate DNS and open ports 53 / 80 / 443 to it (see [Exposing a server with a static IP](../src/setup/static_ip.md) or [Exposing a home server](../src/setup/home_network.md)), and the instance will acquire its wildcard certificate and start serving at `https://mycooldomain.com/`.
 
 ## Run it
 
-Boot the resulting qcow2 (QEMU / KVM / libvirt) or `.ova` (VirtualBox). An HTTP-only image is reached and claimed exactly like a release image; see [Deploying on a shared home machine](./shared_homeserver.md#part-1-download-and-run-the-vm-image). A `--public` image instead needs its networking in place first (delegate DNS, open the ports, as above), then you claim at `https://<domain>`. Either way, the build prints the dashboard URL, the claim mode, and the console login when it finishes.
+Boot the resulting qcow2 (QEMU / KVM / libvirt) or `.ova` (VirtualBox). An HTTP-only image is reached and claimed exactly like a release image; see [Deploying on a shared home machine](../src/setup/shared_homeserver.md#part-1-download-and-run-the-vm-image). A `--public` image instead needs its networking in place first (delegate DNS, open the ports, as above), then you claim at `https://<domain>`. Either way, the build prints the dashboard URL, the claim mode, and the console login when it finishes.
