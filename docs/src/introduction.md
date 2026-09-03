@@ -6,7 +6,12 @@ This is the Cloud in a Bottle Manual. It documents the platform from the perspec
 
 Sections about installing an instance, running apps on it, keeping the data safe, and debugging when things go wrong.
 
-Most of the day-to-day is in the dashboard at [https://mycooldomain.com/](./); this manual fills in the model behind what you see there. If your instance is already up, start at [Using your instance](./operation/overview.md), then set up [Backups](./operation/backups.md).
+For setup docs, choose the guide that matches your desired deployment location:
+- [Deploying on a cloud instance](./setup/cloud_instance.md)
+- [Deploying on a dedicated home server](./setup/dedicated_homeserver.md)
+- [Deploying on a shared home machine](./setup/shared_homeserver.md)
+
+Once your instance is up, things should be mostly self explanatory, but see [Using your instance](./operation/overview.md) for usage details. Then set up [Backups](./operation/backups.md).
 
 ## For app authors
 
