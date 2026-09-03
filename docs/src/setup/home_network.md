@@ -55,18 +55,6 @@ Using your existing connection to the dashboard, open **Settings → Domains** a
 
 Choose **Local (HTTP)** and click **Add domain**.
 
-Check `host` under `[openhost]` in `/home/host/.openhost/local_compute_space/config.toml`. If it is set to `127.0.0.1`, run `tailscale ip -4` and replace the value with the address it prints:
-
-```toml
-host = "100.x.y.z"
-```
-
-If `host` is already `0.0.0.0` or the Tailscale IP, no change is needed. If you changed it, restart the instance:
-
-```bash
-sudo systemctl restart openhost
-```
-
 The dashboard uses `http://bottle.example.com:8080` and apps use `http://<app>.bottle.example.com:8080`.
 
 #### Public (HTTPS)
@@ -90,7 +78,7 @@ sudo chmod 0644 "$CERT_DIR/$DOMAIN.pem"
 sudo chmod 0600 "$CERT_DIR/$DOMAIN.key"
 ```
 
-In `/home/host/.openhost/local_compute_space/config.toml`, set `host = "127.0.0.1"`, `start_caddy = true`, `coredns_enabled = false`, and `acquire_tls_cert_if_missing = false`, then restart the service. The dashboard then uses `https://bottle.example.com`, apps use `https://<app>.bottle.example.com`, and acme.sh renews and installs the certificate through the same DNS API.
+The dashboard then uses `https://bottle.example.com`, apps use `https://<app>.bottle.example.com`, and acme.sh renews and installs the certificate through the same DNS API.
 
 ## IPv4 tunnel service
 
