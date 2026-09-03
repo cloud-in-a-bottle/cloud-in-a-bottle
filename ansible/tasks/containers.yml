@@ -206,7 +206,7 @@
 - name: Write v1 system migration baseline
   copy:
     content: |
-      {"version":1,"timestamp":"{{ ansible_date_time.iso8601 }}","success":true,"error":null}
+      {"version":1,"timestamp":"{{ ansible_facts['date_time']['iso8601'] }}","success":true,"error":null}
     dest: /etc/openhost/migrations.jsonl
     mode: "0644"
   when: not _migration_log.stat.exists
