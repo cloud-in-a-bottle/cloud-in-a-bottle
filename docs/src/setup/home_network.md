@@ -51,15 +51,15 @@ The wildcard record gives every app its own working subdomain.
 
 ### 3. Add the domain
 
-Using your existing connection to the dashboard, open **Settings → Domains** and enter `bottle.example.com`. Choose **Local (HTTP)** to continue serving plain HTTP, or **Public (HTTPS)** to serve the domain with a certificate.
+Using your existing connection to the dashboard, open **Settings → Domains** and enter `bottle.example.com`. Choose **HTTP** to continue serving plain HTTP, or **HTTPS** to serve the domain with a certificate.
 
-#### Local (HTTP)
+#### HTTP
 
-Choose **Local (HTTP)** and click **Add domain**.
+Choose **HTTP** and click **Add domain**.
 
-#### Public (HTTPS)
+#### HTTPS
 
-Choose **Public (HTTPS)** and click **Add domain**. The initial automatic certificate attempt may fail because this setup keeps DNS at your provider rather than delegating it to the instance. Use [acme.sh](https://github.com/acmesh-official/acme.sh) with your DNS provider's [DNS API plugin](https://github.com/acmesh-official/acme.sh/wiki/dnsapi) to complete the DNS-01 challenge and issue a wildcard certificate:
+Choose **HTTPS** and click **Add domain**. The initial automatic certificate attempt may fail because this setup keeps DNS at your provider rather than delegating it to the instance. Use [acme.sh](https://github.com/acmesh-official/acme.sh) with your DNS provider's [DNS API plugin](https://github.com/acmesh-official/acme.sh/wiki/dnsapi) to complete the DNS-01 challenge and issue a wildcard certificate:
 
 ```bash
 DOMAIN=bottle.example.com
