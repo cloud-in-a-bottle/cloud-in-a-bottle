@@ -12,38 +12,21 @@ HTTP tunnels are cheap to provide, because instead of having a dedicated IPv4 pe
 
 This isn't ideal, because there are some non-HTTP protocols that we would like Cloud in a Bottle should be able to receive inbound traffic on, eg SMTP (email). We're working on a better alternative (see below). That said, most apps only use HTTP and will work fine. Just remember that any apps specifying non-standard `[[ports]]` in the manifest won't work properly.
 
-### Cloudflare Tunnel setup
+### Cloudflare Tunnels setup
 
-These steps assume you already have a running OpenHost instance — stand one up first via the [dedicated machine](./dedicated_machine.md) or [shared machine](./shared_machine.md) guide. They then work the same on the VM image, a `provision.sh` install, or bare metal: every instance ends up as a plain-HTTP router listening on `127.0.0.1:8080`, and `cloudflared` reverse-tunnels public traffic to it. Cloudflare terminates TLS at its edge, so OpenHost itself runs in HTTP-only mode — no Caddy, CoreDNS, ACME, or open inbound ports on your side.
-
-> **Claim your instance before the tunnel goes live.** The VM image and any `--local-http-only` bring-up assume the instance is private behind NAT, so claiming may be open (no token). A tunnel makes `/setup` reachable by anyone, so claim it immediately — or bake in a claim token first (`--claim-token` when building the image) so nobody can race you to it.
-
-A couple of limitations to know going in:
-
-- **HTTP(s) only.** Apps using a custom `[[ports]]` entry or a non-HTTP protocol (e.g. SMTP) won't work over the tunnel.
-- **Cloudflare free-plan limits.** Request bodies are capped at 100 MB and origin responses time out after ~100 s, so large uploads and long-lived streaming connections may be cut.
+These steps assume you already have a running Cloud in a Bottle instance in local-only mode, and work with Cloudflare's free plan.
 
 **Prerequisites**
 
-- A domain whose DNS is managed by Cloudflare (nameservers delegated to Cloudflare — the free plan is enough).
-- **Always Use HTTPS** enabled on the zone (Cloudflare dashboard: **SSL/TLS → Edge Certificates**). The local hop from `cloudflared` to the router is plain HTTP, so an app that builds an absolute URL from the forwarded scheme could occasionally emit an `http://` link; this setting upgrades those at the edge. (The dashboard itself already builds `https://` links correctly from the `X-Forwarded-Proto` header Cloudflare sends.)
+- An apex domain (`mycooldomain.com`, not `bottle.mycooldomain.com`) whose DNS is managed by Cloudflare (nameservers delegated to Cloudflare).
+- "Always Use HTTPS" enabled on the zone (Cloudflare dashboard: "Select domain -> SSL/TLS → Edge Certificates"). This setting redirects `http://` requests to `https://` at the edge.
+- Claim your instance before the tunnel goes live. The VM image and any `--local-http-only` bring-up assume the instance is private behind NAT, so claiming may be open (no token). Make sure you finish the instance setup flow before making it public.
 
-**1. Point OpenHost at your domain, in HTTP-only mode.** Edit `/home/host/.openhost/local_compute_space/config.toml`:
+**1. Point Cloud in a Bottle at your domain.**
 
-```toml
-zone_domain = "example.com"
-host = "127.0.0.1"
-tls_enabled = false
-start_caddy = false
-coredns_enabled = false
-acquire_tls_cert_if_missing = false
-```
+First add the domain in the dashboard under **Settings → Domains**: enter `example.com` and choose **Public (HTTPS)**. Cloudflare terminates TLS at its edge, but Cloud in a Bottle still needs to know the public scheme is `https` so that the URLs it generates (and passes to apps) are correct. The local hop from `cloudflared` to the router stays plain HTTP either way. The domain will then report a certificate error, `ACME account key path must be set in config to acquire TLS cert`, which is expected here: Cloudflare supplies the certificate, so Bottle never needs one.
 
-Then `sudo systemctl restart openhost`. Note there's no `:8080` in the domain (unlike the Tailscale HTTP option) — the browser reaches Cloudflare on 443, and Cloudflare forwards to your local `:8080`. Binding to `127.0.0.1` (rather than the image's default `0.0.0.0`) is good hygiene — `cloudflared` reaches the router over loopback, so nothing needs to be exposed on your LAN.
-
-Prefer a domain used at its apex (`example.com`, so apps land at `<app>.example.com`). Cloudflare's free Universal SSL certificate covers the apex and a *first-level* wildcard (`example.com` and `*.example.com`) — but nothing deeper. If you nest OpenHost under `bottle.example.com`, app hostnames like `<app>.bottle.example.com` are a second label deep and browsers will show certificate warnings unless you pay for [Advanced Certificate Manager](https://developers.cloudflare.com/ssl/edge-certificates/advanced-certificate-manager/). The examples here use `example.com` at the apex.
-
-**2. Install `cloudflared`** (Ubuntu):
+**2. Install `cloudflared`** in the VM:
 
 ```bash
 sudo mkdir -p --mode=0755 /usr/share/keyrings
@@ -54,21 +37,21 @@ echo "deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] https://pkg.cloudf
 sudo apt-get update && sudo apt-get install -y cloudflared
 ```
 
-**3. Create the tunnel.** `login` prints a URL — open it in a browser (on any machine) and authorize the zone. `create` writes a credentials file to `~/.cloudflared/<UUID>.json` and prints the tunnel's UUID.
+**3. Create the tunnel**
 
 ```bash
-cloudflared tunnel login
-cloudflared tunnel create openhost
+cloudflared tunnel login  # prints a URL: open it in a browser (on any machine) and authorize the zone.
+cloudflared tunnel create bottle  # `create` writes a credentials file to `~/.cloudflared/<UUID>.json` and prints the tunnel's UUID.
 ```
 
-**4. Route DNS to the tunnel** — one record for the dashboard, one wildcard that gives every app its own subdomain. Quote the wildcard so your shell doesn't glob-expand it (zsh otherwise fails with `no matches found: *.example.com`):
+**4. Route DNS to the tunnel**
 
 ```bash
-cloudflared tunnel route dns openhost example.com
-cloudflared tunnel route dns openhost '*.example.com'
+cloudflared tunnel route dns bottle example.com
+cloudflared tunnel route dns bottle '*.example.com'
 ```
 
-Each creates a **proxied** CNAME to `<UUID>.cfargotunnel.com`. (Proxied wildcard records used to be Enterprise-only, but work on all plans now.) You can also add them by hand in the Cloudflare dashboard under **DNS → Records** if you prefer.
+You can also add them by hand in the Cloudflare dashboard under **DNS → Records** if you prefer.
 
 **5. Write the tunnel config** with a wildcard ingress rule so all app subdomains flow to the one router. Put both the config and credentials under `/etc/cloudflared/` so the system service can read them:
 
@@ -90,12 +73,28 @@ ingress:
   - service: http_status:404
 ```
 
+Check it parses: `cloudflared tunnel ingress validate`
+
 **6. Run it as a service:**
 
 ```bash
 sudo cloudflared service install
 sudo systemctl enable --now cloudflared
 ```
+
+**7. Access your instance over the tunnel**
+
+Go to your configured domain name in a browser from any machine, and you should be able to access your instance!
+
+If it doesn't come up, try these:
+
+```bash
+systemctl status cloudflared                             # is the connector running?
+cloudflared tunnel info bottle                           # does Cloudflare see active connections?
+curl -I -H "Host: example.com" http://127.0.0.1:8080/    # is Bottle itself answering?
+```
+
+A `502` at the edge while that last command returns a `302` means the tunnel is healthy and the app behind it isn't. `Connection refused` instead means Bottle isn't running, or isn't listening on `:8080`. For anything else, `journalctl -u cloudflared -f` shows the connector's own view.
 
 ## Tailscale: HTTP or HTTPS
 
