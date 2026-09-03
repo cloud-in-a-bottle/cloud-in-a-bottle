@@ -82,9 +82,7 @@ def _serial(zonefile: Path) -> int:
 # ─── the container-facing view ───
 
 
-def test_container_dns_view_rendered_when_gateway_bindable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(dns_mod, "_gateway_ip_is_bindable", lambda ip: True)
-
+def test_container_dns_view_rendered_when_a_gateway_is_given(tmp_path: Path) -> None:
     render = _render(tmp_path, container_gateway_ip="10.200.0.1")
     dns_mod.write_coredns_config((APP_ZONE,), (), serial=1, **render)
 
@@ -100,10 +98,9 @@ def test_container_dns_view_rendered_when_gateway_bindable(tmp_path: Path, monke
     assert PUBLIC_IP not in cz
 
 
-def test_container_dns_view_skipped_when_gateway_not_bindable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(dns_mod, "_gateway_ip_is_bindable", lambda ip: False)
-
-    render = _render(tmp_path, container_gateway_ip="10.200.0.1")
+def test_container_dns_view_skipped_without_a_gateway(tmp_path: Path) -> None:
+    # None is what boot passes when the openhost0 interface isn't there to bind.
+    render = _render(tmp_path, container_gateway_ip=None)
     dns_mod.write_coredns_config((APP_ZONE,), (), serial=1, **render)
 
     cf = render["corefile_path"].read_text()
@@ -112,11 +109,9 @@ def test_container_dns_view_skipped_when_gateway_not_bindable(tmp_path: Path, mo
     assert not _app_zonefile(tmp_path).with_suffix(".zone.container").exists()
 
 
-def test_container_view_forward_and_distinct_bind(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_container_view_forward_and_distinct_bind(tmp_path: Path) -> None:
     # The public view and the container view must bind different addresses (the default-route
     # source vs the gateway), and the container catch-all must forward to the upstreams.
-    monkeypatch.setattr(dns_mod, "_gateway_ip_is_bindable", lambda ip: True)
-
     render = _render(tmp_path, container_gateway_ip=CONTAINER_GATEWAY_IP)
     dns_mod.write_coredns_config((APP_ZONE,), (), serial=1, **render)
     cf = render["corefile_path"].read_text()

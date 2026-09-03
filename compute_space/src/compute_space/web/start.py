@@ -115,6 +115,23 @@ def _dns_bind_ip(public_ip: str) -> str:
         return public_ip
 
 
+def _hairpin_gateway_ip() -> str | None:
+    """The address the container-facing DNS view binds, or None to leave that view out.
+
+    That view is what makes container->sibling-app hairpin work (see core/containers.py --dns).  It
+    binds the ``openhost0`` dummy interface, which only ansible-provisioned hosts have; emitting a
+    `bind` for an address that isn't there stops CoreDNS starting at all, so probe before asking
+    for it.
+    """
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
+            probe.bind((CONTAINER_GATEWAY_IP, 0))
+    except OSError:
+        logger.info(f"Container gateway {CONTAINER_GATEWAY_IP} not bindable; serving no container-facing DNS view")
+        return None
+    return CONTAINER_GATEWAY_IP
+
+
 # Domains that resolve without this instance answering for them: mDNS handles ``.local``, and
 # ``lvh.me`` (and friends) are public wildcards pointing at loopback.  An instance configured with
 # only these has nothing to be authoritative for, so it never binds :53.
@@ -180,7 +197,7 @@ async def _main() -> None:
             corefile_path=config.coredns_corefile_path,
             zones_dir=config.zones_dir,
             bind_ip=bind_ip,
-            container_gateway_ip=CONTAINER_GATEWAY_IP,
+            container_gateway_ip=_hairpin_gateway_ip(),
             # Only resolved when it will actually be launched: looking it up self-heals by
             # downloading, which an instance that never runs CoreDNS shouldn't pay for.
             coredns_bin=_ensure_coredns_binary(config) if config.coredns_enabled else "coredns",

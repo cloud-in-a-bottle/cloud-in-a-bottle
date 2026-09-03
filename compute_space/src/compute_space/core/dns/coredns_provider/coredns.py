@@ -1,22 +1,8 @@
-"""The CoreDNS process, and the files it reads.  It serves two things:
-
-* **Public authoritative zones** — one per zone the compute space asked the provider to manage.
-* **The container view** — the same names bound on the container gateway, answering the wildcard
-  with the gateway IP so app containers reach sibling apps through Caddy (NAT hairpin), plus a
-  catch-all forward.  Needed because pasta otherwise makes the public IP local to the container
-  netns.
-
-Zone data reloads on an SOA serial bump, but a *new* zone means a new Corefile server block and so
-a restart — which is why ``InternalDnsProvider`` owns the process rather than this module.  Here it
-is only rendering and the child process; what to render is the provider's.
-"""
-
 from __future__ import annotations
 
 import asyncio
 import contextlib
 import os
-import socket
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -40,18 +26,6 @@ UPSTREAM_DNS = ("8.8.8.8", "1.1.1.1")
 # default: it is what keeps visitors able to reach the instance while CoreDNS is down during an
 # update.
 ADDRESS_TTL_SECONDS = 300
-
-
-def _gateway_ip_is_bindable(gateway_ip: str) -> bool:
-    """The ``openhost0`` dummy interface only exists on ansible-provisioned hosts; in dev/CI
-    binding it would crash CoreDNS, so probe a UDP bind to decide."""
-    try:
-        probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        probe.bind((gateway_ip, 0))
-        probe.close()
-        return True
-    except OSError:
-        return False
 
 
 def _zonefile_path(zones_dir: Path, zone: str) -> Path:
@@ -95,11 +69,6 @@ def write_coredns_config(
     Builds from scratch each time, ignoring the current config.
     """
     assert bind_ip is not None or container_gateway_ip is not None, "must bind at least one view"
-
-    # Emitting the container view against an unbindable gateway would stop CoreDNS starting.
-    if container_gateway_ip and not _gateway_ip_is_bindable(container_gateway_ip):
-        logger.info("Container gateway {} not bindable; skipping container-facing DNS view", container_gateway_ip)
-        container_gateway_ip = None
 
     # The Corefile names a file per zone per view, so pair each zone up with its paths once.
     zone_files = [
