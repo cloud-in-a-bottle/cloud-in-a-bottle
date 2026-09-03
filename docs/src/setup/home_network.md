@@ -28,6 +28,8 @@ Then log in to Tailscale:
 sudo tailscale up
 ```
 
+For a long-running server, you may also want to disable key expiry for this machine in the Tailscale admin console so it does not require periodic reauthentication.
+
 Choose a domain you control the DNS for. We'll use `bottle.example.com` for this purpose. Point both that domain and `*.bottle.example.com` at the server's Tailscale IPv4 address (`tailscale ip -4`). The wildcard record gives every app its own working subdomain.
 
 ### Option 1: HTTP
