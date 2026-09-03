@@ -16,7 +16,9 @@ TODO: include instructions on how to actually set this up.
 
 ## Tailscale: HTTP or HTTPS
 
-These steps assume you have already provisioned an instance in HTTP-only mode by following one of the preceding home server setup guides.
+These steps assume you have already provisioned an instance in HTTP-only mode by following one of the preceding home server setup guides and can access its dashboard.
+
+### 1. Install and connect Tailscale
 
 First, install Tailscale on the instance:
 
@@ -32,11 +34,24 @@ sudo tailscale up
 
 For a long-running server, you may also want to disable key expiry for this machine in the Tailscale admin console so it does not require periodic reauthentication.
 
-Choose a domain you control the DNS for. We'll use `bottle.example.com` for this purpose. Point both that domain and `*.bottle.example.com` at the server's Tailscale IPv4 address (`tailscale ip -4`). The wildcard record gives every app its own working subdomain.
+### 2. Point a domain to the Tailscale IP
 
-### Option 1: HTTP
+Choose a domain you control the DNS for. We'll use `bottle.example.com`. Run `tailscale ip -4` on the instance, then create these records at your DNS provider using the address it prints:
 
-Using your existing connection to the dashboard, open **Settings → Domains**, enter `bottle.example.com`, choose **Local (HTTP)**, and click **Add domain**.
+| Type | Name                   | Value                |
+|------|------------------------|----------------------|
+| `A`  | `bottle.example.com`   | `<tailscale-ip>`     |
+| `A`  | `*.bottle.example.com` | `<tailscale-ip>`     |
+
+The wildcard record gives every app its own working subdomain.
+
+### 3. Add the domain
+
+Using your existing connection to the dashboard, open **Settings → Domains** and enter `bottle.example.com`. Choose **Local (HTTP)** to continue serving plain HTTP on port 8080, or **Public (HTTPS)** to serve the domain with a certificate.
+
+#### Local (HTTP)
+
+Choose **Local (HTTP)** and click **Add domain**.
 
 Run `tailscale ip -4`, then edit `/home/host/.openhost/local_compute_space/config.toml` and set `host` under `[openhost]` to the address it prints:
 
@@ -52,9 +67,9 @@ sudo systemctl restart openhost
 
 The dashboard uses `http://bottle.example.com:8080` and apps use `http://<app>.bottle.example.com:8080`.
 
-### Option 2: HTTPS
+#### Public (HTTPS)
 
-Use the same DNS records, then use [acme.sh](https://github.com/acmesh-official/acme.sh) with your DNS provider's [DNS API plugin](https://github.com/acmesh-official/acme.sh/wiki/dnsapi) to complete the DNS-01 challenge and issue a wildcard certificate:
+Choose **Public (HTTPS)** and click **Add domain**. The initial automatic certificate attempt may fail because this setup keeps DNS at your provider rather than delegating it to the instance. Use [acme.sh](https://github.com/acmesh-official/acme.sh) with your DNS provider's [DNS API plugin](https://github.com/acmesh-official/acme.sh/wiki/dnsapi) to complete the DNS-01 challenge and issue a wildcard certificate:
 
 ```bash
 DOMAIN=bottle.example.com
@@ -73,7 +88,7 @@ sudo chmod 0644 "$CERT_DIR/$DOMAIN.pem"
 sudo chmod 0600 "$CERT_DIR/$DOMAIN.key"
 ```
 
-Using your existing connection to the dashboard, open **Settings → Domains**, enter `bottle.example.com`, leave the type as **Public (HTTPS)**, and click **Add domain**. In `/home/host/.openhost/local_compute_space/config.toml`, set `host = "127.0.0.1"`, `start_caddy = true`, `coredns_enabled = false`, and `acquire_tls_cert_if_missing = false`, then restart the service. The dashboard then uses `https://bottle.example.com`, apps use `https://<app>.bottle.example.com`, and acme.sh renews and installs the certificate through the same DNS API.
+In `/home/host/.openhost/local_compute_space/config.toml`, set `host = "127.0.0.1"`, `start_caddy = true`, `coredns_enabled = false`, and `acquire_tls_cert_if_missing = false`, then restart the service. The dashboard then uses `https://bottle.example.com`, apps use `https://<app>.bottle.example.com`, and acme.sh renews and installs the certificate through the same DNS API.
 
 ## IPv4 tunnel service
 
