@@ -18,6 +18,8 @@ TODO: include instructions on how to actually set this up.
 
 These steps assume you have already provisioned an instance in HTTP-only mode by following one of the preceding home server setup guides and can access its dashboard.
 
+This approach does not make the instance publicly accessible. It makes the instance available only to devices on your tailnet, wherever those devices are connected to the internet.
+
 ### 1. Install and connect Tailscale
 
 First, install Tailscale on the instance:
