@@ -57,8 +57,6 @@ Using your existing connection to the dashboard, open **Settings → Domains** a
 
 Choose **Local (HTTP)** and click **Add domain**.
 
-The dashboard uses `http://bottle.example.com:8080` and apps use `http://<app>.bottle.example.com:8080`.
-
 #### Public (HTTPS)
 
 Choose **Public (HTTPS)** and click **Add domain**. The initial automatic certificate attempt may fail because this setup keeps DNS at your provider rather than delegating it to the instance. Use [acme.sh](https://github.com/acmesh-official/acme.sh) with your DNS provider's [DNS API plugin](https://github.com/acmesh-official/acme.sh/wiki/dnsapi) to complete the DNS-01 challenge and issue a wildcard certificate:
