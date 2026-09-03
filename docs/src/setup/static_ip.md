@@ -9,6 +9,8 @@ Using a static IP is the simpler path, and it is the case on essentially any VPS
 
 If the machine is at home you probably have neither; see [Exposing a home server](./home_network.md) instead.
 
+This page converts an instance that is *already running* in HTTP-only mode. If you are starting from a fresh cloud machine, don't come here first: [Deploying on a cloud instance](./cloud_instance.md) sets the same DNS records up front and then installs directly onto your domain, which is fewer steps and leaves your domain as the instance's primary.
+
 ## Delegate DNS to the machine
 
 Cloud in a Bottle runs an authoritative DNS server for your zone. It serves the wildcard `*.mycooldomain.com`, so every app gets a subdomain without you touching DNS again, and it answers the ACME DNS-01 challenge used to issue the wildcard TLS certificate.
@@ -52,7 +54,7 @@ sudo -u host bash -c "cd /home/host/openhost && /home/host/.pixi/bin/pixi run py
 sudo chmod 600 "$KEY"
 ```
 
-Then edit `/home/host/.openhost/local_compute_space/config.toml`. Under `[openhost]`, flip three settings on, add the three ACME settings, and make sure `public_ip` is your server's real public IPv4 — CoreDNS answers every app subdomain with it:
+Then edit `/home/host/.openhost/local_compute_space/config.toml`. Under `[openhost]`, flip three settings on, add the three ACME settings, and make sure `public_ip` is your server's real public IPv4, since CoreDNS answers every app subdomain with it:
 
 ```toml
 acquire_tls_cert_if_missing = true
@@ -88,4 +90,4 @@ The domain flips to active in the settings table once the certificate lands. The
 curl https://mycooldomain.com/health        # -> {"status":"ok"}
 ```
 
-The domain you installed with stays the instance's primary and keeps working; the dashboard cannot change which domain is primary, and the primary is what background tasks and outbound links use. If you want `mycooldomain.com` to be the primary, provision the machine with it from the start rather than converting.
+The domain you installed with stays the instance's primary and keeps working; the dashboard cannot change which domain is primary, and the primary is what background tasks and outbound links use. If you want `mycooldomain.com` to be the primary, provision the machine with it from the start rather than converting; see [Deploying on a cloud instance](./cloud_instance.md).
