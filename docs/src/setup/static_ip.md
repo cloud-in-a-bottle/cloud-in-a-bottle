@@ -9,7 +9,7 @@ Using a static IP is the simpler path, and it is the case on essentially any VPS
 
 If the machine is at home you probably have neither; see [Exposing a home server](./home_network.md) instead.
 
-This page converts an instance that is *already running* in HTTP-only mode. If you are starting from a fresh cloud machine, don't come here first: [Deploying on a cloud instance](./cloud_instance.md) sets the same DNS records up front and then installs directly onto your domain, which is fewer steps and leaves your domain as the instance's primary.
+This page converts an instance that is *already running* in HTTP-only mode. If you are starting fresh, [Deploying on a cloud instance](./cloud_instance.md) the a more direct path.
 
 ## Delegate DNS to the machine
 
@@ -89,5 +89,3 @@ The domain flips to active in the settings table once the certificate lands. The
 ```bash
 curl https://mycooldomain.com/health        # -> {"status":"ok"}
 ```
-
-The domain you installed with stays the instance's primary and keeps working; the dashboard cannot change which domain is primary, and the primary is what background tasks and outbound links use. If you want `mycooldomain.com` to be the primary, provision the machine with it from the start rather than converting; see [Deploying on a cloud instance](./cloud_instance.md).

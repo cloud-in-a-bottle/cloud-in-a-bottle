@@ -48,4 +48,4 @@ Then browse to the dashboard at `http://lvh.me:8088/` and an app named `foo` at 
 
 ## Part 2: taking it public
 
-Follow [Exposing a server with a static IP](./static_ip.md) for a VPS/static-IP host, or [Exposing a home server](./home_network.md) for a home connection.
+Follow [Exposing a home server](./home_network.md) for a typical home ISP connection, or [Exposing a server with a static IP](./static_ip.md) if you have a static IP.
