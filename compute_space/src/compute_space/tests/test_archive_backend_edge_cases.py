@@ -531,7 +531,7 @@ def test_stop_running_archive_apps_none_when_empty(db, cfg):
 
 
 def test_start_apps_by_id_empty_noop(db, cfg):
-    with mock.patch.object(apps_mod, "start_app_process") as start:
+    with mock.patch.object(apps_mod, "restart_app_process") as start:
         apps_mod.start_apps_by_id([], db, cfg)
     start.assert_not_called()
 

@@ -510,6 +510,19 @@ def remove_image(app_name: str) -> None:
     subprocess.run(["podman", "rmi", image_tag], capture_output=True, timeout=30)
 
 
+def image_exists(image_tag: str) -> bool:
+    """Return whether podman has a usable local image with this tag."""
+    try:
+        result = subprocess.run(
+            ["podman", "image", "exists", image_tag],
+            capture_output=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return result.returncode == 0
+
+
 def container_image_storage_bytes() -> tuple[int | None, int | None]:
     """Return ``(total, reclaimable)`` bytes from ``podman system df``; either value may be ``None``."""
     try:

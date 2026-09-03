@@ -1331,7 +1331,7 @@ def test_stop_running_archive_apps_aborts_if_container_still_running(cfg, db):
 def test_start_apps_by_id_starts_each(cfg, db):
     """start_apps_by_id restarts every id it's given (companion to the quiesce)."""
     db.row_factory = sqlite3.Row
-    with mock.patch.object(apps_mod, "start_app_process") as start:
+    with mock.patch.object(apps_mod, "restart_app_process") as start:
         apps_mod.start_apps_by_id(["a", "b"], db, cfg)
     assert [c.args[0] for c in start.call_args_list] == ["a", "b"]
 
@@ -1339,6 +1339,6 @@ def test_start_apps_by_id_starts_each(cfg, db):
 def test_start_apps_by_id_continues_on_failure(cfg, db):
     """A failure starting one app must not block the others (best-effort)."""
     db.row_factory = sqlite3.Row
-    with mock.patch.object(apps_mod, "start_app_process", side_effect=[RuntimeError("boom"), None]) as start:
+    with mock.patch.object(apps_mod, "restart_app_process", side_effect=[RuntimeError("boom"), None]) as start:
         apps_mod.start_apps_by_id(["a", "b"], db, cfg)
     assert start.call_count == 2

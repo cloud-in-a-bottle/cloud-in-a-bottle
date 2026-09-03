@@ -11,6 +11,7 @@ import pytest
 from compute_space.core import apps as apps_mod
 from compute_space.core.apps import deploy_app_background
 from compute_space.core.apps import launch_app_image
+from compute_space.core.apps import restart_app_process
 from compute_space.core.apps import start_app_process
 from compute_space.core.manifest import PortMapping
 from compute_space.core.manifest import parse_manifest_from_string
@@ -174,6 +175,29 @@ def test_launch_failure_preserves_container_reference_when_cleanup_fails(
 
     row = db.execute("SELECT status, container_id FROM apps WHERE app_id = ?", (app_id,)).fetchone()
     assert (row["status"], row["container_id"]) == ("error", "container-123")
+
+
+def test_restart_reuses_tagged_image_and_persisted_manifest_without_build(
+    cfg: Any,
+    app_db: tuple[sqlite3.Connection, str, Path],
+) -> None:
+    db, app_id, _ = app_db
+    db.execute(
+        "UPDATE apps SET manifest_raw = ?, container_id = ? WHERE app_id = ?",
+        (MANIFEST_TEXT, "old-container", app_id),
+    )
+    db.commit()
+
+    with (
+        mock.patch.object(apps_mod, "launch_app_image") as launch,
+        mock.patch.object(apps_mod, "build_image") as build,
+    ):
+        restart_app_process(app_id, db, cfg)
+
+    build.assert_not_called()
+    launch.assert_called_once()
+    assert launch.call_args.args[:2] == (app_id, "openhost-launch-test:latest")
+    assert launch.call_args.args[2].memory_mb == 384
 
 
 @pytest.mark.parametrize("entry_point", ["start", "deploy"])

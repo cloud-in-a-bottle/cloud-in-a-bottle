@@ -102,10 +102,11 @@ def _capture_restart_sweep(monkeypatch: Any) -> tuple[list[str], threading.Event
     restarted: list[str] = []
     done = threading.Event()
 
-    def fake_sequential(app_ids: list[str], config: Any) -> None:
-        restarted.extend(app_ids)
+    def fake_sequential(apps: list[tuple[str, bool]], config: Any) -> None:
+        restarted.extend(app_id for app_id, _needs_build in apps)
         done.set()
 
+    monkeypatch.setattr(startup, "image_exists", lambda image_tag: True)
     monkeypatch.setattr(startup, "_restart_apps_sequential", fake_sequential)
     return restarted, done
 
@@ -115,7 +116,16 @@ def test_starting_app_with_dead_container_is_restarted(tmp_path: Path, monkeypat
     init_db(cfg.db_path)
     repo = tmp_path / "repo"
     repo.mkdir()
-    app_id = _seed_app(cfg, name="stuck", status="starting", port=20210, container_id="deadbeef", repo_path=str(repo))
+    monkeypatch.setattr(startup, "_PROCESS_START_UTC", "2020-01-01 00:00:00")
+    app_id = _seed_app(
+        cfg,
+        name="stuck",
+        status="starting",
+        port=20210,
+        container_id="deadbeef",
+        repo_path=str(repo),
+        created_at="2019-12-31 23:59:59",
+    )
 
     monkeypatch.setattr(startup, "is_container_running", lambda cid: False)
     restarted, done = _capture_restart_sweep(monkeypatch)
@@ -144,19 +154,30 @@ def test_building_app_with_dead_container_is_restarted(tmp_path: Path, monkeypat
     assert app_id in restarted
 
 
-def test_starting_app_with_live_container_is_healed_to_running(tmp_path: Path, monkeypatch: Any) -> None:
+def test_starting_app_with_live_container_is_recreated(tmp_path: Path, monkeypatch: Any) -> None:
     cfg = _make_test_config(tmp_path, port=20300)
     init_db(cfg.db_path)
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    monkeypatch.setattr(startup, "_PROCESS_START_UTC", "2020-01-01 00:00:00")
     app_id = _seed_app(
-        cfg, name="live", status="starting", port=20310, container_id="livecontainer", repo_path="/nonexistent"
+        cfg,
+        name="live",
+        status="starting",
+        port=20310,
+        container_id="livecontainer",
+        repo_path=str(repo),
+        created_at="2019-12-31 23:59:59",
     )
 
     monkeypatch.setattr(startup, "is_container_running", lambda cid: True)
-    _capture_restart_sweep(monkeypatch)
+    restarted, done = _capture_restart_sweep(monkeypatch)
 
     startup.check_app_status(cfg)
 
-    assert _status(cfg, app_id) == "running"
+    assert done.wait(5)
+    assert restarted == [app_id]
+    assert _status(cfg, app_id) == "starting"
 
 
 def test_running_app_with_dead_container_is_restarted(tmp_path: Path, monkeypatch: Any) -> None:
@@ -566,3 +587,90 @@ def test_inflight_starting_from_current_process_is_not_restarted(tmp_path: Path,
     assert not done.is_set()
     assert app_id not in restarted
     assert _status(cfg, app_id) == "starting"
+
+
+def test_inflight_starting_with_live_container_is_not_restarted(tmp_path: Path, monkeypatch: Any) -> None:
+    cfg = _make_test_config(tmp_path, port=21420)
+    init_db(cfg.db_path)
+    repo = tmp_path / "repo-live"
+    repo.mkdir()
+    monkeypatch.setattr(startup, "_PROCESS_START_UTC", "2020-01-01 00:00:00")
+    app_id = _seed_app(
+        cfg,
+        name="inflight-live",
+        status="starting",
+        port=21430,
+        container_id="live-container",
+        repo_path=str(repo),
+        created_at="2020-01-01 00:00:05",
+    )
+
+    monkeypatch.setattr(startup, "is_container_running", lambda cid: True)
+    restarted, done = _capture_restart_sweep(monkeypatch)
+
+    startup.check_app_status(cfg)
+
+    assert not done.is_set()
+    assert app_id not in restarted
+    assert _status(cfg, app_id) == "starting"
+
+
+def test_running_app_without_image_falls_back_to_rebuild(tmp_path: Path, monkeypatch: Any) -> None:
+    cfg = _make_test_config(tmp_path, port=22100)
+    init_db(cfg.db_path)
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    app_id = _seed_app(
+        cfg, name="missing-image", status="running", port=22110, container_id="dead", repo_path=str(repo)
+    )
+    captured: list[tuple[str, bool]] = []
+    done = threading.Event()
+
+    monkeypatch.setattr(startup, "is_container_running", lambda cid: False)
+    monkeypatch.setattr(startup, "image_exists", lambda image_tag: False)
+
+    def fake_sequential(apps: list[tuple[str, bool]], config: Any) -> None:
+        captured.extend(apps)
+        done.set()
+
+    monkeypatch.setattr(startup, "_restart_apps_sequential", fake_sequential)
+    startup.check_app_status(cfg)
+
+    assert done.wait(5)
+    assert captured == [(app_id, True)]
+
+
+def test_recovery_worker_restarts_existing_images_and_rebuilds_only_fallbacks(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    cfg = _make_test_config(tmp_path, port=22200)
+    init_db(cfg.db_path)
+    restarted: list[str] = []
+    rebuilt: list[str] = []
+
+    monkeypatch.setattr(startup, "restart_app_process", lambda app_id, db, config: restarted.append(app_id))
+    monkeypatch.setattr(startup, "start_app_process", lambda app_id, db, config: rebuilt.append(app_id))
+
+    startup._restart_apps_sequential([("reuse", False), ("fallback", True)], cfg)
+
+    assert restarted == ["reuse"]
+    assert rebuilt == ["fallback"]
+
+
+def test_recovery_worker_persists_restart_failure(tmp_path: Path, monkeypatch: Any) -> None:
+    cfg = _make_test_config(tmp_path, port=22300)
+    init_db(cfg.db_path)
+    repo = tmp_path / "repo-failure"
+    repo.mkdir()
+    app_id = _seed_app(
+        cfg, name="restart-failure", status="starting", port=22310, container_id="old", repo_path=str(repo)
+    )
+
+    def fail_restart(app_id: str, db: sqlite3.Connection, config: Any) -> None:
+        raise RuntimeError("replacement failed")
+
+    monkeypatch.setattr(startup, "restart_app_process", fail_restart)
+    startup._restart_apps_sequential([(app_id, False)], cfg)
+
+    assert _status(cfg, app_id) == "error"
+    assert _error_message(cfg, app_id) == "replacement failed"

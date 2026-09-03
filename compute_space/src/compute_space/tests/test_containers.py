@@ -19,6 +19,7 @@ from compute_space.core.containers import DEFAULT_CAPABILITIES
 from compute_space.core.containers import _bind_mount_arg
 from compute_space.core.containers import build_image
 from compute_space.core.containers import get_docker_logs
+from compute_space.core.containers import image_exists
 from compute_space.core.containers import is_container_running
 from compute_space.core.containers import remove_image
 from compute_space.core.containers import run_container
@@ -785,6 +786,28 @@ def test_is_container_running_returns_false_on_failure(monkeypatch: pytest.Monke
 
     _patch_subprocess_run(monkeypatch, fake_run)
     assert is_container_running("bogus") is False
+
+
+@pytest.mark.parametrize("returncode, expected", [(0, True), (1, False)])
+def test_image_exists_uses_podman_exit_status(
+    monkeypatch: pytest.MonkeyPatch, returncode: int, expected: bool
+) -> None:
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(args[0], returncode),
+    )
+
+    assert image_exists("openhost-notes:latest") is expected
+
+
+def test_image_exists_returns_false_when_podman_is_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
+    def unavailable(*args: object, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+        raise FileNotFoundError
+
+    monkeypatch.setattr(subprocess, "run", unavailable)
+
+    assert image_exists("openhost-notes:latest") is False
 
 
 def test_is_container_running_returns_true_when_podman_reports_running(
