@@ -16,6 +16,12 @@ TODO: include instructions on how to actually set this up.
 
 ## Tailscale: HTTP or HTTPS
 
+First, install Tailscale on the instance:
+
+```bash
+sudo snap install tailscale --classic
+```
+
 Choose a domain you control the DNS for. We'll use `bottle.example.com` for this purpose. Point both that domain and `*.bottle.example.com` at the server's Tailscale IPv4 address (`tailscale ip -4`). The wildcard record gives every app its own working subdomain.
 
 ### Option 1: HTTP
