@@ -70,7 +70,7 @@ function renderDomains(domains) {
         d.is_primary ? dom.el('span', {class: 'domain-primary-label', text: ' (primary)'}) : null,
       ]),
       dom.el('td', {text: d.scheme}),
-      dom.el('td', {text: d.mdns ? 'mDNS (.local)' : 'Public DNS'}),
+      dom.el('td', {text: d.tls ? 'Public' : 'Local'}),
       dom.el('td', null, domainCertCell(d)),
       dom.el('td', {class: 'col-actions'}, domainActions(d, primaryName)),
     ]);

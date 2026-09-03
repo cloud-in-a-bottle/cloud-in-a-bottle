@@ -1,7 +1,7 @@
 [book]
 title = "Cloud in a Bottle Manual"
 authors = ["Imbue"]
-description = "Documentation for the Cloud in a Bottle platform, for operators and app authors."
+description = "Documentation for the Cloud in a Bottle platform, for owners and app authors."
 src = "src"
 language = "en"
 

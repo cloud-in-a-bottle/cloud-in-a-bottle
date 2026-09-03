@@ -54,6 +54,7 @@ from compute_space.core.service_interface.headers import approve_grant_url
 from compute_space.core.service_interface.provider import ProviderUnavailable
 from compute_space.core.service_interface.resolve import resolve_provider
 from compute_space.core.service_interface.services import lookup_service_by_manifest_shortname
+from compute_space.web.auth.auth import get_connection_origin
 from compute_space.web.auth.auth import require_app_auth
 from compute_space.web.auth.auth import verify_app_auth
 from compute_space.web.helpers.proxy import proxy_http_request
@@ -75,6 +76,7 @@ def _inject_grant_url_if_global(
     service_url: str,
     consumer_app_id: str,
     db: sqlite3.Connection,
+    request: Request[Any, Any, Any],
 ) -> ASGIResponse:
     """If the provider's 403 body is ``permission_required`` with a global-scoped
     grant request, decorate it with ``grant_url`` pointing at the owner-facing
@@ -95,7 +97,12 @@ def _inject_grant_url_if_global(
     if not isinstance(grant, (str, dict)):
         return response
 
-    required_grant["grant_url"] = approve_grant_url(consumer_app_id, service_url, grant, db)
+    # The browsing authority comes from the consumer app's Origin header on a browser-driven
+    # call, so the approval URL keeps the owner's domain + access port; a server-side call has
+    # no Origin and falls back to the primary (see ``approve_grant_url``).
+    required_grant["grant_url"] = approve_grant_url(
+        consumer_app_id, service_url, grant, db, get_connection_origin(request)
+    )
 
     return ASGIResponse(
         body=json.dumps(body).encode(),
@@ -222,7 +229,7 @@ async def service_call(
     )
 
     if response.status_code == 403:
-        response = _inject_grant_url_if_global(response, resolved.service_url, consumer_app_id, db)
+        response = _inject_grant_url_if_global(response, resolved.service_url, consumer_app_id, db, request)
 
     _add_cors_response_headers(response, request)
     return response

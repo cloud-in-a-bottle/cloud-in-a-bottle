@@ -98,9 +98,10 @@
   <div class="panel">
     <p class="hint">Hostnames this instance answers on. The primary is used for canonical links and
       app configuration. Add a <strong>public</strong> domain (its DNS must be delegated to this instance
-      for automatic TLS) or a local <code>.local</code> name served over plain HTTP. A primary domain
-      can't be removed; make another domain primary first. Running apps restart automatically when
-      the primary changes.</p>
+      for automatic TLS) or a hostname served locally over plain HTTP, such as a <code>.local</code> or
+      tailnet-only name. Arrange name resolution for local domains separately. A primary domain can't
+      be removed; make another domain primary first. Running apps restart automatically when the primary
+      changes.</p>
 
     <div class="field-row field-row--add">
       <label class="field" for="domain-name">
@@ -111,7 +112,7 @@
         <span>Type</span>
         <select id="domain-type">
           <option value="public">Public (HTTPS)</option>
-          <option value="mdns">Local mDNS (.local, HTTP)</option>
+          <option value="mdns">Local (HTTP)</option>
         </select>
       </label>
       {{ button("Add domain", variant="primary", id="add-domain-btn", onclick="addDomain()", disabled=true) }}
@@ -121,7 +122,7 @@
     <div class="table-scroll" id="domains-table-wrap" hidden>
       <table>
         <thead><tr>
-          <th>Domain</th><th>Scheme</th><th>Discovery</th><th>Certificate</th>
+          <th>Domain</th><th>Scheme</th><th>Type</th><th>Certificate</th>
           <th class="col-actions">Actions</th>
         </tr></thead>
         <tbody id="domains-body"></tbody>

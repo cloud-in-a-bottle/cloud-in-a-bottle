@@ -153,6 +153,10 @@ def test_settings_renders_domains_section(cfg: Any) -> None:
     assert settings_resp.status_code == 200
     assert ">Domains</h2>" in settings_resp.text
     assert 'onclick="addDomain()"' in settings_resp.text
+    assert "Local (HTTP)" in settings_resp.text
+    assert "Local mDNS" not in settings_resp.text
+    assert "Arrange name resolution for local domains" in settings_resp.text
+    assert "<th>Domain</th><th>Scheme</th><th>Type</th>" in settings_resp.text
     assert "js/domains.js" in settings_resp.text
 
 

@@ -24,6 +24,7 @@ from compute_space.core.auth.auth import validate_api_token
 from compute_space.core.auth.auth import validate_app_token
 from compute_space.core.auth.auth import validate_session_token
 from compute_space.core.domains import Domain
+from compute_space.core.domains import host_with_request_port
 from compute_space.db import get_db
 from compute_space.web.helpers.zone import zone_for_request
 
@@ -214,7 +215,7 @@ def build_login_url(zone: Domain, netloc: str, path: str, query: str) -> str:
     next_url = f"{proto}://{netloc}{path}"
     if query:
         next_url = f"{next_url}?{query}"
-    return f"{proto}://{zone.name}/login?next={quote(next_url, safe='')}"
+    return f"{proto}://{host_with_request_port(zone.name_no_port, netloc)}/login?next={quote(next_url, safe='')}"
 
 
 def login_required_redirect(request: Request[Any, Any, Any]) -> Response[Any]:

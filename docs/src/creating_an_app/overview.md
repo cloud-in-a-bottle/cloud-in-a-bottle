@@ -1,0 +1,153 @@
+# Creating an App for Cloud in a Bottle
+
+This guide walks through building an app that runs on Cloud in a Bottle.
+
+## Deploying your app
+
+From the dashboard, click "Deploy New App" and provide a git repo URL (public or private - private GitHub repos will prompt for auth).
+
+The router reads `cloudinabottle.toml`, builds the container image from your `Dockerfile` using rootless podman, and starts routing requests to it. Apps are accessible at `https://{app_name}.{zone_domain}/` (e.g. `https://my-app.mycooldomain.com/`).
+
+
+## Writing an app to run on Cloud in a Bottle
+
+Apps can be anything that can run in an OCI container, and accessed via HTTP(s). Cloud in a Bottle runs every app under rootless podman, so container-root maps to an unprivileged subuid on the host rather than real root.
+
+A `cloudinabottle.toml` manifest must be placed at the root of your repo, to indicate to Cloud in a Bottle how to run your app. See the [manifest spec](manifest_spec.md) for the full field reference.
+
+## App template
+
+Cloud in a Bottle has a standard app template available as a starting point: [https://github.com/cloud-in-a-bottle/app-template](https://github.com/cloud-in-a-bottle/app-template)
+
+This repo contains a Python 3.12 server using Litestar and Hypercorn, managed with uv. It includes pre-commit hooks (ruff formatting, mypy strict type checking), and an integration test suite using pytest, httpx, and Playwright. Tests run both locally and as a full containerized app, building the Dockerfile and fronting it with the real Cloud in a Bottle router. 
+
+The template is recommended when starting a new app from scratch. Existing projects can also be deployed to Cloud in a Bottle directly via their own Dockerfile without using this template.
+
+
+Here's an example of a simple app:
+
+### Directory structure
+
+```
+my-app/
+├── cloudinabottle.toml
+├── Dockerfile
+├── pyproject.toml          # or package.json, go.mod, etc.
+├── app.py                  # your app code
+└── entrypoint.sh           # optional startup script
+```
+
+### cloudinabottle.toml
+
+```toml
+[app]
+name = "my-app"
+version = "0.1.0"
+description = "What it does"
+
+[runtime.container]
+image = "Dockerfile"          # path to Dockerfile relative to repo root
+port = 8080                   # port your app listens on inside the container
+
+[routing]
+public_paths = ["/webhook"]   # routes accessible without auth
+
+[resources]
+memory_mb = 128
+cpu_cores = 0.1
+
+[data]
+sqlite = ["main"]
+app_data = true
+```
+
+### Dockerfile
+
+```dockerfile
+FROM python:3.12-alpine
+
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+
+WORKDIR /app
+COPY pyproject.toml .
+RUN uv sync
+COPY . .
+
+EXPOSE 8080
+CMD ["uv", "run", "python", "-u", "app.py"]
+```
+
+### App code
+
+Your app should listen on `0.0.0.0:<port>` where `<port>` matches `runtime.container.port` in the manifest. The router handles TLS and proxies requests to your container as HTTP.
+
+```python
+from flask import Flask
+import os
+
+app = Flask(__name__)
+
+@app.route("/")
+def index():
+    return "<h1>Hello from Cloud in a Bottle</h1>"
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=8080)
+```
+
+### Notes
+
+- Apps are available at `{app_name}.{compute_space_url}`.
+- Data directories are mounted into the container at `/data/`. See [Environment variables](#environment-variables) below.
+- The router handles authentication. By default, all routes require the compute space owner to be logged in. To make specific routes public, list them in `public_paths` in the manifest.
+- For apps that implement their own auth, routes can be set as public, and requests that have been authenticated by the router will bear a `X-OpenHost-Is-Owner=true` header.
+- To surface interesting paths on your app (e.g. an admin console) to the user on the dashboard, declare them in `[[links]]` (each with a `name` and `path`). See the [manifest spec](manifest_spec.md).
+
+### Environment variables
+
+The router injects these environment variables into your app.
+
+| Variable | Example | Description                                                                                                     |
+|----------|---------|-----------------------------------------------------------------------------------------------------------------|
+| `BOTTLE_APP_NAME` | `my-app` | Your app's name, as registered with Cloud in a Bottle. This will be the subdomain the app is routeable at.               |
+| `BOTTLE_APP_ID` | `4Hm9pX2Qk7Lt` (12-char base58) | Opaque, immutable per-app identity. Stable across renames; safe to key persistent state on. |
+| `BOTTLE_APP_TOKEN` | `kF3xP_2qA-bN4...` (43-char url-safe token) | Random per-app token used to authenticate cross-app service calls                                               |
+| `BOTTLE_ROUTER_URL` | `http://host.containers.internal:8080` | internal URL of the router, used for constructing service requests. |
+| `BOTTLE_LOCAL_PORT` | `9137` | The host port the router expects the app on. Set only for `network_host` apps, which must bind this instead of their manifest port |
+| `BOTTLE_ZONE_DOMAIN` | `mycooldomain.com` | The instance's domain                                                                                      |
+| `BOTTLE_MY_REDIRECT_DOMAIN` | `my.selfhost.imbue.com` | The shared `my.*` OAuth redirect domain. This hosts a browser-local page that redirects the user to their zone. |
+| `BOTTLE_APP_DATA_DIR` | `/data/app_data/my-app` | Path to the app's persistent data directory. Set when `app_data` (default on), `sqlite`, or `access_all_app_data` is requested   |
+| `BOTTLE_APP_TEMP_DIR` | `/data/app_temp_data/my-app` | Path to the app's temporary data directory. Set when `app_temp_data` or `access_all_app_data` is requested          |
+| `BOTTLE_APP_ARCHIVE_DIR` | `/data/app_archive/my-app` | Path to the app's elastic archive directory. Set when `app_archive` or `access_all_app_data` is requested and the archive mount is available |
+| `BOTTLE_SQLITE_<NAME>` | `/data/app_data/my-app/sqlite/main.db` (for `sqlite = ["main"]`) | Path to a provisioned SQLite database file. Set once per entry in `sqlite`                                      |
+| `BOTTLE_OWNER_USERNAME` | `alice` | The compute space owner's chosen display name. Use to seed SSO account names. Defaults to `owner` if not explicitly configured. |
+
+### Data storage
+
+Apps have three storage areas, each with different durability + size + latency tradeoffs. By default, apps receive a permanent data directory (`app_data`). Other tiers must be explicitly requested via the `[data]` section of their manifest:
+
+- **Permanent data** (mounted at `BOTTLE_APP_DATA_DIR`): local disk. Small, fast, backed up. Enabled by default.
+- **Temporary data** (mounted at `BOTTLE_APP_TEMP_DIR`): local disk scratch. Not backed up, recreatable. Enabled by `app_temp_data = true`.
+- **Archive data** (mounted at `BOTTLE_APP_ARCHIVE_DIR`): bulk content storage. Backed by local disk by default, but the owner can configure a S3 bucket (which is mounted with JuiceFS as a POSIX-compatible filesystem) from the dashboard for elastic, durable object storage. Higher-latency on uncached reads once on S3, although JuiceFS yields relatively performant access once cached. Intended for apps that store bulk content (videos, photos, attachments) that may overload local storage, and where low latency isn't critical. Enabled by `app_archive = true`.
+
+Apps can additionally request `access_all_app_data`, giving read/write access to every app's permanent, temporary, and archive data. This is necessary for apps like file browsers or backup apps. The retired `access_all_data` and `access_all_archive` fields are deprecated aliases for this permission.
+
+All data dirs are mounted under `/data/` in the container. All apps see the same path structure regardless of permissions; only the dirs they have access to are mounted. The directory structure contains folders like `/data/app_data/{app_name}`, `/data/app_temp_data/{app_name}`, `/data/app_archive/{app_name}`. The env vars `BOTTLE_APP_*_DIR` should be preferred to hardcoding paths.
+
+See the [manifest spec](manifest_spec.md) for the full reference.
+
+### Services
+
+See [Cross-App Services](./cross_app_services.md) for how services work.
+
+## Development / Debugging workflow
+
+In general, the debugging flow is something like:
+1. Create your app in its own repo
+2. Install it into your compute space (from the dashboard or CLI)
+3. Test it
+4. Fix bugs / make changes, commit and push
+5. "Update and reload" from the app details page (pulls new code and rebuilds)
+6. Retest and repeat
+
+There is a CLI interface, `bottle`, that can be used for interacting with your compute space, if you prefer that style of workflow. See [The bottle CLI](../operation/cli.md) to install it and log in.

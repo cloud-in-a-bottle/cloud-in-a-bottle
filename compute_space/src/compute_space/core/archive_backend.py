@@ -1,5 +1,5 @@
 """Operator-controlled archive backend management.  See
-``docs/src/data.md`` for the operator-facing model.
+``docs/src/how_it_works/data.md`` for the operator-facing model.
 
 Design: the archive tier is ALWAYS a JuiceFS volume mounted at
 ``config.app_archive_dir``.  Only the JuiceFS *object storage* differs by

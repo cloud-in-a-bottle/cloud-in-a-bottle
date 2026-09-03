@@ -1,13 +1,14 @@
 - read the style guide in style_guide.md
 - on first init, ensure pre-commit hooks are installed (`pre-commit install`). this runs ruff and mypy on commit.
 - please ask before doing anything that affects low level system stuff on this machine, or anything using sudo.
+- never use em dashes, in docs, code comments, commit messages, or anything else you write. rewrite the sentence with a colon, comma, semicolon, parentheses, or two sentences instead.
 
 ## project structure
 
 ```
 openhost/
 ├── compute_space/
-│   └── compute_space/    # litestar/hypercorn app — routes requests to apps, manages containers
+│   └── compute_space/    # litestar/hypercorn app: routes requests to apps, manages containers
 ├── routerd_cli/          # `openhost` CLI: up, down, doctor, update
 ├── compute_space_cli/    # compute space management CLI
 ├── ansible/              # server deployment (any VPS or bare metal)
@@ -25,7 +26,7 @@ openhost/
 
 ## running and testing
 
-**in general don't run the full test suite (or full sub-suites) locally — that's what CI is for.** it is fine to run individual tests or a few test files, but the strong default is to let CI handle the rest. this applies to the unit test suite also.
+**in general don't run the full test suite (or full sub-suites) locally; that's what CI is for.** it is fine to run individual tests or a few test files, but the strong default is to let CI handle the rest. this applies to the unit test suite also.
 
 run a single test file with `-x` to fail fast, e.g.:
 
@@ -35,7 +36,7 @@ pixi run -e dev pytest -x compute_space/src/compute_space/tests/test_token_hashi
 
 ## warnings
 
-address deprecation warnings that surface in tests — fix the call site, don't let them accumulate. common ones and their fixes:
+address deprecation warnings that surface in tests: fix the call site, don't let them accumulate. common ones and their fixes:
 
 - `litestar.contrib.jinja` import → import from `litestar.plugins.jinja`.
 - path/query params via `Parameter(...)` → `FromPath[...]` / `FromQuery[...]` (from `litestar.params`).
@@ -49,7 +50,7 @@ when a warning genuinely can't be fixed at the source, suppress it as narrowly a
 use `pixi` for all python work in this repo.  the `dev` environment
 (`pixi install -e dev`) gives you the full test/lint stack.
 
-on mac, the `coredns` and `podman` conda packages are linux-only — they
+on mac, the `coredns` and `podman` conda packages are linux-only and
 won't install via pixi.  the default test suite skips both via pytest
 markers, so this is only relevant if you want to run `--run-tls` or
 `--run-containers` locally on mac (install them by hand if so).

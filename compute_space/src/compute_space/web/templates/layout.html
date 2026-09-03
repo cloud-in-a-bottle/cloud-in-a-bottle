@@ -4,6 +4,7 @@
 {#- The banner doubles as the way home now that the tab strip is gone, so it is
    a link everywhere except on the dashboard itself. -#}
 {%- set on_dashboard = request.url.path.rstrip('/') in ('', '/dashboard') -%}
+{# with context: nav_menu (imported below icon_nav) calls app_url(), which reads `request` — the whole chain must carry context #}
 {% from "_components/icon_nav.html" import icon_nav with context %}
 {% from "_components/nav_back.html" import nav_back %}
 <!DOCTYPE html>

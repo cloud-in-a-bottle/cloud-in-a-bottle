@@ -10,6 +10,31 @@
 # config.toml), so the ref checked out here must be new enough to read first_boot.toml — the
 # config/domains-consolidation change onward. Older refs boot with no domain. See ansible/readme.md.
 
+- name: Configure root Git to use HTTP/1.1 for updates
+  become: true
+  ansible.builtin.command:
+    argv:
+      - git
+      - config
+      - --global
+      - --replace-all
+      - http.version
+      - HTTP/1.1
+  environment:
+    HOME: /root
+  changed_when: false
+
+- name: Configure host Git to use HTTP/1.1
+  ansible.builtin.command:
+    argv:
+      - git
+      - config
+      - --global
+      - --replace-all
+      - http.version
+      - HTTP/1.1
+  changed_when: false
+
 - name: Clone or update openhost repo
   ansible.builtin.git:
     repo: https://github.com/cloud-in-a-bottle/cloud-in-a-bottle.git

@@ -1,5 +1,36 @@
+# User identity
 
-## Specific Design
+Federated identity between zones: the design, and the parts that exist today. Internal: not in the manual, and not production ready.
+
+## What exists today
+
+Every instance is an identity provider for its owner. The owner's keypair lives on the instance's data disk and persists across reboots, so remote apps can keep recognising the same person. (The zone auth keypair, at `/.well-known/jwks.json`, is separate and regenerated on each boot.)
+
+An instance publishes its public identity at:
+
+```
+GET https://host.example.com/.well-known/openhost-identity
+```
+
+which returns the zone's domain and its public key in PEM form.
+
+To log someone in, an app sends their browser to their own instance:
+
+```
+https://<their-domain>/identity/approve
+  ?callback=https://myapp.host.example.com/identity-response
+  &app_name=myapp
+  &requesting_domain=host.example.com
+```
+
+Their instance checks they are logged in to it, shows a page naming the app that is asking, and, if they approve, redirects back to `callback` with an `identity_token` query parameter. That token is an RS256 JWT signed by their instance, with `sub` set to their domain and `aud` set to the callback URL, expiring after five minutes.
+
+The app verifies it by fetching the public key from their `/.well-known/openhost-identity` and checking the signature, audience and expiry. A valid token means: the person controlling `<their-domain>` approved a login to this exact callback, just now.
+
+Nothing wraps this on the app side yet (no client library, no worked example, no revocation story), which is why it is not documented in the manual.
+
+## Design notes
+### Specific design
 
 - eventually this will become a new DID method, so let's keep close to that setup
 - i want a new hybrid method - public key / DID is the source of truth, but the domain is the human-readable advisory ID. anytime you really need to ensure the domain shortname is valid, you’ll hit the domain and verify it still controls its private key. and the user can refer to themselves by their domain - eg to create a login - with the assumption that if the user thinks they control their domain, it’s probably safe to assume that is true for the next ~5 mins or whatever. so you can hit their domain and fetch their public key.
@@ -15,7 +46,7 @@
 
 
 
-## General context (copied from another doc)
+### General context (copied from another doc)
 
 - i want a way to do things like give permissions to an app to specific other Cloud in a Bottle users. so they are authed if they’re logged into their instance, i guess?
 - eg for the project management system - i need a way to invite other users, and i don’t want them to have to make accounts specifically for this. they should be able to use their VM as a SSO provider, maybe?

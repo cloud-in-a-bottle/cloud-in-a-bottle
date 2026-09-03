@@ -13,6 +13,11 @@
 # (no token) since the image is private behind NAT and a shipped default token
 # would be a public non-secret; pass --claim-token to bake one instead.
 #
+# Pass --public (with --public-ip) to bake a TLS image instead: it provisions
+# with CoreDNS + Caddy + Let's Encrypt for --domain, ready to serve publicly
+# once you delegate DNS and open ports 53/80/443. Claiming is token-gated in
+# this mode (open claiming is refused on a reachable instance).
+#
 # Usage (run on a Linux host with KVM):
 #   image/build.sh [options]
 #
@@ -24,7 +29,17 @@
 #                         provision.sh to embed and run in the build VM
 #                         (default: this repo's scripts/provision.sh). Embedded
 #                         from the working tree, so the branch need not be pushed.
-#   --domain <domain>     App subdomain-routing domain baked in (default: lvh.me)
+#   --domain <domain>     App subdomain-routing domain baked in (default: lvh.me).
+#                         With --public this is the real domain served over TLS.
+#   --public              Build a TLS image (CoreDNS + Caddy + Let's Encrypt for
+#                         --domain) instead of the default HTTP-only image.
+#                         Requires --public-ip.
+#   --public-ip <ip>      Public IPv4 baked into the config for DNS records
+#                         (required with --public).
+#   --acme-key <path>     Pre-registered ACME account key to bake in (--public).
+#                         Default: the build generates and registers one.
+#   --acme-email <email>  Email for the generated ACME account (--public, when
+#                         no --acme-key is given).
 #   --claim-token <tok>   Bake in a claim token gating /setup. Default: none —
 #                         claiming is open (claim_token_required=false), since
 #                         the image is private behind NAT. Set this to require a
@@ -68,6 +83,10 @@ MEM_MB="4096"
 CPUS="2"
 BUILD_TIMEOUT="1800"
 MAKE_OVA="true"
+PUBLIC="false"
+PUBLIC_IP=""
+ACME_KEY_FILE=""
+ACME_EMAIL=""
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 OUTPUT_DIR="$SCRIPT_DIR/out"
@@ -97,10 +116,29 @@ while [[ $# -gt 0 ]]; do
         --output-dir)   OUTPUT_DIR="$2"; shift 2 ;;
         --no-ova)       MAKE_OVA="false"; shift ;;
         --timeout)      BUILD_TIMEOUT="$2"; shift 2 ;;
+        --public)       PUBLIC="true"; shift ;;
+        --public-ip)    PUBLIC_IP="$2"; shift 2 ;;
+        --acme-key)     ACME_KEY_FILE="$2"; shift 2 ;;
+        --acme-email)   ACME_EMAIL="$2"; shift 2 ;;
         -h|--help)      usage; exit 0 ;;
         *)              echo "Unknown option: $1" >&2; usage; exit 1 ;;
     esac
 done
+
+# ---- Validate --public flags ----
+if [ "$PUBLIC" = "true" ]; then
+    if [ -z "$PUBLIC_IP" ]; then
+        echo "Error: --public requires --public-ip <ip> (baked in for DNS records)." >&2
+        exit 1
+    fi
+elif [ -n "$PUBLIC_IP" ] || [ -n "$ACME_KEY_FILE" ] || [ -n "$ACME_EMAIL" ]; then
+    echo "Error: --public-ip / --acme-key / --acme-email require --public." >&2
+    exit 1
+fi
+if [ -n "$ACME_KEY_FILE" ] && [ ! -f "$ACME_KEY_FILE" ]; then
+    echo "Error: --acme-key file not found: $ACME_KEY_FILE" >&2
+    exit 1
+fi
 
 # ---- Portable helpers ----
 file_size() { stat -c%s "$1" 2>/dev/null || stat -f%z "$1"; }
@@ -145,8 +183,15 @@ echo "=== OpenHost VM image build ==="
 echo "  Version:      $VERSION"
 echo "  Repo/branch:  $REPO_URL @ $BRANCH"
 echo "  provision.sh: $PROVISION_SCRIPT (embedded)"
-echo "  Domain:       $DOMAIN   (HTTP-only, bound 0.0.0.0)"
-echo "  Claim:        ${CLAIM_TOKEN:+token '$CLAIM_TOKEN'}${CLAIM_TOKEN:-open (no token required)}"
+if [ "$PUBLIC" = "true" ]; then
+    echo "  Domain:       $DOMAIN   (public, TLS via Let's Encrypt)"
+    echo "  Public IP:    $PUBLIC_IP"
+    echo "  ACME key:     ${ACME_KEY_FILE:-generated during build}"
+    echo "  Claim:        ${CLAIM_TOKEN:+token '$CLAIM_TOKEN'}${CLAIM_TOKEN:-token-gated (random, printed on first boot)}"
+else
+    echo "  Domain:       $DOMAIN   (HTTP-only, bound 0.0.0.0)"
+    echo "  Claim:        ${CLAIM_TOKEN:+token '$CLAIM_TOKEN'}${CLAIM_TOKEN:-open (no token required)}"
+fi
 echo "  Disk size:    $DISK_SIZE"
 echo "  Output dir:   $OUTPUT_DIR"
 echo ""
@@ -174,18 +219,35 @@ if [ -n "$SSH_PUBKEY_FILE" ]; then
     SSH_KEY_CONTENT="$(cat "$SSH_PUBKEY_FILE")"
 fi
 
-# Claim mode: with no --claim-token, claiming is open (no token). Otherwise bake
-# the given token. This becomes the provision.sh argument in the seed.
+# Claim mode. An explicit --claim-token always wins. Otherwise HTTP-only images
+# ship open-claim (safe behind NAT); --public images can't (open claiming on a
+# reachable instance is refused), so they fall through to provision.sh's default
+# random, printed, token-gated claim. This becomes provision.sh args in the seed.
 if [ -n "$CLAIM_TOKEN" ]; then
     CLAIM_ARG="--claim-token \"$CLAIM_TOKEN\""
+elif [ "$PUBLIC" = "true" ]; then
+    CLAIM_ARG=""
 else
     CLAIM_ARG="--open-claim"
 fi
 
-# Embed provision.sh and seal.sh as single-line base64 blobs. The base64
-# alphabet is [A-Za-z0-9+/=] — none of which collide with sed's '|' delimiter.
+# Mode args passed to provision.sh: HTTP-only + LAN bind by default, or TLS with
+# the baked public IP (and optional ACME account key / email) under --public.
+if [ "$PUBLIC" = "true" ]; then
+    MODE_ARGS="--public-ip \"$PUBLIC_IP\""
+    [ -n "$ACME_KEY_FILE" ] && MODE_ARGS="$MODE_ARGS --acme-key /root/acme_account_key.json"
+    [ -n "$ACME_EMAIL" ]    && MODE_ARGS="$MODE_ARGS --acme-email \"$ACME_EMAIL\""
+else
+    MODE_ARGS="--local-http-only --bind-host 0.0.0.0"
+fi
+
+# Embed provision.sh and seal.sh (and, for --public --acme-key, the account key)
+# as single-line base64 blobs. The base64 alphabet is [A-Za-z0-9+/=] — none of
+# which collide with sed's '|' delimiter.
 PROVISION_B64="$(base64 -w0 "$PROVISION_SCRIPT")"
 SEAL_B64="$(base64 -w0 "$SCRIPT_DIR/seal.sh")"
+ACME_KEY_B64=""
+[ -n "$ACME_KEY_FILE" ] && ACME_KEY_B64="$(base64 -w0 "$ACME_KEY_FILE")"
 
 USER_DATA="$WORK_DIR/user-data"
 # Use a non-/ delimiter for sed since URLs contain slashes.
@@ -193,12 +255,14 @@ sed \
     -e "s|__REPO_URL__|$REPO_URL|g" \
     -e "s|__BRANCH__|$BRANCH|g" \
     -e "s|__DOMAIN__|$DOMAIN|g" \
+    -e "s|__MODE_ARGS__|$MODE_ARGS|g" \
     -e "s|__CLAIM_ARG__|$CLAIM_ARG|g" \
     -e "s|__HOST_PASSWORD__|$HOST_PASSWORD|g" \
     -e "s|__SSH_AUTHORIZED_KEY__|$SSH_KEY_CONTENT|g" \
     -e "s|__SWAP_SIZE_GB__|$SWAP_SIZE_GB|g" \
     -e "s|__PROVISION_B64__|$PROVISION_B64|g" \
     -e "s|__SEAL_B64__|$SEAL_B64|g" \
+    -e "s|__ACME_KEY_B64__|$ACME_KEY_B64|g" \
     "$SCRIPT_DIR/cloud-init/user-data.tmpl" > "$USER_DATA"
 
 SEED_ISO="$WORK_DIR/seed.iso"
@@ -387,12 +451,23 @@ echo "Disk:   ships as ${DISK_SIZE} (floor). To install with more, size the VM's
 echo "        virtual disk larger before first boot (or write to a bigger"
 echo "        physical disk) — the root filesystem grows to fill it on boot."
 echo ""
-echo "Boot it, then reach the dashboard at:  http://<vm-ip>:8080"
-if [ -n "$CLAIM_TOKEN" ]; then
-    echo "Claim URL:                             http://<vm-ip>:8080/setup?claim=$CLAIM_TOKEN"
+if [ "$PUBLIC" = "true" ]; then
+    echo "Public image for: $DOMAIN"
+    echo "Before it can serve, delegate DNS to $PUBLIC_IP and open ports 53, 80, 443"
+    echo "to the VM. Then the dashboard comes up at:  https://$DOMAIN"
+    if [ -n "$CLAIM_TOKEN" ]; then
+        echo "Claim URL:                                  https://$DOMAIN/setup?claim=$CLAIM_TOKEN"
+    else
+        echo "Claim:                                      token-gated; the random token prints"
+        echo "                                            to the instance console on first boot."
+    fi
 else
-    echo "Claim:                                 open — go to /setup (no token)"
+    echo "Boot it, then reach the dashboard at:  http://<vm-ip>:8080"
+    if [ -n "$CLAIM_TOKEN" ]; then
+        echo "Claim URL:                             http://<vm-ip>:8080/setup?claim=$CLAIM_TOKEN"
+    else
+        echo "Claim:                                 open — go to /setup (no token)"
+    fi
+    echo "Find <vm-ip> from the VM console (\`ip addr\`) or your hypervisor's NAT/DHCP."
 fi
 echo "Console login:                         user 'host', password '$HOST_PASSWORD'"
-echo ""
-echo "Find <vm-ip> from the VM console (\`ip addr\`) or your hypervisor's NAT/DHCP."

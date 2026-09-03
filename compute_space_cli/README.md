@@ -63,7 +63,7 @@ bottle tokens delete 3                           # delete by token ID
 
 `bottle logs` shows zone-level router logs (deploy errors, routing issues). `bottle app logs` shows a specific app's container output.
 
-`--grant-permissions-v2` automatically grants all `[[services.v2.consumes]]` entries from the manifest at deploy time, skipping the manual approval step in the dashboard. See [cross_app_services.md](../docs/src/cross_app_services.md) for details on the permissions model.
+`--grant-permissions-v2` automatically grants all `[[services.v2.consumes]]` entries from the manifest at deploy time, skipping the manual approval step in the dashboard. See [cross_app_services.md](../docs/src/creating_an_app/cross_app_services.md) for details on the permissions model.
 
 `--port` can be repeated for multiple overrides: `--port web=8080 --port metrics=9090`.
 

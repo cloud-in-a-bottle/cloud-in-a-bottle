@@ -46,6 +46,16 @@ write_files:
     encoding: b64
     content: __SEAL_B64__
 
+  # Optional pre-registered ACME account key for a --public build (base64 from
+  # --acme-key; empty otherwise). provision.sh is told to use it via --acme-key
+  # only when one was supplied, so an empty file here is simply never read.
+  - path: /root/acme_account_key.json
+    permissions: '0600'
+    owner: root:root
+    encoding: b64
+    content: |
+      __ACME_KEY_B64__
+
 runcmd:
   # Provision, then seal. The SUCCESS sentinel only reaches the serial console
   # if BOTH succeeded (cloud-init's runcmd does not stop on error on its own),
@@ -58,8 +68,7 @@ runcmd:
              --domain "__DOMAIN__" \
              --repo "__REPO_URL__" \
              --branch "__BRANCH__" \
-             --local-http-only \
-             --bind-host 0.0.0.0 \
+             __MODE_ARGS__ \
              __CLAIM_ARG__ \
              --swap-size "__SWAP_SIZE_GB__" \
         && echo 'host:__HOST_PASSWORD__' | chpasswd \

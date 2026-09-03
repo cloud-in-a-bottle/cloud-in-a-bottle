@@ -29,13 +29,13 @@ from compute_space.web.helpers.zone import ZONE_SCOPE_KEY
 
 def stash_zone_middleware(app: ASGIApp) -> ASGIApp:
     """Test stand-in for the zone-stashing half of ``SubdomainProxyMiddleware``: put the DB primary
-    in the request scope so ``zone_for_request`` resolves in minimal test apps that omit the full
-    proxy middleware (the real middleware is required on every request in production)."""
+    in the request scope so ``zone_for_request`` / ``app_url`` resolve in minimal test apps that omit
+    the full proxy middleware (the real middleware is required on every request in production)."""
 
     async def middleware(scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] in ("http", "websocket"):
             with closing(get_db()) as db:
-                scope[ZONE_SCOPE_KEY] = primary_domain_or_none(db)
+                scope[ZONE_SCOPE_KEY] = primary_domain_or_none(db)  # type: ignore[index]
         await app(scope, receive, send)
 
     return middleware

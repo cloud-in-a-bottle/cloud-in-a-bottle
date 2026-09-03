@@ -68,6 +68,17 @@ class Domain:
         return best
 
 
+def host_with_request_port(host: str, request_netloc: str) -> str:
+    """``host`` with the port the request arrived on (from ``request_netloc``) appended.
+
+    Lets links behave over an SSH tunnel / NAT forward on a nonstandard port — we preserve
+    that port instead of dropping the browser on the default one.  No port on the request
+    (default 80/443) → ``host`` unchanged.
+    """
+    _, sep, port = request_netloc.rpartition(":")
+    return f"{host}:{port}" if sep and port.isdigit() else host
+
+
 class DomainCertStatus(StrEnum):
     """Per-domain cert/acquisition status surfaced by /api/domains."""
 

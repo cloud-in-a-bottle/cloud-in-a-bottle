@@ -33,37 +33,27 @@ Cloud in a Bottle is the project our team needed and couldn't find: a corner of 
 
 ### Run it yourself
 
-Cloud in a Bottle runs on your own hardware, a local virtual machine, or a cloud server. Follow the
-[deployment guide](https://cloudinabottle.org/docs/deploying.html) to install it.
+Cloud in a Bottle runs on your own hardware, a local virtual machine, or a cloud server. Follow the [deployment guide](https://cloudinabottle.org/docs/deploying.html) to install it.
 
 ### Managed hosting
 
-If you'd rather not run your own server, [Imbue can provision one for you](https://cloudinabottle.imbue.com/). We
-configure it with your SSH key, then hand it over.
+If you'd rather not run your own server, [Imbue can provision one for you](https://cloudinabottle.imbue.com/). We configure it with your SSH key, then hand it over.
 
 ## How it works
 
-The Python router is the control plane for your instance. Its dashboard and APIs install apps from Git repositories,
-read their `cloudinabottle.toml` manifests, build their Dockerfiles with rootless Podman, and manage updates, logs, and
-the container lifecycle.
+The Python router is the control plane for your instance. Its dashboard and APIs install apps from Git repositories, read their `cloudinabottle.toml` manifests, build their Dockerfiles with rootless Podman, and manage updates, logs, and the container lifecycle.
 
-By default, each app's main HTTP port is bound to the host's loopback interface. The router proxies HTTP and WebSocket
-requests to the right container based on the app subdomain. App routes require owner authentication by default, while
-the manifest can declare paths that should be public. In the standard public deployment, Caddy handles HTTPS and
-CoreDNS provides wildcard DNS for app subdomains.
+By default, each app's main HTTP port is bound to the host's loopback interface. The router proxies HTTP and WebSocket requests to the right container based on the app subdomain. App routes require owner authentication by default, while the manifest can declare paths that should be public. In the standard public deployment, Caddy handles HTTPS and CoreDNS provides wildcard DNS for app subdomains.
 
-App storage is organized into permanent data, temporary files, and archive storage. The manifest controls which tiers
-the container can access. Platform state and permanent app data are stored on your instance. Archive data can stay
-local or use S3-compatible storage you configure.
+App storage is organized into permanent data, temporary files, and archive storage. The manifest controls which tiers the container can access. Platform state and permanent app data are stored on your instance. Archive data can stay local or use S3-compatible storage you configure.
 
 ## Documentation
 
-Read the [Cloud in a Bottle manual](https://cloudinabottle.org/docs/) for platform concepts, app development, and
-operating guides. Useful starting points include:
+Read the [Cloud in a Bottle manual](https://cloudinabottle.org/docs/) for platform concepts, app development, and operating guides. Useful starting points include:
 
 - [Deploying Cloud in a Bottle](https://cloudinabottle.org/docs/deploying.html)
-- [Creating an app](https://cloudinabottle.org/docs/creating_an_app.html)
-- [`cloudinabottle.toml` manifest specification](https://cloudinabottle.org/docs/manifest_spec.html)
+- [Creating an app](https://cloudinabottle.org/docs/creating_an_app/overview.html)
+- [`cloudinabottle.toml` manifest specification](https://cloudinabottle.org/docs/creating_an_app/manifest_spec.html)
 
 ## Agent skill
 
@@ -80,7 +70,7 @@ uv tool install "cloud-in-a-bottle-cli @ git+https://github.com/cloud-in-a-bottl
 bottle instance login
 ```
 
-Once set up, ask your coding agent to package any existing project for Cloud in a Bottle and deploy it directly — no manual manifest editing required.
+Once set up, ask your coding agent to package any existing project for Cloud in a Bottle and deploy it directly, with no manual manifest editing required.
 
 ---
 
@@ -88,7 +78,7 @@ Once set up, ask your coding agent to package any existing project for Cloud in 
 
 Cloud in a Bottle is provided under the [AGPL-3.0 license](LICENSE).
 
-We may move to a different license in the future — something like a [fair source license](https://fair.io/licenses/) — with the intent that personal use will always be unrestricted, while commercial use may be scoped to support a sustainable project.
+We may move to a different license in the future, something like a [fair source license](https://fair.io/licenses/), with the intent that personal use will always be unrestricted, while commercial use may be scoped to support a sustainable project.
 
 ---
 
