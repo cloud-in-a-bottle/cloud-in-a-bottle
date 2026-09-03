@@ -157,6 +157,47 @@ async def test_unknown_external_host_still_404s(wrapped_app: Any) -> None:
     assert r.status_code == 404
 
 
+@pytest.mark.asyncio
+async def test_unmatched_host_404_body_is_not_null(wrapped_app: Any) -> None:
+    # Regression: the 404 used to render the JSON literal "null" (content=None on the
+    # default JSON media type), which surfaced as a page reading "null".
+    async with _client(wrapped_app) as c:
+        r = await c.get("http://evil.example.org/health")
+    assert r.status_code == 404
+    assert r.text == ""
+
+
+# --- localhost & friends redirect to the primary domain instead of 404ing -----------
+
+
+@pytest.mark.asyncio
+async def test_localhost_redirects_to_primary_domain(wrapped_app: Any) -> None:
+    # `localhost` isn't a configured domain, but instead of a bare 404 we bounce the browser
+    # onto the canonical primary domain (over its own scheme — https here).
+    async with _client(wrapped_app) as c:
+        r = await c.get("http://localhost/")
+    assert r.status_code == 302
+    assert r.headers["location"] == "https://host.example.com/"
+
+
+@pytest.mark.asyncio
+async def test_localhost_redirect_preserves_port_path_and_query(wrapped_app: Any) -> None:
+    # A tunnelled browser hits localhost on a forwarded port; the redirect must keep the port,
+    # path, and query so the user lands exactly where they meant to on the canonical domain.
+    async with _client(wrapped_app) as c:
+        r = await c.get("http://localhost:18090/setup?next=%2Fapps&x=1")
+    assert r.status_code == 302
+    assert r.headers["location"] == "https://host.example.com:18090/setup?next=%2Fapps&x=1"
+
+
+@pytest.mark.asyncio
+async def test_localhost_localdomain_also_redirects(wrapped_app: Any) -> None:
+    async with _client(wrapped_app) as c:
+        r = await c.get("http://localhost.localdomain/health")
+    assert r.status_code == 302
+    assert r.headers["location"] == "https://host.example.com/health"
+
+
 # --- Phase 2: unauthenticated login redirect stays on the ARRIVING domain ----------
 
 

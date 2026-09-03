@@ -7,6 +7,7 @@ from litestar import WebSocket
 from litestar.connection import ASGIConnection
 from litestar.enums import ScopeType
 from litestar.exceptions import NotAuthorizedException
+from litestar.response import Redirect
 from litestar.types import ASGIApp
 from litestar.types import Receive
 from litestar.types import Scope
@@ -19,6 +20,8 @@ from compute_space.core.apps import get_app_from_hostname
 from compute_space.core.apps import is_public_path
 from compute_space.core.containers import ROUTER_INTERNAL_HOSTS
 from compute_space.core.domains import Domain
+from compute_space.core.domains import host_with_request_port
+from compute_space.core.domains import primary_domain_or_none
 from compute_space.core.logging import logger
 from compute_space.core.proxy_target import LocalPort
 from compute_space.db import get_db
@@ -35,6 +38,14 @@ IS_OWNER_HEADER = ("X-OpenHost-Is-Owner", "true")
 # X-Forwarded-For it sets; any other peer (e.g. a container reaching us via the
 # 10.200.0.1 gateway) is untrusted and can't dictate the chain.
 _LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1"})
+
+# Bare-host aliases that mean "this machine" but are never a configured domain.  A browser
+# pointed at one of these — typically over an SSH tunnel or a local port-forward — would
+# otherwise miss every domain and get a 404.  We redirect it onto the primary domain instead
+# (see _redirect_to_primary) so the whole session stays on the one canonical hostname rather
+# than splitting cookies/login across host aliases.  127.0.0.1 is intentionally absent: it's a
+# ROUTER_INTERNAL_HOST used by the container->host gateway and is handled before we get here.
+_LOCAL_ALIAS_HOSTS = frozenset({"localhost", "localhost.localdomain"})
 
 
 def _resolve_forwarded_for(connection: ASGIConnection[Any, Any, Any, Any]) -> str | None:
@@ -90,10 +101,28 @@ async def _send_not_found(scope: Scope, receive: Receive, send: Send) -> None:
     """404 (HTTP) / close (WS) — for a host or app-subdomain this router doesn't serve."""
     if scope["type"] == ScopeType.HTTP:
         request: Request[Any, Any, Any] = Request(scope, receive, send)
-        response: Response[Any] = Response(content=None, status_code=404)
+        # Empty text/plain body: a bare ``content=None`` renders as the JSON literal ``null``
+        # (the default media type serializes None), which surfaces as a page reading "null".
+        response: Response[Any] = Response(content="", media_type="text/plain", status_code=404)
         await response.to_asgi_response(app=None, request=request)(scope, receive, send)
     else:
         await send(WebSocketCloseEvent(type="websocket.close", code=4404, reason="not found"))
+
+
+async def _redirect_to_primary(primary: Domain, scope: Scope, receive: Receive, send: Send) -> None:
+    """302 a local-alias host (e.g. ``localhost``) onto the primary domain, preserving path,
+    query, and the port the request arrived on so a tunnelled browser lands on the canonical
+    dashboard instead of a 404.  HTTP only — a websocket can't be redirected, so it 404s."""
+    if scope["type"] != ScopeType.HTTP:
+        await _send_not_found(scope, receive, send)
+        return
+    request: Request[Any, Any, Any] = Request(scope, receive, send)
+    target = host_with_request_port(primary.name_no_port, request.url.netloc)
+    location = f"{primary.scheme}://{target}{request.url.path}"
+    if request.url.query:
+        location = f"{location}?{request.url.query}"
+    response: Response[Any] = Redirect(path=location, status_code=302)
+    await response.to_asgi_response(app=None, request=request)(scope, receive, send)
 
 
 class SubdomainProxyMiddleware:
@@ -146,11 +175,21 @@ class SubdomainProxyMiddleware:
             looks_like_app = zone is not None and app is None and zone.is_app_subdomain(netloc)
 
         if zone is None:
-            if netloc.split(":")[0].lower() in ROUTER_INTERNAL_HOSTS:
+            bare_host = netloc.split(":")[0].lower()
+            if bare_host in ROUTER_INTERNAL_HOSTS:
                 # App→router service-proxy calls arrive here via OPENHOST_ROUTER_URL (the container→host
                 # gateway), which isn't a configured domain.  Defer to Litestar; those routes are auth-gated.
                 await self.app(scope, receive, send)
                 return
+            if bare_host in _LOCAL_ALIAS_HOSTS:
+                # ``localhost`` & friends aren't configured domains, so they'd 404 with no obvious cause.
+                # Bounce them to the primary domain (when one exists) so a tunnelled browser reaches the
+                # dashboard on the canonical hostname.  If no primary is configured yet, fall through to 404.
+                with closing(get_db()) as db:
+                    primary = primary_domain_or_none(db)
+                if primary is not None:
+                    await _redirect_to_primary(primary, scope, receive, send)
+                    return
             # Unmatched host — not a configured domain or one of its subdomains.  Don't serve it (no
             # fallback to the primary).  Public traffic always arrives via Caddy with the original
             # domain Host, so this only rejects direct-by-IP / unknown-Host requests to the full app.
