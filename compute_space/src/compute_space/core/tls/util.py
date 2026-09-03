@@ -1,8 +1,6 @@
 import asyncio
-import contextlib
 import datetime
 import json
-import time
 from pathlib import Path
 
 from acme import challenges
@@ -15,10 +13,9 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from josepy import JWKRSA  # type: ignore[attr-defined]
 
-import compute_space.core.dns as dns_module
+from compute_space.core.dns.coredns_provider.interface import InternalDnsProvider
 from compute_space.core.logging import logger
-
-_DIG_TIMEOUT_SECONDS = 10.0
+from compute_space.core.tls import dns_challenge
 
 
 def load_account_key(path: Path) -> JWKRSA:
@@ -46,75 +43,18 @@ def _create_csr(private_key: ec.EllipticCurvePrivateKey, domains: str | list[str
     )
 
 
-async def _wait_for_txt_propagation(
-    zone_domain: str,
-    expected_values: list[str],
-    timeout: float = 120,
-    interval: float = 5,
-    resolver: str = "8.8.8.8",
-) -> bool:
-    """Poll an external resolver until all expected TXT values are visible.
-
-    Returns True if all values were found, False on timeout.  On timeout the
-    caller should proceed anyway — the ACME retry loop is the fallback.
-    """
-    qname = f"_acme-challenge.{zone_domain}"
-    deadline = time.monotonic() + timeout
-    expected_set = set(expected_values)
-
-    while time.monotonic() < deadline:
-        if expected_set <= await _dig_txt(qname, resolver):
-            logger.info(f"DNS propagation confirmed: {qname} has all {len(expected_set)} expected TXT value(s)")
-            return True
-
-        remaining = deadline - time.monotonic()
-        logger.info(f"Waiting for DNS propagation of {qname} ({remaining:.0f}s remaining)")
-        await asyncio.sleep(interval)
-
-    logger.warning(f"DNS propagation timeout: {qname} not fully visible after {timeout}s, proceeding anyway")
-    return False
-
-
-async def _dig_txt(qname: str, resolver: str) -> set[str]:
-    """One dig, or an empty set if it fails — a resolver hiccup is indistinguishable from
-    not-yet-visible, and both mean keep waiting."""
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            "dig",
-            f"@{resolver}",
-            qname,
-            "TXT",
-            "+short",
-            "+timeout=5",
-            "+tries=1",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.DEVNULL,
-        )
-        try:
-            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=_DIG_TIMEOUT_SECONDS)
-        except BaseException:
-            if proc.returncode is None:
-                with contextlib.suppress(ProcessLookupError):
-                    proc.kill()
-            # Keep reaping in the background if another cancellation arrives.
-            with contextlib.suppress(Exception):
-                await asyncio.shield(proc.wait())
-            raise
-    except (TimeoutError, FileNotFoundError, OSError):
-        return set()
-    # dig +short TXT output looks like: "token-value-here"
-    return {line.strip().strip('"') for line in stdout.decode().strip().splitlines()}
-
-
 async def _acquire_cert_dns01(
     domains: list[str],
     directory_url: str,
-    coredns_zonefile_path: Path,
+    dns_provider: InternalDnsProvider,
     account_key: JWKRSA,
     verify_ssl: bool = True,
     acme_email: str | None = None,
 ) -> tuple[bytes, bytes]:
-    """Acquire cert via DNS-01 challenge by writing TXT records to the local zone file."""
+    """Acquire a cert via DNS-01, publishing the challenge records through the DNS provider.
+
+    ``acme`` is a blocking library, so each of its network calls is handed to a worker thread
+    rather than stalling the loop."""
     tls_key = _generate_tls_key()
 
     logger.info(f"DNS-01: connecting to ACME directory {directory_url}")
@@ -184,30 +124,22 @@ async def _acquire_cert_dns01(
                         break
 
             logger.info(f"DNS-01: {len(pending_challenges)} pending challenges to answer")
-            txt_records_written = False
+            challenge_published = False
             acquisition_succeeded = False
             try:
                 if pending_challenges:
-                    # Write all TXT records to the zone file at once
+                    # Publish every challenge value at once.  For a wildcard cert the base domain
+                    # and *.domain are separate authorizations that both need a TXT record live at
+                    # the same time.
                     logger.info(f"Setting {len(validation_values)} DNS-01 challenge TXT record(s)")
-                    dns_module.append_txt_records(
-                        coredns_zonefile_path,
-                        [
-                            dns_module.TxtRecord(record_name="_acme-challenge", record_value=v)
-                            for v in validation_values
-                        ],
-                    )
-                    txt_records_written = True
+                    dns_challenge.publish(dns_provider, validation_values)
+                    challenge_published = True
 
-                    # Wait for CoreDNS to pick up the zone file change (reload interval = 2s)
-                    await asyncio.sleep(3)
-
-                    # Wait until an external resolver can see our TXT records before
-                    # telling the ACME server to validate.  Without this, the ACME
-                    # server's resolvers may get NXDOMAIN if the NS delegation from
-                    # the parent zone hasn't propagated yet.
-                    zone_domain = domains[0].lstrip("*.")
-                    await _wait_for_txt_propagation(zone_domain, validation_values)
+                    # Wait until an external resolver can see the records before telling the ACME
+                    # server to validate.  Without this the CA's resolvers may get NXDOMAIN — the
+                    # zone file reload hasn't happened yet, or the NS delegation from the parent
+                    # zone hasn't propagated.
+                    await dns_challenge.wait_until_visible(domains[0], validation_values)
 
                     # Now answer all challenges
                     for challenge_body in pending_challenges:
@@ -229,9 +161,12 @@ async def _acquire_cert_dns01(
                 acquisition_succeeded = True
                 return result
             finally:
-                if txt_records_written:
+                # In a `finally` so a cancellation between publishing and finalizing still takes
+                # the tokens back down; only if we actually published, so a failure before that
+                # doesn't delete another run's records.
+                if challenge_published:
                     try:
-                        dns_module.clear_txt(coredns_zonefile_path)
+                        dns_challenge.clear(dns_provider)
                     except Exception:
                         if acquisition_succeeded:
                             raise

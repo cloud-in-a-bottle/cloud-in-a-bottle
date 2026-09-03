@@ -26,6 +26,7 @@ from compute_space.config import provide_config
 from compute_space.core import caddy
 from compute_space.core.auth.auth import SESSION_COOKIE_NAME
 from compute_space.core.auth.auth import create_session
+from compute_space.core.dns.coredns_provider.interface import InternalDnsProvider
 from compute_space.core.domains import Domain
 from compute_space.core.domains import DomainCertStatus
 from compute_space.core.domains import seed_domains
@@ -33,6 +34,7 @@ from compute_space.db import provide_db
 from compute_space.db.connection import init_db
 from compute_space.tests.conftest import _make_test_config
 from compute_space.tests.conftest import open_db
+from compute_space.tests.conftest import stub_coredns_spawn
 from compute_space.web.routes.api import domains
 from compute_space.web.routes.api.domains import api_domains_routes
 
@@ -63,14 +65,25 @@ def _write_cert(cert_path: Path, key_path: Path, *, days_valid: int = 60) -> Non
     )
 
 
-def _make_app() -> Litestar:
+def _make_app(dns_provider: Any) -> Litestar:
     return Litestar(
         route_handlers=[api_domains_routes],
         dependencies={
             "config": Provide(provide_config, sync_to_thread=False),
             "db": Provide(provide_db),
+            # Mirrors create_app: the routes are always handed the running provider.
+            "dns_provider": Provide(lambda: dns_provider, sync_to_thread=False, use_cache=True),
         },
         openapi_config=None,
+    )
+
+
+def _unstarted_provider(tmp_path: Path, bind_ip: str | None = "203.0.113.10") -> InternalDnsProvider:
+    return InternalDnsProvider(
+        corefile_path=tmp_path / "Corefile",
+        zones_dir=tmp_path / "zones",
+        bind_ip=bind_ip,
+        zones=(PRIMARY.name,) if bind_ip else (),
     )
 
 
@@ -98,12 +111,45 @@ def cfg(tmp_path: Path) -> Any:
 
 
 @pytest.fixture
-def client(cfg: Any) -> Iterator[TestClient[Litestar]]:
-    with TestClient(app=_make_app()) as c:
+def client(cfg: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient[Litestar]]:
+    stub_coredns_spawn(monkeypatch)  # add_zone starts CoreDNS; keep that off the test machine
+    with TestClient(app=_make_app(_unstarted_provider(tmp_path))) as c:
         yield c
 
 
-async def _acquired(config: Any, domain: Any, db: Any) -> None:
+@pytest.fixture
+def dns_client(
+    cfg: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> Iterator[tuple[InternalDnsProvider, TestClient[Litestar]]]:
+    """A real provider, never started, so the routes drive the same zone set production would."""
+    stub_coredns_spawn(monkeypatch)  # add_zone starts CoreDNS; keep that off the test machine
+    dns_provider = _unstarted_provider(tmp_path)
+    with TestClient(app=_make_app(dns_provider)) as c:
+        c.cookies.update(_auth_cookie(cfg.db_path))
+        yield dns_provider, c
+
+
+def test_a_public_domain_is_accepted_when_dns_is_not_bound(cfg: Any, tmp_path: Path) -> None:
+    # Running without CoreDNS is a supported choice, so it must not veto the add -- the domain is
+    # recorded and served by Caddy; only the zone this instance would answer for is missing.
+    with TestClient(app=_make_app(_unstarted_provider(tmp_path, bind_ip=None))) as c:
+        c.cookies.update(_auth_cookie(cfg.db_path))
+        r = c.post("/api/domains", json={"name": "host.example.org", "tls": False, "mdns": False})
+        assert r.status_code == 202
+        assert "host.example.org" in [d["name"] for d in c.get("/api/domains").json()["domains"]]
+
+
+def test_a_tls_domain_added_without_dns_reports_why_its_cert_failed(cfg: Any, tmp_path: Path) -> None:
+    # The consequence shows up where the user can see it: the domain's cert status, not a refusal.
+    with TestClient(app=_make_app(_unstarted_provider(tmp_path, bind_ip=None))) as c:
+        c.cookies.update(_auth_cookie(cfg.db_path))
+        assert c.post("/api/domains", json={"name": "host.example.org", "tls": True}).status_code == 202
+        info = next(d for d in c.get("/api/domains").json()["domains"] if d["name"] == "host.example.org")
+        assert info["cert_status"] == DomainCertStatus.ERROR
+        assert "CoreDNS must be enabled" in info["error_message"]
+
+
+async def _acquired(config: Any, domain: Any, db: Any, dns_provider: Any) -> None:
     """ensure_cert_for is async now; a stub has to be too."""
 
 
@@ -182,7 +228,7 @@ def test_add_tls_domain_acquires_and_becomes_active(
 def test_add_tls_domain_records_acquisition_error(
     cfg: Any, client: TestClient[Litestar], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    async def boom(config: Any, domain: Any, db: Any) -> None:
+    async def boom(config: Any, domain: Any, db: Any, dns_provider: Any) -> None:
         raise RuntimeError("DNS not delegated")
 
     monkeypatch.setattr(domains, "ensure_cert_for", boom)
@@ -191,6 +237,33 @@ def test_add_tls_domain_records_acquisition_error(
     info = next(d for d in client.get("/api/domains").json()["domains"] if d["name"] == "host.example.org")
     assert info["cert_status"] == DomainCertStatus.ERROR
     assert "DNS not delegated" in info["error_message"]
+
+
+def test_a_new_public_domain_is_served_by_the_dns_provider(
+    dns_client: tuple[InternalDnsProvider, TestClient[Litestar]], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The provider has to be authoritative for the zone *before* acquisition, since DNS-01 answers
+    # the challenge out of that zone's file.
+    monkeypatch.setattr(domains, "ensure_cert_for", _acquired)
+    dns_provider, client = dns_client
+
+    client.post("/api/domains", json={"name": "host.example.org", "tls": True})
+    assert list(dns_provider.zones) == [PRIMARY.name, "host.example.org"]
+
+    client.delete("/api/domains/host.example.org")
+    assert list(dns_provider.zones) == [PRIMARY.name]
+
+
+def test_an_mdns_domain_never_reaches_the_dns_provider(
+    dns_client: tuple[InternalDnsProvider, TestClient[Litestar]],
+) -> None:
+    # .local is served by the wildcard mDNS responder; CoreDNS never sees it.
+    dns_provider, client = dns_client
+
+    client.post("/api/domains", json={"name": "myhost.local", "mdns": True})
+    client.delete("/api/domains/myhost.local")
+
+    assert list(dns_provider.zones) == [PRIMARY.name]
 
 
 # --- validation ---------------------------------------------------------------------

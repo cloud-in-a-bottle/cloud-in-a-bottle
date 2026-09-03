@@ -1,8 +1,8 @@
 """Tests for the openhost-cert-api broker cert-acquisition flow.
 
-Drives the full flow against an in-process httpx.MockTransport broker and a
-temp CoreDNS zone file.  No real broker, ACME server, or sleeping is involved
-(a FakeClock makes the poll loop deterministic).
+Drives the full flow against an in-process httpx.MockTransport broker and a real
+InternalDnsProvider rendering to a temp zone file.  No real broker, ACME server, CoreDNS process,
+or sleeping is involved (a FakeClock makes the poll loop deterministic).
 """
 
 from __future__ import annotations
@@ -17,6 +17,7 @@ from cryptography import x509
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 
+from compute_space.core.dns.coredns_provider.interface import InternalDnsProvider
 from compute_space.core.tls.acquire_cert_broker import CertAcquisitionTimeoutError
 from compute_space.core.tls.acquire_cert_broker import acquire_tls_cert_via_broker
 from compute_space.core.tls.cert_api_client import CertApiClient
@@ -40,20 +41,17 @@ class FakeClock:
         self.now += seconds
 
 
-def _write_zonefile(path: Path) -> None:
-    path.write_text(
-        f"$ORIGIN {DOMAIN}.\n"
-        "$TTL 60\n"
-        f"@   IN SOA  ns.{DOMAIN}. admin.{DOMAIN}. (\n"
-        "    100   ; serial\n"
-        "    3600  ; refresh\n"
-        "    600   ; retry\n"
-        "    86400 ; expire\n"
-        "    60    ; minimum\n"
-        ")\n"
-        f"@   IN NS   ns.{DOMAIN}.\n"
-        "@   IN A    127.0.0.1\n"
+def _dns(tmp_path: Path) -> tuple[InternalDnsProvider, Path]:
+    """A provider serving one zone, rendering to a real file.  Never started, so no CoreDNS runs;
+    the zone file is what the broker flow actually has to get right."""
+    zonefile = tmp_path / "zones" / f"{DOMAIN}.zone"
+    dns_provider = InternalDnsProvider(
+        corefile_path=tmp_path / "Corefile",
+        zones_dir=tmp_path / "zones",
+        bind_ip="203.0.113.10",
+        zones=(DOMAIN,),
     )
+    return dns_provider, zonefile
 
 
 def _order_payload() -> dict[str, object]:
@@ -72,8 +70,8 @@ def _client_from_handler(handler: object) -> CertApiClient:
     return CertApiClient(http_client=http_client, token_provider=StaticTokenProvider("tok"))
 
 
-async def _noop_wait(zone_domain: str, expected_values: list[str]) -> None:
-    """Stub out the real CoreDNS-reload sleep + external dig so tests stay fast."""
+async def _noop_wait(domain: str, expected_values: list[str]) -> None:
+    """Stub out the external dig so tests stay fast."""
 
 
 @attr.s(auto_attribs=True)
@@ -86,10 +84,9 @@ class _BrokerState:
 
 @pytest.mark.asyncio
 async def test_full_flow_installs_cert_and_key(tmp_path: Path) -> None:
-    zonefile = tmp_path / "zonefile"
+    dns_provider, zonefile = _dns(tmp_path)
     cert_path = tmp_path / "cert.pem"
     key_path = tmp_path / "key.pem"
-    _write_zonefile(zonefile)
 
     state = _BrokerState()
 
@@ -101,8 +98,8 @@ async def test_full_flow_installs_cert_and_key(tmp_path: Path) -> None:
             state.finalize_calls += 1
             if state.finalize_calls == 1:
                 # The broker validates DNS; assert our TXT records are already
-                # published (verbatim, absolute) and propagation was awaited
-                # before we are asked to finalize.
+                # published and propagation was awaited before we are asked to
+                # finalize.
                 state.txt_when_first_polled = zonefile.read_text()
                 assert state.waited_with is not None, "must wait for DNS propagation before polling finalize"
             if state.finalize_calls < 3:
@@ -110,15 +107,15 @@ async def test_full_flow_installs_cert_and_key(tmp_path: Path) -> None:
             return httpx.Response(200, json={"status": "valid", "certificate": FAKE_CHAIN})
         return httpx.Response(404, json={"error": "not_found", "message": request.url.path})
 
-    async def record_wait(zone_domain: str, expected_values: list[str]) -> None:
-        state.waited_with = (zone_domain, expected_values)
+    async def record_wait(domain: str, expected_values: list[str]) -> None:
+        state.waited_with = (domain, expected_values)
 
     async with _client_from_handler(handler) as client:
         await acquire_tls_cert_via_broker(
             domain=DOMAIN,
             cert_path=cert_path,
             key_path=key_path,
-            coredns_zonefile_path=zonefile,
+            dns_provider=dns_provider,
             client=client,
             poll_interval_seconds=1.0,
             poll_timeout_seconds=600.0,
@@ -145,10 +142,10 @@ async def test_full_flow_installs_cert_and_key(tmp_path: Path) -> None:
     assert "CERTIFICATE REQUEST" in state.sent_csr
     assert "PRIVATE KEY" not in state.sent_csr
 
-    # TXT records were published (absolute FQDN, verbatim values) before polling.
+    # Both TXT records were published, named relative to the zone, before polling.
     assert state.txt_when_first_polled is not None
-    assert f'_acme-challenge.{DOMAIN}.   60  IN TXT  "base-value"' in state.txt_when_first_polled
-    assert f'_acme-challenge.{DOMAIN}.   60  IN TXT  "wildcard-value"' in state.txt_when_first_polled
+    assert '_acme-challenge   60  IN TXT  "base-value"' in state.txt_when_first_polled
+    assert '_acme-challenge   60  IN TXT  "wildcard-value"' in state.txt_when_first_polled
 
     # ...and cleaned up afterward.
     assert "IN TXT" not in zonefile.read_text()
@@ -156,8 +153,7 @@ async def test_full_flow_installs_cert_and_key(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_csr_covers_base_and_wildcard(tmp_path: Path) -> None:
-    zonefile = tmp_path / "zonefile"
-    _write_zonefile(zonefile)
+    dns_provider, _ = _dns(tmp_path)
     captured: dict[str, str] = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -171,7 +167,7 @@ async def test_csr_covers_base_and_wildcard(tmp_path: Path) -> None:
             domain=DOMAIN,
             cert_path=tmp_path / "cert.pem",
             key_path=tmp_path / "key.pem",
-            coredns_zonefile_path=zonefile,
+            dns_provider=dns_provider,
             client=client,
             clock=FakeClock(),
             wait_for_propagation=_noop_wait,
@@ -186,8 +182,7 @@ async def test_csr_covers_base_and_wildcard(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_timeout_raises_and_clears_txt(tmp_path: Path) -> None:
-    zonefile = tmp_path / "zonefile"
-    _write_zonefile(zonefile)
+    dns_provider, zonefile = _dns(tmp_path)
 
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/v1/orders":
@@ -201,7 +196,7 @@ async def test_timeout_raises_and_clears_txt(tmp_path: Path) -> None:
                 domain=DOMAIN,
                 cert_path=tmp_path / "cert.pem",
                 key_path=tmp_path / "key.pem",
-                coredns_zonefile_path=zonefile,
+                dns_provider=dns_provider,
                 client=client,
                 poll_interval_seconds=5.0,
                 poll_timeout_seconds=30.0,
@@ -215,8 +210,7 @@ async def test_timeout_raises_and_clears_txt(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_failed_order_raises_and_clears_txt(tmp_path: Path) -> None:
-    zonefile = tmp_path / "zonefile"
-    _write_zonefile(zonefile)
+    dns_provider, zonefile = _dns(tmp_path)
 
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/v1/orders":
@@ -230,7 +224,7 @@ async def test_failed_order_raises_and_clears_txt(tmp_path: Path) -> None:
                 domain=DOMAIN,
                 cert_path=tmp_path / "cert.pem",
                 key_path=tmp_path / "key.pem",
-                coredns_zonefile_path=zonefile,
+                dns_provider=dns_provider,
                 client=client,
                 clock=FakeClock(),
                 wait_for_propagation=_noop_wait,

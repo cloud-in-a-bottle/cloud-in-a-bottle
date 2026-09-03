@@ -1,3 +1,4 @@
+{% if bind_ip %}
 {% for zone in zones %}
 {{ zone.domain }}:53 {
     bind {{ bind_ip }}
@@ -8,6 +9,7 @@
     errors
 }
 {% endfor %}
+{% endif %}
 {% if container_gateway_ip %}
 # Container-facing view.  Pasta app containers point their resolver here (see
 # core/containers.py --dns).  It answers each zone's wildcard with the gateway IP
