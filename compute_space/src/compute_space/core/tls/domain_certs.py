@@ -9,7 +9,7 @@ from compute_space.core.tls.renewal import get_cert_status
 
 
 async def ensure_cert_for(
-    config: Config, domain: Domain, db: sqlite3.Connection, dns: InternalDnsProvider | None
+    config: Config, domain: Domain, db: sqlite3.Connection, dns_provider: InternalDnsProvider | None
 ) -> None:
     """Idempotently ensure a usable TLS cert exists for ``domain`` at its per-domain path.
 
@@ -29,4 +29,4 @@ async def ensure_cert_for(
     if get_cert_status(cert_path, key_path) == CertStatus.OK:
         return
     cert_path.parent.mkdir(parents=True, exist_ok=True)
-    await acquire_cert_for_domain(config, name, cert_path, key_path, db, dns)
+    await acquire_cert_for_domain(config, name, cert_path, key_path, db, dns_provider)

@@ -261,6 +261,40 @@ async def test_re_adding_a_served_zone_raises_and_leaves_coredns_alone(
 
 
 @pytest.mark.asyncio
+async def test_concurrent_zone_changes_serialize_their_restarts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Two /api/domains requests are two tasks on one event loop.  Overlapping restarts would leave
+    # an orphaned CoreDNS holding :53, with the surviving handle pointing at the other process.
+    _stub_spawn(monkeypatch)
+
+    config = _seed_dns_cfg(tmp_path, Domain(name="host.example.com", tls=True))
+    with closing(open_db(config)) as db:
+        dns = _provider(config, _zones(db))
+    await dns.start()
+    try:
+        in_flight = 0
+        peak = 0
+        real_restart = dns_mod.CoreDnsProcess.restart
+
+        async def tracked_restart(self: dns_mod.CoreDnsProcess) -> None:
+            nonlocal in_flight, peak
+            in_flight += 1
+            peak = max(peak, in_flight)
+            await asyncio.sleep(0)  # a yield the second restart could slip through
+            await real_restart(self)
+            in_flight -= 1
+
+        monkeypatch.setattr(dns_mod.CoreDnsProcess, "restart", tracked_restart)
+        await asyncio.gather(dns.add_zone("a.example.com"), dns.add_zone("b.example.com"))
+
+        assert peak == 1
+        assert set(dns.zones) == {"host.example.com", "a.example.com", "b.example.com"}
+    finally:
+        await dns.stop()
+
+
+@pytest.mark.asyncio
 async def test_a_zone_change_before_start_is_stored_but_restarts_nothing(tmp_path: Path) -> None:
     # /api/domains can be served by a router with coredns_enabled off; the zone set still has to be
     # kept honest so a later start picks it up.

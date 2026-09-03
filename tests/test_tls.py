@@ -396,7 +396,7 @@ class TestAcquireTlsCert:
                 cert_path=cert_path,
                 key_path=key_path,
                 acme_account_key_path=acme_account_key["path"],
-                dns=dns_provider,
+                dns_provider=dns_provider,
                 directory_url=pebble_server["directory_url"],
                 verify_ssl=False,
             )

@@ -78,7 +78,7 @@ async def test_acquire_cert_clears_txt_records_on_cancellation(
     async def cancel_on_sleep(seconds: float) -> None:
         raise asyncio.CancelledError
 
-    def clear(dns: object) -> None:
+    def clear(dns_provider: object) -> None:
         calls.append("clear")
         if cleanup_fails:
             raise OSError("zone file unavailable")
@@ -87,15 +87,15 @@ async def test_acquire_cert_clears_txt_records_on_cancellation(
     monkeypatch.setattr(tls_util.client, "ClientV2", _FakeAcmeClient)
     monkeypatch.setattr(tls_util.messages.Directory, "from_json", staticmethod(lambda value: object()))
     monkeypatch.setattr(tls_util.challenges, "DNS01", _FakeDns01)
-    monkeypatch.setattr(tls_util.challenge, "publish", lambda dns, values: calls.append("publish"))
-    monkeypatch.setattr(tls_util.challenge, "clear", clear)
+    monkeypatch.setattr(tls_util.dns_challenge, "publish", lambda dns_provider, values: calls.append("publish"))
+    monkeypatch.setattr(tls_util.dns_challenge, "clear", clear)
     monkeypatch.setattr(tls_util.asyncio, "sleep", cancel_on_sleep)
 
     with pytest.raises(asyncio.CancelledError):
         await tls_util._acquire_cert_dns01(
             domains=["example.com", "*.example.com"],
             directory_url="https://acme.test/directory",
-            dns=None,  # type: ignore[arg-type]  # unused once publish/clear are patched
+            dns_provider=None,  # type: ignore[arg-type]  # unused once publish/clear are patched
             account_key=object(),  # type: ignore[arg-type]
         )
 

@@ -9,7 +9,7 @@ import attr
 import pytest
 
 from compute_space.core.dns.coredns_provider.interface import RecordType
-from compute_space.core.tls import challenge
+from compute_space.core.tls import dns_challenge
 
 
 @attr.s(auto_attribs=True)
@@ -28,29 +28,29 @@ class _RecordingDns:
 def test_a_wildcard_order_validates_against_the_base_domain() -> None:
     # *.example.com and example.com share one challenge name, which is why both authorizations'
     # tokens have to be live at the same time.  Only the propagation check uses the FQDN.
-    assert challenge.challenge_fqdn("*.example.com") == "_acme-challenge.example.com"
-    assert challenge.challenge_fqdn("example.com") == "_acme-challenge.example.com"
+    assert dns_challenge.challenge_fqdn("*.example.com") == "_acme-challenge.example.com"
+    assert dns_challenge.challenge_fqdn("example.com") == "_acme-challenge.example.com"
 
 
 def test_only_a_leading_wildcard_label_is_stripped() -> None:
     # `lstrip("*.")` would take a character set and mangle these.
-    assert challenge.challenge_fqdn("host.example.com") == "_acme-challenge.host.example.com"
-    assert challenge.challenge_fqdn("*.a.example.com") == "_acme-challenge.a.example.com"
+    assert dns_challenge.challenge_fqdn("host.example.com") == "_acme-challenge.host.example.com"
+    assert dns_challenge.challenge_fqdn("*.a.example.com") == "_acme-challenge.a.example.com"
 
 
 def test_publishing_replaces_the_rrset_with_a_short_ttl() -> None:
     # Replace, not append: a run that died before cleaning up must not leave stale tokens. Short
     # TTL so the previous run's token isn't served from a resolver cache during a renewal.
-    dns: Any = _RecordingDns()
-    challenge.publish(dns, ["base", "wildcard"])
+    dns_provider: Any = _RecordingDns()
+    dns_challenge.publish(dns_provider, ["base", "wildcard"])
     # Named relative to the zone, not by FQDN: the provider publishes into every zone it manages.
-    assert dns.calls == [("set", "_acme-challenge", "TXT", "base,wildcard", "60")]
+    assert dns_provider.calls == [("set", "_acme-challenge", "TXT", "base,wildcard", "60")]
 
 
 def test_clearing_removes_the_whole_rrset() -> None:
-    dns: Any = _RecordingDns()
-    challenge.clear(dns)
-    assert dns.calls == [("delete", "_acme-challenge", "TXT")]
+    dns_provider: Any = _RecordingDns()
+    dns_challenge.clear(dns_provider)
+    assert dns_provider.calls == [("delete", "_acme-challenge", "TXT")]
 
 
 @pytest.mark.asyncio
@@ -62,6 +62,6 @@ async def test_the_wait_has_a_bounded_timeout(monkeypatch: pytest.MonkeyPatch) -
         seen.update(fqdn=fqdn, record_type=record_type, timeout=timeout)
         return True
 
-    monkeypatch.setattr(challenge, "wait_for_records", record)
-    await challenge.wait_until_visible("example.com", ["tok"])
+    monkeypatch.setattr(dns_challenge, "wait_for_records", record)
+    await dns_challenge.wait_until_visible("example.com", ["tok"])
     assert seen == {"fqdn": "_acme-challenge.example.com", "record_type": "TXT", "timeout": 90}

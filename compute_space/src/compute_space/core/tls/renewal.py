@@ -33,12 +33,6 @@ RETRY_INTERVAL = datetime.timedelta(hours=1)
 INITIAL_RETRY_INTERVAL = datetime.timedelta(seconds=15)
 
 
-# The two injection points renew_cert_if_needed offers, spelled out so a test double has to match
-# the real signature.
-ProvisionPrimary = Callable[[Config, sqlite3.Connection, "InternalDnsProvider | None"], Awaitable[None]]
-AcquireDomain = Callable[[Config, str, Path, Path, sqlite3.Connection, "InternalDnsProvider | None"], Awaitable[None]]
-
-
 class CertStatus(enum.Enum):
     MISSING = "missing"
     EXPIRED = "expired"
@@ -103,9 +97,7 @@ def _mark_cert_active(name: str) -> None:
 async def renew_cert_if_needed(
     config: Config,
     reload_caddy: Callable[[Config, sqlite3.Connection], Awaitable[object]],
-    dns: InternalDnsProvider | None = None,
-    provision: ProvisionPrimary = provision_cert,
-    acquire: AcquireDomain = acquire_cert_for_domain,
+    dns_provider: InternalDnsProvider | None = None,
 ) -> bool:
     """Renew every TLS cert that is missing, expired, or inside the renewal window.
 
@@ -120,13 +112,13 @@ async def renew_cert_if_needed(
 
     with closing(get_db()) as db:
         primary = primary_domain_or_none(db)
-        # Primary — legacy cert paths + injectable ``provision``, but only when the primary is itself a
-        # TLS domain (a non-TLS/.local primary has no cert to provision).  A failure here propagates.
+        # Primary — legacy cert paths, but only when the primary is itself a TLS domain (a
+        # non-TLS/.local primary has no cert to provision).  A failure here propagates.
         if primary is not None and primary.tls:
             status = get_cert_status(config.tls_cert_path, config.tls_key_path)
             if status != CertStatus.OK:
                 logger.info(f"TLS cert for {primary.name} is {status.value}; renewing")
-                await provision(config, db, dns)
+                await provision_cert(config, db, dns_provider)
                 _mark_cert_active(primary.name_no_port)
                 renewed = True
 
@@ -144,7 +136,7 @@ async def renew_cert_if_needed(
             try:
                 logger.info(f"TLS cert for {name} is {status.value}; renewing")
                 cert_path.parent.mkdir(parents=True, exist_ok=True)
-                await acquire(config, name, cert_path, key_path, db, dns)
+                await acquire_cert_for_domain(config, name, cert_path, key_path, db, dns_provider)
                 _mark_cert_active(name)
                 renewed = True
             except Exception:
@@ -157,7 +149,7 @@ async def renew_cert_if_needed(
 
 def start_renewal_task(
     reload_caddy: Callable[[Config, sqlite3.Connection], Awaitable[object]],
-    dns: InternalDnsProvider | None = None,
+    dns_provider: InternalDnsProvider | None = None,
 ) -> asyncio.Task[None]:
     """Run renew_cert_if_needed periodically on the caller's event loop, retrying sooner after failures.
 
@@ -176,7 +168,7 @@ def start_renewal_task(
         retry = INITIAL_RETRY_INTERVAL
         while True:
             try:
-                await renew_cert_if_needed(get_config(), reload_caddy, dns)
+                await renew_cert_if_needed(get_config(), reload_caddy, dns_provider)
             except Exception:
                 logger.exception(f"TLS cert renewal failed; retrying in {retry}")
                 await asyncio.sleep(retry.total_seconds())

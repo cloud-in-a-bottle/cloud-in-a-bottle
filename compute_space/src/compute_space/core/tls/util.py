@@ -15,7 +15,7 @@ from josepy import JWKRSA  # type: ignore[attr-defined]
 
 from compute_space.core.dns.coredns_provider.interface import InternalDnsProvider
 from compute_space.core.logging import logger
-from compute_space.core.tls import challenge
+from compute_space.core.tls import dns_challenge
 
 
 def load_account_key(path: Path) -> JWKRSA:
@@ -46,7 +46,7 @@ def _create_csr(private_key: ec.EllipticCurvePrivateKey, domains: str | list[str
 async def _acquire_cert_dns01(
     domains: list[str],
     directory_url: str,
-    dns: InternalDnsProvider,
+    dns_provider: InternalDnsProvider,
     account_key: JWKRSA,
     verify_ssl: bool = True,
     acme_email: str | None = None,
@@ -132,14 +132,14 @@ async def _acquire_cert_dns01(
                     # and *.domain are separate authorizations that both need a TXT record live at
                     # the same time.
                     logger.info(f"Setting {len(validation_values)} DNS-01 challenge TXT record(s)")
-                    challenge.publish(dns, validation_values)
+                    dns_challenge.publish(dns_provider, validation_values)
                     challenge_published = True
 
                     # Wait until an external resolver can see the records before telling the ACME
                     # server to validate.  Without this the CA's resolvers may get NXDOMAIN — the
                     # zone file reload hasn't happened yet, or the NS delegation from the parent
                     # zone hasn't propagated.
-                    await challenge.wait_until_visible(domains[0], validation_values)
+                    await dns_challenge.wait_until_visible(domains[0], validation_values)
 
                     # Now answer all challenges
                     for challenge_body in pending_challenges:
@@ -166,7 +166,7 @@ async def _acquire_cert_dns01(
                 # doesn't delete another run's records.
                 if challenge_published:
                     try:
-                        challenge.clear(dns)
+                        dns_challenge.clear(dns_provider)
                     except Exception:
                         if acquisition_succeeded:
                             raise

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import time
 from collections.abc import Sequence
 from pathlib import Path
@@ -38,6 +39,8 @@ class InternalDnsProvider:
     Recreated from scratch on every boot, so it holds no persistent state.
     A set of zones are registered, along with a set of records.
     Records are relative to a zone, and are published identically on all zones.
+
+    Should never be passed into a new thread, but is async-safe.
     """
 
     # Where the generated CoreDNS config goes.
@@ -56,6 +59,10 @@ class InternalDnsProvider:
     _records: dict[tuple[str, RecordType], tuple[DnsRecord, ...]] = attr.ib(factory=dict, init=False)
     _coredns: CoreDnsProcess | None = attr.ib(default=None, init=False)
     _serial: int = attr.ib(default=0, init=False)
+    # Serializes zone changes: two concurrent /api/domains requests are two tasks on one loop, and
+    # two overlapping restarts orphan a CoreDNS still holding :53.  Record writes need no lock --
+    # they never await, so they cannot interleave.
+    _zone_lock: asyncio.Lock = attr.ib(factory=asyncio.Lock, init=False, eq=False, repr=False)
 
     async def start(self) -> None:
         self._write_config()
@@ -126,18 +133,19 @@ class InternalDnsProvider:
         A restart, not just a re-render, because a zone appearing or disappearing means a
         different set of Corefile server blocks, which a running process won't pick up.
         """
-        before = set(self._zones)
-        self._zones = zones
+        async with self._zone_lock:
+            before = set(self._zones)
+            self._zones = zones
 
-        for name in before - set(zones):
-            discard_zone_files(self.zones_dir, name)
-        logger.info(f"DNS zones are now {sorted(zones) or 'none'}")
+            for name in before - set(zones):
+                discard_zone_files(self.zones_dir, name)
+            logger.info(f"DNS zones are now {sorted(zones) or 'none'}")
 
-        # Re-render whether or not anything is serving the files right now: a later start reads
-        # them as they are.
-        self._write_config()
-        if self._coredns is not None:
-            await self._coredns.restart()
+            # Re-render whether or not anything is serving the files right now: a later start reads
+            # them as they are.
+            self._write_config()
+            if self._coredns is not None:
+                await self._coredns.restart()
 
     def _write_config(self) -> None:
         """The Corefile and every zone file, rendered from scratch.

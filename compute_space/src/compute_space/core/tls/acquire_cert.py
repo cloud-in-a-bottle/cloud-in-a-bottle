@@ -29,7 +29,7 @@ async def acquire_tls_cert(
     cert_path: Path,
     key_path: Path,
     acme_account_key_path: Path,
-    dns: InternalDnsProvider,
+    dns_provider: InternalDnsProvider,
     directory_url: str | None = None,
     verify_ssl: bool = True,
     acme_email: str | None = None,
@@ -47,7 +47,7 @@ async def acquire_tls_cert(
     cert_pem, key_pem = await _acquire_cert_dns01(
         domains=domains,
         directory_url=directory_url,
-        dns=dns,
+        dns_provider=dns_provider,
         account_key=account_key,
         verify_ssl=verify_ssl,
         acme_email=acme_email,

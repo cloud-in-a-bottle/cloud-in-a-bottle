@@ -45,13 +45,13 @@ def _dns(tmp_path: Path) -> tuple[InternalDnsProvider, Path]:
     """A provider serving one zone, rendering to a real file.  Never started, so no CoreDNS runs;
     the zone file is what the broker flow actually has to get right."""
     zonefile = tmp_path / "zones" / f"{DOMAIN}.zone"
-    dns = InternalDnsProvider(
+    dns_provider = InternalDnsProvider(
         corefile_path=tmp_path / "Corefile",
         zones_dir=tmp_path / "zones",
         bind_ip="203.0.113.10",
         zones=(DOMAIN,),
     )
-    return dns, zonefile
+    return dns_provider, zonefile
 
 
 def _order_payload() -> dict[str, object]:
@@ -84,7 +84,7 @@ class _BrokerState:
 
 @pytest.mark.asyncio
 async def test_full_flow_installs_cert_and_key(tmp_path: Path) -> None:
-    dns, zonefile = _dns(tmp_path)
+    dns_provider, zonefile = _dns(tmp_path)
     cert_path = tmp_path / "cert.pem"
     key_path = tmp_path / "key.pem"
 
@@ -115,7 +115,7 @@ async def test_full_flow_installs_cert_and_key(tmp_path: Path) -> None:
             domain=DOMAIN,
             cert_path=cert_path,
             key_path=key_path,
-            dns=dns,
+            dns_provider=dns_provider,
             client=client,
             poll_interval_seconds=1.0,
             poll_timeout_seconds=600.0,
@@ -153,7 +153,7 @@ async def test_full_flow_installs_cert_and_key(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_csr_covers_base_and_wildcard(tmp_path: Path) -> None:
-    dns, _ = _dns(tmp_path)
+    dns_provider, _ = _dns(tmp_path)
     captured: dict[str, str] = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -167,7 +167,7 @@ async def test_csr_covers_base_and_wildcard(tmp_path: Path) -> None:
             domain=DOMAIN,
             cert_path=tmp_path / "cert.pem",
             key_path=tmp_path / "key.pem",
-            dns=dns,
+            dns_provider=dns_provider,
             client=client,
             clock=FakeClock(),
             wait_for_propagation=_noop_wait,
@@ -182,7 +182,7 @@ async def test_csr_covers_base_and_wildcard(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_timeout_raises_and_clears_txt(tmp_path: Path) -> None:
-    dns, zonefile = _dns(tmp_path)
+    dns_provider, zonefile = _dns(tmp_path)
 
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/v1/orders":
@@ -196,7 +196,7 @@ async def test_timeout_raises_and_clears_txt(tmp_path: Path) -> None:
                 domain=DOMAIN,
                 cert_path=tmp_path / "cert.pem",
                 key_path=tmp_path / "key.pem",
-                dns=dns,
+                dns_provider=dns_provider,
                 client=client,
                 poll_interval_seconds=5.0,
                 poll_timeout_seconds=30.0,
@@ -210,7 +210,7 @@ async def test_timeout_raises_and_clears_txt(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_failed_order_raises_and_clears_txt(tmp_path: Path) -> None:
-    dns, zonefile = _dns(tmp_path)
+    dns_provider, zonefile = _dns(tmp_path)
 
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/v1/orders":
@@ -224,7 +224,7 @@ async def test_failed_order_raises_and_clears_txt(tmp_path: Path) -> None:
                 domain=DOMAIN,
                 cert_path=tmp_path / "cert.pem",
                 key_path=tmp_path / "key.pem",
-                dns=dns,
+                dns_provider=dns_provider,
                 client=client,
                 clock=FakeClock(),
                 wait_for_propagation=_noop_wait,

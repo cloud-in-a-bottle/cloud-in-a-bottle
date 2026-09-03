@@ -18,21 +18,21 @@ async def acquire_cert_for_domain(
     cert_path: Path,
     key_path: Path,
     db: sqlite3.Connection,
-    dns: InternalDnsProvider | None,
+    dns_provider: InternalDnsProvider | None,
 ) -> None:
     """Acquire a TLS cert (apex + wildcard) for ``domain`` with the configured provider and
     install it at ``cert_path``/``key_path``.
 
     The provider dispatch (BYO-ACME vs the openhost-cert-api broker) and DNS-01 mechanics are
     identical for every domain; only the domain name and output paths vary.  The DNS-01 challenge
-    TXT records go into every zone ``dns`` serves, so the challenge is answerable for secondary
-    domains too.  Caller must ensure ``dns`` is authoritative for ``domain`` and that
+    TXT records go into every zone ``dns_provider`` serves, so the challenge is answerable for secondary
+    domains too.  Caller must ensure ``dns_provider`` is authoritative for ``domain`` and that
     ``cert_path``'s parent directory exists.
 
     The cert_provider value and its required settings are validated when the Config is constructed
     (Config.__attrs_post_init__), so here we only narrow the optional fields for the type checker.
     """
-    if dns is None:
+    if dns_provider is None:
         raise RuntimeError("CoreDNS must be enabled to acquire a TLS cert via DNS-01 challenge")
     if config.cert_provider == CERT_PROVIDER_ACME:
         if not config.acme_account_key_path:
@@ -42,7 +42,7 @@ async def acquire_cert_for_domain(
             cert_path=cert_path,
             key_path=key_path,
             acme_account_key_path=Path(config.acme_account_key_path),
-            dns=dns,
+            dns_provider=dns_provider,
             acme_email=config.acme_email,
             directory_url=config.acme_directory_url,
         )
@@ -62,15 +62,15 @@ async def acquire_cert_for_domain(
                     domain=domain,
                     cert_path=cert_path,
                     key_path=key_path,
-                    dns=dns,
+                    dns_provider=dns_provider,
                     client=client,
                 )
 
 
-async def provision_cert(config: Config, db: sqlite3.Connection, dns: InternalDnsProvider | None) -> None:
+async def provision_cert(config: Config, db: sqlite3.Connection, dns_provider: InternalDnsProvider | None) -> None:
     """Acquire the primary domain's TLS cert and install it at the config's cert/key paths.
 
     Used both for the initial acquisition at startup and for renewals.  Thin wrapper over
     ``acquire_cert_for_domain`` for the primary domain."""
     primary = primary_domain(db)
-    await acquire_cert_for_domain(config, primary.name, config.tls_cert_path, config.tls_key_path, db, dns)
+    await acquire_cert_for_domain(config, primary.name, config.tls_cert_path, config.tls_key_path, db, dns_provider)

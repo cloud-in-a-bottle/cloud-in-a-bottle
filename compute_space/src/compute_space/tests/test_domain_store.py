@@ -144,7 +144,7 @@ async def test_ensure_cert_for_noop_on_mdns(tmp_path: Path, monkeypatch) -> None
 async def test_ensure_cert_for_acquires_tls_to_per_domain_path(tmp_path: Path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
     captured = {}
 
-    async def fake_acquire(config, domain, cert_path, key_path, db, dns):  # type: ignore[no-untyped-def]
+    async def fake_acquire(config, domain, cert_path, key_path, db, dns_provider):  # type: ignore[no-untyped-def]
         captured["domain"] = domain
         captured["cert_path"] = cert_path
 

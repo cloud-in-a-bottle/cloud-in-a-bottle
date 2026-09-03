@@ -128,13 +128,13 @@ async def _reload_caddy_after_response() -> None:
         await reload_caddy_for_domains(get_config(), db)
 
 
-async def _acquire_cert(config: Config, domain: Domain, dns: InternalDnsProvider | None) -> None:
+async def _acquire_cert(config: Config, domain: Domain, dns_provider: InternalDnsProvider | None) -> None:
     """Acquire the domain's cert, then flip its status + reload Caddy so it uses the real cert.
     Runs after the response (acquisition is slow), so it owns one DB connection for the job.
     Records the error on failure."""
     with closing(get_db()) as db:
         try:
-            await ensure_cert_for(config, domain, db, dns)
+            await ensure_cert_for(config, domain, db, dns_provider)
         except Exception as exc:  # noqa: BLE001 — surface any acquisition failure as domain status
             logger.opt(exception=True).error("cert acquisition failed for {}", domain.name)
             set_record_status(db, domain.name_no_port, DomainCertStatus.ERROR, error_message=str(exc))
@@ -167,7 +167,7 @@ async def add_domain(
     data: AddDomainRequest,
     config: NamedDependency[Config],
     db: NamedDependency[sqlite3.Connection],
-    dns: NamedDependency[InternalDnsProvider | None],
+    dns_provider: NamedDependency[InternalDnsProvider | None],
 ) -> Response[DomainListResponse]:
     name = data.name.strip().lower()
     error = _validate_new_domain(config, name, data.tls, data.mdns, db)
@@ -186,18 +186,18 @@ async def add_domain(
             cert_status=DomainCertStatus.ACQUIRING if data.tls else DomainCertStatus.ACTIVE,
         ),
     )
-    if not data.mdns and dns is not None:
+    if not data.mdns and dns_provider is not None:
         # Make CoreDNS authoritative for the new zone *before* acquisition: DNS-01 writes the
         # _acme-challenge TXT into every zone file, and it only resolves for this domain once
         # CoreDNS serves its zone.  (mDNS domains never touch CoreDNS.)
-        await dns.add_zone(name)
+        await dns_provider.add_zone(name)
     # Return the full updated list so the client repaints the table without a follow-up GET, and
     # regenerate Caddy (serving the new site) only after this response has been sent — see
     # _reload_caddy_after_response.  BackgroundTasks runs these in order, so the new site is being
     # served (via `tls internal`) before the slow acquisition starts.
     background: list[BackgroundTask] = [BackgroundTask(_reload_caddy_after_response)]
     if data.tls:
-        background.append(BackgroundTask(_acquire_cert, config, domain, dns))
+        background.append(BackgroundTask(_acquire_cert, config, domain, dns_provider))
     return Response(
         DomainListResponse(domains=_domain_list(config, db)),
         status_code=202,
@@ -216,7 +216,7 @@ async def remove_domain(
     name: FromPath[str],
     config: NamedDependency[Config],
     db: NamedDependency[sqlite3.Connection],
-    dns: NamedDependency[InternalDnsProvider | None],
+    dns_provider: NamedDependency[InternalDnsProvider | None],
 ) -> Response[DomainListResponse]:
     name = name.strip().lower()
     if name == primary_domain(db).name_no_port:
@@ -224,10 +224,10 @@ async def remove_domain(
     removed = get_record(db, name)
     if not remove_record(db, name):
         raise NotFoundException(detail="domain not found")
-    if removed is not None and not removed.mdns and dns is not None:
+    if removed is not None and not removed.mdns and dns_provider is not None:
         # Drop the zone from CoreDNS so it stops answering for the removed public domain, and
         # discard its zone file.  The records survive — they belong to no zone.
-        await dns.remove_zone(name)
+        await dns_provider.remove_zone(name)
     # Regenerate Caddy only after this response has been sent — see _reload_caddy_after_response.
     return Response(
         DomainListResponse(domains=_domain_list(config, db)),

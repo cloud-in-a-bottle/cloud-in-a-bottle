@@ -27,7 +27,7 @@ from cryptography.hazmat.primitives import serialization
 
 from compute_space.core.dns.coredns_provider.interface import InternalDnsProvider
 from compute_space.core.logging import logger
-from compute_space.core.tls import challenge
+from compute_space.core.tls import dns_challenge
 from compute_space.core.tls.acquire_cert import write_cert_and_key
 from compute_space.core.tls.cert_api_client import FINALIZE_STATUS_VALID
 from compute_space.core.tls.cert_api_client import CertApiClient
@@ -69,14 +69,14 @@ async def _wait_for_dns_propagation(domain: str, expected_values: list[str]) -> 
     ``wait_until_visible`` logs and proceeds on timeout, so a delegation that never propagates still
     falls through to the broker's own retries.
     """
-    await challenge.wait_until_visible(domain, expected_values)
+    await dns_challenge.wait_until_visible(domain, expected_values)
 
 
 async def acquire_tls_cert_via_broker(
     domain: str,
     cert_path: Path,
     key_path: Path,
-    dns: InternalDnsProvider,
+    dns_provider: InternalDnsProvider,
     client: CertApiClient,
     *,
     poll_interval_seconds: float = 5.0,
@@ -100,7 +100,7 @@ async def acquire_tls_cert_via_broker(
     # The broker returns a record name per challenge; a wildcard order puts both at
     # ``_acme-challenge``, the one name the provider publishes them under.
     values = [c.record_value for c in order.challenges]
-    challenge.publish(dns, values)
+    dns_challenge.publish(dns_provider, values)
     try:
         # Don't poll finalize until the records are actually live: the broker drives
         # CA validation during finalize, so a not-yet-visible record fails the order.
@@ -116,7 +116,7 @@ async def acquire_tls_cert_via_broker(
         )
     finally:
         # Always pull the challenge records back out, success or failure.
-        challenge.clear(dns)
+        dns_challenge.clear(dns_provider)
 
     write_cert_and_key(cert_path, key_path, certificate.encode(), tls_private_key_to_pem(tls_key))
     logger.info(f"Installed broker-issued TLS cert for {domain} -> {cert_path}")
