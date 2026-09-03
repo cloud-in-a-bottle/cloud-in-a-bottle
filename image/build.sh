@@ -55,7 +55,9 @@
 #                         filesystem to fill whatever disk it is installed onto
 #                         on first boot, so users pick the real size by sizing
 #                         the VM disk (or the physical disk on bare metal).
-#   --swap-size <gib>     Swap file size in GiB baked into the image (default: 2)
+#   --swap-size <gib>     Swap file size in GiB baked into the image (default: 4).
+#                         Tweak after install by SSHing in and resizing /swapfile
+#                         (or from the dashboard settings page).
 #   --mem <mb>            Build VM memory in MB (default: 4096)
 #   --cpus <n>            Build VM vCPUs (default: 2)
 #   --output-dir <dir>    Where artifacts land (default: image/out)
@@ -78,7 +80,7 @@ HOST_PASSWORD="openhost"
 SSH_PUBKEY_FILE=""
 VERSION=""
 DISK_SIZE="20G"
-SWAP_SIZE_GB="2"
+SWAP_SIZE_GB="4"
 MEM_MB="4096"
 CPUS="2"
 BUILD_TIMEOUT="1800"
