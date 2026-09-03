@@ -205,6 +205,15 @@ class TestApplyUpdateWalk:
         # quirk is test-only; the agent trusts the working repo on its own.
         _exec(c, "git", "config", "--global", "--add", "safe.directory", "/tmp/origin.git")
 
+        # Seed conflicting multi-valued settings so the migration has to
+        # converge both users to one value rather than merely append another.
+        _exec(c, "git", "config", "--global", "--add", "http.version", "HTTP/2")
+        _exec(c, "git", "config", "--global", "--add", "http.version", "HTTP/1.1")
+        _host_sh(
+            c,
+            "git config --global --add http.version HTTP/2 && git config --global --add http.version HTTP/1.1",
+        )
+
         # Precondition: the image ships the pre-migration pixi.
         before = _host_sh(c, f"{_PIXI} --version")
         assert "0.69.0" in before.stdout, f"unexpected starting pixi: {before.stdout!r}"
@@ -235,6 +244,11 @@ class TestApplyUpdateWalk:
         latest = latest_registry_version(REGISTRY)
         log = _exec(c, "cat", "/etc/openhost/migrations.jsonl")
         assert f'"version":{latest}' in log.stdout.replace(" ", ""), f"log did not reach v{latest}:\n{log.stdout}"
+
+        root_http_version = _exec(c, "git", "config", "--global", "--get-all", "http.version")
+        host_http_version = _host_sh(c, "git config --global --get-all http.version")
+        assert root_http_version.stdout.splitlines() == ["HTTP/1.1"]
+        assert host_http_version.stdout.splitlines() == ["HTTP/1.1"]
 
         # openhost was stopped for the walk and started again at the end; the
         # unit's ExecStopPost guarantees that even on a failure path.
