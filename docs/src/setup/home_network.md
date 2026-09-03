@@ -16,6 +16,8 @@ TODO: include instructions on how to actually set this up.
 
 ## Tailscale: HTTP or HTTPS
 
+These steps assume you have already provisioned an instance in HTTP-only mode by following one of the preceding home server setup guides.
+
 First, install Tailscale on the instance:
 
 ```bash
@@ -34,16 +36,21 @@ Choose a domain you control the DNS for. We'll use `bottle.example.com` for this
 
 ### Option 1: HTTP
 
-Provision a fresh instance in HTTP-only mode, including port 8080 in the domain because the browser connects directly to the router:
+Using your existing connection to the dashboard, open **Settings → Domains**, enter `bottle.example.com`, choose **Local (HTTP)**, and click **Add domain**.
 
-```bash
-TAILSCALE_IP=$(tailscale ip -4)
-test -n "$TAILSCALE_IP"
-curl -fsSL https://raw.githubusercontent.com/cloud-in-a-bottle/cloud-in-a-bottle/main/scripts/provision.sh \
-  | sudo bash -s -- --domain bottle.example.com:8080 --local-http-only --bind-host "$TAILSCALE_IP"
+Run `tailscale ip -4`, then edit `/home/host/.openhost/local_compute_space/config.toml` and set `host` under `[openhost]` to the address it prints:
+
+```toml
+host = "100.x.y.z"
 ```
 
-Open the Claim URL printed by the installer. The dashboard uses `http://bottle.example.com:8080` and apps use `http://<app>.bottle.example.com:8080`.
+Restart the instance:
+
+```bash
+sudo systemctl restart openhost
+```
+
+The dashboard uses `http://bottle.example.com:8080` and apps use `http://<app>.bottle.example.com:8080`.
 
 ### Option 2: HTTPS
 
@@ -51,22 +58,22 @@ Use the same DNS records, then use [acme.sh](https://github.com/acmesh-official/
 
 ```bash
 DOMAIN=bottle.example.com
-CERT_DIR=/home/host/.openhost/local_compute_space/persistent_data/openhost
-sudo install -d "$CERT_DIR"
+CERT_DIR=/home/host/.openhost/local_compute_space/persistent_data/openhost/certs
+sudo install -d -o host -g host "$CERT_DIR"
 curl -fsSL https://get.acme.sh | sh -s email=you@example.com
 # Export the credentials required by your DNS provider's plugin first.
 ~/.acme.sh/acme.sh --issue --server letsencrypt --dns dns_yourprovider \
   -d "$DOMAIN" -d "*.$DOMAIN"
 ~/.acme.sh/acme.sh --install-cert -d "$DOMAIN" \
-  --fullchain-file "$CERT_DIR/openhost-tls-cert.pem" \
-  --key-file "$CERT_DIR/openhost-tls-key.pem" \
+  --fullchain-file "$CERT_DIR/$DOMAIN.pem" \
+  --key-file "$CERT_DIR/$DOMAIN.key" \
   --reloadcmd "sudo systemctl restart openhost"
-sudo chown host:host "$CERT_DIR/openhost-tls-cert.pem" "$CERT_DIR/openhost-tls-key.pem"
-sudo chmod 0644 "$CERT_DIR/openhost-tls-cert.pem"
-sudo chmod 0600 "$CERT_DIR/openhost-tls-key.pem"
+sudo chown host:host "$CERT_DIR/$DOMAIN.pem" "$CERT_DIR/$DOMAIN.key"
+sudo chmod 0644 "$CERT_DIR/$DOMAIN.pem"
+sudo chmod 0600 "$CERT_DIR/$DOMAIN.key"
 ```
 
-In `/home/host/.openhost/local_compute_space/config.toml`, set `host = "127.0.0.1"`, `start_caddy = true`, `coredns_enabled = true`, and `acquire_tls_cert_if_missing = false`. Mark the primary domain as HTTPS, remove `:8080` from its name, and restart the service. The dashboard then uses `https://bottle.example.com`, apps use `https://<app>.bottle.example.com`, and acme.sh renews and installs the certificate through the same DNS API.
+Using your existing connection to the dashboard, open **Settings → Domains**, enter `bottle.example.com`, leave the type as **Public (HTTPS)**, and click **Add domain**. In `/home/host/.openhost/local_compute_space/config.toml`, set `host = "127.0.0.1"`, `start_caddy = true`, `coredns_enabled = false`, and `acquire_tls_cert_if_missing = false`, then restart the service. The dashboard then uses `https://bottle.example.com`, apps use `https://<app>.bottle.example.com`, and acme.sh renews and installs the certificate through the same DNS API.
 
 ## IPv4 tunnel service
 
