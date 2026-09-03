@@ -44,7 +44,7 @@ SSH to the machine as root and run:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/cloud-in-a-bottle/cloud-in-a-bottle/main/scripts/provision.sh \
-  | bash -s -- --domain mycooldomain.com --acme-email you@example.com
+  | sudo bash -s -- --domain mycooldomain.com --acme-email you@example.com
 ```
 
 The script:

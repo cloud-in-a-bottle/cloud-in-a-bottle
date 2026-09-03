@@ -2,7 +2,7 @@
 # provision.sh — Bootstrap a fresh Ubuntu 24.04 server into a running Cloud in a Bottle instance.
 #
 # Usage (run as root on the target server):
-#   curl -fsSL https://raw.githubusercontent.com/cloud-in-a-bottle/cloud-in-a-bottle/main/scripts/provision.sh | bash -s -- --domain myhost.example.com
+#   curl -fsSL https://raw.githubusercontent.com/cloud-in-a-bottle/cloud-in-a-bottle/main/scripts/provision.sh | sudo bash -s -- --domain myhost.example.com
 #
 # Prerequisites:
 #   - Fresh Ubuntu 24.04 server with root access

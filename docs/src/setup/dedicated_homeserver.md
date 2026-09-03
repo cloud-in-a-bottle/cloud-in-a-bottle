@@ -20,7 +20,7 @@ SSH to the machine as root and run:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/cloud-in-a-bottle/cloud-in-a-bottle/main/scripts/provision.sh \
-  | bash -s -- --domain lvh.me:8080 --local-http-only --open-claim
+  | sudo bash -s -- --domain lvh.me:8080 --local-http-only --open-claim
 ```
 
 The script:
