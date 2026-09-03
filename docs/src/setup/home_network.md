@@ -51,7 +51,7 @@ The wildcard record gives every app its own working subdomain.
 
 ### 3. Add the domain
 
-Using your existing connection to the dashboard, open **Settings → Domains** and enter `bottle.example.com`. Choose **Local (HTTP)** to continue serving plain HTTP on port 8080, or **Public (HTTPS)** to serve the domain with a certificate.
+Using your existing connection to the dashboard, open **Settings → Domains** and enter `bottle.example.com`. Choose **Local (HTTP)** to continue serving plain HTTP, or **Public (HTTPS)** to serve the domain with a certificate.
 
 #### Local (HTTP)
 
