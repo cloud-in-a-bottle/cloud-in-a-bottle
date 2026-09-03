@@ -135,7 +135,7 @@ fi
 echo "--- Installing ansible and git ---"
 apt-get update -qq
 apt-get install -y -qq ansible-core git > /dev/null 2>&1
-sudo git config --global http.version HTTP/1.1
+su host -c "git config --global http.version HTTP/1.1"
 
 # ---- Clone the repo ----
 echo "--- Cloning Cloud in a Bottle ($BRANCH) ---"
