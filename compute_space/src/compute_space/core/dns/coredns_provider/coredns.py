@@ -86,7 +86,7 @@ def write_coredns_config(
     *,
     corefile_path: Path,
     zones_dir: Path,
-    bind_ip: str,
+    bind_ip: str | None,
     container_gateway_ip: str | None = None,
     default_ttl: int = ADDRESS_TTL_SECONDS,
 ) -> None:
@@ -94,6 +94,8 @@ def write_coredns_config(
 
     Builds from scratch each time, ignoring the current config.
     """
+    assert bind_ip is not None or container_gateway_ip is not None, "must bind at least one view"
+
     # Emitting the container view against an unbindable gateway would stop CoreDNS starting.
     if container_gateway_ip and not _gateway_ip_is_bindable(container_gateway_ip):
         logger.info("Container gateway {} not bindable; skipping container-facing DNS view", container_gateway_ip)

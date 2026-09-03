@@ -97,7 +97,7 @@ def _mark_cert_active(name: str) -> None:
 async def renew_cert_if_needed(
     config: Config,
     reload_caddy: Callable[[Config, sqlite3.Connection], Awaitable[object]],
-    dns_provider: InternalDnsProvider | None = None,
+    dns_provider: InternalDnsProvider,
 ) -> bool:
     """Renew every TLS cert that is missing, expired, or inside the renewal window.
 
@@ -149,7 +149,7 @@ async def renew_cert_if_needed(
 
 def start_renewal_task(
     reload_caddy: Callable[[Config, sqlite3.Connection], Awaitable[object]],
-    dns_provider: InternalDnsProvider | None = None,
+    dns_provider: InternalDnsProvider,
 ) -> asyncio.Task[None]:
     """Run renew_cert_if_needed periodically on the caller's event loop, retrying sooner after failures.
 

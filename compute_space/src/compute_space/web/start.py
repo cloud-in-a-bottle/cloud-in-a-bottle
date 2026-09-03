@@ -73,7 +73,7 @@ def _require_configured_domain(domains: tuple[Domain, ...]) -> None:
         )
 
 
-async def _ensure_tls_cert(config: Config, db: sqlite3.Connection, dns_provider: InternalDnsProvider | None) -> None:
+async def _ensure_tls_cert(config: Config, db: sqlite3.Connection, dns_provider: InternalDnsProvider) -> None:
     """Make sure a usable cert+key pair is on disk before Caddy starts, acquiring or renewing as configured."""
     status = get_cert_status(config.tls_cert_path, config.tls_key_path)
     if status == CertStatus.OK:
@@ -115,6 +115,17 @@ def _dns_bind_ip(public_ip: str) -> str:
         return public_ip
 
 
+# Domains that resolve without this instance answering for them: mDNS handles ``.local``, and
+# ``lvh.me`` (and friends) are public wildcards pointing at loopback.  An instance configured with
+# only these has nothing to be authoritative for, so it never binds :53.
+_LOCAL_ONLY_SUFFIXES = (".local", "lvh.me")
+
+
+def _is_local_only(domain: Domain) -> bool:
+    name = domain.name_no_port
+    return domain.mdns or any(name == suffix or name.endswith(f".{suffix}") for suffix in _LOCAL_ONLY_SUFFIXES)
+
+
 def _ensure_coredns_binary(config: Config) -> str:
     """Return the CoreDNS binary to launch, self-healing a missing one."""
     if found := shutil.which("coredns"):
@@ -138,7 +149,6 @@ async def _main() -> None:
     # The DB `domains` table is the source of truth.  Seed it once (+ the claim token) from
     # first_boot.toml before starting CoreDNS/Caddy so every configured domain is served this boot.
     seed_first_boot(config)
-    dns_provider: InternalDnsProvider | None = None
     caddy: CaddyProcess | None = None
     # Long-running tasks started at boot.  Held here for their whole lifetime (the loop keeps only
     # weak references) and cancelled together by _shutdown.
@@ -149,25 +159,38 @@ async def _main() -> None:
         domains = effective_domains(db)  # primary first
         _require_configured_domain(domains)  # fail loud at boot, not late in the first request
 
-        if config.coredns_enabled:
+        # Bind :53 only when a domain actually needs this instance to answer for it.  With only
+        # local-only domains the provider still runs, serving just the container-facing view that
+        # app containers point their resolver at.
+        public_zones = tuple(d.name_no_port for d in domains if not _is_local_only(d))
+        public_ip: str | None = None
+        bind_ip: str | None = None
+        if public_zones and config.coredns_enabled:
             if not config.public_ip:
                 raise RuntimeError("Public IP must be set in config to use CoreDNS")
-            # Authoritative for every public (non-mDNS) domain the instance answers on, so a
-            # secondary domain delegated to this box resolves too — not just the primary.
-            dns_provider = InternalDnsProvider(
-                corefile_path=config.coredns_corefile_path,
-                zones_dir=config.zones_dir,
-                bind_ip=_dns_bind_ip(config.public_ip),
-                container_gateway_ip=CONTAINER_GATEWAY_IP,
-                # mDNS `.local` domains are excluded: the wildcard mDNS responder serves them, and
-                # they never reach CoreDNS or ACME.
-                zones=tuple(d.name_no_port for d in domains if not d.mdns),
-                coredns_bin=_ensure_coredns_binary(config),
-            )
-            await dns_provider.start()
+            public_ip = config.public_ip
+            bind_ip = _dns_bind_ip(public_ip)
+        elif public_zones:
+            logger.warning(f"coredns_enabled is off, so {', '.join(public_zones)} will not resolve via this instance")
+
+        # Always constructed, so every caller has a provider to talk to and can be told *why* a
+        # zone can't be served rather than finding a None.  Authoritative for every public domain
+        # the instance answers on, so a secondary domain delegated to this box resolves too.
+        dns_provider = InternalDnsProvider(
+            corefile_path=config.coredns_corefile_path,
+            zones_dir=config.zones_dir,
+            bind_ip=bind_ip,
+            container_gateway_ip=CONTAINER_GATEWAY_IP,
+            # Only resolved when it will actually be launched: looking it up self-heals by
+            # downloading, which an instance that never runs CoreDNS shouldn't pay for.
+            coredns_bin=_ensure_coredns_binary(config) if config.coredns_enabled else "coredns",
+        )
+        if bind_ip:
+            await dns_provider.set_zones(public_zones)
+        if public_ip is not None:
             # The provider holds its records in memory, so the ones that route the space are
             # published on every boot rather than read back from anywhere.
-            publish_router_addresses(dns_provider, config.public_ip)
+            publish_router_addresses(dns_provider, public_ip)
 
         if domains[0].tls:  # primary is a TLS domain
             await _ensure_tls_cert(config, db, dns_provider)
@@ -210,9 +233,9 @@ async def _main() -> None:
         for task in background_tasks:
             with contextlib.suppress(asyncio.CancelledError):
                 await task
-        for child in (caddy, dns_provider):
-            if child is not None:
-                await child.stop()
+        if caddy is not None:
+            await caddy.stop()
+        await dns_provider.cleanup()
 
     hypercorn_config = hypercorn.config.Config()
     # Bind the primary address (127.0.0.1 in production) plus the container

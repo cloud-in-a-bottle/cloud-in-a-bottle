@@ -34,6 +34,7 @@ from compute_space.db import provide_db
 from compute_space.db.connection import init_db
 from compute_space.tests.conftest import _make_test_config
 from compute_space.tests.conftest import open_db
+from compute_space.tests.conftest import stub_coredns_spawn
 from compute_space.web.routes.api import domains
 from compute_space.web.routes.api.domains import api_domains_routes
 
@@ -64,17 +65,25 @@ def _write_cert(cert_path: Path, key_path: Path, *, days_valid: int = 60) -> Non
     )
 
 
-def _make_app(dns_provider: Any = None) -> Litestar:
+def _make_app(dns_provider: Any) -> Litestar:
     return Litestar(
         route_handlers=[api_domains_routes],
         dependencies={
             "config": Provide(provide_config, sync_to_thread=False),
             "db": Provide(provide_db),
-            # Mirrors create_app: the routes are handed the running provider, or None when the
-            # router isn't serving DNS.
+            # Mirrors create_app: the routes are always handed the running provider.
             "dns_provider": Provide(lambda: dns_provider, sync_to_thread=False, use_cache=True),
         },
         openapi_config=None,
+    )
+
+
+def _unstarted_provider(tmp_path: Path, bind_ip: str | None = "203.0.113.10") -> InternalDnsProvider:
+    return InternalDnsProvider(
+        corefile_path=tmp_path / "Corefile",
+        zones_dir=tmp_path / "zones",
+        bind_ip=bind_ip,
+        zones=(PRIMARY.name,) if bind_ip else (),
     )
 
 
@@ -102,23 +111,42 @@ def cfg(tmp_path: Path) -> Any:
 
 
 @pytest.fixture
-def client(cfg: Any) -> Iterator[TestClient[Litestar]]:
-    with TestClient(app=_make_app()) as c:
+def client(cfg: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient[Litestar]]:
+    stub_coredns_spawn(monkeypatch)  # add_zone starts CoreDNS; keep that off the test machine
+    with TestClient(app=_make_app(_unstarted_provider(tmp_path))) as c:
         yield c
 
 
 @pytest.fixture
-def dns_client(cfg: Any, tmp_path: Path) -> Iterator[tuple[InternalDnsProvider, TestClient[Litestar]]]:
+def dns_client(
+    cfg: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> Iterator[tuple[InternalDnsProvider, TestClient[Litestar]]]:
     """A real provider, never started, so the routes drive the same zone set production would."""
-    dns_provider = InternalDnsProvider(
-        corefile_path=tmp_path / "Corefile",
-        zones_dir=tmp_path / "zones",
-        bind_ip="203.0.113.10",
-        zones=(PRIMARY.name,),
-    )
+    stub_coredns_spawn(monkeypatch)  # add_zone starts CoreDNS; keep that off the test machine
+    dns_provider = _unstarted_provider(tmp_path)
     with TestClient(app=_make_app(dns_provider)) as c:
         c.cookies.update(_auth_cookie(cfg.db_path))
         yield dns_provider, c
+
+
+def test_a_public_domain_is_accepted_when_dns_is_not_bound(cfg: Any, tmp_path: Path) -> None:
+    # Running without CoreDNS is a supported choice, so it must not veto the add -- the domain is
+    # recorded and served by Caddy; only the zone this instance would answer for is missing.
+    with TestClient(app=_make_app(_unstarted_provider(tmp_path, bind_ip=None))) as c:
+        c.cookies.update(_auth_cookie(cfg.db_path))
+        r = c.post("/api/domains", json={"name": "host.example.org", "tls": False, "mdns": False})
+        assert r.status_code == 202
+        assert "host.example.org" in [d["name"] for d in c.get("/api/domains").json()["domains"]]
+
+
+def test_a_tls_domain_added_without_dns_reports_why_its_cert_failed(cfg: Any, tmp_path: Path) -> None:
+    # The consequence shows up where the user can see it: the domain's cert status, not a refusal.
+    with TestClient(app=_make_app(_unstarted_provider(tmp_path, bind_ip=None))) as c:
+        c.cookies.update(_auth_cookie(cfg.db_path))
+        assert c.post("/api/domains", json={"name": "host.example.org", "tls": True}).status_code == 202
+        info = next(d for d in c.get("/api/domains").json()["domains"] if d["name"] == "host.example.org")
+        assert info["cert_status"] == DomainCertStatus.ERROR
+        assert "CoreDNS must be enabled" in info["error_message"]
 
 
 async def _acquired(config: Any, domain: Any, db: Any, dns_provider: Any) -> None:

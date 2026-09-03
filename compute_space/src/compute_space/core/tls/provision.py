@@ -18,7 +18,7 @@ async def acquire_cert_for_domain(
     cert_path: Path,
     key_path: Path,
     db: sqlite3.Connection,
-    dns_provider: InternalDnsProvider | None,
+    dns_provider: InternalDnsProvider,
 ) -> None:
     """Acquire a TLS cert (apex + wildcard) for ``domain`` with the configured provider and
     install it at ``cert_path``/``key_path``.
@@ -32,7 +32,9 @@ async def acquire_cert_for_domain(
     The cert_provider value and its required settings are validated when the Config is constructed
     (Config.__attrs_post_init__), so here we only narrow the optional fields for the type checker.
     """
-    if dns_provider is None:
+    # Fail fast and legibly: DNS-01 answers the challenge from a zone this instance serves, so
+    # without one the CA would just time out.  The message reaches the domain's error_message.
+    if not dns_provider.serves_public_zones:
         raise RuntimeError("CoreDNS must be enabled to acquire a TLS cert via DNS-01 challenge")
     if config.cert_provider == CERT_PROVIDER_ACME:
         if not config.acme_account_key_path:
@@ -67,7 +69,7 @@ async def acquire_cert_for_domain(
                 )
 
 
-async def provision_cert(config: Config, db: sqlite3.Connection, dns_provider: InternalDnsProvider | None) -> None:
+async def provision_cert(config: Config, db: sqlite3.Connection, dns_provider: InternalDnsProvider) -> None:
     """Acquire the primary domain's TLS cert and install it at the config's cert/key paths.
 
     Used both for the initial acquisition at startup and for renewals.  Thin wrapper over

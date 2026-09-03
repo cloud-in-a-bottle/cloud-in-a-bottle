@@ -30,6 +30,7 @@ from litestar.params import FromPath
 from compute_space.config import Config
 from compute_space.config import get_config
 from compute_space.core.caddy import reload_caddy_for_domains
+from compute_space.core.dns.coredns_provider.interface import DnsNotBoundError
 from compute_space.core.dns.coredns_provider.interface import InternalDnsProvider
 from compute_space.core.domains import Domain
 from compute_space.core.domains import DomainCertStatus
@@ -128,7 +129,7 @@ async def _reload_caddy_after_response() -> None:
         await reload_caddy_for_domains(get_config(), db)
 
 
-async def _acquire_cert(config: Config, domain: Domain, dns_provider: InternalDnsProvider | None) -> None:
+async def _acquire_cert(config: Config, domain: Domain, dns_provider: InternalDnsProvider) -> None:
     """Acquire the domain's cert, then flip its status + reload Caddy so it uses the real cert.
     Runs after the response (acquisition is slow), so it owns one DB connection for the job.
     Records the error on failure."""
@@ -145,7 +146,13 @@ async def _acquire_cert(config: Config, domain: Domain, dns_provider: InternalDn
     await _reload_caddy_after_response()
 
 
-def _validate_new_domain(config: Config, name: str, tls: bool, mdns: bool, db: sqlite3.Connection) -> str | None:
+def _validate_new_domain(
+    config: Config,
+    name: str,
+    tls: bool,
+    mdns: bool,
+    db: sqlite3.Connection,
+) -> str | None:
     if not name:
         return "domain name is required"
     if not _DOMAIN_RE.match(name):
@@ -167,7 +174,7 @@ async def add_domain(
     data: AddDomainRequest,
     config: NamedDependency[Config],
     db: NamedDependency[sqlite3.Connection],
-    dns_provider: NamedDependency[InternalDnsProvider | None],
+    dns_provider: NamedDependency[InternalDnsProvider],
 ) -> Response[DomainListResponse]:
     name = data.name.strip().lower()
     error = _validate_new_domain(config, name, data.tls, data.mdns, db)
@@ -186,11 +193,17 @@ async def add_domain(
             cert_status=DomainCertStatus.ACQUIRING if data.tls else DomainCertStatus.ACTIVE,
         ),
     )
-    if not data.mdns and dns_provider is not None:
+    if not data.mdns:
         # Make CoreDNS authoritative for the new zone *before* acquisition: DNS-01 writes the
         # _acme-challenge TXT into every zone file, and it only resolves for this domain once
         # CoreDNS serves its zone.  (mDNS domains never touch CoreDNS.)
-        await dns_provider.add_zone(name)
+        try:
+            await dns_provider.add_zone(name)
+        except DnsNotBoundError:
+            # Not an error: running without CoreDNS is a supported choice, and the domain is still
+            # worth recording (Caddy will serve it once its DNS points here by other means).  A TLS
+            # domain surfaces the consequence through its cert status, below.
+            logger.warning("Added {} but this instance is not serving DNS for it", name)
     # Return the full updated list so the client repaints the table without a follow-up GET, and
     # regenerate Caddy (serving the new site) only after this response has been sent — see
     # _reload_caddy_after_response.  BackgroundTasks runs these in order, so the new site is being
@@ -216,7 +229,7 @@ async def remove_domain(
     name: FromPath[str],
     config: NamedDependency[Config],
     db: NamedDependency[sqlite3.Connection],
-    dns_provider: NamedDependency[InternalDnsProvider | None],
+    dns_provider: NamedDependency[InternalDnsProvider],
 ) -> Response[DomainListResponse]:
     name = name.strip().lower()
     if name == primary_domain(db).name_no_port:
@@ -224,7 +237,7 @@ async def remove_domain(
     removed = get_record(db, name)
     if not remove_record(db, name):
         raise NotFoundException(detail="domain not found")
-    if removed is not None and not removed.mdns and dns_provider is not None:
+    if removed is not None and not removed.mdns and dns_provider.serves_public_zones:
         # Drop the zone from CoreDNS so it stops answering for the removed public domain, and
         # discard its zone file.  The records survive — they belong to no zone.
         await dns_provider.remove_zone(name)

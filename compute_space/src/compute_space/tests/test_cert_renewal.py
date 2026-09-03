@@ -14,6 +14,7 @@ from compute_space.config import Config
 from compute_space.config import DefaultConfig
 from compute_space.core.caddy import config_cert_resolver
 from compute_space.core.caddy import generate_caddyfile
+from compute_space.core.dns.coredns_provider.interface import InternalDnsProvider
 from compute_space.core.domains import Domain
 from compute_space.core.domains import DomainRecord
 from compute_space.core.domains import effective_domains
@@ -107,6 +108,11 @@ def _async(fn: Any) -> Any:
     return call
 
 
+def _dns(tmp_path: Path) -> InternalDnsProvider:
+    """Never started, and never used: the cert work that would touch it is patched out."""
+    return InternalDnsProvider(corefile_path=tmp_path / "Corefile", zones_dir=tmp_path / "zones", bind_ip=None)
+
+
 def _patch_cert_work(monkeypatch: pytest.MonkeyPatch, *, provision: Any = None, acquire: Any = None) -> None:
     """Stand in for the real ACME work, which renew_cert_if_needed calls by name."""
     if provision is not None:
@@ -130,7 +136,7 @@ async def test_renew_skips_valid_cert(tmp_path: Path, monkeypatch: pytest.Monkey
     )
     calls: list[str] = []
     _patch_cert_work(monkeypatch, provision=_async(lambda c, db, dns_provider: calls.append("provision")))
-    renewed = await renew_cert_if_needed(config, _async(lambda c, db: calls.append("restart")))
+    renewed = await renew_cert_if_needed(config, _async(lambda c, db: calls.append("restart")), _dns(tmp_path))
     assert renewed is False
     assert calls == []
 
@@ -150,7 +156,7 @@ async def test_renew_provisions_and_restarts_caddy(
     )
     calls: list[str] = []
     _patch_cert_work(monkeypatch, provision=_async(lambda c, db, dns_provider: calls.append("provision")))
-    renewed = await renew_cert_if_needed(config, _async(lambda c, db: calls.append("restart")))
+    renewed = await renew_cert_if_needed(config, _async(lambda c, db: calls.append("restart")), _dns(tmp_path))
     assert renewed is True
     assert calls == ["provision", "restart"]
 
@@ -165,7 +171,7 @@ async def test_renew_failure_does_not_restart_caddy(tmp_path: Path, monkeypatch:
 
     _patch_cert_work(monkeypatch, provision=_failing_provision)
     with pytest.raises(RuntimeError, match="ACME is down"):
-        await renew_cert_if_needed(config, _async(lambda c, db: calls.append("restart")))
+        await renew_cert_if_needed(config, _async(lambda c, db: calls.append("restart")), _dns(tmp_path))
     assert calls == []
 
 
@@ -192,7 +198,7 @@ async def test_renew_acquires_stale_secondary_domain(tmp_path: Path, monkeypatch
         provision=_async(lambda c, db, dns_provider: calls.append("provision")),
         acquire=_async(lambda c, name, cp, kp, db, dns_provider: acquired.append(name)),
     )
-    renewed = await renew_cert_if_needed(config, _async(lambda c, db: calls.append("restart")))
+    renewed = await renew_cert_if_needed(config, _async(lambda c, db: calls.append("restart")), _dns(tmp_path))
 
     assert renewed is True
     assert acquired == ["second.example.com"]
@@ -214,7 +220,7 @@ async def test_renew_acquires_secondary_under_non_tls_primary(tmp_path: Path, mo
         provision=_async(lambda c, db, dns_provider: calls.append("provision")),
         acquire=_async(lambda c, name, cp, kp, db, dns_provider: acquired.append(name)),
     )
-    renewed = await renew_cert_if_needed(config, _async(lambda c, db: calls.append("restart")))
+    renewed = await renew_cert_if_needed(config, _async(lambda c, db: calls.append("restart")), _dns(tmp_path))
     assert renewed is True
     assert acquired == ["public.example.com"]
     assert calls == ["restart"]  # primary is non-TLS → provision never called
@@ -235,7 +241,7 @@ async def test_renew_isolates_a_failing_secondary(tmp_path: Path, monkeypatch: p
 
     calls: list[str] = []
     _patch_cert_work(monkeypatch, provision=_async(lambda c, db, dns_provider: None), acquire=_acquire)
-    renewed = await renew_cert_if_needed(config, _async(lambda c, db: calls.append("restart")))
+    renewed = await renew_cert_if_needed(config, _async(lambda c, db: calls.append("restart")), _dns(tmp_path))
 
     assert renewed is True
     assert acquired == ["good.example.com"]  # bad one failed but didn't abort the loop
@@ -263,7 +269,7 @@ async def test_renew_reload_regenerates_caddyfile_for_new_secondary_cert(
         caddyfile.write_text(generate_caddyfile(effective_domains(db), c.port, config_cert_resolver(c, db)))
 
     _patch_cert_work(monkeypatch, provision=_async(lambda c, db, dns_provider: None), acquire=_acquire)
-    renewed = await renew_cert_if_needed(config, _reload)
+    renewed = await renew_cert_if_needed(config, _reload, _dns(tmp_path))
 
     assert renewed is True
     content = caddyfile.read_text()
@@ -320,7 +326,7 @@ async def test_renew_marks_primary_active_same_cycle(tmp_path: Path, monkeypatch
         _write_self_signed_cert(c.tls_cert_path, c.tls_key_path, datetime.datetime(2100, 1, 1, tzinfo=datetime.UTC))
 
     _patch_cert_work(monkeypatch, provision=_provision)
-    renewed = await renew_cert_if_needed(cfg, _async(lambda c, db: None))
+    renewed = await renew_cert_if_needed(cfg, _async(lambda c, db: None), _dns(tmp_path))
     assert renewed is True
     with closing(open_db(cfg)) as db:
         assert get_record(db, "host.example.com").cert_status == "active"

@@ -203,7 +203,7 @@ def _reject_app_subdomain_requests(request: Request[Any, Any, Any]) -> Response[
     return None
 
 
-def create_app(config: Config, dns_provider: InternalDnsProvider | None = None) -> ASGIApp:
+def create_app(config: Config, dns_provider: InternalDnsProvider) -> ASGIApp:
     """Build the full router ASGI app.  The returned app is the Litestar app wrapped
     in ``SubdomainProxyMiddleware`` so app-subdomain requests are diverted to backend
     containers before Litestar attempts any routing.  Caller must have already
@@ -260,7 +260,6 @@ def create_app(config: Config, dns_provider: InternalDnsProvider | None = None) 
             "db": Provide(provide_db),
             # The running provider itself, so a route that changes the domain set or needs a cert
             # can tell it, rather than reaching for whichever one a module global happens to hold.
-            # None when the router isn't serving DNS (`coredns_enabled` off).
             "dns_provider": Provide(lambda: dns_provider, sync_to_thread=False, use_cache=True),
         },
         exception_handlers={

@@ -21,6 +21,7 @@ from compute_space.core.logging import logger
 __all__ = [
     "ADDRESS_TTL_SECONDS",
     "APEX",
+    "DnsNotBoundError",
     "DnsRecord",
     "DnsZoneError",
     "InternalDnsProvider",
@@ -32,6 +33,10 @@ class DnsZoneError(Exception):
     """A zone change that contradicts the set already served."""
 
 
+class DnsNotBoundError(Exception):
+    """A public zone was asked for on an instance with no address to answer it on."""
+
+
 @attr.s(auto_attribs=True)
 class InternalDnsProvider:
     """Interface to the internal DNS server provided by CoreDNS.
@@ -39,6 +44,8 @@ class InternalDnsProvider:
     Recreated from scratch on every boot, so it holds no persistent state.
     A set of zones are registered, along with a set of records.
     Records are relative to a zone, and are published identically on all zones.
+
+    The actual CoreDNS process is started and stopped automatically as needed as zones are added and removed.
 
     Should never be passed into a new thread, but is async-safe.
     """
@@ -48,7 +55,8 @@ class InternalDnsProvider:
     zones_dir: Path
 
     # what internal interface address to serve coredns on for the main routing records
-    bind_ip: str
+    # None indicates that we should never bind / serve these records, and will raise DnsNotBoundError on attempts.
+    bind_ip: str | None
     # what internal interface address to serve coredns on for the loopback records,
     # or none if these records should not be served (dev/CI)
     container_gateway_ip: str | None = None
@@ -64,37 +72,42 @@ class InternalDnsProvider:
     # they never await, so they cannot interleave.
     _zone_lock: asyncio.Lock = attr.ib(factory=asyncio.Lock, init=False, eq=False, repr=False)
 
-    async def start(self) -> None:
-        self._write_config()
-        logger.info(f"Starting CoreDNS for {', '.join(self._zones) or 'no zones'}")
-        self._coredns = await CoreDnsProcess.start(self.corefile_path, coredns_bin=self.coredns_bin)
-
-    async def stop(self) -> None:
+    async def cleanup(self) -> None:
+        """Shut CoreDNS down for good.  A no-op if it isn't running, so a shutdown path needs no
+        check of its own."""
         if self._coredns is not None:
             await self._coredns.stop()
             self._coredns = None
 
     @property
-    def is_running(self) -> bool:
-        return self._coredns is not None
+    def serves_public_zones(self) -> bool:
+        return self.bind_ip is not None
 
     @property
     def zones(self) -> tuple[str, ...]:
         return self._zones
 
+    async def set_zones(self, zones: Sequence[str]) -> None:
+        """Make ``zones`` the served set, whatever it was before."""
+        if not self.serves_public_zones:
+            raise DnsNotBoundError(f"No address to serve {zones!r} on; this instance is not bound for public DNS")
+        await self._apply_zones(tuple(normalize_zone(z) for z in zones))
+
     async def add_zone(self, zone: str) -> None:
         # Normalize on the way in, not just for the comparison, so the stored set and a later
         # lookup agree on how a zone is spelled.
+        if not self.serves_public_zones:
+            raise DnsNotBoundError(f"No address to serve {zone!r} on; this instance is not bound for public DNS")
         added = normalize_zone(zone)
         if added in self._zones:
             raise DnsZoneError(f"Already authoritative for {added!r}")
-        await self._reconcile((*self._zones, added))
+        await self._apply_zones((*self._zones, added))
 
     async def remove_zone(self, zone: str) -> None:
         name = normalize_zone(zone)
         if name not in self._zones:
             raise DnsZoneError(f"Not authoritative for {name!r}")
-        await self._reconcile(tuple(z for z in self._zones if z != name))
+        await self._apply_zones(tuple(z for z in self._zones if z != name))
 
     @property
     def records(self) -> tuple[DnsRecord, ...]:
@@ -127,7 +140,7 @@ class InternalDnsProvider:
         self._write_config()
         logger.info(f"Cleared {record_type} records at {name!r} in every zone")
 
-    async def _reconcile(self, zones: tuple[str, ...]) -> None:
+    async def _apply_zones(self, zones: tuple[str, ...]) -> None:
         """Move the managed set to ``zones``, then re-render and restart CoreDNS.
 
         A restart, not just a re-render, because a zone appearing or disappearing means a
@@ -144,8 +157,23 @@ class InternalDnsProvider:
             # Re-render whether or not anything is serving the files right now: a later start reads
             # them as they are.
             self._write_config()
+            await self._match_process_to_zones()
+
+    async def _match_process_to_zones(self) -> None:
+        """Run CoreDNS exactly when there is a zone to answer for.
+
+        Caller holds the zone lock.  With nothing to serve the Corefile has no server blocks, which
+        CoreDNS refuses to start against, so not running is the only honest state for it.
+        """
+        if not self._zones:
             if self._coredns is not None:
-                await self._coredns.restart()
+                logger.info("No zones left to serve; stopping CoreDNS")
+                await self.cleanup()
+        elif self._coredns is None:
+            logger.info(f"Serving DNS for {', '.join(self._zones)}")
+            self._coredns = await CoreDnsProcess.start(self.corefile_path, coredns_bin=self.coredns_bin)
+        else:
+            await self._coredns.restart()
 
     def _write_config(self) -> None:
         """The Corefile and every zone file, rendered from scratch.

@@ -25,6 +25,7 @@ from compute_space.core.domains import seed_domains
 from compute_space.core.domains import upsert_record
 from compute_space.db import init_db
 from compute_space.tests.conftest import open_db
+from compute_space.tests.conftest import stub_coredns_spawn
 
 PUBLIC_IP = "203.0.113.10"
 # The local address CoreDNS binds; the compute space works it out and passes it in.
@@ -65,7 +66,7 @@ def _zones(db: sqlite3.Connection) -> tuple[str, ...]:
     return tuple(d.name_no_port for d in effective_domains(db) if not d.mdns)
 
 
-def _provider(config: DefaultConfig, zones: tuple[str, ...]) -> InternalDnsProvider:
+def _provider(config: DefaultConfig, zones: tuple[str, ...] = ()) -> InternalDnsProvider:
     return InternalDnsProvider(
         corefile_path=config.coredns_corefile_path,
         zones_dir=config.zones_dir,
@@ -79,39 +80,6 @@ def _serial(zonefile: Path) -> int:
 
 
 # ─── the container-facing view ───
-
-
-class _FakeStdout:
-    """An empty stream that never ends, so the log task stays alive like it would over a real
-    process and is wound down by stop() rather than falling out of its own loop."""
-
-    def __aiter__(self) -> _FakeStdout:
-        return self
-
-    async def __anext__(self) -> bytes:
-        await asyncio.Event().wait()
-        raise AssertionError("unreachable")
-
-
-class _FakeProc:
-    pid = 4242
-    # Report already-exited so CoreDnsProcess.stop() skips the terminate path.
-    returncode = 0
-
-    def __init__(self) -> None:
-        self.stdout = _FakeStdout()
-
-    async def wait(self) -> int:
-        return 0
-
-
-def _stub_spawn(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Stub at the OS boundary, so start() and restart() themselves run for real."""
-
-    async def fake_exec(*a: object, **k: object) -> _FakeProc:
-        return _FakeProc()
-
-    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
 
 
 def test_container_dns_view_rendered_when_gateway_bindable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -188,14 +156,15 @@ def test_zone_set_covers_every_public_domain_and_skips_mdns(tmp_path: Path) -> N
 async def test_start_writes_a_zone_block_and_file_per_public_domain(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    _stub_spawn(monkeypatch)
+    stub_coredns_spawn(monkeypatch)
 
     config = _seed_dns_cfg(
         tmp_path, Domain(name="host.example.com", tls=True), Domain(name="host.example.org", tls=True)
     )
     with closing(open_db(config)) as db:
-        dns = _provider(config, _zones(db))
-    await dns.start()
+        zones = _zones(db)
+    dns = _provider(config)
+    await dns.set_zones(zones)
     try:
         cf = config.coredns_corefile_path.read_text()
         # Both domains get their own authoritative server block referencing their own zone file.
@@ -208,19 +177,19 @@ async def test_start_writes_a_zone_block_and_file_per_public_domain(
         assert "$ORIGIN host.example.org." in secondary
         assert "@   IN NS   ns.host.example.org." in secondary
     finally:
-        await dns.stop()
+        await dns.cleanup()
 
 
 @pytest.mark.asyncio
 async def test_adding_a_zone_regenerates_the_corefile_and_restarts(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    _stub_spawn(monkeypatch)
+    stub_coredns_spawn(monkeypatch)
 
     config = _seed_dns_cfg(tmp_path, Domain(name="host.example.com", tls=True))
     with closing(open_db(config)) as db:
-        dns = _provider(config, _zones(db))
-        await dns.start()
+        dns = _provider(config)
+        await dns.set_zones(_zones(db))
         try:
             assert dns._coredns is not None
             first_proc = dns._coredns.proc
@@ -234,7 +203,7 @@ async def test_adding_a_zone_regenerates_the_corefile_and_restarts(
             # restart() replaced the process so the new Corefile (new zone) takes effect.
             assert dns._coredns.proc is not first_proc
         finally:
-            await dns.stop()
+            await dns.cleanup()
 
 
 @pytest.mark.asyncio
@@ -244,12 +213,12 @@ async def test_re_adding_a_served_zone_raises_and_leaves_coredns_alone(
     # /api/domains rejects an already-configured domain before it gets here, so a duplicate reaching
     # the provider means the two disagree -- worth raising over.  The refusal must not cost a
     # restart, which would drop DNS for no reason.
-    _stub_spawn(monkeypatch)
+    stub_coredns_spawn(monkeypatch)
 
     config = _seed_dns_cfg(tmp_path, Domain(name="host.example.com", tls=True))
     with closing(open_db(config)) as db:
-        dns = _provider(config, _zones(db))
-        await dns.start()
+        dns = _provider(config)
+        await dns.set_zones(_zones(db))
         try:
             assert dns._coredns is not None
             first_proc = dns._coredns.proc
@@ -257,7 +226,7 @@ async def test_re_adding_a_served_zone_raises_and_leaves_coredns_alone(
                 await dns.add_zone("host.example.com")
             assert dns._coredns.proc is first_proc
         finally:
-            await dns.stop()
+            await dns.cleanup()
 
 
 @pytest.mark.asyncio
@@ -266,12 +235,13 @@ async def test_concurrent_zone_changes_serialize_their_restarts(
 ) -> None:
     # Two /api/domains requests are two tasks on one event loop.  Overlapping restarts would leave
     # an orphaned CoreDNS holding :53, with the surviving handle pointing at the other process.
-    _stub_spawn(monkeypatch)
+    stub_coredns_spawn(monkeypatch)
 
     config = _seed_dns_cfg(tmp_path, Domain(name="host.example.com", tls=True))
     with closing(open_db(config)) as db:
-        dns = _provider(config, _zones(db))
-    await dns.start()
+        zones = _zones(db)
+    dns = _provider(config)
+    await dns.set_zones(zones)
     try:
         in_flight = 0
         peak = 0
@@ -291,22 +261,34 @@ async def test_concurrent_zone_changes_serialize_their_restarts(
         assert peak == 1
         assert set(dns.zones) == {"host.example.com", "a.example.com", "b.example.com"}
     finally:
-        await dns.stop()
+        await dns.cleanup()
 
 
 @pytest.mark.asyncio
-async def test_a_zone_change_before_start_is_stored_but_restarts_nothing(tmp_path: Path) -> None:
-    # /api/domains can be served by a router with coredns_enabled off; the zone set still has to be
-    # kept honest so a later start picks it up.
+async def test_the_first_zone_starts_coredns_and_the_last_one_leaving_stops_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # There is no separate start(): a provider with nothing to answer for renders a Corefile with
+    # no server blocks, which CoreDNS won't start against, so the process follows the zone set.
+    stub_coredns_spawn(monkeypatch)
+
     config = _seed_dns_cfg(tmp_path, Domain(name="host.example.com", tls=True))
-    with closing(open_db(config)) as db:
-        dns = _provider(config, _zones(db))
-    await dns.add_zone("host.example.org")
-    assert list(dns.zones) == ["host.example.com", "host.example.org"]
+    dns = _provider(config)
+    assert dns._coredns is None
+
+    await dns.add_zone("host.example.com")
+    assert dns._coredns is not None
+
+    await dns.remove_zone("host.example.com")
+    assert dns._coredns is None
+    assert dns.zones == ()
 
 
 @pytest.mark.asyncio
-async def test_removing_a_zone_discards_its_files_but_keeps_the_records(tmp_path: Path) -> None:
+async def test_removing_a_zone_discards_its_files_but_keeps_the_records(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    stub_coredns_spawn(monkeypatch)
     # Records belong to no zone, so dropping one takes its rendered files and nothing else -- and
     # the surviving zone still serves everything that was written.
     config = _seed_dns_cfg(
@@ -320,6 +302,7 @@ async def test_removing_a_zone_discards_its_files_but_keeps_the_records(tmp_path
 
         remove_record(db, "host.example.org")
         await dns.remove_zone("host.example.org")
+    await dns.cleanup()
 
     assert not removed_zone.exists()
     assert [r.data for r in dns.records] == ["198.51.100.7"]
@@ -327,7 +310,10 @@ async def test_removing_a_zone_discards_its_files_but_keeps_the_records(tmp_path
 
 
 @pytest.mark.asyncio
-async def test_a_new_zone_serves_the_records_written_before_it_existed(tmp_path: Path) -> None:
+async def test_a_new_zone_serves_the_records_written_before_it_existed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    stub_coredns_spawn(monkeypatch)
     # The point of records that carry no zone: one that appears later renders from the same set as
     # every other, with nothing to backfill.
     config = _seed_dns_cfg(tmp_path, Domain(name="host.example.com", tls=True))
@@ -337,6 +323,7 @@ async def test_a_new_zone_serves_the_records_written_before_it_existed(tmp_path:
 
         upsert_record(db, DomainRecord("host.example.org", tls=True, mdns=False))
         await dns.add_zone("host.example.org")
+    await dns.cleanup()
 
     added = (_zonefile(config, "host.example.org")).read_text()
     assert "$ORIGIN host.example.org." in added
