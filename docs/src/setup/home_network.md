@@ -53,13 +53,13 @@ Using your existing connection to the dashboard, open **Settings → Domains** a
 
 Choose **Local (HTTP)** and click **Add domain**.
 
-Run `tailscale ip -4`, then edit `/home/host/.openhost/local_compute_space/config.toml` and set `host` under `[openhost]` to the address it prints:
+Check `host` under `[openhost]` in `/home/host/.openhost/local_compute_space/config.toml`. If it is set to `127.0.0.1`, run `tailscale ip -4` and replace the value with the address it prints:
 
 ```toml
 host = "100.x.y.z"
 ```
 
-Restart the instance:
+If `host` is already `0.0.0.0` or the Tailscale IP, no change is needed. If you changed it, restart the instance:
 
 ```bash
 sudo systemctl restart openhost
