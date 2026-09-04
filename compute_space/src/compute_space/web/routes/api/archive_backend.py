@@ -283,7 +283,7 @@ async def configure_archive_backend(
             # has no data + no live mount, so it needs no quiesce.
             migrating = archive_backend.read_state(worker_db).backend in ("local", "s3")
             # Imported lazily to avoid a core<-web import cycle.
-            from compute_space.core.apps import start_apps_by_id  # noqa: PLC0415
+            from compute_space.core.apps import restart_apps_by_id  # noqa: PLC0415
             from compute_space.core.apps import stop_running_archive_apps  # noqa: PLC0415
 
             # For a migration the JuiceFS mount must be restarted (juicefs
@@ -327,7 +327,7 @@ async def configure_archive_backend(
                 # stopped is safe; attach_on_startup remounts and the operator
                 # restarts the apps (state_message tells them to).
                 if quiesced and archive_backend.is_mounted(archive_backend.juicefs_mount_dir(config)):
-                    start_apps_by_id(quiesced, worker_db, config)
+                    restart_apps_by_id(quiesced, worker_db, config)
         finally:
             worker_db.close()
 

@@ -633,7 +633,7 @@ def stop_running_archive_apps(
     sync (that write would be lost when the volume re-points to S3), and
     ``systemctl stop openhost-juicefs`` cannot cleanly unmount while a
     container still has the mount open.  The caller restarts these apps once
-    the mount is back (via ``start_apps_by_id``).
+    the mount is back (via ``restart_apps_by_id``).
 
     ``stop_app_process`` stops the container but does NOT update the DB status
     and never raises, so we verify quiescence against the real container state
@@ -675,7 +675,7 @@ def stop_running_archive_apps(
     return recorded
 
 
-def start_apps_by_id(app_ids: list[str], db: sqlite3.Connection, config: Config) -> None:
+def restart_apps_by_id(app_ids: list[str], db: sqlite3.Connection, config: Config) -> None:
     """Restart each app by id (best-effort).  Companion to
     ``stop_running_archive_apps`` for the migration quiesce/resume dance."""
     for app_id in app_ids:

@@ -1207,7 +1207,7 @@ def configure_backend(
     lost), and ``systemctl stop openhost-juicefs`` cannot unmount the FUSE
     filesystem while an app container holds it open (the unmount times out).
     The caller is responsible for RE-STARTING those apps afterwards (the web
-    route records the quiesced app ids and calls ``start_apps_by_id`` in a
+    route records the quiesced app ids and calls ``restart_apps_by_id`` in a
     ``finally``), which re-opens the now-migrated archive.
 
     FAIL-OPEN: if any step before the DB flip fails, the volume is left

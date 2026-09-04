@@ -530,9 +530,9 @@ def test_stop_running_archive_apps_none_when_empty(db, cfg):
         assert apps_mod.stop_running_archive_apps(db, cfg) == []
 
 
-def test_start_apps_by_id_empty_noop(db, cfg):
+def test_restart_apps_by_id_empty_noop(db, cfg):
     with mock.patch.object(apps_mod, "restart_app_process") as start:
-        apps_mod.start_apps_by_id([], db, cfg)
+        apps_mod.restart_apps_by_id([], db, cfg)
     start.assert_not_called()
 
 
