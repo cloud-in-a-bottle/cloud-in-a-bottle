@@ -22,6 +22,7 @@ from litestar.params import Body
 from compute_space.config import Config
 from compute_space.core import archive_backend
 from compute_space.core.archive_backend import BackendState
+from compute_space.core.domains import PRIMARY_DOMAIN_RESTART_MARKER
 from compute_space.core.operation_locks import archive_configuration
 from compute_space.web.auth.auth import require_owner_auth
 from compute_space.web.exceptions import ConflictException
@@ -334,9 +335,12 @@ async def configure_archive_backend(
     if not archive_configuration.acquire(blocking=False):
         raise ConflictException(detail="Archive configuration is already in progress.", extra={"code": "archive_busy"})
     try:
-        if db.execute("SELECT 1 FROM apps WHERE status IN ('building', 'starting', 'removing') LIMIT 1").fetchone():
+        if db.execute(
+            "SELECT 1 FROM apps WHERE status = 'starting' AND error_message = ? LIMIT 1",
+            (PRIMARY_DOMAIN_RESTART_MARKER,),
+        ).fetchone():
             raise ConflictException(
-                detail="Wait for active app operations to finish before configuring archive storage.",
+                detail="Wait for the primary-domain restart to finish before configuring archive storage.",
                 extra={"code": "apps_busy"},
             )
         worker = asyncio.create_task(asyncio.to_thread(_run))

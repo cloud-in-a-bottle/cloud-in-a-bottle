@@ -8,6 +8,7 @@ from typing import Any
 import pytest
 
 from compute_space.core import startup
+from compute_space.core.domains import PRIMARY_DOMAIN_RESTART_MARKER
 from compute_space.core.domains import AppsBusyForPrimaryChangeError
 from compute_space.core.domains import ArchiveMigrationInProgressError
 from compute_space.core.domains import DomainCertStatus
@@ -61,6 +62,11 @@ def test_promotion_atomically_marks_only_active_apps_starting(tmp_path: Path) ->
             "live-error": "starting",
             "dead-error": "error",
         }
+        claimed = {
+            row["name"]: row["error_message"]
+            for row in db.execute("SELECT name, error_message FROM apps WHERE status = 'starting'")
+        }
+        assert claimed == {"running": PRIMARY_DOMAIN_RESTART_MARKER, "live-error": PRIMARY_DOMAIN_RESTART_MARKER}
         assert db.execute("SELECT value FROM settings WHERE key = ?", (LEGACY_CERT_DOMAIN_KEY,)).fetchone()[0] == (
             "old.example.com"
         )

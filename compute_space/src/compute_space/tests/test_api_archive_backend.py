@@ -18,6 +18,7 @@ from litestar.testing import TestClient
 import compute_space.web.routes.api.apps as apps_routes
 from compute_space.core import archive_backend
 from compute_space.core.app_id import new_app_id
+from compute_space.core.domains import PRIMARY_DOMAIN_RESTART_MARKER
 from compute_space.core.manifest import AppManifest
 from compute_space.core.operation_locks import archive_configuration
 from compute_space.db.connection import init_db
@@ -318,8 +319,9 @@ def test_configure_rejects_active_app_operation(
 ) -> None:
     with sqlite3.connect(cfg.db_path) as db:
         db.execute(
-            "INSERT INTO apps (app_id, name, version, repo_path, local_port, status) "
-            "VALUES ('app-id', 'busy', '1', '/tmp/repo', 21000, 'starting')"
+            "INSERT INTO apps (app_id, name, version, repo_path, local_port, status, error_message) "
+            "VALUES ('app-id', 'busy', '1', '/tmp/repo', 21000, 'starting', ?)",
+            (PRIMARY_DOMAIN_RESTART_MARKER,),
         )
 
     with mock.patch.object(archive_backend, "configure_backend") as configure:
@@ -337,6 +339,33 @@ def test_configure_rejects_active_app_operation(
     assert resp.status_code == 409
     assert resp.json()["extra"]["code"] == "apps_busy"
     configure.assert_not_called()
+
+
+def test_configure_allows_unrelated_app_start(cfg: Any, client: TestClient[Litestar], cookies: dict[str, str]) -> None:
+    with sqlite3.connect(cfg.db_path) as db:
+        db.execute(
+            "INSERT INTO apps (app_id, name, version, repo_path, local_port, status) "
+            "VALUES ('app-id', 'busy', '1', '/tmp/repo', 21000, 'starting')"
+        )
+
+    def configure(_config: Any, db: sqlite3.Connection, **kwargs: Any) -> None:
+        db.execute("UPDATE archive_backend SET backend = 's3', s3_bucket = ? WHERE id = 1", (kwargs["s3_bucket"],))
+        db.commit()
+
+    with mock.patch.object(archive_backend, "configure_backend", side_effect=configure):
+        client.cookies.update(cookies)
+        resp = client.post(
+            "/api/storage/archive_backend/configure",
+            json={
+                "s3_bucket": "mybucket",
+                "s3_access_key_id": "AKIA",
+                "s3_secret_access_key": "secret",
+                "s3_prefix": "andrew-3",
+            },
+        )
+
+    assert resp.status_code == 200
+    assert resp.json()["backend"] == "s3"
 
 
 @pytest.mark.asyncio

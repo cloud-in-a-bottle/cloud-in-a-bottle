@@ -106,6 +106,9 @@ class ArchiveMigrationInProgressError(RuntimeError):
     pass
 
 
+PRIMARY_DOMAIN_RESTART_MARKER = "Restarting after primary domain change"
+
+
 _COLS = "name, tls, mdns, is_primary, cert_status, error_message"
 
 
@@ -278,8 +281,9 @@ def set_primary_domain(db: sqlite3.Connection, name: str, expected_primary: str)
         if demoted.rowcount != 1 or promoted.rowcount != 1:
             raise RuntimeError("Primary domain changed concurrently")
         db.execute(
-            "UPDATE apps SET status = 'starting', error_message = NULL "
-            "WHERE status = 'running' OR (status = 'error' AND container_id IS NOT NULL)"
+            "UPDATE apps SET status = 'starting', error_message = ? "
+            "WHERE status = 'running' OR (status = 'error' AND container_id IS NOT NULL)",
+            (PRIMARY_DOMAIN_RESTART_MARKER,),
         )
         db.execute("COMMIT")
         return True
