@@ -7,7 +7,7 @@ Covers the load-bearing pieces of the OPENHOST_OWNER_USERNAME feature:
      through the ``users`` table.  Pre-setup zones (no user row) must
      return None / raise ValueError respectively; the env-var plumbing
      keys on None to mean "use the default".
-  3. ``provision_data`` — env var stamped with the passed-in value.
+  3. ``make_data_dirs_and_env_vars`` - env var stamped with the passed-in value.
   4. The Litestar ``/api/settings/owner_username`` routes.
   5. The setup app's optional username form field.
   6. /login: the session minted on login resolves to the persisted
@@ -35,7 +35,7 @@ from compute_space.core.auth.auth import create_session
 from compute_space.core.auth.auth import read_owner_username
 from compute_space.core.auth.auth import update_owner_username
 from compute_space.core.auth.auth import validate_owner_username
-from compute_space.core.data import provision_data
+from compute_space.core.data import make_data_dirs_and_env_vars
 from compute_space.core.manifest import AppManifest
 from compute_space.db import provide_db
 from compute_space.db.connection import init_db
@@ -93,7 +93,7 @@ def _read_username_direct(db_path: str) -> str | None:
 
 
 def _bare_manifest() -> AppManifest:
-    """Minimal manifest with app_data enabled so provision_data runs."""
+    """Minimal manifest with app_data enabled so make_data_dirs_and_env_vars runs."""
     return AppManifest(  # type: ignore[call-arg]
         name="probe",
         version="1.0",
@@ -109,7 +109,7 @@ def _provision(tmp_path: Path, **kwargs: Any) -> dict[str, str]:
 
     archive_dir = tmp_path / "archive"
     archive_dir.mkdir(exist_ok=True)
-    return provision_data(
+    return make_data_dirs_and_env_vars(
         "test-app-id",
         "probe",
         _bare_manifest(),
@@ -292,11 +292,11 @@ def test_update_owner_username_raises_pre_setup(db: sqlite3.Connection) -> None:
 
 
 # ---------------------------------------------------------------------------
-# provision_data: OPENHOST_OWNER_USERNAME stamping
+# make_data_dirs_and_env_vars: OPENHOST_OWNER_USERNAME stamping
 # ---------------------------------------------------------------------------
 
 
-def test_provision_data_stamps_owner_username(tmp_path: Path) -> None:
+def test_make_data_dirs_and_env_vars_stamps_owner_username(tmp_path: Path) -> None:
     env = _provision(tmp_path, owner_username="alice")
     assert env["OPENHOST_OWNER_USERNAME"] == "alice"
     assert env["OPENHOST_APP_NAME"] == "probe"

@@ -10,8 +10,9 @@ import pytest
 
 from compute_space.core import apps as apps_mod
 from compute_space.core.apps import deploy_app_background
-from compute_space.core.apps import launch_app_image
+from compute_space.core.apps import insert_and_deploy
 from compute_space.core.apps import restart_app_process
+from compute_space.core.apps import run_app_image
 from compute_space.core.apps import start_app_process
 from compute_space.core.manifest import PortMapping
 from compute_space.core.manifest import parse_manifest_from_string
@@ -63,7 +64,7 @@ def app_db(cfg: Any, tmp_path: Path) -> tuple[sqlite3.Connection, str, Path]:
         db.close()
 
 
-def test_launch_existing_image_prepares_fresh_runtime_from_persisted_app(
+def test_run_existing_image_prepares_fresh_runtime_from_persisted_app(
     cfg: Any,
     app_db: tuple[sqlite3.Connection, str, Path],
 ) -> None:
@@ -72,15 +73,15 @@ def test_launch_existing_image_prepares_fresh_runtime_from_persisted_app(
     runtime_env = {"OPENHOST_APP_TOKEN": "fresh-token", "CUSTOM": "value"}
 
     with (
-        mock.patch.object(apps_mod, "provision_data", return_value=runtime_env) as provision,
+        mock.patch.object(apps_mod, "make_data_dirs_and_env_vars", return_value=runtime_env) as prepare,
         mock.patch.object(apps_mod, "run_container", return_value="container-123") as run,
         mock.patch.object(apps_mod, "wait_for_ready", return_value=True),
         mock.patch.object(apps_mod, "build_image") as build,
     ):
-        launch_app_image(app_id, "registry.example/existing:sha", manifest, db, cfg)
+        run_app_image(app_id, "registry.example/existing:sha", manifest, db, cfg)
 
     build.assert_not_called()
-    provision.assert_called_once_with(
+    prepare.assert_called_once_with(
         app_id=app_id,
         app_name="launch-test",
         manifest=manifest,
@@ -109,7 +110,7 @@ def test_launch_existing_image_prepares_fresh_runtime_from_persisted_app(
     assert token["token_hash"] == hashlib.sha256(b"fresh-token").hexdigest()
 
 
-def test_launch_failure_removes_started_container_and_clears_db_reference(
+def test_run_failure_removes_started_container_and_clears_db_reference(
     cfg: Any,
     app_db: tuple[sqlite3.Connection, str, Path],
 ) -> None:
@@ -117,13 +118,13 @@ def test_launch_failure_removes_started_container_and_clears_db_reference(
     manifest = parse_manifest_from_string(MANIFEST_TEXT)
 
     with (
-        mock.patch.object(apps_mod, "provision_data", return_value={}),
+        mock.patch.object(apps_mod, "make_data_dirs_and_env_vars", return_value={}),
         mock.patch.object(apps_mod, "run_container", return_value="container-123"),
         mock.patch.object(apps_mod, "wait_for_ready", side_effect=RuntimeError("readiness crashed")),
         mock.patch.object(apps_mod, "stop_container") as stop,
         pytest.raises(RuntimeError, match="readiness crashed"),
     ):
-        launch_app_image(app_id, "existing:image", manifest, db, cfg)
+        run_app_image(app_id, "existing:image", manifest, db, cfg)
 
     stop.assert_called_once_with("container-123")
     row = db.execute("SELECT status, error_message, container_id FROM apps WHERE app_id = ?", (app_id,)).fetchone()
@@ -140,12 +141,12 @@ def test_runtime_preparation_failure_preserves_existing_container_reference(
     db.commit()
 
     with (
-        mock.patch.object(apps_mod, "provision_data", side_effect=RuntimeError("storage unavailable")),
+        mock.patch.object(apps_mod, "make_data_dirs_and_env_vars", side_effect=RuntimeError("storage unavailable")),
         mock.patch.object(apps_mod, "run_container") as run,
         mock.patch.object(apps_mod, "stop_container") as stop,
         pytest.raises(RuntimeError, match="storage unavailable"),
     ):
-        launch_app_image(app_id, "existing:image", manifest, db, cfg)
+        run_app_image(app_id, "existing:image", manifest, db, cfg)
 
     run.assert_not_called()
     stop.assert_not_called()
@@ -157,7 +158,7 @@ def test_runtime_preparation_failure_preserves_existing_container_reference(
     )
 
 
-def test_launch_failure_preserves_container_reference_when_cleanup_fails(
+def test_run_failure_preserves_container_reference_when_cleanup_fails(
     cfg: Any,
     app_db: tuple[sqlite3.Connection, str, Path],
 ) -> None:
@@ -165,13 +166,13 @@ def test_launch_failure_preserves_container_reference_when_cleanup_fails(
     manifest = parse_manifest_from_string(MANIFEST_TEXT)
 
     with (
-        mock.patch.object(apps_mod, "provision_data", return_value={}),
+        mock.patch.object(apps_mod, "make_data_dirs_and_env_vars", return_value={}),
         mock.patch.object(apps_mod, "run_container", return_value="container-123"),
         mock.patch.object(apps_mod, "wait_for_ready", side_effect=RuntimeError("readiness crashed")),
         mock.patch.object(apps_mod, "stop_container", side_effect=RuntimeError("podman unavailable")),
         pytest.raises(RuntimeError, match="readiness crashed"),
     ):
-        launch_app_image(app_id, "existing:image", manifest, db, cfg)
+        run_app_image(app_id, "existing:image", manifest, db, cfg)
 
     row = db.execute("SELECT status, container_id FROM apps WHERE app_id = ?", (app_id,)).fetchone()
     assert (row["status"], row["container_id"]) == ("error", "container-123")
@@ -189,19 +190,19 @@ def test_restart_reuses_tagged_image_and_persisted_manifest_without_build(
     db.commit()
 
     with (
-        mock.patch.object(apps_mod, "launch_app_image") as launch,
+        mock.patch.object(apps_mod, "run_app_image") as run,
         mock.patch.object(apps_mod, "build_image") as build,
     ):
         restart_app_process(app_id, db, cfg)
 
     build.assert_not_called()
-    launch.assert_called_once()
-    assert launch.call_args.args[:2] == (app_id, "openhost-launch-test:latest")
-    assert launch.call_args.args[2].memory_mb == 384
+    run.assert_called_once()
+    assert run.call_args.args[:2] == (app_id, "openhost-launch-test:latest")
+    assert run.call_args.args[2].memory_mb == 384
 
 
 @pytest.mark.parametrize("entry_point", ["start", "deploy"])
-def test_existing_start_paths_build_before_launching_image(
+def test_existing_start_paths_build_before_running_image(
     entry_point: str,
     cfg: Any,
     app_db: tuple[sqlite3.Connection, str, Path],
@@ -214,13 +215,13 @@ def test_existing_start_paths_build_before_launching_image(
         events.append(("build", args[0]))
         return "newly-built:image"
 
-    def launch(launch_app_id: str, image: str, *args: Any) -> None:
-        assert launch_app_id == app_id
-        events.append(("launch", image))
+    def run(run_app_id: str, image: str, *args: Any, **kwargs: Any) -> None:
+        assert run_app_id == app_id
+        events.append(("run", image))
 
     with (
         mock.patch.object(apps_mod, "build_image", side_effect=build),
-        mock.patch.object(apps_mod, "launch_app_image", side_effect=launch),
+        mock.patch.object(apps_mod, "run_app_image", side_effect=run),
     ):
         if entry_point == "start":
             start_app_process(app_id, db, cfg)
@@ -228,4 +229,81 @@ def test_existing_start_paths_build_before_launching_image(
             db.close()
             deploy_app_background(manifest, str(repo), cfg, app_id, "launch-test")
 
-    assert events == [("build", "launch-test"), ("launch", "newly-built:image")]
+    assert events == [("build", "launch-test"), ("run", "newly-built:image")]
+
+
+def test_initial_deploy_reuses_prepared_environment(
+    cfg: Any,
+    tmp_path: Path,
+) -> None:
+    repo = tmp_path / "initial-repo"
+    repo.mkdir()
+    (repo / "cloudinabottle.toml").write_text(MANIFEST_TEXT)
+    manifest = parse_manifest_from_string(MANIFEST_TEXT)
+    prepared_env = {"OPENHOST_APP_TOKEN": "initial-token"}
+
+    class ImmediateThread:
+        def __init__(self, *, target: Any, args: tuple[Any, ...], kwargs: dict[str, Any], daemon: bool) -> None:
+            self.target = target
+            self.args = args
+            self.kwargs = kwargs
+
+        def start(self) -> None:
+            self.target(*self.args, **self.kwargs)
+
+    db = sqlite3.connect(cfg.db_path)
+    db.row_factory = sqlite3.Row
+    try:
+        with (
+            mock.patch.object(apps_mod, "make_data_dirs_and_env_vars", return_value=prepared_env) as prepare,
+            mock.patch.object(apps_mod.threading, "Thread", ImmediateThread),
+            mock.patch.object(apps_mod, "build_image", return_value="built:image"),
+            mock.patch.object(apps_mod, "run_app_image") as run,
+        ):
+            app_id = insert_and_deploy(manifest, str(repo), cfg, db)
+    finally:
+        db.close()
+
+    prepare.assert_called_once()
+    run.assert_called_once_with(app_id, "built:image", manifest, mock.ANY, cfg, env_vars=prepared_env)
+
+
+def test_deploy_retries_build_three_times_before_running(
+    cfg: Any,
+    app_db: tuple[sqlite3.Connection, str, Path],
+) -> None:
+    db, app_id, repo = app_db
+    manifest = parse_manifest_from_string(MANIFEST_TEXT)
+    db.close()
+
+    with (
+        mock.patch.object(
+            apps_mod,
+            "build_image",
+            side_effect=[RuntimeError("transient one"), RuntimeError("transient two"), "built:image"],
+        ) as build,
+        mock.patch.object(apps_mod.time, "sleep") as sleep,
+        mock.patch.object(apps_mod, "run_app_image") as run,
+    ):
+        deploy_app_background(manifest, str(repo), cfg, app_id, "launch-test")
+
+    assert build.call_count == 3
+    assert sleep.call_args_list == [mock.call(5), mock.call(10)]
+    run.assert_called_once_with(app_id, "built:image", manifest, mock.ANY, cfg, env_vars=None)
+
+
+def test_start_build_failure_is_not_retried(
+    cfg: Any,
+    app_db: tuple[sqlite3.Connection, str, Path],
+) -> None:
+    db, app_id, _ = app_db
+
+    with (
+        mock.patch.object(apps_mod, "build_image", side_effect=RuntimeError("build failed")) as build,
+        mock.patch.object(apps_mod, "run_app_image") as run,
+        pytest.raises(RuntimeError, match="build failed"),
+    ):
+        start_app_process(app_id, db, cfg)
+
+    build.assert_called_once()
+    run.assert_not_called()

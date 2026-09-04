@@ -29,7 +29,7 @@ from compute_space.core.containers import stop_app_process
 from compute_space.core.containers import stop_container
 from compute_space.core.data import deprovision_data
 from compute_space.core.data import deprovision_temp_data
-from compute_space.core.data import provision_data
+from compute_space.core.data import make_data_dirs_and_env_vars
 from compute_space.core.data import rmtree_with_sudo_fallback
 from compute_space.core.domains import Domain
 from compute_space.core.domains import primary_domain
@@ -328,7 +328,7 @@ def insert_and_deploy(
     # Resolve auto-assigned ports (host_port=0)
     resolved_mappings = resolve_port_mappings(mappings, db, config.port_range_start, config.port_range_end)
 
-    env_vars = provision_data(
+    env_vars = make_data_dirs_and_env_vars(
         app_id=app_id,
         app_name=app_name,
         manifest=manifest,
@@ -396,7 +396,7 @@ def insert_and_deploy(
     threading.Thread(
         target=deploy_app_background,
         args=(manifest, repo_path, config),
-        kwargs={"app_id": app_id, "app_name": app_name},
+        kwargs={"app_id": app_id, "app_name": app_name, "env_vars": env_vars},
         daemon=True,
     ).start()
 
@@ -409,6 +409,7 @@ def deploy_app_background(
     config: Config,
     app_id: str,
     app_name: str | None = None,
+    env_vars: dict[str, str] | None = None,
 ) -> None:
     """Build and start an app in a background thread."""
     if app_name is None:
@@ -420,35 +421,16 @@ def deploy_app_background(
     try:
         storage.check_before_deploy(config)
 
-        # Retry container builds for transient failures.  Cache-corrupt
-        # failures re-raise immediately — retrying can't fix them and
-        # the dashboard needs the marker to surface the remediation.
-        max_build_attempts = 3
-        image_tag = ""
-        for attempt in range(1, max_build_attempts + 1):
-            try:
-                image_tag = build_image(
-                    app_name,
-                    repo_path,
-                    manifest.container_image,
-                    temp_data_dir=config.temporary_data_dir,
-                    memory_mb=manifest.effective_build_memory_mb,
-                )
-                break
-            except RuntimeError as e:
-                if BUILD_CACHE_CORRUPT_MARKER in str(e):
-                    raise
-                if attempt == max_build_attempts:
-                    raise
-                logger.warning(
-                    "Container build attempt {}/{} for {} failed, retrying in {}s",
-                    attempt,
-                    max_build_attempts,
-                    app_name,
-                    attempt * 5,
-                )
-                time.sleep(attempt * 5)
-        launch_app_image(app_id, image_tag, manifest, db, config)
+        _build_then_run_app(
+            app_id,
+            app_name,
+            repo_path,
+            manifest,
+            db,
+            config,
+            max_build_attempts=3,
+            env_vars=env_vars,
+        )
     except Exception as e:
         logger.exception("Failed to deploy {}", app_name)
         db.execute(
@@ -489,14 +471,15 @@ def _load_port_mappings_from_db(app_id: str, db: sqlite3.Connection) -> list[Por
     return [PortMapping(label=r["label"], container_port=r["container_port"], host_port=r["host_port"]) for r in rows]
 
 
-def launch_app_image(
+def run_app_image(
     app_id: str,
     image_tag: str,
     manifest: AppManifest,
     db: sqlite3.Connection,
     config: Config,
+    env_vars: dict[str, str] | None = None,
 ) -> None:
-    """Prepare and launch an existing image using persisted runtime settings."""
+    """Prepare and run an existing image using persisted runtime settings."""
     app_row = db.execute("SELECT * FROM apps WHERE app_id = ?", (app_id,)).fetchone()
     if app_row is None:
         raise RuntimeError(f"No app found with id {app_id}")
@@ -506,18 +489,19 @@ def launch_app_image(
     container_id: str | None = None
     launch_started = False
     try:
-        env_vars = provision_data(
-            app_id=app_id,
-            app_name=app_name,
-            manifest=manifest,
-            data_dir=config.persistent_data_dir,
-            temp_data_dir=config.temporary_data_dir,
-            archive_dir=archive_backend.effective_archive_dir(config, db),
-            my_openhost_redirect_domain=config.my_openhost_redirect_domain,
-            zone_domain=primary_domain(db).name,
-            port=config.port,
-            owner_username=read_owner_username(db) or DEFAULT_OWNER_USERNAME,
-        )
+        if env_vars is None:
+            env_vars = make_data_dirs_and_env_vars(
+                app_id=app_id,
+                app_name=app_name,
+                manifest=manifest,
+                data_dir=config.persistent_data_dir,
+                temp_data_dir=config.temporary_data_dir,
+                archive_dir=archive_backend.effective_archive_dir(config, db),
+                my_openhost_redirect_domain=config.my_openhost_redirect_domain,
+                zone_domain=primary_domain(db).name,
+                port=config.port,
+                owner_username=read_owner_username(db) or DEFAULT_OWNER_USERNAME,
+            )
         app_token = env_vars.get("OPENHOST_APP_TOKEN")
         if app_token:
             db.execute(
@@ -714,14 +698,44 @@ def start_app_process(app_id: str, db: sqlite3.Connection, config: Config) -> No
     )
     db.commit()
 
-    image_tag = build_image(
-        app_name,
-        app_row["repo_path"],
-        manifest.container_image,
-        temp_data_dir=config.temporary_data_dir,
-        memory_mb=manifest.effective_build_memory_mb,
-    )
-    launch_app_image(app_id, image_tag, manifest, db, config)
+    _build_then_run_app(app_id, app_name, app_row["repo_path"], manifest, db, config)
+
+
+def _build_then_run_app(
+    app_id: str,
+    app_name: str,
+    repo_path: str,
+    manifest: AppManifest,
+    db: sqlite3.Connection,
+    config: Config,
+    *,
+    max_build_attempts: int = 1,
+    env_vars: dict[str, str] | None = None,
+) -> None:
+    """Build an app image, retrying transient failures, then run it."""
+    image_tag = ""
+    for attempt in range(1, max_build_attempts + 1):
+        try:
+            image_tag = build_image(
+                app_name,
+                repo_path,
+                manifest.container_image,
+                temp_data_dir=config.temporary_data_dir,
+                memory_mb=manifest.effective_build_memory_mb,
+            )
+            break
+        except RuntimeError as e:
+            if BUILD_CACHE_CORRUPT_MARKER in str(e) or attempt == max_build_attempts:
+                raise
+            logger.warning(
+                "Container build attempt {}/{} for {} failed, retrying in {}s",
+                attempt,
+                max_build_attempts,
+                app_name,
+                attempt * 5,
+            )
+            time.sleep(attempt * 5)
+    run_app_image(app_id, image_tag, manifest, db, config, env_vars=env_vars)
 
 
 def restart_app_process(app_id: str, db: sqlite3.Connection, config: Config) -> None:
@@ -733,7 +747,7 @@ def restart_app_process(app_id: str, db: sqlite3.Connection, config: Config) -> 
     storage.check_before_deploy(config)
     manifest_raw = app_row["manifest_raw"]
     manifest = parse_manifest_from_string(manifest_raw) if manifest_raw else parse_manifest(app_row["repo_path"])
-    launch_app_image(app_id, f"openhost-{app_row['name']}:latest", manifest, db, config)
+    run_app_image(app_id, f"openhost-{app_row['name']}:latest", manifest, db, config)
 
 
 def app_log_path(app_name: str, config: Config) -> str:
