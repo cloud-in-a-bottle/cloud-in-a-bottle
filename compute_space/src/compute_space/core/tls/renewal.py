@@ -27,9 +27,6 @@ RENEW_BEFORE = datetime.timedelta(days=7)
 CHECK_INTERVAL = datetime.timedelta(hours=12)
 RETRY_INTERVAL = datetime.timedelta(hours=1)
 
-# First failures back off from seconds, not straight to an hour.  A failure is often something
-# that clears on its own in a moment -- a zone that hasn't finished reloading, a registrar's API
-# having a bad minute -- and an hour of no cert over a few seconds of skew would be a poor trade.
 INITIAL_RETRY_INTERVAL = datetime.timedelta(seconds=15)
 
 

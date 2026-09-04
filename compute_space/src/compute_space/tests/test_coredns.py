@@ -13,7 +13,7 @@ import pytest
 import compute_space.core.dns.coredns_provider.coredns as dns_mod
 from compute_space.config import DefaultConfig
 from compute_space.core.containers import CONTAINER_GATEWAY_IP
-from compute_space.core.dns.coredns_provider.interface import DnsZoneError
+from compute_space.core.dns.coredns_provider.interface import DnsNotEnabled
 from compute_space.core.dns.coredns_provider.interface import InternalDnsProvider
 from compute_space.core.dns.coredns_provider.interface import RecordType
 from compute_space.core.dns.router_records import publish_router_addresses
@@ -59,6 +59,12 @@ def _render(tmp_path: Path, container_gateway_ip: str | None = None) -> dict[str
 
 def _app_zonefile(tmp_path: Path) -> Path:
     return tmp_path / "zones" / f"{APP_ZONE}.zone"
+
+
+async def _serve(dns: InternalDnsProvider, zones: tuple[str, ...]) -> None:
+    """Bring a provider up the way boot does: one zone at a time, no bulk setter."""
+    for zone in zones:
+        await dns.add_zone(zone)
 
 
 def _zones(db: sqlite3.Connection) -> tuple[str, ...]:
@@ -159,7 +165,7 @@ async def test_start_writes_a_zone_block_and_file_per_public_domain(
     with closing(open_db(config)) as db:
         zones = _zones(db)
     dns = _provider(config)
-    await dns.set_zones(zones)
+    await _serve(dns, zones)
     try:
         cf = config.coredns_corefile_path.read_text()
         # Both domains get their own authoritative server block referencing their own zone file.
@@ -184,7 +190,7 @@ async def test_adding_a_zone_regenerates_the_corefile_and_restarts(
     config = _seed_dns_cfg(tmp_path, Domain(name="host.example.com", tls=True))
     with closing(open_db(config)) as db:
         dns = _provider(config)
-        await dns.set_zones(_zones(db))
+        await _serve(dns, _zones(db))
         try:
             assert dns._coredns is not None
             first_proc = dns._coredns.proc
@@ -202,29 +208,6 @@ async def test_adding_a_zone_regenerates_the_corefile_and_restarts(
 
 
 @pytest.mark.asyncio
-async def test_re_adding_a_served_zone_raises_and_leaves_coredns_alone(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    # /api/domains rejects an already-configured domain before it gets here, so a duplicate reaching
-    # the provider means the two disagree -- worth raising over.  The refusal must not cost a
-    # restart, which would drop DNS for no reason.
-    stub_coredns_spawn(monkeypatch)
-
-    config = _seed_dns_cfg(tmp_path, Domain(name="host.example.com", tls=True))
-    with closing(open_db(config)) as db:
-        dns = _provider(config)
-        await dns.set_zones(_zones(db))
-        try:
-            assert dns._coredns is not None
-            first_proc = dns._coredns.proc
-            with pytest.raises(DnsZoneError):
-                await dns.add_zone("host.example.com")
-            assert dns._coredns.proc is first_proc
-        finally:
-            await dns.cleanup()
-
-
-@pytest.mark.asyncio
 async def test_concurrent_zone_changes_serialize_their_restarts(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -236,7 +219,7 @@ async def test_concurrent_zone_changes_serialize_their_restarts(
     with closing(open_db(config)) as db:
         zones = _zones(db)
     dns = _provider(config)
-    await dns.set_zones(zones)
+    await _serve(dns, zones)
     try:
         in_flight = 0
         peak = 0
@@ -257,6 +240,38 @@ async def test_concurrent_zone_changes_serialize_their_restarts(
         assert set(dns.zones) == {"host.example.com", "a.example.com", "b.example.com"}
     finally:
         await dns.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_re_adding_a_served_zone_is_a_no_op(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Appending it again would put two server blocks for the same zone in the Corefile, which
+    # CoreDNS refuses to load -- and the restart would drop DNS for no reason.
+    stub_coredns_spawn(monkeypatch)
+
+    config = _seed_dns_cfg(tmp_path, Domain(name="host.example.com", tls=True))
+    dns = _provider(config)
+    await dns.add_zone("host.example.com")
+    try:
+        assert dns._coredns is not None
+        first_proc = dns._coredns.proc
+
+        await dns.add_zone("host.example.com")
+
+        assert dns.zones == ("host.example.com",)
+        assert dns._coredns.proc is first_proc
+    finally:
+        await dns.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_a_zone_this_instance_cannot_serve_is_refused(tmp_path: Path) -> None:
+    # bind_ip=None means nothing would answer for it; boot catches this and carries on.
+    config = _seed_dns_cfg(tmp_path, Domain(name="host.example.com", tls=True))
+    dns = InternalDnsProvider(corefile_path=config.coredns_corefile_path, zones_dir=config.zones_dir, bind_ip=None)
+
+    with pytest.raises(DnsNotEnabled):
+        await dns.add_zone("host.example.com")
+    assert dns.zones == ()
 
 
 @pytest.mark.asyncio

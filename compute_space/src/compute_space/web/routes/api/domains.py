@@ -30,7 +30,7 @@ from litestar.params import FromPath
 from compute_space.config import Config
 from compute_space.config import get_config
 from compute_space.core.caddy import reload_caddy_for_domains
-from compute_space.core.dns.coredns_provider.interface import DnsNotBoundError
+from compute_space.core.dns.coredns_provider.interface import DnsNotEnabled
 from compute_space.core.dns.coredns_provider.interface import InternalDnsProvider
 from compute_space.core.domains import Domain
 from compute_space.core.domains import DomainCertStatus
@@ -194,12 +194,9 @@ async def add_domain(
         ),
     )
     if not data.mdns:
-        # Make CoreDNS authoritative for the new zone *before* acquisition: DNS-01 writes the
-        # _acme-challenge TXT into every zone file, and it only resolves for this domain once
-        # CoreDNS serves its zone.  (mDNS domains never touch CoreDNS.)
         try:
             await dns_provider.add_zone(name)
-        except DnsNotBoundError:
+        except DnsNotEnabled:
             # Not an error: running without CoreDNS is a supported choice, and the domain is still
             # worth recording (Caddy will serve it once its DNS points here by other means).  A TLS
             # domain surfaces the consequence through its cert status, below.
@@ -237,9 +234,7 @@ async def remove_domain(
     removed = get_record(db, name)
     if not remove_record(db, name):
         raise NotFoundException(detail="domain not found")
-    if removed is not None and not removed.mdns and dns_provider.serves_public_zones:
-        # Drop the zone from CoreDNS so it stops answering for the removed public domain, and
-        # discard its zone file.  The records survive — they belong to no zone.
+    if removed is not None and not removed.mdns:
         await dns_provider.remove_zone(name)
     # Regenerate Caddy only after this response has been sent — see _reload_caddy_after_response.
     return Response(

@@ -21,20 +21,24 @@ from compute_space.core.logging import logger
 __all__ = [
     "ADDRESS_TTL_SECONDS",
     "APEX",
-    "DnsNotBoundError",
+    "DnsNotEnabled",
     "DnsRecord",
-    "DnsZoneError",
     "InternalDnsProvider",
     "RecordType",
 ]
 
+# Domains that resolve without this instance answering for them: mDNS handles ``.local``, and
+# ``lvh.me`` (and friends) are public wildcards pointing at loopback.  An instance configured with
+# only these has nothing to be authoritative for, so it never binds :53.
+_LOCAL_ONLY_SUFFIXES = (".local", "lvh.me")
 
-class DnsZoneError(Exception):
-    """A zone change that contradicts the set already served."""
+
+def _is_local_only(domain: str) -> bool:
+    return any(domain == suffix or domain.endswith(f".{suffix}") for suffix in _LOCAL_ONLY_SUFFIXES)
 
 
-class DnsNotBoundError(Exception):
-    """A public zone was asked for on an instance with no address to answer it on."""
+class DnsNotEnabled(Exception):
+    pass
 
 
 @attr.s(auto_attribs=True)
@@ -55,7 +59,7 @@ class InternalDnsProvider:
     zones_dir: Path
 
     # what internal interface address to serve coredns on for the main routing records
-    # None indicates that we should never bind / serve these records, and will raise DnsNotBoundError on attempts.
+    # None indicates that we should never bind / serve these records, and will raise DnsNotEnabled on attempts.
     bind_ip: str | None
     # what internal interface address to serve coredns on for the loopback records,
     # or none if these records should not be served (dev/CI)
@@ -73,8 +77,7 @@ class InternalDnsProvider:
     _zone_lock: asyncio.Lock = attr.ib(factory=asyncio.Lock, init=False, eq=False, repr=False)
 
     async def cleanup(self) -> None:
-        """Shut CoreDNS down for good.  A no-op if it isn't running, so a shutdown path needs no
-        check of its own."""
+        """Shut CoreDNS down for good.  A no-op if it isn't running, so a shutdown path needs no check of its own."""
         if self._coredns is not None:
             await self._coredns.stop()
             self._coredns = None
@@ -87,26 +90,21 @@ class InternalDnsProvider:
     def zones(self) -> tuple[str, ...]:
         return self._zones
 
-    async def set_zones(self, zones: Sequence[str]) -> None:
-        """Make ``zones`` the served set, whatever it was before."""
-        if not self.serves_public_zones:
-            raise DnsNotBoundError(f"No address to serve {zones!r} on; this instance is not bound for public DNS")
-        await self._apply_zones(tuple(normalize_zone(z) for z in zones))
-
     async def add_zone(self, zone: str) -> None:
-        # Normalize on the way in, not just for the comparison, so the stored set and a later
-        # lookup agree on how a zone is spelled.
+        if _is_local_only(zone):
+            # these already resolve without coredns
+            return
         if not self.serves_public_zones:
-            raise DnsNotBoundError(f"No address to serve {zone!r} on; this instance is not bound for public DNS")
-        added = normalize_zone(zone)
-        if added in self._zones:
-            raise DnsZoneError(f"Already authoritative for {added!r}")
-        await self._apply_zones((*self._zones, added))
+            raise DnsNotEnabled(f"No address to serve {zone!r} on; this instance is not bound for public DNS")
+        normalized_zone = normalize_zone(zone)
+        if normalized_zone in self._zones:
+            # Already authoritative for it.  Appending anyway would put two server blocks for the
+            # same zone in the Corefile, which CoreDNS refuses to load.
+            return
+        await self._apply_zones((*self._zones, normalized_zone))
 
     async def remove_zone(self, zone: str) -> None:
         name = normalize_zone(zone)
-        if name not in self._zones:
-            raise DnsZoneError(f"Not authoritative for {name!r}")
         await self._apply_zones(tuple(z for z in self._zones if z != name))
 
     @property

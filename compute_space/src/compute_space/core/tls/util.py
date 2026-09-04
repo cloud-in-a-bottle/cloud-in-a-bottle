@@ -51,10 +51,7 @@ async def _acquire_cert_dns01(
     verify_ssl: bool = True,
     acme_email: str | None = None,
 ) -> tuple[bytes, bytes]:
-    """Acquire a cert via DNS-01, publishing the challenge records through the DNS provider.
-
-    ``acme`` is a blocking library, so each of its network calls is handed to a worker thread
-    rather than stalling the loop."""
+    """Acquire a cert via DNS-01, publishing the challenge records through the DNS provider."""
     tls_key = _generate_tls_key()
 
     logger.info(f"DNS-01: connecting to ACME directory {directory_url}")

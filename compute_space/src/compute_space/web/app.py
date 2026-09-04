@@ -261,8 +261,6 @@ def create_app(config: Config, dns_provider: InternalDnsProvider) -> ASGIApp:
         dependencies={
             "config": Provide(provide_config, sync_to_thread=False),
             "db": Provide(provide_db),
-            # The running provider itself, so a route that changes the domain set or needs a cert
-            # can tell it, rather than reaching for whichever one a module global happens to hold.
             "dns_provider": Provide(lambda: dns_provider, sync_to_thread=False, use_cache=True),
         },
         exception_handlers={

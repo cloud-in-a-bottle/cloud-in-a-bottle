@@ -23,12 +23,15 @@ from compute_space.core.caddy import set_active_caddy
 from compute_space.core.caddy import start_caddy
 from compute_space.core.caddy import unix_admin_address
 from compute_space.core.containers import CONTAINER_GATEWAY_IP
+from compute_space.core.dns.coredns_provider.interface import DnsNotEnabled
 from compute_space.core.dns.coredns_provider.interface import InternalDnsProvider
 from compute_space.core.dns.router_records import publish_router_addresses
 from compute_space.core.domains import Domain
 from compute_space.core.domains import effective_domains
 from compute_space.core.first_boot import owner_exists
 from compute_space.core.first_boot import seed_first_boot
+from compute_space.core.ip import infer_inbound_ipv4
+from compute_space.core.ip import is_bindable
 from compute_space.core.logging import logger
 from compute_space.core.logging import setup_file_logging
 from compute_space.core.pinned_binary import get_pinned_binary
@@ -98,49 +101,11 @@ async def _ensure_tls_cert(config: Config, db: sqlite3.Connection, dns_provider:
         await provision_cert(config, db, dns_provider)
 
 
-def _dns_bind_ip(public_ip: str) -> str:
-    """The local address CoreDNS binds for authoritative DNS.
-
-    Wildcard :53 conflicts with podman's aardvark-dns.  The configured public IP works where it is
-    assigned to an interface but fails on AWS/GCP, where public IPs are NATed to a private address;
-    the default-route source is the local address that actually receives that traffic.  Connecting
-    a UDP socket sends nothing -- it just asks the kernel which source address the route would use.
-    """
-    try:
-        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
-            sock.connect(("8.8.8.8", 80))
-            return str(sock.getsockname()[0])
-    except OSError:
-        logger.warning(f"Default-route probe failed; binding DNS to the configured public IP {public_ip}")
-        return public_ip
-
-
 def _hairpin_gateway_ip() -> str | None:
-    """The address the container-facing DNS view binds, or None to leave that view out.
-
-    That view is what makes container->sibling-app hairpin work (see core/containers.py --dns).  It
-    binds the ``openhost0`` dummy interface, which only ansible-provisioned hosts have; emitting a
-    `bind` for an address that isn't there stops CoreDNS starting at all, so probe before asking
-    for it.
-    """
-    try:
-        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
-            probe.bind((CONTAINER_GATEWAY_IP, 0))
-    except OSError:
+    if not is_bindable(CONTAINER_GATEWAY_IP):
         logger.info(f"Container gateway {CONTAINER_GATEWAY_IP} not bindable; serving no container-facing DNS view")
         return None
     return CONTAINER_GATEWAY_IP
-
-
-# Domains that resolve without this instance answering for them: mDNS handles ``.local``, and
-# ``lvh.me`` (and friends) are public wildcards pointing at loopback.  An instance configured with
-# only these has nothing to be authoritative for, so it never binds :53.
-_LOCAL_ONLY_SUFFIXES = (".local", "lvh.me")
-
-
-def _is_local_only(domain: Domain) -> bool:
-    name = domain.name_no_port
-    return domain.mdns or any(name == suffix or name.endswith(f".{suffix}") for suffix in _LOCAL_ONLY_SUFFIXES)
 
 
 def _ensure_coredns_binary(config: Config) -> str:
@@ -173,40 +138,36 @@ async def _main() -> None:
     # One connection for the whole domain-dependent startup sequence (CoreDNS -> TLS cert -> Caddy);
     # the primary + cert/zone paths are read live from it.
     with closing(get_db()) as db:
-        domains = effective_domains(db)  # primary first
-        _require_configured_domain(domains)  # fail loud at boot, not late in the first request
+        domains = effective_domains(db)
+        _require_configured_domain(domains)
 
-        # Bind :53 only when a domain actually needs this instance to answer for it.  With only
-        # local-only domains the provider still runs, serving just the container-facing view that
-        # app containers point their resolver at.
-        public_zones = tuple(d.name_no_port for d in domains if not _is_local_only(d))
-        public_ip: str | None = None
-        bind_ip: str | None = None
-        if public_zones and config.coredns_enabled:
-            if not config.public_ip:
+        public_ip = config.public_ip
+
+        if config.coredns_enabled:
+            if not public_ip:
                 raise RuntimeError("Public IP must be set in config to use CoreDNS")
-            public_ip = config.public_ip
-            bind_ip = _dns_bind_ip(public_ip)
-        elif public_zones:
-            logger.warning(f"coredns_enabled is off, so {', '.join(public_zones)} will not resolve via this instance")
+            bind_ip = infer_inbound_ipv4(public_ip)
+        else:
+            # bind_ip=None disables coredns serving public zones
+            bind_ip = None
 
-        # Always constructed, so every caller has a provider to talk to and can be told *why* a
-        # zone can't be served rather than finding a None.  Authoritative for every public domain
-        # the instance answers on, so a secondary domain delegated to this box resolves too.
         dns_provider = InternalDnsProvider(
             corefile_path=config.coredns_corefile_path,
             zones_dir=config.zones_dir,
             bind_ip=bind_ip,
             container_gateway_ip=_hairpin_gateway_ip(),
-            # Only resolved when it will actually be launched: looking it up self-heals by
-            # downloading, which an instance that never runs CoreDNS shouldn't pay for.
             coredns_bin=_ensure_coredns_binary(config) if config.coredns_enabled else "coredns",
         )
-        if bind_ip:
-            await dns_provider.set_zones(public_zones)
+        for domain in domains:
+            try:
+                # slightly inefficient bc we reboot coredns each time, but simpler than a separate batch path
+                await dns_provider.add_zone(domain.name_no_port)
+            except DnsNotEnabled:
+                # Running without CoreDNS is a supported choice; the domain is still served by
+                # Caddy, and a TLS one reports the consequence through its cert status.
+                logger.warning("Not serving DNS for {}: coredns is not enabled", domain.name_no_port)
+
         if public_ip is not None:
-            # The provider holds its records in memory, so the ones that route the space are
-            # published on every boot rather than read back from anywhere.
             publish_router_addresses(dns_provider, public_ip)
 
         if domains[0].tls:  # primary is a TLS domain
