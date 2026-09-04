@@ -15,6 +15,9 @@ from openhost_system_agent.migrations.versions.v0008_restart_on_failure import M
 from openhost_system_agent.migrations.versions.v0009_swap_file import Migration0009SwapFile
 from openhost_system_agent.migrations.versions.v0010_journal_read_for_oom import Migration0010JournalReadForOom
 from openhost_system_agent.migrations.versions.v0011_git_http_version import Migration0011GitHttpVersion
+from openhost_system_agent.migrations.versions.v0012_uniform_certificate_paths import (
+    Migration0012UniformCertificatePaths,
+)
 
 # Numbered migrations in apply order. Versions MUST start at 2 and be
 # contiguous. v1 is the baseline produced by ansible setup.yml.
@@ -29,6 +32,7 @@ REGISTRY: list[SystemMigration] = [
     Migration0009SwapFile(),
     Migration0010JournalReadForOom(),
     Migration0011GitHttpVersion(),
+    Migration0012UniformCertificatePaths(),
 ]
 
 

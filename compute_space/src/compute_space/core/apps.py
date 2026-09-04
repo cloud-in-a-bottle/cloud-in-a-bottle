@@ -31,6 +31,7 @@ from compute_space.core.data import deprovision_data
 from compute_space.core.data import deprovision_temp_data
 from compute_space.core.data import make_data_dirs_and_env_vars
 from compute_space.core.data import rmtree_with_sudo_fallback
+from compute_space.core.domains import PRIMARY_DOMAIN_RESTART_MARKER
 from compute_space.core.domains import Domain
 from compute_space.core.domains import primary_domain
 from compute_space.core.git_ops import CloneFailed
@@ -471,6 +472,17 @@ def _load_port_mappings_from_db(app_id: str, db: sqlite3.Connection) -> list[Por
     return [PortMapping(label=r["label"], container_port=r["container_port"], host_port=r["host_port"]) for r in rows]
 
 
+def _mark_app_starting(db: sqlite3.Connection, app_id: str) -> None:
+    """Keep durable promotion recovery intent until launch reaches a terminal state."""
+    db.execute(
+        "UPDATE apps SET status = 'starting', "
+        "error_message = CASE WHEN error_message = ? THEN error_message ELSE NULL END "
+        "WHERE app_id = ?",
+        (PRIMARY_DOMAIN_RESTART_MARKER, app_id),
+    )
+    db.commit()
+
+
 def run_app_image(
     app_id: str,
     image_tag: str,
@@ -511,11 +523,7 @@ def run_app_image(
         register_services_provided_by_app(app_id, manifest, db)
         port_mappings = _load_port_mappings_from_db(app_id, db)
 
-        db.execute(
-            "UPDATE apps SET status = 'starting', error_message = NULL WHERE app_id = ?",
-            (app_id,),
-        )
-        db.commit()
+        _mark_app_starting(db, app_id)
 
         launch_started = True
         container_id = run_container(
@@ -537,7 +545,7 @@ def run_app_image(
 
         if wait_for_ready(local_port):
             db.execute(
-                "UPDATE apps SET status = 'running' WHERE app_id = ?",
+                "UPDATE apps SET status = 'running', error_message = NULL WHERE app_id = ?",
                 (app_id,),
             )
         else:
@@ -692,11 +700,7 @@ def start_app_process(app_id: str, db: sqlite3.Connection, config: Config) -> No
     app_name = app_row["name"]
 
     manifest = parse_manifest(app_row["repo_path"])
-    db.execute(
-        "UPDATE apps SET status = 'starting', error_message = NULL WHERE app_id = ?",
-        (app_id,),
-    )
-    db.commit()
+    _mark_app_starting(db, app_id)
 
     _build_then_run_app(app_id, app_name, app_row["repo_path"], manifest, db, config)
 

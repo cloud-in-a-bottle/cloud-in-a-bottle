@@ -28,12 +28,14 @@ from compute_space.core.dns.coredns_provider.interface import InternalDnsProvide
 from compute_space.core.dns.router_records import publish_router_addresses
 from compute_space.core.domains import Domain
 from compute_space.core.domains import effective_domains
+from compute_space.core.domains import primary_domain
 from compute_space.core.first_boot import owner_exists
 from compute_space.core.first_boot import seed_first_boot
 from compute_space.core.ip import infer_inbound_ipv4
 from compute_space.core.ip import is_bindable
 from compute_space.core.logging import logger
 from compute_space.core.logging import setup_file_logging
+from compute_space.core.operation_locks import wait_for_operations
 from compute_space.core.pinned_binary import get_pinned_binary
 from compute_space.core.pinned_binary import install_pinned_binary
 from compute_space.core.system_agent.client import system_agent_stop_updater_sync
@@ -78,9 +80,13 @@ def _require_configured_domain(domains: tuple[Domain, ...]) -> None:
 
 async def _ensure_tls_cert(config: Config, db: sqlite3.Connection, dns_provider: InternalDnsProvider) -> None:
     """Make sure a usable cert+key pair is on disk before Caddy starts, acquiring or renewing as configured."""
-    status = get_cert_status(config.tls_cert_path, config.tls_key_path)
+    primary = primary_domain(db)
+    if not primary.tls:
+        return
+    cert_path, key_path = config.cert_key_paths_for(primary.name_no_port)
+    status = get_cert_status(cert_path, key_path)
     if status == CertStatus.OK:
-        logger.info(f"Using existing TLS cert from {config.tls_cert_path}")
+        logger.info(f"Using existing TLS cert from {cert_path}")
         return
     if not config.coredns_enabled or not config.acquire_tls_cert_if_missing:
         # A cert nearing expiry still works, so don't block startup over it.
@@ -197,7 +203,7 @@ async def _main() -> None:
                 config.caddyfile_path,
                 domains,
                 config.port,
-                cert_for=config_cert_resolver(config, db),
+                cert_for=config_cert_resolver(config),
                 admin_addr=unix_admin_address(config.caddy_admin_socket_path),
             )
             # Register so /api/domains can regenerate + restart Caddy when a domain is added/removed.
@@ -216,8 +222,12 @@ async def _main() -> None:
     mark_boot_complete()
 
     async def _shutdown() -> None:
-        """Stop the background tasks and the child processes.  Each handle stops its own process and
-        log task, which restart() may have replaced since startup."""
+        """Finish retained operations, then stop background tasks and child processes.
+
+        Each handle stops its own process and log task, which restart() may have
+        replaced since startup.
+        """
+        await wait_for_operations()
         for task in background_tasks:
             task.cancel()
         for task in background_tasks:

@@ -96,11 +96,13 @@
 <section class="section">
   {% call section_head("Domains") %}{% endcall %}
   <div class="panel">
-    <p class="hint">Hostnames this instance answers on. The primary is set at provisioning. Add a
+    <p class="hint">Hostnames this instance answers on. The primary is used for canonical links and
+      app configuration. Add a
       secondary <strong>public</strong> domain (its DNS must be delegated to this instance — it then
       acquires a TLS certificate automatically) or a hostname served locally over plain HTTP, such
       as a <code>.local</code> or tailnet-only name. Arrange name resolution for local domains
-      separately. Removing a domain takes effect immediately; the primary can't be removed.</p>
+      separately. The primary can't be removed. Changing it restarts running apps and may require
+      signing in again.</p>
 
     <div class="field-row field-row--add">
       <label class="field" for="domain-name">

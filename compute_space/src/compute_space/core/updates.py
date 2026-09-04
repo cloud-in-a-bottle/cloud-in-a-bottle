@@ -1,6 +1,7 @@
 """Compute space self-update: status checking, orchestration, restart."""
 
 import asyncio
+import secrets
 import subprocess
 from enum import StrEnum
 from pathlib import Path
@@ -79,6 +80,7 @@ def run_pixi_install(repo_path: Path) -> None:
 
 
 RESTART_EXIT_CODE = 42
+PROCESS_GENERATION = secrets.token_urlsafe(12)
 
 _shutdown_event: asyncio.Event | None = None
 

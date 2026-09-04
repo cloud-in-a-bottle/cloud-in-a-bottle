@@ -245,6 +245,18 @@ class TestApplyUpdateWalk:
         log = _exec(c, "cat", "/etc/openhost/migrations.jsonl")
         assert f'"version":{latest}' in log.stdout.replace(" ", ""), f"log did not reach v{latest}:\n{log.stdout}"
 
+        data_dir = "/home/host/.openhost/local_compute_space/persistent_data/openhost"
+        cert = _exec(c, "cat", f"{data_dir}/certs/test.local.pem")
+        key = _exec(c, "cat", f"{data_dir}/certs/test.local.key")
+        assert cert.stdout == "migration fixture cert"
+        assert key.stdout == "migration fixture key"
+        cert_stat = _exec(c, "stat", "-c", "%U:%G %a", f"{data_dir}/certs/test.local.pem")
+        key_stat = _exec(c, "stat", "-c", "%U:%G %a", f"{data_dir}/certs/test.local.key")
+        assert cert_stat.stdout.strip() == "host:host 644"
+        assert key_stat.stdout.strip() == "host:host 600"
+        assert _exec(c, "test", "!", "-e", f"{data_dir}/openhost-tls-cert.pem").returncode == 0
+        assert _exec(c, "test", "!", "-e", f"{data_dir}/openhost-tls-key.pem").returncode == 0
+
         root_http_version = _exec(c, "git", "config", "--global", "--get-all", "http.version")
         host_http_version = _host_sh(c, "git config --global --get-all http.version")
         assert root_http_version.stdout.splitlines() == ["HTTP/1.1"]

@@ -14,6 +14,7 @@ from compute_space.core.apps import insert_and_deploy
 from compute_space.core.apps import restart_app_process
 from compute_space.core.apps import run_app_image
 from compute_space.core.apps import start_app_process
+from compute_space.core.domains import PRIMARY_DOMAIN_RESTART_MARKER
 from compute_space.core.manifest import PortMapping
 from compute_space.core.manifest import parse_manifest_from_string
 from compute_space.db.connection import init_db
@@ -32,6 +33,10 @@ port = 8080
 memory_mb = 384
 cpu_cores = 1.5
 """
+
+
+class ProcessInterrupted(BaseException):
+    pass
 
 
 @pytest.fixture
@@ -176,6 +181,57 @@ def test_run_failure_preserves_container_reference_when_cleanup_fails(
 
     row = db.execute("SELECT status, container_id FROM apps WHERE app_id = ?", (app_id,)).fetchone()
     assert (row["status"], row["container_id"]) == ("error", "container-123")
+
+
+def test_promotion_marker_survives_interrupted_launch_and_clears_on_success(
+    cfg: Any,
+    app_db: tuple[sqlite3.Connection, str, Path],
+) -> None:
+    db, app_id, _ = app_db
+    manifest = parse_manifest_from_string(MANIFEST_TEXT)
+    db.execute(
+        "UPDATE apps SET status = 'starting', error_message = ? WHERE app_id = ?",
+        (PRIMARY_DOMAIN_RESTART_MARKER, app_id),
+    )
+    db.commit()
+
+    with (
+        mock.patch.object(apps_mod, "make_data_dirs_and_env_vars", return_value={}),
+        mock.patch.object(apps_mod, "run_container", side_effect=ProcessInterrupted),
+        pytest.raises(ProcessInterrupted),
+    ):
+        run_app_image(app_id, "existing:image", manifest, db, cfg)
+
+    row = db.execute("SELECT status, error_message FROM apps WHERE app_id = ?", (app_id,)).fetchone()
+    assert (row["status"], row["error_message"]) == ("starting", PRIMARY_DOMAIN_RESTART_MARKER)
+
+    with (
+        mock.patch.object(apps_mod, "make_data_dirs_and_env_vars", return_value={}),
+        mock.patch.object(apps_mod, "run_container", return_value="replacement-container"),
+        mock.patch.object(apps_mod, "wait_for_ready", return_value=True),
+    ):
+        run_app_image(app_id, "existing:image", manifest, db, cfg)
+
+    row = db.execute("SELECT status, error_message FROM apps WHERE app_id = ?", (app_id,)).fetchone()
+    assert (row["status"], row["error_message"]) == ("running", None)
+
+
+def test_promotion_marker_survives_interrupted_rebuild(
+    cfg: Any,
+    app_db: tuple[sqlite3.Connection, str, Path],
+) -> None:
+    db, app_id, _ = app_db
+    db.execute(
+        "UPDATE apps SET status = 'starting', error_message = ? WHERE app_id = ?",
+        (PRIMARY_DOMAIN_RESTART_MARKER, app_id),
+    )
+    db.commit()
+
+    with mock.patch.object(apps_mod, "build_image", side_effect=ProcessInterrupted), pytest.raises(ProcessInterrupted):
+        start_app_process(app_id, db, cfg)
+
+    row = db.execute("SELECT status, error_message FROM apps WHERE app_id = ?", (app_id,)).fetchone()
+    assert (row["status"], row["error_message"]) == ("starting", PRIMARY_DOMAIN_RESTART_MARKER)
 
 
 def test_restart_reuses_tagged_image_and_persisted_manifest_without_build(

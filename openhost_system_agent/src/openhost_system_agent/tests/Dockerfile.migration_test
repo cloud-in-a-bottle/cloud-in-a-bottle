@@ -46,5 +46,16 @@ RUN su - host -c "cd /home/host/openhost && \
         openhost_system_agent/src/openhost_system_agent/tests/seed_pre_consolidation_db.py \
         /home/host/.openhost/local_compute_space/persistent_data/openhost/router.db"
 
+# Legacy provisioning-time TLS files. v7 seeds test.local as the primary before v12 moves this pair.
+RUN printf 'migration fixture cert' \
+        > /home/host/.openhost/local_compute_space/persistent_data/openhost/openhost-tls-cert.pem && \
+    printf 'migration fixture key' \
+        > /home/host/.openhost/local_compute_space/persistent_data/openhost/openhost-tls-key.pem && \
+    chown host:host \
+        /home/host/.openhost/local_compute_space/persistent_data/openhost/openhost-tls-cert.pem \
+        /home/host/.openhost/local_compute_space/persistent_data/openhost/openhost-tls-key.pem && \
+    chmod 0644 /home/host/.openhost/local_compute_space/persistent_data/openhost/openhost-tls-cert.pem && \
+    chmod 0600 /home/host/.openhost/local_compute_space/persistent_data/openhost/openhost-tls-key.pem
+
 # systemd as init
 CMD ["/sbin/init"]

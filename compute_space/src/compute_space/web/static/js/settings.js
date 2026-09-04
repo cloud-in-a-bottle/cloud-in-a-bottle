@@ -196,10 +196,20 @@ async function setRemote() {
 }
 
 async function restartComputeSpace() {
+  let resp;
   try {
-    await fetch('/api/settings/restart_compute_space', {method: 'POST'});
+    resp = await fetch('/api/settings/restart_compute_space', {method: 'POST'});
   } catch (e) {
     // Expected — server may die before responding
+    showRestartOverlay();
+    return;
+  }
+  if (!resp.ok) {
+    const data = await resp.json().catch(function() { return {}; });
+    const msg = document.getElementById('restart-msg');
+    msg.textContent = responseErrorMessage(data, 'Failed to prepare the restart.');
+    msg.className = 'msg msg--error';
+    return;
   }
   showRestartOverlay();
 }

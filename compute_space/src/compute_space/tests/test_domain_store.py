@@ -157,3 +157,17 @@ async def test_ensure_cert_for_acquires_tls_to_per_domain_path(tmp_path: Path, m
     # per-domain path under certs/, NOT the primary's legacy cert file
     assert captured["cert_path"] == cfg.certs_dir / "host.example.org.pem"
     assert captured["cert_path"].parent.exists()  # ensure_cert_for created certs/
+
+
+def test_certificate_paths_are_normalized_and_role_independent(tmp_path: Path) -> None:
+    cfg = _cfg(tmp_path)
+    assert cfg.cert_key_paths_for("Host.Example.Com:443") == (
+        cfg.certs_dir / "host.example.com.pem",
+        cfg.certs_dir / "host.example.com.key",
+    )
+
+
+def test_certificate_paths_reject_names_that_escape_the_certificate_directory(tmp_path: Path) -> None:
+    cfg = _cfg(tmp_path)
+    with pytest.raises(ValueError, match="invalid certificate domain"):
+        cfg.cert_key_paths_for("../../escape.example.com")

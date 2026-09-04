@@ -124,6 +124,7 @@ def _patch_cert_work(monkeypatch: pytest.MonkeyPatch, *, provision: Any = None, 
 def _config(tmp_path: Path) -> Config:
     config = DefaultConfig(data_root_dir=str(tmp_path))
     config.openhost_data_path.mkdir(parents=True)
+    config.certs_dir.mkdir()
     _seed_cfg(config, Domain("test.example.com", tls=True))
     return config
 
@@ -131,9 +132,8 @@ def _config(tmp_path: Path) -> Config:
 @pytest.mark.asyncio
 async def test_renew_skips_valid_cert(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     config = _config(tmp_path)
-    _write_self_signed_cert(
-        config.tls_cert_path, config.tls_key_path, datetime.datetime.now(datetime.UTC) + datetime.timedelta(days=60)
-    )
+    cert_path, key_path = config.cert_key_paths_for("test.example.com")
+    _write_self_signed_cert(cert_path, key_path, datetime.datetime.now(datetime.UTC) + datetime.timedelta(days=60))
     calls: list[str] = []
     _patch_cert_work(monkeypatch, provision=_async(lambda c, db, dns_provider: calls.append("provision")))
     renewed = await renew_cert_if_needed(config, _async(lambda c, db: calls.append("restart")), _dns(tmp_path))
@@ -149,9 +149,10 @@ async def test_renew_provisions_and_restarts_caddy(
     tmp_path: Path, expires_in: datetime.timedelta, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     config = _config(tmp_path)
+    cert_path, key_path = config.cert_key_paths_for("test.example.com")
     _write_self_signed_cert(
-        config.tls_cert_path,
-        config.tls_key_path,
+        cert_path,
+        key_path,
         datetime.datetime.now(datetime.UTC) + expires_in,
     )
     calls: list[str] = []
@@ -178,10 +179,10 @@ async def test_renew_failure_does_not_restart_caddy(tmp_path: Path, monkeypatch:
 def _multidomain_config(tmp_path: Path, *secondaries: str) -> Config:
     config = DefaultConfig(data_root_dir=str(tmp_path))
     config.openhost_data_path.mkdir(parents=True)
+    config.certs_dir.mkdir()
     # Primary cert valid so only the secondaries drive behavior.
-    _write_self_signed_cert(
-        config.tls_cert_path, config.tls_key_path, datetime.datetime.now(datetime.UTC) + datetime.timedelta(days=60)
-    )
+    cert_path, key_path = config.cert_key_paths_for("test.example.com")
+    _write_self_signed_cert(cert_path, key_path, datetime.datetime.now(datetime.UTC) + datetime.timedelta(days=60))
     _seed_cfg(config, Domain("test.example.com", tls=True), *(Domain(s, tls=True) for s in secondaries))
     return config
 
@@ -266,7 +267,7 @@ async def test_renew_reload_regenerates_caddyfile_for_new_secondary_cert(
     caddyfile = tmp_path / "Caddyfile"
 
     async def _reload(c: Config, db: sqlite3.Connection) -> None:
-        caddyfile.write_text(generate_caddyfile(effective_domains(db), c.port, config_cert_resolver(c, db)))
+        caddyfile.write_text(generate_caddyfile(effective_domains(db), c.port, config_cert_resolver(c)))
 
     _patch_cert_work(monkeypatch, provision=_async(lambda c, db, dns_provider: None), acquire=_acquire)
     renewed = await renew_cert_if_needed(config, _reload, _dns(tmp_path))
@@ -274,12 +275,12 @@ async def test_renew_reload_regenerates_caddyfile_for_new_secondary_cert(
     assert renewed is True
     content = caddyfile.read_text()
     # The secondary now serves its acquired file cert rather than falling back to `tls internal`.
-    assert str(config.cert_path_for("second.example.com", is_primary=False)) in content
+    assert str(config.cert_path_for("second.example.com")) in content
     assert "tls internal" not in content
 
 
 def test_sync_cert_statuses_marks_primary_active_when_cert_present(tmp_path: Path) -> None:
-    # The primary is seeded 'none' (its legacy cert predates the domains table); once its cert is on
+    # The primary is seeded 'none' (its cert predates the domains table); once its cert is on
     # disk, the boot-time sync reconciles the stored column to 'active' to match the dashboard.
     cfg = _make_test_config(tmp_path, zone_domain="host.example.com", tls_enabled=True)
     init_db(cfg.db_path)
@@ -288,7 +289,9 @@ def test_sync_cert_statuses_marks_primary_active_when_cert_present(tmp_path: Pat
         assert get_record(db, "host.example.com").cert_status == "none"
 
     # far-future not_valid_after => OK against real 'now' (the sync doesn't inject a clock)
-    _write_self_signed_cert(cfg.tls_cert_path, cfg.tls_key_path, datetime.datetime(2100, 1, 1, tzinfo=datetime.UTC))
+    cert_path, key_path = cfg.cert_key_paths_for("host.example.com")
+    cert_path.parent.mkdir(parents=True)
+    _write_self_signed_cert(cert_path, key_path, datetime.datetime(2100, 1, 1, tzinfo=datetime.UTC))
     _sync_cert_statuses(cfg)
 
     with closing(open_db(cfg)) as db:
@@ -318,12 +321,13 @@ async def test_renew_marks_primary_active_same_cycle(tmp_path: Path, monkeypatch
         seed_domains(db, Domain("host.example.com", tls=True), [])
     # Expired cert: the top-of-cycle sync sees it non-OK and leaves the record 'none'; the primary
     # block then renews, so only the post-renewal mark can produce 'active'.
-    _write_self_signed_cert(
-        cfg.tls_cert_path, cfg.tls_key_path, datetime.datetime.now(datetime.UTC) - datetime.timedelta(days=1)
-    )
+    cert_path, key_path = cfg.cert_key_paths_for("host.example.com")
+    cert_path.parent.mkdir(parents=True)
+    _write_self_signed_cert(cert_path, key_path, datetime.datetime.now(datetime.UTC) - datetime.timedelta(days=1))
 
     async def _provision(c: Config, db: sqlite3.Connection, dns_provider: None) -> None:
-        _write_self_signed_cert(c.tls_cert_path, c.tls_key_path, datetime.datetime(2100, 1, 1, tzinfo=datetime.UTC))
+        cert_path, key_path = c.cert_key_paths_for("host.example.com")
+        _write_self_signed_cert(cert_path, key_path, datetime.datetime(2100, 1, 1, tzinfo=datetime.UTC))
 
     _patch_cert_work(monkeypatch, provision=_provision)
     renewed = await renew_cert_if_needed(cfg, _async(lambda c, db: None), _dns(tmp_path))

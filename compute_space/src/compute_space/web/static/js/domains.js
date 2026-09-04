@@ -1,7 +1,6 @@
 // ─── Domains ───
 // Owner-facing UI over /api/domains: list the hostnames this instance answers on,
-// add a secondary public domain (auto-acquires a TLS cert) or a local .local name,
-// and remove non-primary domains.
+// add domains, choose the primary, and remove non-primary domains.
 
 var DOMAINS_URL = '/api/domains';
 
@@ -27,6 +26,14 @@ function removeDomainButton(name) {
                            onclick: function() { removeDomain(name); }},
     dom.el('img', {class: 'icon', src: '/static/img/icons/trash.svg',
                    width: '14', height: '14', alt: '', 'aria-hidden': 'true'}));
+}
+
+function makePrimaryButton(domain) {
+  return dom.el('button', {
+    class: 'btn', type: 'button', text: 'Make primary',
+    disabled: domain.tls && domain.cert_status !== 'active',
+    onclick: function() { makePrimaryDomain(domain.name); },
+  });
 }
 
 // Repaint the table from a domain list (as returned by GET/POST/DELETE /api/domains).
@@ -55,11 +62,82 @@ function renderDomains(domains) {
       dom.el('td', null, domainCertCell(d)),
       dom.el('td', {class: 'col-actions'}, d.is_primary
         ? dom.el('span', {class: 'muted', text: '—'})
-        : removeDomainButton(d.name)),
+        : dom.el('span', null, [makePrimaryButton(d), removeDomainButton(d.name)])),
     ]);
   }));
   // A cert acquisition (DNS-01) runs in the background; poll until it settles.
   if (anyAcquiring) setTimeout(loadDomains, 4000);
+}
+
+function makePrimaryDomain(name) {
+  var warning = 'Make ' + name + ' the primary domain? Running apps will restart and you may need to sign in again.';
+  if (!confirm(warning)) { return; }
+  fetch(DOMAINS_URL + '/' + encodeURIComponent(name) + '/primary', {
+    method: 'POST',
+    credentials: 'same-origin',
+  })
+    .then(readJsonResponse)
+    .then(function(res) {
+      if (!res.ok) {
+        alert(responseErrorMessage(res.data, 'Failed to change primary domain.'));
+        loadDomains();
+        return;
+      }
+      var promoted = ((res.data && res.data.domains) || []).find(function(d) { return d.is_primary; });
+      if (promoted) redirectAfterPrimaryRestart(promoted, res.data.generation);
+    })
+    .catch(function() {
+      alert('The primary-domain request did not return a readable response. Reloading the domain list.');
+      loadDomains();
+    });
+}
+
+function redirectAfterPrimaryRestart(promoted, previousGeneration) {
+  var target = promoted.scheme + '://' + promoted.name + '/settings';
+  var msg = document.getElementById('domain-msg');
+  var deadline = Date.now() + 120000;
+  msg.textContent = 'Primary changed. Waiting for the instance to restart…';
+  msg.className = 'notice';
+  msg.hidden = false;
+
+  function poll() {
+    var controller = new AbortController();
+    var timeout = setTimeout(function() { controller.abort(); }, 2000);
+    fetch('/health', {credentials: 'same-origin', cache: 'no-store', signal: controller.signal})
+      .then(function(response) {
+        clearTimeout(timeout);
+        if (response.ok) {
+          return response.json().then(function(health) {
+            if (previousGeneration && health.generation && health.generation !== previousGeneration) {
+              window.location.assign(target);
+              return true;
+            }
+            return false;
+          });
+        }
+        return false;
+      })
+      .then(function(ready) {
+        if (ready) return;
+        if (Date.now() >= deadline) {
+          msg.textContent = 'The restart did not complete. Restart the instance manually, then open ' + target;
+          msg.className = 'notice notice--error';
+          return;
+        }
+        setTimeout(poll, 250);
+      })
+      .catch(function() {
+        clearTimeout(timeout);
+        if (Date.now() >= deadline) {
+          msg.textContent = 'The restart did not complete. Restart the instance manually, then open ' + target;
+          msg.className = 'notice notice--error';
+          return;
+        }
+        setTimeout(poll, 250);
+      });
+  }
+
+  poll();
 }
 
 function loadDomains() {

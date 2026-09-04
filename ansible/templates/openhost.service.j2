@@ -10,12 +10,12 @@ Description=Cloud in a Bottle Compute Space
 # a hardcoded UID and the value differs across cloud providers.
 After=network-online.target user@{{ host_uid }}.service
 Wants=network-online.target user@{{ host_uid }}.service
-# Crash limiter for Restart=on-failure (see [Service]): if the service fails more
+# Crash limiter for Restart=on-failure (see [Service]): if the service starts more
 # than StartLimitBurst times within StartLimitIntervalSec, systemd stops retrying
 # and leaves it `failed` (recover with `systemctl reset-failed openhost`). This
 # both stops a broken build from flapping forever and caps how fast a persistent
-# cert-acquisition crash could hit an ACME endpoint. Successful exits (code 0 and
-# the update-flow's SuccessExitStatus=42) do not count toward the burst.
+# cert-acquisition crash could hit an ACME endpoint. systemd counts every activation,
+# including intentional exit-42 restarts, so callers reset the counter first.
 StartLimitIntervalSec=1800
 StartLimitBurst=5
 
@@ -67,15 +67,14 @@ ExecStart=/home/host/.pixi/bin/pixi run python -m compute_space
 #
 # RestartForceExitStatus=42 keeps the self-update clean-restart path working (the
 # update flow exits 42 on purpose; see updates.py RESTART_EXIT_CODE). Because 42
-# is also SuccessExitStatus, an update restart is a "success" exit and does NOT
-# count against StartLimitBurst — only genuine failures do — so frequent updates
-# can't trip the crash limiter.
+# is also SuccessExitStatus, an update restart is reported as a clean exit.
+# Intentional restart paths reset the activation-rate counter before exiting.
 Restart=on-failure
 RestartForceExitStatus=42
 SuccessExitStatus=42
 # Wait between restarts so a fast crash loop can't spin the CPU or race ACME.
 RestartSec=30
-# Give up (unit enters `failed`) after 5 failures inside a 30-minute window, so a
+# Give up (unit enters `failed`) after 5 starts inside a 30-minute window, so a
 # genuinely broken build stops flapping and a persistent cert-acquisition crash
 # can make at most ~5 ACME attempts per half hour. StartLimit* live in [Unit].
 # this will kill other processes in the group (eg caddy etc) after the main process exits

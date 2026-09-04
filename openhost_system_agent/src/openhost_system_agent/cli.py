@@ -8,6 +8,7 @@ import attr
 import attrs
 import cappa
 
+from openhost_system_agent.detach import reset_openhost_start_limit
 from openhost_system_agent.migrations.runner import apply_system_migrations
 from openhost_system_agent.status import get_migration_status
 from openhost_system_agent.swap import get_swap_status
@@ -20,8 +21,7 @@ from openhost_system_agent.update import start_apply
 from openhost_system_agent.updater.launcher import launch_updater
 from openhost_system_agent.updater.launcher import stop_updater
 from openhost_system_agent.updater.paths import clear_token
-from openhost_system_agent.updater.paths import tls_cert_path
-from openhost_system_agent.updater.paths import tls_key_path
+from openhost_system_agent.updater.paths import primary_tls_paths
 from openhost_system_agent.updater.paths import write_token
 from openhost_system_agent.updater.progress import mark_boot_complete
 from openhost_system_agent.updater.progress import record_failure_if_not_terminal
@@ -128,6 +128,18 @@ class SwapCmd:
             _error(str(e))
 
 
+@cappa.command(name="service", help="Manage the Cloud in a Bottle system service.")
+@attrs.define
+class ServiceCmd:
+    @cappa.command(name="reset-start-limit", help="Prepare the service for an intentional restart.")
+    def reset_start_limit(self) -> None:
+        try:
+            reset_openhost_start_limit()
+        except Exception as e:
+            _error(str(e))
+        print(json.dumps({"ok": True}))
+
+
 @cappa.command(name="updater", help="Seamless-update downtime server (internal; launched by compute_space).")
 @attrs.define
 class UpdaterCmd:
@@ -139,7 +151,8 @@ class UpdaterCmd:
         name="serve", help="Run the updater mini-server in the foreground (invoked inside the transient unit)."
     )
     def serve(self) -> None:
-        run_updater_server(tls_cert_path(), tls_key_path())
+        paths = primary_tls_paths()
+        run_updater_server(*(paths or (None, None)))
 
     @cappa.command(name="stop", help="Stop the detached updater, releasing 80/443 (called before Caddy starts).")
     def stop(self) -> None:
@@ -180,7 +193,7 @@ class UpdaterCmd:
 )
 @attrs.define
 class SystemAgent:
-    subcommand: cappa.Subcommands[UpdateCmd | StatusCmd | SwapCmd | UpdaterCmd]
+    subcommand: cappa.Subcommands[UpdateCmd | StatusCmd | SwapCmd | ServiceCmd | UpdaterCmd]
 
 
 def main() -> None:

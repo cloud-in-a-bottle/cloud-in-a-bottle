@@ -59,7 +59,7 @@ def get_cert_status(cert_path: Path, key_path: Path, now: datetime.datetime | No
 def _sync_cert_statuses(config: Config) -> None:
     """Bring the DB ``cert_status`` in step with the certs actually on disk, so the stored column
     matches what the dashboard shows (it derives display status from the files).  Only upgrades a
-    tracked TLS domain to ``active`` when its cert+key are present — chiefly the primary, whose legacy
+    tracked TLS domain to ``active`` when its cert+key are present — chiefly the primary, whose
     cert predates the ``domains`` table and was seeded ``none``.  Idempotent (skips rows already
     ``active``); acquiring/error states are left to the add-domain flow and the renewal below.
 
@@ -74,7 +74,7 @@ def _sync_cert_statuses(config: Config) -> None:
                 record = get_record(db, name)
                 if record is None or record.cert_status == DomainCertStatus.ACTIVE:
                     continue
-                cert_path, key_path = config.cert_key_paths_for(db, name)
+                cert_path, key_path = config.cert_key_paths_for(name)
                 if get_cert_status(cert_path, key_path) == CertStatus.OK:
                     set_record_status(db, name, DomainCertStatus.ACTIVE)
     except Exception:
@@ -98,21 +98,20 @@ async def renew_cert_if_needed(
 ) -> bool:
     """Renew every TLS cert that is missing, expired, or inside the renewal window.
 
-    The primary keeps its legacy cert paths and dedicated ``provision`` routine (behavior
-    unchanged).  Each additional TLS domain uses its own ``certs/<name>`` paths; a failure on one
-    (e.g. its DNS isn't delegated to this instance) is logged and skipped so it can't starve the
-    primary or the other domains.  Because this re-acquires any non-OK cert, it also re-drives a
-    domain left mid-acquisition by a restart.  Returns True if any cert was (re)installed.
+    Certificate paths remain attached to domains when the primary role changes. A failure renewing
+    an alias is logged and skipped so it cannot starve the primary or other domains. Because this
+    re-acquires any non-OK cert, it also re-drives a domain left mid-acquisition by a restart.
+    Returns True if any cert was (re)installed.
     """
     _sync_cert_statuses(config)  # keep the stored cert_status honest (e.g. the seeded-'none' primary)
     renewed = False
 
     with closing(get_db()) as db:
         primary = primary_domain_or_none(db)
-        # Primary — legacy cert paths, but only when the primary is itself a TLS domain (a
-        # non-TLS/.local primary has no cert to provision).  A failure here propagates.
+        # A failure renewing the canonical domain propagates; failures on aliases remain isolated.
         if primary is not None and primary.tls:
-            status = get_cert_status(config.tls_cert_path, config.tls_key_path)
+            cert_path, key_path = config.cert_key_paths_for(primary.name_no_port)
+            status = get_cert_status(cert_path, key_path)
             if status != CertStatus.OK:
                 logger.info(f"TLS cert for {primary.name} is {status.value}; renewing")
                 await provision_cert(config, db, dns_provider)
@@ -126,7 +125,7 @@ async def renew_cert_if_needed(
             name = domain.name_no_port
             if not domain.tls or name == primary_no_port:
                 continue
-            cert_path, key_path = config.cert_path_for(name, False), config.key_path_for(name, False)
+            cert_path, key_path = config.cert_key_paths_for(name)
             status = get_cert_status(cert_path, key_path)
             if status == CertStatus.OK:
                 continue

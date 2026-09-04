@@ -1,3 +1,4 @@
+import asyncio
 import hashlib
 import os
 import secrets
@@ -14,6 +15,7 @@ from litestar import Router
 from litestar import delete
 from litestar import get
 from litestar import post
+from litestar.background_tasks import BackgroundTask
 from litestar.di import NamedDependency
 from litestar.exceptions import InternalServerException
 from litestar.exceptions import ServiceUnavailableException
@@ -38,7 +40,11 @@ from compute_space.core.logging import get_log_path
 from compute_space.core.storage import is_guard_paused
 from compute_space.core.storage import set_guard_paused
 from compute_space.core.storage import storage_status
+from compute_space.core.system_agent.client import SystemAgentError
+from compute_space.core.system_agent.client import system_agent_reset_restart_limit_sync
+from compute_space.core.updates import PROCESS_GENERATION
 from compute_space.core.updates import is_shutdown_pending
+from compute_space.core.updates import trigger_restart
 from compute_space.web.auth.auth import require_owner_auth
 
 DEFAULT_TOKEN_EXPIRY_HOURS: float = 8.0
@@ -81,11 +87,13 @@ class OkResponse:
 @attr.s(auto_attribs=True, frozen=True)
 class HealthOk:
     status: str  # "ok"
+    generation: str = PROCESS_GENERATION
 
 
 @attr.s(auto_attribs=True, frozen=True)
 class HealthRestarting:
     status: str  # "restarting"
+    generation: str = PROCESS_GENERATION
 
 
 @attr.s(auto_attribs=True, frozen=True)
@@ -356,20 +364,19 @@ async def api_diagnostics(
     return Response(content=diagnostics, status_code=200, media_type=MediaType.JSON, headers=headers)
 
 
-@post("/restart_router", status_code=200, guards=[require_owner_auth], sync_to_thread=False)
-def restart_router() -> OkResponse:
+@post("/restart_router", status_code=200, guards=[require_owner_auth])
+async def restart_router() -> Response[OkResponse]:
     """Restart the router systemd service to pick up code changes."""
-    subprocess.Popen(
-        [
-            "sudo",
-            "-n",
-            "bash",
-            "-c",
-            "systemctl kill --signal=SIGKILL openhost; systemctl start openhost",
-        ],
-        start_new_session=True,
-    )
-    return OkResponse(ok=True)
+    try:
+        await asyncio.to_thread(system_agent_reset_restart_limit_sync)
+    except SystemAgentError as exc:
+        raise ServiceUnavailableException(detail="could not prepare the instance for a safe restart") from exc
+    return Response(content=OkResponse(ok=True), background=BackgroundTask(_restart_after_response))
+
+
+async def _restart_after_response() -> None:
+    await asyncio.sleep(0.05)
+    trigger_restart()
 
 
 system_routes = Router(
