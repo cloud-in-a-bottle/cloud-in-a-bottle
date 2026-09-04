@@ -32,11 +32,13 @@ There are three ways a request can authenticate:
 
 | Credential | Used by | How |
 |---|---|---|
-| Session cookie | Browsers | `session_token`, set at login. Opaque and stored in the router's database, so it can be revoked. Valid four weeks, and scoped to the domain, so one login covers the dashboard and every app on it. |
+| Session cookie | Browsers | `session_token`, set at login. Opaque and stored in the router's database, so it can be revoked. Valid four weeks and scoped to the domain where you logged in, so one login covers that dashboard and its app subdomains. Cookies are not shared between configured domains. |
 | API token | The `bottle` CLI, scripts, agents | `Authorization: Bearer <token>`. Created and revoked in the dashboard or with `bottle tokens`. |
 | App token | App containers | `OPENHOST_APP_TOKEN`, injected into each container and used to authenticate [cross-app service calls](../creating_an_app/cross_app_services.md). |
 
 Apps can open up specific routes by listing them in `public_paths` in their manifest. Those routes are proxied without authentication, and it is then the app's job to decide who may do what. To help, the router sets `X-OpenHost-Is-Owner: true` on requests that do carry a valid owner session, so an app can serve a public page and still show the owner an edit button. Any `X-OpenHost-*` header supplied by the client is stripped before the app sees it.
+
+Changing the primary domain generally requires signing in on the new primary. A session created on the previous domain remains valid there until it expires or is revoked.
 
 ## On the machine
 

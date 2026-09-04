@@ -9,7 +9,7 @@ Using a static IP is the simpler path, and it is the case on essentially any VPS
 
 If the machine is at home you probably have neither; see [Exposing a home server](./home_network.md) instead.
 
-This page converts an instance that is *already running* in HTTP-only mode. If you are starting fresh, [Deploying on a cloud instance](./cloud_instance.md) the a more direct path.
+This page converts an instance that is *already running* in HTTP-only mode. If you are starting fresh, [Deploying on a cloud instance](./cloud_instance.md) is the more direct path.
 
 ## Delegate DNS to the machine
 
@@ -30,21 +30,13 @@ Check the delegation before continuing. It can take a while to propagate.
 dig +short NS mycooldomain.com     # -> ns1.mycooldomain.com.
 ```
 
-The instance now answers for everything at or below `mycooldomain.com`. You never create per-app records.
+Your DNS provider now delegates everything at or below `mycooldomain.com` to the instance. Once the domain is added below, the instance answers for the apex and wildcard, so you never create per-app records.
 
 ## Switch to TLS
 
-Once the DNS records above are live, add the public domain to the running instance from the dashboard. The instance acquires a certificate for it over DNS-01 and serves it alongside the domain you installed with.
+Once the DNS records above are live, enable the TLS services, add the public domain, and then make it primary. Enabling the services first keeps every intermediate state safe to restart.
 
-This takes two steps, because the HTTP-only install left the pieces that do the work switched off. Adding the domain first and fixing the config second is the order that works; doing it the other way round leaves the instance briefly refusing to start.
-
-### 1. Add the domain
-
-In the dashboard, open **Settings → Domains**, enter `mycooldomain.com`, leave the type as **Public (HTTPS)**, and click **Add domain**.
-
-The domain is recorded immediately, and the instance kicks off certificate acquisition in the background. That attempt will fail, and the domain will show an error in the table: acquisition answers a DNS-01 challenge out of CoreDNS, and CoreDNS is not running yet in HTTP-only mode. Leave it; the next step re-drives it.
-
-### 2. Turn on TLS and restart
+### 1. Turn on TLS services
 
 The HTTP-only install skipped the ACME account key, so generate one:
 
@@ -76,16 +68,26 @@ Restart:
 sudo systemctl restart openhost
 ```
 
-Make the edit before restarting. A TLS domain in the database with `start_caddy = false` is a configuration the router rejects outright, so a restart in between fails with *"A TLS domain is configured but start_caddy is False."*
+At this point the instance still uses its original HTTP primary, but it is ready to add and serve an HTTPS domain. A TLS domain in the database with `start_caddy = false` is a configuration the router rejects outright, which is why Caddy is enabled first.
 
-On this boot the instance starts CoreDNS authoritative for `mycooldomain.com`, starts Caddy on 443, notices the domain's certificate is missing, acquires it, and reloads Caddy to serve it. Watch it happen:
+### 2. Add the domain
+
+In the dashboard, open **Settings → Domains**, enter `mycooldomain.com`, leave the type as **Public (HTTPS)**, and click **Add domain**.
+
+The running instance makes CoreDNS authoritative for `mycooldomain.com`, acquires its wildcard certificate over DNS-01, and reloads Caddy to serve it. Watch it happen:
 
 ```bash
 sudo journalctl -u openhost -f
 ```
 
-The domain flips to active in the settings table once the certificate lands. The dashboard is then reachable at `https://mycooldomain.com/`, apps at `https://<app>.mycooldomain.com/`, and you can drop the SSH tunnel:
+The domain flips to active in the settings table once the certificate lands. It is now reachable at `https://mycooldomain.com/`, with apps at `https://<app>.mycooldomain.com/`, but the original HTTP domain remains canonical until the final step.
 
 ```bash
-curl https://mycooldomain.com/health        # -> {"status":"ok"}
+curl https://mycooldomain.com/health        # -> status "ok" and a process generation
 ```
+
+### 3. Make the public domain primary
+
+Return to **Settings → Domains** and choose **Make primary** beside `mycooldomain.com`. The instance and its running apps restart so app configuration uses the public domain. Stopped apps remain stopped. After restart, the browser opens the new primary and may ask you to sign in again because login cookies are domain-scoped.
+
+Once you have confirmed the dashboard and apps work at their HTTPS URLs, you can remove the old local domain from Settings.
