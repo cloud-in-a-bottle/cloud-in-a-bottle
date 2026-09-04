@@ -22,14 +22,16 @@ from compute_space.core.caddy import reload_caddy_for_domains
 from compute_space.core.caddy import set_active_caddy
 from compute_space.core.caddy import start_caddy
 from compute_space.core.caddy import unix_admin_address
-from compute_space.core.dns import CoreDnsProcess
-from compute_space.core.dns import public_dns_zones
-from compute_space.core.dns import set_active_coredns
-from compute_space.core.dns import start_coredns
+from compute_space.core.containers import CONTAINER_GATEWAY_IP
+from compute_space.core.dns.coredns_provider.interface import DnsNotEnabled
+from compute_space.core.dns.coredns_provider.interface import InternalDnsProvider
+from compute_space.core.dns.router_records import publish_router_addresses
 from compute_space.core.domains import Domain
 from compute_space.core.domains import effective_domains
 from compute_space.core.first_boot import owner_exists
 from compute_space.core.first_boot import seed_first_boot
+from compute_space.core.ip import infer_inbound_ipv4
+from compute_space.core.ip import is_bindable
 from compute_space.core.logging import logger
 from compute_space.core.logging import setup_file_logging
 from compute_space.core.pinned_binary import get_pinned_binary
@@ -74,7 +76,7 @@ def _require_configured_domain(domains: tuple[Domain, ...]) -> None:
         )
 
 
-async def _ensure_tls_cert(config: Config, db: sqlite3.Connection) -> None:
+async def _ensure_tls_cert(config: Config, db: sqlite3.Connection, dns_provider: InternalDnsProvider) -> None:
     """Make sure a usable cert+key pair is on disk before Caddy starts, acquiring or renewing as configured."""
     status = get_cert_status(config.tls_cert_path, config.tls_key_path)
     if status == CertStatus.OK:
@@ -92,11 +94,57 @@ async def _ensure_tls_cert(config: Config, db: sqlite3.Connection) -> None:
         # The existing cert is still valid, so a failed renewal shouldn't block
         # startup — the background renewal loop will keep retrying.
         try:
-            await provision_cert(config, db)
+            await provision_cert(config, db, dns_provider)
         except Exception:
             logger.exception("TLS cert renewal failed; serving the existing cert and retrying in the background")
     else:
-        await provision_cert(config, db)
+        await provision_cert(config, db, dns_provider)
+
+
+def _hairpin_gateway_ip() -> str | None:
+    if not is_bindable(CONTAINER_GATEWAY_IP):
+        logger.info(f"Container gateway {CONTAINER_GATEWAY_IP} not bindable; serving no container-facing DNS view")
+        return None
+    return CONTAINER_GATEWAY_IP
+
+
+def _dns_bind_ip(config: Config) -> str:
+    """The local address CoreDNS serves the public zones on."""
+    if not config.public_ip:
+        raise RuntimeError("Public IP must be set in config to use CoreDNS")
+    bind_ip = infer_inbound_ipv4(config.public_ip)
+    if bind_ip is None:
+        raise RuntimeError("CoreDNS is enabled but no local address to bind to could be inferred")
+    return bind_ip
+
+
+async def _start_dns(config: Config, domains: tuple[Domain, ...]) -> InternalDnsProvider:
+    """Build the DNS provider and bring up the zones for ``domains``."""
+    dns_provider = InternalDnsProvider(
+        corefile_path=config.coredns_corefile_path,
+        zones_dir=config.zones_dir,
+        # None disables serving DNS entirely for the main routing records
+        bind_ip=_dns_bind_ip(config) if config.coredns_enabled else None,
+        container_gateway_ip=_hairpin_gateway_ip(),
+        coredns_bin=_ensure_coredns_binary(config) if config.coredns_enabled else "coredns",
+    )
+
+    # Before the first add_zone, so the zones CoreDNS starts on already carry the A records routing
+    # the space.  Starting without them serves NODATA at the apex and NXDOMAIN for every
+    # `<app>.<domain>` until the next reload, and resolvers negative-cache both.
+    if config.public_ip is not None:
+        publish_router_addresses(dns_provider, config.public_ip)
+
+    for domain in domains:
+        try:
+            # slightly inefficient bc we reboot coredns each time, but simpler than a separate batch path
+            await dns_provider.add_zone(domain.name_no_port)
+        except DnsNotEnabled:
+            # Running without CoreDNS is a supported choice; the domain is still served by Caddy,
+            # and a TLS one reports the consequence through its cert status.
+            logger.warning("Not serving DNS for {}: coredns is not enabled", domain.name_no_port)
+
+    return dns_provider
 
 
 def _ensure_coredns_binary(config: Config) -> str:
@@ -122,7 +170,6 @@ async def _main() -> None:
     # The DB `domains` table is the source of truth.  Seed it once (+ the claim token) from
     # first_boot.toml before starting CoreDNS/Caddy so every configured domain is served this boot.
     seed_first_boot(config)
-    coredns: CoreDnsProcess | None = None
     caddy: CaddyProcess | None = None
     # Long-running tasks started at boot.  Held here for their whole lifetime (the loop keeps only
     # weak references) and cancelled together by _shutdown.
@@ -130,26 +177,13 @@ async def _main() -> None:
     # One connection for the whole domain-dependent startup sequence (CoreDNS -> TLS cert -> Caddy);
     # the primary + cert/zone paths are read live from it.
     with closing(get_db()) as db:
-        domains = effective_domains(db)  # primary first
-        dns_zones = public_dns_zones(config, db)
-        _require_configured_domain(domains)  # fail loud at boot, not late in the first request
+        domains = effective_domains(db)
+        _require_configured_domain(domains)
 
-        if config.coredns_enabled:
-            if not config.public_ip:
-                raise RuntimeError("Public IP must be set in config to use CoreDNS")
-            # Authoritative for every public (non-mDNS) domain the instance answers on, so a
-            # secondary domain delegated to this box resolves too — not just the primary.
-            coredns = await start_coredns(
-                dns_zones,
-                config.public_ip,
-                config.coredns_corefile_path,
-                coredns_bin=_ensure_coredns_binary(config),
-            )
-            # Register so /api/domains can regenerate zones + restart CoreDNS when a domain is added.
-            set_active_coredns(coredns)
+        dns_provider = await _start_dns(config, domains)
 
         if domains[0].tls:  # primary is a TLS domain
-            await _ensure_tls_cert(config, db)
+            await _ensure_tls_cert(config, db, dns_provider)
 
         # Caddy reverse proxy. mainly for TLS termination, but also some other features.
         # The acquired file cert covers the primary domain (a wildcard for it);
@@ -171,7 +205,7 @@ async def _main() -> None:
             if needs_caddy_for_tls and config.coredns_enabled and config.acquire_tls_cert_if_missing:
                 # Renew every TLS domain — including a TLS secondary under a non-TLS primary — and
                 # regenerate the Caddyfile so acquired certs are served.
-                background_tasks.append(start_renewal_task(reload_caddy_for_domains))
+                background_tasks.append(start_renewal_task(reload_caddy_for_domains, dns_provider))
         elif needs_caddy_for_tls:
             raise RuntimeError(
                 "A TLS domain is configured but start_caddy is False. Caddy is required for TLS termination."
@@ -189,9 +223,9 @@ async def _main() -> None:
         for task in background_tasks:
             with contextlib.suppress(asyncio.CancelledError):
                 await task
-        for child in (caddy, coredns):
-            if child is not None:
-                await child.stop()
+        if caddy is not None:
+            await caddy.stop()
+        await dns_provider.cleanup()
 
     hypercorn_config = hypercorn.config.Config()
     # Bind the primary address (127.0.0.1 in production) plus the container
@@ -226,7 +260,7 @@ async def _main() -> None:
             os._exit(0)
 
     # Main web server
-    app = create_app(config)
+    app = create_app(config, dns_provider)
     logger.info("running hypercorn serve")
     restart_requested = await _serve(app, hypercorn_config)
     logger.info(f"hypercorn serve returned, restart_requested={restart_requested}")

@@ -10,6 +10,7 @@ from __future__ import annotations
 import sqlite3
 
 from compute_space.config import DefaultConfig
+from compute_space.core.dns.coredns_provider import coredns as dns_mod
 from compute_space.core.domains import Domain
 from compute_space.core.domains import DomainRecord
 from compute_space.core.domains import effective_domains
@@ -104,9 +105,8 @@ def test_match_domain_empty_name_never_matches() -> None:
     assert matched is not None and matched.name == "host.example.com"
 
 
-def test_coredns_zonefile_path_for_primary_ignores_port() -> None:
-    # The primary must map to the legacy zonefile even when its name carries a port, and no
-    # ':' may leak into a per-domain filename.
+def test_zonefile_path_strips_port() -> None:
+    # Every zone gets a file under zones_dir, and no ':' may leak into the filename.
     cfg = DefaultConfig()
-    assert cfg.coredns_zonefile_path_for("host.example.com:8443", is_primary=True) == cfg.coredns_zonefile_path
-    assert ":" not in cfg.coredns_zonefile_path_for("other.example.com:99", is_primary=False).name
+    assert dns_mod._zonefile_path(cfg.zones_dir, "host.example.com:8443") == cfg.zones_dir / "host.example.com.zone"
+    assert ":" not in dns_mod._zonefile_path(cfg.zones_dir, "other.example.com:99").name

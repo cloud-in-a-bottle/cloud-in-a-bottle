@@ -1,3 +1,4 @@
+import asyncio
 import os
 import signal
 import socket
@@ -214,3 +215,40 @@ def admin_session(router_process: subprocess.Popen[bytes], config: Config) -> re
             pass
         time.sleep(0.2)
     raise RuntimeError("Full app did not come up after /setup within 30s")
+
+
+class _FakeCoreDnsStdout:
+    """An empty stream that never ends, so the log task stays alive like it would over a real
+    process and is wound down by cleanup() rather than falling out of its own loop."""
+
+    def __aiter__(self) -> "_FakeCoreDnsStdout":
+        return self
+
+    async def __anext__(self) -> bytes:
+        await asyncio.Event().wait()
+        raise AssertionError("unreachable")
+
+
+class FakeCoreDnsProc:
+    pid = 4242
+    # Report already-exited so CoreDnsProcess.stop() skips the terminate path.
+    returncode = 0
+
+    def __init__(self) -> None:
+        self.stdout = _FakeCoreDnsStdout()
+
+    async def wait(self) -> int:
+        return 0
+
+
+def stub_coredns_spawn(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Stub at the OS boundary, so the provider's own start/restart logic runs for real.
+
+    Needed by anything that changes the zone set: there is no separate start(), so adding a zone
+    spawns CoreDNS, and a test machine has no business launching one.
+    """
+
+    async def fake_exec(*a: object, **k: object) -> FakeCoreDnsProc:
+        return FakeCoreDnsProc()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)

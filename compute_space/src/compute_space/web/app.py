@@ -26,6 +26,7 @@ from compute_space.config import provide_config
 from compute_space.core import archive_backend
 from compute_space.core.auth.auth import read_owner_username
 from compute_space.core.auth.identity import load_identity_keys
+from compute_space.core.dns.coredns_provider.interface import InternalDnsProvider
 from compute_space.core.domains import Domain
 from compute_space.core.domains import host_with_request_port
 from compute_space.core.domains import primary_domain_or_none
@@ -205,7 +206,7 @@ def _reject_app_subdomain_requests(request: Request[Any, Any, Any]) -> Response[
     return None
 
 
-def create_app(config: Config) -> ASGIApp:
+def create_app(config: Config, dns_provider: InternalDnsProvider) -> ASGIApp:
     """Build the full router ASGI app.  The returned app is the Litestar app wrapped
     in ``SubdomainProxyMiddleware`` so app-subdomain requests are diverted to backend
     containers before Litestar attempts any routing.  Caller must have already
@@ -260,6 +261,7 @@ def create_app(config: Config) -> ASGIApp:
         dependencies={
             "config": Provide(provide_config, sync_to_thread=False),
             "db": Provide(provide_db),
+            "dns_provider": Provide(lambda: dns_provider, sync_to_thread=False, use_cache=True),
         },
         exception_handlers={
             NotAuthorizedException: _login_required_redirect,

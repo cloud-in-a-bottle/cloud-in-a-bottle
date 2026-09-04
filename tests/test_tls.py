@@ -22,7 +22,6 @@ import os
 import signal
 import socket
 import subprocess
-import time
 
 import pytest
 from acme import client
@@ -34,6 +33,8 @@ from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.asymmetric import rsa as rsa_module
 from josepy import JWKRSA
 
+from compute_space.core.dns.coredns_provider.interface import InternalDnsProvider
+from compute_space.core.dns.router_records import publish_router_addresses
 from compute_space.core.tls.acquire_cert import acquire_tls_cert
 from compute_space.core.tls.util import _acquire_cert_dns01
 from compute_space.core.tls.util import load_account_key
@@ -148,28 +149,26 @@ def pebble_certs(tls_tmpdir):
 
 
 @pytest.fixture(scope="module")
-def zonefile_path(tls_tmpdir):
-    """Write an initial DNS zone file for CoreDNS."""
-    path = tls_tmpdir / "zonefile"
-    serial = int(time.time())
-    content = (
-        f"$ORIGIN {ZONE_DOMAIN}.\n"
-        f"$TTL 60\n"
-        f"@   IN SOA  ns.{ZONE_DOMAIN}. admin.{ZONE_DOMAIN}. (\n"
-        f"    {serial}   ; serial\n"
-        f"    3600  ; refresh\n"
-        f"    600   ; retry\n"
-        f"    86400 ; expire\n"
-        f"    60    ; minimum\n"
-        f")\n"
-        f"@   IN NS   ns.{ZONE_DOMAIN}.\n"
-        f"ns  IN A    127.0.0.1\n"
-        f"@   IN A    127.0.0.1\n"
-        f"*   IN A    127.0.0.1\n\n"
+def dns_provider(tls_tmpdir):
+    """A real provider rendering the zone file the test's CoreDNS serves, so cert acquisition
+    drives DNS through exactly the path production uses.
+
+    Never started: the test runs its own CoreDNS on a non-privileged port, so the provider is only
+    here to write records into the zone file.
+    """
+    provider = InternalDnsProvider(
+        corefile_path=tls_tmpdir / "provider-Corefile",  # unused; the test writes its own
+        zones_dir=tls_tmpdir / "zones",
+        bind_ip="127.0.0.1",
+        zones=(ZONE_DOMAIN,),
     )
-    with open(path, "w") as f:
-        f.write(content)
-    return path
+    publish_router_addresses(provider, "127.0.0.1")
+    return provider
+
+
+@pytest.fixture(scope="module")
+def zonefile_path(dns_provider):
+    return dns_provider.zones_dir / f"{ZONE_DOMAIN}.zone"
 
 
 @pytest.fixture(scope="module")
@@ -296,7 +295,7 @@ def acme_account_key(tls_tmpdir, pebble_server):
 
 
 @pytest.fixture(scope="module")
-def acquired_cert(pebble_server, acme_account_key, zonefile_path):
+def acquired_cert(pebble_server, acme_account_key, dns_provider):
     """Acquire a wildcard cert via DNS-01 — reused by multiple tests."""
     domains = [ZONE_DOMAIN, f"*.{ZONE_DOMAIN}"]
     # The fixture is sync and owns no loop, so asyncio.run belongs here.
@@ -304,7 +303,7 @@ def acquired_cert(pebble_server, acme_account_key, zonefile_path):
         _acquire_cert_dns01(
             domains=domains,
             directory_url=pebble_server["directory_url"],
-            coredns_zonefile_path=zonefile_path,
+            dns_provider=dns_provider,
             account_key=acme_account_key["jwk"],
             verify_ssl=False,
         )
@@ -386,7 +385,7 @@ class TestCertAcquisition:
 class TestAcquireTlsCert:
     """Test the public acquire_tls_cert function that writes cert files to disk."""
 
-    def test_acquire_writes_cert_files(self, pebble_server, acme_account_key, zonefile_path, tls_tmpdir):
+    def test_acquire_writes_cert_files(self, pebble_server, acme_account_key, dns_provider, tls_tmpdir):
         """acquire_tls_cert writes cert and key PEM files with correct permissions."""
         cert_path = tls_tmpdir / "acquired-cert.pem"
         key_path = tls_tmpdir / "acquired-key.pem"
@@ -397,7 +396,7 @@ class TestAcquireTlsCert:
                 cert_path=cert_path,
                 key_path=key_path,
                 acme_account_key_path=acme_account_key["path"],
-                coredns_zonefile_path=zonefile_path,
+                dns_provider=dns_provider,
                 directory_url=pebble_server["directory_url"],
                 verify_ssl=False,
             )

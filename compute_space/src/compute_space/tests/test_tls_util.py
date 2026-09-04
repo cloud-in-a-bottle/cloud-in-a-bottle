@@ -1,35 +1,8 @@
 import asyncio
-from pathlib import Path
 
 import pytest
 
 import compute_space.core.tls.util as tls_util
-
-
-class _HungProcess:
-    returncode: int | None = None
-
-    def __init__(self) -> None:
-        self.killed = False
-        self.waited = False
-        self.communicate_cancelled = False
-        self.communicate_started = asyncio.Event()
-
-    async def communicate(self) -> tuple[bytes, bytes]:
-        self.communicate_started.set()
-        try:
-            return await asyncio.Future[tuple[bytes, bytes]]()
-        except asyncio.CancelledError:
-            self.communicate_cancelled = True
-            raise
-
-    def kill(self) -> None:
-        self.killed = True
-
-    async def wait(self) -> int:
-        self.waited = True
-        self.returncode = -9
-        return self.returncode
 
 
 class _JsonResponse:
@@ -96,32 +69,16 @@ class _FakeAcmeClient:
 
 
 @pytest.mark.asyncio
-async def test_dig_txt_kills_and_reaps_process_on_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
-    proc = _HungProcess()
-
-    async def spawn(*args: object, **kwargs: object) -> _HungProcess:
-        return proc
-
-    monkeypatch.setattr(tls_util.asyncio, "create_subprocess_exec", spawn)
-    monkeypatch.setattr(tls_util, "_DIG_TIMEOUT_SECONDS", 0.01)
-
-    assert await tls_util._dig_txt("_acme-challenge.example.com", "8.8.8.8") == set()
-    assert proc.communicate_cancelled is True
-    assert proc.killed is True
-    assert proc.waited is True
-
-
-@pytest.mark.asyncio
 @pytest.mark.parametrize("cleanup_fails", [False, True])
 async def test_acquire_cert_clears_txt_records_on_cancellation(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cleanup_fails: bool
+    monkeypatch: pytest.MonkeyPatch, cleanup_fails: bool
 ) -> None:
     calls: list[str] = []
 
     async def cancel_on_sleep(seconds: float) -> None:
         raise asyncio.CancelledError
 
-    def clear_txt(path: Path) -> None:
+    def clear(dns_provider: object) -> None:
         calls.append("clear")
         if cleanup_fails:
             raise OSError("zone file unavailable")
@@ -130,36 +87,16 @@ async def test_acquire_cert_clears_txt_records_on_cancellation(
     monkeypatch.setattr(tls_util.client, "ClientV2", _FakeAcmeClient)
     monkeypatch.setattr(tls_util.messages.Directory, "from_json", staticmethod(lambda value: object()))
     monkeypatch.setattr(tls_util.challenges, "DNS01", _FakeDns01)
-    monkeypatch.setattr(tls_util.dns_module, "append_txt_records", lambda path, records: calls.append("append"))
-    monkeypatch.setattr(tls_util.dns_module, "clear_txt", clear_txt)
+    monkeypatch.setattr(tls_util.dns_challenge, "publish", lambda dns_provider, values: calls.append("publish"))
+    monkeypatch.setattr(tls_util.dns_challenge, "clear", clear)
     monkeypatch.setattr(tls_util.asyncio, "sleep", cancel_on_sleep)
 
     with pytest.raises(asyncio.CancelledError):
         await tls_util._acquire_cert_dns01(
             domains=["example.com", "*.example.com"],
             directory_url="https://acme.test/directory",
-            coredns_zonefile_path=tmp_path / "zonefile",
+            dns_provider=None,  # type: ignore[arg-type]  # unused once publish/clear are patched
             account_key=object(),  # type: ignore[arg-type]
         )
 
-    assert calls == ["append", "clear"]
-
-
-@pytest.mark.asyncio
-async def test_dig_txt_reaps_process_and_propagates_cancellation(monkeypatch: pytest.MonkeyPatch) -> None:
-    proc = _HungProcess()
-
-    async def spawn(*args: object, **kwargs: object) -> _HungProcess:
-        return proc
-
-    monkeypatch.setattr(tls_util.asyncio, "create_subprocess_exec", spawn)
-
-    task = asyncio.create_task(tls_util._dig_txt("_acme-challenge.example.com", "8.8.8.8"))
-    await proc.communicate_started.wait()
-    task.cancel()
-
-    with pytest.raises(asyncio.CancelledError):
-        await task
-    assert proc.communicate_cancelled is True
-    assert proc.killed is True
-    assert proc.waited is True
+    assert calls == ["publish", "clear"]
