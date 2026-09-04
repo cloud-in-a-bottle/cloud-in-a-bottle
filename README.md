@@ -33,7 +33,7 @@ Cloud in a Bottle is the project our team needed and couldn't find: a corner of 
 
 ### Run it yourself
 
-Cloud in a Bottle runs on your own hardware, a local virtual machine, or a cloud server. Follow the [deployment guide](https://cloudinabottle.org/docs/deploying.html) to install it.
+Cloud in a Bottle runs on your own hardware, a local virtual machine, or a cloud server. Follow the [deployment guide](https://cloudinabottle.org/docs/introduction.html) to install it.
 
 ### Managed hosting
 
@@ -51,7 +51,7 @@ App storage is organized into permanent data, temporary files, and archive stora
 
 Read the [Cloud in a Bottle manual](https://cloudinabottle.org/docs/) for platform concepts, app development, and operating guides. Useful starting points include:
 
-- [Deploying Cloud in a Bottle](https://cloudinabottle.org/docs/deploying.html)
+- [Deploying Cloud in a Bottle](https://cloudinabottle.org/docs/introduction.html)
 - [Creating an app](https://cloudinabottle.org/docs/creating_an_app/overview.html)
 - [`cloudinabottle.toml` manifest specification](https://cloudinabottle.org/docs/creating_an_app/manifest_spec.html)
 
