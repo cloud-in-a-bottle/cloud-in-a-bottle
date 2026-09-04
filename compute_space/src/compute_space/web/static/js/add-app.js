@@ -1,5 +1,6 @@
 var config = JSON.parse(document.getElementById('page-config').textContent);
 const initialRepo = config.initialRepo;
+const autoClone = config.autoClone;
 const nextUrl = config.nextUrl;
 let cloneDir = null;
 let repoUrl = null;
@@ -12,7 +13,7 @@ if (initialRepo) {
   // Programmatic value set doesn't fire 'input', so sync the button here.
   document.getElementById('repo-url').value = initialRepo;
   document.getElementById('deploy-btn').disabled = false;
-  cloneApp(initialRepo);
+  if (autoClone) cloneApp(initialRepo);
 }
 
 function showError(msg) {
