@@ -20,7 +20,7 @@ import requests
 
 from compute_space import OPENHOST_PROJECT_DIR
 from compute_space.core.caddy import generate_caddyfile
-from compute_space.core.data import provision_data
+from compute_space.core.data import make_data_dirs_and_env_vars
 from compute_space.core.domains import Domain
 from compute_space.core.manifest import AppManifest
 from compute_space.tests.conftest import _make_config_and_env
@@ -54,7 +54,7 @@ def test_sqlite_provisioning():
             sqlite_dbs=["main", "cache"],
         )
 
-        env_vars = provision_data(
+        env_vars = make_data_dirs_and_env_vars(
             app_id="testapp-id",
             app_name="testapp",
             manifest=manifest,

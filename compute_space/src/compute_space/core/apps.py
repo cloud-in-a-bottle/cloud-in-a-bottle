@@ -26,9 +26,10 @@ from compute_space.core.containers import is_container_running
 from compute_space.core.containers import remove_image
 from compute_space.core.containers import run_container
 from compute_space.core.containers import stop_app_process
+from compute_space.core.containers import stop_container
 from compute_space.core.data import deprovision_data
 from compute_space.core.data import deprovision_temp_data
-from compute_space.core.data import provision_data
+from compute_space.core.data import make_data_dirs_and_env_vars
 from compute_space.core.data import rmtree_with_sudo_fallback
 from compute_space.core.domains import Domain
 from compute_space.core.domains import primary_domain
@@ -326,7 +327,7 @@ def insert_and_deploy(
     # Resolve auto-assigned ports (host_port=0)
     resolved_mappings = resolve_port_mappings(mappings, db, config.port_range_start, config.port_range_end)
 
-    env_vars = provision_data(
+    env_vars = make_data_dirs_and_env_vars(
         app_id=app_id,
         app_name=app_name,
         manifest=manifest,
@@ -393,8 +394,8 @@ def insert_and_deploy(
 
     threading.Thread(
         target=deploy_app_background,
-        args=(manifest, repo_path, local_port, env_vars, config),
-        kwargs={"app_id": app_id, "app_name": app_name, "port_mappings": resolved_mappings},
+        args=(manifest, repo_path, config),
+        kwargs={"app_id": app_id, "app_name": app_name, "env_vars": env_vars},
         daemon=True,
     ).start()
 
@@ -404,12 +405,10 @@ def insert_and_deploy(
 def deploy_app_background(
     manifest: AppManifest,
     repo_path: str,
-    local_port: int,
-    env_vars: dict[str, str],
     config: Config,
     app_id: str,
     app_name: str | None = None,
-    port_mappings: list[PortMapping] | None = None,
+    env_vars: dict[str, str] | None = None,
 ) -> None:
     """Build and start an app in a background thread."""
     if app_name is None:
@@ -421,67 +420,16 @@ def deploy_app_background(
     try:
         storage.check_before_deploy(config)
 
-        # Retry container builds for transient failures.  Cache-corrupt
-        # failures re-raise immediately — retrying can't fix them and
-        # the dashboard needs the marker to surface the remediation.
-        max_build_attempts = 3
-        image_tag = ""
-        for attempt in range(1, max_build_attempts + 1):
-            try:
-                image_tag = build_image(
-                    app_name,
-                    repo_path,
-                    manifest.container_image,
-                    temp_data_dir=config.temporary_data_dir,
-                    memory_mb=manifest.effective_build_memory_mb,
-                )
-                break
-            except RuntimeError as e:
-                if BUILD_CACHE_CORRUPT_MARKER in str(e):
-                    raise
-                if attempt == max_build_attempts:
-                    raise
-                logger.warning(
-                    "Container build attempt {}/{} for {} failed, retrying in {}s",
-                    attempt,
-                    max_build_attempts,
-                    app_name,
-                    attempt * 5,
-                )
-                time.sleep(attempt * 5)
-        db.execute(
-            "UPDATE apps SET status = 'starting' WHERE app_id = ?",
-            (app_id,),
-        )
-        db.commit()
-        container_id = run_container(
+        _build_then_run_app(
+            app_id,
             app_name,
-            image_tag,
+            repo_path,
             manifest,
-            local_port,
-            env_vars,
-            config.persistent_data_dir,
-            config.temporary_data_dir,
-            archive_backend.effective_archive_dir(config, db),
-            port_mappings=port_mappings,
+            db,
+            config,
+            max_build_attempts=3,
+            env_vars=env_vars,
         )
-        db.execute(
-            "UPDATE apps SET container_id = ? WHERE app_id = ?",
-            (container_id, app_id),
-        )
-        db.commit()
-
-        if wait_for_ready(local_port):
-            db.execute(
-                "UPDATE apps SET status = 'running' WHERE app_id = ?",
-                (app_id,),
-            )
-        else:
-            db.execute(
-                "UPDATE apps SET status = 'error', error_message = ? WHERE app_id = ?",
-                ("App started but not responding to HTTP", app_id),
-            )
-        db.commit()
     except Exception as e:
         logger.exception("Failed to deploy {}", app_name)
         db.execute(
@@ -520,6 +468,105 @@ def _load_port_mappings_from_db(app_id: str, db: sqlite3.Connection) -> list[Por
         (app_id,),
     ).fetchall()
     return [PortMapping(label=r["label"], container_port=r["container_port"], host_port=r["host_port"]) for r in rows]
+
+
+def run_app_image(
+    app_id: str,
+    image_tag: str,
+    manifest: AppManifest,
+    db: sqlite3.Connection,
+    config: Config,
+    env_vars: dict[str, str] | None = None,
+) -> None:
+    """Prepare and run an existing image using persisted runtime settings."""
+    app_row = db.execute("SELECT * FROM apps WHERE app_id = ?", (app_id,)).fetchone()
+    if app_row is None:
+        raise RuntimeError(f"No app found with id {app_id}")
+
+    app_name = app_row["name"]
+    local_port = app_row["local_port"]
+    container_id: str | None = None
+    launch_started = False
+    try:
+        if env_vars is None:
+            env_vars = make_data_dirs_and_env_vars(
+                app_id=app_id,
+                app_name=app_name,
+                manifest=manifest,
+                data_dir=config.persistent_data_dir,
+                temp_data_dir=config.temporary_data_dir,
+                archive_dir=archive_backend.effective_archive_dir(config, db),
+                my_openhost_redirect_domain=config.my_openhost_redirect_domain,
+                zone_domain=primary_domain(db).name,
+                port=config.port,
+                owner_username=read_owner_username(db) or DEFAULT_OWNER_USERNAME,
+            )
+        app_token = env_vars.get("OPENHOST_APP_TOKEN")
+        if app_token:
+            db.execute(
+                "INSERT OR REPLACE INTO app_tokens (app_id, token_hash) VALUES (?, ?)",
+                (app_id, hashlib.sha256(app_token.encode()).hexdigest()),
+            )
+        register_services_provided_by_app(app_id, manifest, db)
+        port_mappings = _load_port_mappings_from_db(app_id, db)
+
+        db.execute(
+            "UPDATE apps SET status = 'starting', error_message = NULL WHERE app_id = ?",
+            (app_id,),
+        )
+        db.commit()
+
+        launch_started = True
+        container_id = run_container(
+            app_name,
+            image_tag,
+            manifest,
+            local_port,
+            env_vars,
+            config.persistent_data_dir,
+            config.temporary_data_dir,
+            archive_backend.effective_archive_dir(config, db),
+            port_mappings=port_mappings,
+        )
+        db.execute(
+            "UPDATE apps SET container_id = ? WHERE app_id = ?",
+            (container_id, app_id),
+        )
+        db.commit()
+
+        if wait_for_ready(local_port):
+            db.execute(
+                "UPDATE apps SET status = 'running' WHERE app_id = ?",
+                (app_id,),
+            )
+        else:
+            db.execute(
+                "UPDATE apps SET status = 'error', error_message = ? WHERE app_id = ?",
+                ("App started but not responding to HTTP", app_id),
+            )
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        cleanup_failed = False
+        if container_id is not None:
+            try:
+                stop_container(container_id)
+            except Exception:
+                cleanup_failed = True
+                logger.exception("Failed to clean up container {} after launch failure", container_id)
+        persisted_container_id = container_id if cleanup_failed else None
+        if not launch_started:
+            persisted_container_id = app_row["container_id"]
+        try:
+            db.execute(
+                "UPDATE apps SET status = 'error', error_message = ?, container_id = ? WHERE app_id = ?",
+                (str(e), persisted_container_id, app_id),
+            )
+            db.commit()
+        except sqlite3.Error:
+            db.rollback()
+            logger.exception("Failed to record launch failure for {}", app_id)
+        raise
 
 
 def _sync_port_mappings(
@@ -644,73 +691,50 @@ def start_app_process(app_id: str, db: sqlite3.Connection, config: Config) -> No
     app_name = app_row["name"]
 
     manifest = parse_manifest(app_row["repo_path"])
-    env_vars = provision_data(
-        app_id=app_id,
-        app_name=app_name,
-        manifest=manifest,
-        data_dir=config.persistent_data_dir,
-        temp_data_dir=config.temporary_data_dir,
-        archive_dir=archive_backend.effective_archive_dir(config, db),
-        my_openhost_redirect_domain=config.my_openhost_redirect_domain,
-        zone_domain=primary_domain(db).name,
-        port=config.port,
-        owner_username=read_owner_username(db) or DEFAULT_OWNER_USERNAME,
-    )
-
-    app_token = env_vars.get("OPENHOST_APP_TOKEN")
-    if app_token:
-        app_token_hash = hashlib.sha256(app_token.encode()).hexdigest()
-        db.execute(
-            "INSERT OR REPLACE INTO app_tokens (app_id, token_hash) VALUES (?, ?)",
-            (app_id, app_token_hash),
-        )
-
-    register_services_provided_by_app(app_id, manifest, db)
-
-    # Load resolved port mappings from DB (preserves host_port assignments)
-    port_mappings = _load_port_mappings_from_db(app_id, db)
-
     db.execute(
         "UPDATE apps SET status = 'starting', error_message = NULL WHERE app_id = ?",
         (app_id,),
     )
     db.commit()
 
-    image_tag = build_image(
-        app_name,
-        app_row["repo_path"],
-        manifest.container_image,
-        temp_data_dir=config.temporary_data_dir,
-        memory_mb=manifest.effective_build_memory_mb,
-    )
-    container_id = run_container(
-        app_name,
-        image_tag,
-        manifest,
-        app_row["local_port"],
-        env_vars,
-        config.persistent_data_dir,
-        config.temporary_data_dir,
-        archive_backend.effective_archive_dir(config, db),
-        port_mappings=port_mappings,
-    )
-    db.execute(
-        "UPDATE apps SET container_id = ? WHERE app_id = ?",
-        (container_id, app_id),
-    )
-    db.commit()
+    _build_then_run_app(app_id, app_name, app_row["repo_path"], manifest, db, config)
 
-    if wait_for_ready(app_row["local_port"]):
-        db.execute(
-            "UPDATE apps SET status = 'running' WHERE app_id = ?",
-            (app_id,),
-        )
-    else:
-        db.execute(
-            "UPDATE apps SET status = 'error', error_message = ? WHERE app_id = ?",
-            ("App started but not responding to HTTP", app_id),
-        )
-    db.commit()
+
+def _build_then_run_app(
+    app_id: str,
+    app_name: str,
+    repo_path: str,
+    manifest: AppManifest,
+    db: sqlite3.Connection,
+    config: Config,
+    *,
+    max_build_attempts: int = 1,
+    env_vars: dict[str, str] | None = None,
+) -> None:
+    """Build an app image, retrying transient failures, then run it."""
+    image_tag = ""
+    for attempt in range(1, max_build_attempts + 1):
+        try:
+            image_tag = build_image(
+                app_name,
+                repo_path,
+                manifest.container_image,
+                temp_data_dir=config.temporary_data_dir,
+                memory_mb=manifest.effective_build_memory_mb,
+            )
+            break
+        except RuntimeError as e:
+            if BUILD_CACHE_CORRUPT_MARKER in str(e) or attempt == max_build_attempts:
+                raise
+            logger.warning(
+                "Container build attempt {}/{} for {} failed, retrying in {}s",
+                attempt,
+                max_build_attempts,
+                app_name,
+                attempt * 5,
+            )
+            time.sleep(attempt * 5)
+    run_app_image(app_id, image_tag, manifest, db, config, env_vars=env_vars)
 
 
 def app_log_path(app_name: str, config: Config) -> str:

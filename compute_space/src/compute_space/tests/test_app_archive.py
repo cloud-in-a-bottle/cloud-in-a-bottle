@@ -7,7 +7,7 @@ host-mounted POSIX filesystem).  Apps see the same in-container path
 either way.
 
 These tests cover the manifest opt-in plumbing that flows from
-``provision_data`` through ``deprovision_data``, plus the
+``make_data_dirs_and_env_vars`` through ``deprovision_data``, plus the
 ``Config.app_archive_dir`` resolution rules.
 """
 
@@ -17,7 +17,7 @@ import pytest
 
 from compute_space.config import DefaultConfig
 from compute_space.core.data import deprovision_data
-from compute_space.core.data import provision_data
+from compute_space.core.data import make_data_dirs_and_env_vars
 from compute_space.core.manifest import AppManifest
 
 
@@ -35,7 +35,7 @@ def _manifest(**kwargs) -> AppManifest:  # type: ignore[no-untyped-def]
     return AppManifest(**base)  # type: ignore[arg-type]
 
 
-def test_provision_data_creates_archive_subdir_when_opted_in(tmp_path) -> None:
+def test_make_data_dirs_and_env_vars_creates_archive_subdir_when_opted_in(tmp_path) -> None:
     """``app_archive=True`` should produce a per-app subdir under the
     operator-configured archive root and stamp
     ``OPENHOST_APP_ARCHIVE_DIR`` on the env-vars dict.
@@ -47,7 +47,7 @@ def test_provision_data_creates_archive_subdir_when_opted_in(tmp_path) -> None:
         d.mkdir()
 
     manifest = _manifest(app_data=True, app_archive=True)
-    env = provision_data(
+    env = make_data_dirs_and_env_vars(
         app_id="archiveapp-id",
         app_name=manifest.name,
         manifest=manifest,
@@ -65,7 +65,7 @@ def test_provision_data_creates_archive_subdir_when_opted_in(tmp_path) -> None:
     assert env["OPENHOST_APP_ARCHIVE_DIR"] == str(expected)
 
 
-def test_provision_data_skips_archive_when_not_opted_in(tmp_path) -> None:
+def test_make_data_dirs_and_env_vars_skips_archive_when_not_opted_in(tmp_path) -> None:
     """An app that doesn't ask for ``app_archive`` must NOT get the
     env var or a subdir created — apps that don't opt in shouldn't
     surface operator-configured backings to themselves."""
@@ -76,7 +76,7 @@ def test_provision_data_skips_archive_when_not_opted_in(tmp_path) -> None:
         d.mkdir()
 
     manifest = _manifest(app_data=True)
-    env = provision_data(
+    env = make_data_dirs_and_env_vars(
         app_id="archiveapp-id",
         app_name=manifest.name,
         manifest=manifest,
@@ -93,7 +93,7 @@ def test_provision_data_skips_archive_when_not_opted_in(tmp_path) -> None:
     assert not (archive_dir / manifest.name).exists()
 
 
-def test_provision_data_archive_subdir_under_access_all_app_data(tmp_path) -> None:
+def test_make_data_dirs_and_env_vars_archive_subdir_under_access_all_app_data(tmp_path) -> None:
     """Cross-app access still provisions the app's own stable archive path."""
     data_dir = tmp_path / "persistent"
     temp_dir = tmp_path / "temp"
@@ -102,7 +102,7 @@ def test_provision_data_archive_subdir_under_access_all_app_data(tmp_path) -> No
         d.mkdir()
 
     manifest = _manifest(access_all_app_data=True)
-    env = provision_data(
+    env = make_data_dirs_and_env_vars(
         app_id="archiveapp-id",
         app_name=manifest.name,
         manifest=manifest,
@@ -119,7 +119,7 @@ def test_provision_data_archive_subdir_under_access_all_app_data(tmp_path) -> No
     assert env["OPENHOST_APP_ARCHIVE_DIR"] == str(archive_dir / manifest.name)
 
 
-def test_provision_data_refuses_when_archive_dir_missing(tmp_path) -> None:
+def test_make_data_dirs_and_env_vars_refuses_when_archive_dir_missing(tmp_path) -> None:
     """When the configured archive root doesn't exist (e.g. the S3 backend's JuiceFS mount has dropped), provisioning must fail loudly rather than silently creating a local-disk ghost path that JuiceFS shadows when the mount eventually attaches."""
     data_dir = tmp_path / "persistent"
     temp_dir = tmp_path / "temp"
@@ -129,7 +129,7 @@ def test_provision_data_refuses_when_archive_dir_missing(tmp_path) -> None:
 
     manifest = _manifest(app_data=True, app_archive=True)
     with pytest.raises(RuntimeError, match="archive_dir"):
-        provision_data(
+        make_data_dirs_and_env_vars(
             app_id="archiveapp-id",
             app_name=manifest.name,
             manifest=manifest,
@@ -143,7 +143,7 @@ def test_provision_data_refuses_when_archive_dir_missing(tmp_path) -> None:
         )
 
 
-def test_provision_data_skips_archive_for_access_all_app_data_when_archive_dir_missing(tmp_path) -> None:
+def test_make_data_dirs_and_env_vars_skips_archive_for_access_all_app_data_when_archive_dir_missing(tmp_path) -> None:
     """Cross-app access is permissive when the archive mount is unavailable."""
     data_dir = tmp_path / "persistent"
     temp_dir = tmp_path / "temp"
@@ -152,7 +152,7 @@ def test_provision_data_skips_archive_for_access_all_app_data_when_archive_dir_m
     temp_dir.mkdir()
 
     manifest = _manifest(access_all_app_data=True)
-    env = provision_data(
+    env = make_data_dirs_and_env_vars(
         app_id="archiveapp-id",
         app_name=manifest.name,
         manifest=manifest,
@@ -169,7 +169,7 @@ def test_provision_data_skips_archive_for_access_all_app_data_when_archive_dir_m
     assert not archive_dir.exists()
 
 
-def test_provision_data_does_not_fail_when_archive_dir_missing_and_no_archive_opt_in(
+def test_make_data_dirs_and_env_vars_does_not_fail_when_archive_dir_missing_and_no_archive_opt_in(
     tmp_path,
 ) -> None:
     """Apps that don't ask for app_archive must NOT fail just
@@ -185,7 +185,7 @@ def test_provision_data_does_not_fail_when_archive_dir_missing_and_no_archive_op
     temp_dir.mkdir()
 
     manifest = _manifest(app_data=True)
-    provision_data(
+    make_data_dirs_and_env_vars(
         app_id="archiveapp-id",
         app_name=manifest.name,
         manifest=manifest,
@@ -199,8 +199,8 @@ def test_provision_data_does_not_fail_when_archive_dir_missing_and_no_archive_op
     )
 
 
-def test_provision_data_archive_idempotent_on_redeploy(tmp_path) -> None:
-    """Calling provision_data twice (the redeploy path) must succeed without complaining about the archive subdir already existing and must preserve data the first deploy wrote — same idempotency contract as app_data and app_temp_data."""
+def test_make_data_dirs_and_env_vars_archive_idempotent_on_redeploy(tmp_path) -> None:
+    """Repeated setup preserves data already written to the archive directory."""
     data_dir = tmp_path / "persistent"
     temp_dir = tmp_path / "temp"
     archive_dir = tmp_path / "archive"
@@ -208,7 +208,7 @@ def test_provision_data_archive_idempotent_on_redeploy(tmp_path) -> None:
         d.mkdir()
 
     manifest = _manifest(app_data=True, app_archive=True)
-    provision_data(
+    make_data_dirs_and_env_vars(
         app_id="archiveapp-id",
         app_name=manifest.name,
         manifest=manifest,
@@ -223,7 +223,7 @@ def test_provision_data_archive_idempotent_on_redeploy(tmp_path) -> None:
     marker = archive_dir / manifest.name / "marker.txt"
     marker.write_text("hello")
 
-    provision_data(
+    make_data_dirs_and_env_vars(
         app_id="archiveapp-id",
         app_name=manifest.name,
         manifest=manifest,
