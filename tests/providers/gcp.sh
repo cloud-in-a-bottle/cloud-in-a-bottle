@@ -15,6 +15,7 @@
 #   GCP_SSH_KEY      — path to SSH private key
 #   GCP_SSH_USER     — SSH user (default: ubuntu)
 #   GCP_DISK_SIZE    — boot disk GB (default: 30)
+#   GCP_CREATE_TIMEOUT — seconds to wait for one zone's instance create (default: 120)
 
 : "${GCP_PROJECT:?GCP_PROJECT is required}"
 : "${GCP_NETWORK_TAG:?GCP_NETWORK_TAG is required}"
@@ -23,6 +24,10 @@ GCP_MACHINE_TYPE="${GCP_MACHINE_TYPE:-e2-standard-4}"
 GCP_IMAGE_FAMILY="${GCP_IMAGE_FAMILY:-ubuntu-2404-lts-amd64}"
 GCP_SSH_USER="${GCP_SSH_USER:-ubuntu}"
 GCP_DISK_SIZE="${GCP_DISK_SIZE:-30}"
+# A healthy zone creates in ~15s.  gcloud's own deadline is 1800s, so a single wedged zone burns
+# half an hour before the fallback list is even reached; cap it well below that but leave enough
+# headroom that a merely slow zone isn't abandoned.
+GCP_CREATE_TIMEOUT="${GCP_CREATE_TIMEOUT:-120}"
 
 # Internal state set by provider_create
 _GCP_INSTANCE_NAME=""
@@ -58,7 +63,8 @@ provider_create() {
     local created=false
     for zone in "${unique_zones[@]}"; do
         echo "  Trying zone: $zone" >&2
-        if gcloud compute instances create "$_GCP_INSTANCE_NAME" \
+        local rc=0
+        timeout "$GCP_CREATE_TIMEOUT" gcloud compute instances create "$_GCP_INSTANCE_NAME" \
             --project="$GCP_PROJECT" \
             --zone="$zone" \
             --machine-type="$GCP_MACHINE_TYPE" \
@@ -69,10 +75,20 @@ provider_create() {
             --tags="$GCP_NETWORK_TAG" \
             --metadata="ssh-keys=${GCP_SSH_USER}:${ssh_pub_key}" \
             --format=json \
-            --quiet >&2 2>&1; then
+            --quiet >&2 2>&1 || rc=$?
+
+        if [ "$rc" -eq 0 ]; then
             created=true
             _GCP_ACTUAL_ZONE="$zone"
             break
+        fi
+
+        if [ "$rc" -eq 124 ]; then
+            # Timed out rather than refused, so the create may still land remotely and would then
+            # be nobody's to delete: the env file only ever names the zone we settled on.
+            echo "  Zone $zone did not create within ${GCP_CREATE_TIMEOUT}s, trying next..." >&2
+            gcloud compute instances delete "$_GCP_INSTANCE_NAME" \
+                --project="$GCP_PROJECT" --zone="$zone" --quiet >/dev/null 2>&1 || true
         else
             echo "  Zone $zone unavailable, trying next..." >&2
         fi
