@@ -4,20 +4,12 @@ Every app gets its own subdomain of one of the instance's domains: `notes.mycool
 
 ## Domains
 
-An instance answers on one or more domains, managed in **Settings → Domains**. One is the primary: the canonical domain used for outbound links, background tasks, and the `BOTTLE_ZONE_DOMAIN` passed to apps. Each domain is one of:
+An instance answers on one or more domains, managed in **Settings → Domains**. One is the primary: the canonical domain used for outbound links and background tasks. Each domain is one of:
 
 - **Public (HTTPS)**: a real domain served over TLS. The usual case.
 - **Local HTTP**: a plain-HTTP domain such as `lvh.me:8080`, served by the router directly. Used before an instance is taken public.
 
 Host matching is longest-suffix, so overlapping domains resolve to the most specific one.
-
-### Changing the primary domain
-
-Add and test a domain before making it primary. A public HTTPS domain must show an **Active** certificate; a temporary self-signed certificate or certificate error is not sufficient. Promoting a domain does not change external DNS, so its apex and wildcard records must already reach the instance.
-
-Choose **Make primary** beside the ready domain. The instance restarts, and running app containers are recreated from their existing images so they receive the new primary domain and fresh runtime configuration. Apps that are stopped remain stopped and receive the new domain the next time they start. Promotion is refused while an app is building, starting, or being removed, or while archive storage is being migrated.
-
-The browser waits for the restarted instance and then opens Settings on the new primary. Sessions are scoped to the domain where you logged in, so you may need to sign in there. The previous primary remains configured and reachable, with its certificate retained if it uses HTTPS, until you remove it.
 
 ## DNS
 

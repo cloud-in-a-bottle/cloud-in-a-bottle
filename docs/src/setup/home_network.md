@@ -24,11 +24,7 @@ These steps assume you already have a running Cloud in a Bottle instance in loca
 
 **1. Point Cloud in a Bottle at your domain.**
 
-First set `start_caddy = true` in `/home/host/.openhost/local_compute_space/config.toml` and restart Cloud in a Bottle. The tunnel still connects directly to the router on `:8080`, but Cloud in a Bottle requires Caddy to be enabled whenever an HTTPS domain is configured; otherwise a later software update or restart will refuse to start the router.
-
-Then add the domain in the dashboard under **Settings → Domains**: enter `example.com` and choose **Public (HTTPS)**. Cloudflare terminates TLS at its edge, while the local hop from `cloudflared` to the router stays plain HTTP. The domain will report a certificate error because local DNS-01 acquisition is not configured; that is expected for this edge-only setup.
-
-This makes the tunnel domain reachable, but it remains a secondary domain. Cloudflare's edge certificate is not a certificate installed on the instance, so Cloud in a Bottle will not allow this domain to become primary. The existing primary remains the canonical domain passed to app containers. If the tunnel domain must become primary, use a setup that installs a usable wildcard certificate on the instance and enables Caddy before promotion.
+First add the domain in the dashboard under **Settings → Domains**: enter `example.com` and choose **Public (HTTPS)**. Cloudflare terminates TLS at its edge, but Cloud in a Bottle still needs to know the public scheme is `https` so that the URLs it generates (and passes to apps) are correct. The local hop from `cloudflared` to the router stays plain HTTP either way. The domain will then report a certificate error, `ACME account key path must be set in config to acquire TLS cert`, which is expected here: Cloudflare supplies the certificate, so Bottle never needs one.
 
 **2. Install `cloudflared`** in the VM:
 
@@ -139,8 +135,6 @@ The wildcard record gives every app its own working subdomain.
 
 Using your existing connection to the dashboard, open **Settings → Domains** and enter `bottle.example.com`. Choose **HTTP** to continue serving plain HTTP, or **HTTPS** to serve the domain with a certificate.
 
-Before adding either type, set `start_caddy = true` in `/home/host/.openhost/local_compute_space/config.toml` and restart. Caddy listens on ports 80 and 443 and forwards requests to the router on `:8080`; without it, `http://bottle.example.com` has nothing listening on port 80.
-
 #### HTTP
 
 Choose **HTTP** and click **Add domain**.
@@ -166,13 +160,7 @@ sudo chmod 0644 "$CERT_DIR/$DOMAIN.pem"
 sudo chmod 0600 "$CERT_DIR/$DOMAIN.key"
 ```
 
-The dashboard is then reachable at `https://bottle.example.com`, apps at `https://<app>.bottle.example.com`, and acme.sh renews and installs the certificate through the same DNS API.
-
-### 4. Make the domain primary
-
-Once the HTTP domain works, or the HTTPS domain shows an **Active** certificate, choose **Make primary** in **Settings → Domains**. The instance and running apps restart; stopped apps stay stopped. Your browser then opens the new primary and may require another login.
-
-For HTTPS, Caddy must remain enabled so the instance can terminate TLS after promotion.
+The dashboard then uses `https://bottle.example.com`, apps use `https://<app>.bottle.example.com`, and acme.sh renews and installs the certificate through the same DNS API.
 
 ## IPv4 tunnel service
 

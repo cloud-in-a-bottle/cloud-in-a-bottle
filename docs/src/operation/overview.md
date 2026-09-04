@@ -58,7 +58,7 @@ There is no way yet to give a named person their own login to your instance or t
 
 ## Settings worth knowing about
 
-- **Domains.** Add or remove the names the instance answers on, and choose the primary domain used for canonical links and app configuration. A public domain can acquire a wildcard certificate automatically when DNS-01 is configured, and must have an active certificate before it can become primary. See [Routing](../how_it_works/routing.md).
+- **Domains.** Add or remove the names the instance answers on. A public domain gets a wildcard certificate automatically, so every app is reachable over HTTPS without further work. See [Routing](../how_it_works/routing.md).
 - **Archive storage.** Point the bulk-content tier at an S3 bucket instead of local disk. See [Data](../how_it_works/data.md#the-archive-tier).
 - **API tokens.** Create and revoke the tokens the [CLI](./cli.md) and any scripts use. They are owner-equivalent, so give them expiries.
 - **Owner account.** Change the username apps see, and your password.
