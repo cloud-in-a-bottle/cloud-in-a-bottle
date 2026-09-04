@@ -89,3 +89,7 @@ The domain flips to active in the settings table once the certificate lands. The
 ```bash
 curl https://mycooldomain.com/health        # -> {"status":"ok"}
 ```
+
+### 3. Make the public domain primary
+
+Your original local domain, such as `lvh.me:8080`, is still the primary. In **Settings → Domains**, choose **Make primary** beside `mycooldomain.com`. The instance and running apps restart, and your browser moves to the new domain; you may need to sign in again. Once it works, you can remove the old local domain.
