@@ -371,7 +371,12 @@ async def restart_router() -> Response[OkResponse]:
         await asyncio.to_thread(system_agent_reset_restart_limit_sync)
     except SystemAgentError as exc:
         raise ServiceUnavailableException(detail="could not prepare the instance for a safe restart") from exc
-    return Response(content=OkResponse(ok=True), background=BackgroundTask(trigger_restart))
+    return Response(content=OkResponse(ok=True), background=BackgroundTask(_restart_after_response))
+
+
+async def _restart_after_response() -> None:
+    await asyncio.sleep(0.05)
+    trigger_restart()
 
 
 system_routes = Router(
