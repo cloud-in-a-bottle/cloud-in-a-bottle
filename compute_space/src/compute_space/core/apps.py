@@ -47,6 +47,7 @@ from compute_space.core.manifest import PermissionGrant
 from compute_space.core.manifest import PortMapping
 from compute_space.core.manifest import find_manifest_path
 from compute_space.core.manifest import parse_manifest
+from compute_space.core.manifest import parse_manifest_from_string
 from compute_space.core.oauth import OAuthRequired
 from compute_space.core.oauth import get_oauth_token
 from compute_space.core.ports import allocate_port
@@ -632,7 +633,7 @@ def stop_running_archive_apps(
     sync (that write would be lost when the volume re-points to S3), and
     ``systemctl stop openhost-juicefs`` cannot cleanly unmount while a
     container still has the mount open.  The caller restarts these apps once
-    the mount is back (via ``start_apps_by_id``).
+    the mount is back (via ``restart_apps_by_id``).
 
     ``stop_app_process`` stops the container but does NOT update the DB status
     and never raises, so we verify quiescence against the real container state
@@ -674,18 +675,18 @@ def stop_running_archive_apps(
     return recorded
 
 
-def start_apps_by_id(app_ids: list[str], db: sqlite3.Connection, config: Config) -> None:
-    """Start each app by id (best-effort).  Companion to
+def restart_apps_by_id(app_ids: list[str], db: sqlite3.Connection, config: Config) -> None:
+    """Restart each app by id (best-effort).  Companion to
     ``stop_running_archive_apps`` for the migration quiesce/resume dance."""
     for app_id in app_ids:
         try:
-            start_app_process(app_id, db, config)
+            restart_app_process(app_id, db, config)
         except Exception:
             logger.exception("failed to restart app {} after archive migration remount", app_id)
 
 
 def start_app_process(app_id: str, db: sqlite3.Connection, config: Config) -> None:
-    """Start the process for an app. Updates DB with status and container id."""
+    """Build the current checkout and launch it for an app."""
     app_row = db.execute("SELECT * FROM apps WHERE app_id = ?", (app_id,)).fetchone()
     storage.check_before_deploy(config)
     app_name = app_row["name"]
@@ -735,6 +736,18 @@ def _build_then_run_app(
             )
             time.sleep(attempt * 5)
     run_app_image(app_id, image_tag, manifest, db, config, env_vars=env_vars)
+
+
+def restart_app_process(app_id: str, db: sqlite3.Connection, config: Config) -> None:
+    """Recreate an app container from its existing tagged image without building."""
+    app_row = db.execute("SELECT * FROM apps WHERE app_id = ?", (app_id,)).fetchone()
+    if app_row is None:
+        raise RuntimeError(f"No app found with id {app_id}")
+
+    storage.check_before_deploy(config)
+    manifest_raw = app_row["manifest_raw"]
+    manifest = parse_manifest_from_string(manifest_raw) if manifest_raw else parse_manifest(app_row["repo_path"])
+    run_app_image(app_id, f"openhost-{app_row['name']}:latest", manifest, db, config)
 
 
 def app_log_path(app_name: str, config: Config) -> str:

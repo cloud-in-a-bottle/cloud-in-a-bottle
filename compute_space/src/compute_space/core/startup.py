@@ -4,9 +4,11 @@ import threading
 import time
 
 from compute_space.config import Config
+from compute_space.core.apps import restart_app_process
 from compute_space.core.apps import start_app_process
 from compute_space.core.containers import BUILD_CACHE_CORRUPT_MARKER
 from compute_space.core.containers import drop_docker_build_cache
+from compute_space.core.containers import image_exists
 from compute_space.core.containers import is_container_running
 from compute_space.core.default_apps import deploy_default_apps
 from compute_space.core.logging import logger
@@ -25,22 +27,26 @@ def check_app_status(config: Config) -> None:
     (e.g. the service restarted mid-rebuild) those apps stay in 'starting'.
     Looking only at 'running' would strand them forever.
 
-    Apps that need rebuilding are restarted sequentially in a single background
-    thread to avoid concurrent image builds against the same containers-storage
-    instance.
+    Recovery runs sequentially in one background thread. Ordinary restarts reuse
+    the tagged image; interrupted builds and missing images rebuild safely.
     """
     db = sqlite3.connect(config.db_path)
     db.row_factory = sqlite3.Row
-    apps_to_restart: list[str] = []
+    apps_to_recover: list[tuple[str, bool]] = []
     try:
         rows = db.execute("SELECT * FROM apps WHERE status IN ('running', 'starting', 'building')").fetchall()
         for row in rows:
             alive = bool(row["container_id"]) and is_container_running(row["container_id"])
 
-            if alive:
-                # Container survived, or a prior sweep restarted it but the
-                # status never advanced past 'starting'/'building'. Heal it.
-                if row["status"] != "running":
+            # A newly inserted row belongs to this process's deploy thread. It
+            # is not durable restart intent yet, even if podman is already up.
+            if row["status"] == "starting" and row["created_at"] >= _PROCESS_START_UTC:
+                continue
+
+            if alive and row["status"] != "starting":
+                # A completed build may have reached podman before its final DB
+                # update. A durable starting state, however, is restart intent.
+                if row["status"] == "building":
                     db.execute(
                         "UPDATE apps SET status = 'running' WHERE app_id = ?",
                         (row["app_id"],),
@@ -48,11 +54,15 @@ def check_app_status(config: Config) -> None:
                 continue
 
             repo_path = row["repo_path"]
-            if not repo_path or not os.path.isdir(repo_path):
+            has_repo = bool(repo_path) and os.path.isdir(repo_path)
+            has_manifest = bool(row["manifest_raw"]) or has_repo
+            image_tag = f"openhost-{row['name']}:latest"
+            needs_build = row["status"] == "building" or not image_exists(image_tag)
+            if not has_manifest or (needs_build and not has_repo):
                 db.execute(
                     "UPDATE apps SET status = 'error', error_message = ? WHERE app_id = ?",
                     (
-                        f"Cannot restart: repo path missing ({repo_path})",
+                        f"Cannot recover: repo path missing ({repo_path})",
                         row["app_id"],
                     ),
                 )
@@ -75,20 +85,20 @@ def check_app_status(config: Config) -> None:
                 "UPDATE apps SET status = 'starting' WHERE app_id = ?",
                 (row["app_id"],),
             )
-            apps_to_restart.append(row["app_id"])
+            apps_to_recover.append((row["app_id"], needs_build))
 
         # Recover apps whose build corrupted containers-storage onto the same
         # serial rebuild path (which exists precisely to avoid that corruption).
-        apps_to_restart.extend(_recover_cache_corrupt_apps(db))
+        apps_to_recover.extend((app_id, True) for app_id in _recover_cache_corrupt_apps(db))
 
         db.commit()
     finally:
         db.close()
 
-    if apps_to_restart:
+    if apps_to_recover:
         threading.Thread(
             target=_restart_apps_sequential,
-            args=(apps_to_restart, config),
+            args=(apps_to_recover, config),
             daemon=True,
         ).start()
 
@@ -133,18 +143,21 @@ def _recover_cache_corrupt_apps(db: sqlite3.Connection) -> list[str]:
     return corrupt
 
 
-def _restart_apps_sequential(app_ids: list[str], config: Config) -> None:
-    """Rebuild and restart apps one at a time in a background thread."""
+def _restart_apps_sequential(apps: list[tuple[str, bool]], config: Config) -> None:
+    """Recover apps one at a time, rebuilding only when required."""
     db = sqlite3.connect(config.db_path, check_same_thread=False)
     db.row_factory = sqlite3.Row
     db.execute("PRAGMA journal_mode=WAL")
     try:
-        for app_id in app_ids:
+        for app_id, needs_build in apps:
             try:
-                start_app_process(app_id, db, config)
-                logger.info("Rebuilt and restarted app {}", app_id)
+                if needs_build:
+                    start_app_process(app_id, db, config)
+                else:
+                    restart_app_process(app_id, db, config)
+                logger.info("Recovered app {} ({})", app_id, "rebuilt" if needs_build else "restarted")
             except Exception as e:
-                logger.exception("Failed to rebuild app {}", app_id)
+                logger.exception("Failed to recover app {}", app_id)
                 db.execute(
                     "UPDATE apps SET status = 'error', error_message = ? WHERE app_id = ?",
                     (str(e), app_id),
