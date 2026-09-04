@@ -1,5 +1,5 @@
 import os
-import sqlite3
+import re
 import tomllib
 from pathlib import Path
 from typing import Any
@@ -10,14 +10,21 @@ import cattrs
 import tomli_w
 import typed_settings
 
-from compute_space.core.domains import domain_uses_legacy_cert_paths
-
 # TLS cert provider selection (see Config.cert_provider).
 # "acme" is the default bring-your-own-ACME-credentials path (unchanged, fully
 # backward compatible). "cert_api" fetches certs from the openhost-cert-api
 # broker, which holds the ACME account so the instance never sees ACME creds.
 CERT_PROVIDER_ACME = "acme"
 CERT_PROVIDER_CERT_API = "cert_api"
+
+_CERT_DOMAIN_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$")
+
+
+def _normalized_cert_domain(domain_name: str) -> str:
+    name = domain_name.strip().split(":", 1)[0].lower()
+    if not _CERT_DOMAIN_RE.fullmatch(name):
+        raise ValueError(f"invalid certificate domain: {domain_name!r}")
+    return name
 
 
 @attr.s(auto_attribs=True, frozen=True)
@@ -186,33 +193,19 @@ class Config:
         return str(self.openhost_data_path / "router.db")
 
     @property
-    def tls_cert_path(self) -> Path:
-        return self.openhost_data_path / "openhost-tls-cert.pem"
-
-    @property
-    def tls_key_path(self) -> Path:
-        return self.openhost_data_path / "openhost-tls-key.pem"
-
-    @property
     def certs_dir(self) -> Path:
-        """Directory for TLS certs other than the provisioning-time legacy pair."""
+        """Directory containing one named TLS certificate pair per domain."""
         return self.openhost_data_path / "certs"
 
-    def cert_path_for(self, domain_name: str, uses_legacy_path: bool) -> Path:
-        """Cert file for a domain, preserving the provisioning-time domain's legacy path."""
-        if uses_legacy_path:
-            return self.tls_cert_path
-        return self.certs_dir / f"{domain_name.split(':')[0]}.pem"
+    def cert_path_for(self, domain_name: str) -> Path:
+        return self.certs_dir / f"{_normalized_cert_domain(domain_name)}.pem"
 
-    def key_path_for(self, domain_name: str, uses_legacy_path: bool) -> Path:
-        if uses_legacy_path:
-            return self.tls_key_path
-        return self.certs_dir / f"{domain_name.split(':')[0]}.key"
+    def key_path_for(self, domain_name: str) -> Path:
+        return self.certs_dir / f"{_normalized_cert_domain(domain_name)}.key"
 
-    def cert_key_paths_for(self, db: sqlite3.Connection, domain_name: str) -> tuple[Path, Path]:
-        """Cert+key paths for a domain, preserving ownership across primary changes."""
-        legacy = domain_uses_legacy_cert_paths(db, domain_name)
-        return self.cert_path_for(domain_name, legacy), self.key_path_for(domain_name, legacy)
+    def cert_key_paths_for(self, domain_name: str) -> tuple[Path, Path]:
+        """Return the domain's normalized, role-independent certificate paths."""
+        return self.cert_path_for(domain_name), self.key_path_for(domain_name)
 
     @property
     def coredns_corefile_path(self) -> Path:

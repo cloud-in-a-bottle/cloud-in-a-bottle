@@ -11,6 +11,7 @@ from compute_space.core.containers import drop_docker_build_cache
 from compute_space.core.containers import image_exists
 from compute_space.core.containers import is_container_running
 from compute_space.core.default_apps import deploy_default_apps
+from compute_space.core.domains import PRIMARY_DOMAIN_RESTART_MARKER
 from compute_space.core.logging import logger
 
 # UTC timestamp captured at module import.  check_app_status uses this to
@@ -27,20 +28,23 @@ def check_app_status(config: Config) -> None:
     (e.g. the service restarted mid-rebuild) those apps stay in 'starting'.
     Looking only at 'running' would strand them forever.
 
-    Recovery runs sequentially in one background thread. Ordinary restarts reuse
-    the tagged image; interrupted builds and missing images rebuild safely.
+    Recovery normally runs sequentially in one background thread. Apps marked by
+    primary-domain promotion recover synchronously so they are using the new
+    domain before the web server accepts archive-configuration requests.
     """
     db = sqlite3.connect(config.db_path)
     db.row_factory = sqlite3.Row
     apps_to_recover: list[tuple[str, bool]] = []
+    promoted_apps_to_recover: list[tuple[str, bool]] = []
     try:
         rows = db.execute("SELECT * FROM apps WHERE status IN ('running', 'starting', 'building')").fetchall()
         for row in rows:
             alive = bool(row["container_id"]) and is_container_running(row["container_id"])
+            promotion_restart = row["status"] == "starting" and row["error_message"] == PRIMARY_DOMAIN_RESTART_MARKER
 
             # A newly inserted row belongs to this process's deploy thread. It
             # is not durable restart intent yet, even if podman is already up.
-            if row["status"] == "starting" and row["created_at"] >= _PROCESS_START_UTC:
+            if not promotion_restart and row["status"] == "starting" and row["created_at"] >= _PROCESS_START_UTC:
                 continue
 
             if alive and row["status"] != "starting":
@@ -74,7 +78,7 @@ def check_app_status(config: Config) -> None:
                 # an active deploy_app_background thread still running; mark them
                 # starting so the dashboard reflects that, but don't queue a second
                 # build.
-                if row["created_at"] >= _PROCESS_START_UTC:
+                if not promotion_restart and row["created_at"] >= _PROCESS_START_UTC:
                     db.execute(
                         "UPDATE apps SET status = 'starting' WHERE app_id = ?",
                         (row["app_id"],),
@@ -85,7 +89,11 @@ def check_app_status(config: Config) -> None:
                 "UPDATE apps SET status = 'starting' WHERE app_id = ?",
                 (row["app_id"],),
             )
-            apps_to_recover.append((row["app_id"], needs_build))
+            recovery = (row["app_id"], needs_build)
+            if promotion_restart:
+                promoted_apps_to_recover.append(recovery)
+            else:
+                apps_to_recover.append(recovery)
 
         # Recover apps whose build corrupted containers-storage onto the same
         # serial rebuild path (which exists precisely to avoid that corruption).
@@ -95,6 +103,8 @@ def check_app_status(config: Config) -> None:
     finally:
         db.close()
 
+    if promoted_apps_to_recover:
+        _restart_apps_sequential(promoted_apps_to_recover, config)
     if apps_to_recover:
         threading.Thread(
             target=_restart_apps_sequential,

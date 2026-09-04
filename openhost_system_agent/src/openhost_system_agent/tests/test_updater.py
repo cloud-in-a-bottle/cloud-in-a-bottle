@@ -107,16 +107,47 @@ def _open_fds() -> list[str]:
         return []
 
 
-def _write_domain_db(data_dir: Path, primary: str, *, tls: bool, legacy_owner: str) -> None:
+def _write_domain_db(data_dir: Path, primary: str, *, tls: bool) -> None:
     with sqlite3.connect(data_dir / "router.db") as db:
         db.execute("CREATE TABLE domains (name TEXT PRIMARY KEY, tls INTEGER, is_primary INTEGER)")
-        db.execute("CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT)")
         db.execute("INSERT INTO domains VALUES (?, ?, 1)", (primary, int(tls)))
-        db.execute("INSERT INTO settings VALUES ('legacy_cert_domain', ?)", (legacy_owner,))
 
 
-def test_updater_uses_promoted_primary_per_domain_certificate(data_dir: Path) -> None:
-    _write_domain_db(data_dir, "new.example.com", tls=True, legacy_owner="old.example.com")
+def test_updater_uses_normalized_primary_certificate_paths(data_dir: Path) -> None:
+    _write_domain_db(data_dir, "New.Example.com:8443", tls=True)
+    certs_dir = data_dir / "certs"
+    certs_dir.mkdir()
+    (certs_dir / "new.example.com.pem").touch()
+    (certs_dir / "new.example.com.key").touch()
+    assert paths.primary_tls_paths() == (
+        data_dir / "certs" / "new.example.com.pem",
+        data_dir / "certs" / "new.example.com.key",
+    )
+
+
+def test_updater_uses_complete_legacy_pair_during_interrupted_migration(data_dir: Path) -> None:
+    _write_domain_db(data_dir, "new.example.com", tls=True)
+    certs_dir = data_dir / "certs"
+    certs_dir.mkdir()
+    (certs_dir / "new.example.com.pem").touch()
+    (certs_dir / "new.example.com.key").touch()
+    (data_dir / "openhost-tls-cert.pem").touch()
+    (data_dir / "openhost-tls-key.pem").touch()
+
+    assert paths.primary_tls_paths() == (
+        data_dir / "openhost-tls-cert.pem",
+        data_dir / "openhost-tls-key.pem",
+    )
+
+
+def test_updater_never_uses_demoted_domains_legacy_pair_for_promoted_primary(data_dir: Path) -> None:
+    _write_domain_db(data_dir, "new.example.com", tls=True)
+    with sqlite3.connect(data_dir / "router.db") as db:
+        db.execute("CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT)")
+        db.execute("INSERT INTO settings VALUES ('legacy_cert_domain', 'old.example.com')")
+    (data_dir / "openhost-tls-cert.pem").touch()
+    (data_dir / "openhost-tls-key.pem").touch()
+
     assert paths.primary_tls_paths() == (
         data_dir / "certs" / "new.example.com.pem",
         data_dir / "certs" / "new.example.com.key",
@@ -124,7 +155,27 @@ def test_updater_uses_promoted_primary_per_domain_certificate(data_dir: Path) ->
 
 
 def test_updater_disables_tls_for_http_primary(data_dir: Path) -> None:
-    _write_domain_db(data_dir, "new.local", tls=False, legacy_owner="old.example.com")
+    _write_domain_db(data_dir, "new.local", tls=False)
+    assert paths.primary_tls_paths() is None
+
+
+def test_updater_handles_missing_router_db_without_creating_it(data_dir: Path) -> None:
+    assert paths.primary_tls_paths() is None
+    assert not (data_dir / "router.db").exists()
+
+
+@pytest.mark.parametrize("database", ["corrupt", "missing_table", "missing_primary"])
+def test_updater_handles_unavailable_primary(data_dir: Path, database: str) -> None:
+    db_path = data_dir / "router.db"
+    if database == "corrupt":
+        db_path.write_text("not sqlite")
+    elif database == "missing_table":
+        with sqlite3.connect(db_path) as db:
+            db.execute("CREATE TABLE unrelated (value TEXT)")
+    else:
+        with sqlite3.connect(db_path) as db:
+            db.execute("CREATE TABLE domains (name TEXT PRIMARY KEY, tls INTEGER, is_primary INTEGER)")
+
     assert paths.primary_tls_paths() is None
 
 
@@ -210,8 +261,8 @@ def test_record_failure_records_when_mid_apply(data_dir: Path) -> None:
 
 @pytest.fixture
 def server_factory(data_dir: Path) -> Iterator[Callable[[str | None, list[dict[str, object]]], int]]:
-    cert = data_dir / "openhost-tls-cert.pem"
-    key = data_dir / "openhost-tls-key.pem"
+    cert = data_dir / "cert.pem"
+    key = data_dir / "key.pem"
     _self_signed(cert, key)
     ctx = server._make_ssl_context(cert, key)
     started: list[object] = []
@@ -428,8 +479,8 @@ def test_acquire_no_tls_uses_port80(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_run_serves_then_releases_when_ready(data_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    cert = data_dir / "openhost-tls-cert.pem"
-    key = data_dir / "openhost-tls-key.pem"
+    cert = data_dir / "cert.pem"
+    key = data_dir / "key.pem"
     _self_signed(cert, key)
     real = server._try_bind("127.0.0.1", 0)
     assert real is not None

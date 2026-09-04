@@ -28,11 +28,11 @@ function removeDomainButton(name) {
                    width: '14', height: '14', alt: '', 'aria-hidden': 'true'}));
 }
 
-function makePrimaryButton(domain, currentPrimary) {
+function makePrimaryButton(domain) {
   return dom.el('button', {
     class: 'btn', type: 'button', text: 'Make primary',
     disabled: domain.tls && domain.cert_status !== 'active',
-    onclick: function() { makePrimaryDomain(domain.name, currentPrimary); },
+    onclick: function() { makePrimaryDomain(domain.name); },
   });
 }
 
@@ -49,8 +49,6 @@ function renderDomains(domains) {
   }
   wrap.hidden = false;
   none.hidden = true;
-  var primary = domains.find(function(d) { return d.is_primary; });
-  var currentPrimary = primary ? primary.name : '';
   var anyAcquiring = false;
   dom.replace(tbody, domains.map(function(d) {
     if (d.tls && d.cert_status === 'acquiring') anyAcquiring = true;
@@ -64,21 +62,19 @@ function renderDomains(domains) {
       dom.el('td', null, domainCertCell(d)),
       dom.el('td', {class: 'col-actions'}, d.is_primary
         ? dom.el('span', {class: 'muted', text: '—'})
-        : dom.el('span', null, [makePrimaryButton(d, currentPrimary), removeDomainButton(d.name)])),
+        : dom.el('span', null, [makePrimaryButton(d), removeDomainButton(d.name)])),
     ]);
   }));
   // A cert acquisition (DNS-01) runs in the background; poll until it settles.
   if (anyAcquiring) setTimeout(loadDomains, 4000);
 }
 
-function makePrimaryDomain(name, currentPrimary) {
+function makePrimaryDomain(name) {
   var warning = 'Make ' + name + ' the primary domain? Running apps will restart and you may need to sign in again.';
   if (!confirm(warning)) { return; }
   fetch(DOMAINS_URL + '/' + encodeURIComponent(name) + '/primary', {
     method: 'POST',
     credentials: 'same-origin',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({expected_primary: currentPrimary}),
   })
     .then(readJsonResponse)
     .then(function(res) {

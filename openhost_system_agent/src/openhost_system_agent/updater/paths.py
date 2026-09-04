@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import sqlite3
 from contextlib import closing
 from pathlib import Path
@@ -13,7 +14,7 @@ from loguru import logger
 # (`sudo env`) and into the detached updater (`systemd-run --setenv`).
 _DEFAULT_DATA_DIR = "/home/host/.openhost/local_compute_space/persistent_data/openhost"
 DATA_DIR_ENV = "OPENHOST_DATA_DIR"
-_LEGACY_CERT_DOMAIN_KEY = "legacy_cert_domain"
+_DOMAIN_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$")
 
 
 def data_dir() -> Path:
@@ -48,37 +49,34 @@ def ready_marker_path() -> Path:
     return updater_dir() / "serve.ready"
 
 
-def tls_cert_path() -> Path:
-    return data_dir() / "openhost-tls-cert.pem"
-
-
-def tls_key_path() -> Path:
-    return data_dir() / "openhost-tls-key.pem"
-
-
 def primary_tls_paths() -> tuple[Path, Path] | None:
-    """Resolve the current primary's stable certificate paths from the router database."""
+    """Resolve a TLS primary's named certificate paths without modifying its database."""
     db_path = data_dir() / "router.db"
-    if not db_path.exists():
-        return tls_cert_path(), tls_key_path()
+    if not db_path.is_file():
+        return None
     try:
-        with closing(sqlite3.connect(db_path)) as db:
+        uri = db_path.resolve().as_uri() + "?mode=ro"
+        with closing(sqlite3.connect(uri, uri=True)) as db:
             primary = db.execute("SELECT name, tls FROM domains WHERE is_primary = 1").fetchone()
             if primary is None:
-                return tls_cert_path(), tls_key_path()
-            name = str(primary[0]).split(":")[0].lower()
+                return None
             if not bool(primary[1]):
                 return None
-            owner = db.execute("SELECT value FROM settings WHERE key = ?", (_LEGACY_CERT_DOMAIN_KEY,)).fetchone()
-            legacy_owner = str(owner[0]).lower() if owner is not None else name
-            if name == legacy_owner:
-                return tls_cert_path(), tls_key_path()
-            return data_dir() / "certs" / f"{name}.pem", data_dir() / "certs" / f"{name}.key"
-    except sqlite3.OperationalError as exc:
-        if "no such table" in str(exc).lower():
-            return tls_cert_path(), tls_key_path()
-        logger.warning(f"updater could not resolve primary TLS paths: {exc}")
-        return None
-    except sqlite3.Error as exc:
+            name = str(primary[0]).strip().split(":", 1)[0].lower()
+            if not _DOMAIN_RE.fullmatch(name):
+                return None
+            legacy = data_dir() / "openhost-tls-cert.pem", data_dir() / "openhost-tls-key.pem"
+            try:
+                owner_row = db.execute("SELECT value FROM settings WHERE key = 'legacy_cert_domain'").fetchone()
+            except sqlite3.OperationalError as exc:
+                if "no such table" not in str(exc).lower():
+                    raise
+                owner_row = None
+            legacy_owner = str(owner_row[0]).strip().split(":", 1)[0].lower() if owner_row is not None else name
+            if legacy_owner == name and all(path.is_file() for path in legacy):
+                return legacy
+            named = data_dir() / "certs" / f"{name}.pem", data_dir() / "certs" / f"{name}.key"
+            return named
+    except (OSError, sqlite3.Error) as exc:
         logger.warning(f"updater could not resolve primary TLS paths: {exc}")
         return None

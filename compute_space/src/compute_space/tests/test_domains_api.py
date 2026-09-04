@@ -177,7 +177,9 @@ def test_list_shows_primary(cfg: Any, client: TestClient[Litestar]) -> None:
 def test_primary_with_cert_on_disk_reports_active(cfg: Any, client: TestClient[Litestar]) -> None:
     # Regression: the seeded primary stores cert_status='none', but a valid cert on disk — which is
     # what Caddy actually serves — must report active, not 'none'.
-    _write_cert(cfg.tls_cert_path, cfg.tls_key_path)
+    cert_path, key_path = cfg.cert_key_paths_for("host.example.com")
+    cert_path.parent.mkdir(parents=True)
+    _write_cert(cert_path, key_path)
     client.cookies.update(_auth_cookie(cfg.db_path))
     info = next(d for d in client.get("/api/domains").json()["domains"])
     assert info["name"] == "host.example.com" and info["cert_status"] == "active"
@@ -186,7 +188,9 @@ def test_primary_with_cert_on_disk_reports_active(cfg: Any, client: TestClient[L
 def test_primary_with_expired_cert_not_active(cfg: Any, client: TestClient[Litestar]) -> None:
     # An expired cert still has files on disk (so a mere existence check would say 'active'), but
     # browsers reject it — it must surface as an error, not active.
-    _write_cert(cfg.tls_cert_path, cfg.tls_key_path, days_valid=-1)
+    cert_path, key_path = cfg.cert_key_paths_for("host.example.com")
+    cert_path.parent.mkdir(parents=True)
+    _write_cert(cert_path, key_path, days_valid=-1)
     client.cookies.update(_auth_cookie(cfg.db_path))
     info = next(d for d in client.get("/api/domains").json()["domains"])
     assert info["cert_status"] == DomainCertStatus.ERROR
@@ -321,16 +325,14 @@ def test_remove_unknown_domain_404(cfg: Any, client: TestClient[Litestar]) -> No
 def test_make_primary_requires_auth(cfg: Any, client: TestClient[Litestar]) -> None:
     with closing(open_db(cfg)) as db:
         domains.upsert_record(db, domains.DomainRecord("new.local", tls=False, mdns=True))
-    assert (
-        client.post("/api/domains/new.local/primary", json={"expected_primary": "host.example.com"}).status_code == 401
-    )
+    assert client.post("/api/domains/new.local/primary").status_code == 401
 
 
 def test_make_primary_requires_usable_tls_certificate(cfg: Any, client: TestClient[Litestar]) -> None:
     with closing(open_db(cfg)) as db:
         domains.upsert_record(db, domains.DomainRecord("new.example.com", tls=True, mdns=False))
     client.cookies.update(_auth_cookie(cfg.db_path))
-    resp = client.post("/api/domains/new.example.com/primary", json={"expected_primary": "host.example.com"})
+    resp = client.post("/api/domains/new.example.com/primary")
     assert resp.status_code == 409
     assert resp.json()["extra"]["code"] == "domain_not_ready"
 
@@ -347,7 +349,7 @@ def test_make_primary_returns_updated_list_then_schedules_restart(
     monkeypatch.setattr(domains, "trigger_restart", lambda: restart_steps.append("restart"))
     client.cookies.update(_auth_cookie(cfg.db_path))
 
-    resp = client.post("/api/domains/new.local/primary", json={"expected_primary": "host.example.com"})
+    resp = client.post("/api/domains/new.local/primary")
 
     assert resp.status_code == 200
     assert next(d for d in resp.json()["domains"] if d["name"] == "new.local")["is_primary"] is True
@@ -369,22 +371,13 @@ def test_make_primary_does_not_restart_when_start_limit_reset_fails(
     monkeypatch.setattr(domains, "trigger_restart", restart)
     client.cookies.update(_auth_cookie(cfg.db_path))
 
-    resp = client.post("/api/domains/new.local/primary", json={"expected_primary": "host.example.com"})
+    resp = client.post("/api/domains/new.local/primary")
 
     assert resp.status_code == 503
     assert resp.json()["extra"]["code"] == "restart_unavailable"
     with closing(open_db(cfg)) as db:
         assert db.execute("SELECT name FROM domains WHERE is_primary = 1").fetchone()[0] == "host.example.com"
     restart.assert_not_called()
-
-
-def test_make_primary_rejects_stale_expected_primary(cfg: Any, client: TestClient[Litestar]) -> None:
-    with closing(open_db(cfg)) as db:
-        domains.upsert_record(db, domains.DomainRecord("new.local", tls=False, mdns=True))
-    client.cookies.update(_auth_cookie(cfg.db_path))
-    resp = client.post("/api/domains/new.local/primary", json={"expected_primary": "stale.local"})
-    assert resp.status_code == 409
-    assert resp.json()["extra"]["code"] == "primary_changed"
 
 
 def test_make_current_primary_is_noop_without_restart_preparation(
@@ -396,18 +389,21 @@ def test_make_current_primary_is_noop_without_restart_preparation(
     monkeypatch.setattr(domains, "trigger_restart", restart)
     client.cookies.update(_auth_cookie(cfg.db_path))
 
-    resp = client.post("/api/domains/host.example.com/primary", json={"expected_primary": "host.example.com"})
+    resp = client.post("/api/domains/host.example.com/primary")
 
     assert resp.status_code == 200
     reset.assert_not_called()
     restart.assert_not_called()
 
 
-def test_domains_ui_outputs_promotion_confirmation_and_expected_primary() -> None:
+def test_domains_ui_outputs_promotion_confirmation_without_request_body() -> None:
     source = (Path(__file__).parents[1] / "web" / "static" / "js" / "domains.js").read_text()
     assert "Make primary" in source
     assert "Running apps will restart" in source
-    assert "expected_primary: currentPrimary" in source
+    promotion_fetch = source.split("function makePrimaryDomain", maxsplit=1)[1].split(
+        "function redirectAfter", maxsplit=1
+    )[0]
+    assert "body:" not in promotion_fetch
     assert "redirectAfterPrimaryRestart(promoted, res.data.generation)" in source
     assert "health.generation !== previousGeneration" in source
     assert "controller.abort()" in source

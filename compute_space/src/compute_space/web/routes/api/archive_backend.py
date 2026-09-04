@@ -22,8 +22,9 @@ from litestar.params import Body
 from compute_space.config import Config
 from compute_space.core import archive_backend
 from compute_space.core.archive_backend import BackendState
-from compute_space.core.domains import PRIMARY_DOMAIN_RESTART_MARKER
-from compute_space.core.operation_locks import archive_configuration
+from compute_space.core.operation_locks import detach_operation
+from compute_space.core.operation_locks import start_exclusive_operation
+from compute_space.core.updates import is_shutdown_pending
 from compute_space.web.auth.auth import require_owner_auth
 from compute_space.web.exceptions import ConflictException
 
@@ -218,6 +219,10 @@ async def configure_archive_backend(
     default — migrates local archive data into the bucket), the legacy
     ``'disabled'`` state (fresh format), or ``'s3'`` (migrates the archive from
     the current bucket to a new bucket/provider)."""
+    # Promotion sets shutdown before releasing the operation lock; this closes
+    # the remaining window for requests Hypercorn already accepted.
+    if is_shutdown_pending():
+        raise ConflictException(detail="the instance is already restarting", extra={"code": "restart_pending"})
     state = archive_backend.read_state(db)
 
     # Guard the local->S3 migration behind an explicit acknowledgement when
@@ -332,33 +337,30 @@ async def configure_archive_backend(
         finally:
             worker_db.close()
 
-    if not archive_configuration.acquire(blocking=False):
-        raise ConflictException(detail="Archive configuration is already in progress.", extra={"code": "archive_busy"})
+    async def _configure() -> None:
+        if is_shutdown_pending():
+            raise ConflictException(detail="the instance is already restarting", extra={"code": "restart_pending"})
+        await asyncio.to_thread(_run)
+
+    worker = await start_exclusive_operation(_configure)
+    if worker is None:
+        raise ConflictException(
+            detail="Another archive or primary-domain operation is already in progress.",
+            extra={"code": "operation_busy"},
+        )
     try:
-        if db.execute(
-            "SELECT 1 FROM apps WHERE status = 'starting' AND error_message = ? LIMIT 1",
-            (PRIMARY_DOMAIN_RESTART_MARKER,),
-        ).fetchone():
-            raise ConflictException(
-                detail="Wait for the primary-domain restart to finish before configuring archive storage.",
-                extra={"code": "apps_busy"},
-            )
-        worker = asyncio.create_task(asyncio.to_thread(_run))
-        try:
-            await asyncio.shield(worker)
-        except asyncio.CancelledError:
-            await worker
-            raise
-        except RuntimeError as exc:
-            # 409 if it was a TOCTOU race against another configure attempt;
-            # 500 for genuine bring-up failures (detail is masked, so it rides in extra).
-            if "already configured" in str(exc):
-                raise ConflictException(detail=str(exc), extra={"code": "already_configured"}) from exc
-            raise InternalServerException(
-                detail="Failed to configure archive backend", extra={"output": str(exc)}
-            ) from exc
-    finally:
-        archive_configuration.release()
+        await asyncio.shield(worker)
+    except asyncio.CancelledError:
+        detach_operation(worker)
+        raise
+    except RuntimeError as exc:
+        # 409 if it was a TOCTOU race against another configure attempt;
+        # 500 for genuine bring-up failures (detail is masked, so it rides in extra).
+        if "already configured" in str(exc):
+            raise ConflictException(detail=str(exc), extra={"code": "already_configured"}) from exc
+        raise InternalServerException(
+            detail="Failed to configure archive backend", extra={"output": str(exc)}
+        ) from exc
 
     state = archive_backend.read_state(db)
     archive_dir = archive_backend.juicefs_mount_dir(config) if state.backend == "s3" else None

@@ -35,21 +35,20 @@ from compute_space.core.caddy import reload_caddy_for_domains
 from compute_space.core.dns.coredns_provider.interface import DnsNotEnabled
 from compute_space.core.dns.coredns_provider.interface import InternalDnsProvider
 from compute_space.core.domains import AppsBusyForPrimaryChangeError
-from compute_space.core.domains import ArchiveMigrationInProgressError
 from compute_space.core.domains import Domain
 from compute_space.core.domains import DomainCertStatus
 from compute_space.core.domains import DomainNotFoundError
 from compute_space.core.domains import DomainRecord
-from compute_space.core.domains import PrimaryDomainChangedError
 from compute_space.core.domains import effective_domains
 from compute_space.core.domains import get_record
 from compute_space.core.domains import load_records
-from compute_space.core.domains import primary_domain
 from compute_space.core.domains import remove_non_primary_record
 from compute_space.core.domains import set_primary_domain
 from compute_space.core.domains import set_record_status
 from compute_space.core.domains import upsert_record
 from compute_space.core.logging import logger
+from compute_space.core.operation_locks import detach_operation
+from compute_space.core.operation_locks import start_exclusive_operation
 from compute_space.core.system_agent.client import SystemAgentError
 from compute_space.core.system_agent.client import system_agent_reset_restart_limit_sync
 from compute_space.core.tls.domain_certs import ensure_cert_for
@@ -76,11 +75,6 @@ class AddDomainRequest:
 
 
 @attr.s(auto_attribs=True, frozen=True)
-class SetPrimaryDomainRequest:
-    expected_primary: str
-
-
-@attr.s(auto_attribs=True, frozen=True)
 class DomainInfo:
     name: str
     tls: bool
@@ -97,12 +91,10 @@ class DomainListResponse:
     generation: str = PROCESS_GENERATION
 
 
-def _tls_cert_display(
-    config: Config, name: str, record: DomainRecord | None, db: sqlite3.Connection
-) -> tuple[DomainCertStatus, str | None]:
+def _tls_cert_display(config: Config, name: str, record: DomainRecord | None) -> tuple[DomainCertStatus, str | None]:
     """Cert status for a TLS domain, derived from the cert actually on disk (what Caddy serves) so an
     expired/unreadable cert is never shown 'active'; falls back to the stored in-flight state."""
-    cert_path, key_path = config.cert_key_paths_for(db, name)
+    cert_path, key_path = config.cert_key_paths_for(name)
     status = get_cert_status(cert_path, key_path)
     if status in (CertStatus.OK, CertStatus.EXPIRING_SOON):
         return DomainCertStatus.ACTIVE, None  # a valid cert is on disk
@@ -116,13 +108,13 @@ def _tls_cert_display(
     return DomainCertStatus.NONE, None
 
 
-def _domain_info(config: Config, domain: Domain, record: DomainRecord | None, db: sqlite3.Connection) -> DomainInfo:
+def _domain_info(config: Config, domain: Domain, record: DomainRecord | None) -> DomainInfo:
     name = domain.name_no_port
     is_primary = record.is_primary if record is not None else False
     if not domain.tls:
         cert_status, error = DomainCertStatus.ACTIVE, None  # http, nothing to acquire
     else:
-        cert_status, error = _tls_cert_display(config, name, record, db)
+        cert_status, error = _tls_cert_display(config, name, record)
     return DomainInfo(
         name=name,
         tls=domain.tls,
@@ -136,7 +128,7 @@ def _domain_info(config: Config, domain: Domain, record: DomainRecord | None, db
 
 def _domain_list(config: Config, db: sqlite3.Connection) -> list[DomainInfo]:
     """The API view of the full domain set, loading all records in one query."""
-    return [_domain_info(config, r.to_domain(), r, db) for r in load_records(db)]
+    return [_domain_info(config, r.to_domain(), r) for r in load_records(db)]
 
 
 async def _reload_caddy_after_response() -> None:
@@ -147,11 +139,6 @@ async def _reload_caddy_after_response() -> None:
     concurrent domain change isn't dropped from the regenerated Caddyfile."""
     with closing(get_db()) as db:
         await reload_caddy_for_domains(get_config(), db)
-
-
-async def _restart_after_response() -> None:
-    await asyncio.sleep(0.05)
-    trigger_restart()
 
 
 async def _acquire_cert(config: Config, domain: Domain, dns_provider: InternalDnsProvider) -> None:
@@ -245,69 +232,75 @@ async def add_domain(
 )
 async def make_primary_domain(
     name: FromPath[str],
-    data: SetPrimaryDomainRequest,
     config: NamedDependency[Config],
     db: NamedDependency[sqlite3.Connection],
 ) -> Response[DomainListResponse]:
     """Promote an existing ready domain, then restart through the standard startup path."""
-    if is_shutdown_pending():
-        raise ConflictException(detail="the instance is already restarting", extra={"code": "restart_pending"})
     name = name.strip().lower()
     record = get_record(db, name)
     if record is None:
         raise NotFoundException(detail="domain not found")
-    current_primary = primary_domain(db).name_no_port
-    expected_primary = data.expected_primary.split(":")[0].lower()
-    if current_primary != expected_primary:
-        raise ConflictException(
-            detail=f"primary domain changed to {current_primary}; reload and try again",
-            extra={"code": "primary_changed", "current_primary": current_primary},
-        )
     if record.is_primary:
         return Response(
             DomainListResponse(domains=_domain_list(config, db)),
             status_code=200,
             media_type=MediaType.JSON,
         )
+    if is_shutdown_pending():
+        raise ConflictException(detail="the instance is already restarting", extra={"code": "restart_pending"})
     if record.tls:
-        cert_path, key_path = config.cert_key_paths_for(db, name)
+        cert_path, key_path = config.cert_key_paths_for(name)
         if get_cert_status(cert_path, key_path) not in (CertStatus.OK, CertStatus.EXPIRING_SOON):
             raise ConflictException(
                 detail="domain must have a usable TLS certificate before it can be made primary",
                 extra={"code": "domain_not_ready"},
             )
+
+    def _run() -> bool:
+        system_agent_reset_restart_limit_sync()
+        worker_db = sqlite3.connect(config.db_path)
+        worker_db.row_factory = sqlite3.Row
+        try:
+            return set_primary_domain(worker_db, name)
+        finally:
+            worker_db.close()
+
+    async def _promote_and_restart() -> bool:
+        if is_shutdown_pending():
+            raise ConflictException(detail="the instance is already restarting", extra={"code": "restart_pending"})
+        changed = await asyncio.to_thread(_run)
+        if changed:
+            trigger_restart()
+        return changed
+
+    worker = await start_exclusive_operation(_promote_and_restart)
+    if worker is None:
+        raise ConflictException(
+            detail="Another archive or primary-domain operation is already in progress.",
+            extra={"code": "operation_busy"},
+        )
     try:
-        await asyncio.to_thread(system_agent_reset_restart_limit_sync)
+        await asyncio.shield(worker)
+    except asyncio.CancelledError:
+        detach_operation(worker)
+        raise
     except SystemAgentError as exc:
         raise ServiceUnavailableException(
             detail="could not prepare the instance for a safe restart",
             extra={"code": "restart_unavailable"},
         ) from exc
-    try:
-        changed = set_primary_domain(db, name, data.expected_primary)
     except DomainNotFoundError as exc:
         raise NotFoundException(detail="domain not found") from exc
-    except PrimaryDomainChangedError as exc:
-        raise ConflictException(
-            detail=f"primary domain changed to {exc.current_primary}; reload and try again",
-            extra={"code": "primary_changed", "current_primary": exc.current_primary},
-        ) from exc
     except AppsBusyForPrimaryChangeError as exc:
         raise ConflictException(
             detail="wait for active app operations to finish before changing the primary domain",
             extra={"code": "apps_busy", "apps": list(exc.app_names)},
-        ) from exc
-    except ArchiveMigrationInProgressError as exc:
-        raise ConflictException(
-            detail="wait for the archive migration to finish before changing the primary domain",
-            extra={"code": "archive_busy"},
         ) from exc
 
     return Response(
         DomainListResponse(domains=_domain_list(config, db)),
         status_code=200,
         media_type=MediaType.JSON,
-        background=BackgroundTask(_restart_after_response) if changed else None,
     )
 
 

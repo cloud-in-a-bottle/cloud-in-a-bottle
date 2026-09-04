@@ -13,8 +13,7 @@ async def ensure_cert_for(
 ) -> None:
     """Idempotently ensure a usable TLS cert exists at the domain's stable path.
 
-    The provisioning-time domain keeps the legacy top-level certificate paths; every other domain
-    uses its named pair under ``certs/``. Promotion changes neither domain's path ownership.
+    Every domain uses its normalized named pair under ``certs/``, independent of its primary role.
 
     This is the single acquisition entry point shared by initial setup and later domain
     addition (via /api/domains).  No-op for non-TLS domains (mDNS ``.local`` is served over
@@ -28,7 +27,7 @@ async def ensure_cert_for(
     if not domain.tls:
         return
     name = domain.name_no_port
-    cert_path, key_path = config.cert_key_paths_for(db, name)
+    cert_path, key_path = config.cert_key_paths_for(name)
     if get_cert_status(cert_path, key_path) == CertStatus.OK:
         return
     cert_path.parent.mkdir(parents=True, exist_ok=True)

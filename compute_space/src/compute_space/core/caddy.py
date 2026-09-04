@@ -56,13 +56,11 @@ def _http_domain_block(name: str, web_server_port: int) -> str:
     return f"http://{name}, http://*.{name} {{\n    encode gzip zstd\n{_reverse_proxy(web_server_port)}}}\n"
 
 
-def config_cert_resolver(config: Config, db: sqlite3.Connection) -> CertResolver:
-    """A CertResolver backed by the config's on-disk cert layout: a domain uses its file
-    cert (the original domain's legacy path, or a per-domain ``certs/<name>`` pair) when both files
-    exist, otherwise falls back to ``tls internal``."""
+def config_cert_resolver(config: Config) -> CertResolver:
+    """Resolve complete named certificate pairs, falling back to ``tls internal`` when absent."""
 
     def resolve(name: str) -> tuple[Path, Path] | None:
-        cert_path, key_path = config.cert_key_paths_for(db, name)
+        cert_path, key_path = config.cert_key_paths_for(name)
         if cert_path.exists() and key_path.exists():
             return (cert_path, key_path)
         return None
@@ -321,7 +319,7 @@ async def reload_caddy_for_domains(config: Config, db: sqlite3.Connection) -> bo
     if caddy is None:
         return False
     caddy.caddyfile_path.write_text(
-        generate_caddyfile(effective_domains(db), config.port, config_cert_resolver(config, db), caddy.admin_addr)
+        generate_caddyfile(effective_domains(db), config.port, config_cert_resolver(config), caddy.admin_addr)
     )
     await caddy.reload()
     return True

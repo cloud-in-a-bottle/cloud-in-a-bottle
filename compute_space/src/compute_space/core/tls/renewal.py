@@ -59,7 +59,7 @@ def get_cert_status(cert_path: Path, key_path: Path, now: datetime.datetime | No
 def _sync_cert_statuses(config: Config) -> None:
     """Bring the DB ``cert_status`` in step with the certs actually on disk, so the stored column
     matches what the dashboard shows (it derives display status from the files).  Only upgrades a
-    tracked TLS domain to ``active`` when its cert+key are present — chiefly the primary, whose legacy
+    tracked TLS domain to ``active`` when its cert+key are present — chiefly the primary, whose
     cert predates the ``domains`` table and was seeded ``none``.  Idempotent (skips rows already
     ``active``); acquiring/error states are left to the add-domain flow and the renewal below.
 
@@ -74,7 +74,7 @@ def _sync_cert_statuses(config: Config) -> None:
                 record = get_record(db, name)
                 if record is None or record.cert_status == DomainCertStatus.ACTIVE:
                     continue
-                cert_path, key_path = config.cert_key_paths_for(db, name)
+                cert_path, key_path = config.cert_key_paths_for(name)
                 if get_cert_status(cert_path, key_path) == CertStatus.OK:
                     set_record_status(db, name, DomainCertStatus.ACTIVE)
     except Exception:
@@ -110,7 +110,7 @@ async def renew_cert_if_needed(
         primary = primary_domain_or_none(db)
         # A failure renewing the canonical domain propagates; failures on aliases remain isolated.
         if primary is not None and primary.tls:
-            cert_path, key_path = config.cert_key_paths_for(db, primary.name_no_port)
+            cert_path, key_path = config.cert_key_paths_for(primary.name_no_port)
             status = get_cert_status(cert_path, key_path)
             if status != CertStatus.OK:
                 logger.info(f"TLS cert for {primary.name} is {status.value}; renewing")
@@ -125,7 +125,7 @@ async def renew_cert_if_needed(
             name = domain.name_no_port
             if not domain.tls or name == primary_no_port:
                 continue
-            cert_path, key_path = config.cert_key_paths_for(db, name)
+            cert_path, key_path = config.cert_key_paths_for(name)
             status = get_cert_status(cert_path, key_path)
             if status == CertStatus.OK:
                 continue
