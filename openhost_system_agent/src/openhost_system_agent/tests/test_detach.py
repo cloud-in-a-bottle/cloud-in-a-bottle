@@ -326,6 +326,12 @@ def test_start_openhost_raises_when_systemd_refuses(monkeypatch: pytest.MonkeyPa
         detach_mod.start_openhost()
 
 
+def test_reset_openhost_start_limit_raises_when_systemd_refuses(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("openhost_system_agent.detach.subprocess.run", lambda *a, **k: _fail("Access denied"))
+    with pytest.raises(RuntimeError, match="systemctl reset-failed"):
+        detach_mod.reset_openhost_start_limit()
+
+
 def test_apply_is_running_reads_active_state(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[list[str]] = []
     for state, expected in (("active", True), ("activating", True), ("inactive", False), ("", False)):

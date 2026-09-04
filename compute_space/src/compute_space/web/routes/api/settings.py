@@ -38,6 +38,7 @@ from compute_space.core.system_agent.client import SystemAgentError
 from compute_space.core.system_agent.client import system_agent_apply
 from compute_space.core.system_agent.client import system_agent_fetch
 from compute_space.core.system_agent.client import system_agent_get_remote
+from compute_space.core.system_agent.client import system_agent_reset_restart_limit_sync
 from compute_space.core.system_agent.client import system_agent_set_remote
 from compute_space.core.system_agent.client import system_agent_status
 from compute_space.core.system_agent.progress import read_progress
@@ -244,6 +245,10 @@ async def update_progress() -> UpdateProgressResponse:
 
 @post("/api/settings/restart_compute_space", status_code=204, guards=[require_owner_auth])
 async def restart_compute_space() -> None:
+    try:
+        await asyncio.to_thread(system_agent_reset_restart_limit_sync)
+    except SystemAgentError as exc:
+        raise ServiceUnavailableException(detail="could not prepare the instance for a safe restart") from exc
     trigger_restart()
 
 

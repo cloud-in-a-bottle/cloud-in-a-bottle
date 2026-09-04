@@ -88,12 +88,60 @@ function makePrimaryDomain(name, currentPrimary) {
         return;
       }
       var promoted = ((res.data && res.data.domains) || []).find(function(d) { return d.is_primary; });
-      if (promoted) window.location.assign(promoted.scheme + '://' + promoted.name + '/settings');
+      if (promoted) redirectAfterPrimaryRestart(promoted, res.data.generation);
     })
     .catch(function() {
       alert('The primary-domain request did not return a readable response. Reloading the domain list.');
       loadDomains();
     });
+}
+
+function redirectAfterPrimaryRestart(promoted, previousGeneration) {
+  var target = promoted.scheme + '://' + promoted.name + '/settings';
+  var msg = document.getElementById('domain-msg');
+  var deadline = Date.now() + 120000;
+  msg.textContent = 'Primary changed. Waiting for the instance to restart…';
+  msg.className = 'notice';
+  msg.hidden = false;
+
+  function poll() {
+    var controller = new AbortController();
+    var timeout = setTimeout(function() { controller.abort(); }, 2000);
+    fetch('/health', {credentials: 'same-origin', cache: 'no-store', signal: controller.signal})
+      .then(function(response) {
+        clearTimeout(timeout);
+        if (response.ok) {
+          return response.json().then(function(health) {
+            if (previousGeneration && health.generation && health.generation !== previousGeneration) {
+              window.location.assign(target);
+              return true;
+            }
+            return false;
+          });
+        }
+        return false;
+      })
+      .then(function(ready) {
+        if (ready) return;
+        if (Date.now() >= deadline) {
+          msg.textContent = 'The restart did not complete. Restart the instance manually, then open ' + target;
+          msg.className = 'notice notice--error';
+          return;
+        }
+        setTimeout(poll, 250);
+      })
+      .catch(function() {
+        clearTimeout(timeout);
+        if (Date.now() >= deadline) {
+          msg.textContent = 'The restart did not complete. Restart the instance manually, then open ' + target;
+          msg.className = 'notice notice--error';
+          return;
+        }
+        setTimeout(poll, 250);
+      });
+  }
+
+  poll();
 }
 
 function loadDomains() {

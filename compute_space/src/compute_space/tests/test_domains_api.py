@@ -11,6 +11,7 @@ from collections.abc import Iterator
 from contextlib import closing
 from pathlib import Path
 from typing import Any
+from unittest import mock
 
 import bcrypt
 import pytest
@@ -339,15 +340,42 @@ def test_make_primary_returns_updated_list_then_schedules_restart(
 ) -> None:
     with closing(open_db(cfg)) as db:
         domains.upsert_record(db, domains.DomainRecord("new.local", tls=False, mdns=True))
-    restarts: list[str] = []
-    monkeypatch.setattr(domains, "trigger_restart", lambda: restarts.append("restart"))
+    restart_steps: list[str] = []
+    monkeypatch.setattr(
+        domains, "system_agent_reset_restart_limit_sync", lambda: restart_steps.append("reset-start-limit")
+    )
+    monkeypatch.setattr(domains, "trigger_restart", lambda: restart_steps.append("restart"))
     client.cookies.update(_auth_cookie(cfg.db_path))
 
     resp = client.post("/api/domains/new.local/primary", json={"expected_primary": "host.example.com"})
 
     assert resp.status_code == 200
     assert next(d for d in resp.json()["domains"] if d["name"] == "new.local")["is_primary"] is True
-    assert restarts == ["restart"]
+    assert resp.json()["generation"]
+    assert restart_steps == ["reset-start-limit", "restart"]
+
+
+def test_make_primary_does_not_restart_when_start_limit_reset_fails(
+    cfg: Any, client: TestClient[Litestar], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with closing(open_db(cfg)) as db:
+        domains.upsert_record(db, domains.DomainRecord("new.local", tls=False, mdns=True))
+    monkeypatch.setattr(
+        domains,
+        "system_agent_reset_restart_limit_sync",
+        lambda: (_ for _ in ()).throw(domains.SystemAgentError("systemd unavailable")),
+    )
+    restart = mock.Mock()
+    monkeypatch.setattr(domains, "trigger_restart", restart)
+    client.cookies.update(_auth_cookie(cfg.db_path))
+
+    resp = client.post("/api/domains/new.local/primary", json={"expected_primary": "host.example.com"})
+
+    assert resp.status_code == 503
+    assert resp.json()["extra"]["code"] == "restart_unavailable"
+    with closing(open_db(cfg)) as db:
+        assert db.execute("SELECT name FROM domains WHERE is_primary = 1").fetchone()[0] == "host.example.com"
+    restart.assert_not_called()
 
 
 def test_make_primary_rejects_stale_expected_primary(cfg: Any, client: TestClient[Litestar]) -> None:
@@ -359,9 +387,27 @@ def test_make_primary_rejects_stale_expected_primary(cfg: Any, client: TestClien
     assert resp.json()["extra"]["code"] == "primary_changed"
 
 
+def test_make_current_primary_is_noop_without_restart_preparation(
+    cfg: Any, client: TestClient[Litestar], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    reset = mock.Mock()
+    restart = mock.Mock()
+    monkeypatch.setattr(domains, "system_agent_reset_restart_limit_sync", reset)
+    monkeypatch.setattr(domains, "trigger_restart", restart)
+    client.cookies.update(_auth_cookie(cfg.db_path))
+
+    resp = client.post("/api/domains/host.example.com/primary", json={"expected_primary": "host.example.com"})
+
+    assert resp.status_code == 200
+    reset.assert_not_called()
+    restart.assert_not_called()
+
+
 def test_domains_ui_outputs_promotion_confirmation_and_expected_primary() -> None:
     source = (Path(__file__).parents[1] / "web" / "static" / "js" / "domains.js").read_text()
     assert "Make primary" in source
     assert "Running apps will restart" in source
     assert "expected_primary: currentPrimary" in source
-    assert "window.location.assign(promoted.scheme" in source
+    assert "redirectAfterPrimaryRestart(promoted, res.data.generation)" in source
+    assert "health.generation !== previousGeneration" in source
+    assert "controller.abort()" in source

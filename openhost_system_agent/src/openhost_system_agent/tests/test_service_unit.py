@@ -86,8 +86,8 @@ class TestOpenhostServiceUnit:
 
     def test_self_update_exit_42_is_a_restarting_success(self) -> None:
         unit = build_openhost_service_unit(1001)
-        # 42 (updates.py RESTART_EXIT_CODE) must force a restart *and* count as a
-        # success, so update restarts work and don't consume the crash burst.
+        # 42 (updates.py RESTART_EXIT_CODE) must force a restart and report success;
+        # intentional callers separately reset systemd's activation-rate counter.
         assert "RestartForceExitStatus=42\n" in unit
         assert "SuccessExitStatus=42\n" in unit
 

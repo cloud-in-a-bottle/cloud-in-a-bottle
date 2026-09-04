@@ -173,3 +173,8 @@ def system_agent_stop_updater_sync() -> None:
         _run_system_agent("updater", "stop", timeout=30)
     except SystemAgentError:
         logger.exception("failed to stop the detached updater; Caddy must win 80/443 via bind-retry")
+
+
+def system_agent_reset_restart_limit_sync() -> None:
+    """Reset systemd's start-rate counter before an intentional restart."""
+    _run_system_agent("service", "reset-start-limit", timeout=30)

@@ -25,6 +25,7 @@ from litestar.background_tasks import BackgroundTasks
 from litestar.di import NamedDependency
 from litestar.enums import MediaType
 from litestar.exceptions import NotFoundException
+from litestar.exceptions import ServiceUnavailableException
 from litestar.exceptions import ValidationException
 from litestar.params import FromPath
 
@@ -43,14 +44,18 @@ from compute_space.core.domains import PrimaryDomainChangedError
 from compute_space.core.domains import effective_domains
 from compute_space.core.domains import get_record
 from compute_space.core.domains import load_records
+from compute_space.core.domains import primary_domain
 from compute_space.core.domains import remove_non_primary_record
 from compute_space.core.domains import set_primary_domain
 from compute_space.core.domains import set_record_status
 from compute_space.core.domains import upsert_record
 from compute_space.core.logging import logger
+from compute_space.core.system_agent.client import SystemAgentError
+from compute_space.core.system_agent.client import system_agent_reset_restart_limit_sync
 from compute_space.core.tls.domain_certs import ensure_cert_for
 from compute_space.core.tls.renewal import CertStatus
 from compute_space.core.tls.renewal import get_cert_status
+from compute_space.core.updates import PROCESS_GENERATION
 from compute_space.core.updates import is_shutdown_pending
 from compute_space.core.updates import trigger_restart
 from compute_space.db import get_db
@@ -89,6 +94,7 @@ class DomainInfo:
 @attr.s(auto_attribs=True, frozen=True)
 class DomainListResponse:
     domains: list[DomainInfo]
+    generation: str = PROCESS_GENERATION
 
 
 def _tls_cert_display(
@@ -248,6 +254,19 @@ async def make_primary_domain(
     record = get_record(db, name)
     if record is None:
         raise NotFoundException(detail="domain not found")
+    current_primary = primary_domain(db).name_no_port
+    expected_primary = data.expected_primary.split(":")[0].lower()
+    if current_primary != expected_primary:
+        raise ConflictException(
+            detail=f"primary domain changed to {current_primary}; reload and try again",
+            extra={"code": "primary_changed", "current_primary": current_primary},
+        )
+    if record.is_primary:
+        return Response(
+            DomainListResponse(domains=_domain_list(config, db)),
+            status_code=200,
+            media_type=MediaType.JSON,
+        )
     if record.tls:
         cert_path, key_path = config.cert_key_paths_for(db, name)
         if get_cert_status(cert_path, key_path) not in (CertStatus.OK, CertStatus.EXPIRING_SOON):
@@ -255,6 +274,13 @@ async def make_primary_domain(
                 detail="domain must have a usable TLS certificate before it can be made primary",
                 extra={"code": "domain_not_ready"},
             )
+    try:
+        await asyncio.to_thread(system_agent_reset_restart_limit_sync)
+    except SystemAgentError as exc:
+        raise ServiceUnavailableException(
+            detail="could not prepare the instance for a safe restart",
+            extra={"code": "restart_unavailable"},
+        ) from exc
     try:
         changed = set_primary_domain(db, name, data.expected_primary)
     except DomainNotFoundError as exc:

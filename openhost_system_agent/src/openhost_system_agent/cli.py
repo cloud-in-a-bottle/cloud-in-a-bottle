@@ -8,6 +8,7 @@ import attr
 import attrs
 import cappa
 
+from openhost_system_agent.detach import reset_openhost_start_limit
 from openhost_system_agent.migrations.runner import apply_system_migrations
 from openhost_system_agent.status import get_migration_status
 from openhost_system_agent.swap import get_swap_status
@@ -127,6 +128,18 @@ class SwapCmd:
             _error(str(e))
 
 
+@cappa.command(name="service", help="Manage the Cloud in a Bottle system service.")
+@attrs.define
+class ServiceCmd:
+    @cappa.command(name="reset-start-limit", help="Prepare the service for an intentional restart.")
+    def reset_start_limit(self) -> None:
+        try:
+            reset_openhost_start_limit()
+        except Exception as e:
+            _error(str(e))
+        print(json.dumps({"ok": True}))
+
+
 @cappa.command(name="updater", help="Seamless-update downtime server (internal; launched by compute_space).")
 @attrs.define
 class UpdaterCmd:
@@ -180,7 +193,7 @@ class UpdaterCmd:
 )
 @attrs.define
 class SystemAgent:
-    subcommand: cappa.Subcommands[UpdateCmd | StatusCmd | SwapCmd | UpdaterCmd]
+    subcommand: cappa.Subcommands[UpdateCmd | StatusCmd | SwapCmd | ServiceCmd | UpdaterCmd]
 
 
 def main() -> None:

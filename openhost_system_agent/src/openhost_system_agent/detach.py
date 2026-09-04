@@ -143,9 +143,18 @@ def start_openhost() -> None:
     start-rate-limit cannot refuse it.
     """
     logger.info(f"starting {OPENHOST_UNIT} after the apply")
-    _systemctl("reset-failed", OPENHOST_UNIT, timeout=30)
+    reset_openhost_start_limit()
     result = _systemctl("restart", OPENHOST_UNIT)
     if result.returncode != 0:
         raise RuntimeError(
             f"systemctl restart {OPENHOST_UNIT} exited {result.returncode}: {(result.stderr or '').strip()}"
+        )
+
+
+def reset_openhost_start_limit() -> None:
+    """Reset systemd's activation-rate counter before an intentional restart."""
+    result = _systemctl("reset-failed", OPENHOST_UNIT, timeout=30)
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"systemctl reset-failed {OPENHOST_UNIT} exited {result.returncode}: {(result.stderr or '').strip()}"
         )

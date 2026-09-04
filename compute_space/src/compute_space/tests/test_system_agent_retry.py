@@ -13,6 +13,8 @@ import pytest
 
 from compute_space.core.system_agent import client as system_agent
 from compute_space.core.system_agent.client import SystemAgentError
+from compute_space.web.routes.api import settings as settings_api
+from compute_space.web.routes.api import system as system_api
 
 
 class _Result:
@@ -117,3 +119,42 @@ def test_stop_updater_sync_calls_agent(monkeypatch: pytest.MonkeyPatch) -> None:
     argv = calls[0][0]
     assert argv[:2] == ["sudo", "openhost_system_agent"]
     assert argv[-2:] == ["updater", "stop"]
+
+
+def test_reset_restart_limit_sync_calls_narrow_agent_command(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[tuple[str, ...]] = []
+    monkeypatch.setattr(system_agent, "_run_system_agent", lambda *args, **kwargs: calls.append(args) or "")
+
+    system_agent.system_agent_reset_restart_limit_sync()
+
+    assert calls == [("service", "reset-start-limit")]
+
+
+@pytest.mark.asyncio
+async def test_manual_restart_prepares_before_triggering(monkeypatch: pytest.MonkeyPatch) -> None:
+    steps: list[str] = []
+    monkeypatch.setattr(settings_api, "system_agent_reset_restart_limit_sync", lambda: steps.append("reset"))
+    monkeypatch.setattr(settings_api, "trigger_restart", lambda: steps.append("restart"))
+
+    await settings_api.restart_compute_space.fn()
+
+    assert steps == ["reset", "restart"]
+
+
+@pytest.mark.asyncio
+async def test_legacy_restart_endpoint_uses_safe_background_restart(monkeypatch: pytest.MonkeyPatch) -> None:
+    steps: list[str] = []
+    monkeypatch.setattr(system_api, "system_agent_reset_restart_limit_sync", lambda: steps.append("reset"))
+    monkeypatch.setattr(system_api, "trigger_restart", lambda: steps.append("restart"))
+
+    response = await system_api.restart_router.fn()
+    assert steps == ["reset"]
+    assert response.background is not None
+    await response.background()
+
+    assert steps == ["reset", "restart"]
+
+
+def test_health_exposes_process_generation() -> None:
+    response = system_api.health.fn()
+    assert response.generation == system_api.PROCESS_GENERATION

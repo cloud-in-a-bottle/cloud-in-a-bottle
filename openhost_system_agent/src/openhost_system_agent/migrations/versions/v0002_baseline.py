@@ -62,10 +62,10 @@ def build_openhost_service_unit(host_uid: int) -> str:
         f"After=network-online.target user@{host_uid}.service\n"
         f"Wants=network-online.target user@{host_uid}.service\n"
         # Crash limiter for Restart=on-failure (see below): after StartLimitBurst
-        # failures within StartLimitIntervalSec systemd stops retrying and leaves
+        # starts within StartLimitIntervalSec systemd stops retrying and leaves
         # the unit `failed`. Bounds how fast a persistent cert-acquisition crash
-        # could hit an ACME endpoint; successful exits (0 and the update-flow's
-        # SuccessExitStatus=42) don't count. StartLimit* MUST live in [Unit].
+        # could hit an ACME endpoint. Intentional restarts reset the activation
+        # counter first. StartLimit* MUST live in [Unit].
         "StartLimitIntervalSec=1800\n"
         "StartLimitBurst=5\n"
         "\n"
@@ -88,8 +88,8 @@ def build_openhost_service_unit(host_uid: int) -> str:
         # applies: a boot with a valid cached cert makes zero ACME calls, and
         # managed instances get certs from the server-side cert-api broker, not a
         # local account key. RestartForceExitStatus=42 keeps the self-update
-        # clean-restart working; because 42 is also SuccessExitStatus it doesn't
-        # count toward the crash burst. Kept in sync with the ansible template.
+        # clean-restart working; intentional restart paths reset the limiter
+        # first. Kept in sync with the ansible template.
         "Restart=on-failure\n"
         "RestartForceExitStatus=42\n"
         "SuccessExitStatus=42\n"
