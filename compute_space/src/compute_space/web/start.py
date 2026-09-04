@@ -108,6 +108,45 @@ def _hairpin_gateway_ip() -> str | None:
     return CONTAINER_GATEWAY_IP
 
 
+def _dns_bind_ip(config: Config) -> str:
+    """The local address CoreDNS serves the public zones on, or None to not serve them at all."""
+    if not config.public_ip:
+        raise RuntimeError("Public IP must be set in config to use CoreDNS")
+    bind_ip = infer_inbound_ipv4(config.public_ip)
+    if bind_ip is None:
+        raise RuntimeError("CoreDNS is enabled but no local address to bind to could be inferred")
+    return bind_ip
+
+
+async def _start_dns(config: Config, domains: tuple[Domain, ...]) -> InternalDnsProvider:
+    """Build the DNS provider and bring up the zones for ``domains``."""
+    dns_provider = InternalDnsProvider(
+        corefile_path=config.coredns_corefile_path,
+        zones_dir=config.zones_dir,
+        # None disables serving DNS entirely for the main routing records
+        bind_ip=_dns_bind_ip(config) if config.coredns_enabled else None,
+        container_gateway_ip=_hairpin_gateway_ip(),
+        coredns_bin=_ensure_coredns_binary(config) if config.coredns_enabled else "coredns",
+    )
+
+    # Before the first add_zone, so the zones CoreDNS starts on already carry the A records routing
+    # the space.  Starting without them serves NODATA at the apex and NXDOMAIN for every
+    # `<app>.<domain>` until the next reload, and resolvers negative-cache both.
+    if config.public_ip is not None:
+        publish_router_addresses(dns_provider, config.public_ip)
+
+    for domain in domains:
+        try:
+            # slightly inefficient bc we reboot coredns each time, but simpler than a separate batch path
+            await dns_provider.add_zone(domain.name_no_port)
+        except DnsNotEnabled:
+            # Running without CoreDNS is a supported choice; the domain is still served by Caddy,
+            # and a TLS one reports the consequence through its cert status.
+            logger.warning("Not serving DNS for {}: coredns is not enabled", domain.name_no_port)
+
+    return dns_provider
+
+
 def _ensure_coredns_binary(config: Config) -> str:
     """Return the CoreDNS binary to launch, self-healing a missing one."""
     if found := shutil.which("coredns"):
@@ -141,34 +180,7 @@ async def _main() -> None:
         domains = effective_domains(db)
         _require_configured_domain(domains)
 
-        public_ip = config.public_ip
-
-        if config.coredns_enabled:
-            if not public_ip:
-                raise RuntimeError("Public IP must be set in config to use CoreDNS")
-            bind_ip = infer_inbound_ipv4(public_ip)
-        else:
-            # bind_ip=None disables coredns serving public zones
-            bind_ip = None
-
-        dns_provider = InternalDnsProvider(
-            corefile_path=config.coredns_corefile_path,
-            zones_dir=config.zones_dir,
-            bind_ip=bind_ip,
-            container_gateway_ip=_hairpin_gateway_ip(),
-            coredns_bin=_ensure_coredns_binary(config) if config.coredns_enabled else "coredns",
-        )
-        for domain in domains:
-            try:
-                # slightly inefficient bc we reboot coredns each time, but simpler than a separate batch path
-                await dns_provider.add_zone(domain.name_no_port)
-            except DnsNotEnabled:
-                # Running without CoreDNS is a supported choice; the domain is still served by
-                # Caddy, and a TLS one reports the consequence through its cert status.
-                logger.warning("Not serving DNS for {}: coredns is not enabled", domain.name_no_port)
-
-        if public_ip is not None:
-            publish_router_addresses(dns_provider, public_ip)
+        dns_provider = await _start_dns(config, domains)
 
         if domains[0].tls:  # primary is a TLS domain
             await _ensure_tls_cert(config, db, dns_provider)

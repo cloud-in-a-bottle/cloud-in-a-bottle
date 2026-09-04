@@ -385,6 +385,31 @@ def test_deleting_a_record_leaves_the_others_alone_and_is_safe_to_repeat(tmp_pat
     assert "www   300  IN A  198.51.100.7" in content
 
 
+@pytest.mark.asyncio
+async def test_removing_a_zone_is_a_no_op_when_nothing_is_served(tmp_path: Path) -> None:
+    # DELETE /api/domains still reaches the provider on an instance with no DNS.  add_zone refused
+    # every zone here, so there is nothing to re-render and no address to render it against.
+    config = _seed_dns_cfg(tmp_path, Domain(name="host.example.com", tls=True))
+    dns = InternalDnsProvider(corefile_path=config.coredns_corefile_path, zones_dir=config.zones_dir, bind_ip=None)
+
+    await dns.remove_zone("host.example.com")
+
+    assert dns.zones == ()
+    assert not config.coredns_corefile_path.exists()
+
+
+def test_records_are_tracked_but_not_rendered_when_nothing_is_served(tmp_path: Path) -> None:
+    # local_http_only sets a public_ip with coredns disabled, so the router still publishes its
+    # address records into a provider that has no view to serve them on.
+    config = _seed_dns_cfg(tmp_path, Domain(name="host.example.com", tls=True))
+    dns = InternalDnsProvider(corefile_path=config.coredns_corefile_path, zones_dir=config.zones_dir, bind_ip=None)
+
+    publish_router_addresses(dns, PUBLIC_IP)
+
+    assert [r.data for r in dns.records] == [PUBLIC_IP] * 3
+    assert not config.coredns_corefile_path.exists()
+
+
 def test_txt_data_is_quoted_so_the_zone_stays_parseable(tmp_path: Path) -> None:
     # An unquoted TXT token containing a space or a semicolon would be read as several strings or
     # as a comment, and CoreDNS would refuse the whole zone.

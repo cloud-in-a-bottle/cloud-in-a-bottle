@@ -168,7 +168,7 @@ def dns_provider(tls_tmpdir):
 
 @pytest.fixture(scope="module")
 def zonefile_path(dns_provider):
-    return dns_provider.settings.zonefile_path
+    return dns_provider.zones_dir / f"{ZONE_DOMAIN}.zone"
 
 
 @pytest.fixture(scope="module")
@@ -303,7 +303,7 @@ def acquired_cert(pebble_server, acme_account_key, dns_provider):
         _acquire_cert_dns01(
             domains=domains,
             directory_url=pebble_server["directory_url"],
-            dns=dns_provider,
+            dns_provider=dns_provider,
             account_key=acme_account_key["jwk"],
             verify_ssl=False,
         )

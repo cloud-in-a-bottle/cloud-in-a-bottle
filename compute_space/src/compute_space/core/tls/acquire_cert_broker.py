@@ -32,6 +32,7 @@ from compute_space.core.tls.acquire_cert import write_cert_and_key
 from compute_space.core.tls.cert_api_client import FINALIZE_STATUS_VALID
 from compute_space.core.tls.cert_api_client import CertApiClient
 from compute_space.core.tls.cert_api_client import CertApiError
+from compute_space.core.tls.cert_api_client import CertChallenge
 from compute_space.core.tls.util import _create_csr
 from compute_space.core.tls.util import _generate_tls_key
 from compute_space.core.tls.util import tls_private_key_to_pem
@@ -97,8 +98,11 @@ async def acquire_tls_cert_via_broker(
     order = await client.create_order(csr_pem)
     logger.info(f"Broker order {order.order_id} created with {len(order.challenges)} challenge(s)")
 
-    # The broker returns a record name per challenge; a wildcard order puts both at
-    # ``_acme-challenge``, the one name the provider publishes them under.
+    # The provider publishes at one fixed label in every zone it serves, so a challenge asking for
+    # any other name cannot be answered from here.  Check rather than publish to the wrong owner
+    # name, which the CA would read as NXDOMAIN and only surface after the finalize poll times out.
+    _check_challenge_names(domain, order.challenges)
+
     values = [c.record_value for c in order.challenges]
     dns_challenge.publish(dns_provider, values)
     try:
@@ -120,6 +124,21 @@ async def acquire_tls_cert_via_broker(
 
     write_cert_and_key(cert_path, key_path, certificate.encode(), tls_private_key_to_pem(tls_key))
     logger.info(f"Installed broker-issued TLS cert for {domain} -> {cert_path}")
+
+
+def _check_challenge_names(domain: str, challenges: list[CertChallenge]) -> None:
+    """Reject an order whose challenges don't all live at ``domain``'s ``_acme-challenge``.
+
+    A wildcard order's two authorizations share that one name, which is what the provider serves.
+    A delegated alias or a sub-domain identifier would need a record the provider has no way to
+    publish, so fail now with the name in the message.
+    """
+    expected = dns_challenge.challenge_fqdn(domain).lower()
+    unexpected = [c.record_name for c in challenges if c.record_name.rstrip(".").lower() != expected]
+    if unexpected:
+        raise CertApiError(
+            f"Broker asked for DNS-01 record(s) at {unexpected}, but this instance can only serve {expected}"
+        )
 
 
 async def _poll_until_issued(

@@ -21,6 +21,7 @@ from compute_space.core.dns.coredns_provider.interface import InternalDnsProvide
 from compute_space.core.tls.acquire_cert_broker import CertAcquisitionTimeoutError
 from compute_space.core.tls.acquire_cert_broker import acquire_tls_cert_via_broker
 from compute_space.core.tls.cert_api_client import CertApiClient
+from compute_space.core.tls.cert_api_client import CertApiError
 from compute_space.core.tls.cert_api_client import CertApiOrderFailed
 from compute_space.core.tls.keycloak import StaticTokenProvider
 
@@ -232,3 +233,30 @@ async def test_failed_order_raises_and_clears_txt(tmp_path: Path) -> None:
 
     # A failed order fails fast (no full-timeout spin) and still cleans up TXT.
     assert "IN TXT" not in zonefile.read_text()
+
+
+@pytest.mark.asyncio
+async def test_a_challenge_name_the_provider_cannot_serve_fails_fast(tmp_path: Path) -> None:
+    # The provider publishes at one fixed label in every zone, so a delegated alias has nowhere to
+    # go.  Publishing anyway puts the token at the wrong owner name and the order dies at the
+    # 600s finalize timeout with nothing saying why.
+    dns_provider, _ = _dns(tmp_path)
+    payload = {
+        "order_id": "order-abc",
+        "challenges": [{"domain": DOMAIN, "record_name": f"_acme-challenge.delegated.{DOMAIN}", "record_value": "v"}],
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=payload)
+
+    with pytest.raises(CertApiError, match="can only serve"):
+        async with _client_from_handler(handler) as client:
+            await acquire_tls_cert_via_broker(
+                domain=DOMAIN,
+                cert_path=tmp_path / "cert.pem",
+                key_path=tmp_path / "key.pem",
+                dns_provider=dns_provider,
+                client=client,
+                clock=FakeClock(),
+                wait_for_propagation=_noop_wait,
+            )

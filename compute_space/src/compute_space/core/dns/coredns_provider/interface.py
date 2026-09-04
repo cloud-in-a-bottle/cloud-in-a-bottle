@@ -104,6 +104,8 @@ class InternalDnsProvider:
         await self._apply_zones((*self._zones, normalized_zone))
 
     async def remove_zone(self, zone: str) -> None:
+        if _is_local_only(zone) or not self.serves_public_zones:
+            return
         name = normalize_zone(zone)
         await self._apply_zones(tuple(z for z in self._zones if z != name))
 
@@ -180,7 +182,13 @@ class InternalDnsProvider:
         one path means there is no second notion of what a zone file should contain.  A record-only
         change re-renders a byte-identical Corefile, which costs nothing -- CoreDNS watches zone
         files (``reload 2s``), not the Corefile, and picks the data up once the serial moves.
+
+        With neither view bound there is no config to write: nothing serves these records, and the
+        renderer has no address to put in a server block.  Records still accumulate in memory, so a
+        provider that later gains an address renders them all.
         """
+        if self.bind_ip is None and self.container_gateway_ip is None:
+            return
         write_coredns_config(
             self._zones,
             self.records,
