@@ -91,7 +91,7 @@ Other app commands: `bottle app status|list|stop|rename|remove`. Run
   `bottle logs --instance my-zone` (zone/router logs).
 - **Shell on the zone**: `bottle instance ssh --instance my-zone`.
 - **Authenticated HTTP**: `bottle curl https://my-app.<zone-domain>/some/path`
-  — runs `curl` with the user's API token token injected, so it behaves like an
+  — runs `curl` with the user's API token injected, so it behaves like an
   owner-logged-in request.
 - **Test a page in a browser** the way a logged-in owner sees it: drive it
   with Playwright and inject the API token as an `Authorization: Bearer
@@ -119,9 +119,8 @@ contract, injected env vars, data storage, auth, cross-app services):
 - Or read the source docs at
   `github.com/cloud-in-a-bottle/cloud-in-a-bottle/tree/main/docs/src` (start with
   `creating_an_app/overview.md` and `creating_an_app/manifest_spec.md`).
-- You can also always clone `github.com/cloud-in-a-bottle/cloud-in-a-bottle
 
-To reference Cloud in a Bottle's code and docs directly, you can always just clone the openhost repo locally:
+To browse Cloud in a Bottle's code and docs locally, clone the repository:
 ```bash
 git clone https://github.com/cloud-in-a-bottle/cloud-in-a-bottle.git
 ```
