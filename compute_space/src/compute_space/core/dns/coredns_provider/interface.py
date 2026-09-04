@@ -71,9 +71,9 @@ class InternalDnsProvider:
     _records: dict[tuple[str, RecordType], tuple[DnsRecord, ...]] = attr.ib(factory=dict, init=False)
     _coredns: CoreDnsProcess | None = attr.ib(default=None, init=False)
     _serial: int = attr.ib(default=0, init=False)
-    # Serializes zone changes: two concurrent /api/domains requests are two tasks on one loop, and
-    # two overlapping restarts orphan a CoreDNS still holding :53.  Record writes need no lock --
-    # they never await, so they cannot interleave.
+    # Serializes zone changes end to end, read included: two concurrent /api/domains requests are
+    # two tasks on one loop, and two overlapping restarts orphan a CoreDNS still holding :53.
+    # Record writes need no lock -- they never await, so they cannot interleave.
     _zone_lock: asyncio.Lock = attr.ib(factory=asyncio.Lock, init=False, eq=False, repr=False)
 
     async def cleanup(self) -> None:
@@ -97,17 +97,24 @@ class InternalDnsProvider:
         if not self.serves_public_zones:
             raise DnsNotEnabled(f"No address to serve {zone!r} on; this instance is not bound for public DNS")
         normalized_zone = normalize_zone(zone)
-        if normalized_zone in self._zones:
-            # Already authoritative for it.  Appending anyway would put two server blocks for the
-            # same zone in the Corefile, which CoreDNS refuses to load.
-            return
-        await self._apply_zones((*self._zones, normalized_zone))
+        # Read the current set only once the lock is held: computing the new set outside it means
+        # two concurrent changes both build on the same stale set, and the second to land drops
+        # whatever the first added.
+        async with self._zone_lock:
+            if normalized_zone in self._zones:
+                # Already authoritative for it.  Appending anyway would put two server blocks for
+                # the same zone in the Corefile, which CoreDNS refuses to load.
+                return
+            await self._apply_zones((*self._zones, normalized_zone))
 
     async def remove_zone(self, zone: str) -> None:
+        # Mirror add_zone's skips: neither kind of domain was ever added, so there is nothing to
+        # re-render, and re-rendering would restart CoreDNS for a zone it never served.
         if _is_local_only(zone) or not self.serves_public_zones:
             return
         name = normalize_zone(zone)
-        await self._apply_zones(tuple(z for z in self._zones if z != name))
+        async with self._zone_lock:
+            await self._apply_zones(tuple(z for z in self._zones if z != name))
 
     @property
     def records(self) -> tuple[DnsRecord, ...]:
@@ -145,19 +152,20 @@ class InternalDnsProvider:
 
         A restart, not just a re-render, because a zone appearing or disappearing means a
         different set of Corefile server blocks, which a running process won't pick up.
+
+        Caller holds the zone lock.
         """
-        async with self._zone_lock:
-            before = set(self._zones)
-            self._zones = zones
+        before = set(self._zones)
+        self._zones = zones
 
-            for name in before - set(zones):
-                discard_zone_files(self.zones_dir, name)
-            logger.info(f"DNS zones are now {sorted(zones) or 'none'}")
+        for name in before - set(zones):
+            discard_zone_files(self.zones_dir, name)
+        logger.info(f"DNS zones are now {sorted(zones) or 'none'}")
 
-            # Re-render whether or not anything is serving the files right now: a later start reads
-            # them as they are.
-            self._write_config()
-            await self._match_process_to_zones()
+        # Re-render whether or not anything is serving the files right now: a later start reads
+        # them as they are.
+        self._write_config()
+        await self._match_process_to_zones()
 
     async def _match_process_to_zones(self) -> None:
         """Run CoreDNS exactly when there is a zone to answer for.

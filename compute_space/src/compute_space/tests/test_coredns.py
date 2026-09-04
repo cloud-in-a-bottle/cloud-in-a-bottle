@@ -31,6 +31,9 @@ PUBLIC_IP = "203.0.113.10"
 # The local address CoreDNS binds; the compute space works it out and passes it in.
 BIND_IP = "10.0.0.5"
 APP_ZONE = "app.example.com"
+# Passed explicitly wherever a render is asserted on, so the Corefile doesn't depend on whatever
+# nameservers the machine running the tests happens to have.
+TEST_UPSTREAM = ("192.0.2.53",)
 
 
 def _seed_dns_cfg(tmp_path: Path, *domains: Domain, **kw: Any) -> DefaultConfig:
@@ -54,6 +57,7 @@ def _render(tmp_path: Path, container_gateway_ip: str | None = None) -> dict[str
         "zones_dir": tmp_path / "zones",
         "bind_ip": BIND_IP,
         "container_gateway_ip": container_gateway_ip,
+        "upstream_dns": TEST_UPSTREAM,
     }
 
 
@@ -96,12 +100,45 @@ def test_container_dns_view_rendered_when_a_gateway_is_given(tmp_path: Path) -> 
     # Public view binds the discovered local IP; container view binds the gateway.
     assert "bind 10.0.0.5" in cf
     assert "bind 10.200.0.1" in cf
-    assert f"forward . {' '.join(dns_mod.UPSTREAM_DNS)}" in cf
+    assert f"forward . {' '.join(TEST_UPSTREAM)}" in cf
 
     # The container zonefile answers the wildcard with the gateway, never the public IP.
     cz = _app_zonefile(tmp_path).with_suffix(".zone.container").read_text()
     assert "*   IN A    10.200.0.1" in cz
     assert PUBLIC_IP not in cz
+
+
+def test_upstream_resolvers_come_from_the_host(tmp_path: Path) -> None:
+    # Hardcoding public resolvers breaks a split-horizon corporate resolver, a VPN's, or a cloud
+    # VPC's internal zone, and routes every container query past the resolver the operator set.
+    resolv_conf = tmp_path / "resolv.conf"
+    resolv_conf.write_text("search example.com\nnameserver 10.0.0.53\nnameserver 10.0.0.54\n")
+
+    assert dns_mod.host_upstream_resolvers(resolv_conf=resolv_conf) == ("10.0.0.53", "10.0.0.54")
+
+
+def test_unusable_host_resolvers_are_dropped(tmp_path: Path) -> None:
+    # Loopback is the systemd-resolved stub, which the container netns can't reach; the gateway is
+    # this CoreDNS, so forwarding there loops.
+    resolv_conf = tmp_path / "resolv.conf"
+    resolv_conf.write_text(
+        f"nameserver 127.0.0.53\nnameserver ::1\nnameserver {CONTAINER_GATEWAY_IP}\nnameserver 10.0.0.53\n"
+    )
+
+    resolvers = dns_mod.host_upstream_resolvers(CONTAINER_GATEWAY_IP, resolv_conf=resolv_conf)
+
+    assert resolvers == ("10.0.0.53",)
+
+
+@pytest.mark.parametrize("contents", ["", "nameserver 127.0.0.53\n"])
+def test_public_resolvers_are_the_fallback_not_the_default(tmp_path: Path, contents: str) -> None:
+    # Nothing usable left (or no resolv.conf at all): containers resolving via the wrong servers
+    # still beats containers resolving nothing.
+    resolv_conf = tmp_path / "resolv.conf"
+    resolv_conf.write_text(contents)
+
+    assert dns_mod.host_upstream_resolvers(resolv_conf=resolv_conf) == dns_mod.FALLBACK_UPSTREAM_DNS
+    assert dns_mod.host_upstream_resolvers(resolv_conf=tmp_path / "absent") == dns_mod.FALLBACK_UPSTREAM_DNS
 
 
 def test_container_dns_view_skipped_without_a_gateway(tmp_path: Path) -> None:
@@ -124,7 +161,7 @@ def test_container_view_forward_and_distinct_bind(tmp_path: Path) -> None:
 
     assert "bind 10.0.0.5" in cf  # public/authoritative view
     assert f"bind {CONTAINER_GATEWAY_IP}" in cf  # container view + catch-all
-    assert f"forward . {' '.join(dns_mod.UPSTREAM_DNS)}" in cf
+    assert f"forward . {' '.join(TEST_UPSTREAM)}" in cf
     # Catch-all is scoped to the container gateway only (never the public bind), so the public IP
     # is not turned into an open recursive resolver.
     catch_all = cf.split(".:53 {", 1)[1]
@@ -317,6 +354,28 @@ async def test_removing_a_zone_discards_its_files_but_keeps_the_records(
     assert not removed_zone.exists()
     assert [r.data for r in dns.records] == ["198.51.100.7"]
     assert "www   300  IN A  198.51.100.7" in _zonefile(config, "host.example.com").read_text()
+
+
+@pytest.mark.asyncio
+async def test_concurrent_zone_changes_do_not_drop_each_other(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Concurrent /api/domains requests are tasks on one loop.  Building the new zone set before
+    # taking the lock means a change queued behind two others computed its set from the state
+    # before the one ahead of it landed, so it drops that zone -- leaving it in the DB with CoreDNS
+    # never serving it.  Takes three overlapping changes: with two, the second reads the set the
+    # first had already stored.
+    config = _seed_dns_cfg(tmp_path, Domain(name="host.example.com", tls=True))
+    dns = _provider(config)
+
+    # The real restart awaits the OS here; yielding inside the lock is what lets a second change
+    # interleave at all.
+    async def yielding_restart(self: InternalDnsProvider) -> None:
+        await asyncio.sleep(0)
+
+    monkeypatch.setattr(InternalDnsProvider, "_match_process_to_zones", yielding_restart)
+
+    await asyncio.gather(dns.add_zone("a.example.com"), dns.add_zone("b.example.com"), dns.add_zone("c.example.com"))
+
+    assert set(dns.zones) == {"a.example.com", "b.example.com", "c.example.com"}
 
 
 @pytest.mark.asyncio

@@ -19,13 +19,53 @@ _TEMPLATES_DIR = Path(__file__).parent / "templates"
 # of silently rendering an empty string (e.g. a blank `file` path that CoreDNS would reject).
 _jinja_env = Environment(loader=FileSystemLoader(_TEMPLATES_DIR), undefined=StrictUndefined)
 
-# upstream resolvers for the container-facing DNS view's catch-all
-UPSTREAM_DNS = ("8.8.8.8", "1.1.1.1")
+# Upstream resolvers for the container-facing DNS view's catch-all, used only when the host's own
+# resolvers can't be discovered.
+FALLBACK_UPSTREAM_DNS = ("8.8.8.8", "1.1.1.1")
+
+_RESOLV_CONF = Path("/etc/resolv.conf")
 
 # The zone's default TTL, and what the records routing the space are published with.  Long by
 # default: it is what keeps visitors able to reach the instance while CoreDNS is down during an
 # update.
 ADDRESS_TTL_SECONDS = 300
+
+
+def host_upstream_resolvers(
+    container_gateway_ip: str | None = None, resolv_conf: Path = _RESOLV_CONF
+) -> tuple[str, ...]:
+    """The host's own resolvers, for the container view's catch-all forward.
+
+    Read from the host's resolv.conf so containers resolve through whatever the operator's network
+    provides: a split-horizon corporate resolver, a VPN's, a cloud VPC's internal zone.  Hardcoding
+    public resolvers instead would break every one of those, and quietly route container queries
+    past the resolver the operator configured.
+
+    Two kinds of entry are unusable and dropped.  Loopback is the systemd-resolved stub, which the
+    container netns cannot reach.  Our own gateway address is this CoreDNS, so forwarding there
+    would loop.  If that leaves nothing, fall back to public resolvers: containers that resolve via
+    the wrong servers beat containers that resolve nothing at all.
+    """
+    resolvers: list[str] = []
+    try:
+        lines = resolv_conf.read_text().splitlines()
+    except OSError:
+        logger.warning(f"Could not read {resolv_conf}; forwarding container DNS to {FALLBACK_UPSTREAM_DNS}")
+        return FALLBACK_UPSTREAM_DNS
+
+    for line in lines:
+        parts = line.split()
+        if len(parts) < 2 or parts[0] != "nameserver":
+            continue
+        addr = parts[1]
+        if addr.startswith("127.") or addr == "::1" or addr == container_gateway_ip:
+            continue
+        resolvers.append(addr)
+
+    if not resolvers:
+        logger.info(f"No usable nameserver in {resolv_conf}; forwarding container DNS to {FALLBACK_UPSTREAM_DNS}")
+        return FALLBACK_UPSTREAM_DNS
+    return tuple(resolvers)
 
 
 def _zonefile_path(zones_dir: Path, zone: str) -> Path:
@@ -63,12 +103,18 @@ def write_coredns_config(
     bind_ip: str | None,
     container_gateway_ip: str | None = None,
     default_ttl: int = ADDRESS_TTL_SECONDS,
+    upstream_dns: Sequence[str] | None = None,
 ) -> None:
     """Render the Corefile plus a zone file per zone, for each enabled view.
 
     Builds from scratch each time, ignoring the current config.
     """
     assert bind_ip is not None or container_gateway_ip is not None, "must bind at least one view"
+
+    # Re-read per render rather than caching at startup, so a resolver change (DHCP renewal, a VPN
+    # coming up) is picked up by the next config write.
+    if upstream_dns is None:
+        upstream_dns = host_upstream_resolvers(container_gateway_ip)
 
     # The Corefile names a file per zone per view, so pair each zone up with its paths once.
     zone_files = [
@@ -86,7 +132,7 @@ def write_coredns_config(
             zones=zone_files,
             bind_ip=bind_ip,
             container_gateway_ip=container_gateway_ip,
-            upstream_dns=" ".join(UPSTREAM_DNS),
+            upstream_dns=" ".join(upstream_dns),
         )
     )
 
