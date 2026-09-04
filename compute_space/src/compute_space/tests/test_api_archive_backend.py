@@ -552,7 +552,7 @@ def test_reload_app_refuses_when_archive_unhealthy(
     cfg: Any, apps_client: TestClient[Litestar], cookies: dict[str, str]
 ) -> None:
     """An archive-using app cannot be reloaded while the JuiceFS mount is
-    unhealthy; without this guard, provision_data would write to the
+    unhealthy; without this guard, make_data_dirs_and_env_vars would write to the
     underlying empty mount-point and lose those writes once the mount
     came back."""
     archived_id = new_app_id()
