@@ -86,6 +86,8 @@ sudo systemctl enable --now cloudflared
 
 Go to your configured domain name in a browser from any machine, and you should be able to access your instance!
 
+This tunnel domain remains secondary: Cloudflare's certificate exists at its edge, not on your instance, so it cannot be made primary. Your original local domain, such as `lvh.me:8080`, remains the primary.
+
 If it doesn't come up, try these:
 
 ```bash
@@ -160,7 +162,9 @@ sudo chmod 0644 "$CERT_DIR/$DOMAIN.pem"
 sudo chmod 0600 "$CERT_DIR/$DOMAIN.key"
 ```
 
-The dashboard then uses `https://bottle.example.com`, apps use `https://<app>.bottle.example.com`, and acme.sh renews and installs the certificate through the same DNS API.
+The dashboard is then reachable at `https://bottle.example.com`, apps at `https://<app>.bottle.example.com`, and acme.sh renews and installs the certificate through the same DNS API.
+
+Once the new domain works, choose **Make primary** beside it in **Settings → Domains**. The instance and running apps restart, and your browser moves to the new domain; you may need to sign in again. You can then remove the old local domain.
 
 ## IPv4 tunnel service
 
