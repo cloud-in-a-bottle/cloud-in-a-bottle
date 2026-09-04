@@ -1,10 +1,3 @@
-"""Has a record actually made it out?
-
-Asks a real resolver, which is the only thing that answers the question: writing a record into a
-zone file says nothing about whether CoreDNS has reloaded, or whether the parent zone's NS
-delegation points here at all.
-"""
-
 from __future__ import annotations
 
 import asyncio
@@ -15,8 +8,6 @@ from collections.abc import Sequence
 from compute_space.core.dns.coredns_provider.interface import RecordType
 from compute_space.core.logging import logger
 
-# Deliberately not the host's own resolver: with the router serving DNS that would query CoreDNS
-# directly and confirm nothing about whether the delegation works.
 _PROPAGATION_RESOLVER = "8.8.8.8"
 
 _DIG_TIMEOUT_SECONDS = 10.0

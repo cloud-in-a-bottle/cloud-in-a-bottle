@@ -13,7 +13,7 @@ import pytest
 import compute_space.core.dns.coredns_provider.coredns as dns_mod
 from compute_space.config import DefaultConfig
 from compute_space.core.containers import CONTAINER_GATEWAY_IP
-from compute_space.core.dns.coredns_provider.interface import DnsZoneError
+from compute_space.core.dns.coredns_provider.interface import DnsNotEnabled
 from compute_space.core.dns.coredns_provider.interface import InternalDnsProvider
 from compute_space.core.dns.coredns_provider.interface import RecordType
 from compute_space.core.dns.router_records import publish_router_addresses
@@ -31,6 +31,9 @@ PUBLIC_IP = "203.0.113.10"
 # The local address CoreDNS binds; the compute space works it out and passes it in.
 BIND_IP = "10.0.0.5"
 APP_ZONE = "app.example.com"
+# Passed explicitly wherever a render is asserted on, so the Corefile doesn't depend on whatever
+# nameservers the machine running the tests happens to have.
+TEST_UPSTREAM = ("192.0.2.53",)
 
 
 def _seed_dns_cfg(tmp_path: Path, *domains: Domain, **kw: Any) -> DefaultConfig:
@@ -54,11 +57,18 @@ def _render(tmp_path: Path, container_gateway_ip: str | None = None) -> dict[str
         "zones_dir": tmp_path / "zones",
         "bind_ip": BIND_IP,
         "container_gateway_ip": container_gateway_ip,
+        "upstream_dns": TEST_UPSTREAM,
     }
 
 
 def _app_zonefile(tmp_path: Path) -> Path:
     return tmp_path / "zones" / f"{APP_ZONE}.zone"
+
+
+async def _serve(dns: InternalDnsProvider, zones: tuple[str, ...]) -> None:
+    """Bring a provider up the way boot does: one zone at a time, no bulk setter."""
+    for zone in zones:
+        await dns.add_zone(zone)
 
 
 def _zones(db: sqlite3.Connection) -> tuple[str, ...]:
@@ -82,9 +92,7 @@ def _serial(zonefile: Path) -> int:
 # ─── the container-facing view ───
 
 
-def test_container_dns_view_rendered_when_gateway_bindable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(dns_mod, "_gateway_ip_is_bindable", lambda ip: True)
-
+def test_container_dns_view_rendered_when_a_gateway_is_given(tmp_path: Path) -> None:
     render = _render(tmp_path, container_gateway_ip="10.200.0.1")
     dns_mod.write_coredns_config((APP_ZONE,), (), serial=1, **render)
 
@@ -92,7 +100,7 @@ def test_container_dns_view_rendered_when_gateway_bindable(tmp_path: Path, monke
     # Public view binds the discovered local IP; container view binds the gateway.
     assert "bind 10.0.0.5" in cf
     assert "bind 10.200.0.1" in cf
-    assert f"forward . {' '.join(dns_mod.UPSTREAM_DNS)}" in cf
+    assert f"forward . {' '.join(TEST_UPSTREAM)}" in cf
 
     # The container zonefile answers the wildcard with the gateway, never the public IP.
     cz = _app_zonefile(tmp_path).with_suffix(".zone.container").read_text()
@@ -100,10 +108,42 @@ def test_container_dns_view_rendered_when_gateway_bindable(tmp_path: Path, monke
     assert PUBLIC_IP not in cz
 
 
-def test_container_dns_view_skipped_when_gateway_not_bindable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(dns_mod, "_gateway_ip_is_bindable", lambda ip: False)
+def test_upstream_resolvers_come_from_the_host(tmp_path: Path) -> None:
+    # Hardcoding public resolvers breaks a split-horizon corporate resolver, a VPN's, or a cloud
+    # VPC's internal zone, and routes every container query past the resolver the operator set.
+    resolv_conf = tmp_path / "resolv.conf"
+    resolv_conf.write_text("search example.com\nnameserver 10.0.0.53\nnameserver 10.0.0.54\n")
 
-    render = _render(tmp_path, container_gateway_ip="10.200.0.1")
+    assert dns_mod.host_upstream_resolvers(resolv_conf=resolv_conf) == ("10.0.0.53", "10.0.0.54")
+
+
+def test_unusable_host_resolvers_are_dropped(tmp_path: Path) -> None:
+    # Loopback is the systemd-resolved stub, which the container netns can't reach; the gateway is
+    # this CoreDNS, so forwarding there loops.
+    resolv_conf = tmp_path / "resolv.conf"
+    resolv_conf.write_text(
+        f"nameserver 127.0.0.53\nnameserver ::1\nnameserver {CONTAINER_GATEWAY_IP}\nnameserver 10.0.0.53\n"
+    )
+
+    resolvers = dns_mod.host_upstream_resolvers(CONTAINER_GATEWAY_IP, resolv_conf=resolv_conf)
+
+    assert resolvers == ("10.0.0.53",)
+
+
+@pytest.mark.parametrize("contents", ["", "nameserver 127.0.0.53\n"])
+def test_public_resolvers_are_the_fallback_not_the_default(tmp_path: Path, contents: str) -> None:
+    # Nothing usable left (or no resolv.conf at all): containers resolving via the wrong servers
+    # still beats containers resolving nothing.
+    resolv_conf = tmp_path / "resolv.conf"
+    resolv_conf.write_text(contents)
+
+    assert dns_mod.host_upstream_resolvers(resolv_conf=resolv_conf) == dns_mod.FALLBACK_UPSTREAM_DNS
+    assert dns_mod.host_upstream_resolvers(resolv_conf=tmp_path / "absent") == dns_mod.FALLBACK_UPSTREAM_DNS
+
+
+def test_container_dns_view_skipped_without_a_gateway(tmp_path: Path) -> None:
+    # None is what boot passes when the openhost0 interface isn't there to bind.
+    render = _render(tmp_path, container_gateway_ip=None)
     dns_mod.write_coredns_config((APP_ZONE,), (), serial=1, **render)
 
     cf = render["corefile_path"].read_text()
@@ -112,18 +152,16 @@ def test_container_dns_view_skipped_when_gateway_not_bindable(tmp_path: Path, mo
     assert not _app_zonefile(tmp_path).with_suffix(".zone.container").exists()
 
 
-def test_container_view_forward_and_distinct_bind(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_container_view_forward_and_distinct_bind(tmp_path: Path) -> None:
     # The public view and the container view must bind different addresses (the default-route
     # source vs the gateway), and the container catch-all must forward to the upstreams.
-    monkeypatch.setattr(dns_mod, "_gateway_ip_is_bindable", lambda ip: True)
-
     render = _render(tmp_path, container_gateway_ip=CONTAINER_GATEWAY_IP)
     dns_mod.write_coredns_config((APP_ZONE,), (), serial=1, **render)
     cf = render["corefile_path"].read_text()
 
     assert "bind 10.0.0.5" in cf  # public/authoritative view
     assert f"bind {CONTAINER_GATEWAY_IP}" in cf  # container view + catch-all
-    assert f"forward . {' '.join(dns_mod.UPSTREAM_DNS)}" in cf
+    assert f"forward . {' '.join(TEST_UPSTREAM)}" in cf
     # Catch-all is scoped to the container gateway only (never the public bind), so the public IP
     # is not turned into an open recursive resolver.
     catch_all = cf.split(".:53 {", 1)[1]
@@ -164,7 +202,7 @@ async def test_start_writes_a_zone_block_and_file_per_public_domain(
     with closing(open_db(config)) as db:
         zones = _zones(db)
     dns = _provider(config)
-    await dns.set_zones(zones)
+    await _serve(dns, zones)
     try:
         cf = config.coredns_corefile_path.read_text()
         # Both domains get their own authoritative server block referencing their own zone file.
@@ -189,7 +227,7 @@ async def test_adding_a_zone_regenerates_the_corefile_and_restarts(
     config = _seed_dns_cfg(tmp_path, Domain(name="host.example.com", tls=True))
     with closing(open_db(config)) as db:
         dns = _provider(config)
-        await dns.set_zones(_zones(db))
+        await _serve(dns, _zones(db))
         try:
             assert dns._coredns is not None
             first_proc = dns._coredns.proc
@@ -207,29 +245,6 @@ async def test_adding_a_zone_regenerates_the_corefile_and_restarts(
 
 
 @pytest.mark.asyncio
-async def test_re_adding_a_served_zone_raises_and_leaves_coredns_alone(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    # /api/domains rejects an already-configured domain before it gets here, so a duplicate reaching
-    # the provider means the two disagree -- worth raising over.  The refusal must not cost a
-    # restart, which would drop DNS for no reason.
-    stub_coredns_spawn(monkeypatch)
-
-    config = _seed_dns_cfg(tmp_path, Domain(name="host.example.com", tls=True))
-    with closing(open_db(config)) as db:
-        dns = _provider(config)
-        await dns.set_zones(_zones(db))
-        try:
-            assert dns._coredns is not None
-            first_proc = dns._coredns.proc
-            with pytest.raises(DnsZoneError):
-                await dns.add_zone("host.example.com")
-            assert dns._coredns.proc is first_proc
-        finally:
-            await dns.cleanup()
-
-
-@pytest.mark.asyncio
 async def test_concurrent_zone_changes_serialize_their_restarts(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -241,7 +256,7 @@ async def test_concurrent_zone_changes_serialize_their_restarts(
     with closing(open_db(config)) as db:
         zones = _zones(db)
     dns = _provider(config)
-    await dns.set_zones(zones)
+    await _serve(dns, zones)
     try:
         in_flight = 0
         peak = 0
@@ -262,6 +277,38 @@ async def test_concurrent_zone_changes_serialize_their_restarts(
         assert set(dns.zones) == {"host.example.com", "a.example.com", "b.example.com"}
     finally:
         await dns.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_re_adding_a_served_zone_is_a_no_op(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Appending it again would put two server blocks for the same zone in the Corefile, which
+    # CoreDNS refuses to load -- and the restart would drop DNS for no reason.
+    stub_coredns_spawn(monkeypatch)
+
+    config = _seed_dns_cfg(tmp_path, Domain(name="host.example.com", tls=True))
+    dns = _provider(config)
+    await dns.add_zone("host.example.com")
+    try:
+        assert dns._coredns is not None
+        first_proc = dns._coredns.proc
+
+        await dns.add_zone("host.example.com")
+
+        assert dns.zones == ("host.example.com",)
+        assert dns._coredns.proc is first_proc
+    finally:
+        await dns.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_a_zone_this_instance_cannot_serve_is_refused(tmp_path: Path) -> None:
+    # bind_ip=None means nothing would answer for it; boot catches this and carries on.
+    config = _seed_dns_cfg(tmp_path, Domain(name="host.example.com", tls=True))
+    dns = InternalDnsProvider(corefile_path=config.coredns_corefile_path, zones_dir=config.zones_dir, bind_ip=None)
+
+    with pytest.raises(DnsNotEnabled):
+        await dns.add_zone("host.example.com")
+    assert dns.zones == ()
 
 
 @pytest.mark.asyncio
@@ -307,6 +354,28 @@ async def test_removing_a_zone_discards_its_files_but_keeps_the_records(
     assert not removed_zone.exists()
     assert [r.data for r in dns.records] == ["198.51.100.7"]
     assert "www   300  IN A  198.51.100.7" in _zonefile(config, "host.example.com").read_text()
+
+
+@pytest.mark.asyncio
+async def test_concurrent_zone_changes_do_not_drop_each_other(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Concurrent /api/domains requests are tasks on one loop.  Building the new zone set before
+    # taking the lock means a change queued behind two others computed its set from the state
+    # before the one ahead of it landed, so it drops that zone -- leaving it in the DB with CoreDNS
+    # never serving it.  Takes three overlapping changes: with two, the second reads the set the
+    # first had already stored.
+    config = _seed_dns_cfg(tmp_path, Domain(name="host.example.com", tls=True))
+    dns = _provider(config)
+
+    # The real restart awaits the OS here; yielding inside the lock is what lets a second change
+    # interleave at all.
+    async def yielding_restart(self: InternalDnsProvider) -> None:
+        await asyncio.sleep(0)
+
+    monkeypatch.setattr(InternalDnsProvider, "_match_process_to_zones", yielding_restart)
+
+    await asyncio.gather(dns.add_zone("a.example.com"), dns.add_zone("b.example.com"), dns.add_zone("c.example.com"))
+
+    assert set(dns.zones) == {"a.example.com", "b.example.com", "c.example.com"}
 
 
 @pytest.mark.asyncio
@@ -373,6 +442,31 @@ def test_deleting_a_record_leaves_the_others_alone_and_is_safe_to_repeat(tmp_pat
     content = _zonefile(config, "host.example.com").read_text()
     assert "IN TXT" not in content
     assert "www   300  IN A  198.51.100.7" in content
+
+
+@pytest.mark.asyncio
+async def test_removing_a_zone_is_a_no_op_when_nothing_is_served(tmp_path: Path) -> None:
+    # DELETE /api/domains still reaches the provider on an instance with no DNS.  add_zone refused
+    # every zone here, so there is nothing to re-render and no address to render it against.
+    config = _seed_dns_cfg(tmp_path, Domain(name="host.example.com", tls=True))
+    dns = InternalDnsProvider(corefile_path=config.coredns_corefile_path, zones_dir=config.zones_dir, bind_ip=None)
+
+    await dns.remove_zone("host.example.com")
+
+    assert dns.zones == ()
+    assert not config.coredns_corefile_path.exists()
+
+
+def test_records_are_tracked_but_not_rendered_when_nothing_is_served(tmp_path: Path) -> None:
+    # local_http_only sets a public_ip with coredns disabled, so the router still publishes its
+    # address records into a provider that has no view to serve them on.
+    config = _seed_dns_cfg(tmp_path, Domain(name="host.example.com", tls=True))
+    dns = InternalDnsProvider(corefile_path=config.coredns_corefile_path, zones_dir=config.zones_dir, bind_ip=None)
+
+    publish_router_addresses(dns, PUBLIC_IP)
+
+    assert [r.data for r in dns.records] == [PUBLIC_IP] * 3
+    assert not config.coredns_corefile_path.exists()
 
 
 def test_txt_data_is_quoted_so_the_zone_stays_parseable(tmp_path: Path) -> None:

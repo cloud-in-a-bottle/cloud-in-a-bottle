@@ -32,7 +32,7 @@ from litestar.params import FromPath
 from compute_space.config import Config
 from compute_space.config import get_config
 from compute_space.core.caddy import reload_caddy_for_domains
-from compute_space.core.dns.coredns_provider.interface import DnsNotBoundError
+from compute_space.core.dns.coredns_provider.interface import DnsNotEnabled
 from compute_space.core.dns.coredns_provider.interface import InternalDnsProvider
 from compute_space.core.domains import AppsBusyForPrimaryChangeError
 from compute_space.core.domains import ArchiveMigrationInProgressError
@@ -219,10 +219,12 @@ async def add_domain(
         ),
     )
     if not data.mdns:
-        # Make CoreDNS authoritative before DNS-01 acquisition starts.
         try:
             await dns_provider.add_zone(name)
-        except DnsNotBoundError:
+        except DnsNotEnabled:
+            # Not an error: running without CoreDNS is a supported choice, and the domain is still
+            # worth recording (Caddy will serve it once its DNS points here by other means).  A TLS
+            # domain surfaces the consequence through its cert status, below.
             logger.warning("Added {} but this instance is not serving DNS for it", name)
     background: list[BackgroundTask] = [BackgroundTask(_reload_caddy_after_response)]
     if data.tls:
@@ -330,9 +332,7 @@ async def remove_domain(
         if current is not None and current.is_primary:
             raise ValidationException(detail="cannot remove the primary domain")
         raise NotFoundException(detail="domain not found")
-    if removed is not None and not removed.mdns and dns_provider.serves_public_zones:
-        # Drop the zone from CoreDNS so it stops answering for the removed public domain, and
-        # discard its zone file.  The records survive — they belong to no zone.
+    if removed is not None and not removed.mdns:
         await dns_provider.remove_zone(name)
     # Regenerate Caddy only after this response has been sent — see _reload_caddy_after_response.
     return Response(

@@ -1,14 +1,3 @@
-"""What a record is, to this provider.
-
-Records live in memory on the :class:`~compute_space.core.dns.coredns_provider.interface.
-InternalDnsProvider` and are rendered into the zone files whenever they change.  Nothing persists
-them: every record the space serves is re-published on each boot, so a copy on disk could only go
-stale.
-
-They carry no zone.  Every zone the provider serves is an alias for the same space, so a record
-that existed in only some of them would make the zones disagree.
-"""
-
 from __future__ import annotations
 
 from enum import StrEnum

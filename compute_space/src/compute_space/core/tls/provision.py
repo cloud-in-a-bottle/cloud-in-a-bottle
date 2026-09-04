@@ -1,4 +1,6 @@
+import asyncio
 import sqlite3
+import weakref
 from pathlib import Path
 
 from compute_space.config import CERT_PROVIDER_ACME
@@ -10,6 +12,22 @@ from compute_space.core.tls.acquire_cert import acquire_tls_cert
 from compute_space.core.tls.acquire_cert_broker import acquire_tls_cert_via_broker
 from compute_space.core.tls.cert_api_client import CertApiClient
 from compute_space.core.tls.keycloak import KeycloakTokenProvider
+
+# Note: this is messy and should get cleaned up when we cleanup the cert aquisition stuff.
+# Serializes cert issuance; see acquire_cert_for_domain.  One lock per event loop rather than one
+# module-level lock, because an asyncio.Lock binds to the first loop that contends it and then
+# raises on any other -- fine for the router, which has exactly one loop for its whole life, but a
+# module-level lock would fail the second test that contends it.
+_ISSUANCE_LOCKS: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Lock] = weakref.WeakKeyDictionary()
+
+
+def _issuance_lock() -> asyncio.Lock:
+    loop = asyncio.get_running_loop()
+    lock = _ISSUANCE_LOCKS.get(loop)
+    if lock is None:
+        lock = asyncio.Lock()
+        _ISSUANCE_LOCKS[loop] = lock
+    return lock
 
 
 async def acquire_cert_for_domain(
@@ -31,11 +49,29 @@ async def acquire_cert_for_domain(
 
     The cert_provider value and its required settings are validated when the Config is constructed
     (Config.__attrs_post_init__), so here we only narrow the optional fields for the type checker.
+
+    One acquisition at a time, instance-wide: every DNS-01 challenge is answered from the same
+    ``_acme-challenge`` name, so a second one starting mid-flight would overwrite the first one's
+    tokens and then clear them on its way out.  Acquisitions are rare and no request waits on one
+    (the add-domain route runs it in the background), so queueing them costs nothing.
     """
     # Fail fast and legibly: DNS-01 answers the challenge from a zone this instance serves, so
     # without one the CA would just time out.  The message reaches the domain's error_message.
     if not dns_provider.serves_public_zones:
         raise RuntimeError("CoreDNS must be enabled to acquire a TLS cert via DNS-01 challenge")
+    async with _issuance_lock():
+        await _acquire_cert_for_domain_locked(config, domain, cert_path, key_path, db, dns_provider)
+
+
+async def _acquire_cert_for_domain_locked(
+    config: Config,
+    domain: str,
+    cert_path: Path,
+    key_path: Path,
+    db: sqlite3.Connection,
+    dns_provider: InternalDnsProvider,
+) -> None:
+    """The acquisition itself.  Caller holds the issuance lock."""
     if config.cert_provider == CERT_PROVIDER_ACME:
         if not config.acme_account_key_path:
             raise RuntimeError("ACME account key path must be set in config to acquire TLS cert")
