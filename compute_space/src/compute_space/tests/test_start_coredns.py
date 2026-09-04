@@ -71,14 +71,23 @@ def test_an_unbindable_public_ip_names_the_address_not_the_setting(monkeypatch: 
     monkeypatch.setattr(start_mod, "infer_inbound_ipv4", lambda public_ip: None)
     config = DefaultConfig(data_root_dir="/tmp/unused", coredns_enabled=True, public_ip=PUBLIC_IP)
 
-    with pytest.raises(RuntimeError, match="no local address to serve on"):
+    with pytest.raises(RuntimeError, match="no local address to bind to"):
         start_mod._dns_bind_ip(config)
 
 
-def test_dns_is_not_bound_when_coredns_is_disabled() -> None:
-    config = DefaultConfig(data_root_dir="/tmp/unused", coredns_enabled=False, public_ip=PUBLIC_IP)
+@pytest.mark.asyncio
+async def test_dns_is_not_bound_when_coredns_is_disabled(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # A public_ip with coredns off (local_http_only) still builds a provider and publishes the
+    # router records into it; it just has no view to serve them on.
+    monkeypatch.setattr(start_mod, "_hairpin_gateway_ip", lambda: None)
+    config = DefaultConfig(data_root_dir=str(tmp_path), coredns_enabled=False, public_ip=PUBLIC_IP)
+    config.make_all_dirs()
 
-    assert start_mod._dns_bind_ip(config) is None
+    dns_provider = await start_mod._start_dns(config, (Domain(name="host.example.com", tls=True),))
+
+    assert dns_provider.bind_ip is None
+    assert dns_provider.zones == ()
+    assert not config.coredns_corefile_path.exists()
 
 
 @pytest.mark.asyncio

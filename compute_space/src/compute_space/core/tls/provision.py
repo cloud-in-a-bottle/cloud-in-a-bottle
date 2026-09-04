@@ -71,7 +71,7 @@ async def _acquire_cert_for_domain_locked(
     db: sqlite3.Connection,
     dns_provider: InternalDnsProvider,
 ) -> None:
-    """The acquisition itself.  Caller holds ``dns_provider.challenge_lock``."""
+    """The acquisition itself.  Caller holds the issuance lock."""
     if config.cert_provider == CERT_PROVIDER_ACME:
         if not config.acme_account_key_path:
             raise RuntimeError("ACME account key path must be set in config to acquire TLS cert")

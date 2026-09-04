@@ -109,7 +109,7 @@ def _hairpin_gateway_ip() -> str | None:
 
 
 def _dns_bind_ip(config: Config) -> str:
-    """The local address CoreDNS serves the public zones on, or None to not serve them at all."""
+    """The local address CoreDNS serves the public zones on."""
     if not config.public_ip:
         raise RuntimeError("Public IP must be set in config to use CoreDNS")
     bind_ip = infer_inbound_ipv4(config.public_ip)
