@@ -86,8 +86,6 @@ sudo systemctl enable --now cloudflared
 
 Go to your configured domain name in a browser from any machine, and you should be able to access your instance!
 
-This tunnel domain remains secondary: Cloudflare's certificate exists at its edge, not on your instance, so it cannot be made primary. Your original local domain, such as `lvh.me:8080`, remains the primary.
-
 If it doesn't come up, try these:
 
 ```bash
