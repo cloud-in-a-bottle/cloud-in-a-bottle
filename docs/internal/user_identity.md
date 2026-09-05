@@ -34,7 +34,7 @@ Nothing wraps this on the app side yet (no client library, no worked example, no
 
 - eventually this will become a new DID method, so let's keep close to that setup
 - i want a new hybrid method - public key / DID is the source of truth, but the domain is the human-readable advisory ID. anytime you really need to ensure the domain shortname is valid, you’ll hit the domain and verify it still controls its private key. and the user can refer to themselves by their domain - eg to create a login - with the assumption that if the user thinks they control their domain, it’s probably safe to assume that is true for the next ~5 mins or whatever. so you can hit their domain and fetch their public key.
-- openhost-specific context
+- Cloud in a Bottle-specific context
   - each user has a Cloud in a Bottle space, accessable at a specific domain (user.host.imbue.com or whatever).
   - their userspaces all run a copy of an identity provider service that handles to the challenges+flows discussed in this doc.
   - a Cloud in a Bottle app (owned/hosted by user A) can give access to other Cloud in a Bottle users (user B) by the following flow
@@ -56,7 +56,7 @@ Nothing wraps this on the app side yet (no client library, no worked example, no
         - then you say “i will share this with user xyz”
         - when user xyz accesses your space/app, the app is like “tell me who you are”.
             - the user can maybe manually enter their PGP identity?
-            - but better is some way that we redirect to my.openhost.imbue.com/sso, which redirects to the user’s space, and is like “hey do you wanna log in to this app”. if you say yes, then it’ll redirect back with whatever crypographic challenge response is needed to provide the identity.
+            - but better is some way that we redirect through my.cloudinabottle.org, which redirects to the user’s space and asks whether they want to log in to this app. if they say yes, it redirects back with whatever cryptographic challenge response is needed to provide the identity.
 - existing implementations of this / standards. generally called “decentralized/federated identity”
     - indieauth
         - your domain name is your identity

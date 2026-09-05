@@ -54,7 +54,7 @@ version = "0.1.0"
 endpoint = "/api/"
 ```
 
-Service requests land rooted at `endpoint` in the provider app, ie `app_name.openhost_space.com/<endpoint>/<whatever_api_route>`.
+Service requests land rooted at `endpoint` in the provider app, ie `app-name.your-domain.com/<endpoint>/<whatever_api_route>`.
 
 ### Consumer apps
 
@@ -261,6 +261,5 @@ Provider apps should verify permissions attached to inbound requests. A simple p
   }
   reverse_proxy localhost:3000
 }```
-
 
 

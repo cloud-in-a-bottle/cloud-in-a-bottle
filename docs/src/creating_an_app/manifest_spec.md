@@ -70,14 +70,14 @@ Multiple apps requesting the same host port can't be installed at the same time,
 
 ### `[[links]]` (optional, repeatable)
 
-A convenience feature to display additional links to the instance owner on the app detail page. By default we just link to your app's root at `{app_name}.{zone_url}`. This feature allows additional links to be displayed, eg to an admin console at `/_openhost/admin`. The `path` is taken at face value and is not verified in any way.
+A convenience feature to display additional links to the instance owner on the app detail page. By default we just link to your app's root at `{app_name}.{zone_url}`. This feature allows additional links to be displayed, eg to an admin console at `/admin`. The `path` is taken at face value and is not verified in any way.
 
 In general it's better to expose these links from within your app; this is mainly a convenience feature for supporting existing apps where we want to add a Cloud in a Bottle specific admin page that isn't exposed in the upstream app. This feature may be removed in the future.
 
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
 | `name` | string | yes | - | Display name for the link (e.g., `"admin"`) |
-| `path` | string | yes | - | Path on the app's URL (e.g., `"/_openhost/admin"`) |
+| `path` | string | yes | - | Path on the app's URL (e.g., `"/admin"`) |
 
 ### `[resources]` (optional)
 
@@ -173,5 +173,5 @@ port = 3000
 
 [[links]]
 name = "admin"
-path = "/_openhost/admin"
+path = "/admin"
 ```

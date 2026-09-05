@@ -64,7 +64,7 @@ start_caddy = true
 public_ip = "203.0.113.10"
 
 acme_account_key_path = "/home/host/openhost/ansible/secrets/certbot_private_key.json"
-acme_email = "openhost@mycooldomain.com"
+acme_email = "admin@mycooldomain.com"
 acme_directory_url = "https://acme-v02.api.letsencrypt.org/directory"
 ```
 
