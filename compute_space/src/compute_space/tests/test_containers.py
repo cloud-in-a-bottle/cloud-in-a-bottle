@@ -440,10 +440,21 @@ def test_run_container_has_hardening_flags(tmp_path, monkeypatch: pytest.MonkeyP
 def test_run_container_points_dns_at_gateway_for_pasta_apps(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
     # Pasta apps resolve via the container-facing CoreDNS view on the gateway so
     # `<app>.<zone>` hairpins to Caddy instead of looping in the container netns.
+    monkeypatch.setattr(containers, "is_bindable", lambda ip: True)
     manifest = _basic_manifest()
     argv = _run_and_capture(monkeypatch, manifest=manifest, tmp_path=tmp_path)
     dns_idx = argv.index("--dns")
     assert argv[dns_idx + 1] == "10.200.0.1"
+
+
+def test_run_container_skips_dns_when_gateway_is_absent(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # No openhost0 dummy interface (dev, CI, macOS) means no container-facing
+    # CoreDNS view to point at, and a container aimed at a resolver that isn't
+    # there gets no DNS at all — leave podman's default resolver in place.
+    monkeypatch.setattr(containers, "is_bindable", lambda ip: False)
+    manifest = _basic_manifest()
+    argv = _run_and_capture(monkeypatch, manifest=manifest, tmp_path=tmp_path)
+    assert "--dns" not in argv
 
 
 def test_run_container_network_host_app_gets_no_dns_override(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:

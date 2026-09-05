@@ -29,6 +29,7 @@ from typing import NoReturn
 
 import attr
 
+from compute_space.core.ip import is_bindable
 from compute_space.core.logging import logger
 from compute_space.core.manifest import AppManifest
 from compute_space.core.manifest import PortMapping
@@ -348,21 +349,26 @@ def run_container(
                 # host.docker.internal kept for compatibility with existing apps.
                 f"--add-host={_DOCKER_COMPAT_HOST}:host-gateway",
                 f"--add-host={ROUTER_GATEWAY_HOST}:host-gateway",
-                # Point the container's resolver at the container-facing CoreDNS
-                # view bound on the gateway.  That view answers `*.zone_domain`
-                # with the gateway IP (where Caddy is reachable) and forwards
-                # everything else upstream.  This is what makes "hairpin" access
-                # to sibling apps' public HTTPS URLs work: pasta otherwise gives
-                # the container the host's public IP as a *local* address, so a
-                # connection to `app.zone` (public IP) never leaves the container
-                # netns and is refused.  Resolving to the gateway instead sends
-                # it to Caddy, which terminates the real zone cert by SNI and
-                # applies normal routing/auth.  network_host apps are excluded:
-                # they share the host netns and use the host's resolver directly.
-                "--dns",
-                CONTAINER_GATEWAY_IP,
             ]
         )
+        # Point the container's resolver at the container-facing CoreDNS view
+        # bound on the gateway.  That view answers `*.zone_domain` with the
+        # gateway IP (where Caddy is reachable) and forwards everything else
+        # upstream.  This is what makes "hairpin" access to sibling apps' public
+        # HTTPS URLs work: pasta otherwise gives the container the host's public
+        # IP as a *local* address, so a connection to `app.zone` (public IP)
+        # never leaves the container netns and is refused.  Resolving to the
+        # gateway instead sends it to Caddy, which terminates the real zone cert
+        # by SNI and applies normal routing/auth.  network_host apps are
+        # excluded: they share the host netns and use the host's resolver
+        # directly.
+        #
+        # Only when that view is actually being served, which is gated on the
+        # same probe (see start.py's _hairpin_gateway_ip).  In dev/CI, and on
+        # macOS, nothing creates the openhost0 dummy interface, and a container
+        # pointed at a resolver that isn't there has no DNS at all.
+        if is_bindable(CONTAINER_GATEWAY_IP):
+            cmd.extend(["--dns", CONTAINER_GATEWAY_IP])
 
     # max-file is not supported by podman's k8s-file driver; archiving is
     # handled by the reload route before run_container is called.
