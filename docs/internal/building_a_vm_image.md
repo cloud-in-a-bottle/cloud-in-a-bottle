@@ -18,7 +18,7 @@ The [release images](../src/setup/shared_homeserver.md#part-1-download-and-run-t
 
 ## Build it
 
-Run from a checkout of the openhost repo, on the Linux/KVM host:
+Run from a checkout of the Cloud in a Bottle repo, on the Linux/KVM host:
 
 ```bash
 image/build.sh
