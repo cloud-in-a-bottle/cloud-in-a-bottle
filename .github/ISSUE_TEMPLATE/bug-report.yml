@@ -1,0 +1,100 @@
+name: Bug report
+description: Report a reproducible problem with Cloud in a Bottle
+title: "[Bug]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping improve Cloud in a Bottle. Please search existing issues before filing a new one.
+
+        Logs are useful, but may contain domain names or other private information. Remove credentials, access tokens, private keys, and anything else you do not want to share publicly.
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: What happened?
+      description: Briefly describe the problem and its impact.
+      placeholder: I expected ..., but instead ...
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Affected area
+      options:
+        - Installation or update
+        - Dashboard
+        - App installation, build, or lifecycle
+        - Routing, domains, DNS, or TLS
+        - Authentication or access
+        - Storage or backups
+        - bottle CLI
+        - Documentation
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Cloud in a Bottle version
+      description: Provide the release version, Git commit, or branch you are running.
+      placeholder: v0.1.4 or 0123abc
+    validations:
+      required: true
+
+  - type: dropdown
+    id: environment
+    attributes:
+      label: Installation environment
+      options:
+        - Cloud server
+        - Dedicated home server
+        - Shared home server or virtual machine
+        - Local development environment
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: host
+    attributes:
+      label: Host details
+      description: Include the operating system, CPU architecture, and relevant infrastructure provider or hardware.
+      placeholder: Ubuntu 24.04, x86_64, Hetzner CX22
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      description: List the smallest reliable sequence that causes the problem. Include relevant commands or app repository URLs.
+      placeholder: |
+        1. Install ...
+        2. Run ...
+        3. Observe ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs or error output
+      description: Share relevant output from `bottle logs`, `bottle app logs <app>`, or `journalctl -u openhost`. Redact sensitive information.
+      render: shell
+
+  - type: textarea
+    id: additional-context
+    attributes:
+      label: Additional context
+      description: Add screenshots, configuration details, or anything else that may help us investigate.
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched existing issues for the same problem.
+          required: true
+        - label: I removed credentials, tokens, private keys, and other sensitive information from this report.
+          required: true
