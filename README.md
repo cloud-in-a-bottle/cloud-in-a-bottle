@@ -55,23 +55,6 @@ Read the [Cloud in a Bottle manual](https://cloudinabottle.org/docs/) for platfo
 - [Creating an app](https://cloudinabottle.org/docs/creating_an_app/overview.html)
 - [`cloudinabottle.toml` manifest specification](https://cloudinabottle.org/docs/creating_an_app/manifest_spec.html)
 
-## Agent skill
-
-An agent skill that gives an AI coding agent context for deploying and debugging apps on Cloud in a Bottle via the `bottle` CLI. Install with:
-
-```bash
-npx skills add cloud-in-a-bottle/cloud-in-a-bottle --skill cloud-in-a-bottle-context
-```
-
-The skill works best with the `bottle` CLI installed and logged in:
-
-```bash
-uv tool install "cloud-in-a-bottle-cli @ git+https://github.com/cloud-in-a-bottle/cloud-in-a-bottle.git#subdirectory=compute_space_cli"
-bottle instance login
-```
-
-Once set up, ask your coding agent to package any existing project for Cloud in a Bottle and deploy it directly, with no manual manifest editing required.
-
 ---
 
 ## License
