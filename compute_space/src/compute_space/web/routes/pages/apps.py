@@ -201,10 +201,7 @@ async def _resolve_edit_app(
     return {"mode": "service", "action": action, "repo": base_url, "ref": ref}
 
 
-@get("/add_app", guards=[require_owner_auth])
-async def add_app(
-    db: NamedDependency[sqlite3.Connection], repo: FromQuery[str] = "", next: FromQuery[str] = ""
-) -> Template:
+def _add_app_page(db: sqlite3.Connection, *, repo: str, next_url: str, auto_clone: bool) -> Template:
     catalog_installed = db.execute("SELECT 1 FROM apps WHERE name = ?", (CATALOG_APP_NAME,)).fetchone() is not None
     return Template(
         template_name="add_app.html",
@@ -213,9 +210,23 @@ async def add_app(
             "catalog_app_name": CATALOG_APP_NAME,
             "catalog_repo_url": CATALOG_REPO_URL,
             "initial_repo": repo,
-            "next_url": next,
+            "next_url": next_url,
+            "auto_clone": auto_clone,
         },
     )
+
+
+@get("/add_app", guards=[require_owner_auth])
+async def add_app(
+    db: NamedDependency[sqlite3.Connection], repo: FromQuery[str] = "", next: FromQuery[str] = ""
+) -> Template:
+    return _add_app_page(db, repo=repo, next_url=next, auto_clone=True)
+
+
+@get("/redirect/deploy", guards=[require_owner_auth])
+async def redirect_deploy(db: NamedDependency[sqlite3.Connection], repo: FromQuery[str] = "") -> Template:
+    """Side-effect-free landing page for public deploy links."""
+    return _add_app_page(db, repo=repo, next_url="", auto_clone=False)
 
 
 @get(
@@ -240,5 +251,5 @@ async def update_review(app_name: FromPath[str], db: NamedDependency[sqlite3.Con
 
 pages_apps_routes = Router(
     path="/",
-    route_handlers=[dashboard, app_detail, add_app, update_review],
+    route_handlers=[dashboard, app_detail, add_app, redirect_deploy, update_review],
 )

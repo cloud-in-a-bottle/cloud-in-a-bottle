@@ -18,6 +18,7 @@ from compute_space.db import provide_db
 from compute_space.db.connection import init_db
 from compute_space.web.app import _template_globals
 from compute_space.web.routes.pages.apps import add_app
+from compute_space.web.routes.pages.apps import redirect_deploy
 
 from ._litestar_helpers import auth_cookie
 from .conftest import _make_test_config
@@ -44,7 +45,7 @@ def _build_app(cfg: Any) -> Litestar:
             engine.engine.globals.update(_template_globals(cfg, web_dir / "static"))
 
     return Litestar(
-        route_handlers=[add_app],
+        route_handlers=[add_app, redirect_deploy],
         template_config=template_config,
         dependencies={
             "config": Provide(provide_config, sync_to_thread=False),
@@ -94,3 +95,31 @@ def test_callout_offers_install_when_catalog_missing(cfg: Any) -> None:
     assert "Install the catalog" in resp.text
     assert "https://github.com/cloud-in-a-bottle/app-catalog" in resp.text
     assert f"http://catalog.{primary_of(cfg).name}/" not in resp.text
+
+
+def test_redirect_deploy_prefills_repo_without_cloning(cfg: Any) -> None:
+    set_active_config(cfg)
+    cookie = auth_cookie(cfg)
+
+    with TestClient(app=_build_app(cfg)) as client:
+        client.cookies.update(cookie)
+        resp = client.get(
+            "/redirect/deploy",
+            params={"repo": "https://github.com/cloud-in-a-bottle/bottled-paperless-ngx"},
+        )
+
+    assert resp.status_code == 200
+    assert '"initialRepo": "https://github.com/cloud-in-a-bottle/bottled-paperless-ngx"' in resp.text
+    assert '"autoClone": false' in resp.text
+
+
+def test_add_app_repo_still_clones_automatically(cfg: Any) -> None:
+    set_active_config(cfg)
+    cookie = auth_cookie(cfg)
+
+    with TestClient(app=_build_app(cfg)) as client:
+        client.cookies.update(cookie)
+        resp = client.get("/add_app", params={"repo": "https://github.com/example/app"})
+
+    assert resp.status_code == 200
+    assert '"autoClone": true' in resp.text
