@@ -357,6 +357,10 @@ async def test_private_startup_auth_precedes_interception_and_owner_gets_details
         ("GET", "text/html;q=2", None, False),
         ("GET", "text/html;q=-1", None, False),
         ("GET", "text/html;q=1e-1", None, False),
+        ("GET", "text/html;q = 0", None, False),
+        ("GET", "text/html;q= 0", None, False),
+        ("GET", "text/html;q=0.001", None, True),
+        ("GET", "text/html;q=0.999,application/json;q=0.991", None, True),
         ("GET", "text/html;q=0,*/*;q=1", "document", False),
         ("GET", "text/html;charset=utf-8;q=0,text/html;q=1", "document", False),
         ("GET", "text/html;charset=iso-8859-1;q=0,text/html;q=1", "document", True),
@@ -412,6 +416,21 @@ async def test_startup_only_retries_html_get_navigation(
     if method == "HEAD":
         # ASGITransport discards HEAD bodies itself; inspect actual emitted bytes too.
         assert b"".join(bodies) == b""
+    assert backend.requests == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", ["building", "starting"])
+async def test_repeated_accept_fields_preserve_explicit_html_exclusion(
+    wrapped_app: Any, proxy_config: Config, backend: _RecordingBackend, status: str
+) -> None:
+    _set_status(proxy_config, status)
+    async with _client(wrapped_app) as c:
+        response = await c.get(
+            "http://myapp.myhost.local/",
+            headers=[("Accept", "text/html"), ("Accept", "text/html;charset=utf-8;q=0")],
+        )
+    _assert_startup(response, html=False)
     assert backend.requests == []
 
 

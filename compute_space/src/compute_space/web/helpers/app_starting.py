@@ -25,12 +25,13 @@ def _is_html_navigation(request: Request[Any, Any, Any]) -> bool:
     # The most specific range determines each representation's quality, including
     # explicit q=0 exclusions. Litestar's Accept.best_match ignores those exclusions.
     try:
-        values = request.headers.get("accept", "").lower().split(",")
+        values = ",".join(request.headers.getall("accept", [])).lower().split(",")
         for value in values:
             for parameter in value.split(";")[1:]:
                 name, _, quality = parameter.strip().partition("=")
-                if name.strip() == "q" and _QUALITY_VALUE.fullmatch(quality.strip()) is None:
-                    return False
+                if name.strip() == "q":
+                    if name != "q" or _QUALITY_VALUE.fullmatch(quality) is None:
+                        return False
         accepted = [MediaTypeHeader(value) for value in values]
 
         def preference(media_type: str) -> tuple[int, int]:
@@ -38,7 +39,9 @@ def _is_html_navigation(request: Request[Any, Any, Any]) -> bool:
             matches = [item for item in accepted if item.match(provided)]
             if not matches:
                 return (0, -1)
-            return max(matches, key=lambda item: (item.priority[1], item.priority[0])).priority
+            best = max(matches, key=lambda item: (item.priority[1], float(item.params.get("q", "1"))))
+            # HTTP weights allow three decimals; MediaTypeHeader.priority truncates to two.
+            return (round(float(best.params.get("q", "1")) * 1000), best.priority[1])
 
         html = preference("text/html; charset=utf-8")
         return html[0] > 0 and html > max(preference("text/plain; charset=utf-8"), preference("application/json"))
