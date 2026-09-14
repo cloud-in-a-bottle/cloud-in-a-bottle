@@ -166,7 +166,7 @@ just = "*"
 
 [tool.pixi.feature.dev.pypi-dependencies]
 pytest = ">=8.0"
-hypothesis = "*"
+hypothesis = "==6.155.3"
 requests = ">=2.31"
 pytest-timeout = ">=2.2"
 playwright = "*"
