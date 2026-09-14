@@ -49,9 +49,7 @@ def _is_html_navigation(request: Request[Any, Any, Any]) -> bool:
         return False
 
 
-def app_starting_response(
-    request: Request[Any, Any, Any], *, app_name: str, zone: Domain, is_owner: bool
-) -> ASGIResponse:
+def app_starting_response(request: Request[Any, Any, Any], *, app_name: str, zone: Domain) -> ASGIResponse:
     headers = {"Cache-Control": "no-store", "Retry-After": str(RETRY_SECONDS), "Referrer-Policy": "no-referrer"}
     if not _is_html_navigation(request):
         return ASGIResponse(
@@ -70,7 +68,6 @@ def app_starting_response(
 
     body = _JINJA_ENV.get_template("app_starting.html").render(
         app_name=app_name,
-        details_url=f"{router_url}/app_detail/{app_name}" if is_owner else None,
         static_url=static_url,
         retry_seconds=RETRY_SECONDS,
     )

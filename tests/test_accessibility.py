@@ -190,29 +190,49 @@ def test_app_launch_waits_at_its_own_url_then_opens_when_ready(
         launch.click()
     app_page = popup.value
     expect(app_page.get_by_role("heading", name="Your app is coming up")).to_be_visible()
-    app_page.get_by_role("button", name="Pause automatic retry").click()
+    expect(app_page.locator("main button, main a")).to_have_count(0)
     assert app_page.url == app_url
     assert backend_paths == []
+    app_page.close()
 
     # The post-deploy Details page offers the same app URL and waiting experience.
-    app_page.get_by_role("link", name="View app details").click()
-    app_page.wait_for_url(f"{stack.router_url}/app_detail/startup-test")
-    with app_page.expect_popup() as detail_popup:
-        app_page.locator(f'a[href="{app_url}"]').first.click()
+    row.hover()
+    row.get_by_role("link", name="Details").click()
+    page.wait_for_url(f"{stack.router_url}/app_detail/startup-test")
+    with page.expect_popup() as detail_popup:
+        page.locator(f'a[href="{app_url}"]').first.click()
     waiting = detail_popup.value
     waiting.set_viewport_size({"width": width, "height": 900})
-    waiting.get_by_role("button", name="Pause automatic retry").click()
-    waiting.evaluate("window.testDocumentMarker = 'paused'")
-    waiting.wait_for_timeout(3500)
-    assert waiting.evaluate("window.testDocumentMarker") == "paused"
+    retried = waiting.wait_for_event(
+        "response", predicate=lambda r: r.url == app_url and r.request.is_navigation_request(), timeout=10000
+    )
+    assert retried.status == 503
     assert backend_paths == []
-    assert waiting.evaluate("document.documentElement.scrollWidth <= innerWidth")
-    assert waiting.locator(".panel").evaluate("element => getComputedStyle(element).borderTopStyle") == "solid"
-    audit = Axe().run(waiting, options={"runOnly": {"type": "tag", "values": WCAG_AA_TAGS}})
-    assert not audit.response["violations"], audit.response["violations"]
+    with browser.new_context(
+        java_script_enabled=False, viewport={"width": width, "height": 900}, storage_state=page.context.storage_state()
+    ) as plain_context:
+        plain = plain_context.new_page()
+        plain.goto(app_url)
+        expect(plain.get_by_role("heading", name="Your app is coming up")).to_be_visible()
+        expect(plain.locator("main button, main a")).to_have_count(0)
+        expect(plain.locator("#startup-hint")).to_contain_text("refresh this page")
+        assert plain.evaluate("document.documentElement.scrollWidth <= innerWidth")
+        assert plain.locator(".panel").evaluate("element => getComputedStyle(element).borderTopStyle") == "solid"
+    with browser.new_context(
+        viewport={"width": width, "height": 900}, storage_state=page.context.storage_state()
+    ) as audit_context:
+        audited = audit_context.new_page()
+        # Keep this static scan from navigating away; real automatic retries are
+        # exercised by the separate waiting tab. Axe itself needs JavaScript.
+        audited.route(
+            "**/static/js/app-starting.js*",
+            lambda route: route.fulfill(status=200, content_type="application/javascript", body=""),
+        )
+        audited.goto(app_url)
+        audit = Axe().run(audited, options={"runOnly": {"type": "tag", "values": WCAG_AA_TAGS}})
+        assert not audit.response["violations"], audit.response["violations"]
 
     set_state("running")
-    waiting.get_by_role("button", name="Resume automatic retry").click()
     expect(waiting.get_by_role("heading", name="App is ready")).to_be_visible(timeout=15000)
     assert waiting.url == app_url
     assert backend_paths.count("/") == 1
@@ -224,17 +244,9 @@ def test_app_launch_waits_at_its_own_url_then_opens_when_ready(
     deep_url = app_url + raw_target + "#keep-this"
     response = waiting.goto(deep_url)
     assert response is not None and response.status == 503
-    waiting.get_by_role("button", name="Pause automatic retry").click()
-    with browser.new_context(java_script_enabled=False, storage_state=page.context.storage_state()) as plain_context:
-        plain = plain_context.new_page()
-        plain.goto(deep_url)
-        expect(plain.get_by_role("heading", name="Your app is coming up")).to_be_visible()
-        expect(plain.locator("#startup-retry")).to_be_hidden()
-        expect(plain.get_by_role("link", name="View app details")).to_be_visible()
-        assert plain.url == deep_url
+    expect(waiting.locator("main button, main a")).to_have_count(0)
     set_state("running")
-    waiting.get_by_role("button", name="Try now", exact=True).click()
-    expect(waiting.get_by_role("heading", name="App is ready")).to_be_visible()
+    expect(waiting.get_by_role("heading", name="App is ready")).to_be_visible(timeout=15000)
     assert waiting.url == deep_url
     assert backend_paths.count("/" + raw_target) == 1
 
@@ -244,12 +256,9 @@ def test_app_launch_waits_at_its_own_url_then_opens_when_ready(
         set_state("starting", unavailable.getsockname()[1])
         response = waiting.goto(app_url + "failed?view=logs#keep-this")
         assert response is not None and response.status == 503
-        waiting.get_by_role("button", name="Pause automatic retry").click()
         set_state("error", unavailable.getsockname()[1])
-        waiting.get_by_role("button", name="Resume automatic retry").click()
         expect(waiting.locator("body")).to_have_text("App is not responding", timeout=15000)
         waiting.evaluate("window.testDocumentMarker = 'failed'")
         waiting.wait_for_timeout(3500)
         assert waiting.evaluate("window.testDocumentMarker") == "failed"
     waiting.close()
-    app_page.close()

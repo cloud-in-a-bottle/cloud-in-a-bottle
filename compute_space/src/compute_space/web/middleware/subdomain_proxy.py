@@ -194,10 +194,8 @@ class SubdomainProxyMiddleware:
         if forwarded_for := _resolve_forwarded_for(connection):
             extra_headers.append(("X-Forwarded-For", forwarded_for))
 
-        is_owner = False
         try:
             verify_owner_auth(connection)
-            is_owner = True
             extra_headers.append(IS_OWNER_HEADER)
         except NotAuthorizedException:
             if not is_public_path(app, scope["path"]):
@@ -218,9 +216,7 @@ class SubdomainProxyMiddleware:
 
         if app.status in ("building", "starting"):
             if scope["type"] == ScopeType.HTTP:
-                startup_response = app_starting_response(
-                    Request(scope, receive, send), app_name=app.name, zone=zone, is_owner=is_owner
-                )
+                startup_response = app_starting_response(Request(scope, receive, send), app_name=app.name, zone=zone)
                 await startup_response(scope, receive, send)
             else:
                 websocket: WebSocket[Any, Any, Any] = WebSocket(scope, receive, send)

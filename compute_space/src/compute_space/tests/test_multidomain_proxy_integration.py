@@ -248,8 +248,7 @@ def _assert_startup(r: httpx.Response, *, html: bool) -> None:
         page = _PageElements(r.text)
         assert any("layout--narrow" in (attrs.get("class") or "").split() for _, attrs in page.elements)
         assert any(tag == "main" and attrs.get("data-retry-seconds") == "3" for tag, attrs in page.elements)
-        ids = {attrs.get("id") for _, attrs in page.elements}
-        assert {"startup-retry", "startup-pause"} <= ids
+        assert not any(tag in ("a", "button") for tag, _ in page.elements)
         assert any(
             tag == "script" and urlsplit(attrs.get("src") or "").path == "/static/js/app-starting.js"
             for tag, attrs in page.elements
@@ -314,7 +313,7 @@ async def test_startup_at_deep_app_url_then_running_proxies_same_url(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("status", ["building", "starting"])
 @pytest.mark.parametrize("authority,scheme", [("host.example.com:8443", "https"), ("myhost.local:8080", "http")])
-async def test_private_startup_auth_precedes_interception_and_owner_gets_details(
+async def test_private_startup_auth_precedes_interception_and_owner_gets_waiting_page(
     wrapped_app: Any, proxy_config: Config, backend: _RecordingBackend, status: str, authority: str, scheme: str
 ) -> None:
     _set_status(proxy_config, status, "privapp")
@@ -332,7 +331,7 @@ async def test_private_startup_auth_precedes_interception_and_owner_gets_details
         owner = await c.get(url, headers={"Accept": "text/html"})
     _assert_startup(owner, html=True)
     links = [attrs.get("href") for tag, attrs in _PageElements(owner.text).elements if tag == "a"]
-    assert links == [f"{scheme}://{authority}/app_detail/privapp"]
+    assert links == []
     assert backend.requests == []
 
 

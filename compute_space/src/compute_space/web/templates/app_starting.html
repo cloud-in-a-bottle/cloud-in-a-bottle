@@ -10,10 +10,5 @@
   <h2>Your app is coming up</h2>
   <p><strong>{{ app_name }}</strong> is getting ready.</p>
   <p class="hint" id="startup-hint" aria-live="polite">Give it a moment, then refresh this page to try again.</p>
-  <div class="actions">
-    <button class="btn btn--accent" id="startup-retry" type="button" hidden>Try now</button>
-    {% if details_url %}<a class="btn" href="{{ details_url }}">View app details</a>{% endif %}
-  </div>
-  <button class="app-starting__pause" id="startup-pause" type="button" hidden>Pause automatic retry</button>
 </main>
 {% endblock %}

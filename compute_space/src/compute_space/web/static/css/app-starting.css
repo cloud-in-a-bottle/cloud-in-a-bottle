@@ -20,18 +20,6 @@
   border: var(--border-w) solid var(--color-border-strong);
 }
 
-.app-starting__pause {
-  margin-top: var(--space-5);
-  padding: 0;
-  border: 0;
-  background: none;
-  color: var(--color-text-muted);
-  font: inherit;
-  font-size: var(--text-xs);
-  text-decoration: underline;
-  cursor: pointer;
-}
-
 @media (prefers-reduced-motion: no-preference) {
   .app-starting__indicator span { animation: app-starting-pulse 1.5s ease-in-out infinite; }
   .app-starting__indicator span:nth-child(2) { animation-delay: 0.2s; }
