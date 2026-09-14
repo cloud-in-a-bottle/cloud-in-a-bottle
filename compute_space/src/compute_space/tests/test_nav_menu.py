@@ -27,6 +27,7 @@ from litestar.template.config import TemplateConfig
 from litestar.testing import TestClient
 
 import compute_space.web.app as web_app
+from compute_space.config import Config
 from compute_space.config import provide_config
 from compute_space.config import set_active_config
 from compute_space.core.domains import Domain
@@ -213,3 +214,35 @@ def test_app_url_carries_origin_from_request_in_context(cfg: Any) -> None:
     # live primary, no port appended.
     out_default = env.from_string('{{ app_url("foo") }}').render()
     assert out_default == "http://foo.alice-zone.example.com/"
+
+
+@pytest.mark.parametrize("status", ["building", "starting", "running", "stopped", "error", "removing"])
+def test_app_row_disables_only_startup_launches(cfg: Config, status: str) -> None:
+    set_active_config(cfg)
+    web_dir = Path(web_app.__file__).resolve().parent
+    env = Environment(loader=FileSystemLoader(str(web_dir / "templates")), autoescape=True)
+    env.globals.update(_template_globals(cfg, web_dir / "static"))
+    request = types.SimpleNamespace(
+        scope={ZONE_SCOPE_KEY: Domain("alternate.example.com", tls=False)},
+        url=types.SimpleNamespace(netloc="alternate.example.com:8088"),
+    )
+    body = env.from_string(
+        '{% from "_components/app_row.html" import app_row with context %}{{ app_row(app) }}'
+    ).render(
+        app=types.SimpleNamespace(app_id="testappid", name="my-app", manifest_name="my-app", status=status),
+        request=request,
+    )
+    launch = re.search(r'<a class="app-row__name"[^>]*>', body)
+    assert launch is not None
+    url = "http://my-app.alternate.example.com:8088/"
+    assert f'data-app-url="{url}"' in launch[0]
+    assert 'target="_blank" rel="noopener"' in launch[0]
+    assert '<a class="app-row__details" href="/app_detail/my-app">Details</a>' in body
+    if status in ("building", "starting"):
+        assert "href=" not in launch[0]
+        assert 'role="link" aria-disabled="true"' in launch[0]
+        assert f'<span class="app-row__status">{status.capitalize()}...</span>' in body
+    else:
+        assert f'href="{url}"' in launch[0]
+        assert "aria-disabled" not in launch[0]
+        assert f'<span class="app-row__status visually-hidden">{status}</span>' in body
