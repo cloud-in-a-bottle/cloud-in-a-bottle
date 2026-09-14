@@ -6,11 +6,14 @@ fields existed) must keep loading unchanged.
 
 from __future__ import annotations
 
+import tomllib
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
 import attr
+import cattrs
 import pytest
+import tomli_w
 import typed_settings
 from hypothesis import given
 from hypothesis import strategies as st
@@ -127,6 +130,36 @@ def test_config_toml_roundtrip_preserves_optional_fields(unset_fields: set[str])
         restored = Config.from_toml(path)
         for field in attr.fields(Config):
             assert getattr(restored, field.name) == getattr(original, field.name)
+
+
+@pytest.mark.parametrize("required_field", ["host", "port", "cert_provider", "claim_token_required", "default_apps"])
+def test_config_toml_loader_rejects_missing_required_fields(tmp_path: Path, required_field: str) -> None:
+    document = tomllib.loads(DefaultConfig().to_toml_str())
+    del document["openhost"][required_field]
+    path = tmp_path / "config.toml"
+    path.write_text(tomli_w.dumps(document))
+    with pytest.raises(cattrs.ClassValidationError) as error:
+        Config.from_toml(str(path))
+    assert len(error.value.exceptions) == 1
+    missing = error.value.exceptions[0]
+    assert isinstance(missing, KeyError)
+    assert missing.args == (required_field,)
+
+
+@pytest.mark.parametrize("wrapped", [False, True])
+def test_default_config_toml_loader_keeps_declared_defaults(tmp_path: Path, wrapped: bool) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text("[openhost]\n" if wrapped else "")
+    restored = DefaultConfig.from_toml(str(path))
+    assert restored == DefaultConfig()
+
+
+def test_config_toml_loader_restores_nullable_fields_in_bare_toml(tmp_path: Path) -> None:
+    original = Config(**attr.asdict(DefaultConfig(data_root_dir=str(tmp_path))))
+    document = tomllib.loads(original.to_toml_str())["openhost"]
+    path = tmp_path / "config.toml"
+    path.write_text(tomli_w.dumps(document))
+    assert Config.from_toml(str(path)) == original
 
 
 def test_unknown_cert_provider_is_rejected() -> None:

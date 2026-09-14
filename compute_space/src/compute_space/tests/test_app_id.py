@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import string
 
+import pytest
 from hypothesis import given
 from hypothesis import strategies as st
 
@@ -58,3 +59,10 @@ def test_app_name_matches_documented_grammar(name: str) -> None:
         and all(character in alphanumeric + "-" for character in name)
     )
     assert is_valid_app_name(name) == expected
+
+
+@pytest.mark.parametrize("name", ["0", "a", "test-app"])
+@pytest.mark.parametrize("suffix", ["\n", "\r\n"])
+def test_app_name_rejects_trailing_line_break(name: str, suffix: str) -> None:
+    assert is_valid_app_name(name)
+    assert not is_valid_app_name(name + suffix)

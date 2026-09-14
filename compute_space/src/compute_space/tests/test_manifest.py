@@ -1,6 +1,7 @@
 """Unit tests for the cloudinabottle.toml manifest parser."""
 
 import json
+import re
 import tomllib
 from unittest import mock
 
@@ -445,6 +446,36 @@ class TestValidation:
         previous[section] = value
         current = parse_manifest_from_string(MINIMAL)
         assert manifest_settings_changes(current, tomli_w.dumps(previous)) == []
+
+    @pytest.mark.parametrize(
+        "section", ["app", "runtime", "runtime.container", "routing", "resources", "data", "services", "services.v2"]
+    )
+    @pytest.mark.parametrize("value", [0, False, "", [], [{}]])
+    def test_non_table_sections_raise_value_error(self, section: str, value: object) -> None:
+        document = tomllib.loads(MINIMAL)
+        parent = document
+        *ancestors, key = section.split(".")
+        for ancestor in ancestors:
+            parent = parent.setdefault(ancestor, {})
+        parent[key] = value
+        raw = tomli_w.dumps(document)
+        with pytest.raises(ValueError, match=rf"\[{re.escape(section)}\] must be a table"):
+            parse_manifest_from_string(raw)
+        assert manifest_settings_changes(parse_manifest_from_string(MINIMAL), raw) == []
+
+    @pytest.mark.parametrize("section", ["ports", "links", "services.v2.provides", "services.v2.consumes"])
+    @pytest.mark.parametrize("value", [0, False, "", {}])
+    def test_non_list_table_arrays_raise_value_error(self, section: str, value: object) -> None:
+        document = tomllib.loads(MINIMAL)
+        parent = document
+        *ancestors, key = section.split(".")
+        for ancestor in ancestors:
+            parent = parent.setdefault(ancestor, {})
+        parent[key] = value
+        raw = tomli_w.dumps(document)
+        with pytest.raises(ValueError, match=rf"\[\[{re.escape(section)}\]\] must be a list of tables"):
+            parse_manifest_from_string(raw)
+        assert manifest_settings_changes(parse_manifest_from_string(MINIMAL), raw) == []
 
 
 class TestServicesV2Parsing:
