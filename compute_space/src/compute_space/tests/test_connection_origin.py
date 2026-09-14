@@ -1,7 +1,7 @@
 """Unit tests for get_connection_origin's Origin-header parsing.
 
 This helper underpins the codebase's CSRF-equivalent origin checks
-(verify_owner_auth / verify_app_auth / verify_same_origin). The security-load-bearing
+(verify_owner_auth / verify_app_auth / is_same_origin_request). The security-load-bearing
 property is that a *present* Origin header is never collapsed to None ("no header"):
 an opaque/unparseable Origin such as ``null`` (sent by sandboxed iframes) must return a
 non-None token so origin-match checks fail closed rather than waving the request through.
