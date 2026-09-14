@@ -786,11 +786,11 @@ class TestSelfHost:
         assert ssh_key and public_ip, "SSH credentials not available for bucket creation"
 
         ssh_opts = f"-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -i {ssh_key}"
-        # Install mc (MinIO client), configure alias, create bucket.
-        # Detect the VM's arch so this works on both amd64 and arm64 hosts.
+        # Reuse the native mc binary shipped in the running MinIO container;
+        # upstream's standalone download endpoint is no longer available.
         commands = (
-            'mcarch=$(case "$(uname -m)" in (aarch64|arm64) echo linux-arm64;; *) echo linux-amd64;; esac) && '
-            "curl -sL https://dl.min.io/client/mc/release/$mcarch/mc -o /tmp/mc && chmod +x /tmp/mc && "
+            'export PATH="/home/host/openhost/.pixi/envs/default/bin:$PATH" && '
+            "podman cp openhost-minio:/usr/bin/mc /tmp/mc && chmod +x /tmp/mc && "
             f"/tmp/mc alias set e2e {endpoint} '{minio_user}' '{minio_password}' && "
             f"/tmp/mc mb --ignore-existing e2e/{bucket} && "
             # Second bucket for the later s3->s3 migration test (13k).
