@@ -1,16 +1,21 @@
 """Unit tests for the cloudinabottle.toml manifest parser."""
 
 import json
+import tomllib
 from unittest import mock
 
 import attr
 import pytest
+import tomli_w
+from hypothesis import given
+from hypothesis import strategies as st
 
 from compute_space.core.manifest import MANIFEST_FILENAMES
 from compute_space.core.manifest import SAFE_CAPABILITIES
 from compute_space.core.manifest import SAFE_DEVICE_PATHS
 from compute_space.core.manifest import UNPRIVILEGED_PORT_FLOOR
 from compute_space.core.manifest import find_manifest_path
+from compute_space.core.manifest import manifest_settings_changes
 from compute_space.core.manifest import parse_manifest
 from compute_space.core.manifest import parse_manifest_from_string
 
@@ -429,6 +434,17 @@ class TestValidation:
         toml = '[app]\nname = "x"\nversion = "1"\n[runtime.container]\nimage = "Dockerfile"\n'
         with pytest.raises(ValueError, match="port"):
             parse_manifest_from_string(toml)
+
+    @given(
+        section=st.sampled_from(["app", "runtime", "resources"]),
+        value=st.one_of(st.integers(), st.booleans(), st.text(), st.lists(st.integers())),
+    )
+    def test_settings_diff_ignores_invalid_previous_sections(self, section: str, value: int | str | list[int]) -> None:
+        # Valid TOML with a non-table section is still an unparseable manifest.
+        previous = tomllib.loads(MINIMAL)
+        previous[section] = value
+        current = parse_manifest_from_string(MINIMAL)
+        assert manifest_settings_changes(current, tomli_w.dumps(previous)) == []
 
 
 class TestServicesV2Parsing:

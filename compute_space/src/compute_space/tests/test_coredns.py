@@ -3,12 +3,17 @@
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import sqlite3
 from contextlib import closing
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Any
 
 import pytest
+from hypothesis import given
+from hypothesis import note
+from hypothesis import strategies as st
 
 import compute_space.core.dns.coredns_provider.coredns as dns_mod
 from compute_space.config import DefaultConfig
@@ -34,6 +39,20 @@ APP_ZONE = "app.example.com"
 # Passed explicitly wherever a render is asserted on, so the Corefile doesn't depend on whatever
 # nameservers the machine running the tests happens to have.
 TEST_UPSTREAM = ("192.0.2.53",)
+
+# Keep relative names within the DNS length limit, including their eventual zone suffix.
+_DNS_LABEL = st.from_regex(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", fullmatch=True)
+_RELATIVE_NAME = st.lists(_DNS_LABEL, min_size=1, max_size=3).map(".".join)
+
+
+def _unbound_provider(directory: Path) -> InternalDnsProvider:
+    # Disabling only the public view still allows container DNS to start.
+    return InternalDnsProvider(
+        corefile_path=directory / "Corefile",
+        zones_dir=directory / "zones",
+        bind_ip=None,
+        container_gateway_ip=None,
+    )
 
 
 def _seed_dns_cfg(tmp_path: Path, *domains: Domain, **kw: Any) -> DefaultConfig:
@@ -130,6 +149,37 @@ def test_unusable_host_resolvers_are_dropped(tmp_path: Path) -> None:
     assert resolvers == ("10.0.0.53",)
 
 
+@pytest.mark.parametrize("excluded", ["loopback", "gateway"])
+@given(
+    gateway=st.ip_addresses(network="fd00::/8"),
+    retained=st.ip_addresses(network="192.0.2.0/24"),
+    expanded=st.booleans(),
+    uppercase=st.booleans(),
+    whitespace=st.sampled_from([" ", "\t", "   "]),
+)
+def test_unusable_ipv6_resolvers_are_filtered_by_address(
+    excluded: str,
+    gateway: ipaddress.IPv6Address,
+    retained: ipaddress.IPv4Address,
+    expanded: bool,
+    uppercase: bool,
+    whitespace: str,
+) -> None:
+    # Equivalent IPv6 spellings must not bypass the loopback/self-forwarding exclusion.
+    address = ipaddress.IPv6Address("::1") if excluded == "loopback" else gateway
+    spelling = address.exploded if expanded else address.compressed
+    if uppercase:
+        spelling = spelling.upper()
+    note(f"excluded={spelling!r}, gateway={str(gateway)!r}, retained={str(retained)!r}")
+    with TemporaryDirectory() as directory:
+        resolv_conf = Path(directory) / "resolv.conf"
+        resolv_conf.write_text(f"nameserver {address.compressed}\nnameserver {retained}\n")
+        assert dns_mod.host_upstream_resolvers(str(gateway), resolv_conf) == (str(retained),)
+
+        resolv_conf.write_text(f"nameserver{whitespace}{spelling}\nnameserver {retained}\n")
+        assert dns_mod.host_upstream_resolvers(str(gateway), resolv_conf) == (str(retained),)
+
+
 @pytest.mark.parametrize("contents", ["", "nameserver 127.0.0.53\n"])
 def test_public_resolvers_are_the_fallback_not_the_default(tmp_path: Path, contents: str) -> None:
     # Nothing usable left (or no resolv.conf at all): containers resolving via the wrong servers
@@ -170,6 +220,36 @@ def test_container_view_forward_and_distinct_bind(tmp_path: Path) -> None:
 
 
 # ─── which zones get served ───
+
+
+@pytest.mark.asyncio
+@given(prefix=_RELATIVE_NAME)
+async def test_mdns_zones_need_no_dns_view(prefix: str) -> None:
+    # Canonical lowercase input isolates .local label matching from zone normalization.
+    with TemporaryDirectory() as directory:
+        dns = _unbound_provider(Path(directory))
+        await dns.add_zone(f"{prefix}.local")
+        assert dns.zones == ()
+        assert not dns.corefile_path.exists()
+
+
+@pytest.mark.asyncio
+@given(prefix=_RELATIVE_NAME, uppercase=st.booleans(), absolute=st.booleans())
+async def test_loopback_alias_zones_are_normalized_before_exclusion(
+    prefix: str, uppercase: bool, absolute: bool
+) -> None:
+    # lvh.me aliases already resolve, including case variants and absolute DNS names.
+    canonical = f"{prefix}.lvh.me"
+    zone = canonical.upper() if uppercase else canonical
+    if absolute:
+        zone += "."
+    note(f"zone={zone!r}")
+    with TemporaryDirectory() as directory:
+        dns = _unbound_provider(Path(directory))
+        await dns.add_zone(canonical)
+        await dns.add_zone(zone)
+        assert dns.zones == ()
+        assert not dns.corefile_path.exists()
 
 
 def test_zone_set_covers_every_public_domain_and_skips_mdns(tmp_path: Path) -> None:
@@ -427,6 +507,34 @@ def test_setting_a_record_replaces_the_whole_rrset(tmp_path: Path) -> None:
     assert "198.51.100.9" in content
     assert "198.51.100.7" not in content
     assert "198.51.100.8" not in content
+
+
+@pytest.mark.parametrize("operation", ["replace", "delete"])
+@given(
+    name=_RELATIVE_NAME,
+    initial=st.lists(st.ip_addresses(v=4).map(str), min_size=1, max_size=3, unique=True),
+    replacement=st.lists(st.ip_addresses(v=4).map(str), max_size=3, unique=True),
+    uppercase=st.booleans(),
+    ttl=st.integers(0, 2**31 - 1),
+)
+def test_rrset_mutations_use_case_insensitive_owner_names(
+    operation: str, name: str, initial: list[str], replacement: list[str], uppercase: bool, ttl: int
+) -> None:
+    # DNS owner names are case-insensitive (RFC 4343); the operation replaces/removes the whole RRset.
+    changed_name = name.upper() if uppercase else name
+    note(f"name={name!r}, changed_name={changed_name!r}, initial={initial!r}, replacement={replacement!r}")
+    with TemporaryDirectory() as directory:
+        dns = _unbound_provider(Path(directory))
+        dns.set_records(name, RecordType.A, initial, ttl=ttl)
+        if operation == "replace":
+            dns.set_records(changed_name, RecordType.A, replacement, ttl=ttl)
+            expected = set(replacement)
+        else:
+            dns.delete_records(changed_name, RecordType.A)
+            expected = set()
+        # Compare DNS values, not record order, preserved owner spelling or duplicate counts.
+        assert {record.data for record in dns.records} == expected
+        assert not dns.corefile_path.exists()
 
 
 def test_deleting_a_record_leaves_the_others_alone_and_is_safe_to_repeat(tmp_path: Path) -> None:

@@ -5,6 +5,11 @@ public request stays on the public domain (https)."""
 from __future__ import annotations
 
 import sqlite3
+from contextlib import closing
+
+from hypothesis import given
+from hypothesis import note
+from hypothesis import strategies as st
 
 from compute_space.core.domains import Domain
 from compute_space.core.domains import DomainRecord
@@ -91,6 +96,20 @@ def test_validated_next_allows_both_domains() -> None:
 
 def test_validated_next_rejects_foreign_domain() -> None:
     assert _validated_next("https://evil.example.org/phish", _db()) is None
+
+
+@given(
+    label=st.from_regex(r"[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?", fullmatch=True),
+    prefix=st.one_of(st.sampled_from(["http://", "https://"]), st.text(alphabet="/", min_size=2)),
+    path=st.text(alphabet="abcdefghijklmnopqrstuvwxyz0123456789/._~-"),
+)
+def test_validated_next_rejects_foreign_network_locations(label: str, prefix: str, path: str) -> None:
+    # HTTP(S) browsers interpret two or more leading slashes as an authority,
+    # including spellings that urllib.parse treats as a relative path.
+    target = f"{prefix}{label}.invalid/{path}"
+    note(f"redirect target: {target!r}")
+    with closing(_db()) as db:
+        assert _validated_next(target, db) is None
 
 
 def test_validated_next_rejects_userinfo_host_spoof() -> None:

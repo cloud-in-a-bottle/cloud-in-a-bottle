@@ -7,12 +7,17 @@ fields existed) must keep loading unchanged.
 from __future__ import annotations
 
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
+import attr
 import pytest
 import typed_settings
+from hypothesis import given
+from hypothesis import strategies as st
 
 from compute_space.config import CERT_PROVIDER_ACME
 from compute_space.config import CERT_PROVIDER_CERT_API
+from compute_space.config import Config
 from compute_space.config import DefaultConfig
 
 
@@ -87,6 +92,41 @@ def test_cert_provider_round_trips_through_toml() -> None:
     assert 'cert_api_keycloak_issuer_url = "https://keycloak.example.com/realms/openhost-customers"' in rendered
     assert 'cert_api_keycloak_client_id = "instance-alice"' in rendered
     assert 'cert_api_keycloak_client_secret = "s3cr3t"' in rendered
+
+
+@given(
+    unset_fields=st.sets(
+        st.sampled_from(
+            [
+                "acme_email",
+                "acme_account_key_path",
+                "acme_directory_url",
+                "cert_api_keycloak_issuer_url",
+                "cert_api_keycloak_client_id",
+                "cert_api_keycloak_client_secret",
+                "public_ip",
+                "apps_dir_override",
+            ]
+        )
+    )
+)
+def test_config_toml_roundtrip_preserves_optional_fields(unset_fields: set[str]) -> None:
+    with TemporaryDirectory() as directory:
+        defaults = DefaultConfig(
+            data_root_dir=directory,
+            apps_dir_override=str(Path(directory) / "apps"),
+            public_ip="127.0.0.1",
+            acme_email="owner@example.com",
+            acme_account_key_path=str(Path(directory) / "account.pem"),
+            acme_directory_url="https://acme.example.com/directory",
+            **_full_cert_api_kwargs(),
+        )
+        original = Config(**(attr.asdict(defaults) | dict.fromkeys(unset_fields)))
+        path = str(Path(directory) / "config.toml")
+        original.to_toml(path)
+        restored = Config.from_toml(path)
+        for field in attr.fields(Config):
+            assert getattr(restored, field.name) == getattr(original, field.name)
 
 
 def test_unknown_cert_provider_is_rejected() -> None:
