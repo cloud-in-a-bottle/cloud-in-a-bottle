@@ -146,19 +146,54 @@ async def setup_post(request: Request[Any, Any, Any], config: NamedDependency[Co
     except Exception as exc:
         logger.error("default_apps deploy raised unexpectedly: {}", exc)
 
-    # 200 + cookie + small "restarting" page (with meta-refresh to land on
-    # the dashboard once the full app is up).  We can't redirect synchronously
-    # because trigger_restart() kills the listener as soon as the response is
-    # written — the browser's redirect-follow would race the shutdown and
-    # land on a closed connection.  A meta-refresh interval gives the full
-    # app time to come up before the next navigation.
+    # Keep the browser here while the setup listener closes and the full app
+    # initializes. A timed redirect can land on a closed connection. Inline
+    # polling also avoids racing shutdown to download a separate script.
     body = (
-        "<!doctype html><html><head><meta http-equiv=refresh content='2; url=/'>"
+        "<!doctype html><html lang='en'><head><meta charset='utf-8'>"
+        "<meta name='viewport' content='width=device-width, initial-scale=1'>"
         "<meta name=robots content=noindex>"
         f"<link rel='icon' type='image/svg+xml' href='{_favicon_url}'>"
-        "<title>Cloud in a Bottle — restarting</title></head>"
+        "<title>Cloud in a Bottle: starting your dashboard</title></head>"
         "<body style='font-family:system-ui;text-align:center;margin-top:4em;'>"
-        "<p>Setup complete. Restarting…</p></body></html>"
+        "<main><h1>Setup complete</h1>"
+        "<p id='setup-status' role='status'>Starting your dashboard…</p>"
+        "<noscript><p>Wait a moment, then open the dashboard below.</p></noscript>"
+        "<p><a href='/'>Open dashboard</a></p></main>"
+        """<script>
+        (function () {
+          var deadline = Date.now() + 120000;
+          async function poll() {
+            var remaining = deadline - Date.now();
+            if (remaining <= 0) {
+              document.getElementById('setup-status').textContent =
+                'Your account is ready, but the dashboard is taking longer than expected. Try opening it below.';
+              return;
+            }
+            var controller = new AbortController();
+            var timeout = setTimeout(function () { controller.abort(); }, Math.min(3000, remaining));
+            try {
+              var response = await fetch('/health', {
+                cache: 'no-store', credentials: 'same-origin', redirect: 'error', signal: controller.signal
+              });
+              if (response.status === 200 && (await response.json()).status === 'ok') {
+                window.location.replace('/');
+                return;
+              }
+            } catch (error) {
+              // Refused connections and timeouts are expected during the handoff.
+            } finally {
+              clearTimeout(timeout);
+            }
+            if (Date.now() >= deadline) {
+              poll();
+            } else {
+              setTimeout(poll, 1000);
+            }
+          }
+          poll();
+        }());
+        </script></body></html>"""
     )
     response = Response(content=body, status_code=200, media_type=MediaType.HTML)
     # Setup is always served on the primary domain; scope the cookie to it (no middleware here to
@@ -175,7 +210,7 @@ async def setup_post(request: Request[Any, Any, Any], config: NamedDependency[Co
 
 
 async def _trigger_restart_after_response() -> None:
-    """Defer trigger_restart slightly so any redirect-follow lands cleanly."""
+    """Let the response finish before closing the setup listener."""
     import asyncio  # noqa: PLC0415
 
     await asyncio.sleep(0.05)
