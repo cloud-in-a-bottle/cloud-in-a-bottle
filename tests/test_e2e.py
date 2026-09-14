@@ -788,10 +788,16 @@ class TestSelfHost:
 
         ssh_opts = f"-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -i {ssh_key}"
         # Install mc (MinIO client), configure alias, create bucket.
+        # Pinned to a GitHub release asset rather than dl.min.io: MinIO archived the
+        # open-source client and dl.min.io now answers 410 Gone for every mc download.
+        # -f is what makes that kind of failure legible; without it curl writes the
+        # error page to /tmp/mc, exits 0, and the shell tries to execute prose.
         # Detect the VM's arch so this works on both amd64 and arm64 hosts.
+        mc_release = "RELEASE.2025-08-13T08-35-41Z"
         commands = (
             'mcarch=$(case "$(uname -m)" in (aarch64|arm64) echo linux-arm64;; *) echo linux-amd64;; esac) && '
-            "curl -sL https://dl.min.io/client/mc/release/$mcarch/mc -o /tmp/mc && chmod +x /tmp/mc && "
+            f"curl -fsSL https://github.com/minio/mc/releases/download/{mc_release}/mc.$mcarch.{mc_release}"
+            " -o /tmp/mc && chmod +x /tmp/mc && "
             f"/tmp/mc alias set e2e {endpoint} '{minio_user}' '{minio_password}' && "
             f"/tmp/mc mb --ignore-existing e2e/{bucket} && "
             # Second bucket for the later s3->s3 migration test (13k).
