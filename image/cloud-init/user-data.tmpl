@@ -6,7 +6,7 @@
 #
 # Nothing here is user-facing at runtime — it only shapes the golden image.
 
-hostname: openhost
+hostname: cloud-in-a-bottle
 manage_etc_hosts: true
 
 # SSH stays key-only: provision.sh's ansible hardening disables password auth.
@@ -29,7 +29,7 @@ write_files:
   # The provisioner itself, embedded (base64) straight from the build host's
   # working tree rather than fetched from GitHub. This means the image is built
   # from exactly the checked-out provision.sh — no need to push the branch
-  # first. The openhost app code is still cloned from __REPO_URL__ @ __BRANCH__
+  # first. The app code is still cloned from __REPO_URL__ @ __BRANCH__
   # by provision.sh below.
   - path: /root/provision.sh
     permissions: '0755'
@@ -73,8 +73,8 @@ runcmd:
              --swap-size "__SWAP_SIZE_GB__" \
         && echo 'host:__HOST_PASSWORD__' | chpasswd \
         && bash /root/seal.sh \
-        && echo "OPENHOST_IMAGE_BUILD_SUCCESS" > /dev/console ) \
-      || echo "OPENHOST_IMAGE_BUILD_FAILED" > /dev/console
+        && echo "BOTTLE_IMAGE_BUILD_SUCCESS" > /dev/console ) \
+      || echo "BOTTLE_IMAGE_BUILD_FAILED" > /dev/console
   # Explicit, deterministic poweroff (both on success and failure) so build.sh's
   # QEMU wait returns. We do this here rather than via cloud-init's power_state
   # module because seal.sh above runs `cloud-init clean`, which tears down the

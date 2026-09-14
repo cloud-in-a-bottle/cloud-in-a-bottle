@@ -1,2 +1,2 @@
-instance-id: openhost-image-build
-local-hostname: openhost
+instance-id: cloud-in-a-bottle-image-build
+local-hostname: cloud-in-a-bottle

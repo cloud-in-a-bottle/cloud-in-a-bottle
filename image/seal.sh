@@ -21,7 +21,7 @@ fi
 
 # ---- boot-time prepare script: grow root + ensure SSH host keys ----
 install -d /usr/local/sbin
-cat > /usr/local/sbin/openhost-prepare <<'PREP'
+cat > /usr/local/sbin/bottle-prepare <<'PREP'
 #!/usr/bin/env bash
 # Grow the root filesystem to fill its disk and regenerate SSH host keys if the
 # (generalized) image shipped without them. Idempotent — safe every boot.
@@ -46,10 +46,12 @@ if ! ls /etc/ssh/ssh_host_*_key >/dev/null 2>&1; then
     ssh-keygen -A || true
 fi
 PREP
-chmod 0755 /usr/local/sbin/openhost-prepare
+chmod 0755 /usr/local/sbin/bottle-prepare
 
-# ---- unit: run it early, before sshd and openhost come up ----
-cat > /etc/systemd/system/openhost-prepare.service <<'UNIT'
+# ---- unit: run it early, before sshd and the app come up ----
+# NOTE: the app unit is still named openhost.service (ansible/templates/), so the
+# Before= below deliberately keeps the old name.
+cat > /etc/systemd/system/bottle-prepare.service <<'UNIT'
 [Unit]
 Description=Grow root filesystem and ensure SSH host keys
 After=local-fs.target
@@ -58,12 +60,12 @@ Before=ssh.service openhost.service
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStart=/usr/local/sbin/openhost-prepare
+ExecStart=/usr/local/sbin/bottle-prepare
 
 [Install]
 WantedBy=multi-user.target
 UNIT
-systemctl enable openhost-prepare.service
+systemctl enable bottle-prepare.service
 
 # ---- strip build-VM identity ----
 # Unique machine-id per install: systemd regenerates an empty file on boot
@@ -71,7 +73,7 @@ systemctl enable openhost-prepare.service
 truncate -s 0 /etc/machine-id
 rm -f /var/lib/dbus/machine-id
 
-# Never ship the build VM's SSH host keys — openhost-prepare regenerates them.
+# Never ship the build VM's SSH host keys; bottle-prepare regenerates them.
 rm -f /etc/ssh/ssh_host_*
 
 # Drop build-time cloud-init instance data + logs. Hygiene only; cloud-init
