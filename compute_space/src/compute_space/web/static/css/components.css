@@ -448,19 +448,8 @@ h2.section-title {
   white-space: nowrap;
 }
 
-.app-row__name[href]:hover {
+.app-row__name:hover {
   text-decoration: underline;
-}
-
-.app-row__name[aria-disabled="true"] {
-  color: var(--color-text-muted);
-  cursor: default;
-}
-
-.app-row__status {
-  color: var(--color-text-muted);
-  font-size: var(--text-xs);
-  white-space: nowrap;
 }
 
 .app-row__alias {

@@ -217,7 +217,7 @@ def test_app_url_carries_origin_from_request_in_context(cfg: Any) -> None:
 
 
 @pytest.mark.parametrize("status", ["building", "starting", "running", "stopped", "error", "removing"])
-def test_app_row_disables_only_startup_launches(cfg: Config, status: str) -> None:
+def test_app_row_keeps_launch_and_details_links_during_startup(cfg: Config, status: str) -> None:
     set_active_config(cfg)
     web_dir = Path(web_app.__file__).resolve().parent
     env = Environment(loader=FileSystemLoader(str(web_dir / "templates")), autoescape=True)
@@ -235,14 +235,8 @@ def test_app_row_disables_only_startup_launches(cfg: Config, status: str) -> Non
     launch = re.search(r'<a class="app-row__name"[^>]*>', body)
     assert launch is not None
     url = "http://my-app.alternate.example.com:8088/"
-    assert f'data-app-url="{url}"' in launch[0]
+    assert f'href="{url}"' in launch[0]
     assert 'target="_blank" rel="noopener"' in launch[0]
     assert '<a class="app-row__details" href="/app_detail/my-app">Details</a>' in body
-    if status in ("building", "starting"):
-        assert "href=" not in launch[0]
-        assert 'role="link" aria-disabled="true"' in launch[0]
-        assert f'<span class="app-row__status">{status.capitalize()}...</span>' in body
-    else:
-        assert f'href="{url}"' in launch[0]
-        assert "aria-disabled" not in launch[0]
-        assert f'<span class="app-row__status visually-hidden">{status}</span>' in body
+    assert "aria-disabled" not in launch[0]
+    assert f'<span class="visually-hidden app-row__status">{status}</span>' in body

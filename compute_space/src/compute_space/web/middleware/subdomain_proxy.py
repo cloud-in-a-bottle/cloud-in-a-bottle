@@ -24,6 +24,7 @@ from compute_space.core.proxy_target import LocalPort
 from compute_space.db import get_db
 from compute_space.web.auth.auth import login_required_redirect
 from compute_space.web.auth.auth import verify_owner_auth
+from compute_space.web.helpers.app_starting import app_starting_response
 from compute_space.web.helpers.proxy import proxy_http_request
 from compute_space.web.helpers.proxy import proxy_websocket_request
 from compute_space.web.helpers.zone import ZONE_SCOPE_KEY
@@ -171,8 +172,6 @@ class SubdomainProxyMiddleware:
             await self.app(scope, receive, send)
             return
 
-        # TODO: maybe behave differently for apps that are not in running state. not sure
-
         # Forwarding headers so the app can tell where the request originated.
         # Caddy terminates TLS and speaks plain HTTP to us on loopback, so we
         # can't read the client's real proto or IP off this hop:
@@ -195,8 +194,10 @@ class SubdomainProxyMiddleware:
         if forwarded_for := _resolve_forwarded_for(connection):
             extra_headers.append(("X-Forwarded-For", forwarded_for))
 
+        is_owner = False
         try:
             verify_owner_auth(connection)
+            is_owner = True
             extra_headers.append(IS_OWNER_HEADER)
         except NotAuthorizedException:
             if not is_public_path(app, scope["path"]):
@@ -214,6 +215,18 @@ class SubdomainProxyMiddleware:
                         WebSocketCloseEvent(type="websocket.close", code=4401, reason="authentication required")
                     )
                 return
+
+        if app.status in ("building", "starting"):
+            if scope["type"] == ScopeType.HTTP:
+                startup_response = app_starting_response(
+                    Request(scope, receive, send), app_name=app.name, zone=zone, is_owner=is_owner
+                )
+                await startup_response(scope, receive, send)
+            else:
+                websocket: WebSocket[Any, Any, Any] = WebSocket(scope, receive, send)
+                await websocket.accept()
+                await websocket.close(code=1013, reason="App is coming up")
+            return
 
         if scope["type"] == ScopeType.HTTP:
             # Rewrite Host to the public hostname (instead of the 127.0.0.1:<port>

@@ -1,19 +1,15 @@
 {#- One row of the dashboard app list. ``data-status`` drives both the dot
     colour (CSS) and the polling loop's status updates (dashboard.js). -#}
 {% macro app_row(app) -%}
-{% set starting = app.status in ('building', 'starting') %}
-{% set url = app_url(app.name) %}
 <div class="app-row" data-app-id="{{ app.app_id }}" data-status="{{ app.status }}"
      data-app-name="{{ app.name }}">
   <div class="app-row__main">
-    <a class="app-row__name" data-app-url="{{ url }}"
-       {% if starting %}role="link" aria-disabled="true"{% else %}href="{{ url }}"{% endif %}
-       target="_blank" rel="noopener">{{ app.name }}</a>
+    <a class="app-row__name" href="{{ app_url(app.name) }}" target="_blank" rel="noopener">{{ app.name }}</a>
     {%- if app.manifest_name and app.manifest_name != app.name %}
     <span class="app-row__alias">({{ app.manifest_name }})</span>
     {%- endif %}
     <span class="status-dot"></span>
-    <span class="app-row__status{% if not starting %} visually-hidden{% endif %}">{{ (app.status | capitalize) ~ '...' if starting else app.status }}</span>
+    <span class="visually-hidden app-row__status">{{ app.status }}</span>
   </div>
   <a class="app-row__details" href="/app_detail/{{ app.name }}">Details</a>
 </div>

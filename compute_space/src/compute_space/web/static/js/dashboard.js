@@ -2,8 +2,8 @@ var config = JSON.parse(document.getElementById('page-config').textContent);
 
 // ─── App List ───
 //
-// Keep the server-rendered status and launch links in sync. Details stays
-// available during startup; deleted apps stay hidden until the next page load.
+// Keep the server-rendered status in sync. Apps can be opened during startup;
+// their own URL shows a waiting page. Deleted apps stay hidden until reload.
 
 function refreshApps() {
   if (!config.apiAppsUrl) return;
@@ -27,22 +27,8 @@ function updateApps(apps) {
     // The dot colour is driven off data-status in CSS, so this one assignment
     // both restyles the row and records the state for anything else reading it.
     row.dataset.status = info.status;
-    var starting = info.status === 'building' || info.status === 'starting';
-    var link = row.querySelector('.app-row__name');
-    if (starting) {
-      link.removeAttribute('href');
-      link.setAttribute('role', 'link');
-      link.setAttribute('aria-disabled', 'true');
-    } else {
-      link.setAttribute('href', link.dataset.appUrl);
-      link.removeAttribute('role');
-      link.removeAttribute('aria-disabled');
-    }
     var statusEl = row.querySelector('.app-row__status');
-    if (statusEl) {
-      statusEl.textContent = starting ? info.status.charAt(0).toUpperCase() + info.status.slice(1) + '...' : info.status;
-      statusEl.classList.toggle('visually-hidden', !starting);
-    }
+    if (statusEl) statusEl.textContent = info.status;
   });
   applyFilter();
 }

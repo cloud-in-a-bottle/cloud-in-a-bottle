@@ -2,11 +2,15 @@
 
 import socket
 import sqlite3
+import threading
 from collections.abc import Iterator
 from contextlib import closing
+from http.server import BaseHTTPRequestHandler
+from http.server import ThreadingHTTPServer
 
 import pytest
 from axe_playwright_python.sync_playwright import Axe
+from playwright.sync_api import Browser
 from playwright.sync_api import Page
 from playwright.sync_api import expect
 
@@ -123,59 +127,129 @@ def test_owner_ui_has_no_automatically_detectable_wcag_2_2_aa_violations(page: P
     assert not failures, "Automatically detectable WCAG 2.2 AA violations:\n" + "\n".join(failures)
 
 
+@pytest.fixture
+def app_backend() -> Iterator[tuple[int, list[str]]]:
+    paths: list[str] = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:  # noqa: N802
+            paths.append(self.path)
+            body = b"<!doctype html><html lang='en'><title>Ready</title><h1>App is ready</h1></html>"
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield server.server_port, paths
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join()
+
+
 @pytest.mark.parametrize(("initial_status", "width"), [("building", 1280), ("starting", 390)])
-def test_starting_app_keeps_details_accessible_and_updates_launch_link(
-    page: Page, stack: LocalStack, initial_status: str, width: int
+def test_app_launch_waits_at_its_own_url_then_opens_when_ready(
+    page: Page,
+    browser: Browser,
+    stack: LocalStack,
+    app_backend: tuple[int, list[str]],
+    initial_status: str,
+    width: int,
 ) -> None:
+    backend_port, backend_paths = app_backend
     owner = complete_setup(stack)
     with closing(sqlite3.connect(stack.config.db_path)) as db, db:
         db.execute(
             "INSERT INTO apps (app_id, name, version, repo_path, local_port, status)"
-            " VALUES ('startingtest', 'startup-test', '1.0', '/tmp/startup-test', 29999, ?)",
-            (initial_status,),
+            " VALUES ('startingtest', 'startup-test', '1.0', '/tmp/startup-test', ?, ?)",
+            (backend_port, initial_status),
         )
+
+    def set_state(status: str, port: int = backend_port) -> None:
+        with closing(sqlite3.connect(stack.config.db_path)) as db, db:
+            db.execute("UPDATE apps SET status = ?, local_port = ? WHERE app_id = 'startingtest'", (status, port))
+
+    # Keep the real zone-wide cookie scope so private app subdomains are authenticated.
     page.context.add_cookies(
-        [{"name": cookie.name, "value": cookie.value, "url": stack.router_url} for cookie in owner.cookies]
+        [{"name": c.name, "value": c.value, "domain": c.domain, "path": c.path} for c in owner.cookies]
     )
     page.set_viewport_size({"width": width, "height": 900})
     page.goto(f"{stack.router_url}/dashboard")
     row = page.locator('[data-app-id="startingtest"]')
     launch = row.locator(".app-row__name")
-    status = row.locator(".app-row__status")
-    details = row.get_by_role("link", name="Details")
-    original_url = launch.get_attribute("data-app-url")
-    assert original_url is not None
-    expect(launch).to_be_disabled()
-    assert launch.get_attribute("href") is None
-    expect(status).to_have_text(f"{initial_status.capitalize()}...")
-    expect(status).to_have_class("app-row__status")
+    app_url = stack.app_url("startup-test") + "/"
+    expect(launch).to_be_enabled()
+    expect(launch).to_have_attribute("href", app_url)
+    expect(row.locator(".app-row__status")).to_have_class("visually-hidden app-row__status")
+    with page.expect_popup() as popup:
+        launch.click()
+    app_page = popup.value
+    expect(app_page.get_by_role("heading", name="Your app is coming up")).to_be_visible()
+    app_page.get_by_role("button", name="Pause automatic retry").click()
+    assert app_page.url == app_url
+    assert backend_paths == []
 
-    # The unavailable launch is skipped by Tab; Details still gets focus.
-    page.get_by_role("link", name="+ New", exact=True).focus()
-    page.keyboard.press("Tab")
-    expect(details).to_be_focused()
-    page.keyboard.press("Enter")
-    page.wait_for_url(f"{stack.router_url}/app_detail/startup-test")
-    page.goto(f"{stack.router_url}/dashboard")
-    row.hover()
-    details.click()
-    page.wait_for_url(f"{stack.router_url}/app_detail/startup-test")
-    page.goto(f"{stack.router_url}/dashboard")
+    # The post-deploy Details page offers the same app URL and waiting experience.
+    app_page.get_by_role("link", name="View app details").click()
+    app_page.wait_for_url(f"{stack.router_url}/app_detail/startup-test")
+    with app_page.expect_popup() as detail_popup:
+        app_page.locator(f'a[href="{app_url}"]').first.click()
+    waiting = detail_popup.value
+    waiting.set_viewport_size({"width": width, "height": 900})
+    waiting.get_by_role("button", name="Pause automatic retry").click()
+    waiting.evaluate("window.testDocumentMarker = 'paused'")
+    waiting.wait_for_timeout(3500)
+    assert waiting.evaluate("window.testDocumentMarker") == "paused"
+    assert backend_paths == []
+    assert waiting.evaluate("document.documentElement.scrollWidth <= innerWidth")
+    assert waiting.locator(".panel").evaluate("element => getComputedStyle(element).borderTopStyle") == "solid"
+    audit = Axe().run(waiting, options={"runOnly": {"type": "tag", "values": WCAG_AA_TAGS}})
+    assert not audit.response["violations"], audit.response["violations"]
 
-    # Exercise real /api/apps polling, without reloading the dashboard.
-    for next_status in ("starting", "running", "building", "error", "stopped", "removing"):
-        with closing(sqlite3.connect(stack.config.db_path)) as db, db:
-            db.execute("UPDATE apps SET status = ? WHERE app_id = 'startingtest'", (next_status,))
-        expect(row).to_have_attribute("data-status", next_status, timeout=10000)
-        if next_status in ("building", "starting"):
-            expect(launch).to_be_disabled()
-            assert launch.get_attribute("href") is None
-            expect(status).to_have_text(f"{next_status.capitalize()}...")
-            expect(status).to_have_class("app-row__status")
-        else:
-            expect(launch).to_be_enabled()
-            expect(launch).to_have_attribute("href", original_url)
-            expect(launch).to_have_attribute("target", "_blank")
-            expect(status).to_have_text(next_status)
-            expect(status).to_have_class("app-row__status visually-hidden")
-        expect(details).to_have_attribute("href", "/app_detail/startup-test")
+    set_state("running")
+    waiting.get_by_role("button", name="Resume automatic retry").click()
+    expect(waiting.get_by_role("heading", name="App is ready")).to_be_visible(timeout=15000)
+    assert waiting.url == app_url
+    assert backend_paths.count("/") == 1
+    assert waiting.evaluate("window.opener") is None
+
+    # Direct links preserve encoded paths, repeated query fields, and the fragment.
+    set_state("starting")
+    raw_target = "deep/a%2Fb?tag=one&tag=two&next=%2Fprivate"
+    deep_url = app_url + raw_target + "#keep-this"
+    response = waiting.goto(deep_url)
+    assert response is not None and response.status == 503
+    waiting.get_by_role("button", name="Pause automatic retry").click()
+    with browser.new_context(java_script_enabled=False, storage_state=page.context.storage_state()) as plain_context:
+        plain = plain_context.new_page()
+        plain.goto(deep_url)
+        expect(plain.get_by_role("heading", name="Your app is coming up")).to_be_visible()
+        expect(plain.locator("#startup-retry")).to_be_hidden()
+        expect(plain.get_by_role("link", name="View app details")).to_be_visible()
+        assert plain.url == deep_url
+    set_state("running")
+    waiting.get_by_role("button", name="Try now", exact=True).click()
+    expect(waiting.get_by_role("heading", name="App is ready")).to_be_visible()
+    assert waiting.url == deep_url
+    assert backend_paths.count("/" + raw_target) == 1
+
+    # Leaving startup for an actual failure must end the waiting/retry page.
+    with socket.socket() as unavailable:
+        unavailable.bind(("127.0.0.1", 0))
+        set_state("starting", unavailable.getsockname()[1])
+        response = waiting.goto(app_url + "failed?view=logs#keep-this")
+        assert response is not None and response.status == 503
+        waiting.get_by_role("button", name="Pause automatic retry").click()
+        set_state("error", unavailable.getsockname()[1])
+        waiting.get_by_role("button", name="Resume automatic retry").click()
+        expect(waiting.locator("body")).to_have_text("App is not responding", timeout=15000)
+        waiting.evaluate("window.testDocumentMarker = 'failed'")
+        waiting.wait_for_timeout(3500)
+        assert waiting.evaluate("window.testDocumentMarker") == "failed"
+    waiting.close()
+    app_page.close()
