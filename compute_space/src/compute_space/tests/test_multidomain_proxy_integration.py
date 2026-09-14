@@ -344,6 +344,7 @@ async def test_private_startup_auth_precedes_interception_and_owner_gets_details
         ("GET", "text/html", None, True),
         ("GET", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8", "document", True),
         ("GET", "text/html;q=0.5,application/json;q=0.1", "iframe", True),
+        ("GET", "text/html", "frame", True),
         ("GET", "application/json", None, False),
         ("GET", "*/*", None, False),
         ("GET", None, None, False),

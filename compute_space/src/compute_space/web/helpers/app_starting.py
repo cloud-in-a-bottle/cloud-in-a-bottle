@@ -20,7 +20,7 @@ _QUALITY_VALUE = re.compile(r"(?:0(?:\.[0-9]{0,3})?|1(?:\.0{0,3})?)")
 
 
 def _is_html_navigation(request: Request[Any, Any, Any]) -> bool:
-    if request.method != "GET" or request.headers.get("sec-fetch-dest", "") not in ("", "document", "iframe"):
+    if request.method != "GET" or request.headers.get("sec-fetch-dest", "") not in ("", "document", "iframe", "frame"):
         return False
     # The most specific range determines each representation's quality, including
     # explicit q=0 exclusions. Litestar's Accept.best_match ignores those exclusions.
