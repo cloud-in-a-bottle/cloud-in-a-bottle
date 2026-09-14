@@ -1,20 +1,20 @@
 # Backups and restore
 
-Every instance comes with a backup app, installed at setup and reachable at `https://backup.<your-domain>/`. It is [restic](https://restic.net/) underneath, so backups are encrypted, incremental and deduplicated, and they go to storage you choose.
+Cloud in a Bottle comes with a backup app. It uses [restic](https://restic.net/) to back up your apps' files to the storage location you choose. Backups are encrypted, incremental and deduplicated.
 
-Nothing is backed up until you configure it.
+The app does not back anything up until you have configured it to do so.
 
 ## Set it up
 
-Open the backup app and fill in:
+Open the backup app and specify:
 
-- **Repository URL**: where snapshots go. Restic speaks S3, Backblaze B2, Google Cloud Storage, Azure Blob, Swift, SFTP, rclone remotes, a REST server, or a local path.
-- **Repository password**: the encryption key. Snapshots are useless without it, and nobody can recover it for you. Store it somewhere separate from the instance.
-- **Backend credentials**: whatever your storage needs, as environment variables (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, and so on).
-- **Interval**: seconds between automatic backups, minimum 60. Leave it at 0 and nothing runs on its own.
-- **Retention**: `keep-last`, `keep-hourly`, `keep-daily`, `keep-weekly`, `keep-monthly`, `keep-yearly`. The rules add together, so `keep-last=5, keep-daily=7` keeps the five newest snapshots plus one per day for a week. All zeros means nothing is ever deleted.
+- **Repository URL**: where backups go, most commonly an S3 bucket. It is recommended to use storage outside the instance for protection from issues that occur on the host.
+- **Repository password**: the password used to encrypt your backups.
+- **Backend credentials**: whatever your storage provider needs, entered as environment variables (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, and so on).
+- **Interval**: seconds to wait between automatic backups, minimum 60. Leave it at `0` to run backups only by hand. The interval starts after the previous backup finishes, so a backup that takes an hour adds an hour to the gap between runs.
+- **Retention**: how many snapshots to keep, using `keep-last`, `keep-hourly`, `keep-daily`, `keep-weekly`, `keep-monthly`, and `keep-yearly`. The rules combine: a snapshot is kept if it matches any enabled rule. All zeros disables automatic deletion.
 
-Test the connection, then run a backup by hand to confirm it works. The scheduler survives restarts and does not restart its countdown.
+Test the connection, save the configuration, then run a backup by hand. Check that it succeeds and appears in the snapshot list, as a successful connection test alone does not mean your data has been backed up.
 
 ## What is in a backup
 
