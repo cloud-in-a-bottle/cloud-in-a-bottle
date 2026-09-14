@@ -31,6 +31,8 @@ DOMAIN = os.environ.get("OPENHOST_DOMAIN", "")
 APP_DEPLOY_TIMEOUT_S = 300
 # Apps live in the synced repo on the host (deployed via ansible).
 TEST_APP_PATH = "/home/host/openhost/apps/test_app"
+# The archive fixture uses a versioned, digest-pinned MinIO image.
+MINIO_REPO_URL = "https://github.com/cloud-in-a-bottle/bottled-minio@92b7f8e4d91783ac80ec378020644171422ef89b"
 # Generate a random password per test run since instances are publicly routable.
 OWNER_PASSWORD = "E2e!" + "".join(secrets.choice(string.ascii_letters + string.digits) for _ in range(20))
 # Claim token written by ansible at deploy time; required to POST /setup.
@@ -718,10 +720,10 @@ class TestSelfHost:
     # -- 13c. S3 archive backend (MinIO) -----------------------------------
 
     def test_13c_deploy_minio(self, session, router_url):
-        """Deploy MinIO from its public GitHub repo."""
+        """Deploy the pinned MinIO archive fixture."""
         r = session.post(
             f"{router_url}/api/add_app",
-            json={"repo_url": "https://github.com/cloud-in-a-bottle/bottled-minio"},
+            json={"repo_url": MINIO_REPO_URL},
             timeout=120,
         )
         assert r.status_code == 200, f"add_app minio failed: {r.status_code}: {r.text[:500]}"
