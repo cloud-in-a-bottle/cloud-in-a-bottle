@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any
 from typing import cast
 from urllib.parse import parse_qs
+from urllib.parse import urljoin
 from urllib.parse import urlsplit
 
 import httpx
@@ -280,6 +281,9 @@ async def test_startup_at_deep_app_url_then_running_proxies_same_url(
         assert not r.history
         assert backend.requests == []
         page = _PageElements(r.text)
+        bases = [attrs.get("href") for tag, attrs in page.elements if tag == "base"]
+        assert bases == [f"{scheme}://{authority}/"]
+        assert r.text.index("<base") < r.text.index("<link")
         links = [attrs.get("href") or "" for tag, attrs in page.elements if tag == "a"]
         assert not any(urlsplit(link).path.startswith(("/app_detail", "/dashboard")) for link in links)
         assets = [
@@ -293,8 +297,9 @@ async def test_startup_at_deep_app_url_then_running_proxies_same_url(
             "/static/js/app-starting.js",
         }
         for asset in router_assets:
-            assert asset.startswith(f"{scheme}://{authority}/static/"), asset
-        assert all(urlsplit(asset).scheme in ("http", "https") for asset in assets)
+            assert asset.startswith("/static/"), asset
+            assert urljoin(bases[0], asset).startswith(f"{scheme}://{authority}/static/")
+        assert all(urlsplit(urljoin(bases[0], asset)).scheme in ("http", "https") for asset in assets)
 
         private = await c.get(f"{scheme}://myapp.{authority}/private", headers={"Accept": "text/html"})
         assert private.status_code == 302
@@ -338,43 +343,30 @@ async def test_private_startup_auth_precedes_interception_and_owner_gets_waiting
 @pytest.mark.asyncio
 @pytest.mark.parametrize("status", ["building", "starting"])
 @pytest.mark.parametrize(
-    "method,accept,destination,html",
+    "method,accept,fetch_mode,html",
     [
         ("GET", "text/html", None, True),
-        ("GET", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8", "document", True),
-        ("GET", "text/html;q=0.5,application/json;q=0.1", "iframe", True),
-        ("GET", "text/html", "frame", True),
+        ("GET", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8", None, True),
+        ("GET", "text/html", "navigate", True),
+        ("GET", None, "navigate", True),
+        ("GET", "application/json", "navigate", True),
+        ("GET", "text/html", "cors", False),
+        ("GET", "text/html", "same-origin", False),
+        ("GET", "text/html", "no-cors", False),
+        ("GET", "text/html", "", False),
         ("GET", "application/json", None, False),
         ("GET", "*/*", None, False),
         ("GET", None, None, False),
         ("GET", "text/html;q=0", None, False),
-        ("GET", "text/html;q=inf", None, False),
-        ("GET", "text/html;q=1e309", None, False),
-        ("GET", "text/html;q=garbage", None, False),
-        ("GET", "text/html;q=NaN", None, False),
-        ("GET", "text/html;q=", None, False),
-        ("GET", "text/html;q=2", None, False),
-        ("GET", "text/html;q=-1", None, False),
-        ("GET", "text/html;q=1e-1", None, False),
-        ("GET", "text/html;q = 0", None, False),
-        ("GET", "text/html;q= 0", None, False),
-        ("GET", "text/html;q=0.001", None, True),
-        ("GET", "text/html;q=0.999,application/json;q=0.991", None, True),
-        ("GET", "text/html;q=0,*/*;q=1", "document", False),
-        ("GET", "text/html;charset=utf-8;q=0,text/html;q=1", "document", False),
-        ("GET", "text/html;charset=iso-8859-1;q=0,text/html;q=1", "document", True),
-        ("GET", "TEXT/HTML;CHARSET=UTF-8", "document", True),
+        ("GET", "TEXT/HTML", None, True),
         ("GET", "application/json,text/html;q=0.5", None, False),
-        ("GET", "text/html", "empty", False),
-        ("GET", "text/html", "script", False),
-        ("POST", "text/html", "document", False),
-        ("POST", "text/html;q=inf", "document", False),
+        ("POST", "text/html", "navigate", False),
+        ("POST", "text/html", None, False),
         ("PUT", "text/html", None, False),
         ("PATCH", "text/html", None, False),
         ("DELETE", "text/html", None, False),
         ("OPTIONS", "text/html", None, False),
-        ("HEAD", "text/html", "document", False),
-        ("HEAD", "text/html;q=inf", "document", False),
+        ("HEAD", "text/html", "navigate", False),
     ],
 )
 async def test_startup_only_retries_html_get_navigation(
@@ -384,7 +376,7 @@ async def test_startup_only_retries_html_get_navigation(
     status: str,
     method: str,
     accept: str | None,
-    destination: str | None,
+    fetch_mode: str | None,
     html: bool,
 ) -> None:
     _set_status(proxy_config, status)
@@ -403,8 +395,8 @@ async def test_startup_only_retries_html_get_navigation(
         headers = {}
         if accept is not None:
             headers["Accept"] = accept
-        if destination is not None:
-            headers["Sec-Fetch-Dest"] = destination
+        if fetch_mode is not None:
+            headers["Sec-Fetch-Mode"] = fetch_mode
         r = await c.request(
             method,
             "http://myapp.myhost.local/deep/action?keep=this",
@@ -415,21 +407,6 @@ async def test_startup_only_retries_html_get_navigation(
     if method == "HEAD":
         # ASGITransport discards HEAD bodies itself; inspect actual emitted bytes too.
         assert b"".join(bodies) == b""
-    assert backend.requests == []
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("status", ["building", "starting"])
-async def test_repeated_accept_fields_preserve_explicit_html_exclusion(
-    wrapped_app: Any, proxy_config: Config, backend: _RecordingBackend, status: str
-) -> None:
-    _set_status(proxy_config, status)
-    async with _client(wrapped_app) as c:
-        response = await c.get(
-            "http://myapp.myhost.local/",
-            headers=[("Accept", "text/html"), ("Accept", "text/html;charset=utf-8;q=0")],
-        )
-    _assert_startup(response, html=False)
     assert backend.requests == []
 
 

@@ -216,7 +216,7 @@ class SubdomainProxyMiddleware:
 
         if app.status in ("building", "starting"):
             if scope["type"] == ScopeType.HTTP:
-                startup_response = app_starting_response(Request(scope, receive, send), app_name=app.name, zone=zone)
+                startup_response = app_starting_response(Request(scope, receive, send))
                 await startup_response(scope, receive, send)
             else:
                 websocket: WebSocket[Any, Any, Any] = WebSocket(scope, receive, send)
