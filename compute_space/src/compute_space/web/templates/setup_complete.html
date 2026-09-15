@@ -1,0 +1,56 @@
+{% extends "_layout_narrow.html" %}
+{% from "_components/button.html" import button %}
+{% block title_suffix %} - Setup complete{% endblock %}
+
+{% block head_assets %}
+<style>{{ setup_styles | safe }}</style>
+{# The optional web font must not delay polling when its CDN is unavailable. #}
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible+Mono:wght@500;600;700&display=swap"
+      media="print" onload="this.media='all'">
+{% endblock %}
+
+{% block content %}
+<main>
+  <h2>Setup complete</h2>
+  <p id="setup-status" class="hint" role="status">Starting…</p>
+  <div class="actions">
+    {{ button("Open dashboard", href="/", variant="primary") }}
+  </div>
+</main>
+
+<script>
+(function () {
+  var deadline = Date.now() + 120000;
+  async function poll() {
+    var remaining = deadline - Date.now();
+    if (remaining <= 0) {
+      document.getElementById('setup-status').textContent = 'Taking longer than expected.';
+      return;
+    }
+    var controller = new AbortController();
+    var timeout = setTimeout(function () { controller.abort(); }, Math.min(3000, remaining));
+    try {
+      var response = await fetch('/health', {
+        cache: 'no-store', credentials: 'same-origin', redirect: 'error', signal: controller.signal
+      });
+      if (response.status === 200 && (await response.json()).status === 'ok') {
+        window.location.replace('/');
+        return;
+      }
+    } catch (error) {
+      // Refused connections and timeouts are expected during the handoff.
+    } finally {
+      clearTimeout(timeout);
+    }
+    if (Date.now() >= deadline) {
+      poll();
+    } else {
+      setTimeout(poll, 1000);
+    }
+  }
+  poll();
+}());
+</script>
+{% endblock %}
