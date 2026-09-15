@@ -72,6 +72,7 @@ from compute_space.core.manifest import all_manifest_permissions_v2
 from compute_space.core.manifest import manifest_newly_declared_permissions_v2
 from compute_space.core.manifest import manifest_settings_changes
 from compute_space.core.manifest import parse_manifest
+from compute_space.core.manifest import settings_changes_require_review
 from compute_space.core.oauth import OAuthRequired
 from compute_space.core.oauth import get_oauth_token
 from compute_space.core.ports import check_port_available
@@ -190,7 +191,9 @@ class UpdateReviewRequiredResponse:
     the running one and the caller hasn't approved it. The reload is NOT
     performed; the app keeps running its current version until the owner
     re-submits with ``approve_new_permissions``. ``settings_changed`` is the
-    grouped old→new diff; ``permissions_required`` the newly declared grants."""
+    grouped old→new diff (descriptive metadata included, for context, even though
+    it never triggers a review by itself); ``permissions_required`` the newly
+    declared grants."""
 
     ok: bool
     review_required: bool
@@ -674,7 +677,10 @@ def _gate_update_review(
         manifest, get_all_permissions_v2(consumer_app_id=app_id), previous_manifest_raw
     )
     settings_changed = manifest_settings_changes(manifest, previous_manifest_raw)
-    if not new_perms and not settings_changed:
+    # Descriptive metadata (description, authors, version) is reported in the diff but
+    # doesn't hold the update back on its own: an app that only rewords its description
+    # gains nothing, and gating on it trains the owner to click through every review.
+    if not new_perms and not settings_changes_require_review(settings_changed):
         return None
 
     if approve_new_permissions:

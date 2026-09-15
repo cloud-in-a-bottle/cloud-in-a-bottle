@@ -31,6 +31,7 @@ from compute_space.core.manifest import manifest_settings_changes
 from compute_space.core.manifest import manifest_ungranted_permissions_v2
 from compute_space.core.manifest import parse_manifest
 from compute_space.core.manifest import parse_manifest_from_string
+from compute_space.core.manifest import settings_changes_require_review
 from compute_space.db.connection import init_db
 from compute_space.tests._litestar_helpers import auth_cookie
 from compute_space.tests._litestar_helpers import make_test_app
@@ -725,6 +726,70 @@ def test_settings_changes_detects_version_and_memory() -> None:
     assert changes["Memory (MB)"] == ("128", "256")
 
 
+_DESCRIBED = """\
+[app]
+name = "perm-app"
+version = "{version}"
+description = "{description}"
+authors = ["{author}"]
+
+[runtime.container]
+image = "Dockerfile"
+port = 5000
+
+[resources]
+memory_mb = {memory}
+"""
+
+
+def _described(version: str = "1.0.0", description: str = "A thing", author: str = "ada", memory: int = 128) -> str:
+    return _DESCRIBED.format(version=version, description=description, author=author, memory=memory)
+
+
+def test_settings_changes_marks_metadata_as_non_gating() -> None:
+    prev = _described()
+    new = parse_manifest_from_string(_described(version="2.0.0", description="A better thing", author="grace"))
+    changes = {c.label: c for c in manifest_settings_changes(new, prev)}
+    assert set(changes) == {"Version", "Description", "Authors"}
+    assert not any(c.gates_review for c in changes.values())
+    assert settings_changes_require_review(list(changes.values())) is False
+
+
+def test_settings_changes_still_gate_on_functional_field() -> None:
+    prev = _described()
+    new = parse_manifest_from_string(_described(description="A better thing", memory=256))
+    changes = {c.label: c for c in manifest_settings_changes(new, prev)}
+    assert changes["Description"].gates_review is False
+    assert changes["Memory (MB)"].gates_review is True
+    assert settings_changes_require_review(list(changes.values())) is True
+
+
+def test_gate_allows_metadata_only_change(cfg: Any, tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "openhost.toml").write_text(_described(version="2.0.0", description="A better thing", author="grace"))
+    app_id = _seed_perm_app(cfg, str(repo))
+
+    assert (
+        _gate_update_review(app_id, str(repo), approve_new_permissions=False, previous_manifest_raw=_described())
+        is None
+    )
+
+
+def test_gate_reports_metadata_alongside_the_change_that_gates(cfg: Any, tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "openhost.toml").write_text(_described(description="A better thing", memory=256))
+    app_id = _seed_perm_app(cfg, str(repo))
+
+    result = _gate_update_review(app_id, str(repo), approve_new_permissions=False, previous_manifest_raw=_described())
+    assert result is not None
+    assert result.review_required is True
+    # The description rides along for context even though it never gates on its own.
+    gating_by_label = {c["label"]: c["gates_review"] for c in result.settings_changed}
+    assert gating_by_label == {"Description": False, "Memory (MB)": True}
+
+
 def test_gate_refuses_settings_change_without_approval(cfg: Any, tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -780,6 +845,24 @@ def _seed_git_app_with_manifest_raw(cfg: Any, repo: Path, on_disk_toml: str, man
     finally:
         db.close()
     return app_id
+
+
+def test_reload_route_applies_metadata_only_change_without_review(
+    cfg: Any, client: TestClient[Litestar], cookies: dict[str, str], tmp_path: Path
+) -> None:
+    repo = tmp_path / "repo"
+    app_id = _seed_git_app_with_manifest_raw(
+        cfg,
+        repo,
+        _described(version="2.0.0", description="A better thing", author="grace"),
+        _described(),
+    )
+
+    client.cookies.update(cookies)
+    with _mocked_reload_side_effects() as m:
+        resp = client.post(f"/reload_app/{app_id}", json={"update": True})
+    assert resp.json() == {"ok": True}
+    m["thread"].assert_called_once()
 
 
 def test_reload_route_gates_on_settings_change(
