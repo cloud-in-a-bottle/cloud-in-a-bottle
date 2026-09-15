@@ -17,6 +17,7 @@ Covers the load-bearing pieces of the OPENHOST_OWNER_USERNAME feature:
 from __future__ import annotations
 
 import sqlite3
+import string
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -24,6 +25,8 @@ from unittest import mock
 
 import bcrypt
 import pytest
+from hypothesis import given
+from hypothesis import strategies as st
 from litestar import Litestar
 from litestar.di import Provide
 from litestar.testing import TestClient
@@ -248,6 +251,25 @@ def test_validate_owner_username_accepts(value: str) -> None:
 )
 def test_validate_owner_username_rejects(value: str) -> None:
     assert validate_owner_username(value) is not None, value
+
+
+@given(
+    value=st.one_of(
+        st.text(),
+        st.tuples(
+            st.text(alphabet=string.ascii_lowercase + string.digits + "._-", min_size=1),
+            st.sampled_from(["", "\n", "\r", "\t", " "]),
+        ).map("".join),
+    )
+)
+def test_owner_username_matches_documented_grammar(value: str) -> None:
+    alphanumeric = string.ascii_lowercase + string.digits
+    expected = (
+        1 <= len(value) <= 30
+        and value[0] in alphanumeric
+        and all(character in alphanumeric + "._-" for character in value)
+    )
+    assert (validate_owner_username(value) is None) == expected
 
 
 # ---------------------------------------------------------------------------

@@ -74,7 +74,7 @@ def format_bytes(size: int) -> str:
 def _ensure_storage_roots(config: Config) -> None:
     os.makedirs(config.persistent_data_dir, exist_ok=True)
     os.makedirs(config.temporary_data_dir, exist_ok=True)
-    os.makedirs(os.path.join(config.persistent_data_dir, "vm_data"), exist_ok=True)
+    os.makedirs(config.openhost_data_path, exist_ok=True)
     os.makedirs(os.path.join(config.persistent_data_dir, "app_data"), exist_ok=True)
 
 
@@ -121,7 +121,7 @@ def disk_free_bytes(config: Config) -> int:
 
 def openhost_data_usage_bytes(config: Config) -> int:
     _ensure_storage_roots(config)
-    return _dir_size_bytes(os.path.join(config.persistent_data_dir, "vm_data"))
+    return _dir_size_bytes(str(config.openhost_data_path))
 
 
 def per_app_usage(config: Config) -> dict[str, int]:

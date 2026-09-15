@@ -133,11 +133,43 @@ async def test_container_dns_starts_with_only_lvh_me(tmp_path: Path, monkeypatch
     try:
         assert dns._coredns is not None
         assert dns._coredns.coredns_bin == "/installed/coredns"
-        assert dns.zones == ()
+        # Public lvh.me loopback answers would point at the app container, not the router.
+        assert dns.zones == ("lvh.me",)
         corefile = config.coredns_corefile_path.read_text()
         assert f"bind {CONTAINER_GATEWAY_IP}" in corefile
         assert "forward . " in corefile
-        assert "lvh.me:53" not in corefile
+        assert "lvh.me:53" in corefile
+        private_zone = (config.zones_dir / "lvh.me.zone.container").read_text()
+        assert "@   IN A    10.200.0.1" in private_zone
+        assert "*   IN A    10.200.0.1" in private_zone
+        assert not (config.zones_dir / "lvh.me.zone").exists()
+    finally:
+        await dns.cleanup()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("public_dns_enabled", [False, True])
+async def test_mdns_domains_get_private_gateway_records_at_startup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, public_dns_enabled: bool
+) -> None:
+    stub_coredns_spawn(monkeypatch)
+    monkeypatch.setattr(start_mod, "_hairpin_gateway_ip", lambda: CONTAINER_GATEWAY_IP)
+    monkeypatch.setattr(start_mod, "infer_inbound_ipv4", lambda public_ip: "10.0.0.5")
+    monkeypatch.setattr(start_mod, "_ensure_coredns_binary", lambda config: "/installed/coredns")
+    config = DefaultConfig(data_root_dir=str(tmp_path), coredns_enabled=public_dns_enabled, public_ip=PUBLIC_IP)
+    config.make_all_dirs()
+    dns = await start_mod._start_dns(config, (Domain("bottle.local", mdns=True),))
+    try:
+        assert dns.zones == ("bottle.local",)
+        assert dns._coredns is not None
+        corefile = config.coredns_corefile_path.read_text()
+        assert "bottle.local:53" in corefile
+        assert "bind 10.0.0.5" not in corefile
+        assert all(line.strip() == f"bind {CONTAINER_GATEWAY_IP}" for line in corefile.splitlines() if "bind " in line)
+        private_zone = (config.zones_dir / "bottle.local.zone.container").read_text()
+        assert "@   IN A    10.200.0.1" in private_zone
+        assert "*   IN A    10.200.0.1" in private_zone
+        assert not (config.zones_dir / "bottle.local.zone").exists()
     finally:
         await dns.cleanup()
 

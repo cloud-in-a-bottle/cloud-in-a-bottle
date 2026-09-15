@@ -1,16 +1,22 @@
 """Unit tests for the cloudinabottle.toml manifest parser."""
 
 import json
+import re
+import tomllib
 from unittest import mock
 
 import attr
 import pytest
+import tomli_w
+from hypothesis import given
+from hypothesis import strategies as st
 
 from compute_space.core.manifest import MANIFEST_FILENAMES
 from compute_space.core.manifest import SAFE_CAPABILITIES
 from compute_space.core.manifest import SAFE_DEVICE_PATHS
 from compute_space.core.manifest import UNPRIVILEGED_PORT_FLOOR
 from compute_space.core.manifest import find_manifest_path
+from compute_space.core.manifest import manifest_settings_changes
 from compute_space.core.manifest import parse_manifest
 from compute_space.core.manifest import parse_manifest_from_string
 
@@ -429,6 +435,47 @@ class TestValidation:
         toml = '[app]\nname = "x"\nversion = "1"\n[runtime.container]\nimage = "Dockerfile"\n'
         with pytest.raises(ValueError, match="port"):
             parse_manifest_from_string(toml)
+
+    @given(
+        section=st.sampled_from(["app", "runtime", "resources"]),
+        value=st.one_of(st.integers(), st.booleans(), st.text(), st.lists(st.integers())),
+    )
+    def test_settings_diff_ignores_invalid_previous_sections(self, section: str, value: int | str | list[int]) -> None:
+        # Valid TOML with a non-table section is still an unparseable manifest.
+        previous = tomllib.loads(MINIMAL)
+        previous[section] = value
+        current = parse_manifest_from_string(MINIMAL)
+        assert manifest_settings_changes(current, tomli_w.dumps(previous)) == []
+
+    @pytest.mark.parametrize(
+        "section", ["app", "runtime", "runtime.container", "routing", "resources", "data", "services", "services.v2"]
+    )
+    @pytest.mark.parametrize("value", [0, False, "", [], [{}]])
+    def test_non_table_sections_raise_value_error(self, section: str, value: object) -> None:
+        document = tomllib.loads(MINIMAL)
+        parent = document
+        *ancestors, key = section.split(".")
+        for ancestor in ancestors:
+            parent = parent.setdefault(ancestor, {})
+        parent[key] = value
+        raw = tomli_w.dumps(document)
+        with pytest.raises(ValueError, match=rf"\[{re.escape(section)}\] must be a table"):
+            parse_manifest_from_string(raw)
+        assert manifest_settings_changes(parse_manifest_from_string(MINIMAL), raw) == []
+
+    @pytest.mark.parametrize("section", ["ports", "links", "services.v2.provides", "services.v2.consumes"])
+    @pytest.mark.parametrize("value", [0, False, "", {}])
+    def test_non_list_table_arrays_raise_value_error(self, section: str, value: object) -> None:
+        document = tomllib.loads(MINIMAL)
+        parent = document
+        *ancestors, key = section.split(".")
+        for ancestor in ancestors:
+            parent = parent.setdefault(ancestor, {})
+        parent[key] = value
+        raw = tomli_w.dumps(document)
+        with pytest.raises(ValueError, match=rf"\[\[{re.escape(section)}\]\] must be a list of tables"):
+            parse_manifest_from_string(raw)
+        assert manifest_settings_changes(parse_manifest_from_string(MINIMAL), raw) == []
 
 
 class TestServicesV2Parsing:

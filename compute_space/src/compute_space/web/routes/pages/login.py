@@ -26,15 +26,28 @@ from compute_space.web.helpers.zone import zone_for_request
 def _validated_next(next_url: str, db: sqlite3.Connection) -> str | None:
     """Return ``next_url`` if it's a safe post-login redirect target, else None.
 
-    Accepts either a path-relative URL or an absolute URL under any configured domain
+    Accepts either a path-relative URL or an HTTP(S) URL under any configured domain
     (router or app subdomain).  Anything else is rejected so a hostile ``?next=`` can't
     bounce the operator off to a phishing page.
     """
-    if not next_url:
+    if (
+        not next_url
+        or next_url[0].isspace()
+        or "\\" in next_url
+        or any(ord(character) < 32 or ord(character) == 127 for character in next_url)
+    ):
         return None
-    parsed = urlparse(next_url)
+    try:
+        parsed = urlparse(next_url)
+        # Accessing port validates its syntax and range; malformed targets are rejected.
+        _ = parsed.port
+    except ValueError:
+        return None
+    if parsed.scheme not in ("", "http", "https"):
+        return None
     if not parsed.scheme and not parsed.netloc:
-        return next_url
+        # Browsers treat multiple leading slashes as an authority, even when urlparse does not.
+        return None if next_url.startswith("//") else next_url
     if parsed.hostname is not None and Domain.match(db, parsed.hostname) is not None:
         return next_url
     return None
