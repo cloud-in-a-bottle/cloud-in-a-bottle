@@ -41,7 +41,9 @@ ProxyTarget = LocalPort | InProcess
 BUILTIN_HOST = "http://builtin.openhost.internal"
 
 
-def client_for(target: ProxyTarget, timeout: httpx.Timeout | float) -> tuple[httpx.AsyncClient, str]:
+def client_for(
+    target: ProxyTarget, timeout: httpx.Timeout | float, *, trust_env: bool = True
+) -> tuple[httpx.AsyncClient, str]:
     """An httpx client and base URL for a target, in-process or over loopback."""
     match target:
         case InProcess(app):
@@ -51,4 +53,4 @@ def client_for(target: ProxyTarget, timeout: httpx.Timeout | float) -> tuple[htt
             base_url = BUILTIN_HOST
         case LocalPort(port):
             transport, base_url = None, f"http://127.0.0.1:{port}"
-    return httpx.AsyncClient(transport=transport, timeout=timeout), base_url
+    return httpx.AsyncClient(transport=transport, timeout=timeout, trust_env=trust_env), base_url

@@ -13,6 +13,9 @@ import attr
 from compute_space.core.app_id import ROUTER_APP_ID
 from compute_space.core.app_id import ROUTER_APP_NAME
 from compute_space.core.proxy_target import AsgiApp
+from compute_space.core.proxy_target import AsgiReceive
+from compute_space.core.proxy_target import AsgiScope
+from compute_space.core.proxy_target import AsgiSend
 from compute_space.core.service_interface.provider import ServiceProvider
 
 # Permission entries stay in wire form (``{"grant": ..., "scope": ...}``) everywhere outside the
@@ -27,7 +30,19 @@ class BuiltinService:
     app: AsgiApp
 
 
-BUILTIN_SERVICES: tuple[BuiltinService, ...] = ()
+APP_DEFINITIONS_SERVICE_URL = "github.com/cloud-in-a-bottle/cloud-in-a-bottle/services/app-definitions"
+
+
+async def _app_definitions(scope: AsgiScope, receive: AsgiReceive, send: AsgiSend) -> None:
+    # Import at dispatch to break the registry -> adapter -> service resolver -> registry cycle.
+    from compute_space.web.routes.api.app_definitions import app_definitions_service_app  # noqa: PLC0415
+
+    await app_definitions_service_app(scope, receive, send)  # type: ignore[arg-type]
+
+
+BUILTIN_SERVICES: tuple[BuiltinService, ...] = (
+    BuiltinService(service_url=APP_DEFINITIONS_SERVICE_URL, version="0.1.0", app=_app_definitions),
+)
 
 
 def builtin_by_url(service_url: str) -> BuiltinService | None:

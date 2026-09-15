@@ -48,6 +48,27 @@
   <span class="hint">Detailed diagnostic info for debugging, or for sharing in a bug report.</span>
 </div>
 
+{% call section_head("App definitions") %}{% endcall %}
+<p class="hint" id="app-definition-scope">Export app definitions: names, sources, ports, and referenced secret keys.
+  This excludes app data and is not a full backup.</p>
+<fieldset class="action-bar app-definition-modes" aria-describedby="app-definition-scope">
+  <legend class="visually-hidden">Export mode</legend>
+  <label><input type="radio" name="app-definition-mode" value="sharing" checked> Sharing</label>
+  <label><input type="radio" name="app-definition-mode" value="private"
+                aria-describedby="app-definition-private-hint"> Private (includes secrets)</label>
+</fieldset>
+<p class="hint" id="app-definition-private-hint" hidden>Private exports include configured secret values. Keep them private.</p>
+<div class="action-bar">
+  <button type="button" class="btn" id="app-definition-copy" disabled>Copy</button>
+  <button type="button" class="btn" id="app-definition-download" disabled>Download</button>
+  <span class="hint" id="app-definition-status" role="status"></span>
+</div>
+<details id="app-definition-preview">
+  <summary>Preview</summary>
+  <pre class="log-output" id="app-definition-json" role="region"
+       aria-label="App definitions JSON" tabindex="0"></pre>
+</details>
+
 {% call section_head("Logs") %}{% endcall %}
 <pre class="log-output log-output--tall" id="cs-logs" role="region"
      aria-label="Cloud in a Bottle logs" tabindex="0"></pre>
@@ -65,4 +86,5 @@
 <script src="{{ static_url('js/http-errors.js') }}"></script>
 <script src="{{ static_url('js/chart.js') }}"></script>
 <script src="{{ static_url('js/system.js') }}"></script>
+<script src="{{ static_url('js/app-definition-export.js') }}"></script>
 {% endblock %}
