@@ -33,8 +33,6 @@ sqlite = ["main"]
 | `description` | string | no | Short description |
 | `authors` | string[] | no | List of author names |
 
-`version`, `description`, and `authors` are descriptive only: changing them does not hold an update back for the instance owner's approval the way a change to the runtime, resource, routing, data, or service fields does.
-
 ### `[runtime.container]` (required)
 
 | Field | Type | Required | Default | Description |

@@ -42,7 +42,7 @@ Two routes, both ending in the same place.
 
 The install page shows what the app asked for in its manifest: how much memory, which data it wants, whether it wants other apps' data, extra Linux capabilities, host devices, host networking, and which cross-app services it consumes. You should review this carefully. By default, apps have minimal permissions to do unsafe things in your space. But if given elevated access, the potential harm can become much greater. [Security](../how_it_works/security.md) explains what each request actually grants.
 
-Updates get the same treatment: when an app's manifest changes something that affects how the app runs, the update page shows the changed settings and any new service permissions, and nothing is granted until you approve. Purely descriptive edits (`description`, `authors`, `version`) apply without stopping to ask, since they change nothing about what the app can do; they are still listed for context when a review happens for another reason.
+Updates get the same treatment: when an app's manifest changes, the update page shows the changed settings and any new service permissions, and nothing is granted until you approve.
 
 ### Updating apps
 

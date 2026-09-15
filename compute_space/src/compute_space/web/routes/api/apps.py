@@ -191,8 +191,8 @@ class UpdateReviewRequiredResponse:
     the running one and the caller hasn't approved it. The reload is NOT
     performed; the app keeps running its current version until the owner
     re-submits with ``approve_new_permissions``. ``settings_changed`` is the
-    grouped old→new diff (descriptive metadata included, for context, even though
-    it never triggers a review by itself); ``permissions_required`` the newly
+    grouped old→new diff (non-gating fields included, for context, even though they
+    never trigger a review by themselves); ``permissions_required`` the newly
     declared grants."""
 
     ok: bool
@@ -677,9 +677,10 @@ def _gate_update_review(
         manifest, get_all_permissions_v2(consumer_app_id=app_id), previous_manifest_raw
     )
     settings_changed = manifest_settings_changes(manifest, previous_manifest_raw)
-    # Descriptive metadata (description, authors, version) is reported in the diff but
-    # doesn't hold the update back on its own: an app that only rewords its description
-    # gains nothing, and gating on it trains the owner to click through every review.
+    # Fields that don't change what the app can do (description, authors, version,
+    # health check, links) are reported in the diff but don't hold the update back on
+    # their own: an app that only rewords its description gains nothing, and gating on
+    # that trains the owner to click through every review.
     if not new_perms and not settings_changes_require_review(settings_changed):
         return None
 
