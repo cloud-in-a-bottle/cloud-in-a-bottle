@@ -27,9 +27,15 @@ info:
     entry of "*" records an approved wildcard. Sharing never contacts Secrets. Private
     retrieves the union of approved keys from the selected provider, expanding a wildcard
     through /list then /get on that same captured target. It does not inspect a Secrets DB
-    or scrape an unreferenced store. Empty values are preserved, extra returned keys ignored,
-    and missing keys or unusable providers/responses fail the whole export. Metadata is a
-    single database snapshot; secret values are read afterward and can change independently.
+    or scrape an unreferenced store. Private always includes secret_values and a sorted,
+    unique missing_secret_keys list; sharing omits both. Empty values are preserved, and
+    extra unrequested values are ignored. Every requested key must appear exactly once,
+    either as a string value or in the provider's explicit missing list. Explicitly absent
+    keys are reported successfully, including keys deleted between wildcard /list and /get.
+    Duplicate, overlapping, non-string or unrequested missing entries and unaccounted keys
+    fail the export, as do unusable providers/responses. No relevant keys means empty
+    secret_values and missing_secret_keys without contacting Secrets. Metadata is a single
+    database snapshot; secret values are read afterward and can change independently.
 paths:
   /export:
     post:
@@ -47,7 +53,7 @@ paths:
                   default: sharing
       responses:
         "200":
-          description: Pretty-printed deterministic JSON. secret_values exists only in private mode.
+          description: Pretty-printed deterministic JSON. Private requires secret_values and missing_secret_keys, including explicitly absent keys. Sharing omits both fields.
           content:
             application/json:
               schema:
@@ -57,7 +63,7 @@ paths:
         "403":
           description: permission_required with required_grant containing the global mode grant. The proxy adds grant_url.
         "502":
-          description: Export incomplete because approved keys or a compatible Secrets provider are unavailable, or the provider response is invalid.
+          description: Export failed because a compatible Secrets provider is unavailable or its response is invalid, including keys not accounted for by values or explicit missing entries.
 components:
   schemas:
     Export:
@@ -68,10 +74,12 @@ components:
         - properties:
             mode: {enum: [sharing]}
           not:
-            required: [secret_values]
+            anyOf:
+              - required: [secret_values]
+              - required: [missing_secret_keys]
         - properties:
             mode: {enum: [private]}
-          required: [secret_values]
+          required: [secret_values, missing_secret_keys]
       properties:
         schema_version:
           type: integer
@@ -124,3 +132,8 @@ components:
         secret_values:
           type: object
           additionalProperties: {type: string}
+        missing_secret_keys:
+          type: array
+          uniqueItems: true
+          items: {type: string}
+          description: Sorted names of requested keys explicitly reported absent by Secrets. Empty when all requested keys have values.

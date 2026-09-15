@@ -13,6 +13,7 @@ import attr
 from compute_space.core.app_definition_secrets import SECRETS_SERVICE_URL
 from compute_space.core.app_definition_secrets import SECRETS_VERSION
 from compute_space.core.app_definition_secrets import ExportError
+from compute_space.core.app_definition_secrets import SecretReadResult
 from compute_space.core.app_definition_secrets import read_secret_values
 from compute_space.core.git_ops import is_ssh_url
 from compute_space.core.git_ops import parse_repo_url
@@ -118,6 +119,7 @@ class DefinitionExport:
 @attr.s(auto_attribs=True, frozen=True)
 class PrivateDefinitionExport(DefinitionExport):
     secret_values: dict[str, str]
+    missing_secret_keys: tuple[str, ...]
 
 
 @attr.s(auto_attribs=True, frozen=True)
@@ -179,8 +181,14 @@ async def export_app_definitions(db: sqlite3.Connection, apps_dir: str, mode: Ex
     document: DefinitionExport
     if mode == "private":
         keys = {key for app in snapshot.apps for key in app.secret_keys}
-        values = await read_secret_values(snapshot.secrets_provider, keys) if snapshot.secrets_provider else {}
-        document = PrivateDefinitionExport(mode=mode, apps=snapshot.apps, secret_values=values)
+        secrets = (
+            await read_secret_values(snapshot.secrets_provider, keys)
+            if snapshot.secrets_provider
+            else SecretReadResult(values={}, missing=())
+        )
+        document = PrivateDefinitionExport(
+            mode=mode, apps=snapshot.apps, secret_values=secrets.values, missing_secret_keys=secrets.missing
+        )
     else:
         document = DefinitionExport(mode=mode, apps=snapshot.apps)
     return json.dumps(attr.asdict(document), indent=2, sort_keys=True, ensure_ascii=False) + "\n"

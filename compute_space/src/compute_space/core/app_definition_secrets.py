@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 from contextvars import ContextVar
 
+import attr
 import httpx
 
 from compute_space.core.proxy_target import client_for
@@ -31,6 +32,12 @@ class ExportError(RuntimeError):
     """Only fixed, non-sensitive messages may cross the export's provider boundary."""
 
 
+@attr.s(auto_attribs=True, frozen=True)
+class SecretReadResult:
+    values: dict[str, str]
+    missing: tuple[str, ...]
+
+
 async def _request(http: httpx.AsyncClient, url: str, keys: list[str] | None = None) -> dict[str, object]:
     # The export adapter has authorized this operation before we assert router grants.
     permissions = [{"grant": {"key": key}, "scope": "global"} for key in keys or []]
@@ -52,7 +59,7 @@ async def _request(http: httpx.AsyncClient, url: str, keys: list[str] | None = N
         raise ExportError("Secrets provider did not return a valid export response.") from None
 
 
-async def read_secret_values(provider: ResolvedProvider, referenced_keys: set[str]) -> dict[str, str]:
+async def read_secret_values(provider: ResolvedProvider, referenced_keys: set[str]) -> SecretReadResult:
     """Read only approved keys, using one pinned target for wildcard enumeration and retrieval."""
     token = _reading_secrets.set(True)
     try:
@@ -61,7 +68,7 @@ async def read_secret_values(provider: ResolvedProvider, referenced_keys: set[st
         _reading_secrets.reset(token)
 
 
-async def _read_secret_values(provider: ResolvedProvider, referenced_keys: set[str]) -> dict[str, str]:
+async def _read_secret_values(provider: ResolvedProvider, referenced_keys: set[str]) -> SecretReadResult:
     http, base_url = client_for(provider.target, timeout=30.0, trust_env=False)
     endpoint = f"{base_url}/{provider.endpoint.strip('/')}".rstrip("/")
     keys = referenced_keys - {"*"}
@@ -78,14 +85,26 @@ async def _read_secret_values(provider: ResolvedProvider, referenced_keys: set[s
                     raise ExportError("Secrets provider returned an invalid key list.")
                 keys.add(key)
         if not keys:
-            return {}
+            return SecretReadResult(values={}, missing=())
         body = await _request(http, f"{endpoint}/get", sorted(keys))
 
     values = body.get("secrets")
     missing = body.get("missing", [])
-    if not isinstance(values, dict) or not isinstance(missing, list) or missing:
-        raise ExportError("Secrets provider could not supply every approved key.")
-    if any(key not in values or not isinstance(values[key], str) for key in keys):
-        raise ExportError("Secrets provider could not supply every approved key.")
+    if (
+        not isinstance(values, dict)
+        or not isinstance(missing, list)
+        or any(not isinstance(key, str) for key in missing)
+    ):
+        raise ExportError("Secrets provider returned an invalid key response.")
+    missing_keys = set(missing)
+    # Explicit absence is valid, but every requested key must be accounted for exactly once.
+    # Reject extra missing names rather than exporting metadata about unrequested keys.
+    if len(missing_keys) != len(missing) or not missing_keys <= keys or missing_keys.intersection(values):
+        raise ExportError("Secrets provider returned inconsistent key results.")
+    present_keys = keys - missing_keys
+    if any(key not in values or not isinstance(values[key], str) for key in present_keys):
+        raise ExportError("Secrets provider did not account for every approved key.")
     # Empty strings are valid. Extra, unrequested provider keys never enter the document.
-    return {key: values[key] for key in sorted(keys)}
+    return SecretReadResult(
+        values={key: values[key] for key in sorted(present_keys)}, missing=tuple(sorted(missing_keys))
+    )

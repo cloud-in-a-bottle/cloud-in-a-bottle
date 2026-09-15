@@ -207,6 +207,7 @@ async def test_private_without_approved_keys_never_contacts_store(
     monkeypatch.setattr(app_definition_secrets, "client_for", lambda *a, **kw: pytest.fail("read unreferenced store"))
     document = json.loads(await export_app_definitions(db, APPS_DIR, "private"))
     assert document["secret_values"] == {}
+    assert document["missing_secret_keys"] == []
     assert document["mode"] == "private"
 
 
@@ -242,14 +243,59 @@ async def test_private_uses_approved_keys_selected_provider_and_preserves_values
     assert SENTINEL not in exported
     document = json.loads(exported)
     assert document["secret_values"] == expected
+    assert document["missing_secret_keys"] == []
     assert len(requests) == 1
     assert document["apps"][0]["secret_keys"] == sorted(expected)
     assert next(a for a in document["apps"] if a["name"] == "second")["secret_keys"] == ["EMPTY"]
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("all_missing", [False, True])
+async def test_private_exports_explicit_absence_with_identical_definition_metadata(
+    db: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, all_missing: bool
+) -> None:
+    seed_app(db, "consumer", repo_url="https://github.com/acme/original@main")
+    seed_provider(db)
+    keys = {"EMPTY", "VALUE", "GOOGLE_OAUTH_CLIENT_ID", "GOOGLE_OAUTH_CLIENT_SECRET", "ключ"}
+    for key in keys:
+        seed_grant(db, "consumer", {"key": key})
+    expected_values = {} if all_missing else {"EMPTY": "", "VALUE": "密钥\nline2\n"}
+    expected_missing = sorted(keys - expected_values.keys())
+    calls = []
+    caplog.set_level(logging.DEBUG)
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        assert request.method == "POST"
+        assert json.loads(request.content) == {"keys": sorted(keys)}
+        return httpx.Response(
+            200,
+            json={"secrets": {**expected_values, "EXTRA": SENTINEL}, "missing": list(reversed(expected_missing))},
+            extensions={"reason_phrase": SENTINEL.encode()},
+        )
+
+    fake_secrets(monkeypatch, handle)
+    sharing = json.loads(await export_app_definitions(db, APPS_DIR, "sharing"))
+    assert not calls
+    assert "secret_values" not in sharing
+    assert "missing_secret_keys" not in sharing
+    exported = await export_app_definitions(db, APPS_DIR, "private")
+    assert json.loads(exported) == {
+        **sharing,
+        "mode": "private",
+        "secret_values": expected_values,
+        "missing_secret_keys": expected_missing,
+    }
+    assert exported == await export_app_definitions(db, APPS_DIR, "private")
+    assert len(calls) == 2
+    assert SENTINEL not in exported
+    assert SENTINEL not in caplog.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("deleted", [False, True])
 async def test_wildcard_is_expanded_once_on_pinned_target_and_metadata_snapshot(
-    db: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
+    db: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch, deleted: bool
 ) -> None:
     seed_app(db, "consumer", repo_url="https://github.com/acme/original@main")
     seed_provider(db, "selected")
@@ -279,14 +325,18 @@ async def test_wildcard_is_expanded_once_on_pinned_target_and_metadata_snapshot(
             "B",
             "EXPLICIT",
         }
-        return httpx.Response(200, json={"secrets": {"A": "a", "B": "b", "EXPLICIT": "e"}})
+        values = {"A": "a", "EXPLICIT": "e"} if deleted else {"A": "a", "B": "b", "EXPLICIT": "e"}
+        return httpx.Response(200, json={"secrets": values, "missing": ["B"] if deleted else []})
 
     fake_secrets(monkeypatch, handle)
     exported = await export_app_definitions(db, APPS_DIR, "private")
     document = json.loads(exported)
     assert document["apps"][0]["source"]["repo_url"] == "https://github.com/acme/original"
     assert document["apps"][0]["secret_keys"] == ["*", "EXPLICIT"]
-    assert document["secret_values"] == {"A": "a", "B": "b", "EXPLICIT": "e"}
+    assert document["secret_values"] == (
+        {"A": "a", "EXPLICIT": "e"} if deleted else {"A": "a", "B": "b", "EXPLICIT": "e"}
+    )
+    assert document["missing_secret_keys"] == (["B"] if deleted else [])
     assert calls == ["/_service_v2/list", "/_service_v2/get"]
     assert SENTINEL not in exported
 
@@ -311,11 +361,22 @@ async def test_private_fails_for_unavailable_provider(db: sqlite3.Connection, st
 @pytest.mark.parametrize(
     "response",
     [
-        httpx.Response(200, json={"secrets": {}, "missing": ["KEY"]}),
         httpx.Response(200, json={"secrets": {}}),
+        httpx.Response(200, json={"secrets": {}, "missing": []}),
         httpx.Response(200, json={"secrets": {"KEY": None}}),
         httpx.Response(200, json={"secrets": {"KEY": 123}}),
         httpx.Response(200, json={"secrets": {"KEY": SENTINEL}, "missing": ["KEY"]}),
+        httpx.Response(200, json={"secrets": {"KEY": None}, "missing": ["KEY"]}),
+        httpx.Response(200, json={"secrets": {}, "missing": ["KEY", "KEY"]}),
+        httpx.Response(200, json={"secrets": {}, "missing": ["KEY", SENTINEL]}),
+        httpx.Response(200, json={"secrets": {"KEY": SENTINEL}, "missing": [SENTINEL]}),
+        httpx.Response(200, json={"secrets": {"KEY": SENTINEL}, "missing": None}),
+        httpx.Response(200, json={"secrets": {"KEY": SENTINEL}, "missing": "KEY"}),
+        httpx.Response(200, json={"secrets": {"KEY": SENTINEL}, "missing": [None]}),
+        httpx.Response(200, json={"secrets": {"KEY": SENTINEL}, "missing": [1]}),
+        httpx.Response(200, json={"secrets": {"KEY": SENTINEL}, "missing": [False]}),
+        httpx.Response(200, json={"secrets": {"KEY": SENTINEL}, "missing": [{}]}),
+        httpx.Response(200, json={"secrets": {"KEY": SENTINEL}, "missing": [[]]}),
         httpx.Response(200, json={"secrets": {"KEY": SENTINEL}, "missing": {}}),
         httpx.Response(200, json={"secrets": [SENTINEL]}),
         httpx.Response(200, json=[SENTINEL]),
@@ -343,6 +404,20 @@ async def test_incomplete_or_invalid_secret_responses_fail_without_leaking_value
     assert SENTINEL not in str(error.value)
     assert SENTINEL not in caplog.text
     assert len(calls) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("body", [{"secrets": {}, "missing": ["A"]}, {"secrets": {"A": ""}, "missing": []}])
+async def test_provider_must_account_for_every_requested_key(
+    db: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch, body: dict[str, object]
+) -> None:
+    seed_app(db, "consumer")
+    seed_provider(db)
+    seed_grant(db, "consumer", {"key": "A"})
+    seed_grant(db, "consumer", {"key": "B"})
+    fake_secrets(monkeypatch, lambda request: httpx.Response(200, json=body))
+    with pytest.raises(ExportError):
+        await export_app_definitions(db, APPS_DIR, "private")
 
 
 @pytest.mark.asyncio
@@ -406,7 +481,9 @@ async def test_empty_approved_wildcard_store_skips_get(
         return httpx.Response(200, json={"keys": []})
 
     fake_secrets(monkeypatch, handle)
-    assert json.loads(await export_app_definitions(db, APPS_DIR, "private"))["secret_values"] == {}
+    document = json.loads(await export_app_definitions(db, APPS_DIR, "private"))
+    assert document["secret_values"] == {}
+    assert document["missing_secret_keys"] == []
 
 
 @pytest.mark.asyncio

@@ -51,9 +51,12 @@
     if (!isObject(data) || data.schema_version !== 1 || data.mode !== requestedMode
         || !Array.isArray(data.apps) || !data.apps.every(isObject)) return false;
     if (requestedMode === 'sharing') {
-      return !Object.prototype.hasOwnProperty.call(data, 'secret_values');
+      return !Object.prototype.hasOwnProperty.call(data, 'secret_values')
+        && !Object.prototype.hasOwnProperty.call(data, 'missing_secret_keys');
     }
-    return isObject(data.secret_values) && Object.values(data.secret_values).every(function(value) {
+    return Array.isArray(data.missing_secret_keys) && data.missing_secret_keys.every(function(key) {
+      return typeof key === 'string';
+    }) && isObject(data.secret_values) && Object.values(data.secret_values).every(function(value) {
       return typeof value === 'string';
     });
   }
@@ -82,12 +85,16 @@
       }
       var text = await response.text();
       if (!current()) return;
-      if (!validEnvelope(JSON.parse(text), requestedMode)) throw new Error('Invalid export');
+      var data = JSON.parse(text);
+      if (!validEnvelope(data, requestedMode)) throw new Error('Invalid export');
       payload = text;
       output.textContent = text;
       copyButton.disabled = false;
       downloadButton.disabled = false;
-      status.textContent = 'Ready.';
+      var missingCount = requestedMode === 'private' ? data.missing_secret_keys.length : 0;
+      status.textContent = missingCount
+        ? 'Ready. ' + missingCount + ' referenced ' + (missingCount === 1 ? 'secret is' : 'secrets are') + ' not configured.'
+        : 'Ready.';
     } catch (error) {
       if (current()) status.textContent = 'Could not load app definitions. Reload to try again.';
     } finally {

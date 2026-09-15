@@ -97,6 +97,10 @@ def test_owner_session_default_mode_and_private_envelope(client: TestClient[Lite
     assert_json_no_store(response)
     assert response.json()["mode"] == body.get("mode", "sharing")
     assert ("secret_values" in response.json()) == (body.get("mode") == "private")
+    assert ("missing_secret_keys" in response.json()) == (body.get("mode") == "private")
+    if body.get("mode") == "private":
+        assert response.json()["secret_values"] == {}
+        assert response.json()["missing_secret_keys"] == []
     assert "\n  " in response.text
     assert response.text.endswith("\n")
     assert SENTINEL not in response.text
@@ -134,6 +138,7 @@ def test_owner_export_denies_nonowners_with_json_no_store(client: TestClient[Lit
     assert response.status_code == 401
     assert_json_no_store(response)
     assert "secret_values" not in response.json()
+    assert "missing_secret_keys" not in response.json()
 
 
 @pytest.mark.parametrize("origin", ["https://evil.example", "http://consumer.testzone.local", "null"])
@@ -263,17 +268,22 @@ def test_builtin_header_trusting_handler_is_not_public(client: TestClient[Litest
 
 
 @pytest.mark.parametrize("path", [OWNER_PATH, SERVICE_PATH])
+@pytest.mark.parametrize("missing", [False, True])
 def test_private_retrieves_values_only_after_auth_and_sharing_never_does(
-    client: TestClient[Litestar], path: str, monkeypatch: pytest.MonkeyPatch
+    client: TestClient[Litestar], path: str, monkeypatch: pytest.MonkeyPatch, missing: bool
 ) -> None:
+    missing_keys = ["GOOGLE_OAUTH_CLIENT_SECRET", "GOOGLE_OAUTH_CLIENT_ID"] if missing else []
     with closing(get_db()) as db:
         seed_provider(db)
         seed_grant(db, "consumer", {"key": "VALUE"})
+        for key in missing_keys:
+            seed_grant(db, "consumer", {"key": key})
     calls = []
 
     def handle(request: httpx.Request) -> httpx.Response:
         calls.append(request)
-        return httpx.Response(200, json={"secrets": {"VALUE": SENTINEL}})
+        assert json.loads(request.content) == {"keys": sorted(["VALUE", *missing_keys])}
+        return httpx.Response(200, json={"secrets": {"VALUE": SENTINEL}, "missing": missing_keys})
 
     fake_secrets(monkeypatch, handle)
     if path == SERVICE_PATH:
@@ -285,17 +295,36 @@ def test_private_retrieves_values_only_after_auth_and_sharing_never_does(
     response = client.post(path, json={"mode": "sharing"})
     assert response.status_code == 200
     assert SENTINEL not in response.text
+    sharing = response.json()
+    assert "secret_values" not in sharing
+    assert "missing_secret_keys" not in sharing
     assert not calls
     response = client.post(path, json={"mode": "private"})
     assert response.status_code == 200
+    assert response.json()["mode"] == "private"
+    assert response.json()["apps"] == sharing["apps"]
     assert response.json()["secret_values"] == {"VALUE": SENTINEL}
+    assert response.json()["missing_secret_keys"] == sorted(missing_keys)
     assert_json_no_store(response)
     assert len(calls) == 1
 
 
 @pytest.mark.parametrize("path", [OWNER_PATH, SERVICE_PATH])
+@pytest.mark.parametrize(
+    "upstream",
+    [
+        httpx.Response(500, json={"error": SENTINEL, "secrets": {"KEY": SENTINEL}}),
+        httpx.Response(200, json={"secrets": {"KEY": SENTINEL}, "missing": ["KEY"]}),
+        httpx.Response(200, json={"secrets": {}, "missing": []}),
+        httpx.Response(200, json={"secrets": {}, "missing": ["KEY", SENTINEL]}),
+    ],
+)
 def test_secret_provider_error_body_and_trace_never_escape(
-    client: TestClient[Litestar], path: str, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    client: TestClient[Litestar],
+    path: str,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    upstream: httpx.Response,
 ) -> None:
     if path == SERVICE_PATH:
         use_app_token(client)
@@ -303,9 +332,7 @@ def test_secret_provider_error_body_and_trace_never_escape(
     with closing(get_db()) as db:
         seed_provider(db)
         seed_grant(db, "consumer", {"key": "KEY"})
-    fake_secrets(
-        monkeypatch, lambda request: httpx.Response(500, json={"error": SENTINEL, "secrets": {"KEY": SENTINEL}})
-    )
+    fake_secrets(monkeypatch, lambda request: upstream)
     response = client.post(path, json={"mode": "private"})
     assert response.status_code == 502
     assert_json_no_store(response)

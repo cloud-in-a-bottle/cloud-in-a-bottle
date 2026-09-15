@@ -23,7 +23,7 @@ SECRET = "SYNTHETIC-PRIVATE-SECRET-ONLY"
 ERROR = "Could not load app definitions. Reload to try again."
 
 
-def _export_text(mode: str, secret: str = SECRET) -> str:
+def _export_text(mode: str, secret: str | None = SECRET, missing_secret_keys: tuple[str, ...] = ()) -> str:
     # Non-default indentation, Unicode and a trailing newline detect accidental reserialization.
     data = {
         "schema_version": 1,
@@ -33,12 +33,13 @@ def _export_text(mode: str, secret: str = SECRET) -> str:
                 "name": "synthetic café <img src=x onerror=window.exportXss=true>",
                 "source": {"kind": "remote", "repo_url": "https://example.invalid/test.git", "ref": "main"},
                 "port_mappings": [{"label": "web", "container_port": 8080, "host_port": 29001}],
-                "secret_keys": ["SYNTHETIC_KEY"],
+                "secret_keys": (["SYNTHETIC_KEY"] if secret is not None else []) + list(missing_secret_keys),
             }
         ],
     }
     if mode == "private":
-        data["secret_values"] = {"SYNTHETIC_KEY": secret}
+        data["secret_values"] = {"SYNTHETIC_KEY": secret} if secret is not None else {}
+        data["missing_secret_keys"] = list(missing_secret_keys)
     return json.dumps(data, ensure_ascii=False, indent=4) + "\n"
 
 
@@ -46,12 +47,12 @@ def _fulfill(route: Route, body: str, status: int = 200, content_type: str = "ap
     route.fulfill(status=status, content_type=content_type, headers={"Cache-Control": "no-store"}, body=body)
 
 
-def _fake_exports(page: Page) -> list[Request]:
+def _fake_exports(page: Page, missing_secret_keys: tuple[str, ...] = (), secret: str | None = SECRET) -> list[Request]:
     inventory: list[Request] = []
 
     def respond(route: Route) -> None:
         inventory.append(route.request)
-        _fulfill(route, _export_text(route.request.post_data_json["mode"]))
+        _fulfill(route, _export_text(route.request.post_data_json["mode"], secret, missing_secret_keys))
 
     page.route(f"**{EXPORT_PATH}", respond)
     return inventory
@@ -103,8 +104,8 @@ def _open(page: Page, stack: LocalStack) -> None:
     assert page.url == f"{stack.router_url}/system/"
 
 
-def _ready(page: Page, text: str) -> None:
-    expect(page.locator("#app-definition-status")).to_have_text("Ready.")
+def _ready(page: Page, text: str, status: str = "Ready.") -> None:
+    expect(page.locator("#app-definition-status")).to_have_text(status)
     assert page.locator("#app-definition-json").text_content() == text
     expect(page.get_by_role("button", name="Copy", exact=True)).to_be_enabled()
     expect(page.get_by_role("button", name="Download", exact=True)).to_be_enabled()
@@ -188,6 +189,52 @@ def test_routed_exports_keyboard_preview_copy_and_download_exact_bytes(
     page.locator("#app-definition-scope").scroll_into_view_if_needed()
     assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
     page.screenshot(path=str(Path(output_path) / "private-mobile.png"))
+
+
+@pytest.mark.parametrize(
+    ("missing_keys", "secret", "status"),
+    [
+        (("<img src=x onerror=window.exportXss=true>",), None, "Ready. 1 referenced secret is not configured."),
+        (
+            ("<img src=x onerror=window.exportXss=true>", "SYNTHETIC_UNCONFIGURED_KEY"),
+            SECRET,
+            "Ready. 2 referenced secrets are not configured.",
+        ),
+    ],
+    ids=["one-missing-none-configured", "two-missing-some-configured"],
+)
+def test_routed_private_missing_secrets_remain_ready_with_exact_preview_copy_and_download(
+    export_page: Page,
+    stack: LocalStack,
+    output_path: str,
+    missing_keys: tuple[str, ...],
+    secret: str | None,
+    status: str,
+) -> None:
+    page = export_page
+    inventory = _fake_exports(page, missing_secret_keys=missing_keys, secret=secret)
+    _open(page, stack)
+    sharing_text = _export_text("sharing", secret=secret, missing_secret_keys=missing_keys)
+    _ready(page, sharing_text)
+    page.get_by_role("radio", name="Private (includes secrets)").check()
+    private_text = _export_text("private", secret=secret, missing_secret_keys=missing_keys)
+    _ready(page, private_text, status)
+    page.locator("#app-definition-preview > summary").click()
+    output = page.get_by_role("region", name="App definitions JSON")
+    expect(output).to_be_visible()
+    assert json.loads(output.text_content())["missing_secret_keys"] == list(missing_keys)
+    assert json.loads(output.text_content())["secret_values"] == (
+        {"SYNTHETIC_KEY": secret} if secret is not None else {}
+    )
+    assert output.locator("img").count() == 0
+    assert page.evaluate("window.exportXss === undefined")
+    output.evaluate("element => element.scrollTop = element.scrollHeight")
+    page.screenshot(path=str(Path(output_path) / "private-missing-secrets.png"), full_page=True)
+    _copy(page, private_text)
+    _download(page, "private", private_text)
+    assert [request.post_data_json for request in inventory] == [{"mode": "sharing"}, {"mode": "private"}]
+    page.get_by_role("radio", name="Sharing", exact=True).check()
+    _ready(page, sharing_text)
 
 
 def test_switching_to_sharing_immediately_clears_ready_private_payload(export_page: Page, stack: LocalStack) -> None:
@@ -308,6 +355,7 @@ def test_private_body_finishing_after_mode_change_cannot_replace_sharing_or_its_
         ('{"schema_version":1,"mode":"sharing","apps":{}}', 200, "application/json"),
         ('{"schema_version":1,"mode":"sharing","apps":[null]}', 200, "application/json"),
         ('{"schema_version":1,"mode":"sharing","apps":[],"secret_values":{}}', 200, "application/json"),
+        ('{"schema_version":1,"mode":"sharing","apps":[],"missing_secret_keys":[]}', 200, "application/json"),
     ],
     ids=[
         "http-error",
@@ -320,6 +368,7 @@ def test_private_body_finishing_after_mode_change_cannot_replace_sharing_or_its_
         "apps",
         "app",
         "secrets",
+        "missing-secret-keys",
     ],
 )
 def test_invalid_response_leaves_no_previous_private_export_actionable(
@@ -342,8 +391,36 @@ def test_private_requires_a_secret_values_string_map(export_page: Page, stack: L
     _fake_exports(page)
     _open(page, stack)
     _ready(page, _export_text("sharing"))
-    body = json.dumps({"schema_version": 1, "mode": "private", "apps": [], "secret_values": values})
+    body = json.dumps(
+        {"schema_version": 1, "mode": "private", "apps": [], "secret_values": values, "missing_secret_keys": []}
+    )
     page.route(f"**{EXPORT_PATH}", lambda route: _fulfill(route, body))
+    page.get_by_role("radio", name="Private (includes secrets)").check()
+    _cleared(page, ERROR)
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        {},
+        {"missing_secret_keys": None},
+        {"missing_secret_keys": "SYNTHETIC_KEY"},
+        {"missing_secret_keys": {}},
+        {"missing_secret_keys": [None]},
+        {"missing_secret_keys": [123]},
+        {"missing_secret_keys": ["SYNTHETIC_KEY", 123]},
+    ],
+    ids=["omitted", "null", "string", "object", "null-key", "numeric-key", "mixed-keys"],
+)
+def test_private_requires_missing_secret_keys_as_a_string_list(
+    export_page: Page, stack: LocalStack, field: dict[str, object]
+) -> None:
+    page = export_page
+    _fake_exports(page)
+    _open(page, stack)
+    _ready(page, _export_text("sharing"))
+    data = {"schema_version": 1, "mode": "private", "apps": [], "secret_values": {}, **field}
+    page.route(f"**{EXPORT_PATH}", lambda route: _fulfill(route, json.dumps(data)))
     page.get_by_role("radio", name="Private (includes secrets)").check()
     _cleared(page, ERROR)
 
@@ -452,6 +529,11 @@ def test_export_expanded_private_loading_and_error_states_have_no_wcag_aa_violat
     _fulfill(pending[0], "<html>Log in</html>", content_type="text/html")
     _cleared(page, ERROR)
     scan("error")
+    missing_text = _export_text("private", missing_secret_keys=("SYNTHETIC_MISSING_ONE", "SYNTHETIC_MISSING_TWO"))
+    page.route(f"**{EXPORT_PATH}", lambda route: _fulfill(route, missing_text))
+    page.get_by_role("radio", name="Private (includes secrets)").check()
+    _ready(page, missing_text, "Ready. 2 referenced secrets are not configured.")
+    scan("private-missing-secrets")
 
 
 def test_real_owner_endpoint_exports_stored_inventory(export_page: Page, stack: LocalStack) -> None:
@@ -469,6 +551,7 @@ def test_real_owner_endpoint_exports_stored_inventory(export_page: Page, stack: 
     assert apps[0]["name"] == "export-fixture"
     assert apps[0]["port_mappings"] == [{"label": "web", "container_port": 8080, "host_port": 29001}]
     assert "secret_values" not in response.json()
+    assert "missing_secret_keys" not in response.json()
     _download(page, "sharing", sharing)
     with page.expect_response(f"**{EXPORT_PATH}") as response_info:
         page.get_by_role("radio", name="Private (includes secrets)").check()
@@ -476,6 +559,7 @@ def test_real_owner_endpoint_exports_stored_inventory(export_page: Page, stack: 
     assert response.ok
     assert response.headers["cache-control"] == "no-store"
     assert response.json()["secret_values"] == {}
+    assert response.json()["missing_secret_keys"] == []
     _ready(page, response.text())
     _download(page, "private", response.text())
 
