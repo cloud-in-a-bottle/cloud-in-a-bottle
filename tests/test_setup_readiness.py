@@ -177,6 +177,37 @@ def test_immediately_healthy_replaces_setup_history_with_dashboard(
     assert navigation_requests[-1] == ("GET", f"{ORIGIN}/")
 
 
+@pytest.mark.parametrize("width", [390, 1280], ids=["mobile", "desktop"])
+def test_waiting_page_keeps_brand_styling_without_static_assets(
+    setup_page: Page, health_routes: list[Route], width: int
+) -> None:
+    setup_page.set_viewport_size({"width": width, "height": 720})
+    _submit(setup_page)
+    expect(setup_page.get_by_role("heading", name="Cloud in a Bottle", exact=True)).to_be_visible()
+    expect(setup_page.locator(".panel")).to_have_css("background-color", "rgb(252, 252, 252)")
+    expect(setup_page.get_by_role("link", name="Open dashboard")).to_have_css("background-color", "rgb(162, 217, 255)")
+    for selector in (".cloud--1", ".deco-grass"):
+        decoration = setup_page.locator(selector)
+        expect(decoration).to_be_visible()
+        assert "data:image/svg+xml;base64," in decoration.evaluate("el => getComputedStyle(el).backgroundImage")
+    assert setup_page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
+    assert len(health_routes) == 1
+    health_routes[0].fulfill(json={"status": "ok"})
+    expect(setup_page).to_have_url(f"{ORIGIN}/")
+
+
+def test_slow_optional_font_does_not_block_readiness(setup_page: Page, health_routes: list[Route]) -> None:
+    font_requests = []
+    setup_page.route("https://fonts.googleapis.com/**", lambda route: font_requests.append(route))
+    setup_page.goto(f"{ORIGIN}/setup")
+    with setup_page.expect_request("https://fonts.googleapis.com/**"), setup_page.expect_request(f"{ORIGIN}/health"):
+        setup_page.locator("form").evaluate("form => form.requestSubmit()")
+    expect(setup_page.get_by_role("status")).to_have_text(STARTING)
+    assert font_requests  # Keep the stylesheet pending throughout recovery.
+    health_routes[0].fulfill(json={"status": "ok"})
+    expect(setup_page).to_have_url(f"{ORIGIN}/")
+
+
 def test_waits_through_503_and_connection_refusal_for_more_than_two_seconds(
     setup_page: Page, health_routes: list[Route], navigation_requests: list[tuple[str, str]]
 ) -> None:
