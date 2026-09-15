@@ -1,0 +1,126 @@
+openapi: 3.0.3
+info:
+  title: Cloud in a Bottle App Definitions Service
+  version: 0.1.0
+  description: |
+    Service identifier: github.com/cloud-in-a-bottle/cloud-in-a-bottle/services/app-definitions
+
+    Call POST /export through the normal authenticated V2 service proxy, using an app's
+    declared shortname and app token. Requires an approved global {"mode":"sharing"}
+    or {"mode":"private"} grant. Private also permits sharing; sharing never permits private.
+    The owner-only equivalent is POST /api/app-definitions/export, authenticated by an
+    owner session or API key. The owner adapter and builtin handler return application/json
+    and Cache-Control: no-store, including their error responses. Before builtin dispatch,
+    the service proxy's existing authentication, shortname and provider-resolution responses apply.
+
+    This is a minimal definition summary, not an import format, backup, lockfile, or
+    reproducibility guarantee. It excludes manifests, commands, images, environment values,
+    arbitrary grants, descriptions, local paths, app data, runtime IDs/status, owner tokens,
+    and platform settings. Remote source URLs omit userinfo, parameters, query and fragment;
+    ref is the configured @ref, not an inferred deployed commit. Local sources cannot be
+    reconstructed. A builtin identifier is the source directory name under the configured
+    bundled apps directory, identified from stored metadata without filesystem inspection.
+
+    Apps are sorted by name, published port mappings by label, and secret keys lexically.
+    Only actual approved Secrets-service grants are included, not requested manifest grants.
+    App-scoped grants apply only to the selected default Secrets provider. A secret_keys
+    entry of "*" records an approved wildcard. Sharing never contacts Secrets. Private
+    retrieves the union of approved keys from the selected provider, expanding a wildcard
+    through /list then /get on that same captured target. It does not inspect a Secrets DB
+    or scrape an unreferenced store. Empty values are preserved, extra returned keys ignored,
+    and missing keys or unusable providers/responses fail the whole export. Metadata is a
+    single database snapshot; secret values are read afterward and can change independently.
+paths:
+  /export:
+    post:
+      summary: Export minimal app definitions
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                mode:
+                  type: string
+                  enum: [sharing, private]
+                  default: sharing
+      responses:
+        "200":
+          description: Pretty-printed deterministic JSON. secret_values exists only in private mode.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Export"
+        "400":
+          description: Invalid JSON object or mode (including null or a non-string mode).
+        "403":
+          description: permission_required with required_grant containing the global mode grant. The proxy adds grant_url.
+        "502":
+          description: Export incomplete because approved keys or a compatible Secrets provider are unavailable, or the provider response is invalid.
+components:
+  schemas:
+    Export:
+      type: object
+      additionalProperties: false
+      required: [schema_version, mode, apps]
+      oneOf:
+        - properties:
+            mode: {enum: [sharing]}
+          not:
+            required: [secret_values]
+        - properties:
+            mode: {enum: [private]}
+          required: [secret_values]
+      properties:
+        schema_version:
+          type: integer
+          enum: [1]
+        mode:
+          type: string
+          enum: [sharing, private]
+        apps:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [name, source, port_mappings, secret_keys]
+            properties:
+              name:
+                type: string
+              source:
+                oneOf:
+                  - type: object
+                    additionalProperties: false
+                    required: [kind, repo_url, ref]
+                    properties:
+                      kind: {type: string, enum: [remote]}
+                      repo_url: {type: string}
+                      ref: {type: string, nullable: true}
+                  - type: object
+                    additionalProperties: false
+                    required: [kind, identifier]
+                    properties:
+                      kind: {type: string, enum: [builtin]}
+                      identifier: {type: string}
+                  - type: object
+                    additionalProperties: false
+                    required: [kind]
+                    properties:
+                      kind: {type: string, enum: [local, unknown]}
+              port_mappings:
+                type: array
+                items:
+                  type: object
+                  additionalProperties: false
+                  required: [label, container_port, host_port]
+                  properties:
+                    label: {type: string}
+                    container_port: {type: integer}
+                    host_port: {type: integer}
+              secret_keys:
+                type: array
+                items: {type: string}
+        secret_values:
+          type: object
+          additionalProperties: {type: string}

@@ -845,6 +845,22 @@ table.form-table input[type="password"] {
   margin: var(--space-4) 0;
 }
 
+.app-definition-modes {
+  border: 0;
+  padding: 0;
+  min-width: 0;
+}
+
+#app-definition-preview > summary {
+  cursor: pointer;
+  font-size: var(--text-xs);
+}
+
+#app-definition-preview > summary:focus-visible {
+  outline: 2px solid var(--color-text);
+  outline-offset: 1px;
+}
+
 /* ── Deploy page ────────────────────────────────────────────────────── */
 
 .port-mappings {
