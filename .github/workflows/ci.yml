@@ -30,6 +30,28 @@ jobs:
           environments: dev
       - run: pixi run -e dev pytest -v
 
+  # Advisory only: reports when a pin in tests/external_pins.toml has fallen
+  # behind what it tracks.  Deliberately does not gate the merge: a stale pin is
+  # something to review and bump, not a reason to block an unrelated change.
+  pin-drift:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: prefix-dev/setup-pixi@v0.8.10
+        with:
+          pixi-version: v0.70.2
+          environments: dev
+      - name: Report stale external pins
+        run: |
+          {
+            echo "### External pin drift"
+            echo '```'
+            pixi run -e dev python scripts/check_pin_drift.py | tee /dev/stderr
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
   accessibility:
     runs-on: ubuntu-latest
     timeout-minutes: 10

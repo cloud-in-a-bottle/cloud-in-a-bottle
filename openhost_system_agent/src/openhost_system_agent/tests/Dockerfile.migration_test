@@ -21,6 +21,9 @@ RUN su - host -c "curl -fsSL https://pixi.sh/install.sh | PIXI_VERSION=v0.69.0 b
 
 # Copy the repo in
 COPY --chown=host:host . /home/host/openhost
+# Catch a missing fixture ignore file before installing the container's own deps.
+RUN test ! -e /home/host/openhost/.pixi && \
+    test ! -e /home/host/openhost/.venv
 WORKDIR /home/host/openhost
 
 # Install deps via pixi (provides python + all packages)

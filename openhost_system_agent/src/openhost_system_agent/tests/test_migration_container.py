@@ -35,6 +35,7 @@ requires_containers = pytest.mark.requires_containers
 _IMAGE_NAME = "openhost-migration-test:latest"
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent.parent
 _DOCKERFILE = Path(__file__).resolve().parent / "Dockerfile.migration_test"
+_IGNORE_FILE = _DOCKERFILE.with_name("Dockerfile.migration_test.containerignore")
 _PIXI = "/home/host/.pixi/bin/pixi"
 _REPO = "/home/host/openhost"
 # The env interpreter, invoked directly the way the prod console script is —
@@ -151,7 +152,17 @@ def _ensure_migration_image() -> None:
     if _migration_image_built:
         return
     if _podman("image", "exists", _IMAGE_NAME, check=False).returncode != 0:
-        _podman("build", "-t", _IMAGE_NAME, "-f", str(_DOCKERFILE), str(_REPO_ROOT), timeout=600)
+        _podman(
+            "build",
+            "-t",
+            _IMAGE_NAME,
+            "-f",
+            str(_DOCKERFILE),
+            "--ignorefile",
+            str(_IGNORE_FILE),
+            str(_REPO_ROOT),
+            timeout=600,
+        )
     _migration_image_built = True
     atexit.register(lambda: _podman("rmi", "-f", _IMAGE_NAME, check=False, timeout=30))
 

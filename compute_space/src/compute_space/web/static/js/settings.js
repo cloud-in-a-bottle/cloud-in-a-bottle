@@ -461,9 +461,9 @@ function renderArchiveBackend(state) {
     var dumps = state.meta_dumps;
     var dumpLine;
     if (dumps && dumps.count > 0) {
-      dumpLine = '<code>' + escSettingsHtml(dumps.latest_at || '?') + '</code> <span class="hint">(' + dumps.count + ' in bucket, hourly cadence)</span>';
+      dumpLine = '<code>' + escSettingsHtml(dumps.latest_at || '?') + '</code> <span class="hint">(' + dumps.count + ' listed, hourly default interval)</span>';
     } else if (dumps && dumps.count === 0) {
-      dumpLine = '<span class="error">No metadata dumps in bucket yet.</span> <span class="hint">JuiceFS writes one within an hour of mount.</span>';
+      dumpLine = '<span class="error">No metadata dumps in bucket yet.</span> <span class="hint">JuiceFS attempts metadata backups on an hourly interval by default.</span>';
     } else {
       dumpLine = '<span class="hint">unavailable; could not list <code>'
         + escSettingsHtml((state.juicefs_volume_name ? state.juicefs_volume_name + '/' : '') + 'meta/')
@@ -479,8 +479,8 @@ function renderArchiveBackend(state) {
       rows += '<tr><th>Host path</th><td><code>' + escSettingsHtml(state.archive_dir) + '</code></td></tr>';
     }
     rows += '<tr><th>Durability</th><td><span class="status-text status-text--warn">Local disk only</span> '
-      + 'The archive is a JuiceFS volume whose objects live on this instance\u2019s local disk '
-      + '(included in backups) but NOT on durable object storage. Configure S3 below for elastic, durable storage.</td></tr>';
+      + 'The archive is a JuiceFS volume whose objects live only on this instance\u2019s local disk. '
+      + 'The bundled backup app excludes this data. Configure S3 below to store archive objects off the instance; recovery also requires JuiceFS metadata.</td></tr>';
     var apps = state.local_archive_apps || [];
     if (apps.length) {
       rows += '<tr><th>Apps with local archive data</th><td>'
@@ -542,7 +542,7 @@ function showConfigureForm(state) {
   formEl.innerHTML = '<p><strong>Configure S3 archive storage.</strong> JuiceFS will format the bucket and mount it locally; this is a one-time operation.</p>'
     + migrateNote
     + '<p class="notice notice--warn"><strong>Experimental.</strong> Filename-to-S3-chunk mappings live in a SQLite metadata DB on this zone’s local disk, not in the bucket. If the local disk is wiped, the bucket bytes can be recovered only from JuiceFS\'s periodic meta dumps in S3 (replayed via <code>juicefs load</code>).</p>'
-    + '<p class="hint">JuiceFS will automatically dump the metadata DB to <code>&lt;bucket&gt;/&lt;prefix&gt;/meta/dump-*.json.gz</code> once an hour. These dumps are the recovery anchor for reattaching a freshly-installed zone to an existing bucket.</p>'
+    + '<p class="hint">By default, JuiceFS attempts an hourly metadata backup to <code>&lt;bucket&gt;/&lt;volume&gt;/meta/dump-*.json.gz</code>. Check Latest meta dump above to confirm one is available. Recovering the archive on a new instance also requires loading that metadata.</p>'
     + '<table class="form-table"><tbody>'
     + '<tr><th><label for="ab-bucket">S3 bucket</label></th><td><input id="ab-bucket" type="text" placeholder="my-openhost-archive"></td></tr>'
     + '<tr><th><label for="ab-region">Region</label></th><td><input id="ab-region" type="text" value="us-east-1"></td></tr>'

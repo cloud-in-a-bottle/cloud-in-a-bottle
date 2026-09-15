@@ -126,9 +126,11 @@ The router injects these environment variables into your app.
 
 Apps have three storage areas, each with different durability + size + latency tradeoffs. By default, apps receive a permanent data directory (`app_data`). Other tiers must be explicitly requested via the `[data]` section of their manifest:
 
-- **Permanent data** (mounted at `BOTTLE_APP_DATA_DIR`): local disk. Small, fast, backed up. Enabled by default.
-- **Temporary data** (mounted at `BOTTLE_APP_TEMP_DIR`): local disk scratch. Not backed up, recreatable. Enabled by `app_temp_data = true`.
+- **Permanent data** (mounted at `BOTTLE_APP_DATA_DIR`): local disk. Small and fast. Enabled by default.
+- **Temporary data** (mounted at `BOTTLE_APP_TEMP_DIR`): local disk scratch for recreatable data. Enabled by `app_temp_data = true`.
 - **Archive data** (mounted at `BOTTLE_APP_ARCHIVE_DIR`): bulk content storage. Backed by local disk by default, but the owner can configure a S3 bucket (which is mounted with JuiceFS as a POSIX-compatible filesystem) from the dashboard for elastic, durable object storage. Higher-latency on uncached reads once on S3, although JuiceFS yields relatively performant access once cached. Intended for apps that store bulk content (videos, photos, attachments) that may overload local storage, and where low latency isn't critical. Enabled by `app_archive = true`.
+
+The configured [bundled backup app](../operation/backups.md) includes permanent and temporary data, excluding its own permanent-data directory. It excludes archive data. Direct app migration copies permanent data for the selected apps, but not temporary or archive data. See [Data](../how_it_works/data.md#the-archive-tier) for archive storage and its metadata recovery requirements.
 
 Apps can additionally request `access_all_app_data`, giving read/write access to every app's permanent, temporary, and archive data. This is necessary for apps like file browsers or backup apps. The retired `access_all_data` and `access_all_archive` fields are deprecated aliases for this permission.
 

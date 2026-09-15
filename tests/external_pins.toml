@@ -1,0 +1,76 @@
+# The external artifacts the test suite pulls from the network that would
+# otherwise move under us, pinned to an immutable identity.
+#
+# Why this file exists
+# --------------------
+# The e2e suite clones third-party app repos and builds container images from
+# public registries.  Unpinned, those move: a `:latest` image retags across major
+# versions, an app repo lands a commit, a download URL starts answering 410.  A
+# test that passed yesterday then fails today for reasons that have nothing to do
+# with this repo.
+#
+# Scope is deliberately narrow.  Repos we clone get pinned to a commit, because
+# their whole contents are built and executed on the e2e host.  Images get pinned
+# only when they track a floating tag; an already-versioned distro tag like
+# python:3.12-alpine moves for patches within that release, which is what we want
+# it to do, so it is left alone and has no row here.
+#
+# It is a table rather than a convention so that two things can read it: the
+# offline guard in tests/test_external_pins.py (which fails on a floating tag, on
+# an unpinned repo URL, or on a row that disagrees with the file it claims to
+# cover) and the online reporter in scripts/check_pin_drift.py (which says when a
+# pin has fallen behind what it tracks).  Adding a dependency means adding a row,
+# not editing either consumer.
+#
+# Bumping a pin
+# -------------
+#   1. `pixi run -e dev python scripts/check_pin_drift.py` to see what moved.
+#   2. Review the upstream diff.  These are cloned, built, and executed on the
+#      e2e host, so a bump is a supply-chain decision, not a formality.
+#   3. Update `ref`/`digest` here and, for images, the matching Dockerfile lines
+#      (the guard checks they agree).
+
+# --- Git repositories, cloned and built by the tests -----------------------
+#
+# `ref` is the pinned commit.  `tracks` is the branch drift is measured against.
+
+[[git]]
+name = "bottled-minio"
+url = "https://github.com/cloud-in-a-bottle/bottled-minio"
+ref = "dc2e4d0ff0b7aa64ad5e23da814d7efcd169cb4b"
+tracks = "main"
+used_by = ["tests/test_e2e.py"]
+
+[[git]]
+name = "secrets"
+url = "https://github.com/cloud-in-a-bottle/secrets"
+ref = "e49eac5a0ceb569e2eb19ccc499fb65343d371ce"
+tracks = "main"
+used_by = ["tests/test_services_e2e.py"]
+
+# --- Container images ------------------------------------------------------
+#
+# Only images on a floating tag need a row here.  `tag` is what we nominally
+# want; `digest` is what we actually get.  Both are written into the Dockerfile
+# (`FROM repo:tag@digest`) so a reader sees the version without resolving the
+# hash, and the build still cannot drift.
+#
+# Already-versioned distro tags (python:3.12-alpine, ubuntu:24.04) are left
+# alone: they move only for patches within the same release, which is what we
+# want them to do.
+
+# Both of these tracked `:latest`, a moving target across major versions.  A
+# silent dufs retag is what broke the archive e2e chain once already.
+[[image]]
+name = "dufs"
+repo = "sigoden/dufs"
+tag = "v0.46.0"
+digest = "sha256:8dd3b750015734703e64b55641fb7d2254c112e0ff3967074766177dc15dc982"
+used_by = ["apps/file_browser/Dockerfile"]
+
+[[image]]
+name = "uv"
+repo = "ghcr.io/astral-sh/uv"
+tag = "0.12.13"
+digest = "sha256:b485bd65cc2cf1c9a93b3554012c9c3778cf7b1b5fd3d3096ce9e1226c97e1e6"
+used_by = ["apps/oauth_demo/Dockerfile", "apps/oauth_provider/Dockerfile"]

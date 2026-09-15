@@ -1,1 +1,1 @@
-FROM sigoden/dufs:latest
+FROM sigoden/dufs:v0.46.0@sha256:8dd3b750015734703e64b55641fb7d2254c112e0ff3967074766177dc15dc982

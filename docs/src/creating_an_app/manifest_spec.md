@@ -91,11 +91,13 @@ In general it's better to expose these links from within your app; this is mainl
 
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
-| `app_data` | boolean | no | true | Provision a directory for this app on the instance's file system, intended for persistent app state. This data will be included in backups and instance migrations. Exposed to the app via `BOTTLE_APP_DATA_DIR`. |
-| `app_temp_data` | boolean | no | false | Provision a directory for this app on the instance's file system, intended for ephemeral app data. This data will persist between container or instance boots, but will not be included in backups / instance migrations. Exposed to the app via `BOTTLE_APP_TEMP_DIR`. |
+| `app_data` | boolean | no | true | Provision a directory for this app on the instance's file system, intended for persistent app state. Exposed to the app via `BOTTLE_APP_DATA_DIR`. |
+| `app_temp_data` | boolean | no | false | Provision a directory for this app on the instance's file system, intended for ephemeral app data. This data persists between container or instance boots. Exposed to the app via `BOTTLE_APP_TEMP_DIR`. |
 | `app_archive` | boolean | no | false | Provision a directory for this app in the instance's "archive storage", intended for persistent but bulky content. Archive storage is backed by local disk by default, but can be configured by the owner to be served by remote S3 backend to enable larger and more reliable storage than the instance's local disk. Exposed to the app via `BOTTLE_APP_ARCHIVE_DIR`. |
 | `sqlite` | string[] | no | [] | SQLite databases to provision. Each entry provisions `app_data/sqlite/{name}.db`, exposed to the app as `BOTTLE_SQLITE_<NAME>`. Enabling implicitly enables `app_data`. |
 | `access_all_app_data` | boolean | no | false | Mount the parent dirs for all apps' permanent, temporary, and archive data (rw). For admin, file browser, and backup apps. Mounted under `/data` in the container. |
+
+The configured [bundled backup app](../operation/backups.md) includes permanent and temporary app data, excluding its own permanent-data directory. Its direct migration copies permanent data for selected apps; temporary and archive data are not migrated. Archive data is also excluded from these backups. See [Data](../how_it_works/data.md#the-archive-tier) for archive recovery requirements.
 
 The retired `access_all_data` and `access_all_archive` fields are deprecated aliases for `access_all_app_data`. Manifests using either receive the full permanent, temporary, and archive data permission and emit a deprecation warning.
 

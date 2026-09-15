@@ -151,24 +151,20 @@ class Config:
 
     @property
     def app_archive_dir(self) -> str:
-        # JuiceFS FUSE mountpoint for the archive tier.  Lives under
-        # data_root_dir (NOT persistent_data_dir) so restic backups don't
-        # double-store bytes that already live in S3.  The archive tier is
-        # ALWAYS a JuiceFS mount here regardless of backend; only JuiceFS's
-        # object storage differs (local file store vs S3 — see
-        # ``local_archive_object_store_dir``).
+        # JuiceFS FUSE mountpoint for the archive tier. The bundled backup
+        # app excludes this mount for both local and S3 object storage.
+        # Only the object storage differs between backends; see
+        # ``local_archive_object_store_dir`` for the local store.
         return os.path.join(self.data_root_dir, "app_archive")
 
     @property
     def local_archive_object_store_dir(self) -> str:
         # Directory that backs JuiceFS's ``file`` object store on the default
-        # 'local' backend.  This holds JuiceFS's raw chunk objects (NOT a
-        # POSIX view of app files — apps always go through the mount at
-        # ``app_archive_dir``).  Kept under ``persistent_data_dir`` so it
-        # (a) survives container rebuilds and (b) IS captured by restic
-        # backups — local archive data has no other durable copy, unlike the
-        # S3-backed tier (whose bytes live in the operator's bucket, so the
-        # mountpoint is excluded from backups).
+        # 'local' backend. This holds raw chunk objects, not a POSIX view of
+        # app files; apps go through the mount at ``app_archive_dir``.
+        # Kept under ``persistent_data_dir`` to survive container rebuilds.
+        # This directory is not mounted into the bundled backup app, so its
+        # restic snapshots do not contain these objects.
         return os.path.join(self.persistent_data_dir, "app_archive_local_objects")
 
     @property

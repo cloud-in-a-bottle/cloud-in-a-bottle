@@ -5,6 +5,7 @@ See ``tests/gcp/`` or ``tests/ec2/`` for infrastructure setup scripts.
 """
 
 import asyncio
+import base64
 import os
 import secrets
 import shlex
@@ -21,6 +22,7 @@ import websockets
 from compute_space.tests.utils import app_id_for
 from compute_space.tests.utils import wait_app_removed
 from compute_space.tests.utils import wait_app_running
+from tests import external_pins
 from tests.helpers import poll_endpoint
 
 # ---------------------------------------------------------------------------
@@ -33,6 +35,11 @@ APP_DEPLOY_TIMEOUT_S = 300
 TEST_APP_PATH = "/home/host/openhost/apps/test_app"
 # Generate a random password per test run since instances are publicly routable.
 OWNER_PASSWORD = "E2e!" + "".join(secrets.choice(string.ascii_letters + string.digits) for _ in range(20))
+# MinIO's root credentials are PROVIDED by this suite (through the secrets
+# service) rather than read back out of the container.  Random per run, since
+# instances are publicly routable.
+MINIO_ROOT_USER = "e2e-" + "".join(secrets.choice(string.ascii_lowercase + string.digits) for _ in range(12))
+MINIO_ROOT_PASSWORD = "".join(secrets.choice(string.ascii_letters + string.digits) for _ in range(24))
 # Claim token written by ansible at deploy time; required to POST /setup.
 CLAIM_TOKEN = os.environ.get("OPENHOST_CLAIM_TOKEN", "")
 
@@ -71,6 +78,117 @@ def healthy_router(router_url):
         fail_msg=f"Router at {router_url} did not become healthy",
     )
     return True
+
+
+# ---------------------------------------------------------------------------
+# Host access.  Some of what the e2e checks is host infrastructure (the archive
+# mount, the container runtime), not an HTTP surface, so it is inspected over
+# SSH rather than through whatever app happens to expose it.
+# ---------------------------------------------------------------------------
+
+
+def ssh_host(command: str, *, timeout: int = 60) -> subprocess.CompletedProcess:
+    """Run ``command`` on the instance over SSH as the ``host`` user."""
+    ssh_key = os.environ.get("OPENHOST_SSH_KEY", "")
+    public_ip = os.environ.get("OPENHOST_PUBLIC_IP", "")
+    assert ssh_key and public_ip, "OPENHOST_SSH_KEY / OPENHOST_PUBLIC_IP not set"
+    ssh_opts = "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR"
+    return subprocess.run(
+        f"ssh {ssh_opts} -i {shlex.quote(ssh_key)} host@{public_ip} {shlex.quote(command)}",
+        shell=True,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+    )
+
+
+def ssh_host_pixi(command: str, *, timeout: int = 60) -> subprocess.CompletedProcess:
+    """Run ``command`` on the host inside the project's pixi environment.
+
+    ``podman`` lives in the pixi env, not on the login PATH, and a
+    non-interactive SSH shell never sources ``.bashrc``, so a bare ``podman``
+    is "command not found".  Run it the way the service does.
+    """
+    return ssh_host(f"cd /home/host/openhost && /home/host/.pixi/bin/pixi run {command}", timeout=timeout)
+
+
+def minio_mc(command: str, *, password: str | None = None, timeout: int = 60) -> subprocess.CompletedProcess:
+    """Run an ``mc`` command against MinIO, inside MinIO's own container.
+
+    ``mc`` ships in the bottled-minio image, so nothing is downloaded onto the
+    host.  The ``e2e`` alias is (re)configured with the provisioned credentials
+    before each call, which is what makes an overridden ``password`` observable.
+    Success is reported as a trailing ``OK`` on stdout; ``command``'s own
+    chatter is dropped so that sentinel is unambiguous.  stderr is left alone so
+    a failure explains itself.
+    """
+    script = (
+        f"mc alias set e2e http://127.0.0.1:9000 {shlex.quote(MINIO_ROOT_USER)} "
+        f"{shlex.quote(password or MINIO_ROOT_PASSWORD)} >/dev/null && {command} >/dev/null && echo OK"
+    )
+    return ssh_host_pixi(f"podman exec openhost-minio sh -c {shlex.quote(script)}", timeout=timeout)
+
+
+# ---------------------------------------------------------------------------
+# Secrets service helpers (owner-facing API on the secrets app's subdomain).
+# The owner session cookie is scoped to the zone domain, so it is valid on
+# ``secrets.<domain>`` too.  This is how an operator (or this suite) hands an
+# app its credentials up front, instead of reading them back out afterwards.
+# ---------------------------------------------------------------------------
+
+
+def secrets_set(session, domain, key, value):
+    r = session.post(
+        f"https://secrets.{domain}/api/secrets",
+        json={"key": key, "value": value},
+        timeout=20,
+    )
+    assert r.status_code in (200, 201), f"secrets set {key} failed: {r.status_code}: {r.text[:200]}"
+
+
+def secrets_delete(session, domain, key):
+    session.request("DELETE", f"https://secrets.{domain}/api/secrets/{key}", timeout=20)
+
+
+# ---------------------------------------------------------------------------
+# Archive-tier helpers.  The archive is a JuiceFS mount on the host; the e2e
+# manipulates it directly over SSH rather than through some app's HTTP surface,
+# so these tests never depend on how a particular app happens to serve files.
+# ---------------------------------------------------------------------------
+
+
+def archive_write(archive_dir, relpath, content):
+    """Write ``content`` to ``<archive_dir>/<relpath>`` on the host (base64 over
+    SSH to stay binary-safe and quoting-safe)."""
+    full = f"{archive_dir.rstrip('/')}/{relpath}"
+    b64 = base64.b64encode(content.encode()).decode()
+    r = ssh_host(
+        f"mkdir -p {shlex.quote(os.path.dirname(full))} && printf %s {shlex.quote(b64)} | base64 -d > {shlex.quote(full)}"
+    )
+    assert r.returncode == 0, f"archive write {relpath} failed: {r.stderr or r.stdout}"
+
+
+def archive_read(archive_dir, relpath, *, attempts=1, interval=5):
+    """Read ``<archive_dir>/<relpath>`` from the host, retrying (the mount is
+    briefly recycled across a backend migration)."""
+    last = None
+    full = f"{archive_dir.rstrip('/')}/{relpath}"
+    for i in range(attempts):
+        last = ssh_host(f"cat {shlex.quote(full)}", timeout=30)
+        if last.returncode == 0:
+            return last.stdout
+        if i < attempts - 1:
+            time.sleep(interval)
+    raise AssertionError(f"archive read {relpath} failed: {last.stderr if last else '?'}")
+
+
+def archive_delete(archive_dir, relpath):
+    ssh_host(f"rm -f {shlex.quote(archive_dir.rstrip('/') + '/' + relpath)}")
+
+
+def archive_exists(archive_dir, relpath):
+    full = f"{archive_dir.rstrip('/')}/{relpath}"
+    return ssh_host(f"test -f {shlex.quote(full)} && echo yes || echo no").stdout.strip() == "yes"
 
 
 # ---------------------------------------------------------------------------
@@ -716,147 +834,118 @@ class TestSelfHost:
 
     # -- 13c. S3 archive backend (MinIO) -----------------------------------
 
-    def test_13c_deploy_minio(self, session, router_url):
-        """Deploy MinIO from its public GitHub repo."""
+    # MinIO's root credentials are PROVIDED by the test through the secrets
+    # service: we store them (13c), deploy MinIO with the secrets grant (13d),
+    # and MinIO fetches them at boot (see cloud-in-a-bottle/bottled-minio's
+    # ``[[services.v2.consumes]]`` block).  The test never reads them back out
+    # of a file, and never leans on an unrelated app to do so for it.
+    #
+    # Pinned: the repo is cloned, built, and run on the host on every deploy, so
+    # an upstream push would otherwise change what this test exercises.  The sha
+    # and the bump process live in tests/external_pins.toml.
+    _MINIO_REPO = external_pins.git_url("bottled-minio")
+
+    def test_13c_provision_minio_secrets(self, session, router_url, domain):
+        """Store the MinIO root credentials in the secrets service so MinIO can
+        fetch them at boot.  Must run before the deploy in 13d."""
+        # The secrets app is a default app, deployed at /setup completion; on a
+        # fresh instance it may still be building when we get here.
+        wait_app_running(session, router_url, "secrets", timeout=APP_DEPLOY_TIMEOUT_S)
+        secrets_set(session, domain, "MINIO_ROOT_USER", MINIO_ROOT_USER)
+        secrets_set(session, domain, "MINIO_ROOT_PASSWORD", MINIO_ROOT_PASSWORD)
+
+    def test_13d_deploy_minio(self, session, router_url):
+        """Deploy MinIO (pinned) with the secrets grant, so it boots with the
+        credentials provisioned in 13c."""
         r = session.post(
             f"{router_url}/api/add_app",
-            json={"repo_url": "https://github.com/cloud-in-a-bottle/bottled-minio"},
-            timeout=120,
+            json={"repo_url": self._MINIO_REPO, "grant_permissions_v2": True},
+            timeout=240,
         )
         assert r.status_code == 200, f"add_app minio failed: {r.status_code}: {r.text[:500]}"
         assert r.json().get("app_name") == "minio"
         wait_app_running(session, router_url, "minio", timeout=APP_DEPLOY_TIMEOUT_S)
 
-    def test_13d_deploy_file_browser(self, session, router_url, domain):
-        """Deploy file-browser (built-in) to read MinIO credentials and archive files."""
-        # file-browser may already be deployed as a default app; skip if so
-        existing = app_id_for(session, router_url, "file-browser")
-        if existing:
-            TestSelfHost._fb_was_preexisting = True
-            # Verify it's running
-            r = session.get(f"{router_url}/api/app_status/{existing}", timeout=10)
-            assert r.json()["status"] == "running"
-            return
-        TestSelfHost._fb_was_preexisting = False
-        r = session.post(
-            f"{router_url}/api/add_app",
-            json={"repo_url": "file:///home/host/openhost/apps/file_browser"},
-            timeout=120,
+    def test_13e_verify_provisioned_credentials(self):
+        """Prove MinIO booted with the PROVISIONED credentials: they must
+        authenticate against MinIO's admin API, and a wrong password must be
+        rejected, so a pass means MinIO really consumed the secret rather than
+        that auth is open."""
+        good = minio_mc("mc admin info e2e")
+        assert good.returncode == 0 and good.stdout.strip().endswith("OK"), (
+            f"provisioned creds did not authenticate: rc={good.returncode} out={good.stdout!r} err={good.stderr!r}"
         )
-        assert r.status_code == 200, f"add_app file-browser failed: {r.status_code}: {r.text[:500]}"
-        wait_app_running(session, router_url, "file-browser", timeout=APP_DEPLOY_TIMEOUT_S)
+        bad = minio_mc("mc admin info e2e", password=MINIO_ROOT_PASSWORD + "-wrong")
+        assert not bad.stdout.strip().endswith("OK"), "MinIO accepted a WRONG password; auth is not being enforced"
 
-    def test_13e_read_minio_credentials(self, session, domain):
-        """Read MinIO root credentials via file-browser."""
-        fb_url = f"https://file-browser.{domain}"
-        # file-browser (dufs) serves files directly; credentials are at
-        # /app_data/minio/config/root-credentials.txt
-        r = poll_endpoint(
-            session,
-            f"{fb_url}/app_data/minio/config/root-credentials.txt",
-            timeout=60,
-            interval=5,
-            fail_msg="Could not read MinIO credentials via file-browser",
+    def test_13f_create_minio_buckets(self):
+        """Create the two archive buckets (13g uses the first, 13k migrates to
+        the second).
+
+        ``mc`` ships inside the MinIO image, so this runs there.  The host does
+        not download a MinIO client of its own.  That used to fetch
+        ``dl.min.io/client/mc/...`` on every run, which is both unpinned and, as
+        of 2026-09, gone (HTTP 410).
+        """
+        r = minio_mc(f"mc mb --ignore-existing e2e/{self._BUCKET} && mc mb --ignore-existing e2e/{self._BUCKET_2}")
+        assert r.returncode == 0 and r.stdout.strip().endswith("OK"), (
+            f"bucket creation failed: rc={r.returncode} out={r.stdout!r} err={r.stderr!r}"
         )
-        cred_text = r.text
-        # Parse: lines like "export MINIO_ROOT_USER='...'"
-        creds = {}
-        for line in cred_text.splitlines():
-            line = line.strip()
-            if line.startswith("export MINIO_ROOT_USER="):
-                creds["user"] = line.split("=", 1)[1].strip("'\"")
-            elif line.startswith("export MINIO_ROOT_PASSWORD="):
-                creds["password"] = line.split("=", 1)[1].strip("'\"")
-        assert "user" in creds, f"Could not parse MINIO_ROOT_USER from: {cred_text[:200]}"
-        assert "password" in creds, f"Could not parse MINIO_ROOT_PASSWORD from: {cred_text[:200]}"
-        TestSelfHost._minio_user = creds["user"]
-        TestSelfHost._minio_password = creds["password"]
 
-    def test_13f_create_minio_bucket(self, domain):
-        """Create a test bucket in MinIO using the mc CLI on the host via SSH."""
-        minio_user = getattr(TestSelfHost, "_minio_user", None)
-        minio_password = getattr(TestSelfHost, "_minio_password", None)
-        assert minio_user and minio_password, "MinIO credentials not available"
+    # The archive backend is configured with the S3 API on the host-published
+    # port (see bottled-minio's [[ports]] mapping), reached from the router as
+    # localhost.
+    _MINIO_ENDPOINT = "http://localhost:9106"
+    _BUCKET = "openhost-e2e-archive"
+    _BUCKET_2 = "openhost-e2e-archive-2"
 
-        bucket = "openhost-e2e-archive"
-        # MinIO S3 API is on port 9106 (host-mapped), accessible as localhost on the host
-        endpoint = "http://localhost:9106"
-        ssh_key = os.environ.get("OPENHOST_SSH_KEY", "")
-        public_ip = os.environ.get("OPENHOST_PUBLIC_IP", "")
-        assert ssh_key and public_ip, "SSH credentials not available for bucket creation"
-
-        ssh_opts = f"-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -i {ssh_key}"
-        # Install mc (MinIO client), configure alias, create bucket.
-        # Detect the VM's arch so this works on both amd64 and arm64 hosts.
-        commands = (
-            'mcarch=$(case "$(uname -m)" in (aarch64|arm64) echo linux-arm64;; *) echo linux-amd64;; esac) && '
-            "curl -sL https://dl.min.io/client/mc/release/$mcarch/mc -o /tmp/mc && chmod +x /tmp/mc && "
-            f"/tmp/mc alias set e2e {endpoint} '{minio_user}' '{minio_password}' && "
-            f"/tmp/mc mb --ignore-existing e2e/{bucket} && "
-            # Second bucket for the later s3->s3 migration test (13k).
-            f"/tmp/mc mb --ignore-existing e2e/{bucket}-2"
-        )
-        result = subprocess.run(
-            f"ssh {ssh_opts} host@{public_ip} {shlex.quote(commands)}",
-            shell=True,
-            capture_output=True,
-            text=True,
-            timeout=60,
-        )
-        assert result.returncode == 0, f"Bucket creation failed: {result.stderr}"
-        TestSelfHost._minio_bucket = bucket
-        TestSelfHost._minio_bucket_2 = f"{bucket}-2"
-        TestSelfHost._minio_endpoint = endpoint
-
-    # Content written to the LOCAL archive before S3 is configured; it must
-    # survive the local->S3 migration (juicefs sync + config) byte-for-byte.
-    _PRE_MIGRATION_PATH = "app_archive/file-browser/pre-migration.txt"
+    # A synthetic app subdirectory seeded directly into the archive mount before
+    # S3 is configured.  Its content must survive each migration byte-for-byte,
+    # and its presence is what drives the local_archive_apps assertion (13f3).
+    # Using a dedicated name rather than a real app keeps the archive tests
+    # independent of which apps happen to be deployed.
+    _ARCHIVE_APP = "e2e-archive-test"
+    _PRE_MIGRATION_REL = f"{_ARCHIVE_APP}/pre-migration.txt"
     _PRE_MIGRATION_CONTENT = "written on the LOCAL backend before S3 migration\n" * 64
 
-    def test_13f2_seed_local_archive_before_migration(self, session, domain):
-        """Write a file into the (local file-backed) archive BEFORE configuring
-        S3, so test_13h2 can prove the migration preserved existing data."""
-        fb_url = f"https://file-browser.{domain}"
-        r = session.put(
-            f"{fb_url}/{self._PRE_MIGRATION_PATH}",
-            data=self._PRE_MIGRATION_CONTENT,
-            headers={"Content-Type": "text/plain"},
-            timeout=30,
-        )
-        assert r.status_code in (200, 201, 204), f"seed PUT failed: {r.status_code}: {r.text[:200]}"
+    def test_13f2_seed_local_archive_before_migration(self, session, router_url):
+        """Seed a file into the (local file-backed) archive BEFORE configuring
+        S3, so 13h2 can prove the migration preserved existing data.  Written
+        straight to the archive mount on the host, with no app involved."""
+        r = session.get(f"{router_url}/api/storage/archive_backend", timeout=10)
+        assert r.status_code == 200, r.text[:300]
+        data = r.json()
+        assert data["backend"] == "local", data
+        archive_dir = data.get("archive_dir")
+        assert archive_dir, f"no archive_dir in backend state: {data}"
+        TestSelfHost._archive_dir = archive_dir
+        archive_write(archive_dir, self._PRE_MIGRATION_REL, self._PRE_MIGRATION_CONTENT)
         # Read back on the local backend to be sure it landed.
-        r = session.get(f"{fb_url}/{self._PRE_MIGRATION_PATH}", timeout=10)
-        assert r.status_code == 200
-        assert r.text == self._PRE_MIGRATION_CONTENT
+        assert archive_read(archive_dir, self._PRE_MIGRATION_REL) == self._PRE_MIGRATION_CONTENT
 
     def test_13f3_state_lists_local_archive_app(self, session, router_url):
-        """Before migrating, the backend must report backend=local and list
-        file-browser among the apps whose data an S3 upgrade will migrate."""
+        """Before migrating, the backend must report backend=local and list the
+        seeded app among those whose data an S3 upgrade will migrate."""
         r = session.get(f"{router_url}/api/storage/archive_backend", timeout=10)
         assert r.status_code == 200
         data = r.json()
         assert data["backend"] == "local", data
-        assert "file-browser" in (data.get("local_archive_apps") or []), data
+        assert self._ARCHIVE_APP in (data.get("local_archive_apps") or []), data
 
     def test_13g_configure_archive_backend(self, session, router_url):
         """Configure the archive backend to use the local MinIO instance."""
-        minio_user = getattr(TestSelfHost, "_minio_user", None)
-        minio_password = getattr(TestSelfHost, "_minio_password", None)
-        bucket = getattr(TestSelfHost, "_minio_bucket", None)
-        endpoint = getattr(TestSelfHost, "_minio_endpoint", None)
-        assert all([minio_user, minio_password, bucket, endpoint])
+        creds = {
+            "s3_bucket": self._BUCKET,
+            "s3_access_key_id": MINIO_ROOT_USER,
+            "s3_secret_access_key": MINIO_ROOT_PASSWORD,
+            "s3_endpoint": self._MINIO_ENDPOINT,
+            "s3_region": "us-east-1",
+        }
 
         # Test connection first
         r = session.post(
             f"{router_url}/api/storage/archive_backend/test_connection",
-            json={
-                "s3_bucket": bucket,
-                "s3_access_key_id": minio_user,
-                "s3_secret_access_key": minio_password,
-                "s3_endpoint": endpoint,
-                "s3_region": "us-east-1",
-                "s3_prefix": "",
-            },
+            json={**creds, "s3_prefix": ""},
             timeout=30,
         )
         assert r.status_code == 200, f"test_connection failed: {r.status_code}: {r.text[:500]}"
@@ -867,11 +956,7 @@ class TestSelfHost:
         r = session.post(
             f"{router_url}/api/storage/archive_backend/configure",
             json={
-                "s3_bucket": bucket,
-                "s3_access_key_id": minio_user,
-                "s3_secret_access_key": minio_password,
-                "s3_endpoint": endpoint,
-                "s3_region": "us-east-1",
+                **creds,
                 "s3_prefix": "e2e-test",
                 # NOTE: no juicefs_volume_name override — the local zone already
                 # has a formatted volume ('openhost'); its objects live under
@@ -894,131 +979,75 @@ class TestSelfHost:
         assert r.status_code == 200
         data = r.json()
         assert data["backend"] == "s3"
-        assert data["s3_bucket"] == "openhost-e2e-archive"
+        assert data["s3_bucket"] == self._BUCKET
 
-    def test_13h2_pre_migration_data_survived(self, session, domain):
-        """The file written to the LOCAL archive in 13f2 must still be readable
-        (byte-identical) now that the volume is S3-backed — proving the
-        juicefs sync + config migration preserved existing data."""
-        fb_url = f"https://file-browser.{domain}"
-        # The app was recycled after migration (quiesced before the remount,
-        # restarted after); give it a moment to come back and re-open the
-        # now-S3-backed archive.
-        r = poll_endpoint(
-            session,
-            f"{fb_url}/{self._PRE_MIGRATION_PATH}",
-            timeout=90,
-            interval=5,
-            fail_msg="pre-migration archive file not readable after local->S3 migration",
-        )
-        assert r.text == self._PRE_MIGRATION_CONTENT, "pre-migration archive content changed across migration"
+    def test_13h2_pre_migration_data_survived(self):
+        """The file seeded into the LOCAL archive in 13f2 must still be readable
+        (byte-identical) now that the volume is S3-backed, proving the juicefs
+        sync + config migration preserved existing data.  The mount is briefly
+        recycled across the migration, so retry."""
+        content = archive_read(TestSelfHost._archive_dir, self._PRE_MIGRATION_REL, attempts=18, interval=5)
+        assert content == self._PRE_MIGRATION_CONTENT, "pre-migration archive content changed across migration"
 
-    def test_13i_archive_file_roundtrip(self, session, domain):
-        """Write, read, and delete a file in the archive via file-browser."""
-        fb_url = f"https://file-browser.{domain}"
-        test_content = "e2e archive backend test file"
+    def test_13i_archive_file_roundtrip(self):
+        """Write, read, and delete a file in the (now S3-backed) archive."""
+        archive_dir = TestSelfHost._archive_dir
+        rel = f"{self._ARCHIVE_APP}/roundtrip.txt"
+        content = "e2e archive backend test file"
+        archive_write(archive_dir, rel, content)
+        assert archive_read(archive_dir, rel) == content
+        archive_delete(archive_dir, rel)
+        assert not archive_exists(archive_dir, rel)
 
-        # file-browser (dufs) supports PUT for uploads
-        r = session.put(
-            f"{fb_url}/app_archive/file-browser/e2e-test-file.txt",
-            data=test_content,
-            headers={"Content-Type": "text/plain"},
-            timeout=30,
-        )
-        # dufs returns 201 Created or 204 No Content on PUT
-        assert r.status_code in (200, 201, 204), f"PUT failed: {r.status_code}: {r.text[:200]}"
-
-        # Read back
-        r = session.get(f"{fb_url}/app_archive/file-browser/e2e-test-file.txt", timeout=10)
-        assert r.status_code == 200
-        assert r.text == test_content
-
-        # Delete
-        r = session.request(
-            "DELETE",
-            f"{fb_url}/app_archive/file-browser/e2e-test-file.txt",
-            timeout=10,
-        )
-        assert r.status_code in (200, 204), f"DELETE failed: {r.status_code}: {r.text[:200]}"
-
-        # Verify gone
-        r = session.get(f"{fb_url}/app_archive/file-browser/e2e-test-file.txt", timeout=10)
-        assert r.status_code == 404
-
-    def test_13k_migrate_s3_to_s3(self, session, router_url, domain):
+    def test_13k_migrate_s3_to_s3(self, session, router_url):
         """Migrate the archive from the first MinIO bucket to a SECOND bucket
-        (s3->s3), and prove pre-migration data survives byte-identical and the
-        roundtrip file is gone (it was deleted in 13i) — exercising the
-        juicefs sync + config s3->s3 path on a live instance."""
-        minio_user = getattr(TestSelfHost, "_minio_user", None)
-        minio_password = getattr(TestSelfHost, "_minio_password", None)
-        bucket2 = getattr(TestSelfHost, "_minio_bucket_2", None)
-        endpoint = getattr(TestSelfHost, "_minio_endpoint", None)
-        assert all([minio_user, minio_password, bucket2, endpoint])
+        (s3->s3), and prove pre-migration data survives byte-identical,
+        exercising the juicefs sync + config s3->s3 path on a live instance."""
+        creds = {
+            "s3_bucket": self._BUCKET_2,
+            "s3_access_key_id": MINIO_ROOT_USER,
+            "s3_secret_access_key": MINIO_ROOT_PASSWORD,
+            "s3_endpoint": self._MINIO_ENDPOINT,
+            "s3_region": "us-east-1",
+        }
 
         # Without confirm_migrate_s3 the API must refuse (409) since we're on s3.
-        r = session.post(
-            f"{router_url}/api/storage/archive_backend/configure",
-            json={
-                "s3_bucket": bucket2,
-                "s3_access_key_id": minio_user,
-                "s3_secret_access_key": minio_password,
-                "s3_endpoint": endpoint,
-                "s3_region": "us-east-1",
-            },
-            timeout=60,
-        )
+        r = session.post(f"{router_url}/api/storage/archive_backend/configure", json=creds, timeout=60)
         assert r.status_code == 409, f"expected 409 without confirm_migrate_s3, got {r.status_code}: {r.text[:300]}"
         assert "confirm_migrate_s3" in r.text
 
         # Now migrate for real.
         r = session.post(
             f"{router_url}/api/storage/archive_backend/configure",
-            json={
-                "s3_bucket": bucket2,
-                "s3_access_key_id": minio_user,
-                "s3_secret_access_key": minio_password,
-                "s3_endpoint": endpoint,
-                "s3_region": "us-east-1",
-                "confirm_migrate_s3": True,
-            },
+            json={**creds, "confirm_migrate_s3": True},
             timeout=600,
         )
         assert r.status_code == 200, f"s3->s3 configure failed: {r.status_code}: {r.text[:500]}"
         data = r.json()
         assert data.get("backend") == "s3"
-        assert data.get("s3_bucket") == bucket2, f"backend not on new bucket: {data}"
+        assert data.get("s3_bucket") == self._BUCKET_2, f"backend not on new bucket: {data}"
 
         # State reflects the new bucket.
         r = session.get(f"{router_url}/api/storage/archive_backend", timeout=10)
-        assert r.json()["s3_bucket"] == bucket2
+        assert r.json()["s3_bucket"] == self._BUCKET_2
 
         # Pre-migration data (seeded in 13f2, already survived local->s3 in 13h2)
         # must ALSO survive s3->s3, byte-identical.
-        fb_url = f"https://file-browser.{domain}"
-        r = poll_endpoint(
-            session,
-            f"{fb_url}/{self._PRE_MIGRATION_PATH}",
-            timeout=90,
-            interval=5,
-            fail_msg="pre-migration archive file not readable after s3->s3 migration",
-        )
-        assert r.text == self._PRE_MIGRATION_CONTENT, "pre-migration archive content changed across s3->s3 migration"
+        content = archive_read(TestSelfHost._archive_dir, self._PRE_MIGRATION_REL, attempts=18, interval=5)
+        assert content == self._PRE_MIGRATION_CONTENT, "pre-migration archive content changed across s3->s3 migration"
 
-    def test_13j_cleanup_archive_test(self, session, router_url):
-        """Remove MinIO and optionally file-browser."""
-        # Remove minio
+    def test_13j_cleanup_archive_test(self, session, router_url, domain):
+        """Remove MinIO, delete the provisioned secrets, and clean up the seeded
+        archive data."""
         minio_id = app_id_for(session, router_url, "minio")
         if minio_id:
             session.post(f"{router_url}/remove_app/{minio_id}", timeout=30)
             wait_app_removed(session, router_url, "minio")
-
-        # Only remove file-browser if we deployed it
-        if not getattr(TestSelfHost, "_fb_was_preexisting", True):
-            fb_id = app_id_for(session, router_url, "file-browser")
-            if fb_id:
-                session.post(f"{router_url}/remove_app/{fb_id}", timeout=30)
-                wait_app_removed(session, router_url, "file-browser")
+        secrets_delete(session, domain, "MINIO_ROOT_USER")
+        secrets_delete(session, domain, "MINIO_ROOT_PASSWORD")
+        archive_dir = getattr(TestSelfHost, "_archive_dir", None)
+        if archive_dir:
+            archive_delete(archive_dir, self._PRE_MIGRATION_REL)
 
     # -- 14. Cleanup -------------------------------------------------------
 

@@ -5,10 +5,11 @@ Design: the archive tier is ALWAYS a JuiceFS volume mounted at
 ``config.app_archive_dir``.  Only the JuiceFS *object storage* differs by
 backend:
 
-* ``'local'`` (the default) — JuiceFS ``--storage file``: objects live in a
+* ``'local'`` (the default): JuiceFS ``--storage file``: objects live in a
   directory on the instance's local disk (``local_object_store_dir``, under
-  ``persistent_data`` so it is backed up).  No S3, no extra daemon, no extra
-  listening port — JuiceFS's ``file`` storage is a first-class backend.
+  ``persistent_data`` to survive rebuilds). The bundled backup app does not
+  capture these objects. No S3, no extra daemon, no extra listening port:
+  JuiceFS's ``file`` storage is a first-class backend.
 * ``'s3'`` — JuiceFS ``--storage s3``: objects live in an operator-supplied
   S3 (or S3-compatible) bucket.
 
@@ -135,9 +136,9 @@ def local_object_store_dir(config: Config) -> str:
     backend.
 
     This holds JuiceFS's raw chunk objects (NOT a POSIX view of app files),
-    so nothing should ever read it directly.  It lives under
-    ``persistent_data`` so it survives rebuilds and is captured by restic
-    backups — local archive data has no other durable copy.
+    so nothing should ever read it directly. It lives under
+    ``persistent_data`` so it survives rebuilds, but is not mounted into the
+    bundled backup app and is not captured by its restic snapshots.
     """
     return config.local_archive_object_store_dir
 
@@ -163,8 +164,8 @@ class StorageSummary:
     LOCAL disk (so they can decide to configure S3 first if they care).
     """
 
-    app_data: bool  # local, backed-up permanent data
-    app_temp_data: bool  # local scratch, not backed up
+    app_data: bool  # local permanent data; included in configured app backups
+    app_temp_data: bool  # local scratch; included in configured app backups
     uses_archive: bool  # app_archive or access_all_app_data
     requires_archive: bool  # hard app_archive requirement
     archive_backend: str  # "local" | "s3" | "disabled"

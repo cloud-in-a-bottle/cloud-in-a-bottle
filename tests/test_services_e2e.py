@@ -28,10 +28,12 @@ from compute_space.tests.local_stack import create_bare_git_repo
 from compute_space.tests.local_stack import deploy_app
 from compute_space.tests.local_stack import make_local_stack_config
 from compute_space.tests.utils import managed_router
+from tests import external_pins
 
 ROUTER_PORT = 28180
 
-SECRETS_REPO_URL = "https://github.com/cloud-in-a-bottle/secrets"
+# Pinned to a commit; see tests/external_pins.toml.
+SECRETS_REPO_URL = external_pins.git_url("secrets")
 SECRETS_SERVICE_URL = "github.com/imbue-openhost/openhost/services/secrets"
 TEST_APP_REPO_URL = f"file://{OPENHOST_PROJECT_DIR / 'apps' / 'test_app'}"
 

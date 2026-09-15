@@ -1,6 +1,6 @@
 # Security
 
-An instance is a machine on the public internet running code you did not write. This page is what the platform does about that, and where the line is.
+An instance is a machine on the public internet, running app code that you may not fully trust. We do a lot to make this safer, but the user should be aware of how things work in order to keep it secure.
 
 ## App sandbox
 
@@ -16,6 +16,8 @@ By default a container gets:
 
 Apps can request additional capabilities/permissions that significantly elevate the access they have to your instance. These are documented in [the manifest spec](../creating_an_app/manifest_spec.md); it is your choice if you are comfortable installing apps requesting elevated permissions.
 
+Apps intentionally cannot communicate directly with other apps - any app-to-app communications need to be permissioned and go through the [Service Interface](../creating_an_app/cross_app_services.md).
+
 ## Who can reach an app
 
 Every route requires the owner's session unless the app's manifest lists it in `public_paths`. The router checks this before proxying, so an unauthenticated request never reaches an app that did not ask for one.
@@ -25,10 +27,6 @@ Three credentials authenticate as you, all documented in [Overview](./overview.m
 Owner sessions are refused on cross-origin requests, so JavaScript running in one app cannot make owner-authenticated calls to the router or to another app on your behalf.
 
 The router is the sole authority for the `X-OpenHost-*` headers an app receives. Anything a client sends under those names is stripped before the app sees it, so an app can trust `X-OpenHost-Is-Owner` and a provider can trust the consumer name it is handed.
-
-## Permissions between apps
-
-An app that consumes a [cross-app service](../creating_an_app/cross_app_services.md) does not get access to the provider's data by just installing. It declares the grants it wants, you approve them, and the router forwards only the granted set on each call. Enforcement is the provider's: the router carries the grant, the provider decides what it means. Provider-scoped grants let a provider run its own approval UI for anything data-dependent, such as which folder or which mailbox.
 
 ## Catalog apps
 

@@ -13,14 +13,15 @@
 - catalog + current apps in catalog
 - basic imbue managed spaces platform
 - public landing page, with public docs, and a clear onboarding flow for selfhost or managed
+- reasonably good docs
 
 ### things being worked on / polished up now:
 
-- great docs
-- great self-hosted onboarding
+- even easier self-hosted onboarding
 
 ### roadmap (likely to happen, in no particular order):
 
+- ARM support + ARM VM builds
 - add Cloud in a Bottle platform support for notifications (similar to how smartphones aggregate notifications from apps in one place)
 - get notifications working in our community chat app
 - have email addresses (capable of send and receive) auto-setup in new spaces
@@ -30,7 +31,6 @@
   - IP tunnels, for easier setup of self-hosted instances without a static IPv4
   - S3 for backup and archive backend, auto-setup for imbue-managed instances
 - make it run well + install super easily on raspberry pis (even with limited memory).
-- create a cloud in a bottle newsletter/blog, showing off cool new stuff each ~week
 - create polished coding apps (VS code, claude code, imbue sculptor, imbue minds, etc)
 - create or find+package many more great apps!
 - have a free tier in our managed service, with limited memory and auto-suspending of apps or the whole space
