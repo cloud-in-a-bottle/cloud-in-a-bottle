@@ -154,11 +154,10 @@ async def setup_post(request: Request[Any, Any, Any], config: NamedDependency[Co
         "<meta name='viewport' content='width=device-width, initial-scale=1'>"
         "<meta name=robots content=noindex>"
         f"<link rel='icon' type='image/svg+xml' href='{_favicon_url}'>"
-        "<title>Cloud in a Bottle: starting your dashboard</title></head>"
+        "<title>Setup complete</title></head>"
         "<body style='font-family:system-ui;text-align:center;margin-top:4em;'>"
         "<main><h1>Setup complete</h1>"
-        "<p id='setup-status' role='status'>Starting your dashboard…</p>"
-        "<noscript><p>Wait a moment, then open the dashboard below.</p></noscript>"
+        "<p id='setup-status' role='status'>Starting…</p>"
         "<p><a href='/'>Open dashboard</a></p></main>"
         """<script>
         (function () {
@@ -167,7 +166,7 @@ async def setup_post(request: Request[Any, Any, Any], config: NamedDependency[Co
             var remaining = deadline - Date.now();
             if (remaining <= 0) {
               document.getElementById('setup-status').textContent =
-                'Your account is ready, but the dashboard is taking longer than expected. Try opening it below.';
+                'Taking longer than expected.';
               return;
             }
             var controller = new AbortController();

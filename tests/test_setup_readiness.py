@@ -28,8 +28,8 @@ from compute_space.db import connection
 from compute_space.web import setup_app
 
 ORIGIN = "http://readiness.localhost"
-STARTING = "Starting your dashboard…"
-DEADLINE_MESSAGE = "Your account is ready, but the dashboard is taking longer than expected. Try opening it below."
+STARTING = "Starting…"
+DEADLINE_MESSAGE = "Taking longer than expected."
 CLOCK_START = datetime(2026, 1, 1, tzinfo=UTC)
 
 
@@ -344,12 +344,10 @@ def test_deadline_bounds_last_request_stops_polling_and_keeps_manual_get_link(
 
 
 @pytest.mark.browser_context_args(java_script_enabled=False)
-def test_no_javascript_has_visible_fallback_and_manual_get_link(
+def test_no_javascript_has_manual_get_link(
     setup_page: Page, health_routes: list[Route], navigation_requests: list[tuple[str, str]]
 ) -> None:
     _submit(setup_page, javascript=False)
-    expect(setup_page.locator("noscript")).to_be_visible()
-    assert setup_page.locator("noscript").inner_text().strip()
     assert not health_routes
     setup_page.get_by_role("link", name="Open dashboard", exact=True).click()
     expect(setup_page).to_have_url(f"{ORIGIN}/")
