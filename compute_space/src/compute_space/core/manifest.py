@@ -140,19 +140,27 @@ class ServiceConsumes:
 @attr.s(auto_attribs=True, frozen=True)
 class SettingLabel:
     """Marks an :class:`AppManifest` field as shown in the update review diff,
-    under ``group``, displayed as ``text``. See :func:`manifest_setting_labels`."""
+    under ``group``, displayed as ``text``. See :func:`manifest_setting_labels`.
+
+    ``review_required`` is False for fields an app author can change without changing
+    what the app can do: descriptive metadata (description, authors, version) and
+    app-local routing detail (health check, links). A change to one still appears in
+    the diff, so the owner sees it when a review happens, but on its own it never
+    holds an update back for approval. Anything that affects the app's capabilities or
+    how it runs keeps the default, True."""
 
     group: str
     text: str
+    review_required: bool = True
 
 
 @attr.s(auto_attribs=True, frozen=True)
 class AppManifest:
     # [app]
     name: str
-    version: Annotated[str, SettingLabel("App", "Version")]
-    description: Annotated[str, SettingLabel("App", "Description")] = ""
-    authors: Annotated[list[str], SettingLabel("App", "Authors")] = attr.Factory(list)
+    version: Annotated[str, SettingLabel("App", "Version", review_required=False)]
+    description: Annotated[str, SettingLabel("App", "Description", review_required=False)] = ""
+    authors: Annotated[list[str], SettingLabel("App", "Authors", review_required=False)] = attr.Factory(list)
 
     # [runtime]
     runtime_type: Annotated[str, SettingLabel("App", "Runtime type")] = "serverfull"
@@ -179,11 +187,11 @@ class AppManifest:
     network_host: Annotated[bool, SettingLabel("Container", "Host networking")] = False
 
     # [routing]
-    health_check: Annotated[str | None, SettingLabel("Routing", "Health check")] = None
+    health_check: Annotated[str | None, SettingLabel("Routing", "Health check", review_required=False)] = None
     public_paths: Annotated[list[str], SettingLabel("Routing", "Public paths")] = attr.Factory(list)
 
     # [[links]]
-    links: Annotated[list[AppLink], SettingLabel("Routing", "Links")] = attr.Factory(list)
+    links: Annotated[list[AppLink], SettingLabel("Routing", "Links", review_required=False)] = attr.Factory(list)
 
     # [resources]
     memory_mb: Annotated[int, SettingLabel("Resources", "Memory (MB)")] = 128
@@ -640,12 +648,17 @@ def manifest_newly_declared_permissions_v2(
 
 @attr.s(auto_attribs=True, frozen=True)
 class SettingChange:
-    """A single manifest setting whose value changed between two deployments."""
+    """A single manifest setting whose value changed between two deployments.
+
+    ``review_required`` mirrors the field's :class:`SettingLabel`: False for a field
+    that is reported for context but is never on its own a reason to hold the update
+    for approval."""
 
     group: str
     label: str
     old: str
     new: str
+    review_required: bool = True
 
 
 def _render_setting_value(value: Any) -> str:
@@ -663,7 +676,11 @@ def manifest_settings_changes(manifest: AppManifest, previous_manifest_raw: str 
     """Grouped diff of :class:`SettingLabel`-annotated manifest settings changed vs
     the previously-deployed manifest. Empty when there's no parseable previous
     manifest; permissions are excluded (diffed separately, see
-    :func:`manifest_newly_declared_permissions_v2`)."""
+    :func:`manifest_newly_declared_permissions_v2`).
+
+    The result is the full diff, non-gating fields included. Callers deciding whether
+    an update needs the owner's approval must look at the gating subset instead
+    (see :func:`settings_changes_require_review`)."""
     if not previous_manifest_raw:
         return []
     try:
@@ -681,6 +698,18 @@ def manifest_settings_changes(manifest: AppManifest, previous_manifest_raw: str 
                     label=setting_label.text,
                     old=_render_setting_value(old_val),
                     new=_render_setting_value(new_val),
+                    review_required=setting_label.review_required,
                 )
             )
     return changes
+
+
+def settings_changes_require_review(changes: list[SettingChange]) -> bool:
+    """Whether a settings diff is reason enough to hold an update for the owner.
+
+    An update that only rewords the description, adds an author, bumps the version, or
+    adjusts the app's own health check or links changes nothing about what the app can
+    do, so it applies without interrupting the owner. Anything else in the diff (ports,
+    resources, data tiers, public paths, the image itself) does need approval.
+    """
+    return any(change.review_required for change in changes)
