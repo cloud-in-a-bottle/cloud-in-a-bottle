@@ -5,7 +5,7 @@
   var copyButton = document.getElementById('app-definition-copy');
   var downloadButton = document.getElementById('app-definition-download');
   var preview = document.getElementById('app-definition-preview');
-  var output = document.getElementById('app-definition-json');
+  var output = document.getElementById('app-definition-output');
   var status = document.getElementById('app-definition-status');
   var privateHint = document.getElementById('app-definition-private-hint');
   var mode = 'sharing';
@@ -43,24 +43,6 @@
     preview.open = false;
   }
 
-  function isObject(value) {
-    return value !== null && typeof value === 'object' && !Array.isArray(value);
-  }
-
-  function validEnvelope(data, requestedMode) {
-    if (!isObject(data) || data.schema_version !== 1 || data.mode !== requestedMode
-        || !Array.isArray(data.apps) || !data.apps.every(isObject)) return false;
-    if (requestedMode === 'sharing') {
-      return !Object.prototype.hasOwnProperty.call(data, 'secret_values')
-        && !Object.prototype.hasOwnProperty.call(data, 'missing_secret_keys');
-    }
-    return Array.isArray(data.missing_secret_keys) && data.missing_secret_keys.every(function(key) {
-      return typeof key === 'string';
-    }) && isObject(data.secret_values) && Object.values(data.secret_values).every(function(value) {
-      return typeof value === 'string';
-    });
-  }
-
   async function load() {
     var requestGeneration = generation;
     var requestedMode = mode;
@@ -74,24 +56,31 @@
         method: 'POST',
         credentials: 'same-origin',
         cache: 'no-store',
-        headers: {'Accept': 'application/json', 'Content-Type': 'application/json'},
+        headers: {'Accept': 'application/yaml', 'Content-Type': 'application/json'},
         body: JSON.stringify({mode: requestedMode}),
         signal: controller.signal,
       });
       if (!current()) return;
       if (!response.ok || response.redirected
-          || (response.headers.get('Content-Type') || '').split(';')[0].trim().toLowerCase() !== 'application/json') {
+          || (response.headers.get('Content-Type') || '').split(';')[0].trim().toLowerCase() !== 'application/yaml'
+          || response.headers.get('X-App-Definitions-Mode') !== requestedMode
+          || response.headers.get('X-App-Definitions-Schema-Version') !== '1') {
         throw new Error('Invalid export');
       }
+      var missingHeader = response.headers.get('X-App-Definitions-Missing-Count');
+      var missingCount = Number(missingHeader);
+      if (!/^[0-9]+$/.test(missingHeader || '') || !Number.isSafeInteger(missingCount)
+          || (requestedMode === 'sharing' && missingCount !== 0)) {
+        throw new Error('Invalid export');
+      }
+      // The server validates YAML structure and privacy; keep its text opaque and byte-for-byte intact.
       var text = await response.text();
       if (!current()) return;
-      var data = JSON.parse(text);
-      if (!validEnvelope(data, requestedMode)) throw new Error('Invalid export');
+      if (!text.trim()) throw new Error('Invalid export');
       payload = text;
       output.textContent = text;
       copyButton.disabled = false;
       downloadButton.disabled = false;
-      var missingCount = requestedMode === 'private' ? data.missing_secret_keys.length : 0;
       status.textContent = missingCount
         ? 'Ready. ' + missingCount + ' referenced ' + (missingCount === 1 ? 'secret is' : 'secrets are') + ' not configured.'
         : 'Ready.';
@@ -148,11 +137,11 @@
   downloadButton.addEventListener('click', function() {
     if (payload === null) return;
     revokeDownload();
-    downloadUrl = URL.createObjectURL(new Blob([payload], {type: 'application/json'}));
+    downloadUrl = URL.createObjectURL(new Blob([payload], {type: 'application/yaml'}));
     var url = downloadUrl;
     var link = document.createElement('a');
     link.href = url;
-    link.download = 'app-definitions-' + mode + '.json';
+    link.download = 'app-definitions-' + mode + '.yaml';
     document.body.appendChild(link);
     link.click();
     link.remove();

@@ -1,11 +1,13 @@
 import hashlib
 import json
+import sqlite3
 from collections.abc import Iterator
 from contextlib import closing
 from pathlib import Path
 
 import httpx
 import pytest
+import yaml
 from litestar import Litestar
 from litestar.di import Provide
 from litestar.exceptions import NotAuthorizedException
@@ -13,6 +15,7 @@ from litestar.testing import TestClient
 
 from compute_space.config import provide_config
 from compute_space.core import app_definition_secrets
+from compute_space.core.app_definitions import ExportMode
 from compute_space.core.app_id import ROUTER_APP_ID
 from compute_space.core.auth.permissions_v2 import revoke_permission_v2
 from compute_space.core.service_interface.builtin_services import APP_DEFINITIONS_SERVICE_URL
@@ -27,6 +30,7 @@ from compute_space.tests.test_app_definitions import seed_app
 from compute_space.tests.test_app_definitions import seed_grant
 from compute_space.tests.test_app_definitions import seed_provider
 from compute_space.web.app import _login_required_redirect
+from compute_space.web.routes.api import app_definitions
 from compute_space.web.routes.api.app_definitions import api_app_definitions_routes
 from compute_space.web.routes.services_v2 import services_v2_routes
 
@@ -88,6 +92,8 @@ def approve(mode: str, *, scope: str = "global", provider: str = "") -> None:
 def assert_json_no_store(response: httpx.Response) -> None:
     assert response.headers["Content-Type"].startswith("application/json")
     assert response.headers["Cache-Control"] == "no-store"
+    if response.status_code >= 400:
+        assert not any(header.startswith("x-app-definitions-") for header in response.headers)
 
 
 @pytest.mark.parametrize("body", [{}, {"mode": "sharing"}, {"mode": "private"}])
@@ -114,7 +120,10 @@ def test_owner_api_key_auth(client: TestClient[Litestar]) -> None:
 
 
 @pytest.mark.parametrize("auth", ["anonymous", "app", "invalid", "expired-api", "expired-session", "spoofed"])
-def test_owner_export_denies_nonowners_with_json_no_store(client: TestClient[Litestar], auth: str) -> None:
+@pytest.mark.parametrize("accept", ["application/json", "application/yaml"])
+def test_owner_export_denies_nonowners_with_json_no_store(
+    client: TestClient[Litestar], auth: str, accept: str
+) -> None:
     headers = {}
     if auth != "expired-session":
         client.cookies.clear()
@@ -134,6 +143,7 @@ def test_owner_export_denies_nonowners_with_json_no_store(client: TestClient[Lit
             "X-OpenHost-Consumer-Id": ROUTER_APP_ID,
             "X-OpenHost-Permissions": '[{"grant":{"mode":"private"},"scope":"global"}]',
         }
+    headers["Accept"] = accept
     response = client.post(OWNER_PATH, json={"mode": "private"}, headers=headers, follow_redirects=False)
     assert response.status_code == 401
     assert_json_no_store(response)
@@ -142,13 +152,15 @@ def test_owner_export_denies_nonowners_with_json_no_store(client: TestClient[Lit
 
 
 @pytest.mark.parametrize("origin", ["https://evil.example", "http://consumer.testzone.local", "null"])
-def test_owner_session_denies_cross_origin(client: TestClient[Litestar], origin: str) -> None:
-    response = client.post(OWNER_PATH, json={}, headers={"Origin": origin})
+@pytest.mark.parametrize("accept", ["application/json", "application/yaml"])
+def test_owner_session_denies_cross_origin(client: TestClient[Litestar], origin: str, accept: str) -> None:
+    response = client.post(OWNER_PATH, json={}, headers={"Origin": origin, "Accept": accept})
     assert response.status_code == 401
     assert_json_no_store(response)
 
 
 @pytest.mark.parametrize("path", [OWNER_PATH, SERVICE_PATH])
+@pytest.mark.parametrize("accept", ["application/json", "application/yaml"])
 @pytest.mark.parametrize(
     "body",
     [
@@ -164,30 +176,36 @@ def test_owner_session_denies_cross_origin(client: TestClient[Litestar], origin:
         "sharing",
     ],
 )
-def test_invalid_modes_fail_400(client: TestClient[Litestar], path: str, body: object) -> None:
+def test_invalid_modes_fail_400(client: TestClient[Litestar], path: str, body: object, accept: str) -> None:
     if path == SERVICE_PATH:
         use_app_token(client)
         approve("private")
     # httpx's json=None means no body, so encode explicitly to test the JSON null case.
-    response = client.post(path, content=json.dumps(body), headers={"Content-Type": "application/json"})
+    response = client.post(
+        path, content=json.dumps(body), headers={"Content-Type": "application/json", "Accept": accept}
+    )
     assert response.status_code == 400
     assert_json_no_store(response)
 
 
 @pytest.mark.parametrize("path", [OWNER_PATH, SERVICE_PATH])
+@pytest.mark.parametrize("accept", ["application/json", "application/yaml"])
 @pytest.mark.parametrize("content", ["", f'{{"mode": {SENTINEL}', "{broken"])
-def test_malformed_json_errors_are_sanitized(client: TestClient[Litestar], path: str, content: str) -> None:
+def test_malformed_json_errors_are_sanitized(
+    client: TestClient[Litestar], path: str, content: str, accept: str
+) -> None:
     if path == SERVICE_PATH:
         use_app_token(client)
-    response = client.post(path, content=content, headers={"Content-Type": "application/json"})
+    response = client.post(path, content=content, headers={"Content-Type": "application/json", "Accept": accept})
     assert response.status_code == 400
     assert_json_no_store(response)
     assert SENTINEL not in response.text
 
 
 @pytest.mark.parametrize("requested", ["sharing", "private"])
+@pytest.mark.parametrize("accept", ["application/json", "application/yaml"])
 def test_requested_manifest_grant_is_not_approval_and_spoofed_headers_do_not_authorize(
-    client: TestClient[Litestar], requested: str, monkeypatch: pytest.MonkeyPatch
+    client: TestClient[Litestar], requested: str, monkeypatch: pytest.MonkeyPatch, accept: str
 ) -> None:
     use_app_token(client)
     monkeypatch.setattr(app_definition_secrets, "client_for", lambda *a, **kw: pytest.fail("unapproved Secrets call"))
@@ -195,6 +213,7 @@ def test_requested_manifest_grant_is_not_approval_and_spoofed_headers_do_not_aut
         SERVICE_PATH,
         json={"mode": requested},
         headers={
+            "Accept": accept,
             "X-OpenHost-Consumer-Id": ROUTER_APP_ID,
             "X-OpenHost-Permissions": '[{"grant":{"mode":"private"},"scope":"global"}]',
         },
@@ -310,6 +329,7 @@ def test_private_retrieves_values_only_after_auth_and_sharing_never_does(
 
 
 @pytest.mark.parametrize("path", [OWNER_PATH, SERVICE_PATH])
+@pytest.mark.parametrize("accept", ["application/json", "application/yaml"])
 @pytest.mark.parametrize(
     "upstream",
     [
@@ -325,6 +345,7 @@ def test_secret_provider_error_body_and_trace_never_escape(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
     upstream: httpx.Response,
+    accept: str,
 ) -> None:
     if path == SERVICE_PATH:
         use_app_token(client)
@@ -333,8 +354,135 @@ def test_secret_provider_error_body_and_trace_never_escape(
         seed_provider(db)
         seed_grant(db, "consumer", {"key": "KEY"})
     fake_secrets(monkeypatch, lambda request: upstream)
-    response = client.post(path, json={"mode": "private"})
+    response = client.post(path, json={"mode": "private"}, headers={"Accept": accept})
     assert response.status_code == 502
     assert_json_no_store(response)
     assert SENTINEL not in response.text
     assert SENTINEL not in caplog.text
+
+
+def assert_export_headers(response: httpx.Response, document: dict[str, object]) -> None:
+    assert response.headers["Cache-Control"] == "no-store"
+    assert "accept" in {part.strip().lower() for part in response.headers["Vary"].split(",")}
+    assert response.headers["X-App-Definitions-Mode"] == document["mode"]
+    assert response.headers["X-App-Definitions-Schema-Version"] == str(document["schema_version"]) == "1"
+    missing = document.get("missing_secret_keys", [])
+    assert isinstance(missing, list)
+    count = response.headers["X-App-Definitions-Missing-Count"]
+    assert count.isascii() and count.isdecimal()
+    assert int(count) == len(missing)
+
+
+@pytest.mark.parametrize("path", [OWNER_PATH, SERVICE_PATH])
+@pytest.mark.parametrize(
+    ("accept", "media_type"),
+    [
+        (None, "application/json"),
+        ("*/*", "application/json"),
+        ("application/*", "application/json"),
+        ("application/json", "application/json"),
+        ("application/yaml", "application/yaml"),
+        ("text/html", "application/json"),
+        ("application/yaml;q=0.9,application/json;q=1", "application/json"),
+        ("application/json;q=0.2,application/yaml;q=0.8", "application/yaml"),
+        ("application/yaml;q=0.001", "application/yaml"),
+        ("application/json;q=0.101,application/yaml;q=0.109", "application/yaml"),
+        ("application/yaml;profile=special;q=0,application/yaml;q=1,application/json;q=0.5", "application/yaml"),
+        ("application/yaml;profile=special", "application/json"),
+        ("application/yaml;profile=special;q=1,application/yaml;q=0", "application/json"),
+        ("application/yaml;q=0", "application/json"),
+        ("application/yaml;q=0,application/json;q=0.5", "application/json"),
+        ("application/json;q=0,application/yaml;q=0.5", "application/yaml"),
+        ("application/yaml;q=0,*/*;q=1", "application/json"),
+        ("application/json;q=0,*/*;q=1", "application/yaml"),
+        ("application/json;q=0.1,application/yaml;q=0.2,*/*;q=1", "application/yaml"),
+        ("application/yaml;q=0,application/json;q=0", "application/json"),
+        ("*/*;q=0", "application/json"),
+    ],
+)
+def test_export_content_negotiation(
+    client: TestClient[Litestar], path: str, accept: str | None, media_type: str
+) -> None:
+    if path == SERVICE_PATH:
+        use_app_token(client)
+        approve("sharing")
+    client.headers.pop("Accept", None)
+    response = client.post(path, json={}, headers={"Accept": accept} if accept else {})
+    assert response.status_code == 200
+    assert response.headers["Content-Type"].split(";")[0] == media_type
+    document = yaml.safe_load(response.text) if media_type == "application/yaml" else response.json()
+    assert document["mode"] == "sharing"
+    assert_export_headers(response, document)
+    if media_type == "application/yaml":
+        with pytest.raises(json.JSONDecodeError):
+            response.json()
+
+
+@pytest.mark.parametrize("path", [OWNER_PATH, SERVICE_PATH])
+@pytest.mark.parametrize("mode", ["sharing", "private"])
+@pytest.mark.parametrize("missing", [[], ["ABSENT", "missing\nkey"]])
+def test_yaml_and_json_export_the_same_document(
+    client: TestClient[Litestar], path: str, mode: str, missing: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    values = {"VALUE": SENTINEL, "EMPTY": "", "1e3": "first\nsecond\n\n", "true": "a\r\nb\u2028c"}
+    with closing(get_db()) as db:
+        seed_provider(db)
+        seed_app(db, "remote", repo_url=f"https://user:{SENTINEL}@example.com/app?token={SENTINEL}")
+        for key in [*values, *missing]:
+            seed_grant(db, "consumer", {"key": key})
+        db.execute(
+            "INSERT INTO app_port_mappings (app_id, label, container_port, host_port) VALUES ('remote', '1e3', 8080, 30000)"
+        )
+        db.commit()
+    calls = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        return httpx.Response(200, json={"secrets": values, "missing": missing})
+
+    fake_secrets(monkeypatch, handle)
+    if path == SERVICE_PATH:
+        use_app_token(client)
+        approve(mode)
+    json_response = client.post(path, json={"mode": mode}, headers={"Accept": "application/json"})
+    yaml_response = client.post(path, json={"mode": mode}, headers={"Accept": "application/yaml"})
+    assert json_response.status_code == yaml_response.status_code == 200
+    assert yaml_response.headers["Content-Type"].split(";")[0] == "application/yaml"
+    document = yaml.safe_load(yaml_response.text)
+    assert document == json_response.json()
+    assert_export_headers(json_response, document)
+    assert_export_headers(yaml_response, document)
+    if mode == "private":
+        assert document["secret_values"] == values
+        assert document["missing_secret_keys"] == sorted(missing)
+        assert len(calls) == 2
+    else:
+        assert "secret_values" not in document
+        assert "missing_secret_keys" not in document
+        assert SENTINEL not in yaml_response.text
+        assert yaml_response.headers["X-App-Definitions-Missing-Count"] == "0"
+        assert not calls
+
+
+@pytest.mark.parametrize("path", [OWNER_PATH, SERVICE_PATH])
+@pytest.mark.parametrize("accept", ["application/json", "application/yaml"])
+@pytest.mark.parametrize("requested", ["sharing", "private"])
+def test_success_headers_describe_exported_document_instead_of_request(
+    client: TestClient[Litestar], path: str, accept: str, requested: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    document = {"mode": "private" if requested == "sharing" else "sharing", "schema_version": 1, "apps": []}
+    if document["mode"] == "private":
+        document.update(secret_values={}, missing_secret_keys=["ONE", "TWO"])
+
+    async def export(db: sqlite3.Connection, apps_dir: str, mode: ExportMode) -> str:
+        assert mode == requested
+        return json.dumps(document)
+
+    monkeypatch.setattr(app_definitions, "export_app_definitions", export)
+    if path == SERVICE_PATH:
+        use_app_token(client)
+        approve("private")
+    response = client.post(path, json={"mode": requested}, headers={"Accept": accept})
+    assert response.status_code == 200
+    assert yaml.safe_load(response.text) == document
+    assert_export_headers(response, document)

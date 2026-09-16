@@ -23,11 +23,30 @@ from compute_space.core.app_definitions import parse_export_mode
 from compute_space.core.service_interface.headers import PERMISSIONS_HEADER
 from compute_space.db import provide_db
 from compute_space.web.auth.auth import require_owner_auth
+from compute_space.web.helpers.app_definition_export import dump_export_yaml
+from compute_space.web.helpers.app_definition_export import export_media_type
 
 
 def _json_response(content: str, status_code: int = 200) -> Response[str]:
     return Response(
         content, status_code=status_code, media_type="application/json", headers={"Cache-Control": "no-store"}
+    )
+
+
+def _export_response(request: Request[Any, Any, Any], content: str) -> Response[str]:
+    document = json.loads(content)
+    media_type = export_media_type(request.accept)
+    return Response(
+        dump_export_yaml(document) if media_type == "application/yaml" else content,
+        status_code=200,
+        media_type=media_type,
+        headers={
+            "Cache-Control": "no-store",
+            "Vary": "Accept",
+            "X-App-Definitions-Mode": document["mode"],
+            "X-App-Definitions-Missing-Count": str(len(document.get("missing_secret_keys", []))),
+            "X-App-Definitions-Schema-Version": str(document["schema_version"]),
+        },
     )
 
 
@@ -56,7 +75,7 @@ async def owner_export(
     config: NamedDependency[Config],
 ) -> Response[str]:
     mode = await _mode(request)
-    return _json_response(await export_app_definitions(db, config.apps_dir, mode))
+    return _export_response(request, await export_app_definitions(db, config.apps_dir, mode))
 
 
 def _has_export_grant(request: Request[Any, Any, Any], mode: ExportMode) -> bool:
@@ -87,7 +106,7 @@ async def service_export(
             ),
             403,
         )
-    return _json_response(await export_app_definitions(db, config.apps_dir, mode))
+    return _export_response(request, await export_app_definitions(db, config.apps_dir, mode))
 
 
 api_app_definitions_routes = Router(path="/", route_handlers=[owner_export])

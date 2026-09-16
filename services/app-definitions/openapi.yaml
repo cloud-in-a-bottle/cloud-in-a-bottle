@@ -9,8 +9,19 @@ info:
     declared shortname and app token. Requires an approved global {"mode":"sharing"}
     or {"mode":"private"} grant. Private also permits sharing; sharing never permits private.
     The owner-only equivalent is POST /api/app-definitions/export, authenticated by an
-    owner session or API key. The owner adapter and builtin handler return application/json
-    and Cache-Control: no-store, including their error responses. Before builtin dispatch,
+    owner session or API key. Send Content-Type: application/json and a JSON body such as
+    {"mode":"sharing"} or {"mode":"private"}; an empty object defaults to sharing.
+    Send Accept: application/yaml for the canonical, readable block YAML used by the System
+    preview, copy and .yaml download. Accept: application/json, an omitted Accept header,
+    or an unqualified wildcard defaults to deterministic pretty-printed JSON for compatibility.
+    Accept quality and specificity select between the two; q=0 excludes a representation.
+    If neither is acceptable, the compatibility fallback is JSON. Both representations
+    encode the same logical document and preserve exact secret strings, including empty
+    values and line endings. Successful responses include Vary: Accept and authoritative
+    X-App-Definitions-Mode, X-App-Definitions-Missing-Count and X-App-Definitions-Schema-Version
+    headers derived from the exported document. The owner adapter and builtin handler always
+    return Cache-Control: no-store. Their errors remain application/json regardless of Accept,
+    including permission_required so the proxy can decorate required_grant. Before builtin dispatch,
     the service proxy's existing authentication, shortname and provider-resolution responses apply.
 
     This is a minimal definition summary, not an import format, backup, lockfile, or
@@ -53,19 +64,82 @@ paths:
                   default: sharing
       responses:
         "200":
-          description: Pretty-printed deterministic JSON. Private requires secret_values and missing_secret_keys, including explicitly absent keys. Sharing omits both fields.
+          description: Deterministic YAML or pretty-printed JSON, selected by Accept. Private requires secret_values and missing_secret_keys, including explicitly absent keys. Sharing omits both fields.
+          headers:
+            Cache-Control:
+              $ref: "#/components/headers/NoStore"
+            Vary:
+              description: The successful representation depends on Accept.
+              schema: {type: string, enum: [Accept]}
+            X-App-Definitions-Mode:
+              description: The mode in this response's document.
+              schema: {type: string, enum: [sharing, private]}
+            X-App-Definitions-Missing-Count:
+              description: Nonnegative decimal count of missing_secret_keys in this document; always 0 for sharing.
+              schema: {type: string, pattern: '^[0-9]+$'}
+            X-App-Definitions-Schema-Version:
+              description: The schema_version in this response's document.
+              schema: {type: string, enum: ['1']}
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/Export"
+            application/yaml:
+              schema:
+                $ref: "#/components/schemas/Export"
         "400":
           description: Invalid JSON object or mode (including null or a non-string mode).
+          headers:
+            Cache-Control:
+              $ref: "#/components/headers/NoStore"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ExportError"
         "403":
           description: permission_required with required_grant containing the global mode grant. The proxy adds grant_url.
+          headers:
+            Cache-Control:
+              $ref: "#/components/headers/NoStore"
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [code, required_grant]
+                properties:
+                  code: {type: string, enum: [permission_required]}
+                  required_grant:
+                    type: object
+                    required: [grant, scope]
+                    properties:
+                      grant:
+                        type: object
+                        required: [mode]
+                        properties:
+                          mode: {type: string, enum: [sharing, private]}
+                      scope: {type: string, enum: [global]}
+                      grant_url: {type: string}
         "502":
           description: Export failed because a compatible Secrets provider is unavailable or its response is invalid, including keys not accounted for by values or explicit missing entries.
+          headers:
+            Cache-Control:
+              $ref: "#/components/headers/NoStore"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ExportError"
 components:
+  headers:
+    NoStore:
+      description: Export responses must not be stored in caches.
+      schema: {type: string, enum: [no-store]}
   schemas:
+    ExportError:
+      type: object
+      required: [error]
+      additionalProperties: false
+      properties:
+        error: {type: string, enum: [App definition export failed.]}
     Export:
       type: object
       additionalProperties: false

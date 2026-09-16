@@ -49,7 +49,7 @@
 </div>
 
 {% call section_head("App definitions") %}{% endcall %}
-<p class="hint" id="app-definition-scope">Export app definitions: names, sources, ports, and referenced secret keys.
+<p class="hint" id="app-definition-scope">Export app definitions as YAML: names, sources, ports, and referenced secret keys.
   This excludes app data and is not a full backup.</p>
 <fieldset class="action-bar app-definition-modes" aria-describedby="app-definition-scope">
   <legend class="visually-hidden">Export mode</legend>
@@ -65,8 +65,8 @@
 </div>
 <details id="app-definition-preview">
   <summary>Preview</summary>
-  <pre class="log-output" id="app-definition-json" role="region"
-       aria-label="App definitions JSON" tabindex="0"></pre>
+  <pre class="log-output" id="app-definition-output" role="region"
+       aria-label="App definitions YAML" tabindex="0"></pre>
 </details>
 
 {% call section_head("Logs") %}{% endcall %}
