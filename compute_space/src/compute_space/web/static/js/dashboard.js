@@ -2,10 +2,8 @@ var config = JSON.parse(document.getElementById('page-config').textContent);
 
 // ─── App List ───
 //
-// Rows are rendered server-side by the app_row macro and only ever carry a
-// link to the detail page — every action on an app lives there. This loop just
-// keeps each row's status in sync, and rows for apps that have gone away are
-// hidden until the next full page load.
+// Keep the server-rendered status in sync. Apps can be opened during startup;
+// their own URL shows a waiting page. Deleted apps stay hidden until reload.
 
 function refreshApps() {
   if (!config.apiAppsUrl) return;

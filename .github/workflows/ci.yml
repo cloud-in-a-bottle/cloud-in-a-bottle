@@ -65,6 +65,8 @@ jobs:
         run: pixi run -e dev playwright install --with-deps chromium
       - name: Run automated WCAG 2.2 AA checks
         run: pixi run -e dev pytest tests/test_accessibility.py tests/test_app_definition_export_browser.py tests/test_app_definition_load_browser.py -v
+      - name: Test setup dashboard readiness in Chromium
+        run: pixi run -e dev pytest tests/test_setup_readiness.py -v
 
   # Runs full unit test suite, including containerized tests.
   test-containers:

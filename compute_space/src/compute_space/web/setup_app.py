@@ -6,6 +6,7 @@ When the setup handler successfully creates the owner row, it triggers shutdown 
 
 import os
 import secrets
+from base64 import b64encode
 from contextlib import closing
 from pathlib import Path
 from typing import Any
@@ -13,7 +14,6 @@ from typing import NoReturn
 
 import bcrypt
 from litestar import Litestar
-from litestar import MediaType
 from litestar import Request
 from litestar import Response
 from litestar import get
@@ -51,7 +51,18 @@ from compute_space.web.helpers.static import make_static_url
 # app during the brief window before hypercorn actually drops the listener.
 _setup_completed: bool = False
 _static_url = make_static_url(STATIC_DIR)
-_favicon_url = _static_url("img/favicon.svg")
+
+
+def _inline_setup_styles() -> str:
+    """Bundle the shared styling and decorations for the listener handoff."""
+    styles = "\n".join(
+        (STATIC_DIR / "css" / name).read_text(encoding="utf-8")
+        for name in ("tokens.css", "base.css", "components.css")
+    )
+    for name in ("cloud.svg", "grass.svg"):
+        image = b64encode((STATIC_DIR / "img" / "deco" / name).read_bytes()).decode("ascii")
+        styles = styles.replace(f"../img/deco/{name}", f"data:image/svg+xml;base64,{image}")
+    return styles
 
 
 def _verify_claim_token(claim_token: str) -> bool:
@@ -146,21 +157,9 @@ async def setup_post(request: Request[Any, Any, Any], config: NamedDependency[Co
     except Exception as exc:
         logger.error("default_apps deploy raised unexpectedly: {}", exc)
 
-    # 200 + cookie + small "restarting" page (with meta-refresh to land on
-    # the dashboard once the full app is up).  We can't redirect synchronously
-    # because trigger_restart() kills the listener as soon as the response is
-    # written — the browser's redirect-follow would race the shutdown and
-    # land on a closed connection.  A meta-refresh interval gives the full
-    # app time to come up before the next navigation.
-    body = (
-        "<!doctype html><html><head><meta http-equiv=refresh content='2; url=/'>"
-        "<meta name=robots content=noindex>"
-        f"<link rel='icon' type='image/svg+xml' href='{_favicon_url}'>"
-        "<title>Cloud in a Bottle — restarting</title></head>"
-        "<body style='font-family:system-ui;text-align:center;margin-top:4em;'>"
-        "<p>Setup complete. Restarting…</p></body></html>"
-    )
-    response = Response(content=body, status_code=200, media_type=MediaType.HTML)
+    # Keep the browser here while the full app initializes. The page carries
+    # its styling and polling script so neither races the closing listener.
+    response = Template(template_name="setup_complete.html")
     # Setup is always served on the primary domain; scope the cookie to it (no middleware here to
     # stash a request domain).
     response.set_cookie(build_session_cookie(session_token, primary_domain(db)))
@@ -175,7 +174,7 @@ async def setup_post(request: Request[Any, Any, Any], config: NamedDependency[Co
 
 
 async def _trigger_restart_after_response() -> None:
-    """Defer trigger_restart slightly so any redirect-follow lands cleanly."""
+    """Let the response finish before closing the setup listener."""
     import asyncio  # noqa: PLC0415
 
     await asyncio.sleep(0.05)
@@ -200,6 +199,7 @@ def create_setup_app(config: Config) -> Litestar:
     web_dir = Path(__file__).parent
     template_dir = web_dir / "templates"
     static_dir = STATIC_DIR
+    setup_styles = _inline_setup_styles()
 
     template_config: TemplateConfig[JinjaTemplateEngine] = TemplateConfig(
         directory=template_dir,
@@ -214,6 +214,7 @@ def create_setup_app(config: Config) -> Litestar:
         # silently skipping the globals and 500ing on the first render.
         assert isinstance(engine, JinjaTemplateEngine), f"expected a Jinja engine, got {type(engine)}"
         engine.engine.globals["static_url"] = _static_url
+        engine.engine.globals["setup_styles"] = setup_styles
 
     return Litestar(
         route_handlers=[root_redirect, setup_get, setup_post, health, static_router],

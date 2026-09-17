@@ -233,12 +233,11 @@ class TestSelfHost:
             timeout=30,
             allow_redirects=False,
         )
-        # setup_app returns 200 + meta-refresh + Set-Cookie, then triggers a
-        # restart (it can't 302 synchronously without racing the listener
-        # shutdown). Treat the "Restarting…" page as the success signal and
-        # wait for the full app to come back up before hitting /dashboard.
+        # setup_app returns 200 + a readiness page + Set-Cookie, then triggers
+        # a restart. The "Setup complete" page polls health before navigating;
+        # this HTTP client waits for the full app before hitting /dashboard.
         assert r.status_code == 200, f"Setup POST returned {r.status_code}: {r.text[:500]}"
-        assert "Restarting" in r.text, f"Expected restart page, got: {r.text[:500]}"
+        assert "Setup complete" in r.text, f"Expected readiness page, got: {r.text[:500]}"
 
         set_cookies = r.headers.get("Set-Cookie", "")
         assert "session_token" in set_cookies, f"Setup must set session_token cookie. Set-Cookie: {set_cookies[:300]}"

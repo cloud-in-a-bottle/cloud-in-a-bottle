@@ -1,0 +1,31 @@
+.app-starting h2 {
+  font-size: var(--text-lg);
+  line-height: 1.4;
+}
+
+.app-starting p {
+  overflow-wrap: anywhere;
+}
+
+.app-starting__indicator {
+  display: flex;
+  gap: var(--space-2);
+  margin-bottom: var(--space-6);
+}
+
+.app-starting__indicator span {
+  width: 12px;
+  height: 12px;
+  background: var(--color-accent);
+  border: var(--border-w) solid var(--color-border-strong);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .app-starting__indicator span { animation: app-starting-pulse 1.5s ease-in-out infinite; }
+  .app-starting__indicator span:nth-child(2) { animation-delay: 0.2s; }
+  .app-starting__indicator span:nth-child(3) { animation-delay: 0.4s; }
+}
+
+@keyframes app-starting-pulse {
+  50% { background: var(--color-accent-alt); transform: translateY(-4px); }
+}
