@@ -1,3 +1,4 @@
+import json
 import sqlite3
 from pathlib import Path
 from typing import Any
@@ -120,6 +121,7 @@ async def app_detail(
         template_name="app_detail.html",
         context={
             "app": app_row,
+            "public_paths": json.loads(app_row["public_paths"] or "[]"),
             "links": links,
             "databases": databases,
             "port_mappings": port_mappings,
