@@ -1,0 +1,15 @@
+{% extends "_layout_narrow.html" %}
+{% block title_suffix %} - Your app is coming up{% endblock %}
+{# Shared static_url paths must resolve on the router, not the starting app. #}
+{% block base %}<base href="{{ router_url }}/">{% endblock %}
+{% block head %}
+<link rel="stylesheet" href="{{ static_url('css/app-starting.css') }}">
+<script src="{{ static_url('js/app-starting.js') }}" defer></script>
+{% endblock %}
+{% block content %}
+<main class="app-starting" data-retry-seconds="{{ retry_seconds }}">
+  <div class="app-starting__indicator" aria-hidden="true"><span></span><span></span><span></span></div>
+  <h2>Your app is coming up</h2>
+  <p class="hint" id="startup-hint" aria-live="polite">Give it a moment, then refresh this page to try again.</p>
+</main>
+{% endblock %}
