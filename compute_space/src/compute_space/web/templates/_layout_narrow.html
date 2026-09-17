@@ -11,6 +11,7 @@
   <title>Cloud in a Bottle{% block title_suffix %}{% endblock %}</title>
   {% block base %}{% endblock %}
   <link rel="icon" type="image/svg+xml" href="{{ static_url('img/favicon.svg') }}">
+  {% block head_assets %}
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible+Mono:wght@500;600;700&display=swap">
@@ -18,6 +19,7 @@
   <link rel="stylesheet" href="{{ static_url('css/base.css') }}">
   <link rel="stylesheet" href="{{ static_url('css/components.css') }}">
   <script src="{{ static_url('js/info-tip.js') }}" defer></script>
+  {% endblock %}
   {% block head %}{% endblock %}
 </head>
 <body>
