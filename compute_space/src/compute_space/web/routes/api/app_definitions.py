@@ -16,7 +16,6 @@ from litestar.exceptions import SerializationException
 
 from compute_space.config import Config
 from compute_space.config import provide_config
-from compute_space.core.app_definition_secrets import ExportError
 from compute_space.core.app_definitions import ExportMode
 from compute_space.core.app_definitions import export_app_definitions
 from compute_space.core.app_definitions import parse_export_mode
@@ -44,15 +43,14 @@ def _export_response(request: Request[Any, Any, Any], content: str) -> Response[
             "Cache-Control": "no-store",
             "Vary": "Accept",
             "X-App-Definitions-Mode": document["mode"],
-            "X-App-Definitions-Missing-Count": str(len(document.get("missing_secret_keys", []))),
             "X-App-Definitions-Schema-Version": str(document["schema_version"]),
         },
     )
 
 
 def _export_error(request: Request[Any, Any, Any], exc: Exception) -> Response[str]:
-    status = exc.status_code if isinstance(exc, HTTPException) else 502 if isinstance(exc, ExportError) else 500
-    # Never render exception details or log traceback locals: either can contain provider values.
+    status = exc.status_code if isinstance(exc, HTTPException) else 500
+    # Never render exception details or log traceback locals: either can contain private data.
     return _json_response(json.dumps({"error": "App definition export failed."}), status)
 
 

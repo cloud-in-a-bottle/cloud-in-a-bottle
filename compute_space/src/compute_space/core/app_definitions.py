@@ -10,17 +10,8 @@ from urllib.parse import urlparse
 
 import attr
 
-from compute_space.core.app_definition_secrets import SECRETS_SERVICE_URL
-from compute_space.core.app_definition_secrets import SECRETS_VERSION
-from compute_space.core.app_definition_secrets import ExportError
-from compute_space.core.app_definition_secrets import SecretReadResult
-from compute_space.core.app_definition_secrets import read_secret_values
 from compute_space.core.git_ops import is_ssh_url
 from compute_space.core.git_ops import parse_repo_url
-from compute_space.core.service_interface.provider import ProviderUnavailable
-from compute_space.core.service_interface.provider import ResolvedProvider
-from compute_space.core.service_interface.resolve import resolve_provider
-from compute_space.core.service_interface.services import default_provider_id_for_service
 from compute_space.db.connection import make_atomic_with_savepoint
 
 type ExportMode = Literal["sharing", "private"]
@@ -106,50 +97,32 @@ class AppDefinition:
     name: str
     source: PortableSource
     port_mappings: tuple[PublishedPort, ...]
-    secret_keys: tuple[str, ...]
+
+
+@attr.s(auto_attribs=True, frozen=True)
+class PlatformApiToken:
+    name: str
+    token_hash: str
+    expires_at: str | None
 
 
 @attr.s(auto_attribs=True, frozen=True)
 class DefinitionExport:
     mode: ExportMode
     apps: tuple[AppDefinition, ...]
-    schema_version: int = attr.field(default=1, init=False)
+    schema_version: int = attr.field(default=2, init=False)
 
 
 @attr.s(auto_attribs=True, frozen=True)
 class PrivateDefinitionExport(DefinitionExport):
-    secret_values: dict[str, str]
-    missing_secret_keys: tuple[str, ...]
+    platform_api_tokens: tuple[PlatformApiToken, ...]
 
 
-@attr.s(auto_attribs=True, frozen=True)
-class ExportSnapshot:
-    apps: tuple[AppDefinition, ...]
-    secrets_provider: ResolvedProvider | None
-
-
-def _snapshot(db: sqlite3.Connection, apps_dir: str, mode: ExportMode) -> ExportSnapshot:
+def _snapshot(db: sqlite3.Connection, apps_dir: str, mode: ExportMode) -> DefinitionExport:
     # Read only allow-listed metadata. In particular, never select or parse manifest_raw.
-    # The savepoint fixes the DB snapshot and is released before any provider request.
+    # All app, port and API-token records come from one database snapshot.
     with make_atomic_with_savepoint(db):
         app_rows = db.execute("SELECT app_id, name, repo_url FROM apps ORDER BY name").fetchall()
-        provider_id = default_provider_id_for_service(SECRETS_SERVICE_URL, db)
-        grants = db.execute(
-            """SELECT p.consumer_app_id, p.grant_payload FROM permissions_v2 p
-               JOIN apps a ON a.app_id = p.consumer_app_id
-               WHERE p.service_url = ? AND (p.scope = 'global' OR
-                   (p.scope = 'app' AND p.provider_app_id = ?))""",
-            (SECRETS_SERVICE_URL, provider_id),
-        ).fetchall()
-        keys_by_app: dict[str, set[str]] = {}
-        for row in grants:
-            try:
-                payload = json.loads(row["grant_payload"])
-            except ValueError:
-                raise ExportError("Stored Secrets grants are invalid.") from None
-            if isinstance(payload, dict) and isinstance(key := payload.get("key"), str) and key:
-                keys_by_app.setdefault(row["consumer_app_id"], set()).add(key)
-
         ports_by_app: dict[str, list[PublishedPort]] = {}
         for row in db.execute(
             "SELECT app_id, label, container_port, host_port FROM app_port_mappings ORDER BY label"
@@ -162,33 +135,21 @@ def _snapshot(db: sqlite3.Connection, apps_dir: str, mode: ExportMode) -> Export
                 name=row["name"],
                 source=portable_source(row["repo_url"], apps_dir),
                 port_mappings=tuple(ports_by_app.get(row["app_id"], [])),
-                secret_keys=tuple(sorted(keys_by_app.get(row["app_id"], set()))),
             )
             for row in app_rows
         )
-        provider = None
-        if mode == "private" and any(app.secret_keys for app in apps):
-            try:
-                provider = resolve_provider(SECRETS_SERVICE_URL, SECRETS_VERSION, db, provider_app_id=provider_id)
-            except ProviderUnavailable:
-                raise ExportError("An available, compatible Secrets provider is required.") from None
-    return ExportSnapshot(apps, provider)
+        if mode == "private":
+            tokens = tuple(
+                PlatformApiToken(row["name"], row["token_hash"], row["expires_at"] or None)
+                for row in db.execute(
+                    "SELECT name, token_hash, expires_at FROM api_tokens ORDER BY name, token_hash"
+                ).fetchall()
+            )
+            return PrivateDefinitionExport(mode=mode, apps=apps, platform_api_tokens=tokens)
+        return DefinitionExport(mode=mode, apps=apps)
 
 
 async def export_app_definitions(db: sqlite3.Connection, apps_dir: str, mode: ExportMode) -> str:
     """Export stored definitions after owner auth or an export-service grant check."""
-    snapshot = _snapshot(db, apps_dir, mode)
-    document: DefinitionExport
-    if mode == "private":
-        keys = {key for app in snapshot.apps for key in app.secret_keys}
-        secrets = (
-            await read_secret_values(snapshot.secrets_provider, keys)
-            if snapshot.secrets_provider
-            else SecretReadResult(values={}, missing=())
-        )
-        document = PrivateDefinitionExport(
-            mode=mode, apps=snapshot.apps, secret_values=secrets.values, missing_secret_keys=secrets.missing
-        )
-    else:
-        document = DefinitionExport(mode=mode, apps=snapshot.apps)
+    document = _snapshot(db, apps_dir, mode)
     return json.dumps(attr.asdict(document), indent=2, sort_keys=True, ensure_ascii=False) + "\n"

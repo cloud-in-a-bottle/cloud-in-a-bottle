@@ -16,37 +16,36 @@ info:
     or an unqualified wildcard defaults to deterministic pretty-printed JSON for compatibility.
     Accept quality and specificity select between the two; q=0 excludes a representation.
     If neither is acceptable, the compatibility fallback is JSON. Both representations
-    encode the same logical document and preserve exact secret strings, including empty
-    values and line endings. Successful responses include Vary: Accept and authoritative
-    X-App-Definitions-Mode, X-App-Definitions-Missing-Count and X-App-Definitions-Schema-Version
+    encode the same logical document and preserve exact strings, including empty values
+    and line endings. Successful responses include Vary: Accept and authoritative
+    X-App-Definitions-Mode and X-App-Definitions-Schema-Version
     headers derived from the exported document. The owner adapter and builtin handler always
     return Cache-Control: no-store. Their errors remain application/json regardless of Accept,
     including permission_required so the proxy can decorate required_grant. Before builtin dispatch,
     the service proxy's existing authentication, shortname and provider-resolution responses apply.
 
-    This is a minimal definition summary, not an import format, backup, lockfile, or
-    reproducibility guarantee. It excludes manifests, commands, images, environment values,
-    arbitrary grants, descriptions, local paths, app data, runtime IDs/status, owner tokens,
-    and platform settings. Remote source URLs omit userinfo, parameters, query and fragment;
+    This is a minimal definition summary, not a full backup, lockfile, or reproducibility
+    guarantee. It excludes manifests, commands, images, environment values, grants,
+    descriptions, local paths, app data, runtime IDs/status, app tokens, session tokens,
+    user passwords and platform settings. Remote source URLs omit userinfo, parameters, query and fragment;
     ref is the configured @ref, not an inferred deployed commit. Local sources cannot be
     reconstructed. A builtin identifier is the source directory name under the configured
     bundled apps directory, identified from stored metadata without filesystem inspection.
 
-    Apps are sorted by name, published port mappings by label, and secret keys lexically.
-    Only actual approved Secrets-service grants are included, not requested manifest grants.
-    App-scoped grants apply only to the selected default Secrets provider. A secret_keys
-    entry of "*" records an approved wildcard. Sharing never contacts Secrets. Private
-    retrieves the union of approved keys from the selected provider, expanding a wildcard
-    through /list then /get on that same captured target. It does not inspect a Secrets DB
-    or scrape an unreferenced store. Private always includes secret_values and a sorted,
-    unique missing_secret_keys list; sharing omits both. Empty values are preserved, and
-    extra unrequested values are ignored. Every requested key must appear exactly once,
-    either as a string value or in the provider's explicit missing list. Explicitly absent
-    keys are reported successfully, including keys deleted between wildcard /list and /get.
-    Duplicate, overlapping, non-string or unrequested missing entries and unaccounted keys
-    fail the export, as do unusable providers/responses. No relevant keys means empty
-    secret_values and missing_secret_keys without contacting Secrets. Metadata is a single
-    database snapshot; secret values are read afterward and can change independently.
+    Apps are sorted by name and published port mappings by label. Private always adds
+    platform_api_tokens, including an empty array when there are no records. Each record
+    contains name, token_hash (the stored lowercase SHA256 verifier, never a raw API key),
+    and expires_at (the exact stored timezone-aware ISO timestamp, or null for no expiry).
+    Expired records are included. Token records are sorted by name then token_hash;
+    duplicate names with different hashes are preserved. Original key strings are not
+    available. Owner and already-approved Private service exports include the same records.
+    Sharing omits platform_api_tokens and the exporter never queries api_tokens in that mode.
+    Apps, ports and token records are read from one database snapshot, with no writes or HTTP calls.
+    All apps use the same definition fields; their database contents remain ordinary app data.
+
+    Document schema_version is 2. Older files containing Secrets-app values must be
+    re-exported. The unreleased service interface remains version 0.1.0; schema_version
+    identifies the file format independently of the operation and permission interface.
 paths:
   /export:
     post:
@@ -64,7 +63,7 @@ paths:
                   default: sharing
       responses:
         "200":
-          description: Deterministic YAML or pretty-printed JSON, selected by Accept. Private requires secret_values and missing_secret_keys, including explicitly absent keys. Sharing omits both fields.
+          description: Deterministic schema v2 YAML or pretty-printed JSON, selected by Accept. Private always includes platform_api_tokens. Sharing omits it.
           headers:
             Cache-Control:
               $ref: "#/components/headers/NoStore"
@@ -74,12 +73,9 @@ paths:
             X-App-Definitions-Mode:
               description: The mode in this response's document.
               schema: {type: string, enum: [sharing, private]}
-            X-App-Definitions-Missing-Count:
-              description: Nonnegative decimal count of missing_secret_keys in this document; always 0 for sharing.
-              schema: {type: string, pattern: '^[0-9]+$'}
             X-App-Definitions-Schema-Version:
               description: The schema_version in this response's document.
-              schema: {type: string, enum: ['1']}
+              schema: {type: string, enum: ['2']}
           content:
             application/json:
               schema:
@@ -119,8 +115,8 @@ paths:
                           mode: {type: string, enum: [sharing, private]}
                       scope: {type: string, enum: [global]}
                       grant_url: {type: string}
-        "502":
-          description: Export failed because a compatible Secrets provider is unavailable or its response is invalid, including keys not accounted for by values or explicit missing entries.
+        "500":
+          description: Export failed. Error details are sanitized.
           headers:
             Cache-Control:
               $ref: "#/components/headers/NoStore"
@@ -148,16 +144,14 @@ components:
         - properties:
             mode: {enum: [sharing]}
           not:
-            anyOf:
-              - required: [secret_values]
-              - required: [missing_secret_keys]
+            required: [platform_api_tokens]
         - properties:
             mode: {enum: [private]}
-          required: [secret_values, missing_secret_keys]
+          required: [platform_api_tokens]
       properties:
         schema_version:
           type: integer
-          enum: [1]
+          enum: [2]
         mode:
           type: string
           enum: [sharing, private]
@@ -166,7 +160,7 @@ components:
           items:
             type: object
             additionalProperties: false
-            required: [name, source, port_mappings, secret_keys]
+            required: [name, source, port_mappings]
             properties:
               name:
                 type: string
@@ -200,14 +194,17 @@ components:
                     label: {type: string}
                     container_port: {type: integer}
                     host_port: {type: integer}
-              secret_keys:
-                type: array
-                items: {type: string}
-        secret_values:
-          type: object
-          additionalProperties: {type: string}
-        missing_secret_keys:
+        platform_api_tokens:
           type: array
-          uniqueItems: true
-          items: {type: string}
-          description: Sorted names of requested keys explicitly reported absent by Secrets. Empty when all requested keys have values.
+          description: All platform API-token verifier records, ordered by name then token_hash. Expired records and duplicate names are preserved.
+          items:
+            type: object
+            additionalProperties: false
+            required: [name, token_hash, expires_at]
+            properties:
+              name: {type: string}
+              token_hash: {type: string, pattern: '^[0-9a-f]{64}$'}
+              expires_at:
+                type: string
+                nullable: true
+                description: Exact stored timezone-aware ISO timestamp, or null for no expiry.

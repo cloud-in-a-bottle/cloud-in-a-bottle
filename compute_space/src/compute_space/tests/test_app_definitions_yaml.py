@@ -90,13 +90,12 @@ def load_yaml(request: pytest.FixtureRequest) -> Callable[[str], object]:
     return reader.load
 
 
-def test_scalar_values_and_mapping_keys_roundtrip_exactly(load_yaml: Callable[[str], object]) -> None:
+def test_scalar_strings_roundtrip_exactly(load_yaml: Callable[[str], object]) -> None:
     document = {
-        "schema_version": 1,
+        "schema_version": 2,
         "mode": "private",
         "apps": [{"name": "true", "source": {"ref": None}, "port_mappings": [{"container_port": 8080}]}],
-        "secret_values": {text: text for text in STRINGS},
-        "missing_secret_keys": STRINGS,
+        "platform_api_tokens": [{"name": text, "token_hash": "a" * 64, "expires_at": None} for text in STRINGS],
     }
     rendered = dump_export_yaml(document)
     assert load_yaml(rendered) == document
@@ -105,16 +104,19 @@ def test_scalar_values_and_mapping_keys_roundtrip_exactly(load_yaml: Callable[[s
 
 
 @pytest.mark.parametrize("trailing_newlines", range(5))
-@pytest.mark.parametrize(
-    "text", ["-----BEGIN TEST KEY-----\n  café\n\n  abcdef\n-----END TEST KEY-----", "1234\n5678"]
-)
-def test_readable_literal_multiline_secrets_preserve_chomping(
+@pytest.mark.parametrize("text", ["first line\n  café\n\n  abcdef\nlast line", "1234\n5678"])
+def test_readable_literal_multiline_names_preserve_chomping(
     load_yaml: Callable[[str], object], trailing_newlines: int, text: str
 ) -> None:
     value = text + "\n" * trailing_newlines
-    document = {"apps": [], "mode": "private", "schema_version": 1, "secret_values": {"KEY": value}}
+    document = {
+        "apps": [],
+        "mode": "private",
+        "schema_version": 2,
+        "platform_api_tokens": [{"name": value, "token_hash": "a" * 64, "expires_at": None}],
+    }
     rendered = dump_export_yaml(document)
-    assert "KEY: |" in rendered
+    assert "name: |" in rendered
     assert load_yaml(rendered) == document
     assert list(yaml.safe_load(rendered))[:2] == ["schema_version", "mode"]
 
@@ -127,6 +129,6 @@ def test_codec_leaves_global_yaml_configuration_unchanged() -> None:
     before = [(d.yaml_representers.copy(), d.yaml_implicit_resolvers.copy()) for d in dumpers]
     sample = {"a": "1e3", "b": "first\nsecond\n", "c": "a\x85b"}
     default_output = yaml.safe_dump(sample)
-    dump_export_yaml({"schema_version": 1, "mode": "sharing", "apps": [], "sample": sample})
+    dump_export_yaml({"schema_version": 2, "mode": "sharing", "apps": [], "sample": sample})
     assert before == [(d.yaml_representers, d.yaml_implicit_resolvers) for d in dumpers]
     assert default_output == yaml.safe_dump(sample)

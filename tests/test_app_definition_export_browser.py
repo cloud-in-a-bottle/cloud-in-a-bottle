@@ -1,3 +1,4 @@
+import hashlib
 import json
 import sqlite3
 from collections.abc import Iterator
@@ -20,27 +21,37 @@ from compute_space.tests.local_stack import LocalStack
 from compute_space.tests.local_stack import complete_setup
 
 EXPORT_PATH = "/api/app-definitions/export"
-SECRET = "SYNTHETIC-PRIVATE-SECRET-ONLY"
+RAW_KEY = "SYNTHETIC-ORIGINAL-KEY-NEVER-EXPORTED"
+TOKEN_HASH = hashlib.sha256(RAW_KEY.encode()).hexdigest()
+PRIVATE_LABEL = "Private (includes API-token records)"
 ERROR = "Could not load app definitions. Reload to try again."
 
 
-def _export_text(mode: str, secret: str | None = SECRET, missing_secret_keys: tuple[str, ...] = ()) -> str:
+def _export_text(mode: str, token_hash: str | None = TOKEN_HASH) -> str:
     # Comments, explicit document markers, indentation, Unicode and final newlines must survive the UI.
     data = {
-        "schema_version": 1,
+        "schema_version": 2,
         "mode": mode,
         "apps": [
             {
                 "name": "synthetic café <img src=x onerror=window.exportXss=true>",
                 "source": {"kind": "remote", "repo_url": "https://example.invalid/test.git", "ref": "main"},
                 "port_mappings": [{"label": "web", "container_port": 8080, "host_port": 29001}],
-                "secret_keys": (["SYNTHETIC_KEY"] if secret is not None else []) + list(missing_secret_keys),
             }
         ],
     }
     if mode == "private":
-        data["secret_values"] = {"SYNTHETIC_KEY": secret} if secret is not None else {}
-        data["missing_secret_keys"] = list(missing_secret_keys)
+        data["platform_api_tokens"] = (
+            [
+                {
+                    "name": "synthetic <img src=x onerror=window.exportXss=true>",
+                    "token_hash": token_hash,
+                    "expires_at": None,
+                }
+            ]
+            if token_hash is not None
+            else []
+        )
     return (
         "# Server-formatted YAML: café\n"
         + yaml.safe_dump(data, allow_unicode=True, sort_keys=False, indent=4, explicit_start=True, explicit_end=True)
@@ -48,12 +59,11 @@ def _export_text(mode: str, secret: str | None = SECRET, missing_secret_keys: tu
     )
 
 
-def _export_headers(mode: str, missing_count: int = 0) -> dict[str, str]:
+def _export_headers(mode: str) -> dict[str, str]:
     return {
         "Cache-Control": "no-store",
         "X-App-Definitions-Mode": mode,
-        "X-App-Definitions-Missing-Count": str(missing_count),
-        "X-App-Definitions-Schema-Version": "1",
+        "X-App-Definitions-Schema-Version": "2",
     }
 
 
@@ -63,10 +73,9 @@ def _fulfill(
     status: int = 200,
     content_type: str = "application/yaml",
     *,
-    missing_count: int = 0,
     headers: dict[str, str | None] | None = None,
 ) -> None:
-    metadata = _export_headers(route.request.post_data_json["mode"], missing_count)
+    metadata = _export_headers(route.request.post_data_json["mode"])
     for name, value in (headers or {}).items():
         if value is None:
             metadata.pop(name, None)
@@ -75,17 +84,13 @@ def _fulfill(
     route.fulfill(status=status, content_type=content_type, headers=metadata, body=body)
 
 
-def _fake_exports(page: Page, missing_secret_keys: tuple[str, ...] = (), secret: str | None = SECRET) -> list[Request]:
+def _fake_exports(page: Page, token_hash: str | None = TOKEN_HASH) -> list[Request]:
     inventory: list[Request] = []
 
     def respond(route: Route) -> None:
         inventory.append(route.request)
         mode = route.request.post_data_json["mode"]
-        _fulfill(
-            route,
-            _export_text(mode, secret, missing_secret_keys),
-            missing_count=len(missing_secret_keys) if mode == "private" else 0,
-        )
+        _fulfill(route, _export_text(mode, token_hash))
 
     page.route(f"**{EXPORT_PATH}", respond)
     return inventory
@@ -115,6 +120,9 @@ def export_owner(stack: LocalStack) -> Iterator[requests.Session]:
             db.execute(
                 "INSERT INTO app_port_mappings (app_id, label, container_port, host_port)"
                 " VALUES ('exportfixture', 'web', 8080, 29001)"
+            )
+            db.execute(
+                "INSERT INTO api_tokens (name, token_hash, expires_at) VALUES ('browser token', ?, '')", (TOKEN_HASH,)
             )
         yield owner
 
@@ -149,7 +157,8 @@ def _cleared(page: Page, status: str = "Loading…") -> None:
     expect(page.get_by_role("button", name="Copy", exact=True)).to_be_disabled()
     expect(page.get_by_role("button", name="Download", exact=True)).to_be_disabled()
     expect(page.locator("#app-definition-status")).to_have_text(status)
-    assert SECRET not in page.locator("body").inner_text()
+    assert TOKEN_HASH not in page.locator("body").inner_text()
+    assert RAW_KEY not in page.locator("body").inner_text()
 
 
 def _download(page: Page, mode: str, text: str) -> None:
@@ -209,10 +218,14 @@ def test_routed_exports_keyboard_preview_copy_and_download_exact_bytes(
             sharing = page.get_by_role("radio", name="Sharing", exact=True)
             sharing.focus()
             sharing.press("ArrowRight")
-            expect(page.get_by_role("radio", name="Private (includes secrets)")).to_be_checked()
+            expect(page.get_by_role("radio", name=PRIVATE_LABEL)).to_be_checked()
             _ready(page, _export_text(mode))
             expect(page.locator("#app-definition-private-hint")).to_be_visible()
-            expect(output).to_contain_text(SECRET)
+            expect(output).to_contain_text(TOKEN_HASH)
+            expect(page.locator("#app-definition-private-hint")).to_contain_text(
+                "Original key strings are not available."
+            )
+            assert RAW_KEY not in output.text_content()
             output.evaluate("element => element.scrollTop = element.scrollHeight")
             page.screenshot(path=str(Path(output_path) / "private-expanded.png"), full_page=True)
         _copy(page, _export_text(mode))
@@ -230,45 +243,34 @@ def test_routed_exports_keyboard_preview_copy_and_download_exact_bytes(
     page.screenshot(path=str(Path(output_path) / "private-mobile.png"))
 
 
-@pytest.mark.parametrize(
-    ("missing_keys", "secret", "status"),
-    [
-        (("<img src=x onerror=window.exportXss=true>",), None, "Ready. 1 referenced secret is not configured."),
-        (
-            ("<img src=x onerror=window.exportXss=true>", "SYNTHETIC_UNCONFIGURED_KEY"),
-            SECRET,
-            "Ready. 2 referenced secrets are not configured.",
-        ),
-    ],
-    ids=["one-missing-none-configured", "two-missing-some-configured"],
-)
-def test_routed_private_missing_secrets_remain_ready_with_exact_preview_copy_and_download(
+@pytest.mark.parametrize("token_hash", [None, TOKEN_HASH], ids=["empty", "populated"])
+def test_private_token_records_remain_ready_with_exact_preview_copy_and_download(
     export_page: Page,
     stack: LocalStack,
     output_path: str,
-    missing_keys: tuple[str, ...],
-    secret: str | None,
-    status: str,
+    token_hash: str | None,
 ) -> None:
     page = export_page
-    inventory = _fake_exports(page, missing_secret_keys=missing_keys, secret=secret)
+    inventory = _fake_exports(page, token_hash=token_hash)
     _open(page, stack)
-    sharing_text = _export_text("sharing", secret=secret, missing_secret_keys=missing_keys)
+    sharing_text = _export_text("sharing", token_hash)
     _ready(page, sharing_text)
-    page.get_by_role("radio", name="Private (includes secrets)").check()
-    private_text = _export_text("private", secret=secret, missing_secret_keys=missing_keys)
-    _ready(page, private_text, status)
+    page.get_by_role("radio", name=PRIVATE_LABEL).check()
+    private_text = _export_text("private", token_hash)
+    _ready(page, private_text)
     page.locator("#app-definition-preview > summary").click()
     output = page.get_by_role("region", name="App definitions YAML")
     expect(output).to_be_visible()
-    assert yaml.safe_load(output.text_content())["missing_secret_keys"] == list(missing_keys)
-    assert yaml.safe_load(output.text_content())["secret_values"] == (
-        {"SYNTHETIC_KEY": secret} if secret is not None else {}
-    )
+    records = yaml.safe_load(output.text_content())["platform_api_tokens"]
+    assert len(records) == (1 if token_hash else 0)
+    if records:
+        assert records[0]["token_hash"] == token_hash
+        assert records[0]["expires_at"] is None
+    assert RAW_KEY not in private_text
     assert output.locator("img").count() == 0
     assert page.evaluate("window.exportXss === undefined")
     output.evaluate("element => element.scrollTop = element.scrollHeight")
-    page.screenshot(path=str(Path(output_path) / "private-missing-secrets.png"), full_page=True)
+    page.screenshot(path=str(Path(output_path) / "private-token-records.png"), full_page=True)
     _copy(page, private_text)
     _download(page, "private", private_text)
     assert [request.post_data_json for request in inventory] == [{"mode": "sharing"}, {"mode": "private"}]
@@ -281,7 +283,7 @@ def test_switching_to_sharing_immediately_clears_ready_private_payload(export_pa
     _fake_exports(page)
     _open(page, stack)
     _ready(page, _export_text("sharing"))
-    page.get_by_role("radio", name="Private (includes secrets)").check()
+    page.get_by_role("radio", name=PRIVATE_LABEL).check()
     _ready(page, _export_text("private"))
     page.locator("#app-definition-preview > summary").click()
     pending: list[Route] = []
@@ -320,15 +322,15 @@ def test_late_private_response_cannot_publish_even_after_returning_to_same_mode(
     _ready(page, _export_text("sharing"))
     pending: list[Route] = []
     page.route(f"**{EXPORT_PATH}", lambda route: pending.append(route))
-    page.get_by_role("radio", name="Private (includes secrets)").check()
+    page.get_by_role("radio", name=PRIVATE_LABEL).check()
     _cleared(page)
     page.get_by_role("radio", name="Sharing", exact=True).check()
     _cleared(page)
     if latest_mode == "private":
-        page.get_by_role("radio", name="Private (includes secrets)").check()
+        page.get_by_role("radio", name=PRIVATE_LABEL).check()
     assert page.evaluate("window.exportSignals[1].aborted")
     assert len(pending) == (3 if latest_mode == "private" else 2)
-    latest_text = _export_text(latest_mode, "SYNTHETIC-CURRENT-SECRET")
+    latest_text = _export_text(latest_mode, "b" * 64)
     _fulfill(pending[-1], latest_text)
     _ready(page, latest_text)
     # Neither a stale success nor a stale error may replace current text or feedback.
@@ -340,7 +342,7 @@ def test_late_private_response_cannot_publish_even_after_returning_to_same_mode(
         _fulfill(pending[1], _export_text("sharing"))
     page.wait_for_function("window.exportCompletions === window.exportSignals.length")
     _ready(page, latest_text)
-    assert SECRET not in page.locator("#app-definition-output").text_content()
+    assert TOKEN_HASH not in page.locator("#app-definition-output").text_content()
     _copy(page, latest_text)
     _download(page, latest_mode, latest_text)
 
@@ -371,7 +373,7 @@ def test_private_body_finishing_after_mode_change_cannot_replace_current_export_
     _fake_exports(page)
     _open(page, stack)
     _ready(page, _export_text("sharing"))
-    page.get_by_role("radio", name="Private (includes secrets)").check()
+    page.get_by_role("radio", name=PRIVATE_LABEL).check()
     page.wait_for_function("typeof window.releasePrivateBody === 'function'")
     _cleared(page)
     if latest_fails:
@@ -380,11 +382,11 @@ def test_private_body_finishing_after_mode_change_cannot_replace_current_export_
             lambda route: _fulfill(route, '{"error":"Export failed."}', status=500, content_type="application/json"),
         )
     else:
-        _fake_exports(page, secret="SYNTHETIC-CURRENT-SECRET")
+        _fake_exports(page, token_hash="b" * 64)
     page.get_by_role("radio", name="Sharing", exact=True).check()
     if latest_mode == "private":
-        page.get_by_role("radio", name="Private (includes secrets)").check()
-    latest_text = _export_text(latest_mode, "SYNTHETIC-CURRENT-SECRET")
+        page.get_by_role("radio", name=PRIVATE_LABEL).check()
+    latest_text = _export_text(latest_mode, "b" * 64)
     if latest_fails:
         _cleared(page, ERROR)
     else:
@@ -432,7 +434,7 @@ def test_invalid_response_leaves_no_previous_private_export_actionable(
     _fake_exports(page)
     _open(page, stack)
     _ready(page, _export_text("sharing"))
-    page.get_by_role("radio", name="Private (includes secrets)").check()
+    page.get_by_role("radio", name=PRIVATE_LABEL).check()
     _ready(page, _export_text("private"))
     page.route(f"**{EXPORT_PATH}", lambda route: _fulfill(route, body, http_status, content_type))
     page.get_by_role("radio", name="Sharing", exact=True).check()
@@ -449,22 +451,10 @@ def test_invalid_response_leaves_no_previous_private_export_actionable(
         {"X-App-Definitions-Mode": "sharing, private"},
         {"X-App-Definitions-Schema-Version": None},
         {"X-App-Definitions-Schema-Version": ""},
-        {"X-App-Definitions-Schema-Version": "2"},
-        {"X-App-Definitions-Schema-Version": "1.0"},
-        {"X-App-Definitions-Schema-Version": "01"},
-        {"X-App-Definitions-Missing-Count": None},
-        {"X-App-Definitions-Missing-Count": ""},
-        {"X-App-Definitions-Missing-Count": "-1"},
-        {"X-App-Definitions-Missing-Count": "1.5"},
-        {"X-App-Definitions-Missing-Count": "1e0"},
-        {"X-App-Definitions-Missing-Count": "0x0"},
-        {"X-App-Definitions-Missing-Count": "+0"},
-        {"X-App-Definitions-Missing-Count": "0 0"},
-        {"X-App-Definitions-Missing-Count": "NaN"},
-        {"X-App-Definitions-Missing-Count": "Infinity"},
-        {"X-App-Definitions-Missing-Count": "0, 0"},
-        {"X-App-Definitions-Missing-Count": "9007199254740992"},
-        {"X-App-Definitions-Missing-Count": "999999999999999999999999999999999999999999999999"},
+        {"X-App-Definitions-Schema-Version": "1"},
+        {"X-App-Definitions-Schema-Version": "3"},
+        {"X-App-Definitions-Schema-Version": "2.0"},
+        {"X-App-Definitions-Schema-Version": "02"},
     ],
     ids=[
         "mode-missing",
@@ -473,22 +463,10 @@ def test_invalid_response_leaves_no_previous_private_export_actionable(
         "mode-duplicate",
         "schema-missing",
         "schema-empty",
+        "schema-old",
         "schema-unsupported",
         "schema-float",
         "schema-leading-zero",
-        "count-missing",
-        "count-empty",
-        "count-negative",
-        "count-fraction",
-        "count-exponent",
-        "count-hex",
-        "count-sign",
-        "count-internal-whitespace",
-        "count-nan",
-        "count-infinity",
-        "count-duplicate",
-        "count-unsafe",
-        "count-huge",
     ],
 )
 def test_invalid_metadata_cannot_fall_back_to_parsing_a_valid_yaml_body(
@@ -498,15 +476,13 @@ def test_invalid_metadata_cannot_fall_back_to_parsing_a_valid_yaml_body(
     _fake_exports(page)
     _open(page, stack)
     _ready(page, _export_text("sharing"))
-    page.get_by_role("radio", name="Private (includes secrets)").check()
+    page.get_by_role("radio", name=PRIVATE_LABEL).check()
     _ready(page, _export_text("private"))
     if mode == "private":
         page.get_by_role("radio", name="Sharing", exact=True).check()
         _ready(page, _export_text("sharing"))
     page.route(f"**{EXPORT_PATH}", lambda route: _fulfill(route, _export_text(mode), headers=headers))
-    page.get_by_role(
-        "radio", name="Sharing" if mode == "sharing" else "Private (includes secrets)", exact=True
-    ).check()
+    page.get_by_role("radio", name="Sharing" if mode == "sharing" else PRIVATE_LABEL, exact=True).check()
     _cleared(page, ERROR)
 
 
@@ -520,77 +496,53 @@ def test_mode_header_must_match_request_even_when_yaml_body_matches(
     _ready(page, _export_text("sharing"))
     other_mode = "private" if mode == "sharing" else "sharing"
     if mode == "sharing":
-        page.get_by_role("radio", name="Private (includes secrets)").check()
+        page.get_by_role("radio", name=PRIVATE_LABEL).check()
         _ready(page, _export_text("private"))
     page.route(
         f"**{EXPORT_PATH}",
         lambda route: _fulfill(route, _export_text(mode), headers={"X-App-Definitions-Mode": other_mode}),
     )
-    page.get_by_role(
-        "radio", name="Sharing" if mode == "sharing" else "Private (includes secrets)", exact=True
-    ).check()
-    _cleared(page, ERROR)
-
-
-def test_sharing_requires_zero_missing_count(export_page: Page, stack: LocalStack) -> None:
-    page = export_page
-    _fake_exports(page)
-    _open(page, stack)
-    _ready(page, _export_text("sharing"))
-    page.get_by_role("radio", name="Private (includes secrets)").check()
-    _ready(page, _export_text("private"))
-    page.route(f"**{EXPORT_PATH}", lambda route: _fulfill(route, _export_text("sharing"), missing_count=1))
-    page.get_by_role("radio", name="Sharing", exact=True).check()
+    page.get_by_role("radio", name="Sharing" if mode == "sharing" else PRIVATE_LABEL, exact=True).check()
     _cleared(page, ERROR)
 
 
 @pytest.mark.parametrize("mode", ["sharing", "private"])
-def test_decimal_count_with_leading_zero_and_yaml_charset_are_accepted(
-    export_page: Page, stack: LocalStack, mode: str
-) -> None:
+def test_yaml_charset_is_accepted(export_page: Page, stack: LocalStack, mode: str) -> None:
     page = export_page
     _fake_exports(page)
     _open(page, stack)
     _ready(page, _export_text("sharing"))
     if mode == "sharing":
-        page.get_by_role("radio", name="Private (includes secrets)").check()
+        page.get_by_role("radio", name=PRIVATE_LABEL).check()
         _ready(page, _export_text("private"))
-    missing_keys = ("SYNTHETIC_MISSING_KEY",) if mode == "private" else ()
-    text = _export_text(mode, missing_secret_keys=missing_keys)
+    text = _export_text(mode)
     page.route(
         f"**{EXPORT_PATH}",
         lambda route: _fulfill(
             route,
             text,
             content_type="Application/Yaml; charset=utf-8",
-            headers={"X-App-Definitions-Missing-Count": "01" if mode == "private" else "00"},
         ),
     )
-    page.get_by_role(
-        "radio", name="Sharing" if mode == "sharing" else "Private (includes secrets)", exact=True
-    ).check()
-    _ready(page, text, "Ready. 1 referenced secret is not configured." if mode == "private" else "Ready.")
+    page.get_by_role("radio", name="Sharing" if mode == "sharing" else PRIVATE_LABEL, exact=True).check()
+    _ready(page, text)
 
 
-def test_yaml_looking_secret_is_opaque_and_mode_binding_uses_headers(export_page: Page, stack: LocalStack) -> None:
+def test_yaml_looking_name_is_opaque_and_mode_binding_uses_headers(export_page: Page, stack: LocalStack) -> None:
     page = export_page
     # Valid YAML can spell keys differently and contain misleading metadata inside scalar text.
     text = (
-        '# café: server formatting must survive\n---\n"schema_version": 1\n"mode": \'private\'\napps: []\n'
-        "secret_values:\n    SYNTHETIC_KEY: |\n"
-        f"        {SECRET}\n        mode: sharing\n        schema_version: 999\n"
-        "        missing_secret_keys: []\n        secret_values: {}\n"
-        '    BOOL_LOOKING: "on"\n    NUMBER_LOOKING: "00123"\n    NULL_LOOKING: "null"\n'
-        '    DATE_LOOKING: "2026-09-16"\nmissing_secret_keys: []\n...\n\n'
+        '# café: server formatting must survive\n---\n"schema_version": 2\n"mode": \'private\'\napps: []\n'
+        "platform_api_tokens:\n    - name: |\n"
+        "        mode: sharing\n        schema_version: 999\n        platform_api_tokens: []\n"
+        f'      token_hash: "{TOKEN_HASH}"\n      expires_at: null\n...\n\n'
     )
-    values = yaml.safe_load(text)["secret_values"]
-    assert all(isinstance(value, str) for value in values.values())
-    assert "mode: sharing\n" in values["SYNTHETIC_KEY"]
+    assert "mode: sharing\n" in yaml.safe_load(text)["platform_api_tokens"][0]["name"]
     _fake_exports(page)
     _open(page, stack)
     _ready(page, _export_text("sharing"))
     page.route(f"**{EXPORT_PATH}", lambda route: _fulfill(route, text, headers={"X-App-Definitions-Mode": "private"}))
-    page.get_by_role("radio", name="Private (includes secrets)").check()
+    page.get_by_role("radio", name=PRIVATE_LABEL).check()
     _ready(page, text)
     _copy(page, text)
     _download(page, "private", text)
@@ -603,7 +555,7 @@ def test_successful_yaml_redirect_is_rejected(export_page: Page, stack: LocalSta
     _fake_exports(page)
     _open(page, stack)
     _ready(page, _export_text("sharing"))
-    page.get_by_role("radio", name="Private (includes secrets)").check()
+    page.get_by_role("radio", name=PRIVATE_LABEL).check()
     _ready(page, _export_text("private"))
     # Playwright routes only the first URL in a redirect chain. Preserve the POST and let
     # the target reach the real owner endpoint, so every check except redirected succeeds.
@@ -640,7 +592,7 @@ def test_async_failure_leaves_no_previous_private_export_actionable(
     _fake_exports(page)
     _open(page, stack)
     _ready(page, _export_text("sharing"))
-    page.get_by_role("radio", name="Private (includes secrets)").check()
+    page.get_by_role("radio", name=PRIVATE_LABEL).check()
     _ready(page, _export_text("private"))
     page.evaluate("stage => window.failExportStage = stage", stage)
     page.get_by_role("radio", name="Sharing", exact=True).check()
@@ -663,13 +615,13 @@ def test_clipboard_completion_after_mode_change_cannot_fallback_or_change_feedba
     _fake_exports(page)
     _open(page, stack)
     _ready(page, _export_text("sharing"))
-    page.get_by_role("radio", name="Private (includes secrets)").check()
+    page.get_by_role("radio", name=PRIVATE_LABEL).check()
     _ready(page, _export_text("private"))
     page.get_by_role("button", name="Copy", exact=True).click()
     page.get_by_role("radio", name="Sharing", exact=True).check()
     _ready(page, _export_text("sharing"))
     if latest_mode == "private":
-        page.get_by_role("radio", name="Private (includes secrets)").check()
+        page.get_by_role("radio", name=PRIVATE_LABEL).check()
         _ready(page, _export_text("private"))
     page.evaluate("outcome => window.finishCopy[outcome]()", outcome)
     assert page.evaluate("window.fallbackCopies") == []
@@ -708,7 +660,7 @@ def test_reload_back_and_return_to_system_request_only_sharing(export_page: Page
     _open(page, stack)
     for navigation in ("reload", "back", "return"):
         _ready(page, _export_text("sharing"))
-        page.get_by_role("radio", name="Private (includes secrets)").check()
+        page.get_by_role("radio", name=PRIVATE_LABEL).check()
         _ready(page, _export_text("private"))
         count = len(inventory)
         if navigation == "reload":
@@ -721,7 +673,7 @@ def test_reload_back_and_return_to_system_request_only_sharing(export_page: Page
                 page.goto(f"{stack.router_url}/system/")
         _ready(page, _export_text("sharing"))
         expect(page.get_by_role("radio", name="Sharing", exact=True)).to_be_checked()
-        expect(page.get_by_role("radio", name="Private (includes secrets)")).not_to_be_checked()
+        expect(page.get_by_role("radio", name=PRIVATE_LABEL)).not_to_be_checked()
         expect(page.locator("#app-definition-private-hint")).to_be_hidden()
         assert page.locator("#app-definition-preview").get_attribute("open") is None
         assert [request.post_data_json for request in inventory[count:]] == [{"mode": "sharing"}]
@@ -743,7 +695,7 @@ def test_export_expanded_private_loading_and_error_states_have_no_wcag_aa_violat
         page.screenshot(path=str(Path(output_path) / f"{state}.png"), full_page=True)
 
     scan("sharing-expanded")
-    page.get_by_role("radio", name="Private (includes secrets)").check()
+    page.get_by_role("radio", name=PRIVATE_LABEL).check()
     _ready(page, _export_text("private"))
     scan("private-expanded")
     pending: list[Route] = []
@@ -755,11 +707,11 @@ def test_export_expanded_private_loading_and_error_states_have_no_wcag_aa_violat
     _fulfill(pending[0], "<html>Log in</html>", content_type="text/html")
     _cleared(page, ERROR)
     scan("error")
-    missing_text = _export_text("private", missing_secret_keys=("SYNTHETIC_MISSING_ONE", "SYNTHETIC_MISSING_TWO"))
-    page.route(f"**{EXPORT_PATH}", lambda route: _fulfill(route, missing_text, missing_count=2))
-    page.get_by_role("radio", name="Private (includes secrets)").check()
-    _ready(page, missing_text, "Ready. 2 referenced secrets are not configured.")
-    scan("private-missing-secrets")
+    empty_text = _export_text("private", token_hash=None)
+    page.route(f"**{EXPORT_PATH}", lambda route: _fulfill(route, empty_text))
+    page.get_by_role("radio", name=PRIVATE_LABEL).check()
+    _ready(page, empty_text)
+    scan("private-empty-tokens")
 
 
 def test_real_owner_endpoint_exports_stored_inventory(export_page: Page, stack: LocalStack, output_path: str) -> None:
@@ -776,25 +728,27 @@ def test_real_owner_endpoint_exports_stored_inventory(export_page: Page, stack: 
     assert response.headers["content-type"].split(";")[0] == "application/yaml"
     assert response.headers["cache-control"] == "no-store"
     assert response.headers["x-app-definitions-mode"] == "sharing"
-    assert response.headers["x-app-definitions-schema-version"] == "1"
-    assert response.headers["x-app-definitions-missing-count"] == "0"
+    assert response.headers["x-app-definitions-schema-version"] == "2"
+    assert "x-app-definitions-missing-count" not in response.headers
     sharing = response.text()
     _ready(page, sharing)
     data = yaml.safe_load(sharing)
-    assert data["schema_version"] == 1
+    assert data["schema_version"] == 2
     assert data["mode"] == "sharing"
     apps = data["apps"]
     assert len(apps) == 1
     assert apps[0]["name"] == "export-fixture"
     assert apps[0]["port_mappings"] == [{"label": "web", "container_port": 8080, "host_port": 29001}]
-    assert "secret_values" not in data
-    assert "missing_secret_keys" not in data
+    assert set(apps[0]) == {"name", "source", "port_mappings"}
+    assert "platform_api_tokens" not in data
+    assert TOKEN_HASH not in sharing
+    assert RAW_KEY not in sharing
     page.locator("#app-definition-preview > summary").click()
     page.screenshot(path=str(Path(output_path) / "real-sharing-yaml.png"), full_page=True)
     _copy(page, sharing)
     _download(page, "sharing", sharing)
     with page.expect_response(f"**{EXPORT_PATH}") as response_info:
-        page.get_by_role("radio", name="Private (includes secrets)").check()
+        page.get_by_role("radio", name=PRIVATE_LABEL).check()
     response = response_info.value
     assert response.ok
     assert response.request.headers["accept"] == "application/yaml"
@@ -804,14 +758,14 @@ def test_real_owner_endpoint_exports_stored_inventory(export_page: Page, stack: 
     assert response.headers["content-type"].split(";")[0] == "application/yaml"
     assert response.headers["cache-control"] == "no-store"
     assert response.headers["x-app-definitions-mode"] == "private"
-    assert response.headers["x-app-definitions-schema-version"] == "1"
-    assert response.headers["x-app-definitions-missing-count"] == "0"
+    assert response.headers["x-app-definitions-schema-version"] == "2"
+    assert "x-app-definitions-missing-count" not in response.headers
     assert yaml.safe_load(response.text()) == {
         **data,
         "mode": "private",
-        "secret_values": {},
-        "missing_secret_keys": [],
+        "platform_api_tokens": [{"name": "browser token", "token_hash": TOKEN_HASH, "expires_at": None}],
     }
+    assert RAW_KEY not in response.text()
     _ready(page, response.text())
     page.screenshot(path=str(Path(output_path) / "real-private-yaml.png"), full_page=True)
     _copy(page, response.text())
@@ -841,7 +795,7 @@ def test_actual_bfcache_restoration_resets_payload_model_and_restored_radios(
         )
         _open(page, stack)
         expect(page.locator("#app-definition-status")).to_have_text("Ready.")
-        page.get_by_role("radio", name="Private (includes secrets)").check()
+        page.get_by_role("radio", name=PRIVATE_LABEL).check()
         expect(page.locator("#app-definition-status")).to_have_text("Ready.")
         page.locator("#app-definition-preview > summary").click()
         page.wait_for_load_state("networkidle")
@@ -868,7 +822,7 @@ def test_actual_bfcache_restoration_resets_payload_model_and_restored_radios(
         )
         assert page.evaluate("window.exportClearedOnLeave")
         expect(page.get_by_role("radio", name="Sharing", exact=True)).to_be_checked()
-        expect(page.get_by_role("radio", name="Private (includes secrets)")).not_to_be_checked()
+        expect(page.get_by_role("radio", name=PRIVATE_LABEL)).not_to_be_checked()
         expect(page.locator("#app-definition-status")).to_have_text("Ready.")
         assert yaml.safe_load(page.locator("#app-definition-output").text_content())["mode"] == "sharing"
         assert [json.loads(body) for body in inventory[count:]] == [{"mode": "sharing"}]
