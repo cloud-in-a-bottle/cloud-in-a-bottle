@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 import sqlite3
 from collections.abc import Hashable
+from datetime import datetime
 from pathlib import Path
 from typing import Literal
 from urllib.parse import unquote
@@ -15,11 +16,11 @@ from yaml.nodes import MappingNode
 from yaml.nodes import Node
 from yaml.nodes import ScalarNode
 
-from compute_space.core.app_definition_secrets import SECRETS_SERVICE_URL
 from compute_space.core.app_definitions import AppDefinition
 from compute_space.core.app_definitions import BuiltinSource
 from compute_space.core.app_definitions import DefinitionExport
 from compute_space.core.app_definitions import ExportMode
+from compute_space.core.app_definitions import PlatformApiToken
 from compute_space.core.app_definitions import PortableSource
 from compute_space.core.app_definitions import PrivateDefinitionExport
 from compute_space.core.app_definitions import PublishedPort
@@ -31,6 +32,7 @@ from compute_space.core.apps import RESERVED_PATHS
 from compute_space.core.git_ops import parse_repo_url
 from compute_space.core.manifest import MANIFEST_FILENAMES
 from compute_space.core.manifest import UNPRIVILEGED_PORT_FLOOR
+from compute_space.db.connection import make_atomic_with_savepoint
 
 MAX_DEFINITION_BYTES = 1024 * 1024
 
@@ -57,8 +59,11 @@ class _DefinitionLoader(yaml.SafeLoader):
             if node is None:
                 raise DefinitionError("Expected a YAML node.")
             if isinstance(node, ScalarNode):
+                # Bound numeric conversion work, including YAML's sexagesimal integers.
+                if node.tag == "tag:yaml.org,2002:int" and len(node.value) > 64:
+                    raise DefinitionError("YAML integer scalars must be at most 64 characters.")
                 # YAML escapes can introduce lone surrogates even in an otherwise UTF-8 file.
-                # Reject these before a later JSON provider request can fail after earlier writes.
+                # Reject these before a later database write can fail after earlier writes.
                 node.value.encode("utf-8")
             if node.tag not in {
                 "tag:yaml.org,2002:map",
@@ -112,11 +117,21 @@ def _list(value: object) -> list[object]:
     return value
 
 
-def _keys(value: object) -> tuple[str, ...]:
-    keys = tuple(_string(key) for key in _list(value))
-    if len(set(keys)) != len(keys):
-        raise DefinitionError("Duplicate secret keys are not supported.")
-    return keys
+def _platform_api_token(value: object) -> PlatformApiToken:
+    token = _object(value, {"name", "token_hash", "expires_at"})
+    name = _string(token["name"], empty=True)
+    token_hash = _string(token["token_hash"])
+    if not re.fullmatch(r"[0-9a-f]{64}", token_hash):
+        raise DefinitionError("API token hashes must be lowercase SHA256 verifiers (64 hex characters).")
+    expiry = token["expires_at"]
+    expires_at = None if expiry is None else _string(expiry)
+    if expires_at is not None:
+        try:
+            if datetime.fromisoformat(expires_at).utcoffset() is None:
+                raise ValueError
+        except ValueError:
+            raise DefinitionError("API token expiry must be null or a timezone-aware ISO timestamp.") from None
+    return PlatformApiToken(name, token_hash, expires_at)
 
 
 def _remote_url(source: RemoteSource) -> str:
@@ -160,8 +175,8 @@ def _source(value: object) -> PortableSource:
     source = _object(value)
     kind = source.get("kind")
     if kind == "remote":
-        source = _object(value, {"kind", "repo_url"}, {"ref"})
-        ref = source.get("ref")
+        source = _object(value, {"kind", "repo_url", "ref"})
+        ref = source["ref"]
         remote = RemoteSource(_string(source["repo_url"]), None if ref is None else _string(ref))
         _remote_url(remote)
         return remote
@@ -188,18 +203,18 @@ def _port(value: object) -> PublishedPort:
 
 
 def _app(value: object) -> AppDefinition:
-    app = _object(value, {"name", "source", "port_mappings", "secret_keys"})
+    app = _object(value, {"name", "source", "port_mappings"})
     name = _string(app["name"])
     if not is_valid_app_name(name) or name.endswith("\n") or f"/{name}" in RESERVED_PATHS:
         raise DefinitionError("Invalid or reserved app name.")
     ports = tuple(_port(port) for port in _list(app["port_mappings"]))
     if len({port.label for port in ports}) != len(ports):
         raise DefinitionError("Duplicate port labels are not supported.")
-    return AppDefinition(name, _source(app["source"]), ports, _keys(app["secret_keys"]))
+    return AppDefinition(name, _source(app["source"]), ports)
 
 
 def parse_definition(content: str) -> DefinitionExport:
-    """Validate the complete document before any provider request or installation."""
+    """Validate the complete v2 document before any database write or installation."""
     try:
         if len(content.encode("utf-8")) > MAX_DEFINITION_BYTES:
             raise DefinitionError("App definition YAML must be at most 1 MiB.")
@@ -209,29 +224,22 @@ def parse_definition(content: str) -> DefinitionExport:
     except Exception:
         # Even safe constructors can raise KeyError/TypeError with scalar values in the message.
         raise DefinitionError("Invalid app definition YAML.") from None
-    if type(document.get("schema_version")) is not int or document["schema_version"] != 1:
-        raise DefinitionError("schema_version must be 1.")
+    if type(document.get("schema_version")) is not int or document["schema_version"] != 2:
+        raise DefinitionError("schema_version must be 2. Re-export older app definition files.")
     mode = document.get("mode")
     if mode != "sharing" and mode != "private":
         raise DefinitionError("mode must be sharing or private.")
     fields = {"schema_version", "mode", "apps"}
-    _object(document, fields | ({"secret_values", "missing_secret_keys"} if mode == "private" else set()))
+    _object(document, fields | ({"platform_api_tokens"} if mode == "private" else set()))
     apps = tuple(_app(app) for app in _list(document["apps"]))
     if len({app.name for app in apps}) != len(apps):
         raise DefinitionError("Duplicate app names are not supported.")
     if mode == "sharing":
         return DefinitionExport(mode, apps)
-    values = {key: _string(value, empty=True) for key, value in _object(document["secret_values"]).items()}
-    missing = _keys(document["missing_secret_keys"])
-    if any(not key or key == "*" for key in (*values, *missing)) or set(values).intersection(missing):
-        raise DefinitionError("Invalid or overlapping secret value and missing key names.")
-    return PrivateDefinitionExport(mode, apps, values, missing)
-
-
-@attr.s(auto_attribs=True, frozen=True)
-class SecretPermission:
-    grant: dict[str, str]
-    service_url: str = SECRETS_SERVICE_URL
+    tokens = tuple(_platform_api_token(token) for token in _list(document["platform_api_tokens"]))
+    if len({token.token_hash for token in tokens}) != len(tokens):
+        raise DefinitionError("Duplicate API token hashes are not supported.")
+    return PrivateDefinitionExport(mode, apps, tokens)
 
 
 @attr.s(auto_attribs=True, frozen=True)
@@ -239,7 +247,6 @@ class DefinitionInstall:
     repo_url: str
     app_name: str
     port_overrides: dict[str, int]
-    permissions_v2_grants: tuple[SecretPermission, ...]
 
 
 @attr.s(auto_attribs=True, frozen=True)
@@ -247,7 +254,6 @@ class PlannedApp:
     name: str
     source_label: str
     status: Literal["ready", "existing", "unavailable"]
-    secret_keys: tuple[str, ...]
     app_id: str | None = None
     install: DefinitionInstall | None = None
 
@@ -256,9 +262,8 @@ class PlannedApp:
 class DefinitionPlan:
     mode: ExportMode
     apps: tuple[PlannedApp, ...]
-    secret_keys: tuple[str, ...]
-    missing_secret_keys: tuple[str, ...]
-    schema_version: int = attr.field(default=1, init=False)
+    platform_api_token_names: tuple[str, ...]
+    schema_version: int = attr.field(default=2, init=False)
 
 
 def definition_plan(document: DefinitionExport, db: sqlite3.Connection, apps_dir: str) -> DefinitionPlan:
@@ -284,21 +289,35 @@ def definition_plan(document: DefinitionExport, db: sqlite3.Connection, apps_dir
             case UnavailableSource(kind):
                 label = kind
         if app.name in existing:
-            apps.append(PlannedApp(app.name, label, "existing", app.secret_keys, app_id=existing[app.name]))
+            apps.append(PlannedApp(app.name, label, "existing", app_id=existing[app.name]))
         elif repo_url is None:
-            apps.append(PlannedApp(app.name, label, "unavailable", app.secret_keys))
+            apps.append(PlannedApp(app.name, label, "unavailable"))
         else:
             install = DefinitionInstall(
                 repo_url,
                 app.name,
                 {port.label: port.host_port for port in app.port_mappings},
-                tuple(SecretPermission({"key": key}) for key in app.secret_keys),
             )
-            apps.append(PlannedApp(app.name, label, "ready", app.secret_keys, install=install))
+            apps.append(PlannedApp(app.name, label, "ready", install=install))
     private = document if isinstance(document, PrivateDefinitionExport) else None
     return DefinitionPlan(
         document.mode,
         tuple(apps),
-        tuple(sorted(private.secret_values)) if private else (),
-        tuple(sorted(private.missing_secret_keys)) if private else (),
+        tuple(token.name for token in private.platform_api_tokens) if private else (),
     )
+
+
+def import_platform_api_tokens(db: sqlite3.Connection, tokens: tuple[PlatformApiToken, ...]) -> int:
+    """Atomically add a validated batch, preserving existing rows and any enclosing transaction."""
+    if not tokens:
+        return 0
+    with make_atomic_with_savepoint(db):
+        cursor = db.executemany(
+            """INSERT INTO api_tokens (name, token_hash, expires_at) VALUES (?, ?, ?)
+               ON CONFLICT(token_hash) DO NOTHING""",
+            [
+                (token.name, token.token_hash, token.expires_at if token.expires_at is not None else "")
+                for token in tokens
+            ],
+        )
+    return cursor.rowcount

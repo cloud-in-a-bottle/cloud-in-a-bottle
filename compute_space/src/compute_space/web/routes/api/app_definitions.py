@@ -16,7 +16,6 @@ from litestar.exceptions import SerializationException
 
 from compute_space.config import Config
 from compute_space.config import provide_config
-from compute_space.core.app_definition_secrets import ExportError
 from compute_space.core.app_definitions import ExportMode
 from compute_space.core.app_definitions import export_app_definitions
 from compute_space.core.app_definitions import parse_export_mode
@@ -25,7 +24,7 @@ from compute_space.db import provide_db
 from compute_space.web.auth.auth import require_owner_auth
 from compute_space.web.helpers.app_definition_export import dump_export_yaml
 from compute_space.web.helpers.app_definition_export import export_media_type
-from compute_space.web.routes.api.app_definition_loader import owner_import_secrets
+from compute_space.web.routes.api.app_definition_loader import owner_import_private
 from compute_space.web.routes.api.app_definition_loader import owner_parse
 
 
@@ -46,15 +45,14 @@ def _export_response(request: Request[Any, Any, Any], content: str) -> Response[
             "Cache-Control": "no-store",
             "Vary": "Accept",
             "X-App-Definitions-Mode": document["mode"],
-            "X-App-Definitions-Missing-Count": str(len(document.get("missing_secret_keys", []))),
             "X-App-Definitions-Schema-Version": str(document["schema_version"]),
         },
     )
 
 
 def _export_error(request: Request[Any, Any, Any], exc: Exception) -> Response[str]:
-    status = exc.status_code if isinstance(exc, HTTPException) else 502 if isinstance(exc, ExportError) else 500
-    # Never render exception details or log traceback locals: either can contain provider values.
+    status = exc.status_code if isinstance(exc, HTTPException) else 500
+    # Never render exception details or log traceback locals: either can contain private data.
     return _json_response(json.dumps({"error": "App definition export failed."}), status)
 
 
@@ -111,7 +109,7 @@ async def service_export(
     return _export_response(request, await export_app_definitions(db, config.apps_dir, mode))
 
 
-api_app_definitions_routes = Router(path="/", route_handlers=[owner_export, owner_parse, owner_import_secrets])
+api_app_definitions_routes = Router(path="/", route_handlers=[owner_export, owner_parse, owner_import_private])
 
 # This app is reachable only through BuiltinService's in-process transport, never a public route.
 # Its headers are authoritative because the normal authenticated service proxy replaces them.

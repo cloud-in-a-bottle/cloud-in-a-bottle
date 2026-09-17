@@ -16,9 +16,8 @@ from compute_space.config import Config
 from compute_space.core.app_definition_loader import MAX_DEFINITION_BYTES
 from compute_space.core.app_definition_loader import DefinitionError
 from compute_space.core.app_definition_loader import definition_plan
+from compute_space.core.app_definition_loader import import_platform_api_tokens
 from compute_space.core.app_definition_loader import parse_definition
-from compute_space.core.app_definition_secrets import SecretImportError
-from compute_space.core.app_definition_secrets import import_secret_values
 from compute_space.core.app_definitions import DefinitionExport
 from compute_space.core.app_definitions import PrivateDefinitionExport
 from compute_space.web.auth.auth import require_owner_auth
@@ -33,31 +32,19 @@ def _response(body: object, status: int = 200) -> Response[str]:
 def _load_error(request: Request[Any, Any, Any], exc: Exception) -> Response[str]:
     if isinstance(exc, DefinitionError):
         return _response({"error": str(exc)}, 400)
-    if isinstance(exc, SecretImportError):
-        return _response({"error": str(exc), "saved_secret_count": exc.saved_secret_count}, 502)
     status = exc.status_code if isinstance(exc, HTTPException) else 500
-    # Uploaded YAML and provider errors may contain values in their details and traceback locals.
+    # Uploaded YAML and database errors may contain private data in their details and traceback locals.
     return _response({"error": "App definition loading failed."}, status)
 
 
-async def _document(request: Request[Any, Any, Any], *, importing: bool = False) -> DefinitionExport:
+async def _document(request: Request[Any, Any, Any]) -> DefinitionExport:
     try:
         body = await request.json()
     except (SerializationException, ValueError):
         raise DefinitionError("Expected a JSON object containing YAML content.") from None
-    allowed = {"content", "replace_existing"} if importing else {"content"}
-    if (
-        not isinstance(body, dict)
-        or body.keys() - allowed
-        or not isinstance(body.get("content"), str)
-        or ("replace_existing" in body and type(body["replace_existing"]) is not bool)
-    ):
-        raise DefinitionError("Expected YAML content and, for secret import, a boolean replace_existing.")
-    document = await asyncio.to_thread(parse_definition, body["content"])
-    if importing and isinstance(document, PrivateDefinitionExport) and document.secret_values:
-        if body.get("replace_existing") is not True:
-            raise DefinitionError("Confirm replacement of the named secret values with replace_existing: true.")
-    return document
+    if not isinstance(body, dict) or body.keys() != {"content"} or not isinstance(body.get("content"), str):
+        raise DefinitionError("Expected a JSON object containing only YAML content.")
+    return await asyncio.to_thread(parse_definition, body["content"])
 
 
 @post(
@@ -78,19 +65,20 @@ async def owner_parse(
 
 
 @post(
-    "/api/app-definitions/import-secrets",
+    "/api/app-definitions/import-private",
     guards=[require_owner_auth],
     exception_handlers={Exception: _load_error, NotAuthorizedException: _load_error},
     request_max_body_size=6 * MAX_DEFINITION_BYTES + 1024,
     status_code=200,
 )
-async def owner_import_secrets(
+async def owner_import_private(
     request: Request[Any, Any, Any],
     db: NamedDependency[sqlite3.Connection],
     config: NamedDependency[Config],
 ) -> Response[str]:
-    document = await _document(request, importing=True)
+    document = await _document(request)
     # Recheck the entire plan, including builtin containment, before the first write.
     definition_plan(document, db, config.apps_dir)
-    values = document.secret_values if isinstance(document, PrivateDefinitionExport) else {}
-    return _response({"ok": True, "saved_secret_count": await import_secret_values(db, values)})
+    tokens = document.platform_api_tokens if isinstance(document, PrivateDefinitionExport) else ()
+    added = import_platform_api_tokens(db, tokens)
+    return _response({"ok": True, "added_api_token_count": added, "existing_api_token_count": len(tokens) - added})

@@ -10,11 +10,11 @@ import pytest
 import yaml
 from litestar import Litestar
 from litestar.di import Provide
+from litestar.exceptions import HTTPException
 from litestar.exceptions import NotAuthorizedException
 from litestar.testing import TestClient
 
 from compute_space.config import provide_config
-from compute_space.core import app_definition_secrets
 from compute_space.core.app_definitions import ExportMode
 from compute_space.core.app_id import ROUTER_APP_ID
 from compute_space.core.auth.permissions_v2 import revoke_permission_v2
@@ -25,10 +25,8 @@ from compute_space.db import provide_db
 from compute_space.tests._litestar_helpers import auth_cookie
 from compute_space.tests.conftest import _make_test_config
 from compute_space.tests.test_app_definitions import SENTINEL
-from compute_space.tests.test_app_definitions import fake_secrets
+from compute_space.tests.test_app_definitions import seed_api_token
 from compute_space.tests.test_app_definitions import seed_app
-from compute_space.tests.test_app_definitions import seed_grant
-from compute_space.tests.test_app_definitions import seed_provider
 from compute_space.web.app import _login_required_redirect
 from compute_space.web.routes.api import app_definitions
 from compute_space.web.routes.api.app_definitions import api_app_definitions_routes
@@ -61,11 +59,7 @@ def client(tmp_path: Path) -> Iterator[TestClient[Litestar]]:
         db.execute(
             "INSERT INTO app_tokens VALUES (?, ?)", ("consumer", hashlib.sha256(APP_TOKEN.encode()).hexdigest())
         )
-        db.execute(
-            "INSERT INTO api_tokens (name, token_hash, expires_at) VALUES ('test', ?, '')",
-            (hashlib.sha256(API_TOKEN.encode()).hexdigest(),),
-        )
-        db.commit()
+        seed_api_token(db, "test", API_TOKEN)
     # The outer app deliberately has the production HTML login handler; the export's local
     # handler must still return JSON, 401 and no-store even without an Accept header.
     app = Litestar(
@@ -86,7 +80,12 @@ def use_app_token(client: TestClient[Litestar]) -> None:
 
 def approve(mode: str, *, scope: str = "global", provider: str = "") -> None:
     with closing(get_db()) as db:
-        seed_grant(db, "consumer", {"mode": mode}, service=APP_DEFINITIONS_SERVICE_URL, scope=scope, provider=provider)
+        db.execute(
+            """INSERT OR IGNORE INTO permissions_v2
+               (consumer_app_id, service_url, grant_payload, scope, provider_app_id) VALUES (?, ?, ?, ?, ?)""",
+            ("consumer", APP_DEFINITIONS_SERVICE_URL, json.dumps({"mode": mode}), scope, provider),
+        )
+        db.commit()
 
 
 def assert_json_no_store(response: httpx.Response) -> None:
@@ -102,21 +101,27 @@ def test_owner_session_default_mode_and_private_envelope(client: TestClient[Lite
     assert response.status_code == 200
     assert_json_no_store(response)
     assert response.json()["mode"] == body.get("mode", "sharing")
-    assert ("secret_values" in response.json()) == (body.get("mode") == "private")
-    assert ("missing_secret_keys" in response.json()) == (body.get("mode") == "private")
+    assert response.json()["schema_version"] == 2
+    assert ("platform_api_tokens" in response.json()) == (body.get("mode") == "private")
     if body.get("mode") == "private":
-        assert response.json()["secret_values"] == {}
-        assert response.json()["missing_secret_keys"] == []
+        assert response.json()["platform_api_tokens"] == [
+            {"name": "test", "token_hash": hashlib.sha256(API_TOKEN.encode()).hexdigest(), "expires_at": None}
+        ]
     assert "\n  " in response.text
     assert response.text.endswith("\n")
     assert SENTINEL not in response.text
+    assert API_TOKEN not in response.text
+    assert APP_TOKEN not in response.text
 
 
-def test_owner_api_key_auth(client: TestClient[Litestar]) -> None:
+@pytest.mark.parametrize("mode", ["sharing", "private"])
+def test_owner_api_key_auth(client: TestClient[Litestar], mode: str) -> None:
     client.cookies.clear()
-    response = client.post(OWNER_PATH, json={}, headers={"Authorization": f"Bearer {API_TOKEN}"})
+    response = client.post(OWNER_PATH, json={"mode": mode}, headers={"Authorization": f"Bearer {API_TOKEN}"})
     assert response.status_code == 200
     assert_json_no_store(response)
+    assert API_TOKEN not in response.text
+    assert ("platform_api_tokens" in response.json()) == (mode == "private")
 
 
 @pytest.mark.parametrize("auth", ["anonymous", "app", "invalid", "expired-api", "expired-session", "spoofed"])
@@ -147,8 +152,7 @@ def test_owner_export_denies_nonowners_with_json_no_store(
     response = client.post(OWNER_PATH, json={"mode": "private"}, headers=headers, follow_redirects=False)
     assert response.status_code == 401
     assert_json_no_store(response)
-    assert "secret_values" not in response.json()
-    assert "missing_secret_keys" not in response.json()
+    assert "platform_api_tokens" not in response.json()
 
 
 @pytest.mark.parametrize("origin", ["https://evil.example", "http://consumer.testzone.local", "null"])
@@ -208,7 +212,7 @@ def test_requested_manifest_grant_is_not_approval_and_spoofed_headers_do_not_aut
     client: TestClient[Litestar], requested: str, monkeypatch: pytest.MonkeyPatch, accept: str
 ) -> None:
     use_app_token(client)
-    monkeypatch.setattr(app_definition_secrets, "client_for", lambda *a, **kw: pytest.fail("unapproved Secrets call"))
+    monkeypatch.setattr(app_definitions, "export_app_definitions", lambda *a, **kw: pytest.fail("unapproved export"))
     response = client.post(
         SERVICE_PATH,
         json={"mode": requested},
@@ -245,6 +249,7 @@ def test_service_grant_modes_and_revoke(client: TestClient[Litestar], grant: str
     assert_json_no_store(response)
     if status == 200:
         assert response.json()["mode"] == mode
+        assert ("platform_api_tokens" in response.json()) == (mode == "private")
     revoke_permission_v2("consumer", APP_DEFINITIONS_SERVICE_URL, {"mode": grant})
     assert client.post(SERVICE_PATH, json={"mode": mode}).status_code == 403
 
@@ -287,76 +292,87 @@ def test_builtin_header_trusting_handler_is_not_public(client: TestClient[Litest
 
 
 @pytest.mark.parametrize("path", [OWNER_PATH, SERVICE_PATH])
-@pytest.mark.parametrize("missing", [False, True])
-def test_private_retrieves_values_only_after_auth_and_sharing_never_does(
-    client: TestClient[Litestar], path: str, monkeypatch: pytest.MonkeyPatch, missing: bool
+@pytest.mark.parametrize("empty", [False, True])
+def test_private_includes_api_records_after_auth_and_sharing_never_queries_them(
+    client: TestClient[Litestar], path: str, monkeypatch: pytest.MonkeyPatch, empty: bool
 ) -> None:
-    missing_keys = ["GOOGLE_OAUTH_CLIENT_SECRET", "GOOGLE_OAUTH_CLIENT_ID"] if missing else []
     with closing(get_db()) as db:
-        seed_provider(db)
-        seed_grant(db, "consumer", {"key": "VALUE"})
-        for key in missing_keys:
-            seed_grant(db, "consumer", {"key": key})
-    calls = []
+        db.execute("DELETE FROM api_tokens")
+        db.commit()
+        expected = (
+            []
+            if empty
+            else [
+                seed_api_token(db, "duplicate", SENTINEL, "2000-01-01T00:00:00+00:00"),
+                seed_api_token(db, "duplicate", API_TOKEN),
+            ]
+        )
+    queries: list[str] = []
+    original_export = app_definitions.export_app_definitions
 
-    def handle(request: httpx.Request) -> httpx.Response:
-        calls.append(request)
-        assert json.loads(request.content) == {"keys": sorted(["VALUE", *missing_keys])}
-        return httpx.Response(200, json={"secrets": {"VALUE": SENTINEL}, "missing": missing_keys})
+    async def tracked_export(db: sqlite3.Connection, apps_dir: str, mode: ExportMode) -> str:
+        db.set_trace_callback(queries.append)
+        try:
+            return await original_export(db, apps_dir, mode)
+        finally:
+            db.set_trace_callback(None)
 
-    fake_secrets(monkeypatch, handle)
+    monkeypatch.setattr(app_definitions, "export_app_definitions", tracked_export)
     if path == SERVICE_PATH:
         use_app_token(client)
         approve("sharing")
         assert client.post(path, json={"mode": "private"}).status_code == 403
-        assert not calls
+        assert not queries
         approve("private")
     response = client.post(path, json={"mode": "sharing"})
     assert response.status_code == 200
     assert SENTINEL not in response.text
     sharing = response.json()
-    assert "secret_values" not in sharing
-    assert "missing_secret_keys" not in sharing
-    assert not calls
+    assert "platform_api_tokens" not in sharing
+    assert not any("api_tokens" in query for query in queries)
     response = client.post(path, json={"mode": "private"})
     assert response.status_code == 200
     assert response.json()["mode"] == "private"
     assert response.json()["apps"] == sharing["apps"]
-    assert response.json()["secret_values"] == {"VALUE": SENTINEL}
-    assert response.json()["missing_secret_keys"] == sorted(missing_keys)
+    assert response.json()["platform_api_tokens"] == sorted(expected, key=lambda token: token["token_hash"])
     assert_json_no_store(response)
-    assert len(calls) == 1
+    assert sum("FROM api_tokens" in query for query in queries) == 1
+    assert SENTINEL not in response.text
+    assert API_TOKEN not in response.text
+    assert APP_TOKEN not in response.text
 
 
 @pytest.mark.parametrize("path", [OWNER_PATH, SERVICE_PATH])
 @pytest.mark.parametrize("accept", ["application/json", "application/yaml"])
 @pytest.mark.parametrize(
-    "upstream",
+    ("failure", "status"),
     [
-        httpx.Response(500, json={"error": SENTINEL, "secrets": {"KEY": SENTINEL}}),
-        httpx.Response(200, json={"secrets": {"KEY": SENTINEL}, "missing": ["KEY"]}),
-        httpx.Response(200, json={"secrets": {}, "missing": []}),
-        httpx.Response(200, json={"secrets": {}, "missing": ["KEY", SENTINEL]}),
+        (sqlite3.OperationalError(SENTINEL), 500),
+        (RuntimeError(SENTINEL), 500),
+        (HTTPException(status_code=503, detail=SENTINEL), 503),
     ],
 )
-def test_secret_provider_error_body_and_trace_never_escape(
+def test_export_error_details_and_trace_never_escape(
     client: TestClient[Litestar],
     path: str,
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
-    upstream: httpx.Response,
+    failure: Exception,
+    status: int,
     accept: str,
 ) -> None:
     if path == SERVICE_PATH:
         use_app_token(client)
         approve("private")
-    with closing(get_db()) as db:
-        seed_provider(db)
-        seed_grant(db, "consumer", {"key": "KEY"})
-    fake_secrets(monkeypatch, lambda request: upstream)
+
+    async def failed_export(db: sqlite3.Connection, apps_dir: str, mode: ExportMode) -> str:
+        raise failure
+
+    monkeypatch.setattr(app_definitions, "export_app_definitions", failed_export)
     response = client.post(path, json={"mode": "private"}, headers={"Accept": accept})
-    assert response.status_code == 502
+    assert response.status_code == status
     assert_json_no_store(response)
+    assert response.json() == {"error": "App definition export failed."}
     assert SENTINEL not in response.text
     assert SENTINEL not in caplog.text
 
@@ -365,12 +381,8 @@ def assert_export_headers(response: httpx.Response, document: dict[str, object])
     assert response.headers["Cache-Control"] == "no-store"
     assert "accept" in {part.strip().lower() for part in response.headers["Vary"].split(",")}
     assert response.headers["X-App-Definitions-Mode"] == document["mode"]
-    assert response.headers["X-App-Definitions-Schema-Version"] == str(document["schema_version"]) == "1"
-    missing = document.get("missing_secret_keys", [])
-    assert isinstance(missing, list)
-    count = response.headers["X-App-Definitions-Missing-Count"]
-    assert count.isascii() and count.isdecimal()
-    assert int(count) == len(missing)
+    assert response.headers["X-App-Definitions-Schema-Version"] == str(document["schema_version"]) == "2"
+    assert "X-App-Definitions-Missing-Count" not in response.headers
 
 
 @pytest.mark.parametrize("path", [OWNER_PATH, SERVICE_PATH])
@@ -420,27 +432,16 @@ def test_export_content_negotiation(
 
 @pytest.mark.parametrize("path", [OWNER_PATH, SERVICE_PATH])
 @pytest.mark.parametrize("mode", ["sharing", "private"])
-@pytest.mark.parametrize("missing", [[], ["ABSENT", "missing\nkey"]])
-def test_yaml_and_json_export_the_same_document(
-    client: TestClient[Litestar], path: str, mode: str, missing: list[str], monkeypatch: pytest.MonkeyPatch
-) -> None:
-    values = {"VALUE": SENTINEL, "EMPTY": "", "1e3": "first\nsecond\n\n", "true": "a\r\nb\u2028c"}
+def test_yaml_and_json_export_the_same_document(client: TestClient[Litestar], path: str, mode: str) -> None:
+    names = ["", "1e3", "first\nsecond\n\n", "true", "a\r\nb\u2028c"]
     with closing(get_db()) as db:
-        seed_provider(db)
+        db.execute("DELETE FROM api_tokens")
+        records = [seed_api_token(db, name, f"{SENTINEL}-{index}") for index, name in enumerate(names)]
         seed_app(db, "remote", repo_url=f"https://user:{SENTINEL}@example.com/app?token={SENTINEL}")
-        for key in [*values, *missing]:
-            seed_grant(db, "consumer", {"key": key})
         db.execute(
             "INSERT INTO app_port_mappings (app_id, label, container_port, host_port) VALUES ('remote', '1e3', 8080, 30000)"
         )
         db.commit()
-    calls = []
-
-    def handle(request: httpx.Request) -> httpx.Response:
-        calls.append(request)
-        return httpx.Response(200, json={"secrets": values, "missing": missing})
-
-    fake_secrets(monkeypatch, handle)
     if path == SERVICE_PATH:
         use_app_token(client)
         approve(mode)
@@ -453,15 +454,10 @@ def test_yaml_and_json_export_the_same_document(
     assert_export_headers(json_response, document)
     assert_export_headers(yaml_response, document)
     if mode == "private":
-        assert document["secret_values"] == values
-        assert document["missing_secret_keys"] == sorted(missing)
-        assert len(calls) == 2
+        assert document["platform_api_tokens"] == sorted(records, key=lambda token: token["name"])
     else:
-        assert "secret_values" not in document
-        assert "missing_secret_keys" not in document
-        assert SENTINEL not in yaml_response.text
-        assert yaml_response.headers["X-App-Definitions-Missing-Count"] == "0"
-        assert not calls
+        assert "platform_api_tokens" not in document
+    assert SENTINEL not in yaml_response.text
 
 
 @pytest.mark.parametrize("path", [OWNER_PATH, SERVICE_PATH])
@@ -470,9 +466,9 @@ def test_yaml_and_json_export_the_same_document(
 def test_success_headers_describe_exported_document_instead_of_request(
     client: TestClient[Litestar], path: str, accept: str, requested: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    document = {"mode": "private" if requested == "sharing" else "sharing", "schema_version": 1, "apps": []}
+    document = {"mode": "private" if requested == "sharing" else "sharing", "schema_version": 2, "apps": []}
     if document["mode"] == "private":
-        document.update(secret_values={}, missing_secret_keys=["ONE", "TWO"])
+        document.update(platform_api_tokens=[])
 
     async def export(db: sqlite3.Connection, apps_dir: str, mode: ExportMode) -> str:
         assert mode == requested

@@ -64,13 +64,7 @@
       if (!response.ok || response.redirected
           || (response.headers.get('Content-Type') || '').split(';')[0].trim().toLowerCase() !== 'application/yaml'
           || response.headers.get('X-App-Definitions-Mode') !== requestedMode
-          || response.headers.get('X-App-Definitions-Schema-Version') !== '1') {
-        throw new Error('Invalid export');
-      }
-      var missingHeader = response.headers.get('X-App-Definitions-Missing-Count');
-      var missingCount = Number(missingHeader);
-      if (!/^[0-9]+$/.test(missingHeader || '') || !Number.isSafeInteger(missingCount)
-          || (requestedMode === 'sharing' && missingCount !== 0)) {
+           || response.headers.get('X-App-Definitions-Schema-Version') !== '2') {
         throw new Error('Invalid export');
       }
       // The server validates YAML structure and privacy; keep its text opaque and byte-for-byte intact.
@@ -81,9 +75,7 @@
       output.textContent = text;
       copyButton.disabled = false;
       downloadButton.disabled = false;
-      status.textContent = missingCount
-        ? 'Ready. ' + missingCount + ' referenced ' + (missingCount === 1 ? 'secret is' : 'secrets are') + ' not configured.'
-        : 'Ready.';
+      status.textContent = 'Ready.';
     } catch (error) {
       if (current()) status.textContent = 'Could not load app definitions. Reload to try again.';
     } finally {
