@@ -44,6 +44,23 @@
 <code>{{ text }}</code>
 {%- endmacro %}
 
+{% macro public_paths_value() -%}
+{% if public_paths %}
+{% for path in public_paths %}
+<code>{{ path }}</code>{% if not loop.last %}, {% endif %}
+{% endfor %}
+<p class="hint">
+  {% if "/" in public_paths %}
+  All paths are accessible without Cloud in a Bottle login.
+  {% else %}
+  These paths and their subpaths are accessible without Cloud in a Bottle login.
+  {% endif %}
+</p>
+{% else %}
+None. All paths require Cloud in a Bottle login.
+{% endif %}
+{%- endmacro %}
+
 {#- Action rows pair the button with a one-line explanation of what it does. -#}
 {% macro action_label(name, note, danger=false) -%}
 {{ name }}<span class="action-note{% if danger %} action-note--danger{% endif %}">{{ note }}</span>
@@ -73,6 +90,7 @@
     {{ info_row("Version", app.version) }}
     {{ info_row("Description", app.description or "---") }}
     {{ info_row("URL", url_value()) }}
+    {{ info_row("Public paths", public_paths_value()) }}
     {{ info_row("Local port", app.local_port) }}
     {{ info_row("Health check", app.health_check or "---") }}
     {{ info_row("Memory", app.memory_mb ~ " MB") }}

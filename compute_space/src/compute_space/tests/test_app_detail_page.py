@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 from collections.abc import Iterator
 from pathlib import Path
@@ -11,7 +12,9 @@ from litestar.di import Provide
 from litestar.plugins.jinja import JinjaTemplateEngine
 from litestar.template.config import TemplateConfig
 from litestar.testing import TestClient
+from markupsafe import escape
 
+from compute_space.config import Config
 from compute_space.config import provide_config
 from compute_space.config import set_active_config
 from compute_space.db import provide_db
@@ -81,3 +84,65 @@ def test_app_detail_renders_error_row(cfg: Any) -> None:
         resp_ok = client.get("/app_detail/ok-app")
         assert resp_ok.status_code == 200
         assert '<tr id="app-error-row" hidden>' in resp_ok.text
+
+
+@pytest.mark.parametrize(
+    ("public_paths", "explanation"),
+    [
+        ([], "None. All paths require Cloud in a Bottle login."),
+        (
+            ["/api", "/assets/"],
+            "These paths and their subpaths are accessible without Cloud in a Bottle login.",
+        ),
+        (["/"], "All paths are accessible without Cloud in a Bottle login."),
+        (["/api", "/"], "All paths are accessible without Cloud in a Bottle login."),
+        (
+            ['/"><script>alert("public-path")</script>&'],
+            "These paths and their subpaths are accessible without Cloud in a Bottle login.",
+        ),
+    ],
+    ids=["private", "subpaths", "entire-app", "root-with-other-paths", "html-escaping"],
+)
+def test_app_detail_shows_active_public_paths(cfg: Config, public_paths: list[str], explanation: str) -> None:
+    set_active_config(cfg)
+    # The router's stored paths are authoritative, even if the raw manifest differs.
+    manifest_raw = (
+        '[app]\nname = "public-app"\nversion = "2.0.0"\n'
+        '[runtime.container]\nimage = "Dockerfile"\nport = 8000\n'
+        '[routing]\npublic_paths = ["/not-active"]\n'
+    )
+    with sqlite3.connect(cfg.db_path) as conn:
+        conn.execute(
+            """INSERT INTO apps (app_id, name, version, repo_path, local_port, status, public_paths, manifest_raw)
+               VALUES ('public-app-id', 'public-app', '1.0.0', '/tmp/public-app', 19125, 'running', ?, ?)""",
+            (json.dumps(public_paths), manifest_raw),
+        )
+
+    with TestClient(app=_build_app(cfg)) as client:
+        client.cookies.update(auth_cookie(cfg))
+        response = client.get("/app_detail/public-app")
+
+    assert response.status_code == 200
+    assert '<th scope="row">Public paths</th>' in response.text
+    assert explanation in response.text
+    for path in public_paths:
+        assert f"<code>{escape(path)}</code>" in response.text
+    assert "/not-active" not in response.text
+    assert '<script>alert("public-path")</script>' not in response.text
+
+
+def test_app_detail_shows_private_default(cfg: Config) -> None:
+    set_active_config(cfg)
+    with sqlite3.connect(cfg.db_path) as conn:
+        conn.execute(
+            """INSERT INTO apps (app_id, name, version, repo_path, local_port, status)
+               VALUES ('private-app-id', 'private-app', '1.0.0', '/tmp/private-app', 19125, 'stopped')"""
+        )
+
+    with TestClient(app=_build_app(cfg)) as client:
+        client.cookies.update(auth_cookie(cfg))
+        response = client.get("/app_detail/private-app")
+
+    assert response.status_code == 200
+    assert '<th scope="row">Public paths</th>' in response.text
+    assert "None. All paths require Cloud in a Bottle login." in response.text
