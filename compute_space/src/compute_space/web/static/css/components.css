@@ -861,6 +861,18 @@ table.form-table input[type="password"] {
   outline-offset: 1px;
 }
 
+#app-definition-load {
+  overflow-wrap: anywhere;
+}
+
+#app-definition-file {
+  max-width: 100%;
+}
+
+#app-definition-apps > li {
+  margin-block: var(--space-2);
+}
+
 /* ── Deploy page ────────────────────────────────────────────────────── */
 
 .port-mappings {
