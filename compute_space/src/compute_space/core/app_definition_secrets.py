@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import sqlite3
 from contextvars import ContextVar
 
 import attr
@@ -8,17 +9,19 @@ import httpx
 
 from compute_space.core.proxy_target import client_for
 from compute_space.core.service_interface.headers import router_consumer_headers
+from compute_space.core.service_interface.provider import ProviderUnavailable
 from compute_space.core.service_interface.provider import ResolvedProvider
+from compute_space.core.service_interface.resolve import resolve_provider
 
 SECRETS_SERVICE_URL = "github.com/imbue-openhost/openhost/services/secrets"
 SECRETS_VERSION = ">=0.1.0,<0.2.0"
 
-_reading_secrets: ContextVar[bool] = ContextVar("reading_export_secrets", default=False)
+_accessing_secrets: ContextVar[bool] = ContextVar("accessing_definition_secrets", default=False)
 
 
 class _SecretTransportFilter(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
-        return not _reading_secrets.get()
+        return not _accessing_secrets.get()
 
 
 # HTTPX logs upstream reason phrases at INFO; HTTPcore logs headers and exceptions at DEBUG.
@@ -61,11 +64,11 @@ async def _request(http: httpx.AsyncClient, url: str, keys: list[str] | None = N
 
 async def read_secret_values(provider: ResolvedProvider, referenced_keys: set[str]) -> SecretReadResult:
     """Read only approved keys, using one pinned target for wildcard enumeration and retrieval."""
-    token = _reading_secrets.set(True)
+    token = _accessing_secrets.set(True)
     try:
         return await _read_secret_values(provider, referenced_keys)
     finally:
-        _reading_secrets.reset(token)
+        _accessing_secrets.reset(token)
 
 
 async def _read_secret_values(provider: ResolvedProvider, referenced_keys: set[str]) -> SecretReadResult:
@@ -108,3 +111,79 @@ async def _read_secret_values(provider: ResolvedProvider, referenced_keys: set[s
     return SecretReadResult(
         values={key: values[key] for key in sorted(present_keys)}, missing=tuple(sorted(missing_keys))
     )
+
+
+class SecretImportError(RuntimeError):
+    def __init__(self, message: str, saved_secret_count: int = 0) -> None:
+        super().__init__(message)
+        self.saved_secret_count = saved_secret_count
+
+
+def _secret_descriptions(body: object) -> dict[str, str | None]:
+    if not isinstance(body, list):
+        raise ValueError
+    descriptions: dict[str, str | None] = {}
+    for entry in body:
+        if not isinstance(entry, dict):
+            raise ValueError
+        key = entry.get("key", entry.get("name"))
+        description = entry.get("description", "")
+        if (
+            not isinstance(key, str)
+            or not key
+            or key in descriptions
+            or (description is not None and not isinstance(description, str))
+        ):
+            raise ValueError
+        descriptions[key] = description
+    return descriptions
+
+
+async def import_secret_values(db: sqlite3.Connection, values: dict[str, str]) -> int:
+    """Owner-confirmed UPSERTs through one captured provider's existing owner JSON API."""
+    if not values:
+        return 0
+    try:
+        provider = resolve_provider(SECRETS_SERVICE_URL, SECRETS_VERSION, db)
+    except ProviderUnavailable:
+        raise SecretImportError("An available, compatible selected Secrets provider is required.") from None
+    saved = 0
+    token = _accessing_secrets.set(True)
+    try:
+        http, base_url = client_for(provider.target, timeout=30.0, trust_env=False)
+        # This is an owner API at a fixed path, not the provider's read-only V2 service endpoint.
+        endpoint = f"{base_url}/api/secrets"
+        headers = dict(router_consumer_headers([])) | {"X-OpenHost-Is-Owner": "true"}
+        async with http:
+            response = await http.get(endpoint, headers=headers, follow_redirects=False)
+            if response.status_code != 200:
+                raise ValueError
+            descriptions = _secret_descriptions(response.json())
+            # Check every outgoing description before any writes, not while encoding each POST.
+            for key in values:
+                if (description := descriptions.get(key, "")) is not None:
+                    description.encode("utf-8")
+            for key, value in sorted(values.items()):
+                response = await http.post(
+                    endpoint,
+                    headers=headers,
+                    json={"key": key, "value": value, "description": descriptions.get(key, "")},
+                    follow_redirects=False,
+                )
+                if response.status_code not in (200, 201):
+                    raise ValueError
+                body = response.json()
+                if not isinstance(body, dict) or body.get("ok") is not True:
+                    raise ValueError
+                saved += 1
+        return saved
+    except Exception:
+        # A failed response can follow a successful write. Report only confirmed saves and
+        # never imply HTTP requests form an atomic transaction or expose upstream details.
+        raise SecretImportError(
+            "Selected Secrets provider could not complete its owner API request. "
+            "Some values may already have been saved. Check Secrets before retrying.",
+            saved,
+        ) from None
+    finally:
+        _accessing_secrets.reset(token)

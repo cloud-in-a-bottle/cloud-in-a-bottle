@@ -69,6 +69,28 @@
        aria-label="App definitions YAML" tabindex="0"></pre>
 </details>
 
+<section id="app-definition-load" aria-labelledby="app-definition-load-title">
+  <h3 id="app-definition-load-title">Load apps and secrets</h3>
+  <div class="field">
+    <label for="app-definition-file">Exported app YAML</label>
+    <input type="file" id="app-definition-file" accept=".yaml,.yml" autocomplete="off"
+           aria-describedby="app-definition-load-hint">
+    <p class="hint" id="app-definition-load-hint">Choose a YAML file up to 1 MiB. Existing apps and unavailable sources are skipped.</p>
+  </div>
+  <ul id="app-definition-apps" hidden></ul>
+  <p class="hint" id="app-definition-secret-keys" hidden></p>
+  <p class="hint" id="app-definition-missing-keys" hidden></p>
+  <label id="app-definition-consent-label" hidden>
+    <input type="checkbox" id="app-definition-consent" autocomplete="off">
+    <span id="app-definition-consent-text"></span>
+  </label>
+  <div class="action-bar">
+    <button type="button" class="btn btn--primary" id="app-definition-deploy" disabled>Load apps</button>
+    <span class="hint" id="app-definition-load-status" role="status" aria-atomic="true"></span>
+    <a href="/dashboard" id="app-definition-progress" hidden>Check dashboard progress</a>
+  </div>
+</section>
+
 {% call section_head("Logs") %}{% endcall %}
 <pre class="log-output log-output--tall" id="cs-logs" role="region"
      aria-label="Cloud in a Bottle logs" tabindex="0"></pre>
@@ -87,4 +109,5 @@
 <script src="{{ static_url('js/chart.js') }}"></script>
 <script src="{{ static_url('js/system.js') }}"></script>
 <script src="{{ static_url('js/app-definition-export.js') }}"></script>
+<script src="{{ static_url('js/app-definition-load.js') }}"></script>
 {% endblock %}

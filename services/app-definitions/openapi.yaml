@@ -24,8 +24,12 @@ info:
     including permission_required so the proxy can decorate required_grant. Before builtin dispatch,
     the service proxy's existing authentication, shortname and provider-resolution responses apply.
 
-    This is a minimal definition summary, not an import format, backup, lockfile, or
-    reproducibility guarantee. It excludes manifests, commands, images, environment values,
+    The System page can load this minimal definition summary through separate owner-only
+    parse and import-secrets APIs, then submit ready apps to the existing add_app API.
+    The builtin service remains read-only; export grants do not authorize loading.
+    See README.md for the loader contract and its additive install and secret replacement semantics.
+    This is not a backup, lockfile, or reproducibility guarantee.
+    It excludes manifests, commands, images, environment values,
     arbitrary grants, descriptions, local paths, app data, runtime IDs/status, owner tokens,
     and platform settings. Remote source URLs omit userinfo, parameters, query and fragment;
     ref is the configured @ref, not an inferred deployed commit. Local sources cannot be
