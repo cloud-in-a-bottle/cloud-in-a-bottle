@@ -1,5 +1,6 @@
 import hashlib
 import json
+import socket
 import sqlite3
 from collections.abc import Iterator
 from pathlib import Path
@@ -15,10 +16,11 @@ from playwright.sync_api import Request
 from playwright.sync_api import Route
 from playwright.sync_api import expect
 from test_accessibility import WCAG_AA_TAGS
-from test_accessibility import stack as stack
 
 from compute_space.tests.local_stack import LocalStack
 from compute_space.tests.local_stack import complete_setup
+from compute_space.tests.local_stack import make_local_stack_config
+from compute_space.tests.utils import managed_router
 
 EXPORT_PATH = "/api/app-definitions/export"
 RAW_KEY = "SYNTHETIC-ORIGINAL-KEY-NEVER-EXPORTED"
@@ -102,6 +104,21 @@ def _local_only(route: Route) -> None:
         route.continue_()
     else:
         route.abort()
+
+
+@pytest.fixture(scope="module")
+def stack(tmp_path_factory: pytest.TempPathFactory) -> Iterator[LocalStack]:
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        port = int(sock.getsockname()[1])
+    config = make_local_stack_config(
+        data_root_dir=str(tmp_path_factory.mktemp("app-definitions")),
+        port=port,
+        zone_name="app-definitions",
+        default_apps=[],
+    )
+    with managed_router(config):
+        yield LocalStack(config=config)
 
 
 @pytest.fixture(scope="module")
