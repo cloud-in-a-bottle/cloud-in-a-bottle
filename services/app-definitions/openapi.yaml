@@ -1,0 +1,210 @@
+openapi: 3.0.3
+info:
+  title: Cloud in a Bottle App Definitions Service
+  version: 0.1.0
+  description: |
+    Service identifier: github.com/cloud-in-a-bottle/cloud-in-a-bottle/services/app-definitions
+
+    Call POST /export through the normal authenticated V2 service proxy, using an app's
+    declared shortname and app token. Requires an approved global {"mode":"sharing"}
+    or {"mode":"private"} grant. Private also permits sharing; sharing never permits private.
+    The owner-only equivalent is POST /api/app-definitions/export, authenticated by an
+    owner session or API key. Send Content-Type: application/json and a JSON body such as
+    {"mode":"sharing"} or {"mode":"private"}; an empty object defaults to sharing.
+    Send Accept: application/yaml for the canonical, readable block YAML used by the System
+    preview, copy and .yaml download. Accept: application/json, an omitted Accept header,
+    or an unqualified wildcard defaults to deterministic pretty-printed JSON for compatibility.
+    Accept quality and specificity select between the two; q=0 excludes a representation.
+    If neither is acceptable, the compatibility fallback is JSON. Both representations
+    encode the same logical document and preserve exact strings, including empty values
+    and line endings. Successful responses include Vary: Accept and authoritative
+    X-App-Definitions-Mode and X-App-Definitions-Schema-Version
+    headers derived from the exported document. The owner adapter and builtin handler always
+    return Cache-Control: no-store. Their errors remain application/json regardless of Accept,
+    including permission_required so the proxy can decorate required_grant. Before builtin dispatch,
+    the service proxy's existing authentication, shortname and provider-resolution responses apply.
+
+    This is a minimal definition summary, not a full backup, lockfile, or reproducibility
+    guarantee. It excludes manifests, commands, images, environment values, grants,
+    descriptions, local paths, app data, runtime IDs/status, app tokens, session tokens,
+    user passwords and platform settings. Remote source URLs omit userinfo, parameters, query and fragment;
+    ref is the configured @ref, not an inferred deployed commit. Local sources cannot be
+    reconstructed. A builtin identifier is the source directory name under the configured
+    bundled apps directory, identified from stored metadata without filesystem inspection.
+
+    Apps are sorted by name and published port mappings by label. Private always adds
+    platform_api_tokens, including an empty array when there are no records. Each record
+    contains name, token_hash (the stored lowercase SHA256 verifier, never a raw API key),
+    and expires_at (the exact stored timezone-aware ISO timestamp, or null for no expiry).
+    Expired records are included. Token records are sorted by name then token_hash;
+    duplicate names with different hashes are preserved. Original key strings are not
+    available. Owner and already-approved Private service exports include the same records.
+    Sharing omits platform_api_tokens and the exporter never queries api_tokens in that mode.
+    Apps, ports and token records are read from one database snapshot, with no writes or HTTP calls.
+    All apps use the same definition fields; their database contents remain ordinary app data.
+
+    Document schema_version is 2. Older files containing Secrets-app values must be
+    re-exported. The unreleased service interface remains version 0.1.0; schema_version
+    identifies the file format independently of the operation and permission interface.
+paths:
+  /export:
+    post:
+      summary: Export minimal app definitions
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                mode:
+                  type: string
+                  enum: [sharing, private]
+                  default: sharing
+      responses:
+        "200":
+          description: Deterministic schema v2 YAML or pretty-printed JSON, selected by Accept. Private always includes platform_api_tokens. Sharing omits it.
+          headers:
+            Cache-Control:
+              $ref: "#/components/headers/NoStore"
+            Vary:
+              description: The successful representation depends on Accept.
+              schema: {type: string, enum: [Accept]}
+            X-App-Definitions-Mode:
+              description: The mode in this response's document.
+              schema: {type: string, enum: [sharing, private]}
+            X-App-Definitions-Schema-Version:
+              description: The schema_version in this response's document.
+              schema: {type: string, enum: ['2']}
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Export"
+            application/yaml:
+              schema:
+                $ref: "#/components/schemas/Export"
+        "400":
+          description: Invalid JSON object or mode (including null or a non-string mode).
+          headers:
+            Cache-Control:
+              $ref: "#/components/headers/NoStore"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ExportError"
+        "403":
+          description: permission_required with required_grant containing the global mode grant. The proxy adds grant_url.
+          headers:
+            Cache-Control:
+              $ref: "#/components/headers/NoStore"
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [code, required_grant]
+                properties:
+                  code: {type: string, enum: [permission_required]}
+                  required_grant:
+                    type: object
+                    required: [grant, scope]
+                    properties:
+                      grant:
+                        type: object
+                        required: [mode]
+                        properties:
+                          mode: {type: string, enum: [sharing, private]}
+                      scope: {type: string, enum: [global]}
+                      grant_url: {type: string}
+        "500":
+          description: Export failed. Error details are sanitized.
+          headers:
+            Cache-Control:
+              $ref: "#/components/headers/NoStore"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ExportError"
+components:
+  headers:
+    NoStore:
+      description: Export responses must not be stored in caches.
+      schema: {type: string, enum: [no-store]}
+  schemas:
+    ExportError:
+      type: object
+      required: [error]
+      additionalProperties: false
+      properties:
+        error: {type: string, enum: [App definition export failed.]}
+    Export:
+      type: object
+      additionalProperties: false
+      required: [schema_version, mode, apps]
+      oneOf:
+        - properties:
+            mode: {enum: [sharing]}
+          not:
+            required: [platform_api_tokens]
+        - properties:
+            mode: {enum: [private]}
+          required: [platform_api_tokens]
+      properties:
+        schema_version:
+          type: integer
+          enum: [2]
+        mode:
+          type: string
+          enum: [sharing, private]
+        apps:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [name, source, port_mappings]
+            properties:
+              name:
+                type: string
+              source:
+                oneOf:
+                  - type: object
+                    additionalProperties: false
+                    required: [kind, repo_url, ref]
+                    properties:
+                      kind: {type: string, enum: [remote]}
+                      repo_url: {type: string}
+                      ref: {type: string, nullable: true}
+                  - type: object
+                    additionalProperties: false
+                    required: [kind, identifier]
+                    properties:
+                      kind: {type: string, enum: [builtin]}
+                      identifier: {type: string}
+                  - type: object
+                    additionalProperties: false
+                    required: [kind]
+                    properties:
+                      kind: {type: string, enum: [local, unknown]}
+              port_mappings:
+                type: array
+                items:
+                  type: object
+                  additionalProperties: false
+                  required: [label, container_port, host_port]
+                  properties:
+                    label: {type: string}
+                    container_port: {type: integer}
+                    host_port: {type: integer}
+        platform_api_tokens:
+          type: array
+          description: All platform API-token verifier records, ordered by name then token_hash. Expired records and duplicate names are preserved.
+          items:
+            type: object
+            additionalProperties: false
+            required: [name, token_hash, expires_at]
+            properties:
+              name: {type: string}
+              token_hash: {type: string, pattern: '^[0-9a-f]{64}$'}
+              expires_at:
+                type: string
+                nullable: true
+                description: Exact stored timezone-aware ISO timestamp, or null for no expiry.
