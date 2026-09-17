@@ -14,7 +14,6 @@ from playwright.sync_api import Request
 from playwright.sync_api import Route
 from playwright.sync_api import expect
 from test_accessibility import WCAG_AA_TAGS
-from test_accessibility import stack as stack
 from test_app_definition_export_browser import PRIVATE_LABEL
 from test_app_definition_export_browser import _copy
 from test_app_definition_export_browser import _download
@@ -25,6 +24,7 @@ from test_app_definition_export_browser import _open
 from test_app_definition_export_browser import _ready
 from test_app_definition_export_browser import export_owner as export_owner
 from test_app_definition_export_browser import export_page as export_page
+from test_app_definition_export_browser import stack as stack
 
 from compute_space.tests.local_stack import LocalStack
 from compute_space.web.helpers.app_definition_export import dump_export_yaml
