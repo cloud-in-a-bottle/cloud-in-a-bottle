@@ -242,6 +242,32 @@ class TestApplyWalkE2E:
         assert result.stdout.strip() == "active", f"Service not active: {result.stdout}\n{result.stderr}"
         _assert_healthy(c)
 
+    def test_restart_without_dns_or_build_cache(self) -> None:
+        c = self.container
+        cache = "/home/host/.cache/rattler/cache/uv-cache"
+        parked_cache = "/home/host/.cache/rattler/cache/uv-cache.offline-test"
+        resolver_backup = "/tmp/offline-test-resolv.conf"
+        _exec(c, "systemctl", "stop", "openhost")
+        _exec(c, "cp", "/etc/resolv.conf", resolver_backup)
+        _exec(c, "mv", cache, parked_cache)
+        try:
+            _exec(
+                c,
+                "sh",
+                "-c",
+                "printf 'nameserver 127.0.0.1\\noptions attempts:1 timeout:1\\n' > /etc/resolv.conf",
+            )
+            assert _exec(c, "getent", "ahostsv4", "pypi.org", check=False).returncode != 0
+            # The real pre-start hook changes source ctime. Startup must use the
+            # installed environment even though rebuilding would require PyPI.
+            _exec(c, "systemctl", "restart", "openhost")
+            _assert_healthy(c)
+        finally:
+            _exec(c, "systemctl", "stop", "openhost", check=False)
+            _exec(c, "cp", resolver_backup, "/etc/resolv.conf")
+            _exec(c, "rm", "-rf", cache)
+            _exec(c, "mv", parked_cache, cache)
+
     # ── Multi-tag walk in a single invocation, then idempotent re-apply ──
 
     @pytest.fixture(scope="class")

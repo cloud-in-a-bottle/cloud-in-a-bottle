@@ -79,7 +79,9 @@ def build_openhost_service_unit(host_uid: int) -> str:
         f"Environment=XDG_RUNTIME_DIR=/run/user/{host_uid}\n"
         f"Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/{host_uid}/bus\n"
         + RECLAIM_EXEC_START_PRE
-        + "ExecStart=/home/host/.pixi/bin/pixi run python -m compute_space\n"
+        # Provisioning and updates install dependencies. Reclaiming ownership can
+        # invalidate editable-package metadata, so avoid rebuilding on restart.
+        + "ExecStart=/home/host/.pixi/bin/pixi run --as-is python -m compute_space\n"
         # Auto-restart on crash (bounded by StartLimit* above). compute_space is
         # the parent of the in-process CoreDNS + Caddy children, so when it dies
         # they die with it and the instance loses authoritative DNS *and* HTTP/S
