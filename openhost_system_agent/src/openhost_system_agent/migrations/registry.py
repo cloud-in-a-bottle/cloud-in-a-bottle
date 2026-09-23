@@ -18,6 +18,10 @@ from openhost_system_agent.migrations.versions.v0011_git_http_version import Mig
 from openhost_system_agent.migrations.versions.v0012_uniform_certificate_paths import (
     Migration0012UniformCertificatePaths,
 )
+from openhost_system_agent.migrations.versions.v0013_pixi_run_as_is import Migration0013PixiRunAsIs
+from openhost_system_agent.migrations.versions.v0014_selective_ownership_repair import (
+    Migration0014SelectiveOwnershipRepair,
+)
 
 # Numbered migrations in apply order. Versions MUST start at 2 and be
 # contiguous. v1 is the baseline produced by ansible setup.yml.
@@ -33,6 +37,8 @@ REGISTRY: list[SystemMigration] = [
     Migration0010JournalReadForOom(),
     Migration0011GitHttpVersion(),
     Migration0012UniformCertificatePaths(),
+    Migration0013PixiRunAsIs(),
+    Migration0014SelectiveOwnershipRepair(),
 ]
 
 

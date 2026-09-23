@@ -4,11 +4,12 @@
 # before the host `git`/`pixi run`. Managed by Cloud in a Bottle; keep byte-identical
 # with RECLAIM_SCRIPT in the openhost_system_agent baseline (v0002_baseline.py).
 # Best-effort: one overall timeout, failure swallowed, so it can't block startup.
+# Skip correct ownership: even a no-op chown changes ctime and invalidates editable builds.
 # shellcheck disable=SC2016  # $dir is expanded by the inner `sh -c`, not here.
 timeout 80 sh -c '
 for dir in /home/host/openhost /home/host/.pixi; do
     if [ -e "$dir" ]; then
-        chown -Rh host:host "$dir"
+        find "$dir" \( ! -user host -o ! -group host \) -exec chown -h host:host {} +
     fi
 done
 ' || :
