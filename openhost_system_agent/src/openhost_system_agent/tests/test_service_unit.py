@@ -94,7 +94,8 @@ class TestOpenhostServiceUnit:
 
 class TestReclaimScript:
     def test_script_chowns_host_trees_to_host(self) -> None:
-        assert "chown -Rh host:host" in RECLAIM_SCRIPT
+        assert "-exec chown -h host:host {} +" in RECLAIM_SCRIPT
+        assert "! -user host -o ! -group host" in RECLAIM_SCRIPT
         # The repo tree (covers its .pixi env, .git, working tree) and the
         # standalone pixi tree (binary + caches).
         assert "/home/host/openhost" in RECLAIM_SCRIPT

@@ -199,6 +199,19 @@ def _assert_healthy(container: str) -> None:
     assert '"ok"' in body or '"status"' in body
 
 
+def _file_state(container: str, path: str) -> str:
+    return _exec(
+        container,
+        _ENV_PYTHON,
+        "-c",
+        "import hashlib,json,sys; from pathlib import Path; "
+        "p=Path(sys.argv[1]); s=p.stat(); "
+        "print(json.dumps([s.st_uid,s.st_gid,s.st_mode,s.st_mtime_ns,s.st_ctime_ns,"
+        "hashlib.sha256(p.read_bytes()).hexdigest()]))",
+        path,
+    ).stdout
+
+
 @contextmanager
 def _without_dns_or_build_cache(container: str, *, repair_environment: bool = False) -> Iterator[Callable[[], None]]:
     cache = "/home/host/.cache/rattler/cache/uv-cache"
@@ -296,12 +309,56 @@ class TestApplyWalkE2E:
 
     def test_restart_without_dns_or_build_cache(self) -> None:
         c = self.container
+        # Fetch checks run a different ownership-repair path from service boot.
+        # A local origin lets that path run while the package index is offline.
+        _build_tagged_origin(c, "/tmp/origin_offline_check.git", ["v1"], checkout="v1")
+        agent = _agent_path(c)
+        before = _file_state(c, f"{_REPO}/pyproject.toml")
         _exec(c, "systemctl", "stop", "openhost")
         with _without_dns_or_build_cache(c):
-            # The real pre-start hook changes source ctime. Startup must use the
-            # installed environment even though rebuilding would require PyPI.
+            check = _exec(c, "sudo", agent, "update", "fetch", check=False)
+            assert check.returncode == 0, f"local update check failed:\n{check.stdout}\n{check.stderr}"
+            assert _file_state(c, f"{_REPO}/pyproject.toml") == before
             _exec(c, "systemctl", "restart", "openhost")
             _assert_healthy(c)
+            assert _file_state(c, f"{_REPO}/pyproject.toml") == before
+
+    @pytest.mark.parametrize("reclaimer", ["boot", "system-agent"])
+    def test_reclaim_preserves_correct_files_and_does_not_follow_symlinks(self, reclaimer: str) -> None:
+        c = self.container
+        metadata = f"{_REPO}/.pixi/envs/default/conda-meta/pixi"
+        link = f"{_REPO}/.reclaim-test-link"
+        group_only = f"{_REPO}/.reclaim-test-group"
+        outside = "/tmp/reclaim-outside-target"
+        outside_file = f"{outside}/keep-root-owned"
+        _exec(c, "systemctl", "stop", "openhost")
+        _exec(c, "mkdir", outside)
+        _exec(c, "touch", outside_file, group_only)
+        _exec(c, "chown", "root:root", outside, outside_file, metadata, _REPO)
+        _exec(c, "chown", "host:root", group_only)
+        _exec(c, "ln", "-s", outside, link)
+        before = _file_state(c, f"{_REPO}/pyproject.toml")
+        outside_before = _file_state(c, outside_file)
+        command = (
+            ["/usr/local/bin/openhost-reclaim-pixi"]
+            if reclaimer == "boot"
+            else [
+                _ENV_PYTHON,
+                "-c",
+                "from openhost_system_agent.reclaim import reclaim_host_ownership; reclaim_host_ownership()",
+            ]
+        )
+        try:
+            for _ in range(2):
+                _exec(c, *command)
+                assert _file_state(c, f"{_REPO}/pyproject.toml") == before
+                assert _file_state(c, outside_file) == outside_before
+                for path in (_REPO, metadata, group_only, link):
+                    assert _exec(c, "stat", "-c", "%U:%G", path).stdout.strip() == "host:host"
+        finally:
+            _exec(c, "chown", "host:host", _REPO, metadata)
+            _exec(c, "rm", "-f", link, group_only)
+            _exec(c, "rm", "-rf", outside)
 
     def test_crash_recovers_offline_and_repairs_environment_ownership(self) -> None:
         c = self.container
@@ -572,7 +629,28 @@ class TestApplyWalkE2E:
     def test_failed_update_recovers_when_package_index_returns(self) -> None:
         c = self.container
         origin = "/tmp/origin_failed_install.git"
-        _build_tagged_origin(c, origin, ["v1", "v2"], checkout="v1")
+        _build_tagged_origin(c, origin, ["v1"], checkout="v1")
+        # The destination genuinely changes packaging metadata. An empty tag
+        # no longer needs rebuilding when ownership repair leaves ctime alone.
+        _exec(
+            c,
+            "sudo",
+            "-u",
+            "host",
+            "-H",
+            _ENV_PYTHON,
+            "-c",
+            "import re; from pathlib import Path; p=Path('pyproject.toml'); "
+            "text,count=re.subn(r'(?m)^description = .+$', "
+            "'description = \"Updated package metadata\"', p.read_text(), count=1); "
+            "assert count == 1; p.write_text(text)",
+        )
+        publish = _host_sh(
+            c,
+            f"cd {_REPO} && git add pyproject.toml && git commit -q -m metadata "
+            "&& git tag v2 && git push -q origin v2 && git checkout -q v1",
+        )
+        assert publish.returncode == 0, f"metadata update fixture failed:\n{publish.stdout}\n{publish.stderr}"
         # Resolve the installed entrypoint while online. Resolving it through
         # pixi after the fault would synchronize the environment before apply.
         agent = _agent_path(c)

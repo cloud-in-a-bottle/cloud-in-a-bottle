@@ -35,11 +35,12 @@ RECLAIM_SCRIPT = """#!/bin/sh
 # before the host `git`/`pixi run`. Managed by Cloud in a Bottle; keep byte-identical
 # with RECLAIM_SCRIPT in the openhost_system_agent baseline (v0002_baseline.py).
 # Best-effort: one overall timeout, failure swallowed, so it can't block startup.
+# Skip correct ownership: even a no-op chown changes ctime and invalidates editable builds.
 # shellcheck disable=SC2016  # $dir is expanded by the inner `sh -c`, not here.
 timeout 80 sh -c '
 for dir in /home/host/openhost /home/host/.pixi; do
     if [ -e "$dir" ]; then
-        chown -Rh host:host "$dir"
+        find "$dir" \\( ! -user host -o ! -group host \\) -exec chown -h host:host {} +
     fi
 done
 ' || :
@@ -79,9 +80,7 @@ def build_openhost_service_unit(host_uid: int) -> str:
         f"Environment=XDG_RUNTIME_DIR=/run/user/{host_uid}\n"
         f"Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/{host_uid}/bus\n"
         + RECLAIM_EXEC_START_PRE
-        # Provisioning and updates install dependencies. Reclaiming ownership can
-        # invalidate editable-package metadata, so avoid rebuilding on restart.
-        + "ExecStart=/home/host/.pixi/bin/pixi run --as-is python -m compute_space\n"
+        + "ExecStart=/home/host/.pixi/bin/pixi run python -m compute_space\n"
         # Auto-restart on crash (bounded by StartLimit* above). compute_space is
         # the parent of the in-process CoreDNS + Caddy children, so when it dies
         # they die with it and the instance loses authoritative DNS *and* HTTP/S
