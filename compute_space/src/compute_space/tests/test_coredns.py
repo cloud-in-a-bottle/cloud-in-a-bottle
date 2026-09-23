@@ -3,17 +3,23 @@
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import sqlite3
 from contextlib import closing
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Any
 
 import pytest
+from hypothesis import given
+from hypothesis import note
+from hypothesis import strategies as st
 
 import compute_space.core.dns.coredns_provider.coredns as dns_mod
 from compute_space.config import DefaultConfig
 from compute_space.core.containers import CONTAINER_GATEWAY_IP
 from compute_space.core.dns.coredns_provider.interface import DnsNotEnabled
+from compute_space.core.dns.coredns_provider.interface import DnsRecord
 from compute_space.core.dns.coredns_provider.interface import InternalDnsProvider
 from compute_space.core.dns.coredns_provider.interface import RecordType
 from compute_space.core.dns.router_records import publish_router_addresses
@@ -34,6 +40,20 @@ APP_ZONE = "app.example.com"
 # Passed explicitly wherever a render is asserted on, so the Corefile doesn't depend on whatever
 # nameservers the machine running the tests happens to have.
 TEST_UPSTREAM = ("192.0.2.53",)
+
+# Keep relative names within the DNS length limit, including their eventual zone suffix.
+_DNS_LABEL = st.from_regex(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", fullmatch=True)
+_RELATIVE_NAME = st.lists(_DNS_LABEL, min_size=1, max_size=3).map(".".join)
+
+
+def _unbound_provider(directory: Path) -> InternalDnsProvider:
+    # Disabling only the public view still allows container DNS to start.
+    return InternalDnsProvider(
+        corefile_path=directory / "Corefile",
+        zones_dir=directory / "zones",
+        bind_ip=None,
+        container_gateway_ip=None,
+    )
 
 
 def _seed_dns_cfg(tmp_path: Path, *domains: Domain, **kw: Any) -> DefaultConfig:
@@ -108,6 +128,96 @@ def test_container_dns_view_rendered_when_a_gateway_is_given(tmp_path: Path) -> 
     assert PUBLIC_IP not in cz
 
 
+@pytest.mark.parametrize("zone", ["bottle.local", "lvh.me"])
+@pytest.mark.parametrize(
+    "bind_ip,gateway",
+    [(BIND_IP, None), (None, CONTAINER_GATEWAY_IP), (BIND_IP, CONTAINER_GATEWAY_IP)],
+    ids=["public-only", "container-only", "both"],
+)
+def test_local_only_zone_files_use_only_the_container_view(
+    tmp_path: Path, zone: str, bind_ip: str | None, gateway: str | None
+) -> None:
+    records = tuple(DnsRecord(name, RecordType.A, 300, PUBLIC_IP) for name in ("@", "*"))
+    dns_mod.write_coredns_config(
+        (zone,),
+        records,
+        serial=1,
+        corefile_path=tmp_path / "Corefile",
+        zones_dir=tmp_path / "zones",
+        bind_ip=bind_ip,
+        container_gateway_ip=gateway,
+        upstream_dns=TEST_UPSTREAM,
+    )
+    corefile = (tmp_path / "Corefile").read_text()
+    public_path = tmp_path / "zones" / f"{zone}.zone"
+    private_path = public_path.with_name(public_path.name + ".container")
+    assert f"bind {BIND_IP}" not in corefile
+    assert not public_path.exists()
+    assert corefile.count(f"{zone}:53 {{") == int(gateway is not None)
+    if gateway is None:
+        assert not private_path.exists()
+    else:
+        assert f"bind {gateway}" in corefile
+        assert f"file {private_path}" in corefile
+        private_zone = private_path.read_text()
+        assert f"@   IN A    {gateway}" in private_zone
+        assert f"*   IN A    {gateway}" in private_zone
+        assert PUBLIC_IP not in private_zone
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("zone", ["bottle.local", "lvh.me"])
+@pytest.mark.parametrize(
+    "bind_ip,gateway",
+    [(BIND_IP, None), (None, CONTAINER_GATEWAY_IP), (BIND_IP, CONTAINER_GATEWAY_IP)],
+    ids=["public-only", "container-only", "both"],
+)
+async def test_local_only_container_zone_lifecycle(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, zone: str, bind_ip: str | None, gateway: str | None
+) -> None:
+    stub_coredns_spawn(monkeypatch)
+    dns = InternalDnsProvider(tmp_path / "Corefile", tmp_path / "zones", bind_ip, container_gateway_ip=gateway)
+    normalized_alias = f" {zone.upper()}. "
+    await dns.add_zone(normalized_alias)
+    try:
+        if gateway is None:
+            await dns.start()
+            await dns.remove_zone(normalized_alias)
+            assert dns.zones == ()
+            assert dns._coredns is None
+            assert not dns.corefile_path.exists()
+            return
+
+        assert dns.zones == (zone,)
+        assert dns._coredns is not None
+        publish_router_addresses(dns, PUBLIC_IP)
+        private_path = dns.zones_dir / f"{zone}.zone.container"
+        assert f"@   IN A    {gateway}" in private_path.read_text()
+        assert f"*   IN A    {gateway}" in private_path.read_text()
+        assert not (dns.zones_dir / f"{zone}.zone").exists()
+        process = dns._coredns.proc
+        serial = _serial(private_path)
+        await dns.add_zone(zone)
+        assert dns._coredns.proc is process
+        assert _serial(private_path) == serial
+
+        await dns.add_zone(APP_ZONE)
+        assert dns.zones == (zone, APP_ZONE)
+        assert (dns.zones_dir / f"{APP_ZONE}.zone").exists() is (bind_ip is not None)
+        await dns.remove_zone(normalized_alias)
+        assert dns.zones == (APP_ZONE,)
+        assert not private_path.exists()
+        assert f"{zone}:53" not in dns.corefile_path.read_text()
+        await dns.remove_zone(APP_ZONE)
+        assert dns.zones == ()
+        assert dns._coredns is not None  # The gateway's forwarding resolver remains available.
+        assert f"bind {BIND_IP}" not in dns.corefile_path.read_text()
+        assert "forward . " in dns.corefile_path.read_text()
+    finally:
+        await dns.cleanup()
+    assert dns._coredns is None
+
+
 def test_upstream_resolvers_come_from_the_host(tmp_path: Path) -> None:
     # Hardcoding public resolvers breaks a split-horizon corporate resolver, a VPN's, or a cloud
     # VPC's internal zone, and routes every container query past the resolver the operator set.
@@ -130,6 +240,37 @@ def test_unusable_host_resolvers_are_dropped(tmp_path: Path) -> None:
     assert resolvers == ("10.0.0.53",)
 
 
+@pytest.mark.parametrize("excluded", ["loopback", "gateway"])
+@given(
+    gateway=st.ip_addresses(network="fd00::/8"),
+    retained=st.ip_addresses(network="192.0.2.0/24"),
+    expanded=st.booleans(),
+    uppercase=st.booleans(),
+    whitespace=st.sampled_from([" ", "\t", "   "]),
+)
+def test_unusable_ipv6_resolvers_are_filtered_by_address(
+    excluded: str,
+    gateway: ipaddress.IPv6Address,
+    retained: ipaddress.IPv4Address,
+    expanded: bool,
+    uppercase: bool,
+    whitespace: str,
+) -> None:
+    # Equivalent IPv6 spellings must not bypass the loopback/self-forwarding exclusion.
+    address = ipaddress.IPv6Address("::1") if excluded == "loopback" else gateway
+    spelling = address.exploded if expanded else address.compressed
+    if uppercase:
+        spelling = spelling.upper()
+    note(f"excluded={spelling!r}, gateway={str(gateway)!r}, retained={str(retained)!r}")
+    with TemporaryDirectory() as directory:
+        resolv_conf = Path(directory) / "resolv.conf"
+        resolv_conf.write_text(f"nameserver {address.compressed}\nnameserver {retained}\n")
+        assert dns_mod.host_upstream_resolvers(str(gateway), resolv_conf) == (str(retained),)
+
+        resolv_conf.write_text(f"nameserver{whitespace}{spelling}\nnameserver {retained}\n")
+        assert dns_mod.host_upstream_resolvers(str(gateway), resolv_conf) == (str(retained),)
+
+
 @pytest.mark.parametrize("contents", ["", "nameserver 127.0.0.53\n"])
 def test_public_resolvers_are_the_fallback_not_the_default(tmp_path: Path, contents: str) -> None:
     # Nothing usable left (or no resolv.conf at all): containers resolving via the wrong servers
@@ -139,6 +280,33 @@ def test_public_resolvers_are_the_fallback_not_the_default(tmp_path: Path, conte
 
     assert dns_mod.host_upstream_resolvers(resolv_conf=resolv_conf) == dns_mod.FALLBACK_UPSTREAM_DNS
     assert dns_mod.host_upstream_resolvers(resolv_conf=tmp_path / "absent") == dns_mod.FALLBACK_UPSTREAM_DNS
+
+
+@pytest.mark.parametrize(
+    "invalid_entry",
+    [
+        b"nameserver resolver.example\n",
+        b"nameserver 999.0.0.1\n",
+        b"nameserver 2001::db8::1\n",
+        b"nameserver \xff\n",
+    ],
+    ids=["hostname", "ipv4", "ipv6", "encoding"],
+)
+def test_invalid_resolvers_do_not_discard_valid_upstreams(tmp_path: Path, invalid_entry: bytes) -> None:
+    resolv_conf = tmp_path / "resolv.conf"
+    resolv_conf.write_bytes(invalid_entry)
+    assert dns_mod.host_upstream_resolvers(resolv_conf=resolv_conf) == dns_mod.FALLBACK_UPSTREAM_DNS
+
+    # Private addresses and IPv6 scope IDs are useful operator-provided resolvers, not fallback triggers.
+    resolv_conf.write_bytes(invalid_entry + b"nameserver 10.0.0.53\nnameserver FE80::53%eth0\n")
+    assert dns_mod.host_upstream_resolvers(resolv_conf=resolv_conf) == ("10.0.0.53", "FE80::53%eth0")
+
+
+@pytest.mark.parametrize("address", ["::ffff:127.0.0.53", "::ffff:10.200.0.1"])
+def test_ipv4_mapped_loopback_and_gateway_resolvers_are_dropped(tmp_path: Path, address: str) -> None:
+    resolv_conf = tmp_path / "resolv.conf"
+    resolv_conf.write_text(f"nameserver {address}\nnameserver 10.0.0.53\n")
+    assert dns_mod.host_upstream_resolvers("10.200.0.1", resolv_conf) == ("10.0.0.53",)
 
 
 def test_container_dns_view_skipped_without_a_gateway(tmp_path: Path) -> None:
@@ -170,6 +338,36 @@ def test_container_view_forward_and_distinct_bind(tmp_path: Path) -> None:
 
 
 # ─── which zones get served ───
+
+
+@pytest.mark.asyncio
+@given(prefix=_RELATIVE_NAME)
+async def test_mdns_zones_need_no_dns_view(prefix: str) -> None:
+    # Canonical lowercase input isolates .local label matching from zone normalization.
+    with TemporaryDirectory() as directory:
+        dns = _unbound_provider(Path(directory))
+        await dns.add_zone(f"{prefix}.local")
+        assert dns.zones == ()
+        assert not dns.corefile_path.exists()
+
+
+@pytest.mark.asyncio
+@given(prefix=_RELATIVE_NAME, uppercase=st.booleans(), absolute=st.booleans())
+async def test_loopback_alias_zones_are_normalized_before_exclusion(
+    prefix: str, uppercase: bool, absolute: bool
+) -> None:
+    # lvh.me aliases already resolve, including case variants and absolute DNS names.
+    canonical = f"{prefix}.lvh.me"
+    zone = canonical.upper() if uppercase else canonical
+    if absolute:
+        zone += "."
+    note(f"zone={zone!r}")
+    with TemporaryDirectory() as directory:
+        dns = _unbound_provider(Path(directory))
+        await dns.add_zone(canonical)
+        await dns.add_zone(zone)
+        assert dns.zones == ()
+        assert not dns.corefile_path.exists()
 
 
 def test_zone_set_covers_every_public_domain_and_skips_mdns(tmp_path: Path) -> None:
@@ -312,6 +510,43 @@ async def test_a_zone_this_instance_cannot_serve_is_refused(tmp_path: Path) -> N
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("zone", ["notlocal", "notlvh.me", "local.example"])
+async def test_local_only_exclusion_respects_label_boundaries(tmp_path: Path, zone: str) -> None:
+    dns = _unbound_provider(tmp_path)
+    with pytest.raises(DnsNotEnabled):
+        await dns.add_zone(zone)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("local_zone", ["host.local", "HOST.LOCAL.", "lvh.me", "APP.LVH.ME."])
+async def test_normalized_zone_changes_preserve_local_only_no_ops(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, local_zone: str
+) -> None:
+    stub_coredns_spawn(monkeypatch)
+    config = _seed_dns_cfg(tmp_path, Domain(APP_ZONE, tls=True))
+    dns = _provider(config)
+    await dns.add_zone(APP_ZONE)
+    try:
+        assert dns._coredns is not None
+        process = dns._coredns.proc
+        serial = _serial(_zonefile(config, APP_ZONE))
+        await dns.add_zone(f" {APP_ZONE.upper()}. ")
+        await dns.add_zone(local_zone)
+        await dns.remove_zone(local_zone)
+        assert dns.zones == (APP_ZONE,)
+        assert dns._coredns is not None
+        assert dns._coredns.proc is process
+        assert _serial(_zonefile(config, APP_ZONE)) == serial
+
+        await dns.remove_zone(f" {APP_ZONE.upper()}. ")
+        assert dns.zones == ()
+        assert dns._coredns is None
+        assert not _zonefile(config, APP_ZONE).exists()
+    finally:
+        await dns.cleanup()
+
+
+@pytest.mark.asyncio
 async def test_the_first_zone_starts_coredns_and_the_last_one_leaving_stops_it(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -429,6 +664,34 @@ def test_setting_a_record_replaces_the_whole_rrset(tmp_path: Path) -> None:
     assert "198.51.100.8" not in content
 
 
+@pytest.mark.parametrize("operation", ["replace", "delete"])
+@given(
+    name=_RELATIVE_NAME,
+    initial=st.lists(st.ip_addresses(v=4).map(str), min_size=1, max_size=3, unique=True),
+    replacement=st.lists(st.ip_addresses(v=4).map(str), max_size=3, unique=True),
+    uppercase=st.booleans(),
+    ttl=st.integers(0, 2**31 - 1),
+)
+def test_rrset_mutations_use_case_insensitive_owner_names(
+    operation: str, name: str, initial: list[str], replacement: list[str], uppercase: bool, ttl: int
+) -> None:
+    # DNS owner names are case-insensitive (RFC 4343); the operation replaces/removes the whole RRset.
+    changed_name = name.upper() if uppercase else name
+    note(f"name={name!r}, changed_name={changed_name!r}, initial={initial!r}, replacement={replacement!r}")
+    with TemporaryDirectory() as directory:
+        dns = _unbound_provider(Path(directory))
+        dns.set_records(name, RecordType.A, initial, ttl=ttl)
+        if operation == "replace":
+            dns.set_records(changed_name, RecordType.A, replacement, ttl=ttl)
+            expected = set(replacement)
+        else:
+            dns.delete_records(changed_name, RecordType.A)
+            expected = set()
+        # Compare DNS values, not record order, preserved owner spelling or duplicate counts.
+        assert {record.data for record in dns.records} == expected
+        assert not dns.corefile_path.exists()
+
+
 def test_deleting_a_record_leaves_the_others_alone_and_is_safe_to_repeat(tmp_path: Path) -> None:
     config = _seed_dns_cfg(tmp_path, Domain(name="host.example.com", tls=True))
     with closing(open_db(config)) as db:
@@ -520,6 +783,34 @@ def test_an_unchanged_write_does_not_touch_the_zone(tmp_path: Path) -> None:
     dns.set_records("www", RecordType.A, ["198.51.100.7"])
 
     assert _serial(_zonefile(config, "host.example.com")) == before
+
+
+def test_case_variant_rrset_writes_preserve_data_ttl_and_idempotence(tmp_path: Path) -> None:
+    config = _seed_dns_cfg(tmp_path, Domain(APP_ZONE, tls=True))
+    dns = _provider(config, (APP_ZONE,))
+    value = 'MiXeD Token; "Quoted" \\ Value'
+    dns.set_records("_Service", RecordType.TXT, [value], ttl=60)
+    before = _serial(_zonefile(config, APP_ZONE))
+
+    dns.set_records("_SERVICE", RecordType.TXT, [value], ttl=60)
+    assert _serial(_zonefile(config, APP_ZONE)) == before
+    assert dns.records == (DnsRecord("_service", RecordType.TXT, 60, value),)
+
+    dns.set_records("_sErViCe", RecordType.TXT, [value], ttl=180)
+    assert _serial(_zonefile(config, APP_ZONE)) > before
+    assert dns.records == (DnsRecord("_service", RecordType.TXT, 180, value),)
+    dns.delete_records("_SERVICE", RecordType.TXT)
+    assert dns.records == ()
+
+
+def test_rrset_owner_normalization_preserves_name_syntax_and_non_ascii(tmp_path: Path) -> None:
+    dns = _unbound_provider(tmp_path)
+    for name in ("@", "*", "WWW", "WWW.", "TÉST"):
+        dns.set_records(name, RecordType.TXT, ["Case-Sensitive"], ttl=60)
+    assert {record.name for record in dns.records} == {"@", "*", "www", "www.", "tÉst"}
+    assert {(record.data, record.ttl) for record in dns.records} == {("Case-Sensitive", 60)}
+    dns.delete_records("wWw", RecordType.TXT)
+    assert {record.name for record in dns.records} == {"@", "*", "www.", "tÉst"}
 
 
 def test_zone_caches_addresses_long_but_negative_answers_briefly(tmp_path: Path) -> None:

@@ -25,7 +25,7 @@ def validate_owner_username(value: str) -> str | None:
         return "Username is required."
     if len(value) > OWNER_USERNAME_MAX_LEN:
         return f"Username must be at most {OWNER_USERNAME_MAX_LEN} characters."
-    if not _OWNER_USERNAME_RE.match(value):
+    if not _OWNER_USERNAME_RE.fullmatch(value):
         return (
             "Username must start with a lowercase letter or digit and contain only"
             " lowercase letters, digits, `.`, `_` or `-`."

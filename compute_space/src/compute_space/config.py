@@ -2,8 +2,12 @@ import os
 import re
 import tomllib
 from pathlib import Path
+from types import UnionType
 from typing import Any
 from typing import Self
+from typing import Union
+from typing import get_args
+from typing import get_origin
 
 import attr
 import cattrs
@@ -139,7 +143,18 @@ class Config:
     def from_toml(cls, path: str) -> Self:
         with open(path, "rb") as f:
             d = tomllib.load(f)
-        return cattrs.structure(d.get("openhost", d), cls)
+        values = d.get("openhost", d)
+        if isinstance(values, dict):
+            # The writer omits None. Reconstruct it only when there is no declared
+            # default; cattrs still owns subclass defaults and required-field errors.
+            for field in attr.fields(cls):
+                if (
+                    field.default is attr.NOTHING
+                    and get_origin(field.type) in (Union, UnionType)
+                    and type(None) in get_args(field.type)
+                ):
+                    values.setdefault(field.name, None)
+        return cattrs.structure(values, cls)
 
     @property
     def persistent_data_dir(self) -> str:

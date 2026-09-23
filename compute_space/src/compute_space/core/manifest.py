@@ -257,6 +257,16 @@ def manifest_setting_labels() -> dict[str, SettingLabel]:
     return labels
 
 
+def _manifest_table(data: dict[str, Any], *path: str) -> dict[str, Any]:
+    """Read an optional table, rejecting non-table values at every level of its path."""
+    for depth, key in enumerate(path, start=1):
+        table = data.get(key, {})
+        if not isinstance(table, dict):
+            raise ValueError(f"[{'.'.join(path[:depth])}] must be a table")
+        data = table
+    return data
+
+
 def _validate_devices(devices: list[Any]) -> list[str]:
     """Normalise and validate ``[runtime.container].devices`` entries.
 
@@ -306,6 +316,8 @@ def _validate_capabilities(caps: list[Any]) -> list[str]:
 
 def _parse_ports(ports_list: list[Any]) -> list[PortMapping]:
     """Parse and validate [[ports]] entries from manifest data."""
+    if not isinstance(ports_list, list):
+        raise ValueError("[[ports]] must be a list of tables")
     seen_labels: set[str] = set()
     seen_container_ports: set[int] = set()
     seen_host_ports: set[int] = set()
@@ -384,6 +396,8 @@ def _parse_cpu_cores(resources: dict[str, Any], app_name: str) -> float:
 
 
 def _structure_list(data: list[Any], cls: type[Any], label: str) -> list[Any]:
+    if not isinstance(data, list):
+        raise ValueError(f"[[{label}]] must be a list of tables")
     try:
         return [cattrs.structure(entry, cls) for entry in data]
     except (cattrs.ClassValidationError, TypeError, KeyError) as exc:
@@ -391,7 +405,7 @@ def _structure_list(data: list[Any], cls: type[Any], label: str) -> list[Any]:
 
 
 def _parse_services_v2(data: dict[str, Any]) -> list[ServiceProvides]:
-    entries = data.get("services", {}).get("v2", {}).get("provides", [])
+    entries = _manifest_table(data, "services", "v2").get("provides", [])
     provides = _structure_list(entries, ServiceProvides, "services.v2.provides")
     for p in provides:
         # This version is written to the DB and then ordered against the other providers' when
@@ -406,7 +420,9 @@ def _parse_services_v2(data: dict[str, Any]) -> list[ServiceProvides]:
 
 
 def _parse_services_v2_consumes(data: dict[str, Any]) -> list[ServiceConsumes]:
-    raw_entries = data.get("services", {}).get("v2", {}).get("consumes", [])
+    raw_entries = _manifest_table(data, "services", "v2").get("consumes", [])
+    if not isinstance(raw_entries, list):
+        raise ValueError("[[services.v2.consumes]] must be a list of tables")
     perms: list[ServiceConsumes] = []
     seen_shortnames: set[str] = set()
     for entry in raw_entries:
@@ -452,18 +468,18 @@ def parse_manifest_from_string(raw_text: str) -> AppManifest:
     """Parse an app manifest (``cloudinabottle.toml``) from its string content."""
     data = tomllib.loads(raw_text)
 
-    app_section = data.get("app", {})
+    app_section = _manifest_table(data, "app")
     if not app_section.get("name"):
         raise ValueError("Manifest missing required [app].name")
     if not app_section.get("version"):
         raise ValueError("Manifest missing required [app].version")
 
-    runtime = data.get("runtime", {})
+    runtime = _manifest_table(data, "runtime")
     runtime_type = runtime.get("type", "serverfull")
     if runtime_type not in ("serverless", "serverfull"):
         raise ValueError(f"Invalid runtime type: {runtime_type}")
 
-    container = runtime.get("container", {})
+    container = _manifest_table(data, "runtime", "container")
     if not container.get("image"):
         raise ValueError("[runtime.container].image is required")
     if not container.get("port"):
@@ -473,9 +489,9 @@ def parse_manifest_from_string(raw_text: str) -> AppManifest:
     if not isinstance(shm_mb, int) or shm_mb < 0:
         raise ValueError("[runtime.container].shm_mb must be a non-negative integer")
 
-    routing = data.get("routing", {})
-    resources = data.get("resources", {})
-    data_section = data.get("data", {})
+    routing = _manifest_table(data, "routing")
+    resources = _manifest_table(data, "resources")
+    data_section = _manifest_table(data, "data")
 
     app_name = app_section["name"]
 

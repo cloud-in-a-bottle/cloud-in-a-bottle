@@ -2,8 +2,15 @@
 
 from __future__ import annotations
 
+import string
+
+import pytest
+from hypothesis import given
+from hypothesis import strategies as st
+
 from compute_space.core.app_id import APP_ID_LENGTH
 from compute_space.core.app_id import is_valid_app_id
+from compute_space.core.app_id import is_valid_app_name
 from compute_space.core.app_id import new_app_id
 
 
@@ -32,3 +39,30 @@ def test_is_valid_app_id_rejects_obvious_garbage():
     # Punctuation, spaces, etc.
     assert is_valid_app_id("a" * (APP_ID_LENGTH - 1) + " ") is False
     assert is_valid_app_id("a" * (APP_ID_LENGTH - 1) + "-") is False
+
+
+@given(
+    name=st.one_of(
+        st.text(),
+        st.tuples(
+            st.text(alphabet=string.ascii_lowercase + string.digits + "-", min_size=1),
+            st.sampled_from(["", "\n", "\r", "\t", " ", "_"]),
+        ).map("".join),
+    )
+)
+def test_app_name_matches_documented_grammar(name: str) -> None:
+    alphanumeric = string.ascii_lowercase + string.digits
+    expected = (
+        bool(name)
+        and name[0] in alphanumeric
+        and name[-1] in alphanumeric
+        and all(character in alphanumeric + "-" for character in name)
+    )
+    assert is_valid_app_name(name) == expected
+
+
+@pytest.mark.parametrize("name", ["0", "a", "test-app"])
+@pytest.mark.parametrize("suffix", ["\n", "\r\n"])
+def test_app_name_rejects_trailing_line_break(name: str, suffix: str) -> None:
+    assert is_valid_app_name(name)
+    assert not is_valid_app_name(name + suffix)
