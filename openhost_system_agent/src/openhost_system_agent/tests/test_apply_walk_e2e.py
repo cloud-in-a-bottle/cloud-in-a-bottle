@@ -13,7 +13,9 @@ inside an Ubuntu+systemd container, exercising the phased-update control flow:
   * ``show_diff`` pending-commit listing,
   * idempotent re-apply on an already-latest host,
   * migrations alone installing and enabling the openhost.service unit,
-    independent of any tag walk.
+    independent of any tag walk,
+  * offline crash recovery with ownership repair,
+  * automatic recovery when dependency installation fails during an update.
 
 DESIGN DECISION — migrations run once up front, then re-run as no-ops.
 ``setup_class`` runs the real migrations once so the baseline (v2) installs and
@@ -44,6 +46,9 @@ from __future__ import annotations
 import json
 import subprocess
 import time
+from collections.abc import Callable
+from collections.abc import Iterator
+from contextlib import contextmanager
 from typing import cast
 
 import pytest
@@ -65,6 +70,7 @@ from openhost_system_agent.tests.test_migration_container import _exec
 from openhost_system_agent.tests.test_migration_container import _host_sh
 from openhost_system_agent.tests.test_migration_container import _podman
 from openhost_system_agent.tests.test_migration_container import _start_container
+from openhost_system_agent.tests.test_migration_container import _wait_for_apply_unit
 from openhost_system_agent.tests.test_migration_container import _wait_for_health
 from openhost_system_agent.tests.test_migration_container import requires_containers
 
@@ -193,6 +199,65 @@ def _assert_healthy(container: str) -> None:
     assert '"ok"' in body or '"status"' in body
 
 
+def _file_state(container: str, path: str) -> str:
+    return _exec(
+        container,
+        _ENV_PYTHON,
+        "-c",
+        "import hashlib,json,sys; from pathlib import Path; "
+        "p=Path(sys.argv[1]); s=p.stat(); "
+        "print(json.dumps([s.st_uid,s.st_gid,s.st_mode,s.st_mtime_ns,s.st_ctime_ns,"
+        "hashlib.sha256(p.read_bytes()).hexdigest()]))",
+        path,
+    ).stdout
+
+
+@contextmanager
+def _without_dns_or_build_cache(container: str, *, repair_environment: bool = False) -> Iterator[Callable[[], None]]:
+    cache = "/home/host/.cache/rattler/cache/uv-cache"
+    parked_cache = "/home/host/.cache/rattler/cache/uv-cache.offline-test"
+    resolver_backup = "/tmp/offline-test-resolv.conf"
+    _exec(container, "cp", "/etc/resolv.conf", resolver_backup)
+    _exec(container, "test", "!", "-e", parked_cache)
+    had_cache = _exec(container, "test", "-d", cache, check=False).returncode == 0
+    if had_cache:
+        _exec(container, "mv", cache, parked_cache)
+
+    def restore_dns() -> None:
+        _exec(container, "cp", resolver_backup, "/etc/resolv.conf")
+
+    try:
+        # A documentation-only address cannot be answered by the running
+        # instance's own loopback DNS listener.
+        _exec(
+            container,
+            "sh",
+            "-c",
+            "printf 'nameserver 192.0.2.1\\noptions attempts:1 timeout:1\\n' > /etc/resolv.conf",
+        )
+        assert _exec(container, "getent", "ahostsv4", "pypi.org", check=False).returncode != 0
+        yield restore_dns
+    finally:
+        # A timed-out exec client does not stop the detached updater. Quiesce
+        # it and its failsafe before changing the cache or installed packages.
+        _exec(container, "systemctl", "stop", "--no-block", "openhost-apply.service", check=False)
+        _wait_for_apply_unit(container, timeout=120)
+        _exec(container, "systemctl", "stop", "openhost", check=False)
+        try:
+            restore_dns()
+        finally:
+            _exec(container, "rm", "-rf", cache)
+            if had_cache:
+                _exec(container, "mv", parked_cache, cache)
+        if repair_environment:
+            # Failed editable builds can remove the app and its CLI. Repair
+            # only after the automatic-recovery assertion has finished.
+            repair = _host_sh(container, f"cd {_REPO} && {_PIXI} install", timeout=300)
+            assert repair.returncode == 0, (
+                f"test cleanup could not repair the environment:\n{repair.stdout}\n{repair.stderr}"
+            )
+
+
 @requires_containers
 class TestApplyWalkE2E:
     """One container covers every apply/fetch/show_diff scenario.
@@ -241,6 +306,95 @@ class TestApplyWalkE2E:
         result = _exec(c, "systemctl", "is-active", "openhost", timeout=10)
         assert result.stdout.strip() == "active", f"Service not active: {result.stdout}\n{result.stderr}"
         _assert_healthy(c)
+
+    def test_restart_without_dns_or_build_cache(self) -> None:
+        c = self.container
+        # Fetch checks run a different ownership-repair path from service boot.
+        # A local origin lets that path run while the package index is offline.
+        _build_tagged_origin(c, "/tmp/origin_offline_check.git", ["v1"], checkout="v1")
+        agent = _agent_path(c)
+        before = _file_state(c, f"{_REPO}/pyproject.toml")
+        _exec(c, "systemctl", "stop", "openhost")
+        with _without_dns_or_build_cache(c):
+            check = _exec(c, "sudo", agent, "update", "fetch", check=False)
+            assert check.returncode == 0, f"local update check failed:\n{check.stdout}\n{check.stderr}"
+            assert _file_state(c, f"{_REPO}/pyproject.toml") == before
+            _exec(c, "systemctl", "restart", "openhost")
+            _assert_healthy(c)
+            assert _file_state(c, f"{_REPO}/pyproject.toml") == before
+
+    @pytest.mark.parametrize("reclaimer", ["boot", "system-agent"])
+    def test_reclaim_preserves_correct_files_and_does_not_follow_symlinks(self, reclaimer: str) -> None:
+        c = self.container
+        metadata = f"{_REPO}/.pixi/envs/default/conda-meta/pixi"
+        link = f"{_REPO}/.reclaim-test-link"
+        group_only = f"{_REPO}/.reclaim-test-group"
+        outside = "/tmp/reclaim-outside-target"
+        outside_file = f"{outside}/keep-root-owned"
+        _exec(c, "systemctl", "stop", "openhost")
+        _exec(c, "mkdir", outside)
+        _exec(c, "touch", outside_file, group_only)
+        _exec(c, "chown", "root:root", outside, outside_file, metadata, _REPO)
+        _exec(c, "chown", "host:root", group_only)
+        _exec(c, "ln", "-s", outside, link)
+        before = _file_state(c, f"{_REPO}/pyproject.toml")
+        outside_before = _file_state(c, outside_file)
+        command = (
+            ["/usr/local/bin/openhost-reclaim-pixi"]
+            if reclaimer == "boot"
+            else [
+                _ENV_PYTHON,
+                "-c",
+                "from openhost_system_agent.reclaim import reclaim_host_ownership; reclaim_host_ownership()",
+            ]
+        )
+        try:
+            for _ in range(2):
+                _exec(c, *command)
+                assert _file_state(c, f"{_REPO}/pyproject.toml") == before
+                assert _file_state(c, outside_file) == outside_before
+                for path in (_REPO, metadata, group_only, link):
+                    assert _exec(c, "stat", "-c", "%U:%G", path).stdout.strip() == "host:host"
+        finally:
+            _exec(c, "chown", "host:host", _REPO, metadata)
+            _exec(c, "rm", "-f", link, group_only)
+            _exec(c, "rm", "-rf", outside)
+
+    def test_crash_recovers_offline_and_repairs_environment_ownership(self) -> None:
+        c = self.container
+        metadata = f"{_REPO}/.pixi/envs/default/conda-meta/pixi"
+        owner = _exec(c, "stat", "-c", "%u:%g", metadata).stdout.strip()
+        mode = _exec(c, "stat", "-c", "%a", metadata).stdout.strip()
+        _exec(c, "systemctl", "stop", "openhost")
+        try:
+            with _without_dns_or_build_cache(c):
+                _exec(c, "systemctl", "reset-failed", "openhost")
+                _exec(c, "systemctl", "start", "openhost")
+                _assert_healthy(c)
+                old_pid = _exec(c, "systemctl", "show", "openhost", "-p", "MainPID", "--value").stdout.strip()
+                old_restarts = int(_exec(c, "systemctl", "show", "openhost", "-p", "NRestarts", "--value").stdout)
+                _exec(c, "chown", "root:root", metadata)
+                _exec(c, "chmod", "0600", metadata)
+                _exec(c, "systemctl", "kill", "--kill-whom=main", "--signal=SIGKILL", "openhost")
+
+                # The old Python child can answer briefly after Pixi is killed.
+                # Require a new main process before accepting HTTP readiness.
+                deadline = time.monotonic() + 90
+                while time.monotonic() < deadline:
+                    pid = _exec(c, "systemctl", "show", "openhost", "-p", "MainPID", "--value").stdout.strip()
+                    if pid not in ("0", old_pid):
+                        break
+                    time.sleep(1)
+                else:
+                    pytest.fail("systemd did not automatically start a new process")
+                _assert_healthy(c)
+                restarts = int(_exec(c, "systemctl", "show", "openhost", "-p", "NRestarts", "--value").stdout)
+                assert restarts == old_restarts + 1
+                assert _exec(c, "stat", "-c", "%U:%G", metadata).stdout.strip() == "host:host"
+                assert _exec(c, "getent", "ahostsv4", "pypi.org", check=False).returncode != 0
+        finally:
+            _exec(c, "chown", owner, metadata)
+            _exec(c, "chmod", mode, metadata)
 
     # ── Multi-tag walk in a single invocation, then idempotent re-apply ──
 
@@ -471,3 +625,53 @@ class TestApplyWalkE2E:
         assert len(commits) == 2, f"expected 2 pending commits, got: {commits!r}"
         messages = [commit["message"] for commit in commits]
         assert "pending one" in messages and "pending two" in messages, f"missing pending messages: {messages!r}"
+
+    def test_failed_update_recovers_when_package_index_returns(self) -> None:
+        c = self.container
+        origin = "/tmp/origin_failed_install.git"
+        _build_tagged_origin(c, origin, ["v1"], checkout="v1")
+        # The destination genuinely changes packaging metadata. An empty tag
+        # no longer needs rebuilding when ownership repair leaves ctime alone.
+        _exec(
+            c,
+            "sudo",
+            "-u",
+            "host",
+            "-H",
+            _ENV_PYTHON,
+            "-c",
+            "import re; from pathlib import Path; p=Path('pyproject.toml'); "
+            "text,count=re.subn(r'(?m)^description = .+$', "
+            "'description = \"Updated package metadata\"', p.read_text(), count=1); "
+            "assert count == 1; p.write_text(text)",
+        )
+        publish = _host_sh(
+            c,
+            f"cd {_REPO} && git add pyproject.toml && git commit -q -m metadata "
+            "&& git tag v2 && git push -q origin v2 && git checkout -q v1",
+        )
+        assert publish.returncode == 0, f"metadata update fixture failed:\n{publish.stdout}\n{publish.stderr}"
+        # Resolve the installed entrypoint while online. Resolving it through
+        # pixi after the fault would synchronize the environment before apply.
+        agent = _agent_path(c)
+        _exec(c, "systemctl", "reset-failed", "openhost")
+        _exec(c, "systemctl", "start", "openhost")
+        _assert_healthy(c)
+        with _without_dns_or_build_cache(c, repair_environment=True) as restore_dns:
+            apply = _exec(c, "sudo", agent, "update", "apply", "--wait", timeout=180, check=False)
+            assert apply.returncode != 0, "update unexpectedly succeeded with PyPI unavailable"
+            assert _current_tag(c) == "v2", "update failed before checking out the destination"
+            progress = _exec(
+                c,
+                "cat",
+                "/home/host/.openhost/local_compute_space/persistent_data/openhost/updater/progress.jsonl",
+            ).stdout
+            entries = [json.loads(line) for line in progress.splitlines() if line.strip()]
+            assert any(entry["phase"] == "install" for entry in entries)
+            assert entries[-1]["phase"] == "failed"
+            assert "Dependency install failed" in entries[-1]["message"]
+
+            # Only the unavailable dependency source recovers. Do not
+            # manually install, start the service, or clear its limiter.
+            restore_dns()
+            _assert_healthy(c)
