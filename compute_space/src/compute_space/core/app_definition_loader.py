@@ -143,7 +143,8 @@ def _remote_url(source: RemoteSource) -> str:
             parsed.scheme not in {"http", "https", "git"}
             or portable_source(url, "") != RemoteSource(url, None)
             or any(c in url for c in "\\?#;")
-            or any(c.isspace() or ord(c) < 32 or ord(c) == 127 for c in url + path)
+            or any(c.isspace() or ord(c) < 32 or ord(c) == 127 for c in url)
+            or any((c.isspace() and c != " ") or ord(c) < 32 or ord(c) == 127 for c in path)
             or any(c in path for c in "@\\?#;%")
             or path.count("/") != parsed.path.count("/")
             or not path.strip("/")
@@ -157,7 +158,7 @@ def _remote_url(source: RemoteSource) -> str:
             or ref.endswith("/")
             or ".." in ref
             or "//" in ref
-            or any(c in ref for c in "@\\?#;%:^~[*")
+            or any(c in ref for c in "@\\?#;:^~[*")
             or any(c.isspace() or ord(c) < 32 or ord(c) == 127 for c in ref)
         ):
             raise ValueError

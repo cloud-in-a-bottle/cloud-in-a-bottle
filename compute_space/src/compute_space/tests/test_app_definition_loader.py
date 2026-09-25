@@ -145,9 +145,18 @@ def test_builtin_availability_and_containment(tmp_path: Path) -> None:
 
 @pytest.mark.parametrize(
     "url",
-    ["https://example.com/demo.git", "http://example.com:1234/demo", "git://example.com/demo", "https://[::1]/demo"],
+    [
+        "https://example.com/demo.git",
+        "http://example.com:1234/demo",
+        "git://example.com/demo",
+        "https://[::1]/demo",
+        "https://dev.azure.com/example/Project%20Name/_git/demo",
+    ],
 )
-@pytest.mark.parametrize("ref", [None, "main", "feature/foo", "refs/pull/390/head", "a" * 40, "référence"])
+@pytest.mark.parametrize(
+    "ref",
+    [None, "main", "feature/foo", "refs/pull/390/head", "a" * 40, "référence", "release%candidate", "main%3fsecret"],
+)
 def test_remote_refs_roundtrip_exactly(tmp_path: Path, url: str, ref: str | None) -> None:
     _make_test_config(tmp_path)
     source = {"kind": "remote", "repo_url": url, "ref": ref}
@@ -179,6 +188,13 @@ def test_remote_refs_roundtrip_exactly(tmp_path: Path, url: str, ref: str | None
         "https://example.com/demo%2fprivate",
         "https://example.com/\\private",
         "https://example.com/demo%0aprivate",
+        "https://example.com/demo%09private",
+        "https://example.com/demo%00private",
+        "https://example.com/demo%7fprivate",
+        "https://example.com/demo%C2%85private",
+        "https://example.com/demo%E2%80%A8private",
+        "https://example.com/demo%E2%80%A9private",
+        "https://example.com/demo private",
         "https://example.com/demo\n",
         "https://example.com:invalid/demo",
         "https://example.com",
@@ -200,7 +216,6 @@ def test_remote_url_smuggling_rejected(url: str) -> None:
         "main?secret",
         "main#secret",
         "main;secret",
-        "main%3fsecret",
         "--detach",
         "main\n",
         "a b",
