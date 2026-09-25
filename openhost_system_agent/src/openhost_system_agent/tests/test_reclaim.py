@@ -14,8 +14,7 @@ class TestReclaimHostOwnership:
                 reclaim.reclaim_host_ownership()
 
     def test_chowns_existing_paths_as_root(self) -> None:
-        # Both known host trees exist -> both chowned to host:host, recursively,
-        # with symlinks handled in place (-h).
+        # Traverse both trees physically, changing only mismatched ownership.
         with (
             patch("os.geteuid", return_value=0),
             patch("os.path.exists", return_value=True),
@@ -24,10 +23,13 @@ class TestReclaimHostOwnership:
             reclaim.reclaim_host_ownership()
 
         called_paths = [call.args[0] for call in mock_run.call_args_list]
-        assert called_paths == [
-            ["chown", "-Rh", "host:host", "/home/host/openhost"],
-            ["chown", "-Rh", "host:host", "/home/host/.pixi"],
+        assert [cmd[:2] for cmd in called_paths] == [
+            ["find", "/home/host/openhost"],
+            ["find", "/home/host/.pixi"],
         ]
+        for cmd in called_paths:
+            assert cmd[2:-6] == ["(", "!", "-user", "host", "-o", "!", "-group", "host", ")"]
+            assert cmd[-6:] == ["-exec", "chown", "-h", "host:host", "{}", "+"]
         for call in mock_run.call_args_list:
             assert call.kwargs["check"] is True
 
@@ -45,7 +47,7 @@ class TestReclaimHostOwnership:
             reclaim.reclaim_host_ownership()
 
         called_paths = [call.args[0] for call in mock_run.call_args_list]
-        assert called_paths == [["chown", "-Rh", "host:host", "/home/host/.pixi"]]
+        assert [cmd[:2] for cmd in called_paths] == [["find", "/home/host/.pixi"]]
 
     def test_noop_when_no_paths_exist(self) -> None:
         with (

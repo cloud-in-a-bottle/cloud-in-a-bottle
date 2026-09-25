@@ -47,11 +47,29 @@ def reclaim_host_ownership() -> None:
     for path in _HOST_PATHS:
         if not os.path.exists(path):
             continue
-        # -R to cover the whole tree; -h so symlinks are chowned in place
-        # rather than followed. check=True: a failure here means a tree may
-        # still be broken, so surface it rather than silently continuing.
+        # No-op chown still changes ctime, invalidating editable-package build
+        # metadata. Select only misowned entries, and handle symlinks in place.
+        # find's default physical walk never traverses their targets.
         subprocess.run(
-            ["chown", "-Rh", f"{HOST_USER}:{HOST_USER}", path],
+            [
+                "find",
+                path,
+                "(",
+                "!",
+                "-user",
+                HOST_USER,
+                "-o",
+                "!",
+                "-group",
+                HOST_USER,
+                ")",
+                "-exec",
+                "chown",
+                "-h",
+                f"{HOST_USER}:{HOST_USER}",
+                "{}",
+                "+",
+            ],
             check=True,
             timeout=120,
         )

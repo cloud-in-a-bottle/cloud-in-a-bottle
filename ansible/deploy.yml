@@ -1,5 +1,5 @@
 ---
-# Fast re-deploy: clone/update code from GitHub and restart the service.
+# Fast re-deploy: update code, install dependencies, and restart the service.
 # Usage: ansible-playbook ansible/deploy.yml -i <IP>, -e domain=<domain>
 # Optional: -e openhost_branch=<branch> to deploy a branch (defaults to main),
 #           or -e openhost_commit=<sha> to pin an exact commit.
@@ -10,4 +10,8 @@
   tasks:
     - import_tasks: tasks/reclaim_pixi.yml
     - import_tasks: tasks/sync_code.yml
+    - name: Install project dependencies
+      command: /home/host/.pixi/bin/pixi install
+      args:
+        chdir: /home/host/openhost
     - import_tasks: tasks/restart_openhost_service.yml
