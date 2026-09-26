@@ -25,6 +25,7 @@ dependencies = [
     "mdit-py-plugins",
     "packaging",
     "pygments",
+    "PyYAML>=6.0.3,<7",
     "tomli-w",
     "typed-settings>=25.3.0",
     "websockets",
@@ -172,8 +173,10 @@ playwright = "*"
 pytest-playwright = "*"
 axe-playwright-python = "==0.1.8"
 pytest-asyncio = "*"
+"ruamel.yaml" = ">=0.18"
 ruff = "==0.15.5"
 mypy = "*"
+types-PyYAML = "*"
 types-requests = "*"
 schemathesis = ">=4.0"
 pre-commit = "*"

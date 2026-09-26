@@ -1,0 +1,3 @@
+[service]
+name = "app-definitions"
+description = "Minimal app definitions for sharing or private export"

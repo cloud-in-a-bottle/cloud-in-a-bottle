@@ -80,7 +80,11 @@ SERVICE = "github.com/x/mailer"
 
 def _default_app_ids(client: TestClient[Any]) -> list[tuple[str, str]]:
     """What the settings page reads to preselect each service's provider."""
-    return [(p["service_url"], p["app_id"]) for p in client.get("/api/services/v2").json() if p["is_default"]]
+    return [
+        (p["service_url"], p["app_id"])
+        for p in client.get("/api/services/v2").json()
+        if p["is_default"] and p["service_url"] == SERVICE
+    ]
 
 
 def test_settings_page_renders_services_section(cfg: Any) -> None:
@@ -102,7 +106,7 @@ def test_list_services_returns_all_providers(cfg: Any) -> None:
         client.cookies.update(cookie)
         resp = client.get("/api/services/v2")
     assert resp.status_code == 200
-    names = sorted(p["app_name"] for p in resp.json())
+    names = sorted(p["app_name"] for p in resp.json() if p["service_url"] == SERVICE)
     assert names == ["mailer-a", "mailer-b"]
 
 
