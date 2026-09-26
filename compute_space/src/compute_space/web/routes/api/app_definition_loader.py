@@ -1,6 +1,7 @@
 import asyncio
 import json
 import sqlite3
+from contextlib import closing
 from typing import Any
 
 import attr
@@ -19,7 +20,9 @@ from compute_space.core.app_definition_loader import definition_plan
 from compute_space.core.app_definition_loader import import_platform_api_tokens
 from compute_space.core.app_definition_loader import parse_definition
 from compute_space.core.app_definitions import DefinitionExport
+from compute_space.core.app_definitions import PlatformApiToken
 from compute_space.core.app_definitions import PrivateDefinitionExport
+from compute_space.db import get_db
 from compute_space.web.auth.auth import require_owner_auth
 
 
@@ -45,6 +48,12 @@ async def _document(request: Request[Any, Any, Any]) -> DefinitionExport:
     if not isinstance(body, dict) or body.keys() != {"content"} or not isinstance(body.get("content"), str):
         raise DefinitionError("Expected a JSON object containing only YAML content.")
     return await asyncio.to_thread(parse_definition, body["content"])
+
+
+def _import_tokens(tokens: tuple[PlatformApiToken, ...]) -> int:
+    # The worker owns its connection even if the awaiting request is cancelled.
+    with closing(get_db()) as db:
+        return import_platform_api_tokens(db, tokens)
 
 
 @post(
@@ -80,5 +89,5 @@ async def owner_import_private(
     # Recheck the entire plan, including builtin containment, before the first write.
     definition_plan(document, db, config.apps_dir)
     tokens = document.platform_api_tokens if isinstance(document, PrivateDefinitionExport) else ()
-    added = import_platform_api_tokens(db, tokens)
+    added = await asyncio.to_thread(_import_tokens, tokens)
     return _response({"ok": True, "added_api_token_count": added, "existing_api_token_count": len(tokens) - added})

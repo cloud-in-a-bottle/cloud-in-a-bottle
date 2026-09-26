@@ -424,6 +424,25 @@ def test_old_files_require_reexport() -> None:
         parse_definition(dump_export_yaml(document() | {"schema_version": 1}))
 
 
+@pytest.mark.parametrize("field", ["expires_at", "ref"])
+@pytest.mark.parametrize("scalar", ["2000-01-01T00:00:00Z", "false", "42", f'"{SENTINEL}"', '" null "', "nUlL"])
+def test_invalid_tagged_null_cannot_discard_expiry_or_ref(field: str, scalar: str) -> None:
+    content = dump_export_yaml(document(private=True)).replace(f"{field}: null", f"{field}: !!null {scalar}")
+    with pytest.raises(DefinitionError, match="Invalid YAML null value") as error:
+        parse_definition(content)
+    assert SENTINEL not in str(error.value)
+
+
+@pytest.mark.parametrize("field", ["expires_at", "ref"])
+@pytest.mark.parametrize("scalar", ["", "''", "~", "null", "Null", "NULL"])
+def test_valid_tagged_null_representations_remain_supported(field: str, scalar: str) -> None:
+    content = dump_export_yaml(document(private=True)).replace(f"{field}: null", f"{field}: !!null {scalar}")
+    parsed = parse_definition(content)
+    assert isinstance(parsed, PrivateDefinitionExport)
+    assert attr.asdict(parsed.apps[0].source)["ref"] is None
+    assert parsed.platform_api_tokens[0].expires_at is None
+
+
 INVALID_TOKENS = [
     None,
     {},

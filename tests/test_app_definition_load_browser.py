@@ -922,6 +922,20 @@ def test_real_parser_rejects_v1_with_reexport_guidance(load_page: Page, stack: L
     assert not mutations
 
 
+@pytest.mark.parametrize("scalar", ["2000-01-01T00:00:00Z", '"not null"'])
+def test_real_parser_rejects_malformed_null_expiry(load_page: Page, stack: LocalStack, scalar: str) -> None:
+    page = load_page
+    mutations = _fake_mutations(page)
+    _open(page, stack)
+    content = FILE.replace("expires_at: null", f"expires_at: !!null {scalar}")
+    with page.expect_response(f"**{PARSE}") as response_info:
+        _upload(page, content)
+    assert response_info.value.status == 400
+    _status(page, READ_ERROR)
+    _empty(page)
+    assert not mutations
+
+
 @pytest.mark.parametrize("status", ["ready", "existing", "unavailable"])
 def test_secrets_app_is_an_ordinary_app(load_page: Page, stack: LocalStack, status: str) -> None:
     page = load_page

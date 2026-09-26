@@ -59,6 +59,8 @@ class _DefinitionLoader(yaml.SafeLoader):
             if node is None:
                 raise DefinitionError("Expected a YAML node.")
             if isinstance(node, ScalarNode):
+                if node.tag == "tag:yaml.org,2002:null" and node.value not in {"", "~", "null", "Null", "NULL"}:
+                    raise DefinitionError("Invalid YAML null value.")
                 # Bound numeric conversion work, including YAML's sexagesimal integers.
                 if node.tag == "tag:yaml.org,2002:int" and len(node.value) > 64:
                     raise DefinitionError("YAML integer scalars must be at most 64 characters.")

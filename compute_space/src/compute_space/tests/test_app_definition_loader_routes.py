@@ -40,6 +40,29 @@ IMPORT = "/api/app-definitions/import-private"
 
 
 @pytest.mark.parametrize("path", [PARSE, IMPORT])
+def test_malformed_null_expiry_rejected_before_any_token_write(client: TestClient[Litestar], path: str) -> None:
+    body = document(private=True, apps=[]) | {
+        "platform_api_tokens": [
+            token_record(raw="valid-first"),
+            token_record(raw="expired-second", expiry="malformed-null-marker"),
+        ]
+    }
+    content = dump_export_yaml(body).replace(
+        "expires_at: malformed-null-marker", "expires_at: !!null 2000-01-01T00:00:00Z"
+    )
+    with closing(get_db()) as db:
+        before = list(db.iterdump())
+    response = client.post(path, json={"content": content})
+    assert response.status_code == 400
+    assert_json_no_store(response)
+    assert response.json() == {"error": "Invalid YAML null value."}
+    with closing(get_db()) as db:
+        assert list(db.iterdump()) == before
+        assert validate_api_token("valid-first", db) is None
+        assert validate_api_token("expired-second", db) is None
+
+
+@pytest.mark.parametrize("path", [PARSE, IMPORT])
 @pytest.mark.parametrize(
     "auth",
     ["anonymous", "app", "private-grant", "spoofed", "app-spoofed", "bad-token", "expired-api", "expired-session"],
