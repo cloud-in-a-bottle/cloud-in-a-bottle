@@ -32,11 +32,17 @@ Each one is an ordinary app on its own subdomain, and you can remove any of them
 
 ## Installing apps
 
-Two routes, both ending in the same place.
+Install from the catalog, a repository, or an exported app definition file.
 
 **From the catalog.** Open the catalog app, find something, click Install. It hands you to the Deploy app page with the repository and name already filled in. The catalog is a curated feed of known-good apps; open a PR in the [app-manifest](https://github.com/cloud-in-a-bottle/app-manifest) repo to request adding a new app.
 
 **From a git repository.** Deploy app → paste the URL of any repo with a `cloudinabottle.toml` at its root. Private GitHub repos prompt for authorization the first time. The router clones the repo, reads the manifest, builds the container image, and starts the app at `https://<app>.<your-domain>/`. See [Creating an App](../creating_an_app/overview.md) for more on creating your own apps.
+
+**From app definitions.** On the System page, load an exported schema v2 Sharing or Private YAML file, review its apps and platform API-key names, then deploy. Older files must be re-exported. Loading installs only apps whose names are not already present and whose sources are available. Existing apps are skipped, and nothing is removed. Published host ports are passed to the normal install operation, which retains its usual permission-approval behavior.
+
+A Private file always includes platform API-key verifier records. Load adds these atomically before installing apps. Existing keys retain their names and absolute expiries; keys absent from the file remain valid, and repeated loading never extends an expiry. The original key strings continue to work on the destination until expiry; expired keys stay invalid. Different keys can share a name. If importing fails, app installation stops. Sharing files contain no API-key records.
+
+Definition files do not contain app data, databases or local source trees. The Secrets app is an ordinary app; its stored values remain ordinary app data. Local and unavailable bundled sources are skipped. Remote refs are configured branches, tags or commits, not a guarantee of the exact deployed version. Use [Backups and restore](./backups.md) for restoring data.
 
 ### Before you click install
 
