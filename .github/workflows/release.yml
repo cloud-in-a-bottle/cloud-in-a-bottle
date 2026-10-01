@@ -16,9 +16,11 @@ name: release
 # (openhost_system_agent/update.py), so there is exactly one tag scheme.
 #
 # Images are built for amd64 and arm64, each on a runner of its own arch, and
-# each is smoke tested (booted, claimed, default apps
-# deployed) before anything is published. Pull requests that touch the image
-# build, and manual runs on a branch, do the build and smoke test only.
+# each is smoke tested (booted, claimed, default apps deployed) before anything
+# is published. Pull requests that touch the image build, and manual runs on a
+# branch, do the build and smoke test only. Pull requests skip arm64, which
+# takes hours under emulation; build it locally (image/build.sh runs natively
+# on Apple silicon) or with a manual run.
 
 on:
   push:
@@ -62,26 +64,18 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - arch: amd64
-            runner: ubuntu-latest
-            qemu_packages: qemu-system-x86
-            kvm: true
-            vm_args: ""
-            timeout_minutes: 120
-          # GitHub's arm64 runners have no /dev/kvm, so this boots under TCG
-          # emulation: slow, so give the VM every core and a long deadline.
-          - arch: arm64
-            runner: ubuntu-24.04-arm
-            qemu_packages: qemu-system-arm qemu-efi-aarch64
-            kvm: false
-            vm_args: --cpus 4 --mem 8192 --timeout 12600
-            timeout_minutes: 350
-    runs-on: ${{ matrix.runner }}
+        arch: ${{ fromJSON(github.event_name == 'pull_request' && '["amd64"]' || '["amd64", "arm64"]') }}
+    runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
     # The build boots a VM and provisions it end to end, then the smoke test
     # boots it again and deploys the default apps; give it plenty of room.
     # build.sh and smoke_test.sh have their own deadlines inside this budget.
-    timeout-minutes: ${{ matrix.timeout_minutes }}
+    # GitHub's arm64 runners have no /dev/kvm, so arm64 boots under TCG
+    # emulation: slow, so give the VM every core and a long deadline.
+    timeout-minutes: ${{ matrix.arch == 'arm64' && 350 || 120 }}
+    env:
+      KVM: ${{ matrix.arch == 'amd64' }}
+      QEMU_PACKAGES: ${{ matrix.arch == 'arm64' && 'qemu-system-arm qemu-efi-aarch64' || 'qemu-system-x86' }}
+      VM_ARGS: ${{ matrix.arch == 'arm64' && '--cpus 4 --mem 8192 --timeout 12600' || '' }}
     steps:
       - name: Check out the release tag
         uses: actions/checkout@v4
@@ -91,10 +85,10 @@ jobs:
       - name: Install image build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y ${{ matrix.qemu_packages }} qemu-utils cloud-image-utils
+          sudo apt-get install -y $QEMU_PACKAGES qemu-utils cloud-image-utils
 
       - name: Enable KVM access
-        if: matrix.kvm
+        if: env.KVM == 'true'
         run: |
           # GitHub's 2-vCPU+ Linux runners (incl. ubuntu-latest) ship /dev/kvm,
           # but it's root:kvm 0660 — not writable by the runner user. Grant
@@ -107,7 +101,7 @@ jobs:
           sudo udevadm trigger --name-match=kvm
 
       - name: Require KVM
-        if: matrix.kvm
+        if: env.KVM == 'true'
         run: |
           ls -l /dev/kvm || true
           if [ ! -w /dev/kvm ]; then
@@ -124,7 +118,7 @@ jobs:
           # The ref provision.sh clones: the tag, or the PR / dispatched branch.
           BRANCH: ${{ github.head_ref || github.ref_name }}
         run: |
-          image/build.sh --arch ${{ matrix.arch }} ${{ matrix.vm_args }} \
+          image/build.sh --arch ${{ matrix.arch }} $VM_ARGS \
             --branch "$BRANCH" --version "${BRANCH//\//-}"
 
       - name: List built artifacts
@@ -132,7 +126,7 @@ jobs:
 
       - name: Smoke test the image
         run: |
-          image/smoke_test.sh --arch ${{ matrix.arch }} ${{ matrix.vm_args }} \
+          image/smoke_test.sh --arch ${{ matrix.arch }} $VM_ARGS \
             image/out/openhost-*-${{ matrix.arch }}.qcow2
 
       - name: Upload console logs
