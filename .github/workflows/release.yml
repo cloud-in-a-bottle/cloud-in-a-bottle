@@ -15,8 +15,8 @@ name: release
 # goes public. The same vX.Y.Z tags drive the host auto-updater
 # (openhost_system_agent/update.py), so there is exactly one tag scheme.
 #
-# Images are built for amd64 and arm64, each on a runner of its own arch so the
-# build boot gets KVM, and each is smoke tested (booted, claimed, default apps
+# Images are built for amd64 and arm64, each on a runner of its own arch, and
+# each is smoke tested (booted, claimed, default apps
 # deployed) before anything is published. Pull requests that touch the image
 # build, and manual runs on a branch, do the build and smoke test only.
 
@@ -66,14 +66,22 @@ jobs:
           - arch: amd64
             runner: ubuntu-latest
             qemu_packages: qemu-system-x86
+            kvm: true
+            vm_args: ""
+            timeout_minutes: 120
+          # GitHub's arm64 runners have no /dev/kvm, so this boots under TCG
+          # emulation: slow, so give the VM every core and a long deadline.
           - arch: arm64
             runner: ubuntu-24.04-arm
             qemu_packages: qemu-system-arm qemu-efi-aarch64
+            kvm: false
+            vm_args: --cpus 4 --mem 8192 --timeout 12600
+            timeout_minutes: 350
     runs-on: ${{ matrix.runner }}
     # The build boots a VM and provisions it end to end, then the smoke test
     # boots it again and deploys the default apps; give it plenty of room.
-    # build.sh has its own 30-min boot timeout inside this budget.
-    timeout-minutes: 120
+    # build.sh and smoke_test.sh have their own deadlines inside this budget.
+    timeout-minutes: ${{ matrix.timeout_minutes }}
     steps:
       - name: Check out the release tag
         uses: actions/checkout@v4
@@ -86,6 +94,7 @@ jobs:
           sudo apt-get install -y ${{ matrix.qemu_packages }} qemu-utils cloud-image-utils
 
       - name: Enable KVM access
+        if: matrix.kvm
         run: |
           # GitHub's 2-vCPU+ Linux runners (incl. ubuntu-latest) ship /dev/kvm,
           # but it's root:kvm 0660 — not writable by the runner user. Grant
@@ -98,6 +107,7 @@ jobs:
           sudo udevadm trigger --name-match=kvm
 
       - name: Require KVM
+        if: matrix.kvm
         run: |
           ls -l /dev/kvm || true
           if [ ! -w /dev/kvm ]; then
@@ -114,14 +124,16 @@ jobs:
           # The ref provision.sh clones: the tag, or the PR / dispatched branch.
           BRANCH: ${{ github.head_ref || github.ref_name }}
         run: |
-          image/build.sh --arch ${{ matrix.arch }} \
+          image/build.sh --arch ${{ matrix.arch }} ${{ matrix.vm_args }} \
             --branch "$BRANCH" --version "${BRANCH//\//-}"
 
       - name: List built artifacts
         run: ls -lh image/out/
 
       - name: Smoke test the image
-        run: image/smoke_test.sh --arch ${{ matrix.arch }} image/out/openhost-*-${{ matrix.arch }}.qcow2
+        run: |
+          image/smoke_test.sh --arch ${{ matrix.arch }} ${{ matrix.vm_args }} \
+            image/out/openhost-*-${{ matrix.arch }}.qcow2
 
       - name: Upload console logs
         if: always()

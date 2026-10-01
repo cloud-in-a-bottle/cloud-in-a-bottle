@@ -351,7 +351,11 @@ if [ "$NATIVE" = "true" ] && [ -e /dev/kvm ] && [ -w /dev/kvm ]; then
     KVM_ARGS=(-enable-kvm -cpu host)
 else
     echo "  (no usable KVM for $ARCH on this host; falling back to slow TCG emulation)"
-    KVM_ARGS=(-accel tcg,thread=multi -cpu max)
+    # pauth-impdef swaps aarch64 pointer authentication's architected
+    # algorithm (very slow to emulate) for a cheap one; the guest can't tell.
+    TCG_CPU="max"
+    [ "$ARCH" = "arm64" ] && TCG_CPU="max,pauth-impdef=on"
+    KVM_ARGS=(-accel tcg,thread=multi -cpu "$TCG_CPU")
 fi
 
 # -display none -monitor none: no VGA, no monitor on stdio (nothing waits on
