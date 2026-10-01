@@ -211,8 +211,8 @@ def managed_router(config: Config, startup_timeout: int = 30) -> Generator[subpr
             pass
         time.sleep(0.3)
     else:
-        kill_tree(proc)
-        proc.wait()
+        kill_tree(proc, signal.SIGKILL)
+        proc.wait(timeout=5)
         log_file.close()
         with open(log_path) as f:
             log_content = f.read()
@@ -230,8 +230,8 @@ def managed_router(config: Config, startup_timeout: int = 30) -> Generator[subpr
                 try:
                     proc.wait(timeout=5)
                 except subprocess.TimeoutExpired:
-                    kill_tree(proc)
-                    proc.wait()
+                    kill_tree(proc, signal.SIGKILL)
+                    proc.wait(timeout=5)
         finally:
             _router_proc = None
             log_file.close()
