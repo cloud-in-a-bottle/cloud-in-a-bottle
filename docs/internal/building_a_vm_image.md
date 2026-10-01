@@ -6,10 +6,10 @@ The [release images](../src/setup/shared_homeserver.md#part-1-download-and-run-t
 
 **To build the image**, a Linux host with:
 
-- `qemu-system-x86_64` and `qemu-img` (the `qemu-system-x86` and `qemu-utils` packages).
+- `qemu-img` (the `qemu-utils` package), plus the emulator for the image's arch: `qemu-system-x86_64` (`qemu-system-x86`) for amd64, or `qemu-system-aarch64` and its UEFI firmware (`qemu-system-arm` and `qemu-efi-aarch64`) for arm64.
 - A seed-ISO builder: `cloud-localds` (from `cloud-image-utils`), or `xorriso`, or `genisoimage`.
 - `curl` and `tar`.
-- (recommended) KVM (`/dev/kvm`). Without it the build boot falls back to slow TCG emulation.
+- (recommended) KVM (`/dev/kvm`) on a host of the same arch as the image. Without it the build boot falls back to slow TCG emulation; that is how CI builds arm64, since GitHub's arm64 runners have no KVM.
 
 **To run the image it produces** (this applies to the release images too):
 
@@ -24,7 +24,7 @@ Run from a checkout of the Cloud in a Bottle repo, on the Linux/KVM host:
 image/build.sh
 ```
 
-With no options this builds `main` into `image/out/openhost-<version>-amd64.qcow2` and a matching `.ova`, in HTTP-only mode on `lvh.me`, with no claim token and a default console password. The build boots a VM and runs the full provisioning, so it takes a while; Logs go into `image/out/build-console.log`.
+With no options this builds `main` for the host's arch into `image/out/openhost-<version>-<arch>.qcow2` (plus a matching `.ova` for amd64), in HTTP-only mode on `lvh.me`, with no claim token and a default console password. Pass `--arch amd64` or `--arch arm64` to pick the arch explicitly. The build boots a VM and runs the full provisioning, so it takes a while; Logs go into `image/out/build-console.log`.
 
 ### Common options
 
@@ -32,6 +32,7 @@ These customize the image in any mode:
 
 | Option | Purpose |
 | --- | --- |
+| `--arch <arch>` | `amd64` or `arm64` (default: the host's) |
 | `--domain <domain>` | subdomain-routing domain baked in (default `lvh.me`) |
 | `--claim-token <tok>` | bake in a specific `/setup` token instead of the default |
 | `--ssh-pubkey <path>` | authorize an SSH key for `host` (SSH is key-only; otherwise console-only) |
@@ -68,6 +69,14 @@ image/build.sh \
 ```
 
 The build does not get a TLS certificate issued - That can only happen once it's running and has DNS pointing at it. Once it boots with the right public ip `--public-ip`, delegate DNS and open ports 53 / 80 / 443 to it (see [Exposing a server with a static IP](../src/setup/static_ip.md) or [Exposing a home server](../src/setup/home_network.md)), and the instance will acquire its wildcard certificate and start serving at `https://mycooldomain.com/`.
+
+## Smoke test it
+
+`image/smoke_test.sh` boots a built HTTP-only image, claims it, and waits for every default app to build and reach `running`, which proves the image works on its arch rather than only that provisioning finished. CI runs it on every release image.
+
+```bash
+image/smoke_test.sh --arch arm64 image/out/openhost-<version>-arm64.qcow2
+```
 
 ## Run it
 
