@@ -15,6 +15,7 @@
 #   --mem <mb>            VM memory in MB (default: 4096)
 #   --cpus <n>            VM vCPUs (default: 2)
 #   --port <port>         Host port forwarded to the dashboard (default: 18080)
+#   --domain <domain>     Domain the image was built with (default: lvh.me)
 #   --timeout <sec>       Max seconds for boot plus app deploys (default: 2400)
 #   --expect-apps <n>     Number of apps that must reach running (default: 6,
 #                         the length of default_apps in compute_space/config.py)
@@ -29,6 +30,7 @@ esac
 MEM_MB="4096"
 CPUS="2"
 PORT="18080"
+DOMAIN="lvh.me"
 TIMEOUT="2400"
 EXPECT_APPS="6"
 IMAGE=""
@@ -42,6 +44,7 @@ while [[ $# -gt 0 ]]; do
         --mem)      MEM_MB="$2"; shift 2 ;;
         --cpus)     CPUS="$2"; shift 2 ;;
         --port)     PORT="$2"; shift 2 ;;
+        --domain)   DOMAIN="$2"; shift 2 ;;
         --timeout)  TIMEOUT="$2"; shift 2 ;;
         --expect-apps) EXPECT_APPS="$2"; shift 2 ;;
         -h|--help)  usage; exit 0 ;;
@@ -125,8 +128,12 @@ echo "  (guest console -> $CONSOLE_LOG)"
     -device virtio-net-pci,netdev=n0 &
 QEMU_PID=$!
 
-BASE="http://127.0.0.1:$PORT"
+# The session cookie is scoped to the instance's domain, so talk to the router
+# by that name (pinned to the forwarded port, no DNS needed) rather than by IP,
+# or curl never sends the cookie back.
+BASE="http://$DOMAIN:$PORT"
 JAR="$WORK_DIR/cookies"
+curl() { command curl --resolve "$DOMAIN:$PORT:127.0.0.1" "$@"; }
 DEADLINE=$(( $(date +%s) + TIMEOUT ))
 
 fail() {
@@ -165,10 +172,14 @@ echo "--- Waiting for the default apps to build and start ---"
 last=""
 while true; do
     kill -0 "$QEMU_PID" 2>/dev/null || fail "VM exited while waiting for apps"
-    apps="$(curl -s --max-time 10 -b "$JAR" "$BASE/api/apps" || true)"
+    apps="$WORK_DIR/apps.json"
+    code="$(curl -s -o "$apps" -w '%{http_code}' --max-time 10 -b "$JAR" "$BASE/api/apps" || true)"
+    case "$code" in
+        401|403|302|303) fail "GET /api/apps returned $code: the setup session was not accepted" ;;
+    esac
     # Prints one "name status" line per app, then a verdict line: "done",
     # "error <name>: <message>", or "wait".
-    summary="$(printf '%s' "$apps" | EXPECT_APPS="$EXPECT_APPS" python3 -c '
+    summary="$(EXPECT_APPS="$EXPECT_APPS" python3 -c '
 import json, os, sys
 try:
     apps = json.load(sys.stdin)
@@ -184,7 +195,7 @@ elif len(apps) >= int(os.environ["EXPECT_APPS"]) and all(a["status"] == "running
     print("done")
 else:
     print("wait")
-')"
+' < "$apps")"
     if [ "$summary" != "$last" ]; then
         echo "$summary" | sed '$d' | sed 's/^/  /'
         echo "  --"
