@@ -15,12 +15,11 @@ name: release
 # goes public. The same vX.Y.Z tags drive the host auto-updater
 # (openhost_system_agent/update.py), so there is exactly one tag scheme.
 #
-# Images are built for amd64 and arm64, each on a runner of its own arch, and
-# each is smoke tested (booted, claimed, default apps deployed) before anything
-# is published. Pull requests that touch the image build, and manual runs on a
-# branch, do the build and smoke test only. Pull requests skip arm64, which
-# takes hours under emulation; build it locally (image/build.sh runs natively
-# on Apple silicon) or with a manual run.
+# Images are built for amd64 (on the runner, with KVM) and arm64 (on an EC2
+# Graviton bare-metal host, via image/on_ec2.sh), and each is smoke tested
+# (booted, claimed, default apps deployed) before anything is published. Pull
+# requests that touch the image build, and manual runs on a branch, do the
+# build and smoke test only.
 
 on:
   push:
@@ -64,18 +63,15 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        arch: ${{ fromJSON(github.event_name == 'pull_request' && '["amd64"]' || '["amd64", "arm64"]') }}
-    runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
+        arch: [amd64, arm64]
+    runs-on: ubuntu-latest
     # The build boots a VM and provisions it end to end, then the smoke test
     # boots it again and deploys the default apps; give it plenty of room.
     # build.sh and smoke_test.sh have their own deadlines inside this budget.
-    # GitHub's arm64 runners have no /dev/kvm, so arm64 boots under TCG
-    # emulation: slow, so give the VM every core and a long deadline.
-    timeout-minutes: ${{ matrix.arch == 'arm64' && 350 || 120 }}
+    timeout-minutes: 120
     env:
-      KVM: ${{ matrix.arch == 'amd64' }}
-      QEMU_PACKAGES: ${{ matrix.arch == 'arm64' && 'qemu-system-arm qemu-efi-aarch64' || 'qemu-system-x86' }}
-      VM_ARGS: ${{ matrix.arch == 'arm64' && '--cpus 4 --mem 8192 --timeout 12600' || '' }}
+      # The ref provision.sh clones: the tag, or the PR / dispatched branch.
+      BRANCH: ${{ github.head_ref || github.ref_name }}
     steps:
       - name: Check out the release tag
         uses: actions/checkout@v4
@@ -83,12 +79,13 @@ jobs:
           fetch-depth: 0
 
       - name: Install image build dependencies
+        if: matrix.arch == 'amd64'
         run: |
           sudo apt-get update
-          sudo apt-get install -y $QEMU_PACKAGES qemu-utils cloud-image-utils
+          sudo apt-get install -y qemu-system-x86 qemu-utils cloud-image-utils
 
       - name: Enable KVM access
-        if: env.KVM == 'true'
+        if: matrix.arch == 'amd64'
         run: |
           # GitHub's 2-vCPU+ Linux runners (incl. ubuntu-latest) ship /dev/kvm,
           # but it's root:kvm 0660 — not writable by the runner user. Grant
@@ -101,7 +98,7 @@ jobs:
           sudo udevadm trigger --name-match=kvm
 
       - name: Require KVM
-        if: env.KVM == 'true'
+        if: matrix.arch == 'amd64'
         run: |
           ls -l /dev/kvm || true
           if [ ! -w /dev/kvm ]; then
@@ -114,20 +111,37 @@ jobs:
           echo "KVM available — build will use hardware acceleration."
 
       - name: Build VM images
-        env:
-          # The ref provision.sh clones: the tag, or the PR / dispatched branch.
-          BRANCH: ${{ github.head_ref || github.ref_name }}
+        if: matrix.arch == 'amd64'
         run: |
-          image/build.sh --arch ${{ matrix.arch }} $VM_ARGS \
-            --branch "$BRANCH" --version "${BRANCH//\//-}"
+          image/build.sh --arch amd64 --branch "$BRANCH" --version "${BRANCH//\//-}"
 
       - name: List built artifacts
+        if: matrix.arch == 'amd64'
         run: ls -lh image/out/
 
       - name: Smoke test the image
+        if: matrix.arch == 'amd64'
+        run: image/smoke_test.sh --arch amd64 image/out/openhost-*-amd64.qcow2
+
+      # GitHub's arm64 runners have no /dev/kvm, so build and smoke test arm64
+      # on an EC2 Graviton bare-metal host, which does.
+      - name: Build and smoke test on EC2 (arm64)
+        if: matrix.arch == 'arm64'
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          EC2_KEY_NAME: ${{ secrets.EC2_KEY_NAME }}
+          EC2_SECURITY_GROUP: ${{ secrets.EC2_SECURITY_GROUP }}
+          EC2_SSH_PRIVATE_KEY: ${{ secrets.EC2_E2E_SSH_PRIVATE_KEY }}
         run: |
-          image/smoke_test.sh --arch ${{ matrix.arch }} $VM_ARGS \
-            image/out/openhost-*-${{ matrix.arch }}.qcow2
+          export EC2_SSH_KEY="$RUNNER_TEMP/ec2_key"
+          printf '%s\n' "$EC2_SSH_PRIVATE_KEY" > "$EC2_SSH_KEY"
+          chmod 600 "$EC2_SSH_KEY"
+          VM_ARGS="--cpus 8 --mem 16384"
+          image/on_ec2.sh "
+            image/build.sh --arch arm64 $VM_ARGS --branch '$BRANCH' --version '${BRANCH//\//-}' &&
+            ls -lh image/out/ &&
+            image/smoke_test.sh --arch arm64 $VM_ARGS image/out/openhost-*-arm64.qcow2"
 
       - name: Upload console logs
         if: always()
