@@ -1,5 +1,4 @@
 import asyncio
-import os
 import signal
 import socket
 import sqlite3
@@ -114,14 +113,17 @@ def _make_config_and_env(tmp_path: Path, **overrides: Any) -> tuple[Config, dict
 
 def _start_router_process(base_url: str, env: dict[str, str], startup_timeout: int = 30) -> subprocess.Popen[bytes]:
     """Start a router subprocess, wait for /health, return the Popen object."""
-    proc = subprocess.Popen(
-        router_cmd(),
-        cwd=COMPUTE_SPACE_PACKAGE_DIR,
-        env=env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        start_new_session=True,
-    )
+    # Nobody drains pipes after startup; enough logging would block the router.
+    log_path = Path(env["OPENHOST_ROUTER_CONFIG"]).with_name("router.log")
+    with log_path.open("wb") as log_file:
+        proc = subprocess.Popen(
+            router_cmd(),
+            cwd=COMPUTE_SPACE_PACKAGE_DIR,
+            env=env,
+            stdout=log_file,
+            stderr=log_file,
+            start_new_session=True,
+        )
     deadline = time.time() + startup_timeout
     while time.time() < deadline:
         try:
@@ -131,9 +133,9 @@ def _start_router_process(base_url: str, env: dict[str, str], startup_timeout: i
         except (requests.ConnectionError, requests.ReadTimeout):
             pass
         time.sleep(0.3)
-    out, err = proc.communicate(timeout=5)
-    os.killpg(proc.pid, signal.SIGKILL)
-    raise RuntimeError(f"Router failed to start.\nstdout: {out.decode()}\nstderr: {err.decode()}")
+    kill_tree(proc, signal.SIGKILL)
+    proc.wait(timeout=5)
+    raise RuntimeError(f"Router failed to start.\nlog: {log_path.read_text(errors='replace')}")
 
 
 def _stop_router_process(proc: subprocess.Popen[Any]) -> None:
@@ -142,8 +144,8 @@ def _stop_router_process(proc: subprocess.Popen[Any]) -> None:
     try:
         proc.wait(timeout=5)
     except subprocess.TimeoutExpired:
-        kill_tree(proc)
-        proc.wait()
+        kill_tree(proc, signal.SIGKILL)
+        proc.wait(timeout=5)
 
 
 @pytest.fixture
