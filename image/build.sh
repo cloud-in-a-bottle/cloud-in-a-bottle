@@ -21,7 +21,7 @@
 # once you delegate DNS and open ports 53/80/443. Claiming is token-gated in
 # this mode (open claiming is refused on a reachable instance).
 #
-# Usage (run on a Linux host with KVM):
+# Usage (run on a Linux host with KVM, or an Apple silicon Mac for arm64):
 #   image/build.sh [options]
 #
 # Options:
@@ -73,9 +73,9 @@
 #
 # Requirements: qemu-system-x86_64 (amd64) or qemu-system-aarch64 plus UEFI
 # firmware from qemu-efi-aarch64 (arm64), qemu-img, cloud-localds
-# (cloud-image-utils) or genisoimage/xorriso, curl, tar. KVM (/dev/kvm) on a
-# host of the same arch strongly recommended; without it the build boot falls
-# back to slow TCG emulation.
+# (cloud-image-utils) or xorriso/genisoimage/mkisofs, curl, tar. KVM (/dev/kvm),
+# or HVF on macOS, on a host of the same arch strongly recommended; without it
+# the build boot falls back to slow TCG emulation.
 
 set -euo pipefail
 
@@ -155,7 +155,7 @@ case "$ARCH" in
         # boots through the removable-media fallback path (EFI/BOOT/BOOTAA64.EFI)
         # on any UEFI arm64 VM, so no NVRAM state needs to ship with it.
         QEMU_MACHINE=(-machine virt)
-        NATIVE="$([ "$HOST_ARCH" = "aarch64" ] && echo true || echo false)"
+        NATIVE="$(case "$HOST_ARCH" in aarch64|arm64) echo true ;; *) echo false ;; esac)"
         # The VirtualBox OVF below describes an x86 machine.
         MAKE_OVA="false"
         ;;
@@ -209,8 +209,9 @@ if [ "$ARCH" = "arm64" ]; then
 fi
 need curl           "Install curl."
 need tar            "Install tar."
+need timeout        "Install coreutils."
 
-# Seed-ISO builder: prefer cloud-localds, fall back to xorriso/genisoimage.
+# Seed-ISO builder: prefer cloud-localds, fall back to xorriso/genisoimage/mkisofs.
 SEED_TOOL=""
 if command -v cloud-localds >/dev/null 2>&1; then
     SEED_TOOL="cloud-localds"
@@ -218,8 +219,10 @@ elif command -v xorriso >/dev/null 2>&1; then
     SEED_TOOL="xorriso"
 elif command -v genisoimage >/dev/null 2>&1; then
     SEED_TOOL="genisoimage"
+elif command -v mkisofs >/dev/null 2>&1; then
+    SEED_TOOL="mkisofs"
 else
-    echo "Error: need one of cloud-localds (cloud-image-utils), xorriso, or genisoimage." >&2
+    echo "Error: need one of cloud-localds (cloud-image-utils), xorriso, genisoimage, or mkisofs." >&2
     exit 1
 fi
 
@@ -302,10 +305,11 @@ fi
 # Embed provision.sh and seal.sh (and, for --public --acme-key, the account key)
 # as single-line base64 blobs. The base64 alphabet is [A-Za-z0-9+/=] — none of
 # which collide with sed's '|' delimiter.
-PROVISION_B64="$(base64 -w0 "$PROVISION_SCRIPT")"
-SEAL_B64="$(base64 -w0 "$SCRIPT_DIR/seal.sh")"
+b64() { base64 < "$1" | tr -d '\n'; }
+PROVISION_B64="$(b64 "$PROVISION_SCRIPT")"
+SEAL_B64="$(b64 "$SCRIPT_DIR/seal.sh")"
 ACME_KEY_B64=""
-[ -n "$ACME_KEY_FILE" ] && ACME_KEY_B64="$(base64 -w0 "$ACME_KEY_FILE")"
+[ -n "$ACME_KEY_FILE" ] && ACME_KEY_B64="$(b64 "$ACME_KEY_FILE")"
 
 USER_DATA="$WORK_DIR/user-data"
 # Use a non-/ delimiter for sed since URLs contain slashes.
@@ -332,8 +336,8 @@ case "$SEED_TOOL" in
         xorriso -as genisoimage -output "$SEED_ISO" -volid cidata -joliet -rock \
             "$USER_DATA" "$SCRIPT_DIR/cloud-init/meta-data"
         ;;
-    genisoimage)
-        genisoimage -output "$SEED_ISO" -volid cidata -joliet -rock \
+    genisoimage|mkisofs)
+        "$SEED_TOOL" -output "$SEED_ISO" -volid cidata -joliet -rock \
             "$USER_DATA" "$SCRIPT_DIR/cloud-init/meta-data"
         ;;
 esac
@@ -349,8 +353,11 @@ echo "  (guest console -> $CONSOLE_LOG)"
 KVM_ARGS=()
 if [ "$NATIVE" = "true" ] && [ -e /dev/kvm ] && [ -w /dev/kvm ]; then
     KVM_ARGS=(-enable-kvm -cpu host)
+elif [ "$NATIVE" = "true" ] && [ "$(sysctl -n kern.hv_support 2>/dev/null)" = "1" ]; then
+    # macOS Hypervisor.framework.
+    KVM_ARGS=(-accel hvf -cpu host)
 else
-    echo "  (no usable KVM for $ARCH on this host; falling back to slow TCG emulation)"
+    echo "  (no usable KVM or HVF for $ARCH on this host; falling back to slow TCG emulation)"
     # pauth-impdef swaps aarch64 pointer authentication's architected
     # algorithm (very slow to emulate) for a cheap one; the guest can't tell.
     TCG_CPU="max"

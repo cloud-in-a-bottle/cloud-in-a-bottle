@@ -7,7 +7,7 @@
 # container networking on the image's own architecture, which is the part a
 # successful build boot does not prove.
 #
-# Usage (run on a Linux host, ideally with KVM for the image's arch):
+# Usage (ideally on a host of the image's arch with KVM, or HVF on macOS):
 #   image/smoke_test.sh [options] <image.qcow2>
 #
 # Options:
@@ -81,7 +81,7 @@ case "$ARCH" in
             exit 1
         fi
         QEMU_MACHINE=(-machine virt -bios "$UEFI_FW")
-        NATIVE="$([ "$HOST_ARCH" = "aarch64" ] && echo true || echo false)"
+        NATIVE="$(case "$HOST_ARCH" in aarch64|arm64) echo true ;; *) echo false ;; esac)"
         ;;
     *)
         echo "Error: --arch must be amd64 or arm64 (got '$ARCH')." >&2
@@ -91,8 +91,11 @@ esac
 
 if [ "$NATIVE" = "true" ] && [ -e /dev/kvm ] && [ -w /dev/kvm ]; then
     ACCEL_ARGS=(-enable-kvm -cpu host)
+elif [ "$NATIVE" = "true" ] && [ "$(sysctl -n kern.hv_support 2>/dev/null)" = "1" ]; then
+    # macOS Hypervisor.framework.
+    ACCEL_ARGS=(-accel hvf -cpu host)
 else
-    echo "(no usable KVM for $ARCH on this host; falling back to slow TCG emulation)"
+    echo "(no usable KVM or HVF for $ARCH on this host; falling back to slow TCG emulation)"
     # pauth-impdef swaps aarch64 pointer authentication's architected
     # algorithm (very slow to emulate) for a cheap one; the guest can't tell.
     TCG_CPU="max"

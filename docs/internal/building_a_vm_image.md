@@ -4,12 +4,14 @@ The [release images](../src/setup/shared_homeserver.md#part-1-download-and-run-t
 
 ## What you need
 
-**To build the image**, a Linux host with:
+**To build the image**, a Linux host or (for arm64) an Apple silicon Mac with:
 
 - `qemu-img` (the `qemu-utils` package), plus the emulator for the image's arch: `qemu-system-x86_64` (`qemu-system-x86`) for amd64, or `qemu-system-aarch64` and its UEFI firmware (`qemu-system-arm` and `qemu-efi-aarch64`) for arm64.
-- A seed-ISO builder: `cloud-localds` (from `cloud-image-utils`), or `xorriso`, or `genisoimage`.
+- A seed-ISO builder: `cloud-localds` (from `cloud-image-utils`), or `xorriso`, `genisoimage`, or `mkisofs`.
 - `curl` and `tar`.
-- (recommended) KVM (`/dev/kvm`) on a host of the same arch as the image. Without it the build boot falls back to slow TCG emulation; that is how CI builds arm64, since GitHub's arm64 runners have no KVM.
+- (recommended) KVM (`/dev/kvm`), or HVF on macOS, on a host of the same arch as the image. Without it the build boot falls back to slow TCG emulation; that is how CI builds arm64, since GitHub's arm64 runners have no KVM.
+
+On an Apple silicon Mac, `brew install qemu cdrtools coreutils` covers all of this (`cdrtools` provides `mkisofs`, `coreutils` provides `timeout`), and the arm64 build runs under HVF in about five minutes.
 
 **To run the image it produces** (this applies to the release images too):
 
@@ -18,7 +20,7 @@ The [release images](../src/setup/shared_homeserver.md#part-1-download-and-run-t
 
 ## Build it
 
-Run from a checkout of the Cloud in a Bottle repo, on the Linux/KVM host:
+Run from a checkout of the Cloud in a Bottle repo, on the build host:
 
 ```bash
 image/build.sh
