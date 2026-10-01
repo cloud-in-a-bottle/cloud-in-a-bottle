@@ -7,6 +7,9 @@
 # No Packer, no autoinstall ISO dance — just the exact code path a real deploy
 # uses. Output is a QEMU qcow2 and (optionally) a VirtualBox OVA.
 #
+# Builds amd64 or arm64 (--arch). The guest arch need not match the host's, but
+# a cross-arch build runs under TCG emulation and is far slower than KVM.
+#
 # The image comes up out of the box in HTTP-only mode bound to 0.0.0.0, so the
 # dashboard is reachable at http://<vm-ip>:8080 with a default console password.
 # No domain, DNS, or TLS setup required to try it. Claiming is open by default
@@ -22,6 +25,8 @@
 #   image/build.sh [options]
 #
 # Options:
+#   --arch <arch>         Guest architecture: amd64 or arm64 (default: the
+#                         host's). arm64 images boot via UEFI and skip the OVA.
 #   --branch <branch>     Git branch of openhost app code to clone (default: main)
 #   --repo <url>          Git repo URL to clone app code from
 #                         (default: imbue-openhost/openhost)
@@ -62,16 +67,23 @@
 #   --cpus <n>            Build VM vCPUs (default: 2)
 #   --output-dir <dir>    Where artifacts land (default: image/out)
 #   --no-ova              Skip the VirtualBox OVA; produce only the qcow2
+#                         (always skipped for arm64)
 #   --timeout <sec>       Max seconds to wait for the build boot (default: 1800)
 #   -h, --help            Show this help
 #
-# Requirements: qemu-system-x86_64, qemu-img, cloud-localds (cloud-image-utils)
-# or genisoimage/xorriso, curl, tar. KVM (/dev/kvm) strongly recommended —
-# without it the build boot falls back to slow TCG emulation.
+# Requirements: qemu-system-x86_64 (amd64) or qemu-system-aarch64 plus UEFI
+# firmware from qemu-efi-aarch64 (arm64), qemu-img, cloud-localds
+# (cloud-image-utils) or genisoimage/xorriso, curl, tar. KVM (/dev/kvm) on a
+# host of the same arch strongly recommended; without it the build boot falls
+# back to slow TCG emulation.
 
 set -euo pipefail
 
 # ---- Defaults ----
+case "$(uname -m)" in
+    aarch64|arm64) ARCH="arm64" ;;
+    *)             ARCH="amd64" ;;
+esac
 BRANCH="main"
 REPO_URL="https://github.com/imbue-openhost/openhost.git"
 DOMAIN="lvh.me"
@@ -95,14 +107,13 @@ OUTPUT_DIR="$SCRIPT_DIR/out"
 CACHE_DIR="$SCRIPT_DIR/cache"
 PROVISION_SCRIPT="$SCRIPT_DIR/../scripts/provision.sh"
 
-CLOUD_IMG_URL="https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img"
-
 # Print the leading comment block (everything from line 2 up to the first
 # non-comment line), stripped of the leading "# ".
 usage() { sed -n '2,/^[^#]/{/^#/s/^# \{0,1\}//p;}' "${BASH_SOURCE[0]}"; }
 
 while [[ $# -gt 0 ]]; do
     case $1 in
+        --arch)         ARCH="$2"; shift 2 ;;
         --branch)       BRANCH="$2"; shift 2 ;;
         --repo)         REPO_URL="$2"; shift 2 ;;
         --provision-script) PROVISION_SCRIPT="$2"; shift 2 ;;
@@ -126,6 +137,34 @@ while [[ $# -gt 0 ]]; do
         *)              echo "Unknown option: $1" >&2; usage; exit 1 ;;
     esac
 done
+
+# ---- Per-arch settings ----
+HOST_ARCH="$(uname -m)"
+case "$ARCH" in
+    amd64)
+        QEMU="qemu-system-x86_64"
+        QEMU_PKG="qemu-system-x86"
+        QEMU_MACHINE=()
+        NATIVE="$([ "$HOST_ARCH" = "x86_64" ] && echo true || echo false)"
+        ;;
+    arm64)
+        QEMU="qemu-system-aarch64"
+        QEMU_PKG="qemu-system-arm"
+        # Ubuntu's arm64 cloud image boots only via UEFI, so -bios points at the
+        # edk2 firmware. That is all the build boot needs; the image itself
+        # boots through the removable-media fallback path (EFI/BOOT/BOOTAA64.EFI)
+        # on any UEFI arm64 VM, so no NVRAM state needs to ship with it.
+        QEMU_MACHINE=(-machine virt)
+        NATIVE="$([ "$HOST_ARCH" = "aarch64" ] && echo true || echo false)"
+        # The VirtualBox OVF below describes an x86 machine.
+        MAKE_OVA="false"
+        ;;
+    *)
+        echo "Error: --arch must be amd64 or arm64 (got '$ARCH')." >&2
+        exit 1
+        ;;
+esac
+CLOUD_IMG_URL="https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-$ARCH.img"
 
 # ---- Validate --public flags ----
 if [ "$PUBLIC" = "true" ]; then
@@ -151,7 +190,23 @@ need() {
 
 # ---- Dependency checks ----
 need qemu-img       "Install qemu-utils."
-need qemu-system-x86_64 "Install qemu-system-x86."
+need "$QEMU"         "Install $QEMU_PKG."
+
+if [ "$ARCH" = "arm64" ]; then
+    UEFI_FW=""
+    for f in /usr/share/qemu-efi-aarch64/QEMU_EFI.fd \
+             /usr/share/AAVMF/AAVMF_CODE.fd \
+             /usr/share/qemu/edk2-aarch64-code.fd \
+             /opt/homebrew/share/qemu/edk2-aarch64-code.fd \
+             /usr/local/share/qemu/edk2-aarch64-code.fd; do
+        if [ -f "$f" ]; then UEFI_FW="$f"; break; fi
+    done
+    if [ -z "$UEFI_FW" ]; then
+        echo "Error: no aarch64 UEFI firmware found. Install qemu-efi-aarch64." >&2
+        exit 1
+    fi
+    QEMU_MACHINE+=(-bios "$UEFI_FW")
+fi
 need curl           "Install curl."
 need tar            "Install tar."
 
@@ -183,6 +238,7 @@ trap 'rm -rf "$WORK_DIR"' EXIT
 
 echo "=== OpenHost VM image build ==="
 echo "  Version:      $VERSION"
+echo "  Arch:         $ARCH"
 echo "  Repo/branch:  $REPO_URL @ $BRANCH"
 echo "  provision.sh: $PROVISION_SCRIPT (embedded)"
 if [ "$PUBLIC" = "true" ]; then
@@ -199,7 +255,7 @@ echo "  Output dir:   $OUTPUT_DIR"
 echo ""
 
 # ---- 1. Fetch the Ubuntu cloud base image (cached) ----
-BASE_IMG="$CACHE_DIR/noble-server-cloudimg-amd64.img"
+BASE_IMG="$CACHE_DIR/noble-server-cloudimg-$ARCH.img"
 if [ ! -f "$BASE_IMG" ]; then
     echo "--- Downloading Ubuntu 24.04 cloud image ---"
     curl -fSL "$CLOUD_IMG_URL" -o "$BASE_IMG.tmp"
@@ -291,17 +347,19 @@ CONSOLE_LOG="$OUTPUT_DIR/build-console.log"
 echo "  (guest console -> $CONSOLE_LOG)"
 
 KVM_ARGS=()
-if [ -e /dev/kvm ] && [ -w /dev/kvm ]; then
+if [ "$NATIVE" = "true" ] && [ -e /dev/kvm ] && [ -w /dev/kvm ]; then
     KVM_ARGS=(-enable-kvm -cpu host)
 else
-    echo "  (no writable /dev/kvm — falling back to slow TCG emulation)"
-    KVM_ARGS=(-cpu max)
+    echo "  (no usable KVM for $ARCH on this host; falling back to slow TCG emulation)"
+    KVM_ARGS=(-accel tcg,thread=multi -cpu max)
 fi
 
 # -display none -monitor none: no VGA, no monitor on stdio (nothing waits on
-# stdin). The guest's ttyS0 console is captured to CONSOLE_LOG.
+# stdin). The guest serial console (ttyS0, or ttyAMA0 on arm64) is captured
+# to CONSOLE_LOG.
 set +e
-timeout "$BUILD_TIMEOUT" qemu-system-x86_64 \
+timeout "$BUILD_TIMEOUT" "$QEMU" \
+    "${QEMU_MACHINE[@]}" \
     "${KVM_ARGS[@]}" \
     -m "$MEM_MB" \
     -smp "$CPUS" \
@@ -336,7 +394,7 @@ fi
 
 # ---- 5. Compact the qcow2 (drop freed blocks) ----
 echo "--- Finalizing qcow2 ---"
-QCOW2_OUT="$OUTPUT_DIR/openhost-$VERSION-amd64.qcow2"
+QCOW2_OUT="$OUTPUT_DIR/openhost-$VERSION-$ARCH.qcow2"
 qemu-img convert -O qcow2 -c "$DISK" "$QCOW2_OUT"
 
 echo ""
@@ -347,13 +405,13 @@ if [ "$MAKE_OVA" = "true" ]; then
     echo "--- Building VirtualBox OVA ---"
     OVA_STAGE="$WORK_DIR/ova"
     mkdir -p "$OVA_STAGE"
-    VMDK="$OVA_STAGE/openhost-$VERSION-amd64.vmdk"
+    VMDK="$OVA_STAGE/openhost-$VERSION-$ARCH.vmdk"
     qemu-img convert -O vmdk -o subformat=streamOptimized,adapter_type=lsilogic \
         "$DISK" "$VMDK"
 
     CAPACITY_BYTES="$(qemu-img info --output=json "$DISK" | sed -n 's/.*"virtual-size": *\([0-9]*\).*/\1/p' | head -n1)"
     VMDK_BYTES="$(file_size "$VMDK")"
-    OVF="$OVA_STAGE/openhost-$VERSION-amd64.ovf"
+    OVF="$OVA_STAGE/openhost-$VERSION-$ARCH.ovf"
     VMDK_NAME="$(basename "$VMDK")"
 
     cat > "$OVF" <<OVF_EOF
@@ -440,7 +498,7 @@ if [ "$MAKE_OVA" = "true" ]; then
 </Envelope>
 OVF_EOF
 
-    OVA_OUT="$OUTPUT_DIR/openhost-$VERSION-amd64.ova"
+    OVA_OUT="$OUTPUT_DIR/openhost-$VERSION-$ARCH.ova"
     # OVA spec: the .ovf must be the first entry in the tar, disk(s) after.
     tar -C "$OVA_STAGE" -cf "$OVA_OUT" "$(basename "$OVF")" "$VMDK_NAME"
     echo "  VirtualBox:   $OVA_OUT"

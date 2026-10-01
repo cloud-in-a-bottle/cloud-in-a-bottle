@@ -14,11 +14,21 @@ name: release
 # The release is created as a draft so a human can review the changelog before it
 # goes public. The same vX.Y.Z tags drive the host auto-updater
 # (openhost_system_agent/update.py), so there is exactly one tag scheme.
+#
+# Images are built for amd64 and arm64, each on a runner of its own arch so the
+# build boot gets KVM, and each is smoke tested (booted, claimed, default apps
+# deployed) before anything is published. Pull requests that touch the image
+# build, and manual runs on a branch, do the build and smoke test only.
 
 on:
   push:
     tags:
       - "v[0-9]+.[0-9]+.[0-9]+"
+  pull_request:
+    paths:
+      - "image/**"
+      - ".github/workflows/release.yml"
+  workflow_dispatch:
 
 # gh release create needs write access to create the release and upload assets.
 permissions:
@@ -28,6 +38,7 @@ jobs:
   # Fast gate: refuse to build if the root pyproject version doesn't match the tag.
   # This is what turns "we forgot to bump pyproject" into a loud, immediate failure.
   verify-version:
+    if: github.ref_type == 'tag'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -44,12 +55,25 @@ jobs:
           fi
           echo "version ok: pyproject.toml $got matches $TAG"
 
-  release:
+  build:
     needs: verify-version
-    runs-on: ubuntu-latest
-    # The build boots a VM and provisions it end to end; give it plenty of room.
+    # Run on workflow_dispatch too, where verify-version is skipped.
+    if: ${{ !failure() && !cancelled() }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+            qemu_packages: qemu-system-x86
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+            qemu_packages: qemu-system-arm qemu-efi-aarch64
+    runs-on: ${{ matrix.runner }}
+    # The build boots a VM and provisions it end to end, then the smoke test
+    # boots it again and deploys the default apps; give it plenty of room.
     # build.sh has its own 30-min boot timeout inside this budget.
-    timeout-minutes: 90
+    timeout-minutes: 120
     steps:
       - name: Check out the release tag
         uses: actions/checkout@v4
@@ -59,7 +83,7 @@ jobs:
       - name: Install image build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y qemu-system-x86 qemu-utils cloud-image-utils
+          sudo apt-get install -y ${{ matrix.qemu_packages }} qemu-utils cloud-image-utils
 
       - name: Enable KVM access
         run: |
@@ -86,11 +110,50 @@ jobs:
           echo "KVM available — build will use hardware acceleration."
 
       - name: Build VM images
+        env:
+          # The ref provision.sh clones: the tag, or the PR / dispatched branch.
+          BRANCH: ${{ github.head_ref || github.ref_name }}
         run: |
-          image/build.sh --branch "${GITHUB_REF_NAME}" --version "${GITHUB_REF_NAME}"
+          image/build.sh --arch ${{ matrix.arch }} \
+            --branch "$BRANCH" --version "${BRANCH//\//-}"
 
       - name: List built artifacts
         run: ls -lh image/out/
+
+      - name: Smoke test the image
+        run: image/smoke_test.sh --arch ${{ matrix.arch }} image/out/openhost-*-${{ matrix.arch }}.qcow2
+
+      - name: Upload console logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: console-logs-${{ matrix.arch }}
+          path: image/out/*.log
+          if-no-files-found: ignore
+
+      - name: Upload images
+        uses: actions/upload-artifact@v4
+        with:
+          name: images-${{ matrix.arch }}
+          path: |
+            image/out/*.qcow2
+            image/out/*.ova
+          if-no-files-found: error
+          # Already compressed; re-zipping only burns time.
+          compression-level: 0
+          retention-days: 7
+
+  publish:
+    needs: build
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download images
+        uses: actions/download-artifact@v4
+        with:
+          pattern: images-*
+          path: image/out
+          merge-multiple: true
 
       - name: Publish GitHub release
         env:
@@ -106,16 +169,18 @@ jobs:
           # "What's Changed" changelog. gh can't emit both at once, so create with
           # --generate-notes, then prepend our blurb to whatever it produced.
           gh release create "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
             --title "OpenHost $TAG" \
             --generate-notes \
             --draft \
             "${assets[@]}"
 
-          changelog="$(gh release view "$TAG" --json body --jq .body)"
+          changelog="$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json body --jq .body)"
           preamble="OpenHost $TAG — VM images below.
 
-          - \`*.qcow2\` — QEMU/KVM/libvirt (and most cloud importers)
-          - \`*.ova\` — VirtualBox / VMware
+          - \`*-amd64.qcow2\`: QEMU/KVM/libvirt (and most cloud importers)
+          - \`*-amd64.ova\`: VirtualBox / VMware
+          - \`*-arm64.qcow2\`: arm64 hosts (UTM on Apple silicon, QEMU/KVM on arm64 Linux); boots via UEFI
 
           Boot it, then reach the dashboard at \`http://<vm-ip>:8080\` and claim it
           (claiming is open by default — the image is private behind NAT).
@@ -123,5 +188,5 @@ jobs:
 
           ---
           "
-          gh release edit "$TAG" --notes "${preamble}
+          gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --notes "${preamble}
           ${changelog}"
