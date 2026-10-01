@@ -11,7 +11,8 @@ var config = JSON.parse(document.getElementById('page-config').textContent);
   term.open(document.getElementById('terminal'));
   fitAddon.fit();
 
-  var ws = new WebSocket(config.terminalWsUrl);
+  var proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  var ws = new WebSocket(proto + '//' + window.location.host + config.terminalWsUrl);
   ws.binaryType = 'arraybuffer';
 
   function sendResize() {
