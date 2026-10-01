@@ -24,6 +24,7 @@ from compute_space.core.git_ops import get_head_sha
 from compute_space.core.git_ops import get_remote_url
 from compute_space.core.git_ops import parse_repo_url
 from compute_space.core.logging import logger
+from compute_space.core.manifest import AppManifest
 from compute_space.core.manifest import manifest_ungranted_permissions_v2
 from compute_space.core.manifest import parse_manifest_from_string
 from compute_space.core.service_interface.provider import ProviderUnavailable
@@ -40,6 +41,16 @@ CATALOG_APP_NAME = "catalog"
 CATALOG_REPO_URL = "https://github.com/cloud-in-a-bottle/app-catalog"
 
 
+def _stored_manifest(app_row: sqlite3.Row) -> AppManifest | None:
+    if not app_row["manifest_raw"]:
+        return None
+    try:
+        return parse_manifest_from_string(app_row["manifest_raw"])
+    except Exception:
+        logger.opt(exception=True).warning("Failed to parse stored manifest for app {}", app_row["app_id"])
+        return None
+
+
 @get(["/", "/dashboard"], guards=[require_owner_auth])
 async def dashboard(db: NamedDependency[sqlite3.Connection]) -> Template:
     apps_list = db.execute("SELECT * FROM apps ORDER BY name").fetchall()
@@ -48,6 +59,7 @@ async def dashboard(db: NamedDependency[sqlite3.Connection]) -> Template:
         template_name="dashboard.html",
         context={
             "apps": apps_list,
+            "app_manifests": {app["app_id"]: _stored_manifest(app) for app in apps_list},
             "catalog_installed": catalog_installed,
             "catalog_app_name": CATALOG_APP_NAME,
         },
@@ -97,10 +109,9 @@ async def app_detail(
         for p in granted_records
     ]
     ungranted_perms: list[dict[str, object]] = []
-    manifest_raw = app_row["manifest_raw"]
-    if manifest_raw:
+    manifest = _stored_manifest(app_row)
+    if manifest is not None:
         try:
-            manifest = parse_manifest_from_string(manifest_raw)
             shortname_by_service = {c.service: c.shortname for c in manifest.consumes_services_v2}
             for pg in manifest_ungranted_permissions_v2(manifest, granted_records):
                 ungranted_perms.append(
@@ -111,7 +122,7 @@ async def app_detail(
                     }
                 )
         except Exception:
-            logger.opt(exception=True).warning("Failed to parse manifest for permission display (app {})", app_id)
+            logger.opt(exception=True).warning("Failed to compute permissions for display (app {})", app_id)
 
     edit_app = await _resolve_edit_app(
         app_row["repo_url"], app_row["repo_path"], db, config, zone_for_request(request), request.url.netloc
@@ -121,6 +132,7 @@ async def app_detail(
         template_name="app_detail.html",
         context={
             "app": app_row,
+            "manifest": manifest,
             "public_paths": json.loads(app_row["public_paths"] or "[]"),
             "links": links,
             "databases": databases,

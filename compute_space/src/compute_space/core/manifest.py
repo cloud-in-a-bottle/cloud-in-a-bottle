@@ -161,6 +161,8 @@ class AppManifest:
     version: Annotated[str, SettingLabel("App", "Version", review_required=False)]
     description: Annotated[str, SettingLabel("App", "Description", review_required=False)] = ""
     authors: Annotated[list[str], SettingLabel("App", "Authors", review_required=False)] = attr.Factory(list)
+    license: Annotated[str, SettingLabel("App", "Application license", review_required=False)] = ""
+    packaging_license: Annotated[str, SettingLabel("App", "Packaging license", review_required=False)] = ""
 
     # [runtime]
     runtime_type: Annotated[str, SettingLabel("App", "Runtime type")] = "serverfull"
@@ -448,6 +450,13 @@ def _parse_services_v2_consumes(data: dict[str, Any]) -> list[ServiceConsumes]:
     return perms
 
 
+def _parse_license(app_section: dict[str, Any], field: str) -> str:
+    value = app_section.get(field, "")
+    if not isinstance(value, str):
+        raise ValueError(f"[app].{field} must be a string")
+    return value.strip()
+
+
 def parse_manifest_from_string(raw_text: str) -> AppManifest:
     """Parse an app manifest (``cloudinabottle.toml``) from its string content."""
     data = tomllib.loads(raw_text)
@@ -499,6 +508,8 @@ def parse_manifest_from_string(raw_text: str) -> AppManifest:
         version=app_section["version"],
         description=app_section.get("description", ""),
         authors=app_section.get("authors", []),
+        license=_parse_license(app_section, "license"),
+        packaging_license=_parse_license(app_section, "packaging_license"),
         hidden=app_section.get("hidden", False),
         runtime_type=runtime_type,
         container_image=container["image"],

@@ -9,6 +9,7 @@ Apps declare how they should be deployed on Cloud in a Bottle by placing a `clou
 name = "my-app"
 version = "0.1.0"
 description = "A simple web app"
+license = "MIT"
 
 [runtime.container]
 image = "Dockerfile"
@@ -32,6 +33,22 @@ sqlite = ["main"]
 | `version` | string | yes | Version string. Conventionally semver, but only checked for non-emptiness (not validated as semver). |
 | `description` | string | no | Short description |
 | `authors` | string[] | no | List of author names |
+| `license` | string | no | License of the application itself. Prefer an SPDX identifier or expression, such as `MIT` or `MIT OR Apache-2.0`. Custom license names or descriptions are also accepted. |
+| `packaging_license` | string | no | License of the Cloud in a Bottle packaging, such as the manifest, Dockerfile, and integration code. Uses the same format as `license`. |
+
+License metadata is shown in the deployment preview, the dashboard's app list, and the app detail page. For installed apps, it comes from the stored deployment manifest and is refreshed when the app is updated or reloaded.
+
+The application and its packaging may have different licenses. Declare each independently; neither field is inferred from the other. If the same license covers both, set both fields to that license. Existing manifests can omit them. Omitted or blank values display as "Not specified", and leading and trailing whitespace is ignored.
+
+For example, a package wrapping an AGPL application with MIT-licensed integration code would declare:
+
+```toml
+[app]
+name = "wrapped-app"
+version = "1.0.0"
+license = "AGPL-3.0-only"
+packaging_license = "MIT"
+```
 
 ### `[runtime.container]` (required)
 

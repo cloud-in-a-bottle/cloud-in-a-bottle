@@ -24,6 +24,7 @@ from compute_space.core.apps import _manifest_column_values
 from compute_space.core.apps import insert_and_deploy
 from compute_space.core.apps import reload_app_background
 from compute_space.core.manifest import parse_manifest
+from compute_space.core.manifest import parse_manifest_from_string
 from compute_space.db.connection import init_db
 from compute_space.db.schema import schema_path
 
@@ -174,6 +175,25 @@ def test_reload_syncs_all_manifest_columns(cfg: Any, tmp_path: Path) -> None:
     assert row["manifest_name"] == "reload-app"
     assert "/api/" in row["public_paths"]
     assert "cpu_cores = 4.0" in row["manifest_raw"]
+
+
+def test_reload_updates_and_clears_license_metadata(cfg: Any, tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    _write_manifest(repo)
+    manifest_path = repo / "cloudinabottle.toml"
+    base = manifest_path.read_text()
+    app_id = _seed_app(cfg, str(repo), cpu_cores=0.1, memory_mb=64)
+
+    for license_value, packaging_license in [("AGPL-3.0-only", "MIT"), ("Apache-2.0", "BSD-3-Clause"), ("", "")]:
+        fields = f'license = "{license_value}"\npackaging_license = "{packaging_license}"\n' if license_value else ""
+        raw = base.replace("[app]\n", "[app]\n" + fields, 1)
+        manifest_path.write_text(raw)
+        with mock.patch.object(apps_mod, "start_app_process"):
+            reload_app_background(app_id, str(repo), cfg)
+
+        stored = parse_manifest_from_string(_row(cfg, app_id)["manifest_raw"])
+        assert stored.license == license_value
+        assert stored.packaging_license == packaging_license
 
 
 def test_reload_resyncs_runtime_type_and_gpu(cfg: Any, tmp_path: Path) -> None:

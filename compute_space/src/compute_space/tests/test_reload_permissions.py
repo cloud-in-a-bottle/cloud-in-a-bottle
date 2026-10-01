@@ -793,6 +793,25 @@ def test_settings_changes_still_gate_on_functional_field() -> None:
     assert settings_changes_require_review(list(changes.values())) is True
 
 
+@pytest.mark.parametrize("field", ["license", "packaging_license"])
+@pytest.mark.parametrize(("old", "new"), [(None, "MIT"), ("MIT", "Apache-2.0"), ("MIT", None)])
+def test_license_changes_are_visible_non_gating_metadata(field: str, old: str | None, new: str | None) -> None:
+    prev = _described()
+    updated = _described()
+    if old is not None:
+        prev = prev.replace("[app]", f'[app]\n{field} = "{old}"', 1)
+    if new is not None:
+        updated = updated.replace("[app]", f'[app]\n{field} = "{new}"', 1)
+
+    changes = manifest_settings_changes(parse_manifest_from_string(updated), prev)
+    assert len(changes) == 1
+    change = changes[0]
+    assert change.group == "App"
+    assert change.label == ("Application license" if field == "license" else "Packaging license")
+    assert (change.old, change.new) == (old or "", new or "")
+    assert settings_changes_require_review(changes) is False
+
+
 def test_gate_allows_non_functional_change(cfg: Any, tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()

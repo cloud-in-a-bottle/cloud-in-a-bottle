@@ -39,7 +39,7 @@
 
   {% if apps %}
   <div class="app-list" id="app-list">
-    {% for app in apps %}{{ app_row(app) }}{% endfor %}
+    {% for app in apps %}{{ app_row(app, app_manifests[app.app_id]) }}{% endfor %}
   </div>
   <p class="empty" id="no-matches" hidden>No apps match that filter.</p>
   {% else %}

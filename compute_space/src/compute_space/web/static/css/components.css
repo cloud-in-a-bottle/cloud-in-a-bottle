@@ -424,8 +424,12 @@ h2.section-title {
   margin-bottom: 0;
 }
 
-/* Icon, name and status travel together; the actions cluster is the only
-   thing allowed to break onto its own line in a narrow container. */
+.app-row__content {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* Name and status stay together above the wrapping license metadata. */
 .app-row__main {
   display: flex;
   align-items: center;
@@ -455,6 +459,16 @@ h2.section-title {
 .app-row__alias {
   color: var(--color-text-muted);
   font-size: var(--text-xs);
+}
+
+.app-row__licenses {
+  display: flex;
+  flex-wrap: wrap;
+  column-gap: var(--space-4);
+  margin-top: var(--space-1);
+  color: var(--color-text-muted);
+  font-size: var(--text-xs);
+  overflow-wrap: anywhere;
 }
 
 .app-row__details {
@@ -874,6 +888,20 @@ table.form-table input[type="password"] {
 }
 
 /* ── Deploy page ────────────────────────────────────────────────────── */
+
+#manifest-table td {
+  overflow-wrap: anywhere;
+}
+
+#manifest-table td:first-child {
+  width: 32%;
+}
+
+@media (max-width: 640px) {
+  #manifest-table td:first-child {
+    width: 40%;
+  }
+}
 
 .port-mappings {
   margin-top: var(--space-4);

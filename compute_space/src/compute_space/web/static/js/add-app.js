@@ -86,6 +86,8 @@ function renderManifest(m, url, storage) {
   section('App', '#e8f0fe');
   row('Name', `<strong>${esc(m.name)}</strong> v${esc(m.version)}`);
   if (m.description) row('Description', esc(m.description));
+  row('Application license', esc(m.license || 'Not specified'));
+  row('Packaging license', esc(m.packaging_license || 'Not specified'));
   if (url) row('Source', `<a href="${esc(url)}" target="_blank">${esc(url)}</a>`);
 
   section('Resources', '#e8f0fe');

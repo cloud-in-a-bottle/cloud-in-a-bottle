@@ -131,6 +131,45 @@ class TestExplicitValues:
         assert manifest.hidden is False
 
 
+class TestLicenses:
+    def test_older_manifests_have_unspecified_licenses(self):
+        manifest = parse_manifest_from_string(MINIMAL)
+        assert manifest.license == ""
+        assert manifest.packaging_license == ""
+
+    def test_application_and_packaging_licenses_are_independent(self):
+        raw = MINIMAL.replace("[app]", '[app]\nlicense = "AGPL-3.0-only"\npackaging_license = "MIT"', 1)
+        manifest = parse_manifest_from_string(raw)
+        assert manifest.license == "AGPL-3.0-only"
+        assert manifest.packaging_license == "MIT"
+        assert manifest.raw_toml == raw
+        payload = json.loads(json.dumps(attr.asdict(manifest)))
+        assert payload["license"] == "AGPL-3.0-only"
+        assert payload["packaging_license"] == "MIT"
+
+    @pytest.mark.parametrize("field", ["license", "packaging_license"])
+    @pytest.mark.parametrize("value", ["MIT", "MIT OR Apache-2.0", "Proprietary", "LicenseRef-Custom"])
+    def test_license_strings_preserve_expressions_and_custom_names(self, field, value):
+        raw = MINIMAL.replace("[app]", f'[app]\n{field} = "  {value}  "', 1)
+        manifest = parse_manifest_from_string(raw)
+        assert getattr(manifest, field) == value
+        other = "packaging_license" if field == "license" else "license"
+        assert getattr(manifest, other) == ""
+
+    @pytest.mark.parametrize("field", ["license", "packaging_license"])
+    @pytest.mark.parametrize("value", ['""', '"   "'])
+    def test_blank_licenses_are_unspecified(self, field, value):
+        raw = MINIMAL.replace("[app]", f"[app]\n{field} = {value}", 1)
+        assert getattr(parse_manifest_from_string(raw), field) == ""
+
+    @pytest.mark.parametrize("field", ["license", "packaging_license"])
+    @pytest.mark.parametrize("value", ["42", "true", '["MIT"]', '{name = "MIT"}'])
+    def test_non_string_licenses_are_rejected(self, field, value):
+        raw = MINIMAL.replace("[app]", f"[app]\n{field} = {value}", 1)
+        with pytest.raises(ValueError, match=rf"\[app\]\.{field} must be a string"):
+            parse_manifest_from_string(raw)
+
+
 class TestPortMappings:
     """Verify [[ports]] parsing."""
 

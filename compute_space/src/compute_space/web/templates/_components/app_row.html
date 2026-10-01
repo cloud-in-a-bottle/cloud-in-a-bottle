@@ -1,15 +1,21 @@
 {#- One row of the dashboard app list. ``data-status`` drives both the dot
     colour (CSS) and the polling loop's status updates (dashboard.js). -#}
-{% macro app_row(app) -%}
+{% macro app_row(app, manifest=none) -%}
 <div class="app-row" data-app-id="{{ app.app_id }}" data-status="{{ app.status }}"
      data-app-name="{{ app.name }}">
-  <div class="app-row__main">
-    <a class="app-row__name" href="{{ app_url(app.name) }}" target="_blank" rel="noopener">{{ app.name }}</a>
-    {%- if app.manifest_name and app.manifest_name != app.name %}
-    <span class="app-row__alias">({{ app.manifest_name }})</span>
-    {%- endif %}
-    <span class="status-dot"></span>
-    <span class="visually-hidden app-row__status">{{ app.status }}</span>
+  <div class="app-row__content">
+    <div class="app-row__main">
+      <a class="app-row__name" href="{{ app_url(app.name) }}" target="_blank" rel="noopener">{{ app.name }}</a>
+      {%- if app.manifest_name and app.manifest_name != app.name %}
+      <span class="app-row__alias">({{ app.manifest_name }})</span>
+      {%- endif %}
+      <span class="status-dot"></span>
+      <span class="visually-hidden app-row__status">{{ app.status }}</span>
+    </div>
+    <div class="app-row__licenses">
+      <span>Application license: {{ manifest.license if manifest and manifest.license else "Not specified" }}</span>
+      <span>Packaging license: {{ manifest.packaging_license if manifest and manifest.packaging_license else "Not specified" }}</span>
+    </div>
   </div>
   <a class="app-row__details" href="/app_detail/{{ app.name }}">Details</a>
 </div>

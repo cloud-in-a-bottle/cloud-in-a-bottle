@@ -89,6 +89,8 @@ None. All paths require Cloud in a Bottle login.
     </tr>
     {{ info_row("Version", app.version) }}
     {{ info_row("Description", app.description or "---") }}
+    {{ info_row("Application license", manifest.license if manifest and manifest.license else "Not specified") }}
+    {{ info_row("Packaging license", manifest.packaging_license if manifest and manifest.packaging_license else "Not specified") }}
     {{ info_row("URL", url_value()) }}
     {{ info_row("Public paths", public_paths_value()) }}
     {{ info_row("Local port", app.local_port) }}
