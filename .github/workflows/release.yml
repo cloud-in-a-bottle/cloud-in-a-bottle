@@ -1,12 +1,13 @@
 name: release
 
-# The one true OpenHost release process. Pushing a version tag (vMAJOR.MINOR.PATCH)
+# The one true Cloud in a Bottle release process. Pushing a version tag (vMAJOR.MINOR.PATCH)
 # does everything: it verifies the tree's pyproject version matches the tag, builds
 # the VM image artifacts, and publishes a GitHub release whose notes are the
 # auto-generated "What's Changed" changelog with the VM-image usage notes on top.
 #
-# To cut a release (the version lives in the root pyproject.toml — the openhost
-# distribution bundles the sub-packages, so that one field is the version of record):
+# To cut a release (the version lives in the root pyproject.toml; that distribution
+# bundles the sub-packages, so that one field is the version of record; the package
+# itself is still named `openhost`, only the release artifacts are rebranded):
 #   uv version 0.1.4                   # or edit pyproject.toml's [project] version
 #   git commit -am "Release v0.1.4" && git push
 #   git tag v0.1.4 && git push origin v0.1.4
@@ -97,8 +98,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
         run: |
-          assets=(image/out/openhost-*.qcow2)
-          for ova in image/out/openhost-*.ova; do
+          assets=(image/out/cloud-in-a-bottle-*.qcow2)
+          for ova in image/out/cloud-in-a-bottle-*.ova; do
             [ -e "$ova" ] && assets+=("$ova")
           done
 
@@ -106,13 +107,13 @@ jobs:
           # "What's Changed" changelog. gh can't emit both at once, so create with
           # --generate-notes, then prepend our blurb to whatever it produced.
           gh release create "$TAG" \
-            --title "OpenHost $TAG" \
+            --title "Cloud in a Bottle $TAG" \
             --generate-notes \
             --draft \
             "${assets[@]}"
 
           changelog="$(gh release view "$TAG" --json body --jq .body)"
-          preamble="OpenHost $TAG — VM images below.
+          preamble="Cloud in a Bottle $TAG. VM images below.
 
           - \`*.qcow2\` — QEMU/KVM/libvirt (and most cloud importers)
           - \`*.ova\` — VirtualBox / VMware
