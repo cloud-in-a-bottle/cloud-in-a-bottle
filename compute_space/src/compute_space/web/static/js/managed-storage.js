@@ -237,5 +237,8 @@
 
   global.createManagedStorageUsage = create;
   var root = document.getElementById('managed-storage-usage');
-  if (root) global.managedStorageUsage = create(root);
+  if (root) {
+    global.managedStorageUsage = create(root);
+    global.managedStorageUsage.setAllocation(root.dataset.allocationId);
+  }
 })(window);

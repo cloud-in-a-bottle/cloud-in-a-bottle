@@ -1,3 +1,4 @@
+import json
 import socket
 import sqlite3
 from pathlib import Path
@@ -12,6 +13,7 @@ from compute_space.tests.local_stack import LocalStack
 from compute_space.tests.local_stack import complete_setup
 from compute_space.tests.local_stack import make_local_stack_config
 from compute_space.tests.test_managed_storage import ALLOCATION
+from compute_space.tests.test_managed_storage import BINDING
 from compute_space.tests.test_managed_storage import snapshot
 from compute_space.tests.utils import managed_router
 
@@ -326,3 +328,26 @@ def test_lost_owner_authorization_clears_private_snapshot(ui, status):
     expect(region.get_by_role("status")).to_contain_text("Sign in as the instance owner")
     expect(region.get_by_role("progressbar")).to_have_count(0)
     expect(region).not_to_contain_text("25 GiB")
+
+
+def test_usage_loads_from_server_binding_while_object_metadata_is_stalled(ui):
+    page, local, _, _ = ui
+    held = []
+    with sqlite3.connect(local.config.db_path) as db:
+        db.execute(
+            "UPDATE archive_backend SET backend='s3', s3_bucket=?, s3_endpoint=?",
+            (BINDING["s3_bucket"], BINDING["s3_endpoint"]),
+        )
+        db.execute("INSERT INTO settings (key, value) VALUES ('managed_storage_binding', ?)", (json.dumps(BINDING),))
+    try:
+        page.route("**/api/storage/archive_backend", lambda route: held.append(route))
+        region = open_ui(ui)
+        expect(region.get_by_role("status")).to_have_text("Cloud storage usage updated.")
+        expect(page.locator("#archive-backend-status")).to_contain_text("Loading")
+        assert held
+    finally:
+        for route in held:
+            route.abort()
+        with sqlite3.connect(local.config.db_path) as db:
+            db.execute("UPDATE archive_backend SET backend='disabled', s3_bucket=NULL, s3_endpoint=NULL")
+            db.execute("DELETE FROM settings WHERE key='managed_storage_binding'")

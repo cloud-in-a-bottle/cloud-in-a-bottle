@@ -191,7 +191,8 @@
     <div id="archive-backend-status">
       <div class="muted">Loading&hellip;</div>
     </div>
-    <div id="managed-storage-usage" class="managed-storage" hidden></div>
+    {% if managed_storage_error %}<p class="notice notice--error">{{ managed_storage_error }}</p>{% endif %}
+    <div id="managed-storage-usage" class="managed-storage" data-allocation-id="{{ managed_storage_allocation_id or '' }}" hidden></div>
   </div>
 </section>
 

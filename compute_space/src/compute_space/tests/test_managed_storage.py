@@ -18,6 +18,7 @@ from compute_space.tests.conftest import _make_test_config
 from compute_space.tests.conftest import open_db
 from compute_space.web.routes.api.archive_backend import api_archive_backend_routes
 from compute_space.web.routes.api.managed_storage import managed_usage
+from compute_space.web.routes.pages.settings import settings_page
 
 ALLOCATION = "a" * 32
 BINDING = {
@@ -289,3 +290,26 @@ async def test_configuration_change_during_fetch_discards_old_snapshot(cfg, monk
     with closing(open_db(cfg)) as db:
         response = await routes.managed_usage.fn(db=db, config=cfg)
     assert response.status_code == 503 and response.content.status is None
+
+
+@pytest.mark.asyncio
+async def test_settings_bootstrap_only_reads_local_binding(cfg, monkeypatch):
+    bind(cfg)
+
+    def forbidden(*args):
+        raise AssertionError("settings bootstrap must not query object storage")
+
+    monkeypatch.setattr(archive_backend, "list_meta_dumps", forbidden)
+    with closing(open_db(cfg)) as db:
+        response = await settings_page.fn(db=db)
+    assert response.context["managed_storage_allocation_id"] == ALLOCATION
+    assert response.context["managed_storage_error"] is None
+
+
+@pytest.mark.asyncio
+async def test_settings_reports_invalid_binding_without_blocking_page(cfg):
+    bind(cfg, "null")
+    with closing(open_db(cfg)) as db:
+        response = await settings_page.fn(db=db)
+    assert response.context["managed_storage_allocation_id"] is None
+    assert response.context["managed_storage_error"] == "Managed storage connection needs attention."
