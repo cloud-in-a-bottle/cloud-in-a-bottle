@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 import sqlite3
@@ -17,6 +18,7 @@ from compute_space.core.tls.keycloak import KeycloakClientCredentials
 from compute_space.core.tls.keycloak import KeycloakTokenProvider
 
 SETTING_KEY = "managed_storage_binding"
+STATUS_TIMEOUT_SECONDS = 15
 Access = Literal["read_write", "read_only", "suspended"]
 Phase = Literal["reserved", "bucket_ready", "token_pending", "activating", "ready"]
 
@@ -135,18 +137,23 @@ def active_binding(db: sqlite3.Connection, state: BackendState) -> ManagedStorag
 
 async def fetch_status(binding: ManagedStorageBinding, credentials: KeycloakClientCredentials) -> ManagedStatus:
     try:
-        async with KeycloakTokenProvider.create(credentials, timeout=5) as provider:
-            token = await provider.get_token()
-        async with httpx.AsyncClient(timeout=10, follow_redirects=False) as client:
-            response = await client.get(
-                f"{binding.service_url.rstrip('/')}/api/storage/allocations/{binding.allocation_id}/usage",
-                headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
-            )
-        if response.status_code != 200:
-            raise ManagedStorageError("Cloud storage usage is temporarily unavailable. Try refreshing.")
-        if len(response.content) > 65536:
-            raise ValueError("oversized storage response")
-        status = _converter.structure(response.json(), ManagedStatus)
+        async with asyncio.timeout(STATUS_TIMEOUT_SECONDS):
+            async with KeycloakTokenProvider.create(credentials, timeout=5) as provider:
+                token = await provider.get_token()
+            async with httpx.AsyncClient(timeout=10, follow_redirects=False) as client:
+                async with client.stream(
+                    "GET",
+                    f"{binding.service_url.rstrip('/')}/api/storage/allocations/{binding.allocation_id}/usage",
+                    headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
+                ) as response:
+                    if response.status_code != 200:
+                        raise ManagedStorageError("Cloud storage usage is temporarily unavailable. Try refreshing.")
+                    payload = bytearray()
+                    async for chunk in response.aiter_bytes(chunk_size=8192):
+                        if len(payload) + len(chunk) > 65536:
+                            raise ValueError("oversized storage response")
+                        payload.extend(chunk)
+            status = _converter.structure(json.loads(payload), ManagedStatus)
         if status.allocation_id != binding.allocation_id:
             raise ValueError("allocation mismatch")
         return status

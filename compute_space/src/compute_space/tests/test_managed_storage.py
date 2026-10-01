@@ -1,3 +1,4 @@
+import asyncio
 import json
 from contextlib import closing
 
@@ -224,6 +225,54 @@ def test_archive_state_exposes_only_explicit_matching_binding(cfg, monkeypatch):
             db.execute("UPDATE archive_backend SET s3_endpoint='https://other.example'")
             db.commit()
         assert client.get("/api/storage/archive_backend").json()["managed_storage_allocation_id"] is None
+
+
+def test_archive_state_reports_invalid_managed_configuration(cfg, monkeypatch):
+    bind(cfg, "{bad json")
+    monkeypatch.setattr(archive_backend, "list_meta_dumps", lambda *args: None)
+    with TestClient(make_test_app(api_archive_backend_routes)) as client:
+        client.cookies.update(auth_cookie(cfg))
+        response = client.get("/api/storage/archive_backend").json()
+    assert response["managed_storage_allocation_id"] is None
+    assert response["state_message"] == "Managed storage connection needs attention."
+
+
+def test_oversized_response_is_bounded(cfg, transport):
+    bind(cfg)
+    transport["body"]["unexpected"] = "x" * 70000
+    with TestClient(make_test_app(managed_usage)) as client:
+        client.cookies.update(auth_cookie(cfg))
+        assert client.get("/api/storage/managed_usage").status_code == 503
+    assert all(client.is_closed for client in transport["clients"])
+
+
+@pytest.mark.asyncio
+async def test_cancellation_and_total_deadline_close_clients(monkeypatch):
+    clients = []
+    entered = asyncio.Event()
+    real = httpx.AsyncClient
+
+    async def wait(request):
+        entered.set()
+        await asyncio.Event().wait()
+
+    def client(**kwargs):
+        value = real(transport=httpx.MockTransport(wait), **kwargs)
+        clients.append(value)
+        return value
+
+    monkeypatch.setattr(managed_storage.httpx, "AsyncClient", client)
+    binding = managed_storage.ManagedStorageBinding(**BINDING)
+    task = asyncio.create_task(managed_storage.fetch_status(binding, IDENTITY))
+    await entered.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert all(value.is_closed for value in clients)
+    monkeypatch.setattr(managed_storage, "STATUS_TIMEOUT_SECONDS", 0.02)
+    with pytest.raises(managed_storage.ManagedStorageError):
+        await managed_storage.fetch_status(binding, IDENTITY)
+    assert all(value.is_closed for value in clients)
 
 
 @pytest.mark.asyncio

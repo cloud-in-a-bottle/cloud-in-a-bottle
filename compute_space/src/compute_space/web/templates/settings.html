@@ -4,6 +4,10 @@
 
 {% block title_suffix %} - Settings{% endblock %}
 
+{% block head %}
+<link rel="stylesheet" href="{{ static_url('css/managed-storage.css') }}">
+{% endblock %}
+
 {% block content %}
 <p id="error" class="notice notice--error" hidden></p>
 
@@ -187,6 +191,7 @@
     <div id="archive-backend-status">
       <div class="muted">Loading&hellip;</div>
     </div>
+    <div id="managed-storage-usage" class="managed-storage" hidden></div>
   </div>
 </section>
 
@@ -241,6 +246,7 @@
 </section>
 
 <script src="{{ static_url('js/dom.js') }}"></script>
+<script src="{{ static_url('js/managed-storage.js') }}"></script>
 <script src="{{ static_url('js/http-errors.js') }}"></script>
 <script src="{{ static_url('js/username-validation.js') }}"></script>
 <script src="{{ static_url('js/tokens.js') }}"></script>

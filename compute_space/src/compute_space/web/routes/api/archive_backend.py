@@ -154,8 +154,9 @@ async def get_archive_backend(
     state = archive_backend.read_state(db)
     try:
         binding = active_binding(db, state)
-    except ManagedStorageError:
+    except ManagedStorageError as exc:
         binding = None
+        state = attr.evolve(state, state_message="; ".join(filter(None, (state.state_message, str(exc)))))
     # The archive tier is always the JuiceFS mountpoint (local file backend or
     # S3); only the legacy 'disabled' state has no mount.
     if state.backend in ("s3", "local"):

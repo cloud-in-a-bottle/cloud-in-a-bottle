@@ -64,7 +64,14 @@ jobs:
       - name: Install Chromium
         run: pixi run -e dev playwright install --with-deps chromium
       - name: Run automated WCAG 2.2 AA checks
-        run: pixi run -e dev pytest tests/test_accessibility.py tests/test_app_definition_export_browser.py tests/test_app_definition_load_browser.py -v
+        run: pixi run -e dev pytest tests/test_accessibility.py tests/test_app_definition_export_browser.py tests/test_app_definition_load_browser.py tests/test_managed_storage_browser.py -v
+      - name: Save browser evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-ui-evidence
+          path: test-results/
+          retention-days: 7
       - name: Test setup dashboard readiness in Chromium
         run: pixi run -e dev pytest tests/test_setup_readiness.py -v
 

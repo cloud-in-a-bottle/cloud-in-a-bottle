@@ -437,6 +437,7 @@ function toggleSsh() {
 // ─── Archive Backend ───
 
 function renderArchiveBackend(state) {
+  if (window.managedStorageUsage) window.managedStorageUsage.setAllocation(state.managed_storage_allocation_id);
   var el = document.getElementById('archive-backend-status');
   var rows = '';
   if (state.backend === 's3') {
