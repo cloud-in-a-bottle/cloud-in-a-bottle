@@ -192,7 +192,8 @@
       }
     }
 
-    function setAllocation(value) {
+    function setAllocation(value, expectedRevision) {
+      if (expectedRevision !== undefined && expectedRevision !== revision) return;
       value = typeof value === 'string' && /^[a-f0-9]{32}$/.test(value) ? value : null;
       if (value === allocation) return;
       allocation = value;
@@ -232,7 +233,8 @@
     document.addEventListener('visibilitychange', visibility);
     global.addEventListener('pagehide', pause);
     global.addEventListener('pageshow', resume);
-    return {setAllocation: setAllocation, refresh: load, destroy: destroy};
+    return {setAllocation: setAllocation, refresh: load, destroy: destroy,
+      getRevision: function () { return revision; }};
   }
 
   global.createManagedStorageUsage = create;

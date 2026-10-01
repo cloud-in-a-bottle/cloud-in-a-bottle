@@ -1,6 +1,8 @@
 import json
 import socket
 import sqlite3
+from contextlib import closing
+from contextlib import contextmanager
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -27,7 +29,7 @@ def stack(tmp_path_factory):
         str(tmp_path_factory.mktemp("managed-storage-ui")), port, "storage-ui", default_apps=[]
     )
     # This browser fixture renders stored state; it never mounts storage or starts apps.
-    with sqlite3.connect(config.db_path) as db:
+    with closing(sqlite3.connect(config.db_path)) as db, db:
         db.execute("UPDATE archive_backend SET backend='disabled'")
     with managed_router(config):
         local = LocalStack(config)
@@ -330,24 +332,51 @@ def test_lost_owner_authorization_clears_private_snapshot(ui, status):
     expect(region).not_to_contain_text("25 GiB")
 
 
-def test_usage_loads_from_server_binding_while_object_metadata_is_stalled(ui):
-    page, local, _, _ = ui
-    held = []
-    with sqlite3.connect(local.config.db_path) as db:
+@contextmanager
+def server_binding(local):
+    with closing(sqlite3.connect(local.config.db_path)) as db, db:
         db.execute(
             "UPDATE archive_backend SET backend='s3', s3_bucket=?, s3_endpoint=?",
             (BINDING["s3_bucket"], BINDING["s3_endpoint"]),
         )
         db.execute("INSERT INTO settings (key, value) VALUES ('managed_storage_binding', ?)", (json.dumps(BINDING),))
     try:
-        page.route("**/api/storage/archive_backend", lambda route: held.append(route))
-        region = open_ui(ui)
-        expect(region.get_by_role("status")).to_have_text("Cloud storage usage updated.")
-        expect(page.locator("#archive-backend-status")).to_contain_text("Loading")
-        assert held
+        yield
     finally:
-        for route in held:
-            route.abort()
-        with sqlite3.connect(local.config.db_path) as db:
+        with closing(sqlite3.connect(local.config.db_path)) as db, db:
             db.execute("UPDATE archive_backend SET backend='disabled', s3_bucket=NULL, s3_endpoint=NULL")
             db.execute("DELETE FROM settings WHERE key='managed_storage_binding'")
+
+
+def test_usage_loads_from_server_binding_while_object_metadata_is_stalled(ui):
+    page, local, _, _ = ui
+    held = []
+    with server_binding(local):
+        try:
+            page.route("**/api/storage/archive_backend", lambda route: held.append(route))
+            region = open_ui(ui)
+            expect(region.get_by_role("status")).to_have_text("Cloud storage usage updated.")
+            expect(page.locator("#archive-backend-status")).to_contain_text("Loading")
+            assert held
+        finally:
+            for route in held:
+                route.abort()
+
+
+def test_late_archive_result_cannot_reenable_storage_after_newer_binding_decision(ui):
+    page, local, state, _ = ui
+    archive_requests, usage_requests = [], []
+    with server_binding(local):
+        page.route("**/api/storage/archive_backend", lambda route: archive_requests.append(route))
+        page.route("**/api/storage/managed_usage", lambda route: usage_requests.append(route))
+        region = open_ui(ui)
+        expect(region.get_by_role("status")).to_contain_text("Loading")
+        assert len(archive_requests) == len(usage_requests) == 1
+        with closing(sqlite3.connect(local.config.db_path)) as db, db:
+            db.execute("UPDATE archive_backend SET s3_bucket='my-own-bucket'")
+        usage_requests[0].fulfill(json={"managed": False, "status": None})
+        expect(region).to_be_hidden()
+        archive_requests[0].fulfill(json=state)
+        expect(page.locator("#archive-backend-table")).to_be_visible()
+        expect(region).to_be_hidden()
+        assert len(usage_requests) == 1
