@@ -123,7 +123,9 @@ tar -C "$REPO_DIR" --exclude image/out --exclude image/cache -czf - image script
 # the log by byte offset until the exit code lands.
 echo "--- Running: $COMMAND ---"
 printf '%s\n' "$COMMAND" | remote 'cat > run.sh'
-remote 'cd repo && nohup setsid bash -c "bash ../run.sh; echo \$? > ../run.rc" > ../run.log 2>&1 < /dev/null &'
+# The redirections must wrap the whole backgrounded group, or it keeps ssh's
+# stdout open and ssh blocks until the build ends.
+remote '(cd repo && exec setsid bash -c "bash ../run.sh; echo \$? > ../run.rc") > run.log 2>&1 < /dev/null &'
 CHUNK="$(mktemp)"
 offset=0
 rc=""
