@@ -42,13 +42,19 @@ def test_get_without_data_sends_no_body() -> None:
 
 
 def test_bearer_header_attached() -> None:
+    """The token goes in X-OpenHost-Authorization, which the router strips before reaching an app.
+
+    Plain Authorization must stay unset so that aiming the CLI at an app subdomain cannot hand the
+    app our token, and so the app's own Authorization is never clobbered.
+    """
     with patch(
         "compute_space_cli.helpers.httpx.request",
         return_value=_ok_response(),
     ) as mock_req:
         make_api_request("https://x", "tok-123", "GET", "/api/foo")
         kwargs = mock_req.call_args.kwargs
-        assert kwargs["headers"]["Authorization"] == "Bearer tok-123"
+        assert kwargs["headers"]["X-OpenHost-Authorization"] == "Bearer tok-123"
+        assert "Authorization" not in kwargs["headers"]
 
 
 @pytest.mark.parametrize(

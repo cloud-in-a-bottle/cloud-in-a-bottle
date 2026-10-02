@@ -28,7 +28,15 @@ Owner sessions are refused on cross-origin requests, so JavaScript running in on
 
 The router is the sole authority for the `X-OpenHost-*` headers an app receives. Anything a client sends under those names is stripped before the app sees it, so an app can trust `X-OpenHost-Is-Owner` and a provider can trust the consumer name it is handed.
 
-None of those three credentials is ever forwarded to an app. The session cookie is stripped from `Cookie`, and an `Authorization` header is dropped whenever it carries a credential the router itself would accept. Otherwise an app you merely visited with an API token could replay that token against the dashboard API, and a provider app could replay its consumer's app token. Apps learn who the caller is from `X-OpenHost-Is-Owner` and `X-OpenHost-Consumer-Id` instead of from the credential.
+## Credentials never reach an app
+
+None of those three credentials is ever forwarded to an app. Otherwise an app you merely visited with an API token could replay that token against the dashboard API, and a provider app could replay its consumer's app token. Apps learn who the caller is from `X-OpenHost-Is-Owner` and `X-OpenHost-Consumer-Id` instead of from the credential itself.
+
+Send your token in **`X-OpenHost-Authorization: Bearer <token>`**. Because it lives in the `X-OpenHost-*` namespace, it is removed by name, before the router even looks at the value. That holds no matter what the value is: a mistyped token, an expired one, or one minted for a different instance is dropped just the same. It also leaves `Authorization` entirely to the app, so one request can authenticate to the router and carry the app's own bearer token.
+
+Plain `Authorization: Bearer <token>` still works, and the router drops it whenever the value is a credential it would itself accept. That check is by value, so it is weaker: a typo means the router does not recognise the token, does not authenticate you, and forwards the near-miss to the app. On an owner-gated route that is harmless, since the request is redirected to `/login` and never reaches the app, but on a `public_paths` route the app receives it. Prefer the dedicated header; `Authorization` support is deprecated and will be removed once clients have moved over.
+
+The session cookie is stripped from `Cookie` by name, the same way.
 
 ## Catalog apps
 

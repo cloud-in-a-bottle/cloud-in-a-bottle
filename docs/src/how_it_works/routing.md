@@ -54,6 +54,6 @@ The router forwards HTTP and WebSocket traffic alike, and sets a few headers on 
 
 Any `X-OpenHost-*` header from the client is stripped first; the router is the only thing allowed to set them.
 
-The router also drops the `Authorization` header when it carries one of its own credentials (an API token, an app token, or a session token), so the credential you used to reach an app is never handed to that app. An `Authorization` value the router does not recognise is forwarded untouched, so apps are free to run their own bearer auth and schemes like AWS SigV4 or Basic still work.
+That is also why the router reads your own credential from `X-OpenHost-Authorization: Bearer <token>` rather than `Authorization`: it is stripped by name along with every other `X-OpenHost-*` header, so it cannot reach the app, and `Authorization` is left untouched for the app's own use. A credential sent the old way, in `Authorization`, is still accepted and is dropped when the router recognises its value, but anything it does not recognise is forwarded as-is, so apps can run their own bearer auth and schemes like AWS SigV4 or Basic keep working. See [security](./security.md#credentials-never-reach-an-app).
 
 Apps that speak something other than HTTP can bind extra host ports with `[[ports]]` in the manifest; those bypass the router and are exposed directly on the machine. See the [manifest spec](../creating_an_app/manifest_spec.md).

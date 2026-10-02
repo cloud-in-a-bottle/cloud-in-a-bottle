@@ -86,7 +86,7 @@ along with `Authorization: Bearer $BOTTLE_APP_TOKEN` header for server-side requ
 This endpoint is app-specific - the router loads the consumer's manifest, finds the `[[services.v2.consumes]]` entry matching `<shortname>`, resolves the correct provider of the requested service, and proxies to `provider_app.BOTTLE_ROUTER_URL/<provider_endpoint>/<rest>`.
 
 The router identifies and authenticates the calling app two ways:
-- **Server-side calls:** must include `Authorization: Bearer $BOTTLE_APP_TOKEN`. Each app gets a unique `BOTTLE_APP_TOKEN` injected as an env var at deploy time.
+- **Server-side calls:** must include `Authorization: Bearer $BOTTLE_APP_TOKEN`. Each app gets a unique `BOTTLE_APP_TOKEN` injected as an env var at deploy time. `X-OpenHost-Authorization: Bearer $BOTTLE_APP_TOKEN` is also accepted and is preferred for new apps, since the router strips that header by name and so can never pass your app token on to a provider.
 - **Browser calls:** the request's `Origin` is matched against the app's subdomain, with the owner session cookie authenticating the user. No bearer token is needed for these; the browser provides the cookie automatically.
 
 Service calls should be API-only - the user's browser should never be redirected to a service endpoint, with the exception of permission grant pages.
