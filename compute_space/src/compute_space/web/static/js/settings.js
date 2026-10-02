@@ -436,7 +436,8 @@ function toggleSsh() {
 
 // ─── Archive Backend ───
 
-function renderArchiveBackend(state) {
+function renderArchiveBackend(state, managedRevision) {
+  if (window.managedStorageUsage) window.managedStorageUsage.setAllocation(state.managed_storage_allocation_id, managedRevision);
   var el = document.getElementById('archive-backend-status');
   var rows = '';
   if (state.backend === 's3') {
@@ -653,6 +654,7 @@ function submitConfigure() {
 }
 
 function loadArchiveBackend() {
+  var managedRevision = window.managedStorageUsage ? window.managedStorageUsage.getRevision() : undefined;
   return fetch('/api/storage/archive_backend', {credentials: 'same-origin'})
     .then(function(r) {
       if (!r.ok) {
@@ -661,7 +663,7 @@ function loadArchiveBackend() {
       return r.json();
     })
     .then(function(data) {
-      renderArchiveBackend(data);
+      renderArchiveBackend(data, managedRevision);
       return data;
     })
     .catch(function(err) {

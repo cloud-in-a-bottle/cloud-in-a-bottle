@@ -22,6 +22,8 @@ from litestar.params import Body
 from compute_space.config import Config
 from compute_space.core import archive_backend
 from compute_space.core.archive_backend import BackendState
+from compute_space.core.managed_storage import ManagedStorageError
+from compute_space.core.managed_storage import active_binding
 from compute_space.core.operation_locks import detach_operation
 from compute_space.core.operation_locks import start_exclusive_operation
 from compute_space.core.updates import is_shutdown_pending
@@ -56,6 +58,7 @@ class BackendStateResponse:
     # archive dir.  Surfaced so the dashboard can tell the operator exactly
     # whose data an S3 upgrade will migrate.  Empty/omitted for other backends.
     local_archive_apps: list[str] = attr.Factory(list)
+    managed_storage_allocation_id: str | None = None
 
 
 @attr.s(auto_attribs=True, frozen=True)
@@ -69,6 +72,7 @@ def _state_to_response(
     meta_db_path: str,
     meta_dumps: MetaDumpsSummary | None,
     local_archive_apps: list[str] | None = None,
+    managed_storage_allocation_id: str | None = None,
 ) -> BackendStateResponse:
     return BackendStateResponse(
         backend=state.backend,
@@ -84,6 +88,7 @@ def _state_to_response(
         meta_db_path=meta_db_path,
         meta_dumps=meta_dumps,
         local_archive_apps=local_archive_apps or [],
+        managed_storage_allocation_id=managed_storage_allocation_id,
     )
 
 
@@ -147,6 +152,11 @@ async def get_archive_backend(
 ) -> BackendStateResponse:
     """Return current archive-backend state (secret redacted) plus archive_dir, meta_db_path, meta_dumps."""
     state = archive_backend.read_state(db)
+    try:
+        binding = active_binding(db, state)
+    except ManagedStorageError as exc:
+        binding = None
+        state = attr.evolve(state, state_message="; ".join(filter(None, (state.state_message, str(exc)))))
     # The archive tier is always the JuiceFS mountpoint (local file backend or
     # S3); only the legacy 'disabled' state has no mount.
     if state.backend in ("s3", "local"):
@@ -174,7 +184,14 @@ async def get_archive_backend(
                 latest_key=summary.latest_key,
             )
     local_apps = archive_backend.local_archive_apps_with_data(config, db) if state.backend == "local" else []
-    return _state_to_response(state, archive_dir, meta_db_path, meta_dumps, local_apps)
+    return _state_to_response(
+        state,
+        archive_dir,
+        meta_db_path,
+        meta_dumps,
+        local_apps,
+        managed_storage_allocation_id=binding.allocation_id if binding else None,
+    )
 
 
 @post(
