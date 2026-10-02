@@ -22,6 +22,7 @@ import json
 import sqlite3
 from collections.abc import Iterable
 from typing import Any
+from urllib.parse import urlsplit
 
 import attr
 from litestar import HttpMethod
@@ -44,8 +45,10 @@ from litestar.params import FromPath
 from litestar.response import Response
 from litestar.response.base import ASGIResponse
 
+from compute_space.core.app_id import is_valid_app_name
 from compute_space.core.apps import find_app_by_name
-from compute_space.core.apps import get_app_from_hostname
+from compute_space.core.apps import is_public_path
+from compute_space.core.domains import Domain
 from compute_space.core.proxy_target import InProcess
 from compute_space.core.proxy_target import LocalPort
 from compute_space.core.proxy_target import ProxyTarget
@@ -143,11 +146,32 @@ async def service_call_cors(
     rest: FromPath[str],
     db: NamedDependency[sqlite3.Connection],
 ) -> Response[str]:
-    """Hande CORS preflight HTTP OPTIONS request, respond with appropriate CORS headers."""
+    """Allow app-shaped origins on configured domains without revealing installed apps."""
     origin = request.headers.get("Origin", None)
-    # block CORS preflight if Origin is not a known app - no auth headers yet but we can at least verify this,
-    # to help avoid XSRF from external sites.
-    if origin is None or get_app_from_hostname(origin, db) is None:
+    try:
+        host = get_connection_origin(request)
+        # Keep raw host[:port] compatibility, but reject URL components that an Origin cannot contain.
+        parsed = urlsplit(origin if origin and "://" in origin else f"//{origin or ''}")
+        _ = parsed.port  # Validate ports on raw hosts too.
+    except ValueError as e:
+        raise PermissionDeniedException(detail="Forbidden") from e
+    if (
+        not origin
+        or not host
+        or not origin.isprintable()
+        or any(c.isspace() for c in origin)
+        or parsed.scheme not in ("", "http", "https")
+        or parsed.username is not None
+        or parsed.path
+        or "?" in origin
+        or "#" in origin
+    ):
+        raise PermissionDeniedException(detail="Forbidden")
+    domain = Domain.match(db, host)
+    if domain is None or not domain.is_app_subdomain(host):
+        raise PermissionDeniedException(detail="Forbidden")
+    app_name = host.split(":", 1)[0].lower()[: -(len(domain.name_no_port) + 1)]
+    if not is_valid_app_name(app_name):
         raise PermissionDeniedException(detail="Forbidden")
     return Response(content="", status_code=204, headers=_cors_headers(origin))
 
@@ -315,7 +339,7 @@ async def oauth_callback_proxy_v2(request: Request[Any, Any, Any]) -> ASGIRespon
         raise ClientException(detail="Missing app in state", extra={"code": "bad_request"})
 
     app_row = find_app_by_name(app_name)
-    if not app_row:
+    if not app_row or not is_public_path(app_row, "/callback"):
         raise ServiceUnavailableException(
             detail=f"App '{app_name}' not found", extra={"code": "service_not_available"}
         )
