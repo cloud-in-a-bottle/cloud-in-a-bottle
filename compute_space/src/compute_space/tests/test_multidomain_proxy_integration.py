@@ -222,10 +222,13 @@ async def test_unauth_on_public_redirects_to_public_login_over_https(wrapped_app
 @pytest.mark.parametrize("domain", [PRIMARY.name, LOCAL.name])
 @pytest.mark.parametrize("method", ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"])
 @pytest.mark.parametrize("path", ["/", "/secret/deep?view=logs"])
-async def test_private_app_matches_unknown_app(wrapped_app: Any, domain: str, method: str, path: str) -> None:
+@pytest.mark.parametrize("headers", [{}, {"Origin": "http://example.com:invalid"}, {"Origin": "http://["}])
+async def test_private_app_matches_unknown_app(
+    wrapped_app: Any, domain: str, method: str, path: str, headers: dict[str, str]
+) -> None:
     async with _client(wrapped_app) as c:
-        private = await c.request(method, f"http://privapp.{domain}{path}")
-        missing = await c.request(method, f"http://missing.{domain}{path}")
+        private = await c.request(method, f"http://privapp.{domain}{path}", headers=headers)
+        missing = await c.request(method, f"http://missing.{domain}{path}", headers=headers)
     assert private.status_code == missing.status_code == 404
     assert private.content == missing.content
     assert private.headers == missing.headers
@@ -520,7 +523,8 @@ async def test_startup_websocket_closes_after_auth_without_backend_handshake(
     assert backend.requests == []
     if code == 4404:
         private_events = events.copy()
-        events.clear()
-        scope["headers"] = [(b"host", b"missing.myhost.local:8080")]
-        await wrapped_app(scope, receive, send)
-        assert events == private_events
+        for host in (b"privapp.myhost.local:8080", b"missing.myhost.local:8080"):
+            events.clear()
+            scope["headers"] = [(b"host", host), (b"origin", b"http://example.com:invalid")]
+            await wrapped_app(scope, receive, send)
+            assert events == private_events
