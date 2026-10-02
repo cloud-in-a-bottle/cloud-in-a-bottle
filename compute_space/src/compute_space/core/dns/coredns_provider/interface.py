@@ -14,6 +14,8 @@ from compute_space.core.dns.coredns_provider.coredns import write_coredns_config
 from compute_space.core.dns.coredns_provider.records import APEX
 from compute_space.core.dns.coredns_provider.records import DnsRecord
 from compute_space.core.dns.coredns_provider.records import RecordType
+from compute_space.core.dns.coredns_provider.records import is_local_only_zone
+from compute_space.core.dns.coredns_provider.records import normalize_record_name
 from compute_space.core.dns.coredns_provider.records import normalize_zone
 from compute_space.core.logging import logger
 
@@ -27,15 +29,6 @@ __all__ = [
     "RecordType",
 ]
 
-# Domains that resolve without this instance answering for them: mDNS handles ``.local``, and
-# ``lvh.me`` (and friends) are public wildcards pointing at loopback.  An instance configured with
-# only these has nothing to be authoritative for, so it never binds :53.
-_LOCAL_ONLY_SUFFIXES = (".local", "lvh.me")
-
-
-def _is_local_only(domain: str) -> bool:
-    return any(domain == suffix or domain.endswith(f".{suffix}") for suffix in _LOCAL_ONLY_SUFFIXES)
-
 
 class DnsNotEnabled(Exception):
     pass
@@ -46,8 +39,8 @@ class InternalDnsProvider:
     """Interface to the internal DNS server provided by CoreDNS.
 
     Recreated from scratch on every boot, so it holds no persistent state.
-    A set of zones are registered, along with a set of records.
-    Records are relative to a zone, and are published identically on all zones.
+    One set of zones is registered.  The public view publishes records on non-local zones;
+    the container view routes every registered zone through the gateway, including local-only names.
 
     The actual CoreDNS process is started and stopped automatically as needed as zones are added and removed.
 
@@ -96,15 +89,16 @@ class InternalDnsProvider:
 
     @property
     def zones(self) -> tuple[str, ...]:
+        """Zones registered for either DNS view."""
         return self._zones
 
     async def add_zone(self, zone: str) -> None:
-        if _is_local_only(zone):
-            # these already resolve without coredns
+        normalized_zone = normalize_zone(zone)
+        if is_local_only_zone(normalized_zone) and self.container_gateway_ip is None:
+            # mDNS/public loopback answers work outside containers, but containers need the gateway.
             return
         if not self.serves_public_zones and self.container_gateway_ip is None:
             raise DnsNotEnabled(f"No address to serve {zone!r} on; neither DNS view is enabled")
-        normalized_zone = normalize_zone(zone)
         # Read the current set only once the lock is held: computing the new set outside it means
         # two concurrent changes both build on the same stale set, and the second to land drops
         # whatever the first added.
@@ -118,9 +112,9 @@ class InternalDnsProvider:
     async def remove_zone(self, zone: str) -> None:
         # Mirror add_zone's skips: neither kind of domain was ever added, so there is nothing to
         # re-render, and re-rendering would restart CoreDNS for a zone it never served.
-        if _is_local_only(zone) or (not self.serves_public_zones and self.container_gateway_ip is None):
-            return
         name = normalize_zone(zone)
+        if self.container_gateway_ip is None and (is_local_only_zone(name) or not self.serves_public_zones):
+            return
         async with self._zone_lock:
             await self._apply_zones(tuple(z for z in self._zones if z != name))
 
@@ -134,13 +128,13 @@ class InternalDnsProvider:
     ) -> None:
         """Make ``values`` the only records at ``name``/``record_type``, replacing whatever is there.
 
-        ``name`` is relative to the zone, and lands in every zone the provider manages -- those
-        zones are aliases for one space, so there is no such thing as a record in only some of
-        them.
+        ``name`` is case-insensitive and relative to the zone, and lands in every public-view zone --
+        those zones are aliases for one space.  The container view supplies gateway routing records instead.
 
         ``set`` rather than an append, so re-running a publisher (every boot does) replaces what
         the last run wrote instead of accumulating alongside it.
         """
+        name = normalize_record_name(name)
         rrset = tuple(DnsRecord(name=name, type=record_type, ttl=ttl, data=v) for v in values)
         if self._records.get((name, record_type)) == rrset:
             return
@@ -150,6 +144,7 @@ class InternalDnsProvider:
 
     def delete_records(self, name: str, record_type: RecordType) -> None:
         """Remove every record at ``name``/``record_type``, whatever it currently holds (if anything)."""
+        name = normalize_record_name(name)
         if self._records.pop((name, record_type), None) is None:
             return
         self._write_config()

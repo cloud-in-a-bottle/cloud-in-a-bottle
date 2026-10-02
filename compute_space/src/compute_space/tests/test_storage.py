@@ -3,10 +3,14 @@ from __future__ import annotations
 import os
 import sqlite3
 from collections import namedtuple
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Any
 from typing import cast
 
 import pytest
+from hypothesis import given
+from hypothesis import strategies as st
 
 import compute_space.core.storage as storage
 from compute_space.config import DefaultConfig
@@ -19,11 +23,11 @@ def test_storage_status_includes_disk_totals(tmp_path, monkeypatch):
     config = _make_test_config(tmp_path, storage_min_free_mb=0)
     usage = namedtuple("usage", ["total", "used", "free"])
 
-    vm_data = os.path.join(config.persistent_data_dir, "vm_data")
+    openhost_data = config.openhost_data_path
     app_data = os.path.join(config.persistent_data_dir, "app_data")
-    os.makedirs(vm_data, exist_ok=True)
+    os.makedirs(openhost_data, exist_ok=True)
     os.makedirs(app_data, exist_ok=True)
-    with open(os.path.join(vm_data, "router.db"), "wb") as f:
+    with open(openhost_data / "sample.bin", "wb") as f:
         f.write(b"x" * (256 * 1024))
     with open(os.path.join(app_data, "blob.bin"), "wb") as f:
         f.write(b"x" * (512 * 1024))
@@ -146,6 +150,41 @@ def test_storage_low_true_when_below_threshold(tmp_path, monkeypatch):
 
     monkeypatch.setattr(storage.shutil, "disk_usage", fake_disk_usage)
     assert storage.storage_low(config) is True
+
+
+# Five ordinary paths and 1 KiB payloads keep generated filesystem I/O small.
+@given(
+    files=st.dictionaries(
+        st.sampled_from(("state.bin", "index.bin", "cache/first.bin", "cache/second.bin", "cache/nested/data.bin")),
+        st.binary(max_size=1024),
+    )
+)
+def test_openhost_data_usage_counts_configured_directory(files: dict[str, bytes]) -> None:
+    with TemporaryDirectory() as directory:
+        config = DefaultConfig(data_root_dir=directory)
+        config.openhost_data_path.mkdir(parents=True)
+        for name, contents in files.items():
+            path = config.openhost_data_path / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(contents)
+
+        assert storage.openhost_data_usage_bytes(config) == sum(len(contents) for contents in files.values())
+
+
+def test_openhost_data_usage_leaves_legacy_data_untouched(tmp_path):
+    config = DefaultConfig(data_root_dir=str(tmp_path))
+    legacy_dir = Path(config.persistent_data_dir) / "vm_data"
+
+    assert storage.openhost_data_usage_bytes(config) == 0
+    assert config.openhost_data_path.is_dir()
+    assert not legacy_dir.exists()
+
+    legacy_dir.mkdir()
+    legacy_file = legacy_dir / "legacy.bin"
+    legacy_file.write_bytes(b"legacy data")
+
+    assert storage.openhost_data_usage_bytes(config) == 0
+    assert legacy_file.read_bytes() == b"legacy data"
 
 
 def test_per_app_usage(tmp_path):

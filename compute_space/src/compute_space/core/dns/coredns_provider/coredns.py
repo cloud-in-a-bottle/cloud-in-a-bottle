@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import ipaddress
 import os
 from collections.abc import Sequence
 from pathlib import Path
@@ -12,6 +13,7 @@ from jinja2 import FileSystemLoader
 from jinja2 import StrictUndefined
 
 from compute_space.core.dns.coredns_provider.records import DnsRecord
+from compute_space.core.dns.coredns_provider.records import is_local_only_zone
 from compute_space.core.logging import logger
 
 _TEMPLATES_DIR = Path(__file__).parent / "templates"
@@ -31,6 +33,13 @@ _RESOLV_CONF = Path("/etc/resolv.conf")
 ADDRESS_TTL_SECONDS = 300
 
 
+def _resolver_address(value: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address:
+    address = ipaddress.ip_address(value)
+    if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped is not None:
+        return address.ipv4_mapped
+    return address
+
+
 def host_upstream_resolvers(
     container_gateway_ip: str | None = None, resolv_conf: Path = _RESOLV_CONF
 ) -> tuple[str, ...]:
@@ -41,24 +50,31 @@ def host_upstream_resolvers(
     public resolvers instead would break every one of those, and quietly route container queries
     past the resolver the operator configured.
 
-    Two kinds of entry are unusable and dropped.  Loopback is the systemd-resolved stub, which the
-    container netns cannot reach.  Our own gateway address is this CoreDNS, so forwarding there
-    would loop.  If that leaves nothing, fall back to public resolvers: containers that resolve via
-    the wrong servers beat containers that resolve nothing at all.
+    Loopback is the systemd-resolved stub, which the container netns cannot reach.
+    Our own gateway address is this CoreDNS, so forwarding there
+    would loop.  Both are dropped by address identity, including IPv4-mapped IPv6 spellings.
+    Malformed nameserver entries are ignored.  If that leaves nothing, fall back to public resolvers:
+    containers that resolve via the wrong servers beat containers that resolve nothing at all.
     """
     resolvers: list[str] = []
     try:
-        lines = resolv_conf.read_text().splitlines()
+        lines = resolv_conf.read_text(errors="replace").splitlines()
     except OSError:
         logger.warning(f"Could not read {resolv_conf}; forwarding container DNS to {FALLBACK_UPSTREAM_DNS}")
         return FALLBACK_UPSTREAM_DNS
 
+    gateway = _resolver_address(container_gateway_ip) if container_gateway_ip is not None else None
     for line in lines:
         parts = line.split()
         if len(parts) < 2 or parts[0] != "nameserver":
             continue
         addr = parts[1]
-        if addr.startswith("127.") or addr == "::1" or addr == container_gateway_ip:
+        try:
+            address = _resolver_address(addr)
+        except ValueError:
+            logger.warning("Ignoring invalid nameserver {!r} in {}", addr, resolv_conf)
+            continue
+        if address.is_loopback or address == gateway:
             continue
         resolvers.append(addr)
 
@@ -93,6 +109,13 @@ def discard_zone_files(zones_dir: Path, zone: str) -> None:
         path.unlink(missing_ok=True)
 
 
+@attr.s(auto_attribs=True, frozen=True)
+class _ZoneFiles:
+    domain: str
+    zonefile_path: Path
+    container_zonefile_path: Path
+
+
 def write_coredns_config(
     zones: Sequence[str],
     records: Sequence[DnsRecord],
@@ -107,7 +130,8 @@ def write_coredns_config(
 ) -> None:
     """Render the Corefile plus a zone file per zone, for each enabled view.
 
-    Builds from scratch each time, ignoring the current config.
+    Builds from scratch each time, ignoring the current config.  Local-only zones are excluded from
+    the public view; containers need gateway answers even for mDNS and wildcard-to-loopback names.
     """
     assert bind_ip is not None or container_gateway_ip is not None, "must bind at least one view"
 
@@ -118,33 +142,30 @@ def write_coredns_config(
 
     # The Corefile names a file per zone per view, so pair each zone up with its paths once.
     zone_files = [
-        {
-            "domain": zone,
-            "zonefile_path": _zonefile_path(zones_dir, zone),
-            "container_zonefile_path": _container_zonefile_path(zones_dir, zone),
-        }
-        for zone in zones
+        _ZoneFiles(zone, _zonefile_path(zones_dir, zone), _container_zonefile_path(zones_dir, zone)) for zone in zones
     ]
+    public_zones = [zone for zone in zone_files if not is_local_only_zone(zone.domain)] if bind_ip is not None else []
+    container_zones = zone_files if container_gateway_ip is not None else []
 
     corefile_path.parent.mkdir(parents=True, exist_ok=True)
     corefile_path.write_text(
         _jinja_env.get_template("Corefile").render(
-            zones=zone_files,
+            public_zones=public_zones,
+            container_zones=container_zones,
             bind_ip=bind_ip,
             container_gateway_ip=container_gateway_ip,
             upstream_dns=" ".join(upstream_dns),
         )
     )
 
-    for zone in zones:
-        _write_zone_file(zone, _zonefile_path(zones_dir, zone), records, serial, default_ttl)
+    for zone in public_zones:
+        _write_zone_file(zone.domain, zone.zonefile_path, records, serial, default_ttl)
 
-    # this is for the hairpin
-    for zone in zones if container_gateway_ip else ():
+    for zone in container_zones:
         _write_rendered(
-            _container_zonefile_path(zones_dir, zone),
+            zone.container_zonefile_path,
             _jinja_env.get_template("zonefile_container").render(
-                zone_domain=zone, gateway_ip=container_gateway_ip, serial=serial
+                zone_domain=zone.domain, gateway_ip=container_gateway_ip, serial=serial
             ),
         )
 

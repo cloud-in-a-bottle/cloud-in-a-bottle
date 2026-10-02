@@ -40,4 +40,4 @@ def is_valid_app_id(s: str) -> bool:
 
 def is_valid_app_name(s: str) -> bool:
     """True iff s is a valid app name (lowercase alphanumeric, interior hyphens)."""
-    return bool(_APP_NAME_RE.match(s))
+    return bool(_APP_NAME_RE.fullmatch(s))

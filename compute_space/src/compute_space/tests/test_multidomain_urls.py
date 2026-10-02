@@ -5,7 +5,18 @@ public request stays on the public domain (https)."""
 from __future__ import annotations
 
 import sqlite3
+from contextlib import closing
 
+import httpx
+import pytest
+from hypothesis import given
+from hypothesis import note
+from hypothesis import strategies as st
+from litestar import Litestar
+from litestar.di import Provide
+
+from compute_space.core.auth.auth import SESSION_COOKIE_NAME
+from compute_space.core.auth.auth import create_session
 from compute_space.core.domains import Domain
 from compute_space.core.domains import DomainRecord
 from compute_space.core.domains import host_with_request_port
@@ -15,6 +26,7 @@ from compute_space.web.auth.auth import build_login_url
 from compute_space.web.auth.cookies import build_session_cookie
 from compute_space.web.auth.cookies import clear_session_cookie
 from compute_space.web.routes.pages.login import _validated_next
+from compute_space.web.routes.pages.login import login_get
 
 PUBLIC = Domain("host.example.com", tls=True)
 LOCAL = Domain("myhost.local", tls=False, mdns=True)
@@ -93,6 +105,20 @@ def test_validated_next_rejects_foreign_domain() -> None:
     assert _validated_next("https://evil.example.org/phish", _db()) is None
 
 
+@given(
+    label=st.from_regex(r"[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?", fullmatch=True),
+    prefix=st.one_of(st.sampled_from(["http://", "https://"]), st.text(alphabet="/", min_size=2)),
+    path=st.text(alphabet="abcdefghijklmnopqrstuvwxyz0123456789/._~-"),
+)
+def test_validated_next_rejects_foreign_network_locations(label: str, prefix: str, path: str) -> None:
+    # HTTP(S) browsers interpret two or more leading slashes as an authority,
+    # including spellings that urllib.parse treats as a relative path.
+    target = f"{prefix}{label}.invalid/{path}"
+    note(f"redirect target: {target!r}")
+    with closing(_db()) as db:
+        assert _validated_next(target, db) is None
+
+
 def test_validated_next_rejects_userinfo_host_spoof() -> None:
     # `host.example.com:1@evil.com` navigates to evil.com; the port before `@` must not fool
     # the domain match (regression: matching on netloc split the userinfo at the first colon).
@@ -101,6 +127,80 @@ def test_validated_next_rejects_userinfo_host_spoof() -> None:
     assert _validated_next("https://myapp.host.example.com@evil.com/phish", db) is None
     # userinfo in front of a real configured host still resolves to that host, so it's allowed.
     assert _validated_next("https://evil.com@host.example.com/x", db) == "https://evil.com@host.example.com/x"
+
+
+@pytest.mark.parametrize(
+    "target",
+    [
+        " ///outside.invalid/",
+        "\t//outside.invalid/",
+        "/\\outside.invalid/",
+        "https://outside.invalid\\@host.example.com/",
+        "/dashboard\n",
+        "/dashboard\x7f",
+        "javascript://host.example.com/",
+        "ftp://host.example.com/",
+        "https:////outside.invalid/",
+        "https://[invalid/",
+        "//[invalid/",
+        "https://host.example.com:invalid/",
+        "https://host.example.com:65536/",
+    ],
+)
+def test_validated_next_rejects_ambiguous_or_malformed_targets(target: str) -> None:
+    with closing(_db()) as db:
+        assert _validated_next(target, db) is None
+
+
+@pytest.mark.parametrize(
+    "target",
+    [
+        "/",
+        "dashboard",
+        "?tab=apps",
+        "#settings",
+        "/some%20path",
+        "//host.example.com/apps",
+        "https://myapp.host.example.com:8443/path?query=value#section",
+    ],
+)
+def test_validated_next_preserves_safe_target_forms(target: str) -> None:
+    with closing(_db()) as db:
+        assert _validated_next(target, db) == target
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("target", "expected"),
+    [
+        ("///outside.invalid/", "/"),
+        ("https://outside.invalid/path", "/"),
+        ("/dashboard", "/dashboard"),
+        ("https://myapp.host.example.com:8443/path", "https://myapp.host.example.com:8443/path"),
+    ],
+)
+async def test_authenticated_login_validates_return_target(target: str, expected: str) -> None:
+    with closing(_db()) as db:
+        db.execute("INSERT INTO users (user_id, username, password_hash) VALUES (1, 'owner', 'unused')")
+        token = create_session(1, db)
+
+        def provide_test_db() -> sqlite3.Connection:
+            return db
+
+        app = Litestar(
+            route_handlers=[login_get],
+            dependencies={"db": Provide(provide_test_db, sync_to_thread=False)},
+            openapi_config=None,
+        )
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app),
+            base_url=f"https://{PUBLIC.name}",
+            cookies={SESSION_COOKIE_NAME: token},
+        ) as client:
+            response = await client.get("/login", params={"next": target})
+
+        assert response.status_code == 302
+        assert response.headers["location"] == expected
 
 
 # --- cookies: scoped + Secure per arriving domain ---------------------------------

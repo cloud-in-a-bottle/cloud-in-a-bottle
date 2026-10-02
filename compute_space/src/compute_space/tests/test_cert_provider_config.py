@@ -6,13 +6,21 @@ fields existed) must keep loading unchanged.
 
 from __future__ import annotations
 
+import tomllib
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
+import attr
+import cattrs
 import pytest
+import tomli_w
 import typed_settings
+from hypothesis import given
+from hypothesis import strategies as st
 
 from compute_space.config import CERT_PROVIDER_ACME
 from compute_space.config import CERT_PROVIDER_CERT_API
+from compute_space.config import Config
 from compute_space.config import DefaultConfig
 
 
@@ -87,6 +95,71 @@ def test_cert_provider_round_trips_through_toml() -> None:
     assert 'cert_api_keycloak_issuer_url = "https://keycloak.example.com/realms/openhost-customers"' in rendered
     assert 'cert_api_keycloak_client_id = "instance-alice"' in rendered
     assert 'cert_api_keycloak_client_secret = "s3cr3t"' in rendered
+
+
+@given(
+    unset_fields=st.sets(
+        st.sampled_from(
+            [
+                "acme_email",
+                "acme_account_key_path",
+                "acme_directory_url",
+                "cert_api_keycloak_issuer_url",
+                "cert_api_keycloak_client_id",
+                "cert_api_keycloak_client_secret",
+                "public_ip",
+                "apps_dir_override",
+            ]
+        )
+    )
+)
+def test_config_toml_roundtrip_preserves_optional_fields(unset_fields: set[str]) -> None:
+    with TemporaryDirectory() as directory:
+        defaults = DefaultConfig(
+            data_root_dir=directory,
+            apps_dir_override=str(Path(directory) / "apps"),
+            public_ip="127.0.0.1",
+            acme_email="owner@example.com",
+            acme_account_key_path=str(Path(directory) / "account.pem"),
+            acme_directory_url="https://acme.example.com/directory",
+            **_full_cert_api_kwargs(),
+        )
+        original = Config(**(attr.asdict(defaults) | dict.fromkeys(unset_fields)))
+        path = str(Path(directory) / "config.toml")
+        original.to_toml(path)
+        restored = Config.from_toml(path)
+        for field in attr.fields(Config):
+            assert getattr(restored, field.name) == getattr(original, field.name)
+
+
+@pytest.mark.parametrize("required_field", ["host", "port", "cert_provider", "claim_token_required", "default_apps"])
+def test_config_toml_loader_rejects_missing_required_fields(tmp_path: Path, required_field: str) -> None:
+    document = tomllib.loads(DefaultConfig().to_toml_str())
+    del document["openhost"][required_field]
+    path = tmp_path / "config.toml"
+    path.write_text(tomli_w.dumps(document))
+    with pytest.raises(cattrs.ClassValidationError) as error:
+        Config.from_toml(str(path))
+    assert len(error.value.exceptions) == 1
+    missing = error.value.exceptions[0]
+    assert isinstance(missing, KeyError)
+    assert missing.args == (required_field,)
+
+
+@pytest.mark.parametrize("wrapped", [False, True])
+def test_default_config_toml_loader_keeps_declared_defaults(tmp_path: Path, wrapped: bool) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text("[openhost]\n" if wrapped else "")
+    restored = DefaultConfig.from_toml(str(path))
+    assert restored == DefaultConfig()
+
+
+def test_config_toml_loader_restores_nullable_fields_in_bare_toml(tmp_path: Path) -> None:
+    original = Config(**attr.asdict(DefaultConfig(data_root_dir=str(tmp_path))))
+    document = tomllib.loads(original.to_toml_str())["openhost"]
+    path = tmp_path / "config.toml"
+    path.write_text(tomli_w.dumps(document))
+    assert Config.from_toml(str(path)) == original
 
 
 def test_unknown_cert_provider_is_rejected() -> None:

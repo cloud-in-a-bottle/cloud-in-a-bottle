@@ -205,14 +205,14 @@ async def add_domain(
             cert_status=DomainCertStatus.ACQUIRING if data.tls else DomainCertStatus.ACTIVE,
         ),
     )
-    if not data.mdns:
-        try:
-            await dns_provider.add_zone(name)
-        except DnsNotEnabled:
-            # Not an error: running without CoreDNS is a supported choice, and the domain is still
-            # worth recording (Caddy will serve it once its DNS points here by other means).  A TLS
-            # domain surfaces the consequence through its cert status, below.
-            logger.warning("Added {} but this instance is not serving DNS for it", name)
+    try:
+        # The provider selects public/private views; mDNS names still need container routing.
+        await dns_provider.add_zone(name)
+    except DnsNotEnabled:
+        # Not an error: running without CoreDNS is a supported choice, and the domain is still
+        # worth recording (Caddy will serve it once its DNS points here by other means).  A TLS
+        # domain surfaces the consequence through its cert status, below.
+        logger.warning("Added {} but this instance is not serving DNS for it", name)
     background: list[BackgroundTask] = [BackgroundTask(_reload_caddy_after_response)]
     if data.tls:
         background.append(BackgroundTask(_acquire_cert, config, domain, dns_provider))
@@ -325,8 +325,7 @@ async def remove_domain(
         if current is not None and current.is_primary:
             raise ValidationException(detail="cannot remove the primary domain")
         raise NotFoundException(detail="domain not found")
-    if removed is not None and not removed.mdns:
-        await dns_provider.remove_zone(name)
+    await dns_provider.remove_zone(name)
     # Regenerate Caddy only after this response has been sent — see _reload_caddy_after_response.
     return Response(
         DomainListResponse(domains=_domain_list(config, db)),

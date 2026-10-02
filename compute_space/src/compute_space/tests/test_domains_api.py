@@ -27,6 +27,7 @@ from compute_space.config import provide_config
 from compute_space.core import caddy
 from compute_space.core.auth.auth import SESSION_COOKIE_NAME
 from compute_space.core.auth.auth import create_session
+from compute_space.core.containers import CONTAINER_GATEWAY_IP
 from compute_space.core.dns.coredns_provider.interface import InternalDnsProvider
 from compute_space.core.domains import Domain
 from compute_space.core.domains import DomainCertStatus
@@ -79,12 +80,15 @@ def _make_app(dns_provider: Any) -> Litestar:
     )
 
 
-def _unstarted_provider(tmp_path: Path, bind_ip: str | None = "203.0.113.10") -> InternalDnsProvider:
+def _unstarted_provider(
+    tmp_path: Path, bind_ip: str | None = "203.0.113.10", container_gateway_ip: str | None = None
+) -> InternalDnsProvider:
     return InternalDnsProvider(
         corefile_path=tmp_path / "Corefile",
         zones_dir=tmp_path / "zones",
         bind_ip=bind_ip,
-        zones=(PRIMARY.name,) if bind_ip else (),
+        container_gateway_ip=container_gateway_ip,
+        zones=(PRIMARY.name,) if bind_ip or container_gateway_ip else (),
     )
 
 
@@ -259,16 +263,44 @@ def test_a_new_public_domain_is_served_by_the_dns_provider(
     assert list(dns_provider.zones) == [PRIMARY.name]
 
 
-def test_an_mdns_domain_never_reaches_the_dns_provider(
+def test_an_mdns_domain_is_not_published_in_public_dns(
     dns_client: tuple[InternalDnsProvider, TestClient[Litestar]],
 ) -> None:
-    # .local is served by the wildcard mDNS responder; CoreDNS never sees it.
+    # A public-only provider leaves .local to the wildcard mDNS responder.
     dns_provider, client = dns_client
 
     client.post("/api/domains", json={"name": "myhost.local", "mdns": True})
     client.delete("/api/domains/myhost.local")
 
     assert list(dns_provider.zones) == [PRIMARY.name]
+
+
+@pytest.mark.parametrize("bind_ip", [None, "203.0.113.10"], ids=["container-only", "both-views"])
+def test_adding_and_removing_mdns_updates_container_dns(
+    cfg: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, bind_ip: str | None
+) -> None:
+    stub_coredns_spawn(monkeypatch)
+    dns_provider = _unstarted_provider(tmp_path, bind_ip, CONTAINER_GATEWAY_IP)
+    with TestClient(app=_make_app(dns_provider)) as client:
+        client.cookies.update(_auth_cookie(cfg.db_path))
+        response = client.post("/api/domains", json={"name": "myhost.local", "mdns": True})
+        assert response.status_code == 202
+        assert dns_provider.zones == (PRIMARY.name, "myhost.local")
+        corefile = dns_provider.corefile_path.read_text()
+        assert corefile.count("myhost.local:53 {") == 1
+        block = corefile.split("myhost.local:53 {", 1)[1].split("}", 1)[0]
+        assert f"bind {CONTAINER_GATEWAY_IP}" in block
+        assert "bind 203.0.113.10" not in block
+        private_zone = dns_provider.zones_dir / "myhost.local.zone.container"
+        assert f"@   IN A    {CONTAINER_GATEWAY_IP}" in private_zone.read_text()
+        assert f"*   IN A    {CONTAINER_GATEWAY_IP}" in private_zone.read_text()
+        assert not (dns_provider.zones_dir / "myhost.local.zone").exists()
+
+        response = client.delete("/api/domains/myhost.local")
+        assert response.status_code == 200
+        assert dns_provider.zones == (PRIMARY.name,)
+        assert not private_zone.exists()
+        assert "myhost.local:53" not in dns_provider.corefile_path.read_text()
 
 
 # --- validation ---------------------------------------------------------------------
