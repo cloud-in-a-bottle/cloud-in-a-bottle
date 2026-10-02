@@ -198,7 +198,7 @@ class SubdomainProxyMiddleware:
             verify_owner_auth(connection)
             extra_headers.append(IS_OWNER_HEADER)
         except NotAuthorizedException:
-            if not is_public_path(app, scope["path"]):
+            if not is_public_path(app, scope["raw_path"]):
                 # We're outer ASGI middleware — a raised NotAuthorizedException
                 # wouldn't reach Litestar's exception handlers, so produce the
                 # equivalent response ourselves.  HTTP: same /login redirect the

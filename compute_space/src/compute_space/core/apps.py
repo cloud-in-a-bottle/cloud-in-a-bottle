@@ -8,6 +8,7 @@ import tempfile
 import threading
 import time
 from collections.abc import Callable
+from urllib.parse import unquote
 
 import attr
 import httpx
@@ -1127,6 +1128,35 @@ def get_app_from_hostname(host: str, db: sqlite3.Connection) -> App | None:
     return None
 
 
-def is_public_path(app: App, request_path: str) -> bool:
-    # TODO: we should consider if this is the appropriate matching logic
-    return any(request_path == pp or request_path.startswith(pp.rstrip("/") + "/") for pp in app.public_paths)
+def is_public_path(app: App, raw_path: bytes) -> bool:
+    if "/" in app.public_paths:
+        return True
+
+    # ASGI's decoded path may have replaced invalid UTF-8. Validate the bytes we actually forward.
+    try:
+        request_path = unquote(raw_path.decode("ascii"), errors="strict")
+    except UnicodeDecodeError:
+        return False
+
+    # Clients and backends can normalize or decode paths after authorization. Require each decoded
+    # form to remain public and unambiguous, without rewriting the original URL (which may be signed).
+    # Bound repeated decoding so deeply nested encodings cannot make authorization quadratic.
+    for _ in range(8):
+        if (
+            not request_path.startswith("/")
+            or request_path.startswith("//")
+            or "\\" in request_path
+            or any(ord(character) < 32 or ord(character) == 127 for character in request_path)
+            or any(segment.split(";", 1)[0] in (".", "..") for segment in request_path.split("/"))
+        ):
+            return False
+        if not any(request_path == pp or request_path.startswith(pp.rstrip("/") + "/") for pp in app.public_paths):
+            return False
+        try:
+            decoded = unquote(request_path, errors="strict")
+        except UnicodeDecodeError:
+            return False
+        if decoded == request_path:
+            return True
+        request_path = decoded
+    return False

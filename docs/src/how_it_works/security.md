@@ -22,6 +22,8 @@ Apps intentionally cannot communicate directly with other apps - any app-to-app 
 
 Every route requires the owner's session unless the app's manifest lists it in `public_paths`. The router checks this before proxying, so an unauthenticated request never reaches an app that did not ask for one.
 
+For partially public apps, the router checks the original path bytes and requires owner authentication for ambiguous encodings or path segments that could be interpreted differently downstream. This applies to both HTTP and WebSockets; see [`public_paths`](../creating_an_app/manifest_spec.md#routing-optional).
+
 Three credentials authenticate as you, all documented in [Overview](./overview.md#access): the browser session cookie, API tokens, and each app's own token for [cross-app calls](../creating_an_app/cross_app_services.md). App tokens identify the calling app to a provider; they are not owner credentials and cannot be used to reach the dashboard.
 
 Owner sessions are refused on cross-origin requests, so JavaScript running in one app cannot make owner-authenticated calls to the router or to another app on your behalf.

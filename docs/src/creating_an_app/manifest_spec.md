@@ -68,6 +68,8 @@ Multiple apps requesting the same host port can't be installed at the same time,
 | `health_check` | string | no | - | Health check path. Used to determine when the app has finished booting up. |
 | `public_paths` | string[] | no | `[]` | Route prefixes accessible without authentication |
 
+For partially public apps, HTTP and WebSocket paths must remain unambiguously within a public prefix after decoding. Dot segments (`.` and `..`), backslashes, control characters, invalid UTF-8, and excessively nested encodings require owner authentication instead. Allowed requests retain their original encoded paths and queries. Including `"/"` makes the entire app public and removes this path-based restriction; authenticated owners can access every app path.
+
 ### `[[links]]` (optional, repeatable)
 
 A convenience feature to display additional links to the instance owner on the app detail page. By default we just link to your app's root at `{app_name}.{zone_url}`. This feature allows additional links to be displayed, eg to an admin console at `/_openhost/admin`. The `path` is taken at face value and is not verified in any way.
