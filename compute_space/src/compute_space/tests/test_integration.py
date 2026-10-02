@@ -19,6 +19,7 @@ import pytest
 import requests
 
 from compute_space import OPENHOST_PROJECT_DIR
+from compute_space.core.auth.auth import SESSION_COOKIE_NAME
 from compute_space.core.caddy import generate_caddyfile
 from compute_space.core.data import make_data_dirs_and_env_vars
 from compute_space.core.domains import Domain
@@ -676,13 +677,52 @@ class TestContainerE2E:
         # its X-Forwarded-For (the real client IP) is honored.
         assert headers.get("x-forwarded-for") == "203.0.113.7"
 
-    def test_proxy_strips_zone_auth_cookies(self, admin_session, config):
-        """The owner's zone_auth / zone_refresh cookies must not reach the backend app."""
+    def test_proxy_strips_session_cookie(self, admin_session, config):
+        """The owner's session cookie must not reach the backend app."""
         r = admin_session.get(f"{_app_url(config, 'test-app')}/echo-headers")
         assert r.status_code == 200
-        cookie_header = r.json()["headers"].get("Cookie", "")
-        assert "zone_auth=" not in cookie_header
-        assert "zone_refresh=" not in cookie_header
+        headers_ci = {k.lower(): v for k, v in r.json()["headers"].items()}
+        assert f"{SESSION_COOKIE_NAME}=" not in headers_ci.get("cookie", "")
+        # the cookie-authed owner is still announced to the app, just not by handing over the cookie
+        assert headers_ci.get("x-openhost-is-owner") == "true"
+
+    def test_proxy_strips_owner_api_token(self, admin_session, config):
+        """An owner API token used to reach an app must not be forwarded to it.
+
+        The app would otherwise be able to replay it against the router's owner API and take over
+        the whole compute space.  ``X-OpenHost-Is-Owner`` is how the app learns who the caller is.
+        """
+        base = _zone_url(config)
+        r = admin_session.post(f"{base}/api/tokens", json={"name": "proxy-strip-test", "expiry_hours": "1"})
+        assert r.status_code == 200
+        raw_token = r.json()["token"]
+        try:
+            # no cookies -- the bearer token is the only thing authenticating this request
+            r = requests.get(
+                f"{_app_url(config, 'test-app')}/echo-headers",
+                headers={"Authorization": f"Bearer {raw_token}"},
+            )
+            assert r.status_code == 200
+            headers_ci = {k.lower(): v for k, v in r.json()["headers"].items()}
+            assert "authorization" not in headers_ci
+            assert headers_ci.get("x-openhost-is-owner") == "true"
+        finally:
+            tokens = admin_session.get(f"{base}/api/tokens").json()
+            token_id = next(t["id"] for t in tokens if t["name"] == "proxy-strip-test")
+            admin_session.delete(f"{base}/api/tokens/{token_id}")
+
+    def test_proxy_forwards_foreign_authorization(self, admin_session, config):
+        """A bearer the router doesn't recognise belongs to the app's own auth -- pass it through.
+
+        Apps with their own token auth (and non-Bearer schemes like AWS SigV4) depend on this.
+        """
+        r = admin_session.get(
+            f"{_app_url(config, 'test-app')}/echo-headers",
+            headers={"Authorization": "Bearer this-is-the-apps-own-token"},
+        )
+        assert r.status_code == 200
+        headers_ci = {k.lower(): v for k, v in r.json()["headers"].items()}
+        assert headers_ci.get("authorization") == "Bearer this-is-the-apps-own-token"
 
     def test_proxy_strips_spoofed_openhost_headers(self, admin_session, config):
         """Client-supplied X-OpenHost-* headers must be stripped — only the router may set them."""
