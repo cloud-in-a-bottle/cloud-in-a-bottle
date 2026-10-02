@@ -247,6 +247,21 @@ def test_oversized_response_is_bounded(cfg, transport):
     assert all(client.is_closed for client in transport["clients"])
 
 
+def test_operation_only_snapshot_preserves_unknown_storage(cfg, transport):
+    bind(cfg)
+    transport["body"]["usage"].update(
+        used_bytes=None, sample_at=None, storage_microcents=None, operations_observed_at=1790852400
+    )
+    transport["body"]["stale"] = True
+    with TestClient(make_test_app(managed_usage)) as client:
+        client.cookies.update(auth_cookie(cfg))
+        response = client.get("/api/storage/managed_usage")
+    assert response.status_code == 200
+    usage = response.json()["status"]["usage"]
+    assert usage["used_bytes"] is None and usage["sample_at"] is None and usage["storage_microcents"] is None
+    assert usage["operation_microcents"] == 25000000 and usage["operations_observed_at"] == 1790852400
+
+
 @pytest.mark.asyncio
 async def test_cancellation_and_total_deadline_close_clients(monkeypatch):
     clients = []

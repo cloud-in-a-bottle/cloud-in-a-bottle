@@ -25,8 +25,11 @@
     if (![data.observed_at, data.applied_at].every(function (v) { return v === null || number(v); })) return false;
     var usage = data.usage;
     return usage === null || !!(usage
-      && ['used_bytes', 'operation_microcents', 'storage_microcents', 'sample_at', 'read_only_at_microcents', 'suspend_at_microcents']
+      && ['operation_microcents', 'read_only_at_microcents', 'suspend_at_microcents']
         .every(function (key) { return number(usage[key]); })
+      && ((usage.used_bytes === null && usage.sample_at === null) || (number(usage.used_bytes) && number(usage.sample_at)))
+      && (usage.storage_microcents === null || number(usage.storage_microcents))
+      && (usage.operations_observed_at == null || number(usage.operations_observed_at))
       && usage.read_only_at_microcents > 0 && usage.suspend_at_microcents > usage.read_only_at_microcents
       && validDate(usage.period_start) && validDate(usage.resets_at) && usage.period_start < usage.resets_at);
   }
@@ -120,7 +123,14 @@
         details.append(element('p', 'Usage has not been reported for this period yet. Included capacity: ' + bytes(data.capacity_bytes) + '.', 'hint'));
       } else {
         var metrics = element('div', null, 'managed-storage__metrics');
-        metrics.append(metric('Stored capacity', usage.used_bytes, data.capacity_bytes, bytes));
+        if (usage.used_bytes === null) {
+          var capacity = element('div', null, 'managed-storage__metric');
+          capacity.append(element('strong', 'Stored capacity'));
+          capacity.append(element('p', 'Storage-size metrics have not been reported yet. Included capacity: ' + bytes(data.capacity_bytes) + '.'));
+          metrics.append(capacity);
+        } else {
+          metrics.append(metric('Stored capacity', usage.used_bytes, data.capacity_bytes, bytes));
+        }
         metrics.append(metric('Monthly activity allowance', usage.operation_microcents, usage.read_only_at_microcents, money));
         details.append(metrics);
         if (usage.operation_microcents >= usage.read_only_at_microcents * 0.85 && usage.operation_microcents < usage.read_only_at_microcents) {
@@ -132,14 +142,18 @@
         var explanation = element('details');
         explanation.open = !!expanded;
         explanation.append(element('summary', 'How the allowance works'));
-        explanation.append(element('p', 'Reads, writes and listings use the activity allowance. Values are estimated provider costs, not an extra bill. Estimated storage cost this period: ' + money(usage.storage_microcents) + '.'));
+        var storageCost = usage.storage_microcents === null ? 'Storage cost is awaiting complete size metrics.'
+          : 'Estimated storage cost this period: ' + money(usage.storage_microcents) + '.';
+        explanation.append(element('p', 'Reads, writes and listings use the activity allowance. Values are estimated provider costs, not an extra bill. ' + storageCost));
         details.append(explanation);
         if (explanationFocused) explanation.querySelector('summary').focus({preventScroll: true});
       }
       if (usage === null && explanationFocused) refresh.focus({preventScroll: true});
       var facts = element('dl', null, 'managed-storage__facts');
       facts.append(element('dt', 'Reported access'), element('dd', accessLabels[data.applied_access]));
-      facts.append(element('dt', 'Usage checked'), element('dd', timestamp(data.observed_at)));
+      var activityChecked = usage && usage.operations_observed_at != null ? usage.operations_observed_at : data.observed_at;
+      facts.append(element('dt', 'Activity checked'), element('dd', timestamp(activityChecked)));
+      if (usage) facts.append(element('dt', 'Storage sampled'), element('dd', timestamp(usage.sample_at)));
       facts.append(element('dt', 'Permissions checked'), element('dd', timestamp(data.applied_at)));
       details.append(facts);
     }

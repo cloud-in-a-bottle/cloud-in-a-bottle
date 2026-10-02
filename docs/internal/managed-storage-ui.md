@@ -12,4 +12,6 @@ The version-1 snapshot contains allocation_id, phase, capacity_bytes, desired_ac
 
 The UI distinguishes initial loading, usage unavailable, stale observations, provisioning, available access, approaching limits, read-only, suspended, pending permission changes, and observation-only enforcement. Missing usage is never rendered as zero. Refresh failure preserves the last snapshot with an explicit stale warning and a retry action. Dynamic values are inserted as text. Capacity and activity allowances are separate; a monthly activity reset does not reset stored bytes.
 
+R2 operation analytics can arrive before storage-size samples. A partial usage object retains operation_microcents and operations_observed_at while used_bytes, sample_at and storage_microcents can be null. The activity meter remains visible, but the capacity meter is replaced with an explicit waiting message. Unknown size or storage cost is never formatted as zero. operations_observed_at is optional for compatibility with older complete snapshots.
+
 Deploy the hosted-spaces usage API after its allocation backend, then release this Bottle UI. Before activating the panel on an instance, trusted provisioning must configure the allocation-bound Keycloak claim and persist the matching managed-storage binding.

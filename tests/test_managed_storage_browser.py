@@ -218,6 +218,27 @@ def test_exceeded_allowance_clamps_meter_but_preserves_number(ui):
     expect(bar).to_have_attribute("aria-valuetext", "$2.50 of $1.00 (250%)")
 
 
+@pytest.mark.parametrize("width", [320, 1280])
+def test_activity_is_visible_while_storage_size_is_unknown(ui, width, output_path):
+    page, _, _, response = ui
+    page.set_viewport_size({"width": width, "height": 1000})
+    response["body"]["status"]["stale"] = True
+    response["body"]["status"]["usage"].update(
+        used_bytes=None, sample_at=None, storage_microcents=None, operations_observed_at=1790852400
+    )
+    region = open_ui(ui)
+    expect(region).to_contain_text("Storage-size metrics have not been reported yet")
+    expect(region.get_by_role("progressbar", name="Stored capacity")).to_have_count(0)
+    expect(region.get_by_role("progressbar", name="Monthly activity allowance")).to_have_attribute(
+        "aria-valuenow", "25"
+    )
+    region.locator("summary").click()
+    expect(region).to_contain_text("Storage cost is awaiting complete size metrics")
+    expect(region).not_to_contain_text("0 B of")
+    expect(region).not_to_contain_text("storage cost this period: $0.00")
+    screenshot(page, output_path, f"partial-storage-{width}")
+
+
 def test_migration_away_discards_inflight_response(ui):
     page, _, _, _ = ui
     pending = []

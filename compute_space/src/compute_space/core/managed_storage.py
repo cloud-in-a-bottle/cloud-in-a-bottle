@@ -57,16 +57,19 @@ class ManagedStorageBinding:
 
 @attr.s(auto_attribs=True, frozen=True)
 class ManagedUsage:
-    used_bytes: int
+    used_bytes: int | None
     operation_microcents: int
-    storage_microcents: int
+    storage_microcents: int | None
     read_only_at_microcents: int
     suspend_at_microcents: int
-    sample_at: int
+    sample_at: int | None
     period_start: str
     resets_at: str
+    operations_observed_at: int | None = None
 
     def __attrs_post_init__(self) -> None:
+        if (self.used_bytes is None) != (self.sample_at is None):
+            raise ValueError("storage size and sample time must be known together")
         if not 0 < self.read_only_at_microcents < self.suspend_at_microcents:
             raise ValueError("invalid activity thresholds")
         if not date.fromisoformat(self.period_start) < date.fromisoformat(self.resets_at):
