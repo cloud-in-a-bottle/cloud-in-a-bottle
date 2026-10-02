@@ -40,15 +40,15 @@ class TestHarness:
         assert r.status_code == 200
         assert r.json() == {"app": "echo-provider"}
 
-    def test_router_requires_auth(self, stack: OpenhostStack) -> None:
+    def test_private_app_hidden_without_auth(self, stack: OpenhostStack) -> None:
         r = requests.get(f"{stack.url}/", allow_redirects=False, timeout=10)
-        assert r.status_code == 302
-        assert "/login" in r.headers["Location"]
+        assert r.status_code == 404
+        assert "Location" not in r.headers
 
     def test_playwright_login(self, stack: OpenhostStack, page: Page) -> None:
         """playwright_login drives the real /login form so browser tests reach owner routes."""
-        page.goto(stack.url)
-        expect(page).to_have_url(re.compile(r"/login"))  # gated before login
+        response = page.goto(stack.url)
+        assert response is not None and response.status == 404
 
         stack.playwright_login(page)
         page.goto(stack.url)
