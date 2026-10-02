@@ -355,15 +355,17 @@ class TestSelfHost:
         assert headers.get("x-forwarded-host") != "evil.example.com"
 
     def test_07e_subdomain_unauth_rejected(self, domain):
-        """Unauthenticated subdomain request to a non-public path is rejected."""
+        """An unauthenticated private app looks like a missing app."""
         app_url = f"https://test-app.{domain}"
         r = requests.get(
             f"{app_url}/echo-headers",
             allow_redirects=False,
             timeout=10,
         )
-        # Non-public path without auth should be rejected
-        assert r.status_code in (401, 302)
+        missing = requests.get(f"https://missing-app.{domain}/echo-headers", allow_redirects=False, timeout=10)
+        assert r.status_code == missing.status_code == 404
+        assert r.content == missing.content
+        assert "location" not in r.headers
 
     # -- 8. App lifecycle: stop and reload ---------------------------------
 
