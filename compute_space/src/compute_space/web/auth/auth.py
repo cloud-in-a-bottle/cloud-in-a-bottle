@@ -10,6 +10,7 @@ from litestar import Request
 from litestar import Response
 from litestar import WebSocket
 from litestar.connection import ASGIConnection
+from litestar.datastructures import Headers
 from litestar.exceptions import NotAuthorizedException
 from litestar.handlers.base import BaseRouteHandler
 from litestar.response import Redirect
@@ -20,6 +21,7 @@ from compute_space.core.auth.auth import AuthenticatedAPIKey
 from compute_space.core.auth.auth import AuthenticatedAccessor
 from compute_space.core.auth.auth import AuthenticatedApp
 from compute_space.core.auth.auth import AuthenticatedUser
+from compute_space.core.auth.auth import is_openhost_credential
 from compute_space.core.auth.auth import validate_api_token
 from compute_space.core.auth.auth import validate_app_token
 from compute_space.core.auth.auth import validate_session_token
@@ -31,12 +33,36 @@ from compute_space.web.helpers.zone import zone_for_request
 AnyConnection = ASGIConnection[Any, Any, Any, Any]
 
 
-def _get_bearer_token_if_set(connection: AnyConnection) -> str | None:
-    if auth_header := connection.headers.get("Authorization", ""):
-        if auth_header.lower().startswith("bearer "):
-            if token := auth_header[7:].strip():
-                return token
+def bearer_token_from_header(auth_header: str) -> str | None:
+    """The token out of an ``Authorization: Bearer <token>`` value; None if blank or another scheme."""
+    if auth_header.lower().startswith("bearer "):
+        if token := auth_header[7:].strip():
+            return token
     return None
+
+
+def _get_bearer_token_if_set(connection: AnyConnection) -> str | None:
+    return bearer_token_from_header(connection.headers.get("Authorization", ""))
+
+
+def carries_openhost_credential(headers: Headers) -> bool:
+    """True iff an ``Authorization`` header carries a credential the router itself would accept.
+
+    The proxy uses this to decide whether to drop ``Authorization`` before forwarding to a backend
+    app: an app handed the owner's API token could replay it against the router's own owner API and
+    take over the whole compute space.  Values we don't recognise are left alone, since apps are free
+    to run their own bearer auth and non-Bearer schemes (AWS SigV4, Basic) must pass through intact.
+    """
+    bearer_tokens: list[str] = []
+    for key, value in headers.multi_items():
+        if key.lower() == "authorization":
+            if (token := bearer_token_from_header(value)) is not None:
+                bearer_tokens.append(token)
+    if not bearer_tokens:
+        # the common case by far -- don't pay for a DB connection on every proxied request.
+        return False
+    with closing(get_db()) as db:
+        return any(is_openhost_credential(token, db) for token in bearer_tokens)
 
 
 def get_connection_origin(connection: AnyConnection) -> str | None:
