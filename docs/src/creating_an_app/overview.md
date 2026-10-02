@@ -101,7 +101,7 @@ if __name__ == "__main__":
 - Data directories are mounted into the container at `/data/`. See [Environment variables](#environment-variables) below.
 - The router handles authentication. By default, all routes require the compute space owner to be logged in. To make specific routes public, list them in `public_paths` in the manifest.
 - For apps that implement their own auth, routes can be set as public, and requests that have been authenticated by the router will bear a `X-OpenHost-Is-Owner=true` header.
-- `X-OpenHost-Is-Owner` is how you identify the owner -- the router never forwards the credential the caller used, so you will not see the owner's session cookie or API token. An `Authorization` header the router does not recognise as its own is passed through, so your app can still run its own bearer auth.
+- `X-OpenHost-Is-Owner` is how you identify the owner. The router never forwards the credential the caller used, so you will not see the owner's session cookie or API token. `Authorization` is yours: the router reads its own credential from `X-OpenHost-Authorization` and strips that header, so whatever arrives in `Authorization` was meant for your app, and your own bearer auth, AWS SigV4 or Basic all work as normal.
 - To surface interesting paths on your app (e.g. an admin console) to the user on the dashboard, declare them in `[[links]]` (each with a `name` and `path`). See the [manifest spec](manifest_spec.md).
 
 ### Environment variables

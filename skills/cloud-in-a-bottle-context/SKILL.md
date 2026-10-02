@@ -94,10 +94,11 @@ Other app commands: `bottle app status|list|stop|rename|remove`. Run
   — runs `curl` with the user's API token injected, so it behaves like an
   owner-logged-in request.
 - **Test a page in a browser** the way a logged-in owner sees it: drive it
-  with Playwright and inject the API token as an `Authorization: Bearer
-  <token>` header. This matches the behavior of a request carrying the
-  owner's login cookies. Get a token with `bottle instance token` (handle it
-  carefully — see Safety).
+  with Playwright and inject the API token as an `X-OpenHost-Authorization:
+  Bearer <token>` header. This matches the behavior of a request carrying the
+  owner's login cookies, and the router strips the header before the app sees
+  it, so the app never receives your token. Get a token with `bottle instance
+  token` (handle it carefully, see Safety).
 
 ## Building a new app
 

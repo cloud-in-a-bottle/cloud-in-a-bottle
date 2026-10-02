@@ -114,7 +114,7 @@ bottle curl https://myzone.example.com/api/apps          # GET with bearer token
 bottle curl -X POST https://myzone.example.com/api/...   # any curl args work
 ```
 
-`bottle curl` runs `curl` with `Authorization: Bearer <token>` pre-injected for the current instance. Useful for hitting the API or testing app endpoints without copying tokens by hand.
+`bottle curl` runs `curl` with `X-OpenHost-Authorization: Bearer <token>` pre-injected for the current instance. Useful for hitting the API or testing app endpoints without copying tokens by hand. The router strips that header before forwarding to an app, so pointing `bottle curl` at an app subdomain does not hand the app your token.
 
 ## Update
 

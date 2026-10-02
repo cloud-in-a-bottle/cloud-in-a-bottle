@@ -33,8 +33,16 @@ from compute_space.web.helpers.zone import zone_for_request
 AnyConnection = ASGIConnection[Any, Any, Any, Any]
 
 
+# The dedicated channel for credentials the router consumes.  It sits in the X-OpenHost-* namespace
+# the proxy already strips by name, so a token sent here can never reach a backend app: not when it
+# is mistyped, not when it is expired, not when it was minted for a different instance.  Plain
+# Authorization is still accepted (see _get_bearer_token_if_set) but is on its way out, because
+# recognising a credential there means matching its *value*, which fails open on any typo.
+OPENHOST_AUTHORIZATION_HEADER = "X-OpenHost-Authorization"
+
+
 def bearer_token_from_header(auth_header: str) -> str | None:
-    """The token out of an ``Authorization: Bearer <token>`` value; None if blank or another scheme."""
+    """The token out of a ``Bearer <token>`` header value; None if blank or another scheme."""
     if auth_header.lower().startswith("bearer "):
         if token := auth_header[7:].strip():
             return token
@@ -42,6 +50,15 @@ def bearer_token_from_header(auth_header: str) -> str | None:
 
 
 def _get_bearer_token_if_set(connection: AnyConnection) -> str | None:
+    """The caller's bearer credential, preferring the dedicated OpenHost header.
+
+    When ``X-OpenHost-Authorization`` is present it is authoritative and ``Authorization`` is not
+    consulted at all, which is the whole point: it leaves ``Authorization`` entirely to the app, so a
+    caller can authenticate to the router and pass the app its own bearer in the same request.  A
+    malformed value in the OpenHost header therefore fails closed rather than silently falling back.
+    """
+    if openhost_header := connection.headers.get(OPENHOST_AUTHORIZATION_HEADER, ""):
+        return bearer_token_from_header(openhost_header)
     return bearer_token_from_header(connection.headers.get("Authorization", ""))
 
 

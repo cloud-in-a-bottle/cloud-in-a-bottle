@@ -1,4 +1,4 @@
-"""Unit tests for the proxy's inbound-header sanitization — what a backend app is allowed to see."""
+"""Unit tests for the proxy's inbound-header sanitization: what a backend app is allowed to see."""
 
 import hashlib
 import sqlite3
@@ -6,13 +6,34 @@ from datetime import UTC
 from datetime import datetime
 from datetime import timedelta
 from pathlib import Path
+from typing import Any
 
+from litestar.connection import ASGIConnection
 from litestar.datastructures import Headers
 
+from compute_space.core.auth.auth import AuthenticatedAPIKey
 from compute_space.core.auth.auth import is_openhost_credential
+from compute_space.db import get_db
 from compute_space.db.connection import init_db
+from compute_space.web.auth.auth import OPENHOST_AUTHORIZATION_HEADER
+from compute_space.web.auth.auth import authenticate
 from compute_space.web.auth.auth import carries_openhost_credential
 from compute_space.web.helpers.proxy import _sanitize_forwarded_headers
+
+
+def _connection(headers: dict[str, str]) -> ASGIConnection[Any, Any, Any, Any]:
+    scope = {
+        "type": "http",
+        "method": "GET",
+        "path": "/",
+        "raw_path": b"/",
+        "query_string": b"",
+        "headers": [(k.lower().encode(), v.encode()) for k, v in headers.items()],
+        "client": ("127.0.0.1", 12345),
+        "server": ("testzone.local", 80),
+        "scheme": "http",
+    }
+    return ASGIConnection(scope)  # type: ignore[arg-type]
 
 
 def _hash(token: str) -> str:
@@ -93,7 +114,7 @@ def test_api_token_is_our_credential(db: sqlite3.Connection) -> None:
 
 
 def test_app_token_is_our_credential(db: sqlite3.Connection) -> None:
-    """An app token is a credential too — handing app A's token to app B lets B impersonate A."""
+    """An app token is a credential too: handing app A's token to app B lets B impersonate A."""
     _add_app_token(db, "app-token")
     assert is_openhost_credential("app-token", db) is True
 
@@ -133,3 +154,70 @@ def test_carries_ignores_foreign_and_non_bearer_schemes(tmp_path: Path) -> None:
     assert carries_openhost_credential(Headers({"Authorization": "AWS4-HMAC-SHA256 Credential=k/..."})) is False
     assert carries_openhost_credential(Headers({"Authorization": "Basic dXNlcjpwYXNz"})) is False
     assert carries_openhost_credential(Headers({"Accept": "*/*"})) is False
+
+
+# -- X-OpenHost-Authorization: the dedicated, stripped-by-name channel -------
+
+
+def test_openhost_authorization_never_reaches_the_app() -> None:
+    """Stripped by name, so the value is irrelevant: typo, expired or foreign tokens all go."""
+    for value in ("Bearer owner-token", "Bearer typ0ed-token", "Bearer ", "garbage"):
+        assert _sanitize_forwarded_headers(
+            [(OPENHOST_AUTHORIZATION_HEADER, value), ("Accept", "*/*")], strip_authorization=False
+        ) == [("Accept", "*/*")]
+
+
+def test_openhost_header_leaves_authorization_for_the_app() -> None:
+    """The point of the split: authenticate to the router and still hand the app its own bearer."""
+    sanitized = _sanitize_forwarded_headers(
+        [
+            (OPENHOST_AUTHORIZATION_HEADER, "Bearer owner-token"),
+            ("Authorization", "Bearer the-apps-own-token"),
+        ],
+        strip_authorization=False,
+    )
+    assert sanitized == [("Authorization", "Bearer the-apps-own-token")]
+
+
+def test_openhost_header_authenticates(tmp_path: Path) -> None:
+    init_db(str(tmp_path / "test.db"))
+    with sqlite3.connect(str(tmp_path / "test.db")) as db:
+        _add_api_token(db, "owner-token")
+        db.commit()
+    conn = _connection({OPENHOST_AUTHORIZATION_HEADER: "Bearer owner-token"})
+    assert isinstance(authenticate(conn, get_db()), AuthenticatedAPIKey)
+
+
+def test_openhost_header_takes_precedence_over_authorization(tmp_path: Path) -> None:
+    """A request may carry both; ours wins and the app's bearer is ignored for auth."""
+    init_db(str(tmp_path / "test.db"))
+    with sqlite3.connect(str(tmp_path / "test.db")) as db:
+        _add_api_token(db, "owner-token")
+        db.commit()
+    conn = _connection(
+        {
+            OPENHOST_AUTHORIZATION_HEADER: "Bearer owner-token",
+            "Authorization": "Bearer the-apps-own-token",
+        }
+    )
+    assert isinstance(authenticate(conn, get_db()), AuthenticatedAPIKey)
+
+
+def test_openhost_header_present_but_bad_does_not_fall_back(tmp_path: Path) -> None:
+    """Fail closed: a malformed OpenHost header must not silently fall back to Authorization."""
+    init_db(str(tmp_path / "test.db"))
+    with sqlite3.connect(str(tmp_path / "test.db")) as db:
+        _add_api_token(db, "owner-token")
+        db.commit()
+    conn = _connection({OPENHOST_AUTHORIZATION_HEADER: "Bearer typ0ed", "Authorization": "Bearer owner-token"})
+    assert authenticate(conn, get_db()) is None
+
+
+def test_authorization_still_authenticates_on_its_own(tmp_path: Path) -> None:
+    """The deprecated path keeps working while clients migrate."""
+    init_db(str(tmp_path / "test.db"))
+    with sqlite3.connect(str(tmp_path / "test.db")) as db:
+        _add_api_token(db, "owner-token")
+        db.commit()
+    conn = _connection({"Authorization": "Bearer owner-token"})
+    assert isinstance(authenticate(conn, get_db()), AuthenticatedAPIKey)
