@@ -7,6 +7,9 @@
 # No Packer, no autoinstall ISO dance — just the exact code path a real deploy
 # uses. Output is a QEMU qcow2 and (optionally) a VirtualBox OVA.
 #
+# Builds an image for the host's arch: amd64, or arm64 (which boots via UEFI
+# and has no OVA).
+#
 # The image comes up out of the box in HTTP-only mode bound to 0.0.0.0, so the
 # dashboard is reachable at http://<vm-ip>:8080 with a default console password.
 # No domain, DNS, or TLS setup required to try it. Claiming is open by default
@@ -18,7 +21,7 @@
 # once you delegate DNS and open ports 53/80/443. Claiming is token-gated in
 # this mode (open claiming is refused on a reachable instance).
 #
-# Usage (run on a Linux host with KVM):
+# Usage (run on a Linux host with KVM, or an Apple silicon Mac for arm64):
 #   image/build.sh [options]
 #
 # Options:
@@ -62,16 +65,22 @@
 #   --cpus <n>            Build VM vCPUs (default: 2)
 #   --output-dir <dir>    Where artifacts land (default: image/out)
 #   --no-ova              Skip the VirtualBox OVA; produce only the qcow2
+#                         (always skipped for arm64)
 #   --timeout <sec>       Max seconds to wait for the build boot (default: 1800)
 #   -h, --help            Show this help
 #
-# Requirements: qemu-system-x86_64, qemu-img, cloud-localds (cloud-image-utils)
-# or genisoimage/xorriso, curl, tar. KVM (/dev/kvm) strongly recommended —
-# without it the build boot falls back to slow TCG emulation.
+# Requirements: qemu-system-x86_64 (amd64) or qemu-system-aarch64 plus UEFI
+# firmware from qemu-efi-aarch64 (arm64), qemu-img, cloud-localds
+# (cloud-image-utils) or xorriso/genisoimage/mkisofs, curl, tar, timeout, and
+# KVM (/dev/kvm) or HVF on macOS.
 
 set -euo pipefail
 
 # ---- Defaults ----
+case "$(uname -m)" in
+    aarch64|arm64) ARCH="arm64" ;;
+    *)             ARCH="amd64" ;;
+esac
 BRANCH="main"
 REPO_URL="https://github.com/imbue-openhost/openhost.git"
 DOMAIN="lvh.me"
@@ -94,8 +103,6 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 OUTPUT_DIR="$SCRIPT_DIR/out"
 CACHE_DIR="$SCRIPT_DIR/cache"
 PROVISION_SCRIPT="$SCRIPT_DIR/../scripts/provision.sh"
-
-CLOUD_IMG_URL="https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img"
 
 # Print the leading comment block (everything from line 2 up to the first
 # non-comment line), stripped of the leading "# ".
@@ -127,6 +134,29 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+# ---- Per-arch settings ----
+case "$ARCH" in
+    amd64)
+        QEMU="qemu-system-x86_64"
+        QEMU_MACHINE=()
+        ;;
+    arm64)
+        QEMU="qemu-system-aarch64"
+        # Ubuntu's arm64 cloud image boots only via UEFI, so -bios points at the
+        # edk2 firmware. That is all the build boot needs; the image itself
+        # boots through the removable-media fallback path (EFI/BOOT/BOOTAA64.EFI)
+        # on any UEFI arm64 VM, so no NVRAM state needs to ship with it.
+        # Debian/Ubuntu's qemu-efi-aarch64 puts the firmware here. Elsewhere
+        # (e.g. Homebrew) it's in QEMU's data dir, where -bios finds it by name.
+        UEFI_FW=/usr/share/qemu-efi-aarch64/QEMU_EFI.fd
+        [ -f "$UEFI_FW" ] || UEFI_FW=edk2-aarch64-code.fd
+        QEMU_MACHINE=(-machine virt -bios "$UEFI_FW")
+        # The VirtualBox OVF below describes an x86 machine.
+        MAKE_OVA="false"
+        ;;
+esac
+CLOUD_IMG_URL="https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-$ARCH.img"
+
 # ---- Validate --public flags ----
 if [ "$PUBLIC" = "true" ]; then
     if [ -z "$PUBLIC_IP" ]; then
@@ -151,11 +181,23 @@ need() {
 
 # ---- Dependency checks ----
 need qemu-img       "Install qemu-utils."
-need qemu-system-x86_64 "Install qemu-system-x86."
+need "$QEMU"         "Install qemu-system-x86 (amd64) or qemu-system-arm (arm64)."
+
 need curl           "Install curl."
 need tar            "Install tar."
+need timeout        "Install coreutils."
 
-# Seed-ISO builder: prefer cloud-localds, fall back to xorriso/genisoimage.
+if [ -w /dev/kvm ]; then
+    KVM_ARGS=(-enable-kvm -cpu host)
+elif [ "$(sysctl -n kern.hv_support 2>/dev/null)" = "1" ]; then
+    # macOS Hypervisor.framework.
+    KVM_ARGS=(-accel hvf -cpu host)
+else
+    echo "Error: no writable /dev/kvm (or HVF on macOS)." >&2
+    exit 1
+fi
+
+# Seed-ISO builder: prefer cloud-localds, fall back to xorriso/genisoimage/mkisofs.
 SEED_TOOL=""
 if command -v cloud-localds >/dev/null 2>&1; then
     SEED_TOOL="cloud-localds"
@@ -163,8 +205,10 @@ elif command -v xorriso >/dev/null 2>&1; then
     SEED_TOOL="xorriso"
 elif command -v genisoimage >/dev/null 2>&1; then
     SEED_TOOL="genisoimage"
+elif command -v mkisofs >/dev/null 2>&1; then
+    SEED_TOOL="mkisofs"
 else
-    echo "Error: need one of cloud-localds (cloud-image-utils), xorriso, or genisoimage." >&2
+    echo "Error: need one of cloud-localds (cloud-image-utils), xorriso, genisoimage, or mkisofs." >&2
     exit 1
 fi
 
@@ -183,6 +227,7 @@ trap 'rm -rf "$WORK_DIR"' EXIT
 
 echo "=== OpenHost VM image build ==="
 echo "  Version:      $VERSION"
+echo "  Arch:         $ARCH"
 echo "  Repo/branch:  $REPO_URL @ $BRANCH"
 echo "  provision.sh: $PROVISION_SCRIPT (embedded)"
 if [ "$PUBLIC" = "true" ]; then
@@ -199,7 +244,7 @@ echo "  Output dir:   $OUTPUT_DIR"
 echo ""
 
 # ---- 1. Fetch the Ubuntu cloud base image (cached) ----
-BASE_IMG="$CACHE_DIR/noble-server-cloudimg-amd64.img"
+BASE_IMG="$CACHE_DIR/noble-server-cloudimg-$ARCH.img"
 if [ ! -f "$BASE_IMG" ]; then
     echo "--- Downloading Ubuntu 24.04 cloud image ---"
     curl -fSL "$CLOUD_IMG_URL" -o "$BASE_IMG.tmp"
@@ -246,10 +291,11 @@ fi
 # Embed provision.sh and seal.sh (and, for --public --acme-key, the account key)
 # as single-line base64 blobs. The base64 alphabet is [A-Za-z0-9+/=] — none of
 # which collide with sed's '|' delimiter.
-PROVISION_B64="$(base64 -w0 "$PROVISION_SCRIPT")"
-SEAL_B64="$(base64 -w0 "$SCRIPT_DIR/seal.sh")"
+b64() { base64 < "$1" | tr -d '\n'; }
+PROVISION_B64="$(b64 "$PROVISION_SCRIPT")"
+SEAL_B64="$(b64 "$SCRIPT_DIR/seal.sh")"
 ACME_KEY_B64=""
-[ -n "$ACME_KEY_FILE" ] && ACME_KEY_B64="$(base64 -w0 "$ACME_KEY_FILE")"
+[ -n "$ACME_KEY_FILE" ] && ACME_KEY_B64="$(b64 "$ACME_KEY_FILE")"
 
 USER_DATA="$WORK_DIR/user-data"
 # Use a non-/ delimiter for sed since URLs contain slashes.
@@ -276,8 +322,8 @@ case "$SEED_TOOL" in
         xorriso -as genisoimage -output "$SEED_ISO" -volid cidata -joliet -rock \
             "$USER_DATA" "$SCRIPT_DIR/cloud-init/meta-data"
         ;;
-    genisoimage)
-        genisoimage -output "$SEED_ISO" -volid cidata -joliet -rock \
+    genisoimage|mkisofs)
+        "$SEED_TOOL" -output "$SEED_ISO" -volid cidata -joliet -rock \
             "$USER_DATA" "$SCRIPT_DIR/cloud-init/meta-data"
         ;;
 esac
@@ -290,18 +336,12 @@ CONSOLE_LOG="$OUTPUT_DIR/build-console.log"
 : > "$CONSOLE_LOG"
 echo "  (guest console -> $CONSOLE_LOG)"
 
-KVM_ARGS=()
-if [ -e /dev/kvm ] && [ -w /dev/kvm ]; then
-    KVM_ARGS=(-enable-kvm -cpu host)
-else
-    echo "  (no writable /dev/kvm — falling back to slow TCG emulation)"
-    KVM_ARGS=(-cpu max)
-fi
-
 # -display none -monitor none: no VGA, no monitor on stdio (nothing waits on
-# stdin). The guest's ttyS0 console is captured to CONSOLE_LOG.
+# stdin). The guest serial console (ttyS0, or ttyAMA0 on arm64) is captured
+# to CONSOLE_LOG.
 set +e
-timeout "$BUILD_TIMEOUT" qemu-system-x86_64 \
+timeout "$BUILD_TIMEOUT" "$QEMU" \
+    "${QEMU_MACHINE[@]}" \
     "${KVM_ARGS[@]}" \
     -m "$MEM_MB" \
     -smp "$CPUS" \
@@ -336,7 +376,7 @@ fi
 
 # ---- 5. Compact the qcow2 (drop freed blocks) ----
 echo "--- Finalizing qcow2 ---"
-QCOW2_OUT="$OUTPUT_DIR/openhost-$VERSION-amd64.qcow2"
+QCOW2_OUT="$OUTPUT_DIR/openhost-$VERSION-$ARCH.qcow2"
 qemu-img convert -O qcow2 -c "$DISK" "$QCOW2_OUT"
 
 echo ""
@@ -347,13 +387,13 @@ if [ "$MAKE_OVA" = "true" ]; then
     echo "--- Building VirtualBox OVA ---"
     OVA_STAGE="$WORK_DIR/ova"
     mkdir -p "$OVA_STAGE"
-    VMDK="$OVA_STAGE/openhost-$VERSION-amd64.vmdk"
+    VMDK="$OVA_STAGE/openhost-$VERSION-$ARCH.vmdk"
     qemu-img convert -O vmdk -o subformat=streamOptimized,adapter_type=lsilogic \
         "$DISK" "$VMDK"
 
     CAPACITY_BYTES="$(qemu-img info --output=json "$DISK" | sed -n 's/.*"virtual-size": *\([0-9]*\).*/\1/p' | head -n1)"
     VMDK_BYTES="$(file_size "$VMDK")"
-    OVF="$OVA_STAGE/openhost-$VERSION-amd64.ovf"
+    OVF="$OVA_STAGE/openhost-$VERSION-$ARCH.ovf"
     VMDK_NAME="$(basename "$VMDK")"
 
     cat > "$OVF" <<OVF_EOF
@@ -440,7 +480,7 @@ if [ "$MAKE_OVA" = "true" ]; then
 </Envelope>
 OVF_EOF
 
-    OVA_OUT="$OUTPUT_DIR/openhost-$VERSION-amd64.ova"
+    OVA_OUT="$OUTPUT_DIR/openhost-$VERSION-$ARCH.ova"
     # OVA spec: the .ovf must be the first entry in the tar, disk(s) after.
     tar -C "$OVA_STAGE" -cf "$OVA_OUT" "$(basename "$OVF")" "$VMDK_NAME"
     echo "  VirtualBox:   $OVA_OUT"
