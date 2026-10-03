@@ -8,10 +8,14 @@
 info, installed dependency versions, container runtime, disk usage, and every
 installed app. Copy or download it and include it in a bug report.</p>
 
+{# Copy and Refresh ship disabled: they only do anything once the snapshot has
+   been fetched, and diagnostics.js re-enables them when it lands. The Download
+   link is a plain server request, so it stays usable even if the script never
+   runs; the script disables it only while a collection is in flight. #}
 <div class="action-bar">
-  <button class="btn btn--primary" id="copy-btn">Copy to clipboard</button>
+  <button class="btn btn--primary" id="copy-btn" disabled>Copy to clipboard</button>
   <a class="btn" id="download-btn" href="/api/diagnostics?download=1">Download JSON</a>
-  <button class="btn" id="refresh-btn">Refresh</button>
+  <button class="btn" id="refresh-btn" disabled>Refresh</button>
   <span class="hint" id="copy-status"></span>
 </div>
 

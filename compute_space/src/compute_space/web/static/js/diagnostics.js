@@ -203,8 +203,27 @@ function renderReachability(data) {
   }));
 }
 
+// The action bar acts on a snapshot the page doesn't have until its fetch
+// lands, so everything in it is out of action while one is in flight: Copy had
+// nothing to copy and silently did nothing, and Refresh or Download would start
+// a second collection (podman calls, reachability probes) on top of the running
+// one. Copy additionally stays disabled after a failed load, since there is
+// still no snapshot; Refresh and Download come back so the load can be retried.
+function setActionsBusy(busy) {
+  document.getElementById('copy-btn').disabled = busy || !latest;
+  document.getElementById('refresh-btn').disabled = busy;
+  // An <a> has no disabled attribute. aria-disabled carries the state to
+  // assistive tech and to the .btn[aria-disabled="true"] style, and the click
+  // handler below refuses the navigation while it is set.
+  document.getElementById('download-btn').setAttribute('aria-disabled', busy ? 'true' : 'false');
+}
+
 function loadDiagnostics() {
   document.getElementById('copy-status').textContent = '';
+  // Drop the previous snapshot up front: once a reload is under way the page no
+  // longer has a bundle that matches what it is about to show.
+  latest = null;
+  setActionsBusy(true);
   fetch(config.diagnosticsUrl, {credentials: 'same-origin'})
     .then(function(r) {
       if (!r.ok) throw new Error('HTTP ' + r.status);
@@ -219,6 +238,9 @@ function loadDiagnostics() {
     })
     .catch(function(e) {
       document.getElementById('diag-json').textContent = 'Failed to load diagnostics: ' + e.message;
+    })
+    .finally(function() {
+      setActionsBusy(false);
     });
 }
 
@@ -241,6 +263,10 @@ document.getElementById('copy-btn').addEventListener('click', function() {
     try { document.execCommand('copy') ? done() : fail(); } catch (e) { fail(); }
     document.body.removeChild(ta);
   }
+});
+
+document.getElementById('download-btn').addEventListener('click', function(e) {
+  if (this.getAttribute('aria-disabled') === 'true') e.preventDefault();
 });
 
 document.getElementById('refresh-btn').addEventListener('click', loadDiagnostics);
