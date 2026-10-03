@@ -61,7 +61,8 @@ router would otherwise clone the repo at HEAD and silently test stale code.
 - `stack.url` — your app through the router (subdomain routing, real auth)
 - `stack.owner_session` — a `requests.Session` authenticated as the zone owner; its cookie
   is scoped to the zone domain so it works on `stack.url` and every other app URL.
-  Unauthenticated requests to `stack.url` redirect to `/login`, like production.
+  Unauthenticated requests return 404 for apps without public paths. For apps with public
+  paths, requests to protected paths redirect to `/login`.
 - `stack.app_url` — direct to your app's container, bypassing the router (for tests that
   forge `X-OpenHost-*` headers or check unauthenticated behavior)
 - `stack.url_for(app_name)` — any other deployed app, through the router
@@ -70,7 +71,8 @@ router would otherwise clone the repo at HEAD and silently test stale code.
 ### Testing owner routes in a browser (playwright)
 
 `stack.url` goes through the real router, so an unauthenticated `page.goto(stack.url)`
-redirects to `/login`. `stack.playwright_login(page)` drives the real login form (navigates
+returns 404 for a fully private app. Call `stack.playwright_login(page)` before visiting
+private app URLs. It drives the real login form (navigates
 to `/login`, submits the owner password, waits for the redirect) and returns the page
 logged in, so it can then reach owner-only pages. Playwright and pytest-playwright come
 with the `test-harness` extra; pass pytest-playwright's `page` fixture:
@@ -87,8 +89,8 @@ def test_dashboard_renders(stack: OpenhostStack, page) -> None:
 ```
 
 To test the unauthenticated experience instead, use pytest-playwright's plain `page`
-fixture (no cookies) and assert the `/login` redirect, or hit `stack.app_url` to bypass
-the router entirely.
+fixture (no cookies) and assert 404 for a fully private app, or a `/login` redirect for
+a protected path on an app with public paths. Use `stack.app_url` to bypass the router entirely.
 
 ## Testing the service interface
 

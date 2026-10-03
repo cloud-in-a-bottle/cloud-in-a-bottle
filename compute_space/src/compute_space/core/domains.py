@@ -5,6 +5,7 @@ from enum import StrEnum
 
 import attr
 
+from compute_space.core.app_id import is_valid_app_name
 from compute_space.core.logging import logger
 
 
@@ -45,9 +46,16 @@ class Domain:
         host_no_port = host.split(":")[0].lower()
         return host_no_port == name or host_no_port.endswith("." + name)
 
-    def is_app_subdomain(self, host: str) -> bool:
-        """True if ``host`` is an ``<app>.<domain>`` subdomain of this domain, not the domain itself."""
+    def looks_like_app_subdomain(self, host: str) -> bool:
+        """Check for a subdomain of this domain, without checking whether an app exists."""
         return self.owns(host) and host.split(":")[0].lower() != self.name_no_port
+
+    def app_name_from_hostname(self, host: str) -> str | None:
+        """Extract a valid single app label under this domain, without looking up installed apps."""
+        if not self.looks_like_app_subdomain(host):
+            return None
+        app_name = host.split(":", 1)[0].lower()[: -(len(self.name_no_port) + 1)]
+        return app_name if is_valid_app_name(app_name) else None
 
     @classmethod
     def match(cls, db: sqlite3.Connection, host: str) -> Domain | None:

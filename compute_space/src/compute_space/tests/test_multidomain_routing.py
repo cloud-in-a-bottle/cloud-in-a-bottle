@@ -69,7 +69,7 @@ def _route(host: str) -> Any:
 def _looks(host: str) -> bool:
     with closing(get_db()) as db:
         matched = Domain.match(db, host)
-    return matched is not None and matched.is_app_subdomain(host)
+    return matched is not None and matched.looks_like_app_subdomain(host)
 
 
 def test_app_reachable_under_primary_domain(multi_domain_config: Any, captured_lookups: list[str]) -> None:
