@@ -7,8 +7,8 @@
 # No Packer, no autoinstall ISO dance — just the exact code path a real deploy
 # uses. Output is a QEMU qcow2 and (optionally) a VirtualBox OVA.
 #
-# Builds amd64 or arm64 (--arch). The guest arch need not match the host's, but
-# a cross-arch build runs under TCG emulation and is far slower than KVM.
+# Builds an image for the host's arch: amd64, or arm64 (which boots via UEFI
+# and has no OVA).
 #
 # The image comes up out of the box in HTTP-only mode bound to 0.0.0.0, so the
 # dashboard is reachable at http://<vm-ip>:8080 with a default console password.
@@ -25,8 +25,6 @@
 #   image/build.sh [options]
 #
 # Options:
-#   --arch <arch>         Guest architecture: amd64 or arm64 (default: the
-#                         host's). arm64 images boot via UEFI and skip the OVA.
 #   --branch <branch>     Git branch of openhost app code to clone (default: main)
 #   --repo <url>          Git repo URL to clone app code from
 #                         (default: imbue-openhost/openhost)
@@ -73,9 +71,9 @@
 #
 # Requirements: qemu-system-x86_64 (amd64) or qemu-system-aarch64 plus UEFI
 # firmware from qemu-efi-aarch64 (arm64), qemu-img, cloud-localds
-# (cloud-image-utils) or xorriso/genisoimage/mkisofs, curl, tar. KVM (/dev/kvm),
-# or HVF on macOS, on a host of the same arch strongly recommended; without it
-# the build boot falls back to slow TCG emulation.
+# (cloud-image-utils) or xorriso/genisoimage/mkisofs, curl, tar, timeout. KVM
+# (/dev/kvm), or HVF on macOS, strongly recommended; without it the build boot
+# falls back to slow TCG emulation.
 
 set -euo pipefail
 
@@ -113,7 +111,6 @@ usage() { sed -n '2,/^[^#]/{/^#/s/^# \{0,1\}//p;}' "${BASH_SOURCE[0]}"; }
 
 while [[ $# -gt 0 ]]; do
     case $1 in
-        --arch)         ARCH="$2"; shift 2 ;;
         --branch)       BRANCH="$2"; shift 2 ;;
         --repo)         REPO_URL="$2"; shift 2 ;;
         --provision-script) PROVISION_SCRIPT="$2"; shift 2 ;;
@@ -139,29 +136,20 @@ while [[ $# -gt 0 ]]; do
 done
 
 # ---- Per-arch settings ----
-HOST_ARCH="$(uname -m)"
 case "$ARCH" in
     amd64)
         QEMU="qemu-system-x86_64"
-        QEMU_PKG="qemu-system-x86"
         QEMU_MACHINE=()
-        NATIVE="$([ "$HOST_ARCH" = "x86_64" ] && echo true || echo false)"
         ;;
     arm64)
         QEMU="qemu-system-aarch64"
-        QEMU_PKG="qemu-system-arm"
         # Ubuntu's arm64 cloud image boots only via UEFI, so -bios points at the
         # edk2 firmware. That is all the build boot needs; the image itself
         # boots through the removable-media fallback path (EFI/BOOT/BOOTAA64.EFI)
         # on any UEFI arm64 VM, so no NVRAM state needs to ship with it.
         QEMU_MACHINE=(-machine virt)
-        NATIVE="$(case "$HOST_ARCH" in aarch64|arm64) echo true ;; *) echo false ;; esac)"
         # The VirtualBox OVF below describes an x86 machine.
         MAKE_OVA="false"
-        ;;
-    *)
-        echo "Error: --arch must be amd64 or arm64 (got '$ARCH')." >&2
-        exit 1
         ;;
 esac
 CLOUD_IMG_URL="https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-$ARCH.img"
@@ -190,15 +178,14 @@ need() {
 
 # ---- Dependency checks ----
 need qemu-img       "Install qemu-utils."
-need "$QEMU"         "Install $QEMU_PKG."
+need "$QEMU"         "Install qemu-system-x86 (amd64) or qemu-system-arm (arm64)."
 
 if [ "$ARCH" = "arm64" ]; then
     UEFI_FW=""
     for f in /usr/share/qemu-efi-aarch64/QEMU_EFI.fd \
              /usr/share/AAVMF/AAVMF_CODE.fd \
              /usr/share/qemu/edk2-aarch64-code.fd \
-             /opt/homebrew/share/qemu/edk2-aarch64-code.fd \
-             /usr/local/share/qemu/edk2-aarch64-code.fd; do
+             /opt/homebrew/share/qemu/edk2-aarch64-code.fd; do
         if [ -f "$f" ]; then UEFI_FW="$f"; break; fi
     done
     if [ -z "$UEFI_FW" ]; then
@@ -351,18 +338,14 @@ CONSOLE_LOG="$OUTPUT_DIR/build-console.log"
 echo "  (guest console -> $CONSOLE_LOG)"
 
 KVM_ARGS=()
-if [ "$NATIVE" = "true" ] && [ -e /dev/kvm ] && [ -w /dev/kvm ]; then
+if [ -e /dev/kvm ] && [ -w /dev/kvm ]; then
     KVM_ARGS=(-enable-kvm -cpu host)
-elif [ "$NATIVE" = "true" ] && [ "$(sysctl -n kern.hv_support 2>/dev/null)" = "1" ]; then
+elif [ "$(sysctl -n kern.hv_support 2>/dev/null)" = "1" ]; then
     # macOS Hypervisor.framework.
     KVM_ARGS=(-accel hvf -cpu host)
 else
-    echo "  (no usable KVM or HVF for $ARCH on this host; falling back to slow TCG emulation)"
-    # pauth-impdef swaps aarch64 pointer authentication's architected
-    # algorithm (very slow to emulate) for a cheap one; the guest can't tell.
-    TCG_CPU="max"
-    [ "$ARCH" = "arm64" ] && TCG_CPU="max,pauth-impdef=on"
-    KVM_ARGS=(-accel tcg,thread=multi -cpu "$TCG_CPU")
+    echo "  (no usable KVM or HVF; falling back to slow TCG emulation)"
+    KVM_ARGS=(-cpu max)
 fi
 
 # -display none -monitor none: no VGA, no monitor on stdio (nothing waits on

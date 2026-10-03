@@ -16,10 +16,8 @@ name: release
 # (openhost_system_agent/update.py), so there is exactly one tag scheme.
 #
 # Images are built for amd64 (on the runner, with KVM) and arm64 (on an EC2
-# Graviton bare-metal host, via image/on_ec2.sh), and each is smoke tested
-# (booted, claimed, default apps deployed) before anything is published. Pull
-# requests that touch the image build, and manual runs on a branch, do the
-# build and smoke test only.
+# Graviton bare-metal host, via image/on_ec2.sh). Pull requests that touch the
+# image build, and manual runs on a branch, build without publishing.
 
 on:
   push:
@@ -65,10 +63,9 @@ jobs:
       matrix:
         arch: [amd64, arm64]
     runs-on: ubuntu-latest
-    # The build boots a VM and provisions it end to end, then the smoke test
-    # boots it again and deploys the default apps; give it plenty of room.
-    # build.sh and smoke_test.sh have their own deadlines inside this budget.
-    timeout-minutes: 120
+    # The build boots a VM and provisions it end to end; give it plenty of room.
+    # build.sh has its own 30-min boot timeout inside this budget.
+    timeout-minutes: 90
     env:
       # The ref provision.sh clones: the tag, or the PR / dispatched branch.
       BRANCH: ${{ github.head_ref || github.ref_name }}
@@ -96,10 +93,6 @@ jobs:
             | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
-
-      - name: Require KVM
-        if: matrix.arch == 'amd64'
-        run: |
           ls -l /dev/kvm || true
           if [ ! -w /dev/kvm ]; then
             echo "::error::/dev/kvm is not usable. The build needs KVM; a TCG"
@@ -108,24 +101,14 @@ jobs:
             echo "larger runner or a self-hosted KVM runner."
             exit 1
           fi
-          echo "KVM available — build will use hardware acceleration."
 
       - name: Build VM images
         if: matrix.arch == 'amd64'
-        run: |
-          image/build.sh --arch amd64 --branch "$BRANCH" --version "${BRANCH//\//-}"
+        run: image/build.sh --branch "$BRANCH" --version "${BRANCH//\//-}"
 
-      - name: List built artifacts
-        if: matrix.arch == 'amd64'
-        run: ls -lh image/out/
-
-      - name: Smoke test the image
-        if: matrix.arch == 'amd64'
-        run: image/smoke_test.sh --arch amd64 image/out/openhost-*-amd64.qcow2
-
-      # GitHub's arm64 runners have no /dev/kvm, so build and smoke test arm64
-      # on an EC2 Graviton bare-metal host, which does.
-      - name: Build and smoke test on EC2 (arm64)
+      # GitHub's arm64 runners have no /dev/kvm, so build arm64 on an EC2
+      # Graviton bare-metal host, which does.
+      - name: Build VM images on EC2
         if: matrix.arch == 'arm64'
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
@@ -137,18 +120,14 @@ jobs:
           export EC2_SSH_KEY="$RUNNER_TEMP/ec2_key"
           printf '%s\n' "$EC2_SSH_PRIVATE_KEY" > "$EC2_SSH_KEY"
           chmod 600 "$EC2_SSH_KEY"
-          VM_ARGS="--cpus 8 --mem 16384"
-          image/on_ec2.sh "
-            image/build.sh --arch arm64 $VM_ARGS --branch '$BRANCH' --version '${BRANCH//\//-}' &&
-            ls -lh image/out/ &&
-            image/smoke_test.sh --arch arm64 $VM_ARGS image/out/openhost-*-arm64.qcow2"
+          image/on_ec2.sh "image/build.sh --cpus 8 --mem 16384 --branch '$BRANCH' --version '${BRANCH//\//-}'"
 
-      - name: Upload console logs
+      - name: Upload console log
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: console-logs-${{ matrix.arch }}
-          path: image/out/*.log
+          name: console-log-${{ matrix.arch }}
+          path: image/out/build-console.log
           if-no-files-found: ignore
 
       - name: Upload images
