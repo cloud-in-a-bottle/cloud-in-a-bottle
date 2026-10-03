@@ -6,10 +6,10 @@ The [release images](../src/setup/shared_homeserver.md#part-1-download-and-run-t
 
 **To build the image**, a Linux host or an Apple silicon Mac. The image is built for the host's arch (amd64 or arm64). You need:
 
-- `qemu-img` (the `qemu-utils` package), plus the emulator for the host's arch: `qemu-system-x86_64` (`qemu-system-x86`) for amd64, or `qemu-system-aarch64` and its UEFI firmware (`qemu-system-arm` and `qemu-efi-aarch64`) for arm64.
+- `qemu-img` (the `qemu-utils` package), plus QEMU for the host's arch: `qemu-system-x86_64` (`qemu-system-x86`) for amd64, or `qemu-system-aarch64` and its UEFI firmware (`qemu-system-arm` and `qemu-efi-aarch64`) for arm64.
 - A seed-ISO builder: `cloud-localds` (from `cloud-image-utils`), or `xorriso`, `genisoimage`, or `mkisofs`.
 - `curl`, `tar`, and `timeout`.
-- (recommended) KVM (`/dev/kvm`), or HVF on macOS. Without it the build boot falls back to slow TCG emulation.
+- KVM (`/dev/kvm`), or HVF on macOS.
 
 On an Apple silicon Mac, `brew install qemu cdrtools coreutils` covers all of this, and the build runs under HVF in about five minutes.
 

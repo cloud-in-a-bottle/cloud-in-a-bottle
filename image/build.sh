@@ -71,9 +71,8 @@
 #
 # Requirements: qemu-system-x86_64 (amd64) or qemu-system-aarch64 plus UEFI
 # firmware from qemu-efi-aarch64 (arm64), qemu-img, cloud-localds
-# (cloud-image-utils) or xorriso/genisoimage/mkisofs, curl, tar, timeout. KVM
-# (/dev/kvm), or HVF on macOS, strongly recommended; without it the build boot
-# falls back to slow TCG emulation.
+# (cloud-image-utils) or xorriso/genisoimage/mkisofs, curl, tar, timeout, and
+# KVM (/dev/kvm) or HVF on macOS.
 
 set -euo pipefail
 
@@ -197,6 +196,16 @@ fi
 need curl           "Install curl."
 need tar            "Install tar."
 need timeout        "Install coreutils."
+
+if [ -w /dev/kvm ]; then
+    KVM_ARGS=(-enable-kvm -cpu host)
+elif [ "$(sysctl -n kern.hv_support 2>/dev/null)" = "1" ]; then
+    # macOS Hypervisor.framework.
+    KVM_ARGS=(-accel hvf -cpu host)
+else
+    echo "Error: no writable /dev/kvm (or HVF on macOS)." >&2
+    exit 1
+fi
 
 # Seed-ISO builder: prefer cloud-localds, fall back to xorriso/genisoimage/mkisofs.
 SEED_TOOL=""
@@ -336,17 +345,6 @@ echo "--- Provisioning (booting build VM; this takes a while) ---"
 CONSOLE_LOG="$OUTPUT_DIR/build-console.log"
 : > "$CONSOLE_LOG"
 echo "  (guest console -> $CONSOLE_LOG)"
-
-KVM_ARGS=()
-if [ -e /dev/kvm ] && [ -w /dev/kvm ]; then
-    KVM_ARGS=(-enable-kvm -cpu host)
-elif [ "$(sysctl -n kern.hv_support 2>/dev/null)" = "1" ]; then
-    # macOS Hypervisor.framework.
-    KVM_ARGS=(-accel hvf -cpu host)
-else
-    echo "  (no usable KVM or HVF; falling back to slow TCG emulation)"
-    KVM_ARGS=(-cpu max)
-fi
 
 # -display none -monitor none: no VGA, no monitor on stdio (nothing waits on
 # stdin). The guest serial console (ttyS0, or ttyAMA0 on arm64) is captured

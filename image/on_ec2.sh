@@ -1,11 +1,9 @@
 #!/usr/bin/env bash
 # on_ec2.sh: Run an image build command on an EC2 Graviton bare-metal host.
 #
-# GitHub's arm64 runners have no /dev/kvm, so an arm64 image build there runs
-# under slow TCG emulation. A .metal instance has KVM, so build.sh runs at
-# native speed. This launches one, ships image/ and scripts/ from the working
-# tree, runs <command> from the shipped tree, copies image/out/ back, and
-# terminates the instance.
+# GitHub's arm64 runners have no /dev/kvm, but a .metal instance does. This
+# launches one, ships image/ and scripts/ from the working tree, runs <command>
+# from the shipped tree, copies image/out/ back, and terminates the instance.
 #
 # Usage:
 #   image/on_ec2.sh '<command>'
