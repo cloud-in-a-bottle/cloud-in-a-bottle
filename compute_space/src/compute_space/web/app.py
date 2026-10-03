@@ -202,7 +202,7 @@ def _reject_app_subdomain_requests(request: Request[Any, Any, Any]) -> Response[
     netloc = request.url.netloc
     with closing(get_db()) as db:
         matched = Domain.match(db, netloc)
-    if matched is not None and matched.is_app_subdomain(netloc):
+    if matched is not None and matched.looks_like_app_subdomain(netloc):
         return Response(content=None, status_code=404)
     return None
 

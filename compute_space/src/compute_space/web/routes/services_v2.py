@@ -19,10 +19,10 @@ CORS:
 """
 
 import json
+import re
 import sqlite3
 from collections.abc import Iterable
 from typing import Any
-from urllib.parse import urlsplit
 
 import attr
 from litestar import HttpMethod
@@ -45,7 +45,6 @@ from litestar.params import FromPath
 from litestar.response import Response
 from litestar.response.base import ASGIResponse
 
-from compute_space.core.app_id import is_valid_app_name
 from compute_space.core.apps import find_app_by_name
 from compute_space.core.apps import is_public_path
 from compute_space.core.domains import Domain
@@ -64,6 +63,9 @@ from compute_space.web.helpers.proxy import proxy_http_request
 from compute_space.web.helpers.proxy import proxy_websocket_request
 
 _CALL_PATH = "/api/services/v2/call/{shortname:str}/{rest:path}"
+_CORS_ORIGIN_RE = re.compile(
+    r"(?:https?://)?(?P<hostname>[a-z0-9.-]+)(?::(?P<port>[0-9]{1,5}))?", re.IGNORECASE | re.ASCII
+)
 _HTTP_METHODS = [
     HttpMethod.GET,
     HttpMethod.POST,
@@ -123,6 +125,21 @@ def _carry_response_headers(headers: MutableScopeHeaders) -> Iterable[tuple[str,
         yield k, v
 
 
+def _cors_origin_hostname(origin: str) -> str | None:
+    """Accept HTTP(S) origins or legacy host[:port], with an optional port in 0–65535.
+
+    Validate the entire field before reflecting it in CORS headers; get_connection_origin
+    only extracts the host and would also accept URLs containing credentials, paths, or queries.
+    """
+    match = _CORS_ORIGIN_RE.fullmatch(origin)
+    if match is None:
+        return None
+    port = match.group("port")
+    if port is not None and int(port) > 65535:
+        return None
+    return match.group("hostname").lower()
+
+
 def _cors_headers(origin: str) -> dict[str, str]:
     return {
         "Access-Control-Allow-Origin": origin,
@@ -146,32 +163,12 @@ async def service_call_cors(
     rest: FromPath[str],
     db: NamedDependency[sqlite3.Connection],
 ) -> Response[str]:
-    """Allow app-shaped origins on configured domains without revealing installed apps."""
+    """Handle CORS preflights for app-shaped origins without revealing which apps are installed."""
     origin = request.headers.get("Origin", None)
-    try:
-        host = get_connection_origin(request)
-        # Keep raw host[:port] compatibility, but reject URL components that an Origin cannot contain.
-        parsed = urlsplit(origin if origin and "://" in origin else f"//{origin or ''}")
-        _ = parsed.port  # Validate ports on raw hosts too.
-    except ValueError as e:
-        raise PermissionDeniedException(detail="Forbidden") from e
-    if (
-        not origin
-        or not host
-        or not origin.isprintable()
-        or any(c.isspace() for c in origin)
-        or parsed.scheme not in ("", "http", "https")
-        or parsed.username is not None
-        or parsed.path
-        or "?" in origin
-        or "#" in origin
-    ):
+    if origin is None or (host := _cors_origin_hostname(origin)) is None:
         raise PermissionDeniedException(detail="Forbidden")
     domain = Domain.match(db, host)
-    if domain is None or not domain.is_app_subdomain(host):
-        raise PermissionDeniedException(detail="Forbidden")
-    app_name = host.split(":", 1)[0].lower()[: -(len(domain.name_no_port) + 1)]
-    if not is_valid_app_name(app_name):
+    if domain is None or domain.app_name_from_hostname(host) is None:
         raise PermissionDeniedException(detail="Forbidden")
     return Response(content="", status_code=204, headers=_cors_headers(origin))
 
