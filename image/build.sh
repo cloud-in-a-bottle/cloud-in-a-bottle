@@ -146,7 +146,11 @@ case "$ARCH" in
         # edk2 firmware. That is all the build boot needs; the image itself
         # boots through the removable-media fallback path (EFI/BOOT/BOOTAA64.EFI)
         # on any UEFI arm64 VM, so no NVRAM state needs to ship with it.
-        QEMU_MACHINE=(-machine virt)
+        # Debian/Ubuntu's qemu-efi-aarch64 puts the firmware here. Elsewhere
+        # (e.g. Homebrew) it's in QEMU's data dir, where -bios finds it by name.
+        UEFI_FW=/usr/share/qemu-efi-aarch64/QEMU_EFI.fd
+        [ -f "$UEFI_FW" ] || UEFI_FW=edk2-aarch64-code.fd
+        QEMU_MACHINE=(-machine virt -bios "$UEFI_FW")
         # The VirtualBox OVF below describes an x86 machine.
         MAKE_OVA="false"
         ;;
@@ -179,20 +183,6 @@ need() {
 need qemu-img       "Install qemu-utils."
 need "$QEMU"         "Install qemu-system-x86 (amd64) or qemu-system-arm (arm64)."
 
-if [ "$ARCH" = "arm64" ]; then
-    UEFI_FW=""
-    for f in /usr/share/qemu-efi-aarch64/QEMU_EFI.fd \
-             /usr/share/AAVMF/AAVMF_CODE.fd \
-             /usr/share/qemu/edk2-aarch64-code.fd \
-             /opt/homebrew/share/qemu/edk2-aarch64-code.fd; do
-        if [ -f "$f" ]; then UEFI_FW="$f"; break; fi
-    done
-    if [ -z "$UEFI_FW" ]; then
-        echo "Error: no aarch64 UEFI firmware found. Install qemu-efi-aarch64." >&2
-        exit 1
-    fi
-    QEMU_MACHINE+=(-bios "$UEFI_FW")
-fi
 need curl           "Install curl."
 need tar            "Install tar."
 need timeout        "Install coreutils."

@@ -9,7 +9,6 @@ This page is in two parts. Part 1 gets a working instance running inside a VM fr
 ## Part 1: download and run the VM image
 
 Requirements:
-- an x86-64 or arm64 processor. Images are published for both: take the `amd64` files for x86-64, and the `arm64` file for ARM machines such as an Apple silicon Mac or a Raspberry Pi 5.
 - support for hardware virtualization. Most CPUs support this as long as you're running on bare metal, ie not already in a VM (VPS, EC2 instance, etc). It'll work without this but would be very slow.
 - a virtual machine host, like QEMU, VirtualBox, VMWare, etc. If you don't already have a preference, we suggest QEMU.
   - on ubuntu: `apt install qemu-system-x86 qemu-utils` (x86-64), or `apt install qemu-system-arm qemu-efi-aarch64 qemu-utils` (arm64)
@@ -32,7 +31,7 @@ Give the VM at least 1 vCPU, 2 GB RAM, and a disk of the size you want your inst
 - **VirtualBox:** *File → Import Appliance…*, select the `.ova`, adjust CPU/RAM/disk, and start it.
 - **QEMU / libvirt:** import the `.qcow2` as the VM's disk (e.g. `virt-manager`'s "Import existing disk image"), or boot it directly:
 
-QEMU instructions: 
+x86 QEMU instructions: 
 ```bash
 qemu-system-x86_64 -enable-kvm -machine q35 -cpu host -smp 2 -m 4096 \
   -drive file=openhost-<version>-amd64.qcow2,format=qcow2,if=virtio \
