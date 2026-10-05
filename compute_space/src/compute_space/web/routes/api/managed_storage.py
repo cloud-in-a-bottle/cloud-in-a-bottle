@@ -35,8 +35,18 @@ async def managed_usage(
         if identity is None:
             raise ManagedStorageError("Connect this instance to Imbue to view cloud storage usage.")
         status = await fetch_status(binding, identity)
-        if active_binding(db, read_state(db)) != binding:
-            raise ManagedStorageError("Storage configuration changed. Reload settings to view its usage.")
+        # The binding can change while the upstream request is in flight.
+        current = active_binding(db, read_state(db))
+        if current is None:
+            return Response(ManagedUsageResponse(managed=False), headers=headers)
+        if current != binding:
+            return Response(
+                ManagedUsageResponse(
+                    managed=True, error="Storage configuration changed. Reload settings to view its usage."
+                ),
+                status_code=409,
+                headers=headers,
+            )
         return Response(ManagedUsageResponse(managed=True, status=status), headers=headers)
     except ManagedStorageError as exc:
         return Response(ManagedUsageResponse(managed=True, error=str(exc)), status_code=503, headers=headers)

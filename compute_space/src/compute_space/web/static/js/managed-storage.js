@@ -4,13 +4,6 @@
   var accessLabels = {read_write: 'Read and write', read_only: 'Read-only', suspended: 'Access paused'};
   var phases = ['reserved', 'bucket_ready', 'token_pending', 'activating', 'ready'];
 
-  function element(tag, text, className) {
-    var node = document.createElement(tag);
-    if (text != null) node.textContent = text;
-    if (className) node.className = className;
-    return node;
-  }
-
   function number(value) { return typeof value === 'number' && Number.isFinite(value) && value >= 0; }
   function validDate(value) {
     if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
@@ -56,42 +49,31 @@
   function metric(label, value, maximum, format) {
     var ratio = value / maximum * 100;
     var text = format(value) + ' of ' + format(maximum) + ' (' + ratio.toLocaleString(undefined, {maximumFractionDigits: 1}) + '%)';
-    var box = element('div', null, 'managed-storage__metric');
-    box.append(element('strong', label), element('p', text));
-    var bar = element('div', null, 'meter');
-    bar.setAttribute('role', 'progressbar');
-    bar.setAttribute('aria-label', label);
-    bar.setAttribute('aria-valuemin', '0');
-    bar.setAttribute('aria-valuemax', '100');
-    bar.setAttribute('aria-valuenow', String(Math.min(100, ratio)));
-    bar.setAttribute('aria-valuetext', text);
-    var fill = element('div', null, 'meter__fill meter__fill--' + (ratio >= 100 ? 'error' : ratio >= 85 ? 'warn' : 'ok'));
+    var fill = dom.el('div', {class: 'meter__fill meter__fill--' + (ratio >= 100 ? 'error' : ratio >= 85 ? 'warn' : 'ok')});
     fill.style.width = Math.min(100, ratio) + '%';
-    bar.append(fill);
-    box.append(bar);
-    return box;
+    var bar = dom.el('div', {
+      class: 'meter', role: 'progressbar', 'aria-label': label, 'aria-valuemin': '0', 'aria-valuemax': '100',
+      'aria-valuenow': String(Math.min(100, ratio)), 'aria-valuetext': text,
+    }, fill);
+    return dom.el('div', {class: 'managed-storage__metric'}, [dom.el('strong', {text: label}), dom.el('p', {text: text}), bar]);
   }
 
   function create(root, options) {
     options = options || {};
     var fetcher = options.fetch || global.fetch.bind(global);
     var allocation = null, revision = 0, request = null, timer = null, last = null;
-    var header = element('div', null, 'managed-storage__header');
-    var heading = element('h3', 'Cloud storage allowance');
-    heading.id = root.id + '-heading';
+    var heading = dom.el('h3', {id: root.id + '-heading', text: 'Cloud storage allowance'});
     root.setAttribute('role', 'region');
     root.setAttribute('aria-labelledby', heading.id);
-    var refresh = element('button', 'Refresh usage', 'btn');
-    refresh.type = 'button';
-    header.append(heading, refresh);
-    var message = element('p', null, 'hint');
-    message.setAttribute('role', 'status');
-    message.setAttribute('aria-live', 'polite');
-    var details = element('div');
+    var refresh = dom.el('button', {type: 'button', class: 'btn', text: 'Refresh usage'});
+    var header = dom.el('div', {class: 'managed-storage__header'}, [heading, refresh]);
+    var message = dom.el('p', {class: 'hint', role: 'status', 'aria-live': 'polite'});
+    var details = dom.el('div');
     root.replaceChildren(header, message, details);
     root.hidden = true;
 
-    function notice(text, kind) { return element('p', text, 'notice notice--' + kind); }
+    function notice(text, kind) { return dom.el('p', {text: text, class: 'notice notice--' + kind}); }
+    function hint(text) { return dom.el('p', {text: text, class: 'hint'}); }
 
     function render(data, failed) {
       var oldExplanation = details.querySelector('details');
@@ -120,14 +102,14 @@
       }
       var usage = data.usage;
       if (usage === null) {
-        details.append(element('p', 'Usage has not been reported for this period yet. Included capacity: ' + bytes(data.capacity_bytes) + '.', 'hint'));
+        details.append(hint('Usage has not been reported for this period yet. Included capacity: ' + bytes(data.capacity_bytes) + '.'));
       } else {
-        var metrics = element('div', null, 'managed-storage__metrics');
+        var metrics = dom.el('div', {class: 'managed-storage__metrics'});
         if (usage.used_bytes === null) {
-          var capacity = element('div', null, 'managed-storage__metric');
-          capacity.append(element('strong', 'Stored capacity'));
-          capacity.append(element('p', 'Storage-size metrics have not been reported yet. Included capacity: ' + bytes(data.capacity_bytes) + '.'));
-          metrics.append(capacity);
+          metrics.append(dom.el('div', {class: 'managed-storage__metric'}, [
+            dom.el('strong', {text: 'Stored capacity'}),
+            dom.el('p', {text: 'Storage-size metrics have not been reported yet. Included capacity: ' + bytes(data.capacity_bytes) + '.'}),
+          ]));
         } else {
           metrics.append(metric('Stored capacity', usage.used_bytes, data.capacity_bytes, bytes));
         }
@@ -136,26 +118,25 @@
         if (usage.operation_microcents >= usage.read_only_at_microcents * 0.85 && usage.operation_microcents < usage.read_only_at_microcents) {
           details.append(notice('Approaching the monthly activity limit. At 100%, storage may become read-only.', 'warn'));
         }
-        details.append(element('p', 'Activity allowance resets on ' + usage.resets_at + ' (00:00 UTC). Stored capacity does not reset.', 'hint'));
-        details.append(element('p', 'Read-only threshold: ' + money(usage.read_only_at_microcents)
-          + '. Access-pause threshold: ' + money(usage.suspend_at_microcents) + '.', 'hint'));
-        var explanation = element('details');
-        explanation.open = !!expanded;
-        explanation.append(element('summary', 'How the allowance works'));
+        details.append(hint('Activity allowance resets on ' + usage.resets_at + ' (00:00 UTC). Stored capacity does not reset.'));
+        details.append(hint('Read-only threshold: ' + money(usage.read_only_at_microcents)
+          + '. Access-pause threshold: ' + money(usage.suspend_at_microcents) + '.'));
+        var explanation = dom.el('details', {open: !!expanded}, dom.el('summary', {text: 'How the allowance works'}));
         var storageCost = usage.storage_microcents === null ? 'Storage cost is awaiting complete size metrics.'
           : 'Estimated storage cost this period: ' + money(usage.storage_microcents) + '.';
-        explanation.append(element('p', 'Reads, writes and listings use the activity allowance. Values are estimated provider costs, not an extra bill. ' + storageCost));
+        explanation.append(dom.el('p', {text: 'Reads, writes and listings use the activity allowance. Values are estimated provider costs, not an extra bill. ' + storageCost}));
         details.append(explanation);
         if (explanationFocused) explanation.querySelector('summary').focus({preventScroll: true});
       }
       if (usage === null && explanationFocused) refresh.focus({preventScroll: true});
-      var facts = element('dl', null, 'managed-storage__facts');
-      facts.append(element('dt', 'Reported access'), element('dd', accessLabels[data.applied_access]));
+      function fact(term, value) { return [dom.el('dt', {text: term}), dom.el('dd', {text: value})]; }
       var activityChecked = usage && usage.operations_observed_at != null ? usage.operations_observed_at : data.observed_at;
-      facts.append(element('dt', 'Activity checked'), element('dd', timestamp(activityChecked)));
-      if (usage) facts.append(element('dt', 'Storage sampled'), element('dd', timestamp(usage.sample_at)));
-      facts.append(element('dt', 'Permissions checked'), element('dd', timestamp(data.applied_at)));
-      details.append(facts);
+      details.append(dom.el('dl', {class: 'managed-storage__facts'}, [
+        fact('Reported access', accessLabels[data.applied_access]),
+        fact('Activity checked', timestamp(activityChecked)),
+        usage ? fact('Storage sampled', timestamp(usage.sample_at)) : null,
+        fact('Permissions checked', timestamp(data.applied_at)),
+      ]));
     }
 
     function schedule() {
@@ -175,7 +156,11 @@
       message.textContent = last ? 'Refreshing usage...' : 'Loading cloud storage usage...';
       var timeout = setTimeout(function () { controller.abort(); }, options.timeoutMs || 15000);
       try {
-        var response = await fetcher('/api/storage/managed_usage', {credentials: 'same-origin', cache: 'no-store', signal: controller.signal});
+        // JSON clients get the router's 401 for an expired session instead of
+        // a redirect to the HTML login page.
+        var response = await fetcher('/api/storage/managed_usage', {
+          credentials: 'same-origin', cache: 'no-store', headers: {Accept: 'application/json'}, signal: controller.signal,
+        });
         if (current !== revision) return;
         if (response.status === 401 || response.status === 403) {
           last = null;
@@ -186,6 +171,16 @@
         var body = await response.json();
         if (current !== revision) return;
         if (response.ok && body.managed === false) { setAllocation(null); return; }
+        var other = response.ok && body.managed === true && body.status
+          && typeof body.status.allocation_id === 'string' && body.status.allocation_id !== allocation;
+        if (response.status === 409 || other) {
+          // The active storage binding changed since this page loaded. Never
+          // keep showing the previous allocation's usage as if it were current.
+          last = null;
+          details.replaceChildren();
+          message.textContent = 'Cloud storage configuration changed. Reload this page to view current usage.';
+          return;
+        }
         if (!response.ok || body.managed !== true || !validStatus(body.status, allocation)) throw new Error('unavailable');
         last = body.status;
         render(last, false);
@@ -194,7 +189,7 @@
         if (current !== revision) return;
         message.textContent = 'Cloud storage usage is unavailable. Try refreshing.';
         if (last) render(last, true);
-        else details.replaceChildren(element('p', 'Your usage could not be loaded. This does not tell us whether storage access has changed.', 'hint'));
+        else details.replaceChildren(hint('Your usage could not be loaded. This does not tell us whether storage access has changed.'));
       } finally {
         clearTimeout(timeout);
         if (current === revision) {

@@ -353,6 +353,39 @@ def test_lost_owner_authorization_clears_private_snapshot(ui, status):
     expect(region).not_to_contain_text("25 GiB")
 
 
+def test_expired_session_reaches_the_real_auth_handler_and_clears_snapshot(ui):
+    page, _, _, _ = ui
+    region = open_ui(ui)
+    expect(region.get_by_role("status")).to_have_text("Cloud storage usage updated.")
+    # No mock: the router's own NotAuthorizedException handler answers.
+    page.unroute("**/api/storage/managed_usage")
+    page.context.clear_cookies()
+    with page.expect_response("**/api/storage/managed_usage") as answer:
+        region.get_by_role("button", name="Refresh usage").click()
+    assert answer.value.status == 401
+    expect(region.get_by_role("status")).to_contain_text("Sign in as the instance owner")
+    expect(region.get_by_role("progressbar")).to_have_count(0)
+    expect(region).not_to_contain_text("25 GiB")
+
+
+@pytest.mark.parametrize("change", ["other_allocation", "conflict"])
+def test_rebinding_while_open_clears_previous_allocation_snapshot(ui, change):
+    _, _, _, response = ui
+    region = open_ui(ui)
+    expect(region.get_by_role("status")).to_have_text("Cloud storage usage updated.")
+    expect(region).to_contain_text("25 GiB")
+    if change == "other_allocation":
+        response["body"] = {"managed": True, "status": {**snapshot(), "allocation_id": "b" * 32}, "error": None}
+    else:
+        response.update(status=409, body={"managed": True, "status": None, "error": "Storage configuration changed."})
+    region.get_by_role("button", name="Refresh usage").click()
+    expect(region.get_by_role("status")).to_have_text(
+        "Cloud storage configuration changed. Reload this page to view current usage."
+    )
+    expect(region).not_to_contain_text("25 GiB")
+    expect(region.get_by_role("progressbar")).to_have_count(0)
+
+
 @contextmanager
 def server_binding(local):
     with closing(sqlite3.connect(local.config.db_path)) as db, db:

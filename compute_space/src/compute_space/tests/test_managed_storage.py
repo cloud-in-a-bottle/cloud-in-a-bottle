@@ -17,7 +17,6 @@ from compute_space.tests._litestar_helpers import make_test_app
 from compute_space.tests.conftest import _make_test_config
 from compute_space.tests.conftest import open_db
 from compute_space.web.routes.api.archive_backend import api_archive_backend_routes
-from compute_space.web.routes.api.managed_storage import managed_usage
 from compute_space.web.routes.pages.settings import settings_page
 
 ALLOCATION = "a" * 32
@@ -98,7 +97,7 @@ def transport(monkeypatch):
 
 
 def test_local_and_byo_storage_do_not_call_backend(cfg, transport):
-    with TestClient(make_test_app(managed_usage)) as client:
+    with TestClient(make_test_app(routes.managed_usage)) as client:
         client.cookies.update(auth_cookie(cfg))
         assert client.get("/api/storage/managed_usage").json() == {"managed": False, "status": None, "error": None}
         with closing(open_db(cfg)) as db:
@@ -112,7 +111,7 @@ def test_local_and_byo_storage_do_not_call_backend(cfg, transport):
 
 def test_owner_auth_is_required(cfg, transport):
     bind(cfg)
-    with TestClient(make_test_app(managed_usage)) as client:
+    with TestClient(make_test_app(routes.managed_usage)) as client:
         response = client.get("/api/storage/managed_usage")
         assert response.status_code in (401, 403)
     assert not transport["calls"]
@@ -121,7 +120,7 @@ def test_owner_auth_is_required(cfg, transport):
 def test_authenticated_proxy_redacts_secrets_and_closes_clients(cfg, transport):
     bind(cfg)
     transport["body"]["unexpected_secret"] = "private-upstream-value"
-    with TestClient(make_test_app(managed_usage)) as client:
+    with TestClient(make_test_app(routes.managed_usage)) as client:
         client.cookies.update(auth_cookie(cfg))
         response = client.get("/api/storage/managed_usage")
     assert response.status_code == 200
@@ -136,7 +135,7 @@ def test_authenticated_proxy_redacts_secrets_and_closes_clients(cfg, transport):
 def test_upstream_errors_are_generic(cfg, transport, status):
     bind(cfg)
     transport.update(status=status, body={"error": "private-secret-detail"})
-    with TestClient(make_test_app(managed_usage)) as client:
+    with TestClient(make_test_app(routes.managed_usage)) as client:
         client.cookies.update(auth_cookie(cfg))
         response = client.get("/api/storage/managed_usage")
     assert response.status_code == 503 and response.json()["managed"]
@@ -160,7 +159,7 @@ def test_upstream_errors_are_generic(cfg, transport, status):
 def test_bad_snapshot_is_not_forwarded(cfg, transport, field, value):
     bind(cfg)
     transport["body"][field] = value
-    with TestClient(make_test_app(managed_usage)) as client:
+    with TestClient(make_test_app(routes.managed_usage)) as client:
         client.cookies.update(auth_cookie(cfg))
         response = client.get("/api/storage/managed_usage")
     assert response.status_code == 503 and response.json()["status"] is None
@@ -180,7 +179,7 @@ def test_bad_snapshot_is_not_forwarded(cfg, transport, field, value):
 def test_bad_usage_is_not_rendered_as_zero(cfg, transport, field, value):
     bind(cfg)
     transport["body"]["usage"][field] = value
-    with TestClient(make_test_app(managed_usage)) as client:
+    with TestClient(make_test_app(routes.managed_usage)) as client:
         client.cookies.update(auth_cookie(cfg))
         assert client.get("/api/storage/managed_usage").status_code == 503
 
@@ -190,7 +189,7 @@ def test_migration_away_hides_old_binding(cfg, transport):
     with closing(open_db(cfg)) as db:
         db.execute("UPDATE archive_backend SET s3_bucket='my-own-bucket'")
         db.commit()
-    with TestClient(make_test_app(managed_usage)) as client:
+    with TestClient(make_test_app(routes.managed_usage)) as client:
         client.cookies.update(auth_cookie(cfg))
         assert not client.get("/api/storage/managed_usage").json()["managed"]
     assert not transport["calls"]
@@ -209,7 +208,7 @@ def test_migration_away_hides_old_binding(cfg, transport):
 )
 def test_invalid_binding_is_not_used(cfg, transport, raw):
     bind(cfg, raw)
-    with TestClient(make_test_app(managed_usage)) as client:
+    with TestClient(make_test_app(routes.managed_usage)) as client:
         client.cookies.update(auth_cookie(cfg))
         response = client.get("/api/storage/managed_usage")
     assert response.status_code == 503
@@ -241,7 +240,7 @@ def test_archive_state_reports_invalid_managed_configuration(cfg, monkeypatch):
 def test_oversized_response_is_bounded(cfg, transport):
     bind(cfg)
     transport["body"]["unexpected"] = "x" * 70000
-    with TestClient(make_test_app(managed_usage)) as client:
+    with TestClient(make_test_app(routes.managed_usage)) as client:
         client.cookies.update(auth_cookie(cfg))
         assert client.get("/api/storage/managed_usage").status_code == 503
     assert all(client.is_closed for client in transport["clients"])
@@ -253,7 +252,7 @@ def test_operation_only_snapshot_preserves_unknown_storage(cfg, transport):
         used_bytes=None, sample_at=None, storage_microcents=None, operations_observed_at=1790852400
     )
     transport["body"]["stale"] = True
-    with TestClient(make_test_app(managed_usage)) as client:
+    with TestClient(make_test_app(routes.managed_usage)) as client:
         client.cookies.update(auth_cookie(cfg))
         response = client.get("/api/storage/managed_usage")
     assert response.status_code == 200
@@ -291,8 +290,7 @@ async def test_cancellation_and_total_deadline_close_clients(monkeypatch):
     assert all(value.is_closed for value in clients)
 
 
-@pytest.mark.asyncio
-async def test_configuration_change_during_fetch_discards_old_snapshot(cfg, monkeypatch):
+def test_migration_away_during_fetch_reports_unmanaged(cfg, monkeypatch):
     bind(cfg)
 
     async def fetch(*args):
@@ -302,9 +300,28 @@ async def test_configuration_change_during_fetch_discards_old_snapshot(cfg, monk
         return managed_storage._converter.structure(snapshot(), managed_storage.ManagedStatus)
 
     monkeypatch.setattr(routes, "fetch_status", fetch)
+    with TestClient(make_test_app(routes.managed_usage)) as client:
+        client.cookies.update(auth_cookie(cfg))
+        response = client.get("/api/storage/managed_usage")
+    assert response.status_code == 200
+    assert response.json() == {"managed": False, "status": None, "error": None}
+
+
+@pytest.mark.asyncio
+async def test_rebinding_during_fetch_discards_old_snapshot_as_conflict(cfg, monkeypatch):
+    bind(cfg)
+
+    async def fetch(*args):
+        with closing(open_db(cfg)) as db:
+            set_setting(db, managed_storage.SETTING_KEY, json.dumps({**BINDING, "allocation_id": "b" * 32}))
+        return managed_storage._converter.structure(snapshot(), managed_storage.ManagedStatus)
+
+    monkeypatch.setattr(routes, "fetch_status", fetch)
     with closing(open_db(cfg)) as db:
         response = await routes.managed_usage.fn(db=db, config=cfg)
-    assert response.status_code == 503 and response.content.status is None
+    assert response.status_code == 409 and response.content.status is None
+    assert response.content.managed and "changed" in response.content.error
+    assert response.headers["Cache-Control"] == "private, no-store"
 
 
 @pytest.mark.asyncio
