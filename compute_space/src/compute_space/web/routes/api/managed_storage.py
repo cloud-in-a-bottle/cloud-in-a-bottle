@@ -4,6 +4,7 @@ import attr
 from litestar import Response
 from litestar import get
 from litestar.di import NamedDependency
+from litestar.params import FromQuery
 
 from compute_space.config import Config
 from compute_space.core.archive_backend import read_state
@@ -44,12 +45,18 @@ def _binding_moved(db: sqlite3.Connection, binding: ManagedStorageBinding) -> Re
 
 @get("/api/storage/managed_usage", guards=[require_owner_auth])
 async def managed_usage(
-    db: NamedDependency[sqlite3.Connection], config: NamedDependency[Config]
+    db: NamedDependency[sqlite3.Connection],
+    config: NamedDependency[Config],
+    allocation_id: FromQuery[str | None] = None,
 ) -> Response[ManagedUsageResponse]:
+    """``allocation_id`` is the allocation the page is showing; a different current binding is a conflict even if
+    that binding's own usage could not be fetched."""
     try:
         binding = active_binding(db, read_state(db))
         if binding is None:
             return _respond(ManagedUsageResponse(managed=False))
+        if allocation_id is not None and allocation_id != binding.allocation_id:
+            return _respond(ManagedUsageResponse(managed=True, error=_CHANGED), 409)
         try:
             identity = get_instance_identity(db, config)
             if identity is None:

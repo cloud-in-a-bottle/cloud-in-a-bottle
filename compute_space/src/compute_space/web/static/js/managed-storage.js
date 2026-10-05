@@ -160,7 +160,9 @@
       try {
         // JSON clients get the router's 401 for an expired session instead of
         // a redirect to the HTML login page.
-        var response = await fetcher('/api/storage/managed_usage', {
+        // Naming the allocation on screen lets the router report a rebinding
+        // even when the new allocation's own usage cannot be fetched.
+        var response = await fetcher('/api/storage/managed_usage?allocation_id=' + encodeURIComponent(allocation), {
           credentials: 'same-origin', cache: 'no-store', headers: {Accept: 'application/json'}, signal: controller.signal,
         });
         if (current !== revision) return;

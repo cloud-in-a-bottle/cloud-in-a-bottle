@@ -79,7 +79,7 @@ def ui(page, stack):
         response.calls.append(route.request)
         route.fulfill(status=response.status, json=response.body)
 
-    page.route("**/api/storage/managed_usage", usage)
+    page.route("**/api/storage/managed_usage*", usage)
     errors = []
     page.on("pageerror", lambda error: errors.append(str(error)))
     yield page, local, state, response
@@ -253,7 +253,7 @@ def test_activity_is_visible_while_storage_size_is_unknown(ui, width, output_pat
 def test_migration_away_discards_inflight_response(ui):
     page, _, _, _ = ui
     pending = []
-    page.route("**/api/storage/managed_usage", lambda route: pending.append(route))
+    page.route("**/api/storage/managed_usage*", lambda route: pending.append(route))
     region = open_ui(ui)
     expect(region.get_by_role("status")).to_contain_text("Loading")
     page.evaluate("window.managedStorageUsage.setAllocation(null)")
@@ -286,11 +286,11 @@ def test_timeout_releases_refresh_button_and_can_retry(ui):
     def hold(route):
         held.append(route)
 
-    page.route("**/api/storage/managed_usage", hold)
+    page.route("**/api/storage/managed_usage*", hold)
     page.evaluate("window.managedStorageUsage.setAllocation('a'.repeat(32))")
     expect(region.get_by_role("status")).to_contain_text("unavailable")
     expect(region.get_by_role("button", name="Refresh usage")).to_be_enabled()
-    page.unroute("**/api/storage/managed_usage", hold)
+    page.unroute("**/api/storage/managed_usage*", hold)
     region.get_by_role("button", name="Refresh usage").click()
     expect(region.get_by_role("status")).to_have_text("Cloud storage usage updated.")
     for route in held:
@@ -321,12 +321,12 @@ def test_pagehide_aborts_request_and_pageshow_refreshes(ui):
     def hold(route):
         held.append(route)
 
-    page.route("**/api/storage/managed_usage", hold)
+    page.route("**/api/storage/managed_usage*", hold)
     region.get_by_role("button", name="Refresh usage").click()
     expect(region.get_by_role("status")).to_contain_text("Refreshing")
     page.evaluate("window.dispatchEvent(new PageTransitionEvent('pagehide', {persisted:true}))")
     expect(region.get_by_role("progressbar")).to_have_count(0)
-    page.unroute("**/api/storage/managed_usage", hold)
+    page.unroute("**/api/storage/managed_usage*", hold)
     page.evaluate("window.dispatchEvent(new PageTransitionEvent('pageshow', {persisted:true}))")
     expect(region.get_by_role("status")).to_have_text("Cloud storage usage updated.")
     for route in held:
@@ -340,10 +340,10 @@ def test_new_allocation_ignores_old_response(ui):
     def hold(route):
         held.append(route)
 
-    page.route("**/api/storage/managed_usage", hold)
+    page.route("**/api/storage/managed_usage*", hold)
     region = open_ui(ui)
     expect(region.get_by_role("status")).to_contain_text("Loading")
-    page.unroute("**/api/storage/managed_usage", hold)
+    page.unroute("**/api/storage/managed_usage*", hold)
     response.body["status"].update(allocation_id="b" * 32, capacity_bytes=200 * 1024**3)
     page.evaluate("window.managedStorageUsage.setAllocation('b'.repeat(32))")
     expect(region).to_contain_text("200 GiB")
@@ -369,9 +369,9 @@ def test_expired_session_reaches_the_real_auth_handler_and_clears_snapshot(ui):
     region = open_ui(ui)
     expect(region.get_by_role("status")).to_have_text("Cloud storage usage updated.")
     # No mock: the router's own NotAuthorizedException handler answers.
-    page.unroute("**/api/storage/managed_usage")
+    page.unroute("**/api/storage/managed_usage*")
     page.context.clear_cookies()
-    with page.expect_response("**/api/storage/managed_usage") as answer:
+    with page.expect_response("**/api/storage/managed_usage*") as answer:
         region.get_by_role("button", name="Refresh usage").click()
     assert answer.value.status == 401
     expect(region.get_by_role("status")).to_contain_text("Sign in as the instance owner")
@@ -431,12 +431,35 @@ def test_usage_loads_from_server_binding_while_object_metadata_is_stalled(ui):
                 route.abort()
 
 
+def test_rebinding_between_polls_is_detected_even_when_new_fetch_fails(ui):
+    page, local, _, response = ui
+    with server_binding(local):
+        region = open_ui(ui)
+        expect(region.get_by_role("status")).to_have_text("Cloud storage usage updated.")
+        assert f"allocation_id={ALLOCATION}" in response.calls[-1].url
+        # The real router now answers: storage is rebound to another allocation,
+        # whose own usage fetch would fail on this unconnected test instance.
+        page.unroute("**/api/storage/managed_usage*")
+        with closing(sqlite3.connect(local.config.db_path)) as db, db:
+            db.execute(
+                "UPDATE settings SET value = ? WHERE key = 'managed_storage_binding'",
+                (json.dumps({**BINDING, "allocation_id": "b" * 32}),),
+            )
+        with page.expect_response("**/api/storage/managed_usage*") as answer:
+            region.get_by_role("button", name="Refresh usage").click()
+        assert answer.value.status == 409
+        expect(region.get_by_role("status")).to_have_text(
+            "Cloud storage configuration changed. Reload this page to view current usage."
+        )
+        expect(region).not_to_contain_text("25 GiB")
+
+
 def test_late_archive_result_cannot_reenable_storage_after_newer_binding_decision(ui):
     page, local, state, _ = ui
     archive_requests, usage_requests = [], []
     with server_binding(local):
         page.route("**/api/storage/archive_backend", lambda route: archive_requests.append(route))
-        page.route("**/api/storage/managed_usage", lambda route: usage_requests.append(route))
+        page.route("**/api/storage/managed_usage*", lambda route: usage_requests.append(route))
         region = open_ui(ui)
         expect(region.get_by_role("status")).to_contain_text("Loading")
         assert len(archive_requests) == len(usage_requests) == 1

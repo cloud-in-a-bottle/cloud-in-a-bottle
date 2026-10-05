@@ -318,6 +318,18 @@ def test_migration_away_during_fetch_reports_unmanaged(cfg, monkeypatch):
     assert response.json() == {"managed": False, "status": None, "error": None}
 
 
+def test_page_showing_another_allocation_gets_conflict_without_upstream_calls(cfg, transport):
+    bind(cfg)
+    with TestClient(make_test_app(routes.managed_usage)) as client:
+        client.cookies.update(auth_cookie(cfg))
+        stale = client.get("/api/storage/managed_usage", params={"allocation_id": "b" * 32})
+        current = client.get("/api/storage/managed_usage", params={"allocation_id": ALLOCATION})
+    assert stale.status_code == 409 and stale.json()["status"] is None
+    assert stale.headers["cache-control"] == "private, no-store"
+    assert current.status_code == 200 and current.json()["status"]["allocation_id"] == ALLOCATION
+    assert len([call for call in transport.calls if call.url.host == "storage.example"]) == 1
+
+
 @pytest.mark.parametrize("change", ["removed", "rebound"])
 def test_failed_fetch_still_reports_binding_changes(cfg, monkeypatch, change):
     bind(cfg)
