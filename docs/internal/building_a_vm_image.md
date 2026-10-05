@@ -28,7 +28,7 @@ Run from a checkout of the Cloud in a Bottle repo, on the build host:
 image/build.sh
 ```
 
-With no options this builds `main` into `image/out/openhost-<version>-<arch>.qcow2` (plus a matching `.ova` for amd64), in HTTP-only mode on `lvh.me`, with no claim token and a default console password. The build boots a VM and runs the full provisioning, so it takes a while; Logs go into `image/out/build-console.log`.
+With no options this builds `main` into `image/out/cloud-in-a-bottle-<version>-<arch>.qcow2` (plus a matching `.ova` for amd64), in HTTP-only mode on `lvh.me`, with no claim token and a default console password. The build boots a VM and runs the full provisioning, so it takes a while; Logs go into `image/out/build-console.log`.
 
 ### Common options
 

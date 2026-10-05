@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# build.sh — Build a bootable OpenHost VM image from the Ubuntu 24.04 cloud image.
+# build.sh: build a bootable Cloud in a Bottle VM image from the Ubuntu 24.04 cloud image.
 #
 # The recipe is deliberately plain: take Ubuntu's official cloud-image qcow2,
 # boot it once under QEMU with a cloud-init seed that runs our existing,
@@ -25,9 +25,9 @@
 #   image/build.sh [options]
 #
 # Options:
-#   --branch <branch>     Git branch of openhost app code to clone (default: main)
+#   --branch <branch>     Git branch of Cloud in a Bottle app code to clone (default: main)
 #   --repo <url>          Git repo URL to clone app code from
-#                         (default: imbue-openhost/openhost)
+#                         (default: cloud-in-a-bottle/cloud-in-a-bottle)
 #   --provision-script <path>
 #                         provision.sh to embed and run in the build VM
 #                         (default: this repo's scripts/provision.sh). Embedded
@@ -48,7 +48,7 @@
 #                         the image is private behind NAT. Set this to require a
 #                         token (e.g. for a customized image you distribute).
 #   --password <pw>       Default console password for the `host` user
-#                         (default: openhost)
+#                         (default: cloudinabottle)
 #   --ssh-pubkey <path>   Optional SSH public key file to authorize for `host`
 #                         (SSH is key-only; without this, access is console-only)
 #   --version <v>         Version string used in artifact filenames
@@ -82,10 +82,10 @@ case "$(uname -m)" in
     *)             ARCH="amd64" ;;
 esac
 BRANCH="main"
-REPO_URL="https://github.com/imbue-openhost/openhost.git"
+REPO_URL="https://github.com/cloud-in-a-bottle/cloud-in-a-bottle.git"
 DOMAIN="lvh.me"
 CLAIM_TOKEN=""   # empty => open claim (no token required); set to bake a token
-HOST_PASSWORD="openhost"
+HOST_PASSWORD="cloudinabottle"
 SSH_PUBKEY_FILE=""
 VERSION=""
 DISK_SIZE="20G"
@@ -216,6 +216,11 @@ if [ -z "$VERSION" ]; then
     VERSION="$(git -C "$SCRIPT_DIR" describe --tags --always --dirty 2>/dev/null || echo dev)"
 fi
 
+# Every artifact (qcow2, vmdk, ovf, ova) is this stem plus its extension, so the
+# published download names are decided in exactly one place. .github/workflows/
+# release.yml globs `cloud-in-a-bottle-*` to collect them, so keep the two in sync.
+ARTIFACT_BASE="cloud-in-a-bottle-$VERSION-$ARCH"
+
 if [ ! -f "$PROVISION_SCRIPT" ]; then
     echo "Error: provision script not found: $PROVISION_SCRIPT" >&2
     exit 1
@@ -225,7 +230,7 @@ mkdir -p "$OUTPUT_DIR" "$CACHE_DIR"
 WORK_DIR="$(mktemp -d)"
 trap 'rm -rf "$WORK_DIR"' EXIT
 
-echo "=== OpenHost VM image build ==="
+echo "=== Cloud in a Bottle VM image build ==="
 echo "  Version:      $VERSION"
 echo "  Arch:         $ARCH"
 echo "  Repo/branch:  $REPO_URL @ $BRANCH"
@@ -362,9 +367,9 @@ if [ $QEMU_RC -eq 124 ]; then
     exit 1
 fi
 
-if grep -q "OPENHOST_IMAGE_BUILD_SUCCESS" "$CONSOLE_LOG"; then
+if grep -q "BOTTLE_IMAGE_BUILD_SUCCESS" "$CONSOLE_LOG"; then
     echo "  Provisioning succeeded."
-elif grep -q "OPENHOST_IMAGE_BUILD_FAILED" "$CONSOLE_LOG"; then
+elif grep -q "BOTTLE_IMAGE_BUILD_FAILED" "$CONSOLE_LOG"; then
     echo "Error: provisioning reported failure. Last console output:" >&2
     tail -n 60 "$CONSOLE_LOG" >&2 || true
     exit 1
@@ -376,7 +381,7 @@ fi
 
 # ---- 5. Compact the qcow2 (drop freed blocks) ----
 echo "--- Finalizing qcow2 ---"
-QCOW2_OUT="$OUTPUT_DIR/openhost-$VERSION-$ARCH.qcow2"
+QCOW2_OUT="$OUTPUT_DIR/$ARTIFACT_BASE.qcow2"
 qemu-img convert -O qcow2 -c "$DISK" "$QCOW2_OUT"
 
 echo ""
@@ -387,13 +392,13 @@ if [ "$MAKE_OVA" = "true" ]; then
     echo "--- Building VirtualBox OVA ---"
     OVA_STAGE="$WORK_DIR/ova"
     mkdir -p "$OVA_STAGE"
-    VMDK="$OVA_STAGE/openhost-$VERSION-$ARCH.vmdk"
+    VMDK="$OVA_STAGE/$ARTIFACT_BASE.vmdk"
     qemu-img convert -O vmdk -o subformat=streamOptimized,adapter_type=lsilogic \
         "$DISK" "$VMDK"
 
     CAPACITY_BYTES="$(qemu-img info --output=json "$DISK" | sed -n 's/.*"virtual-size": *\([0-9]*\).*/\1/p' | head -n1)"
     VMDK_BYTES="$(file_size "$VMDK")"
-    OVF="$OVA_STAGE/openhost-$VERSION-$ARCH.ovf"
+    OVF="$OVA_STAGE/$ARTIFACT_BASE.ovf"
     VMDK_NAME="$(basename "$VMDK")"
 
     cat > "$OVF" <<OVF_EOF
@@ -417,9 +422,9 @@ if [ "$MAKE_OVA" = "true" ]; then
       <Description>NAT network</Description>
     </Network>
   </NetworkSection>
-  <VirtualSystem ovf:id="openhost-$VERSION">
-    <Info>OpenHost $VERSION</Info>
-    <Name>openhost-$VERSION</Name>
+  <VirtualSystem ovf:id="cloud-in-a-bottle-$VERSION">
+    <Info>Cloud in a Bottle $VERSION</Info>
+    <Name>cloud-in-a-bottle-$VERSION</Name>
     <OperatingSystemSection ovf:id="94">
       <Info>Ubuntu 24.04 (64-bit)</Info>
       <Description>Ubuntu_64</Description>
@@ -480,7 +485,7 @@ if [ "$MAKE_OVA" = "true" ]; then
 </Envelope>
 OVF_EOF
 
-    OVA_OUT="$OUTPUT_DIR/openhost-$VERSION-$ARCH.ova"
+    OVA_OUT="$OUTPUT_DIR/$ARTIFACT_BASE.ova"
     # OVA spec: the .ovf must be the first entry in the tar, disk(s) after.
     tar -C "$OVA_STAGE" -cf "$OVA_OUT" "$(basename "$OVF")" "$VMDK_NAME"
     echo "  VirtualBox:   $OVA_OUT"
