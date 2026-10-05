@@ -507,6 +507,8 @@ async def test_startup_websocket_closes_after_auth_without_backend_handshake(
 
 
 _AMBIGUOUS_PUBLIC_PATHS = [
+    b"/dav/.",
+    b"/dav/..",
     b"/dav/../private",
     b"/dav/./../private",
     b"/dav/%2e%2e/private",
@@ -523,6 +525,7 @@ _AMBIGUOUS_PUBLIC_PATHS = [
     b"/dav/%252f..%252fprivate",
     b"/dav/%255c..%255cprivate",
     b"/dav/%00private",
+    b"/dav/%1fprivate",
     b"/dav/%2509../private",
     b"/dav/%7fprivate",
     b"/dav/%ff",
@@ -636,10 +639,13 @@ async def test_ambiguous_public_websocket_path_requires_auth_before_handshake(
         b"/dav",
         b"/dav/",
         b"/dav/nested/file",
+        b"/dav//file",
         b"/dav/a%3Ab%40c",
         b"/dav/a%2fb",
         b"/dav/%E2%98%83",
         b"/dav/%EF%BF%BD",
+        b"/dav/a%20b",
+        b"/dav/%5Ba%5D%5Eb%60%7Bc%7Cd%7D%7E",
         b"/dav/100%25",
         b"/dav/a..b",
         b"/dav/.../file",
