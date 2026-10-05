@@ -33,7 +33,7 @@ Give the VM at least 1 vCPU, 2 GB RAM, and a disk of the size you want your inst
 QEMU instructions: 
 ```bash
 qemu-system-x86_64 -enable-kvm -machine q35 -cpu host -smp 2 -m 4096 \
-  -drive file=openhost-<version>-amd64.qcow2,format=qcow2,if=virtio \
+  -drive file=cloud-in-a-bottle-<version>-amd64.qcow2,format=qcow2,if=virtio \
   -netdev user,id=n0,hostfwd=tcp::8080-:8080,hostfwd=tcp::2222-:22 \
   -device virtio-net-pci,netdev=n0 \
   -nographic
@@ -41,9 +41,9 @@ qemu-system-x86_64 -enable-kvm -machine q35 -cpu host -smp 2 -m 4096 \
 
 The `hostfwd` options make the VM reachable. QEMU's default networking puts the guest on an isolated NAT with no address you can browse to, so instead we forward the guest's `:8080` and `:22` to `:8080` and `:2222` on the machine running QEMU.
 
-First boot runs `openhost-prepare.service` before the dashboard comes up; give it a minute.
+First boot runs `bottle-prepare.service` before the dashboard comes up; give it a minute.
 
-The local VM console logs in as user `host` with password `openhost` (change it with `passwd`). To get SSH access, log in on the console and append your public key as that `host` user:
+The local VM console logs in as user `host` with password `cloudinabottle` (change it with `passwd`). To get SSH access, log in on the console and append your public key as that `host` user:
 
 ```bash
 mkdir -p ~/.ssh && chmod 700 ~/.ssh
