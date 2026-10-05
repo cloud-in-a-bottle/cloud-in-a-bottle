@@ -6,8 +6,10 @@ from contextlib import contextmanager
 from pathlib import Path
 from urllib.parse import urlsplit
 
+import attr
 import pytest
 from axe_playwright_python.sync_playwright import Axe
+from playwright.sync_api import Request
 from playwright.sync_api import expect
 from test_accessibility import WCAG_AA_TAGS
 
@@ -18,6 +20,15 @@ from compute_space.tests.test_managed_storage import ALLOCATION
 from compute_space.tests.test_managed_storage import BINDING
 from compute_space.tests.test_managed_storage import snapshot
 from compute_space.tests.utils import managed_router
+
+
+@attr.s(auto_attribs=True)
+class UsageReply:
+    """What the mocked usage endpoint answers next, and the requests it received."""
+
+    status: int = 200
+    body: dict[str, object] = attr.ib(factory=lambda: {"managed": True, "status": snapshot(), "error": None})
+    calls: list[Request] = attr.ib(factory=list)
 
 
 @pytest.fixture(scope="module")
@@ -61,12 +72,12 @@ def ui(page, stack):
         "s3_endpoint": "https://example.invalid",
         "managed_storage_allocation_id": ALLOCATION,
     }
-    response = {"body": {"managed": True, "status": snapshot(), "error": None}, "status": 200, "calls": []}
+    response = UsageReply()
     page.route("**/api/storage/archive_backend", lambda route: route.fulfill(json=state))
 
     def usage(route):
-        response["calls"].append(route.request)
-        route.fulfill(status=response["status"], json=response["body"])
+        response.calls.append(route.request)
+        route.fulfill(status=response.status, json=response.body)
 
     page.route("**/api/storage/managed_usage", usage)
     errors = []
@@ -105,7 +116,7 @@ def test_normal_usage_keyboard_and_accessibility(ui, width, output_path):
     page.keyboard.press("Enter")
     expect(refresh).to_be_enabled()
     expect(refresh).to_be_focused()
-    assert len(response["calls"]) >= 2
+    assert len(response.calls) >= 2
     page.get_by_text("How the allowance works", exact=True).click()
     expect(region).to_contain_text("not an extra bill")
     screenshot(page, output_path, f"normal-{width}")
@@ -129,7 +140,7 @@ def test_normal_usage_keyboard_and_accessibility(ui, width, output_path):
 @pytest.mark.parametrize("access", ["read_only", "suspended"])
 def test_restrictions_and_pending_permissions(ui, access, output_path):
     page, _, _, response = ui
-    response["body"]["status"].update(applied_access=access, desired_access="read_write")
+    response.body["status"].update(applied_access=access, desired_access="read_write")
     region = open_ui(ui)
     expect(region).to_contain_text("Permission change pending: Read and write")
     expect(region).to_contain_text("read-only" if access == "read_only" else "reported as paused")
@@ -138,8 +149,8 @@ def test_restrictions_and_pending_permissions(ui, access, output_path):
 
 def test_near_limit_and_observation_mode(ui, output_path):
     page, _, _, response = ui
-    response["body"]["status"]["enforcement_enabled"] = False
-    response["body"]["status"]["usage"]["operation_microcents"] = 90000000
+    response.body["status"]["enforcement_enabled"] = False
+    response.body["status"]["usage"]["operation_microcents"] = 90000000
     region = open_ui(ui)
     expect(region).to_contain_text("Approaching the monthly activity limit")
     expect(region).to_contain_text("Automatic restrictions are not enabled")
@@ -149,7 +160,7 @@ def test_near_limit_and_observation_mode(ui, output_path):
 @pytest.mark.parametrize("phase", ["reserved", "bucket_ready", "token_pending", "activating"])
 def test_provisioning_without_usage_does_not_show_zero(ui, phase):
     _, _, _, response = ui
-    response["body"]["status"].update(phase=phase, usage=None, stale=True)
+    response.body["status"].update(phase=phase, usage=None, stale=True)
     region = open_ui(ui)
     expect(region).to_contain_text("setup is in progress")
     expect(region).to_contain_text("Usage has not been reported")
@@ -167,20 +178,20 @@ def test_unmanaged_storage_has_no_panel_or_usage_requests(ui, mode):
     region = open_ui(ui)
     expect(page.locator("#archive-backend-table")).to_be_visible()
     expect(region).to_be_hidden()
-    assert not response["calls"]
+    assert not response.calls
 
 
 def test_refresh_failure_preserves_snapshot_and_retry_recovers(ui, output_path):
     page, _, _, response = ui
     region = open_ui(ui)
     expect(region.get_by_role("status")).to_have_text("Cloud storage usage updated.")
-    response.update(status=503, body={"managed": True, "error": "unavailable", "status": None})
+    response.status, response.body = 503, {"managed": True, "error": "unavailable", "status": None}
     region.get_by_role("button", name="Refresh usage").click()
     expect(region.get_by_role("status")).to_contain_text("unavailable")
     expect(region).to_contain_text("last reported values")
     expect(region.get_by_role("progressbar", name="Stored capacity")).to_have_attribute("aria-valuenow", "25")
     screenshot(page, output_path, "stale-after-failure")
-    response.update(status=200, body={"managed": True, "status": snapshot()})
+    response.status, response.body = 200, {"managed": True, "status": snapshot()}
     region.get_by_role("button", name="Refresh usage").click()
     expect(region.get_by_role("status")).to_have_text("Cloud storage usage updated.")
     expect(region.get_by_text("Usage or access status may be out of date.", exact=False)).to_have_count(0)
@@ -189,7 +200,7 @@ def test_refresh_failure_preserves_snapshot_and_retry_recovers(ui, output_path):
 @pytest.mark.parametrize("status", [401, 403, 404, 429, 500, 503])
 def test_first_fetch_error_is_not_zero_usage(ui, status):
     _, _, _, response = ui
-    response.update(status=status, body={"managed": True, "status": None, "error": "secret upstream body"})
+    response.status, response.body = status, {"managed": True, "status": None, "error": "secret upstream body"}
     region = open_ui(ui)
     expect(region.get_by_role("status")).to_contain_text("Sign in" if status in (401, 403) else "unavailable")
     expect(region.get_by_role("progressbar")).to_have_count(0)
@@ -199,11 +210,11 @@ def test_first_fetch_error_is_not_zero_usage(ui, status):
 
 def test_hostile_strings_and_malformed_values_are_not_html(ui):
     page, _, _, response = ui
-    response["body"]["status"]["reason"] = '<img src=x onerror="window.storageXss=1">'
+    response.body["status"]["reason"] = '<img src=x onerror="window.storageXss=1">'
     region = open_ui(ui)
     expect(region.get_by_role("status")).to_have_text("Cloud storage usage updated.")
     assert page.evaluate("window.storageXss") is None
-    response["body"]["status"]["capacity_bytes"] = "<script>alert(1)</script>"
+    response.body["status"]["capacity_bytes"] = "<script>alert(1)</script>"
     region.get_by_role("button", name="Refresh usage").click()
     expect(region.get_by_role("status")).to_contain_text("unavailable")
     expect(region.locator("img,script")).to_have_count(0)
@@ -211,7 +222,7 @@ def test_hostile_strings_and_malformed_values_are_not_html(ui):
 
 def test_exceeded_allowance_clamps_meter_but_preserves_number(ui):
     _, _, _, response = ui
-    response["body"]["status"]["usage"]["operation_microcents"] = 250000000
+    response.body["status"]["usage"]["operation_microcents"] = 250000000
     region = open_ui(ui)
     bar = region.get_by_role("progressbar", name="Monthly activity allowance")
     expect(bar).to_have_attribute("aria-valuenow", "100")
@@ -222,8 +233,8 @@ def test_exceeded_allowance_clamps_meter_but_preserves_number(ui):
 def test_activity_is_visible_while_storage_size_is_unknown(ui, width, output_path):
     page, _, _, response = ui
     page.set_viewport_size({"width": width, "height": 1000})
-    response["body"]["status"]["stale"] = True
-    response["body"]["status"]["usage"].update(
+    response.body["status"]["stale"] = True
+    response.body["status"]["usage"].update(
         used_bytes=None, sample_at=None, storage_microcents=None, operations_observed_at=1790852400
     )
     region = open_ui(ui)
@@ -253,7 +264,7 @@ def test_migration_away_discards_inflight_response(ui):
 
 def test_backend_stale_and_ineligible_state_are_visible(ui, output_path):
     page, _, _, response = ui
-    response["body"]["status"].update(
+    response.body["status"].update(
         stale=True, reason="ineligible_or_deleted", applied_access="suspended", desired_access="suspended"
     )
     region = open_ui(ui)
@@ -292,11 +303,11 @@ def test_refresh_deduplicates_requests_and_preserves_explanation_focus(ui):
     expect(region.get_by_role("status")).to_have_text("Cloud storage usage updated.")
     region.locator("summary").click()
     region.locator("summary").focus()
-    before = len(response["calls"])
+    before = len(response.calls)
     page.evaluate(
         "Promise.all([managedStorageUsage.refresh(), managedStorageUsage.refresh(), managedStorageUsage.refresh()])"
     )
-    assert len(response["calls"]) == before + 1
+    assert len(response.calls) == before + 1
     expect(region.locator("summary")).to_be_focused()
     expect(region.locator("details")).to_have_attribute("open", "")
 
@@ -333,7 +344,7 @@ def test_new_allocation_ignores_old_response(ui):
     region = open_ui(ui)
     expect(region.get_by_role("status")).to_contain_text("Loading")
     page.unroute("**/api/storage/managed_usage", hold)
-    response["body"]["status"].update(allocation_id="b" * 32, capacity_bytes=200 * 1024**3)
+    response.body["status"].update(allocation_id="b" * 32, capacity_bytes=200 * 1024**3)
     page.evaluate("window.managedStorageUsage.setAllocation('b'.repeat(32))")
     expect(region).to_contain_text("200 GiB")
     for route in held:
@@ -346,7 +357,7 @@ def test_lost_owner_authorization_clears_private_snapshot(ui, status):
     _, _, _, response = ui
     region = open_ui(ui)
     expect(region.get_by_role("status")).to_have_text("Cloud storage usage updated.")
-    response.update(status=status, body={"error": "unauthorized"})
+    response.status, response.body = status, {"error": "unauthorized"}
     region.get_by_role("button", name="Refresh usage").click()
     expect(region.get_by_role("status")).to_contain_text("Sign in as the instance owner")
     expect(region.get_by_role("progressbar")).to_have_count(0)
@@ -375,9 +386,12 @@ def test_rebinding_while_open_clears_previous_allocation_snapshot(ui, change):
     expect(region.get_by_role("status")).to_have_text("Cloud storage usage updated.")
     expect(region).to_contain_text("25 GiB")
     if change == "other_allocation":
-        response["body"] = {"managed": True, "status": {**snapshot(), "allocation_id": "b" * 32}, "error": None}
+        response.body = {"managed": True, "status": {**snapshot(), "allocation_id": "b" * 32}, "error": None}
     else:
-        response.update(status=409, body={"managed": True, "status": None, "error": "Storage configuration changed."})
+        response.status, response.body = (
+            409,
+            {"managed": True, "status": None, "error": "Storage configuration changed."},
+        )
     region.get_by_role("button", name="Refresh usage").click()
     expect(region.get_by_role("status")).to_have_text(
         "Cloud storage configuration changed. Reload this page to view current usage."

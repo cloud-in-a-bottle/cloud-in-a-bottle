@@ -58,6 +58,75 @@
     return dom.el('div', {class: 'managed-storage__metric'}, [dom.el('strong', {text: label}), dom.el('p', {text: text}), bar]);
   }
 
+  function notice(text, kind) { return dom.el('p', {text: text, class: 'notice notice--' + kind}); }
+  function hint(text) { return dom.el('p', {text: text, class: 'hint'}); }
+  function fact(term, value) { return [dom.el('dt', {text: term}), dom.el('dd', {text: value})]; }
+
+  // Paints one validated snapshot into `details`, keeping the explanation's
+  // open state and keyboard focus across refreshes.
+  function renderSnapshot(details, refresh, data, failed) {
+    var oldExplanation = details.querySelector('details');
+    var expanded = oldExplanation && oldExplanation.open;
+    var explanationFocused = document.activeElement === details.querySelector('summary');
+    details.replaceChildren();
+    if (data.stale || failed) {
+      details.append(notice('Usage or access status may be out of date. These are the last reported values.', 'warn'));
+    }
+    if (data.phase !== 'ready') {
+      details.append(notice('Cloud storage setup is in progress.', 'warn'));
+    } else if (data.applied_access === 'read_only') {
+      details.append(notice('Cloud storage is reported as read-only. Apps may be unable to save changes to the archive.', 'warn'));
+    } else if (data.applied_access === 'suspended') {
+      details.append(notice('Cloud storage access is reported as paused. Apps using the archive may be affected.', 'error'));
+    }
+    if (!data.enforcement_enabled) {
+      details.append(notice('Allowances are being monitored. Automatic restrictions are not enabled.', 'warn'));
+    } else if (data.desired_access !== data.applied_access) {
+      details.append(notice('Permission change pending: ' + accessLabels[data.desired_access] + '.', 'warn'));
+    }
+    if (data.reason === 'ineligible_or_deleted') {
+      details.append(notice('This instance is no longer eligible for managed storage. Check your plan or contact support.', 'warn'));
+    } else if (data.reason === 'capacity_limit') {
+      details.append(notice('The stored capacity allowance has been reached. A monthly activity reset does not free storage space.', 'warn'));
+    }
+    var usage = data.usage;
+    if (usage === null) {
+      details.append(hint('Usage has not been reported for this period yet. Included capacity: ' + bytes(data.capacity_bytes) + '.'));
+    } else {
+      var metrics = dom.el('div', {class: 'managed-storage__metrics'});
+      if (usage.used_bytes === null) {
+        metrics.append(dom.el('div', {class: 'managed-storage__metric'}, [
+          dom.el('strong', {text: 'Stored capacity'}),
+          dom.el('p', {text: 'Storage-size metrics have not been reported yet. Included capacity: ' + bytes(data.capacity_bytes) + '.'}),
+        ]));
+      } else {
+        metrics.append(metric('Stored capacity', usage.used_bytes, data.capacity_bytes, bytes));
+      }
+      metrics.append(metric('Monthly activity allowance', usage.operation_microcents, usage.read_only_at_microcents, money));
+      details.append(metrics);
+      if (usage.operation_microcents >= usage.read_only_at_microcents * 0.85 && usage.operation_microcents < usage.read_only_at_microcents) {
+        details.append(notice('Approaching the monthly activity limit. At 100%, storage may become read-only.', 'warn'));
+      }
+      details.append(hint('Activity allowance resets on ' + usage.resets_at + ' (00:00 UTC). Stored capacity does not reset.'));
+      details.append(hint('Read-only threshold: ' + money(usage.read_only_at_microcents)
+        + '. Access-pause threshold: ' + money(usage.suspend_at_microcents) + '.'));
+      var explanation = dom.el('details', {open: !!expanded}, dom.el('summary', {text: 'How the allowance works'}));
+      var storageCost = usage.storage_microcents === null ? 'Storage cost is awaiting complete size metrics.'
+        : 'Estimated storage cost this period: ' + money(usage.storage_microcents) + '.';
+      explanation.append(dom.el('p', {text: 'Reads, writes and listings use the activity allowance. Values are estimated provider costs, not an extra bill. ' + storageCost}));
+      details.append(explanation);
+      if (explanationFocused) explanation.querySelector('summary').focus({preventScroll: true});
+    }
+    if (usage === null && explanationFocused) refresh.focus({preventScroll: true});
+    var activityChecked = usage && usage.operations_observed_at != null ? usage.operations_observed_at : data.observed_at;
+    details.append(dom.el('dl', {class: 'managed-storage__facts'}, [
+      fact('Reported access', accessLabels[data.applied_access]),
+      fact('Activity checked', timestamp(activityChecked)),
+      usage ? fact('Storage sampled', timestamp(usage.sample_at)) : null,
+      fact('Permissions checked', timestamp(data.applied_at)),
+    ]));
+  }
+
   function create(root, options) {
     options = options || {};
     var fetcher = options.fetch || global.fetch.bind(global);
@@ -71,73 +140,6 @@
     var details = dom.el('div');
     root.replaceChildren(header, message, details);
     root.hidden = true;
-
-    function notice(text, kind) { return dom.el('p', {text: text, class: 'notice notice--' + kind}); }
-    function hint(text) { return dom.el('p', {text: text, class: 'hint'}); }
-
-    function render(data, failed) {
-      var oldExplanation = details.querySelector('details');
-      var expanded = oldExplanation && oldExplanation.open;
-      var explanationFocused = document.activeElement === details.querySelector('summary');
-      details.replaceChildren();
-      if (data.stale || failed) {
-        details.append(notice('Usage or access status may be out of date. These are the last reported values.', 'warn'));
-      }
-      if (data.phase !== 'ready') {
-        details.append(notice('Cloud storage setup is in progress.', 'warn'));
-      } else if (data.applied_access === 'read_only') {
-        details.append(notice('Cloud storage is reported as read-only. Apps may be unable to save changes to the archive.', 'warn'));
-      } else if (data.applied_access === 'suspended') {
-        details.append(notice('Cloud storage access is reported as paused. Apps using the archive may be affected.', 'error'));
-      }
-      if (!data.enforcement_enabled) {
-        details.append(notice('Allowances are being monitored. Automatic restrictions are not enabled.', 'warn'));
-      } else if (data.desired_access !== data.applied_access) {
-        details.append(notice('Permission change pending: ' + accessLabels[data.desired_access] + '.', 'warn'));
-      }
-      if (data.reason === 'ineligible_or_deleted') {
-        details.append(notice('This instance is no longer eligible for managed storage. Check your plan or contact support.', 'warn'));
-      } else if (data.reason === 'capacity_limit') {
-        details.append(notice('The stored capacity allowance has been reached. A monthly activity reset does not free storage space.', 'warn'));
-      }
-      var usage = data.usage;
-      if (usage === null) {
-        details.append(hint('Usage has not been reported for this period yet. Included capacity: ' + bytes(data.capacity_bytes) + '.'));
-      } else {
-        var metrics = dom.el('div', {class: 'managed-storage__metrics'});
-        if (usage.used_bytes === null) {
-          metrics.append(dom.el('div', {class: 'managed-storage__metric'}, [
-            dom.el('strong', {text: 'Stored capacity'}),
-            dom.el('p', {text: 'Storage-size metrics have not been reported yet. Included capacity: ' + bytes(data.capacity_bytes) + '.'}),
-          ]));
-        } else {
-          metrics.append(metric('Stored capacity', usage.used_bytes, data.capacity_bytes, bytes));
-        }
-        metrics.append(metric('Monthly activity allowance', usage.operation_microcents, usage.read_only_at_microcents, money));
-        details.append(metrics);
-        if (usage.operation_microcents >= usage.read_only_at_microcents * 0.85 && usage.operation_microcents < usage.read_only_at_microcents) {
-          details.append(notice('Approaching the monthly activity limit. At 100%, storage may become read-only.', 'warn'));
-        }
-        details.append(hint('Activity allowance resets on ' + usage.resets_at + ' (00:00 UTC). Stored capacity does not reset.'));
-        details.append(hint('Read-only threshold: ' + money(usage.read_only_at_microcents)
-          + '. Access-pause threshold: ' + money(usage.suspend_at_microcents) + '.'));
-        var explanation = dom.el('details', {open: !!expanded}, dom.el('summary', {text: 'How the allowance works'}));
-        var storageCost = usage.storage_microcents === null ? 'Storage cost is awaiting complete size metrics.'
-          : 'Estimated storage cost this period: ' + money(usage.storage_microcents) + '.';
-        explanation.append(dom.el('p', {text: 'Reads, writes and listings use the activity allowance. Values are estimated provider costs, not an extra bill. ' + storageCost}));
-        details.append(explanation);
-        if (explanationFocused) explanation.querySelector('summary').focus({preventScroll: true});
-      }
-      if (usage === null && explanationFocused) refresh.focus({preventScroll: true});
-      function fact(term, value) { return [dom.el('dt', {text: term}), dom.el('dd', {text: value})]; }
-      var activityChecked = usage && usage.operations_observed_at != null ? usage.operations_observed_at : data.observed_at;
-      details.append(dom.el('dl', {class: 'managed-storage__facts'}, [
-        fact('Reported access', accessLabels[data.applied_access]),
-        fact('Activity checked', timestamp(activityChecked)),
-        usage ? fact('Storage sampled', timestamp(usage.sample_at)) : null,
-        fact('Permissions checked', timestamp(data.applied_at)),
-      ]));
-    }
 
     function schedule() {
       clearTimeout(timer);
@@ -183,12 +185,12 @@
         }
         if (!response.ok || body.managed !== true || !validStatus(body.status, allocation)) throw new Error('unavailable');
         last = body.status;
-        render(last, false);
+        renderSnapshot(details, refresh, last, false);
         message.textContent = last.stale ? 'Showing the last reported usage.' : 'Cloud storage usage updated.';
       } catch (error) {
         if (current !== revision) return;
         message.textContent = 'Cloud storage usage is unavailable. Try refreshing.';
-        if (last) render(last, true);
+        if (last) renderSnapshot(details, refresh, last, true);
         else details.replaceChildren(hint('Your usage could not be loaded. This does not tell us whether storage access has changed.'));
       } finally {
         clearTimeout(timeout);

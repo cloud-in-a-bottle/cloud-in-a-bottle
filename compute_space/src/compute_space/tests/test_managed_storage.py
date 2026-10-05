@@ -2,6 +2,7 @@ import asyncio
 import json
 from contextlib import closing
 
+import attr
 import httpx
 import pytest
 from litestar.testing import TestClient
@@ -72,24 +73,34 @@ def bind(cfg, raw=None):
         set_instance_identity(db, IDENTITY)
 
 
+@attr.s(auto_attribs=True)
+class Upstream:
+    """Fake identity and storage backends: the reply to serve, plus the requests and clients seen."""
+
+    status: int = 200
+    body: dict[str, object] = attr.ib(factory=snapshot)
+    calls: list[httpx.Request] = attr.ib(factory=list)
+    clients: list[httpx.AsyncClient] = attr.ib(factory=list)
+
+
 @pytest.fixture
 def transport(monkeypatch):
-    result = {"status": 200, "body": snapshot(), "calls": [], "clients": []}
+    result = Upstream()
     real_client = httpx.AsyncClient
 
     def handle(request):
-        result["calls"].append(request)
+        result.calls.append(request)
         if request.url.host == "identity.example":
             assert request.method == "POST"
             assert b"client_secret=private-secret" in request.content
             return httpx.Response(200, json={"access_token": "private-bearer", "expires_in": 300})
         assert request.url.host == "storage.example"
         assert request.headers["Authorization"] == "Bearer private-bearer"
-        return httpx.Response(result["status"], json=result["body"])
+        return httpx.Response(result.status, json=result.body)
 
     def client(**kwargs):
         instance = real_client(transport=httpx.MockTransport(handle), **kwargs)
-        result["clients"].append(instance)
+        result.clients.append(instance)
         return instance
 
     monkeypatch.setattr(managed_storage.httpx, "AsyncClient", client)
@@ -106,7 +117,7 @@ def test_local_and_byo_storage_do_not_call_backend(cfg, transport):
             )
             db.commit()
         assert not client.get("/api/storage/managed_usage").json()["managed"]
-    assert not transport["calls"]
+    assert not transport.calls
 
 
 def test_owner_auth_is_required(cfg, transport):
@@ -114,12 +125,12 @@ def test_owner_auth_is_required(cfg, transport):
     with TestClient(make_test_app(routes.managed_usage)) as client:
         response = client.get("/api/storage/managed_usage")
         assert response.status_code in (401, 403)
-    assert not transport["calls"]
+    assert not transport.calls
 
 
 def test_authenticated_proxy_redacts_secrets_and_closes_clients(cfg, transport):
     bind(cfg)
-    transport["body"]["unexpected_secret"] = "private-upstream-value"
+    transport.body["unexpected_secret"] = "private-upstream-value"
     with TestClient(make_test_app(routes.managed_usage)) as client:
         client.cookies.update(auth_cookie(cfg))
         response = client.get("/api/storage/managed_usage")
@@ -128,19 +139,19 @@ def test_authenticated_proxy_redacts_secrets_and_closes_clients(cfg, transport):
     assert response.json()["status"]["usage"]["used_bytes"] == 25 * 1024**3
     for secret in ("private-secret", "private-bearer", "private-upstream-value"):
         assert secret not in response.text
-    assert all(client.is_closed for client in transport["clients"])
+    assert all(client.is_closed for client in transport.clients)
 
 
 @pytest.mark.parametrize("status", [301, 302, 401, 403, 404, 429, 500, 503])
 def test_upstream_errors_are_generic(cfg, transport, status):
     bind(cfg)
-    transport.update(status=status, body={"error": "private-secret-detail"})
+    transport.status, transport.body = status, {"error": "private-secret-detail"}
     with TestClient(make_test_app(routes.managed_usage)) as client:
         client.cookies.update(auth_cookie(cfg))
         response = client.get("/api/storage/managed_usage")
     assert response.status_code == 503 and response.json()["managed"]
     assert "private-secret-detail" not in response.text
-    assert len(transport["calls"]) == 2
+    assert len(transport.calls) == 2
 
 
 @pytest.mark.parametrize(
@@ -158,7 +169,7 @@ def test_upstream_errors_are_generic(cfg, transport, status):
 )
 def test_bad_snapshot_is_not_forwarded(cfg, transport, field, value):
     bind(cfg)
-    transport["body"][field] = value
+    transport.body[field] = value
     with TestClient(make_test_app(routes.managed_usage)) as client:
         client.cookies.update(auth_cookie(cfg))
         response = client.get("/api/storage/managed_usage")
@@ -178,7 +189,7 @@ def test_bad_snapshot_is_not_forwarded(cfg, transport, field, value):
 )
 def test_bad_usage_is_not_rendered_as_zero(cfg, transport, field, value):
     bind(cfg)
-    transport["body"]["usage"][field] = value
+    transport.body["usage"][field] = value
     with TestClient(make_test_app(routes.managed_usage)) as client:
         client.cookies.update(auth_cookie(cfg))
         assert client.get("/api/storage/managed_usage").status_code == 503
@@ -192,7 +203,7 @@ def test_migration_away_hides_old_binding(cfg, transport):
     with TestClient(make_test_app(routes.managed_usage)) as client:
         client.cookies.update(auth_cookie(cfg))
         assert not client.get("/api/storage/managed_usage").json()["managed"]
-    assert not transport["calls"]
+    assert not transport.calls
 
 
 @pytest.mark.parametrize(
@@ -212,7 +223,7 @@ def test_invalid_binding_is_not_used(cfg, transport, raw):
         client.cookies.update(auth_cookie(cfg))
         response = client.get("/api/storage/managed_usage")
     assert response.status_code == 503
-    assert not transport["calls"]
+    assert not transport.calls
 
 
 def test_archive_state_exposes_only_explicit_matching_binding(cfg, monkeypatch):
@@ -239,19 +250,19 @@ def test_archive_state_reports_invalid_managed_configuration(cfg, monkeypatch):
 
 def test_oversized_response_is_bounded(cfg, transport):
     bind(cfg)
-    transport["body"]["unexpected"] = "x" * 70000
+    transport.body["unexpected"] = "x" * 70000
     with TestClient(make_test_app(routes.managed_usage)) as client:
         client.cookies.update(auth_cookie(cfg))
         assert client.get("/api/storage/managed_usage").status_code == 503
-    assert all(client.is_closed for client in transport["clients"])
+    assert all(client.is_closed for client in transport.clients)
 
 
 def test_operation_only_snapshot_preserves_unknown_storage(cfg, transport):
     bind(cfg)
-    transport["body"]["usage"].update(
+    transport.body["usage"].update(
         used_bytes=None, sample_at=None, storage_microcents=None, operations_observed_at=1790852400
     )
-    transport["body"]["stale"] = True
+    transport.body["stale"] = True
     with TestClient(make_test_app(routes.managed_usage)) as client:
         client.cookies.update(auth_cookie(cfg))
         response = client.get("/api/storage/managed_usage")
@@ -305,6 +316,31 @@ def test_migration_away_during_fetch_reports_unmanaged(cfg, monkeypatch):
         response = client.get("/api/storage/managed_usage")
     assert response.status_code == 200
     assert response.json() == {"managed": False, "status": None, "error": None}
+
+
+@pytest.mark.parametrize("change", ["removed", "rebound"])
+def test_failed_fetch_still_reports_binding_changes(cfg, monkeypatch, change):
+    bind(cfg)
+
+    async def fetch(*args):
+        with closing(open_db(cfg)) as db:
+            if change == "removed":
+                db.execute("UPDATE archive_backend SET s3_bucket='other'")
+                db.commit()
+            else:
+                set_setting(db, managed_storage.SETTING_KEY, json.dumps({**BINDING, "allocation_id": "b" * 32}))
+        raise managed_storage.ManagedStorageError("Cloud storage usage is temporarily unavailable.")
+
+    monkeypatch.setattr(routes, "fetch_status", fetch)
+    with TestClient(make_test_app(routes.managed_usage)) as client:
+        client.cookies.update(auth_cookie(cfg))
+        response = client.get("/api/storage/managed_usage")
+    assert response.headers["cache-control"] == "private, no-store"
+    if change == "removed":
+        assert response.status_code == 200
+        assert response.json() == {"managed": False, "status": None, "error": None}
+    else:
+        assert response.status_code == 409 and response.json()["status"] is None
 
 
 @pytest.mark.asyncio
