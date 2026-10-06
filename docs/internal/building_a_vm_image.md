@@ -4,12 +4,16 @@ The [release images](../src/setup/shared_homeserver.md#part-1-download-and-run-t
 
 ## What you need
 
-**To build the image**, a Linux host with:
+**To build the image**, a Linux host or an Apple silicon Mac. The image is built for the host's arch (amd64 or arm64). You need:
 
-- `qemu-system-x86_64` and `qemu-img` (the `qemu-system-x86` and `qemu-utils` packages).
-- A seed-ISO builder: `cloud-localds` (from `cloud-image-utils`), or `xorriso`, or `genisoimage`.
-- `curl` and `tar`.
-- (recommended) KVM (`/dev/kvm`). Without it the build boot falls back to slow TCG emulation.
+- `qemu-img` (the `qemu-utils` package), plus QEMU for the host's arch: `qemu-system-x86_64` (`qemu-system-x86`) for amd64, or `qemu-system-aarch64` and its UEFI firmware (`qemu-system-arm` and `qemu-efi-aarch64`) for arm64.
+- A seed-ISO builder: `cloud-localds` (from `cloud-image-utils`), or `xorriso`, `genisoimage`, or `mkisofs`.
+- `curl`, `tar`, and `timeout`.
+- KVM (`/dev/kvm`), or HVF on macOS.
+
+On an Apple silicon Mac, `brew install qemu cdrtools coreutils` covers all of this, and the build runs under HVF in about five minutes.
+
+Without an arm64 KVM host, `image/on_ec2.sh '<command>'` runs a build on a temporary EC2 Graviton bare-metal instance and copies `image/out/` back; CI builds arm64 this way. See the script's header for the AWS settings it needs.
 
 **To run the image it produces** (this applies to the release images too):
 
@@ -18,13 +22,13 @@ The [release images](../src/setup/shared_homeserver.md#part-1-download-and-run-t
 
 ## Build it
 
-Run from a checkout of the Cloud in a Bottle repo, on the Linux/KVM host:
+Run from a checkout of the Cloud in a Bottle repo, on the build host:
 
 ```bash
 image/build.sh
 ```
 
-With no options this builds `main` into `image/out/cloud-in-a-bottle-<version>-amd64.qcow2` and a matching `.ova`, in HTTP-only mode on `lvh.me`, with no claim token and a default console password. The build boots a VM and runs the full provisioning, so it takes a while; Logs go into `image/out/build-console.log`.
+With no options this builds `main` into `image/out/cloud-in-a-bottle-<version>-<arch>.qcow2` (plus a matching `.ova` for amd64), in HTTP-only mode on `lvh.me`, with no claim token and a default console password. The build boots a VM and runs the full provisioning, so it takes a while; Logs go into `image/out/build-console.log`.
 
 ### Common options
 

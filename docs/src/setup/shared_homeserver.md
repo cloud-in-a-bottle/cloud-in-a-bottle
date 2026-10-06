@@ -9,17 +9,18 @@ This page is in two parts. Part 1 gets a working instance running inside a VM fr
 ## Part 1: download and run the VM image
 
 Requirements:
-- an x86-64 processor (ie not an ARM processor like a Mac M-series). We plan to build ARM images in the future.
 - support for hardware virtualization. Most CPUs support this as long as you're running on bare metal, ie not already in a VM (VPS, EC2 instance, etc). It'll work without this but would be very slow.
 - a virtual machine host, like QEMU, VirtualBox, VMWare, etc. If you don't already have a preference, we suggest QEMU.
-  - on ubuntu: `apt install qemu-system-x86 qemu-utils`
+  - on ubuntu: `apt install qemu-system-x86 qemu-utils` (x86-64), or `apt install qemu-system-arm qemu-efi-aarch64 qemu-utils` (arm64)
+  - on an Apple silicon Mac: [UTM](https://mac.getutm.app/), or `brew install qemu`
 
-The release image is a self-contained Ubuntu 24.04 appliance with Cloud in a Bottle already setup. Two formats are published per release:
+The release image is a self-contained Ubuntu 24.04 appliance with Cloud in a Bottle already setup. These files are published per release:
 
-| File     | Use with                                |
-| -------- | --------------------------------------- |
-| `.qcow2` | QEMU / KVM / libvirt (`virt-manager`)   |
-| `.ova`   | VirtualBox (and most other hypervisors) |
+| File           | Use with                                                 |
+| -------------- | -------------------------------------------------------- |
+| `-amd64.qcow2` | QEMU / KVM / libvirt (`virt-manager`) on x86-64          |
+| `-amd64.ova`   | VirtualBox (and most other hypervisors) on x86-64        |
+| `-arm64.qcow2` | QEMU / KVM / libvirt or UTM on arm64; boots through UEFI |
 
 Grab the latest version from the [releases page](https://github.com/cloud-in-a-bottle/cloud-in-a-bottle/releases).
 
@@ -30,7 +31,7 @@ Give the VM at least 1 vCPU, 2 GB RAM, and a disk of the size you want your inst
 - **VirtualBox:** *File → Import Appliance…*, select the `.ova`, adjust CPU/RAM/disk, and start it.
 - **QEMU / libvirt:** import the `.qcow2` as the VM's disk (e.g. `virt-manager`'s "Import existing disk image"), or boot it directly:
 
-QEMU instructions: 
+x86 QEMU instructions: 
 ```bash
 qemu-system-x86_64 -enable-kvm -machine q35 -cpu host -smp 2 -m 4096 \
   -drive file=cloud-in-a-bottle-<version>-amd64.qcow2,format=qcow2,if=virtio \
@@ -38,6 +39,19 @@ qemu-system-x86_64 -enable-kvm -machine q35 -cpu host -smp 2 -m 4096 \
   -device virtio-net-pci,netdev=n0 \
   -nographic
 ```
+
+On an arm64 machine the equivalent is below. The image boots through UEFI, so `-bios` points at the edk2 firmware: `/usr/share/qemu-efi-aarch64/QEMU_EFI.fd` from `qemu-efi-aarch64` on Ubuntu, or `$(brew --prefix)/share/qemu/edk2-aarch64-code.fd` with Homebrew. On a Mac, swap `-enable-kvm` for `-accel hvf`.
+
+```bash
+qemu-system-aarch64 -enable-kvm -machine virt -cpu host -smp 2 -m 4096 \
+  -bios /usr/share/qemu-efi-aarch64/QEMU_EFI.fd \
+  -drive file=cloud-in-a-bottle-<version>-arm64.qcow2,format=qcow2,if=virtio \
+  -netdev user,id=n0,hostfwd=tcp::8080-:8080,hostfwd=tcp::2222-:22 \
+  -device virtio-net-pci,netdev=n0 \
+  -nographic
+```
+
+In UTM, create a new *Virtualize* VM of type *Linux*, choose to import an existing drive, and select the `.qcow2`.
 
 The `hostfwd` options make the VM reachable. QEMU's default networking puts the guest on an isolated NAT with no address you can browse to, so instead we forward the guest's `:8080` and `:22` to `:8080` and `:2222` on the machine running QEMU.
 
