@@ -63,9 +63,7 @@ from compute_space.web.helpers.proxy import proxy_http_request
 from compute_space.web.helpers.proxy import proxy_websocket_request
 
 _CALL_PATH = "/api/services/v2/call/{shortname:str}/{rest:path}"
-_CORS_ORIGIN_RE = re.compile(
-    r"(?:https?://)?(?P<hostname>[a-z0-9.-]+)(?::(?P<port>[0-9]{1,5}))?", re.IGNORECASE | re.ASCII
-)
+_CORS_ORIGIN_RE = re.compile(r"https?://(?P<hostname>[a-z0-9.-]+)(?::(?P<port>[0-9]{1,5}))?", re.IGNORECASE | re.ASCII)
 _HTTP_METHODS = [
     HttpMethod.GET,
     HttpMethod.POST,
@@ -126,7 +124,7 @@ def _carry_response_headers(headers: MutableScopeHeaders) -> Iterable[tuple[str,
 
 
 def _cors_origin_hostname(origin: str) -> str | None:
-    """Accept HTTP(S) origins or legacy host[:port], with an optional port in 0–65535.
+    """Accept scheme://host[:port] HTTP(S) origins, as browsers send them, with a port in 0–65535.
 
     Validate the entire field before reflecting it in CORS headers; get_connection_origin
     only extracts the host and would also accept URLs containing credentials, paths, or queries.
