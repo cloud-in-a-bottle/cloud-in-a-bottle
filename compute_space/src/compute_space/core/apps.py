@@ -3,11 +3,13 @@ import json
 import os
 import shutil
 import sqlite3
+import string
 import subprocess
 import tempfile
 import threading
 import time
 from collections.abc import Callable
+from urllib.parse import unquote
 
 import attr
 import httpx
@@ -55,6 +57,12 @@ from compute_space.core.ports import allocate_port
 from compute_space.core.ports import resolve_port_mappings
 from compute_space.core.service_interface.services import register_services_provided_by_app
 from compute_space.db import get_db
+
+_MAX_PUBLIC_PATH_CHECKS = 8
+# Whitelist of printable ASCII path characters. Control characters are excluded, as is
+# backslash, which some backends treat as a path separator. Strict UTF-8
+# decoding also permits non-ASCII characters, so public paths can contain Unicode names.
+_PUBLIC_PATH_ASCII_CHARACTERS = frozenset(string.ascii_letters + string.digits + " !\"#$%&'()*+,-./:;<=>?@[]^_`{|}~")
 
 RESERVED_PATHS = {
     "/",
@@ -1119,5 +1127,53 @@ def get_app_from_hostname(host: str, db: sqlite3.Connection) -> App | None:
 
 
 def is_public_path(app: App, request_path: str) -> bool:
-    # TODO: we should consider if this is the appropriate matching logic
+    """Match a decoded path to a public prefix; use is_public_request_path for untrusted request bytes."""
     return any(request_path == pp or request_path.startswith(pp.rstrip("/") + "/") for pp in app.public_paths)
+
+
+def _is_unambiguous_path(request_path: str) -> bool:
+    """Check one decoded form for a rooted path, allowed characters, and non-traversal segments."""
+    rooted_path = request_path.startswith("/") and not request_path.startswith("//")
+    allowed_characters = all(
+        character in _PUBLIC_PATH_ASCII_CHARACTERS or ord(character) >= 128 for character in request_path
+    )
+    # Some backends strip matrix parameters before interpreting a segment, so '..;x' is traversal too.
+    ordinary_segments = all(segment.partition(";")[0] not in (".", "..") for segment in request_path.split("/"))
+    return rooted_path and allowed_characters and ordinary_segments
+
+
+def is_public_request_path(app: App, raw_path: bytes) -> bool:
+    """Authorize raw HTTP/WebSocket paths only when every decoded form is unambiguously public.
+
+    Checking only a prefix could let downstream decoding or normalization reach a private route.
+    This checks access without rewriting the URL; wholly public apps have no private routes to protect.
+    """
+    if "/" in app.public_paths:
+        return True
+
+    # These shouldn't exist in a raw path:
+    # # is only used client-side and shouldn't be sent unencoded.
+    # the query arguments (?=..) should already be split off by the server so ? should be impossible here.
+    if b"#" in raw_path or b"?" in raw_path:
+        return False
+
+    # ASGI's decoded path may have replaced invalid UTF-8. Validate the bytes we actually forward.
+    try:
+        request_path = unquote(raw_path.decode("ascii"), errors="strict")
+    except UnicodeDecodeError:
+        return False
+
+    # Clients and backends can normalize or decode paths after authorization. Require each decoded
+    # form to remain public and unambiguous, without rewriting the original URL (which may be signed).
+    # Bound repeated decoding so deeply nested encodings cannot make authorization quadratic.
+    for _ in range(_MAX_PUBLIC_PATH_CHECKS):
+        if not (_is_unambiguous_path(request_path) and is_public_path(app, request_path)):
+            return False
+        try:
+            decoded = unquote(request_path, errors="strict")
+        except UnicodeDecodeError:
+            return False
+        if decoded == request_path:
+            return True
+        request_path = decoded
+    return False

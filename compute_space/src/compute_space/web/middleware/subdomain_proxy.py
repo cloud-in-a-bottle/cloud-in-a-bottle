@@ -16,7 +16,7 @@ from litestar.types.asgi_types import HTTPResponseStartEvent
 from litestar.types.asgi_types import WebSocketCloseEvent
 
 from compute_space.core.apps import get_app_from_hostname
-from compute_space.core.apps import is_public_path
+from compute_space.core.apps import is_public_request_path
 from compute_space.core.containers import ROUTER_INTERNAL_HOSTS
 from compute_space.core.domains import Domain
 from compute_space.core.logging import logger
@@ -202,7 +202,8 @@ class SubdomainProxyMiddleware:
             if not app.public_paths:
                 await _send_not_found(scope, receive, send)
                 return
-            if not is_public_path(app, scope["path"]):
+            raw_path = scope.get("raw_path")
+            if raw_path is None or not is_public_request_path(app, raw_path):
                 # We're outer ASGI middleware — a raised NotAuthorizedException
                 # wouldn't reach Litestar's exception handlers, so produce the
                 # equivalent response ourselves.  HTTP: same /login redirect the
