@@ -202,7 +202,8 @@ class SubdomainProxyMiddleware:
             if not app.public_paths:
                 await _send_not_found(scope, receive, send)
                 return
-            if not is_public_request_path(app, scope["raw_path"]):
+            raw_path = scope.get("raw_path")
+            if raw_path is None or not is_public_request_path(app, raw_path):
                 # We're outer ASGI middleware — a raised NotAuthorizedException
                 # wouldn't reach Litestar's exception handlers, so produce the
                 # equivalent response ourselves.  HTTP: same /login redirect the

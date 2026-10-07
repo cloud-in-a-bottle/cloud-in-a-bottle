@@ -589,12 +589,16 @@ async def _raw_path_request(
     headers: dict[str, str] | None = None,
     method: str = "GET",
     query: str = "",
+    omit_raw_path: bool = False,
 ) -> httpx.Response:
     # Supply the ASGI path directly: a test client would otherwise normalize literal '..'
     # before the router sees it, hiding the difference between authorization and forwarding.
     async def dispatch(scope: Scope, receive: Receive, send: Send) -> None:
         scope["path"] = unquote(raw_path.decode("ascii"))
-        scope["raw_path"] = raw_path
+        if omit_raw_path:
+            scope.pop("raw_path", None)
+        else:
+            scope["raw_path"] = raw_path
         await wrapped_app(scope, receive, send)
 
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=dispatch)) as client:
@@ -613,6 +617,15 @@ async def test_ambiguous_public_http_path_requires_auth_before_forwarding(
 
 
 @pytest.mark.asyncio
+async def test_missing_raw_path_requires_auth_before_forwarding(
+    wrapped_app: ASGIApp, partially_public_app: None, backend: _RecordingBackend
+) -> None:
+    response = await _raw_path_request(wrapped_app, b"/dav/file", omit_raw_path=True)
+    assert response.status_code == 302
+    assert backend.requests == []
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("method", ["POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"])
 async def test_ambiguous_public_path_requires_auth_for_every_method(
     wrapped_app: ASGIApp, partially_public_app: None, backend: _RecordingBackend, method: str
@@ -623,7 +636,12 @@ async def test_ambiguous_public_path_requires_auth_for_every_method(
 
 
 async def _raw_websocket_request(
-    wrapped_app: ASGIApp, raw_path: bytes, *, headers: dict[str, str] | None = None, query: str = ""
+    wrapped_app: ASGIApp,
+    raw_path: bytes,
+    *,
+    headers: dict[str, str] | None = None,
+    query: str = "",
+    omit_raw_path: bool = False,
 ) -> list[Message]:
     scope = cast(
         Scope,
@@ -644,6 +662,8 @@ async def _raw_websocket_request(
             "state": {},
         },
     )
+    if omit_raw_path:
+        scope.pop("raw_path", None)
     events: list[Message] = []
     inbound: asyncio.Queue[WebSocketReceiveMessage] = asyncio.Queue()
     inbound.put_nowait({"type": "websocket.connect"})
@@ -666,6 +686,15 @@ async def test_ambiguous_public_websocket_path_requires_auth_before_handshake(
     wrapped_app: ASGIApp, partially_public_app: None, backend: _RecordingBackend, raw_path: bytes
 ) -> None:
     events = await _raw_websocket_request(wrapped_app, raw_path)
+    assert events == [{"type": "websocket.close", "code": 4401, "reason": "authentication required"}]
+    assert backend.requests == []
+
+
+@pytest.mark.asyncio
+async def test_missing_websocket_raw_path_requires_auth_before_handshake(
+    wrapped_app: ASGIApp, partially_public_app: None, backend: _RecordingBackend
+) -> None:
+    events = await _raw_websocket_request(wrapped_app, b"/dav/file", omit_raw_path=True)
     assert events == [{"type": "websocket.close", "code": 4401, "reason": "authentication required"}]
     assert backend.requests == []
 
