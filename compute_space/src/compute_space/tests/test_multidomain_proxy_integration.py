@@ -533,6 +533,9 @@ _AMBIGUOUS_PUBLIC_PATHS = [
     b"/dav/%c0%ae%c0%ae/private",
     b"/dav/%e0%80%ae%e0%80%ae/private",
     b"/dav/%c0%af../private",
+    b"/dav/..#x",
+    b"/dav/x#/../../private",
+    b"/dav/..?x",
     b"/dav/" + b"%" + b"25" * 12 + b"2e/private",
 ]
 

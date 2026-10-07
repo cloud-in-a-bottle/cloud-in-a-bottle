@@ -1160,6 +1160,12 @@ def is_public_request_path(app: App, raw_path: bytes) -> bool:
     if "/" in app.public_paths:
         return True
 
+    # These shouldn't exist in a raw path:
+    # # is only used client-side and shouldn't be sent unencoded.
+    # the query arguments (?=..) should already be split off by the server so ? should be impossible here.
+    if b"#" in raw_path or b"?" in raw_path:
+        return False
+
     # ASGI's decoded path may have replaced invalid UTF-8. Validate the bytes we actually forward.
     try:
         request_path = unquote(raw_path.decode("ascii"), errors="strict")
