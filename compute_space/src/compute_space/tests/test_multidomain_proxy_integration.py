@@ -22,7 +22,6 @@ from http.server import ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 from typing import cast
-from urllib.parse import parse_qs
 from urllib.parse import urljoin
 from urllib.parse import urlsplit
 
@@ -121,7 +120,7 @@ def proxy_config(tmp_path: Path, backend_port: int) -> Config:
     """Active config with two domains + seeded apps.
 
     `myapp` makes "/" public (so proxy tests don't need auth); `privapp` has no public
-    paths (so unauthenticated requests trigger the login redirect)."""
+    paths (so unauthenticated requests return not found)."""
     cfg = _make_test_config(tmp_path, seed_primary=False)  # this test seeds the full set itself
     init_db(cfg.db_path)
     with closing(open_db(cfg)) as db:
@@ -129,6 +128,7 @@ def proxy_config(tmp_path: Path, backend_port: int) -> Config:
     _seed_app(cfg.db_path, "myapp", backend_port, public_paths=["/"])
     # App ports are unique in the DB; this app is only used for auth/interception tests.
     _seed_app(cfg.db_path, "privapp", backend_port + 1, public_paths=[])
+    _seed_app(cfg.db_path, "mixedapp", backend_port + 2, public_paths=["/public"])
     return cfg
 
 
@@ -202,20 +202,48 @@ async def test_unknown_external_host_still_404s(wrapped_app: Any) -> None:
 @pytest.mark.asyncio
 async def test_unauth_on_local_redirects_to_local_login_over_http(wrapped_app: Any) -> None:
     async with _client(wrapped_app) as c:
-        r = await c.get("http://privapp.myhost.local/secret")  # httpx doesn't auto-follow
+        r = await c.get("http://mixedapp.myhost.local/secret")  # httpx doesn't auto-follow
     assert r.status_code == 302
     # bounced to the .local login over http, NOT the public/canonical domain
-    assert r.headers["location"] == ("http://myhost.local/login?next=http%3A%2F%2Fprivapp.myhost.local%2Fsecret")
+    assert r.headers["location"] == ("http://myhost.local/login?next=http%3A%2F%2Fmixedapp.myhost.local%2Fsecret")
 
 
 @pytest.mark.asyncio
 async def test_unauth_on_public_redirects_to_public_login_over_https(wrapped_app: Any) -> None:
     async with _client(wrapped_app) as c:
-        r = await c.get("http://privapp.host.example.com/secret")
+        r = await c.get("http://mixedapp.host.example.com/secret")
     assert r.status_code == 302
     assert r.headers["location"] == (
-        "https://host.example.com/login?next=https%3A%2F%2Fprivapp.host.example.com%2Fsecret"
+        "https://host.example.com/login?next=https%3A%2F%2Fmixedapp.host.example.com%2Fsecret"
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("domain", [PRIMARY.name, LOCAL.name])
+@pytest.mark.parametrize("method", ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"])
+@pytest.mark.parametrize("path", ["/", "/secret/deep?view=logs"])
+@pytest.mark.parametrize("headers", [{}, {"Origin": "http://example.com:invalid"}, {"Origin": "http://["}])
+async def test_private_app_matches_unknown_app(
+    wrapped_app: Any, domain: str, method: str, path: str, headers: dict[str, str]
+) -> None:
+    async with _client(wrapped_app) as c:
+        private = await c.request(method, f"http://privapp.{domain}{path}", headers=headers)
+        missing = await c.request(method, f"http://missing.{domain}{path}", headers=headers)
+    assert private.status_code == missing.status_code == 404
+    assert private.content == missing.content
+    assert private.headers == missing.headers
+
+
+@pytest.mark.asyncio
+async def test_owner_can_access_running_private_app(wrapped_app: Any, proxy_config: Config) -> None:
+    with closing(open_db(proxy_config)) as db:
+        db.execute("UPDATE apps SET public_paths = '[]' WHERE name = 'myapp'")
+        db.commit()
+    async with _client(wrapped_app) as c:
+        c.cookies.update(auth_cookie(proxy_config))
+        r = await c.get("http://myapp.myhost.local/secret")
+    assert r.status_code == 200
+    assert r.text == "backend-ok"
 
 
 # Startup interception uses the real DB, owner session verification, and HTTP proxy.
@@ -325,10 +353,10 @@ async def test_private_startup_auth_precedes_interception_and_owner_gets_waiting
     url = f"{scheme}://privapp.{authority}/secret/deep?view=logs&next=%2Fprivate"
     async with _client(wrapped_app) as c:
         r = await c.get(url, headers={"Accept": "text/html"})
-        assert r.status_code == 302
-        login = urlsplit(r.headers["location"])
-        assert (login.scheme, login.netloc, login.path) == (scheme, authority, "/login")
-        assert parse_qs(login.query) == {"next": [url]}
+        missing = await c.get(url.replace("privapp.", "missing."), headers={"Accept": "text/html"})
+        assert r.status_code == missing.status_code == 404
+        assert r.content == missing.content
+        assert r.headers == missing.headers
         assert "coming up" not in r.text
         assert backend.requests == []
 
@@ -454,7 +482,7 @@ async def test_running_transport_failure_is_not_disguised_as_startup(wrapped_app
 @pytest.mark.asyncio
 @pytest.mark.parametrize("status", ["building", "starting"])
 @pytest.mark.parametrize(
-    "name,owner,code", [("myapp", False, 1013), ("privapp", False, 4401), ("privapp", True, 1013)]
+    "name,owner,code", [("myapp", False, 1013), ("privapp", False, 4404), ("privapp", True, 1013)]
 )
 async def test_startup_websocket_closes_after_auth_without_backend_handshake(
     wrapped_app: Any, proxy_config: Config, backend: _RecordingBackend, status: str, name: str, owner: bool, code: int
@@ -493,3 +521,10 @@ async def test_startup_websocket_closes_after_auth_without_backend_handshake(
     assert [event["type"] for event in events] == expected_types
     assert events[-1]["code"] == code
     assert backend.requests == []
+    if code == 4404:
+        private_events = events.copy()
+        for host in (b"privapp.myhost.local:8080", b"missing.myhost.local:8080"):
+            events.clear()
+            scope["headers"] = [(b"host", host), (b"origin", b"http://example.com:invalid")]
+            await wrapped_app(scope, receive, send)
+            assert events == private_events

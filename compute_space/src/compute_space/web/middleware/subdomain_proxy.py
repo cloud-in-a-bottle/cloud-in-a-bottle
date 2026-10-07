@@ -144,7 +144,7 @@ class SubdomainProxyMiddleware:
         with closing(get_db()) as db:
             zone = Domain.match(db, netloc)
             app = get_app_from_hostname(netloc, db) if zone is not None else None
-            looks_like_app = zone is not None and app is None and zone.is_app_subdomain(netloc)
+            looks_like_app = zone is not None and app is None and zone.looks_like_app_subdomain(netloc)
 
         if zone is None:
             if netloc.split(":")[0].lower() in ROUTER_INTERNAL_HOSTS:
@@ -198,6 +198,10 @@ class SubdomainProxyMiddleware:
             verify_owner_auth(connection)
             extra_headers.append(IS_OWNER_HEADER)
         except NotAuthorizedException:
+            # Match a missing app's response so unauthorized callers cannot discover fully private apps.
+            if not app.public_paths:
+                await _send_not_found(scope, receive, send)
+                return
             if not is_public_path(app, scope["path"]):
                 # We're outer ASGI middleware — a raised NotAuthorizedException
                 # wouldn't reach Litestar's exception handlers, so produce the
