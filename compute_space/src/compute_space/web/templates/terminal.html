@@ -10,7 +10,7 @@
 <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js"></script>
 <script id="page-config" type="application/json">
 {
-  "terminalWsUrl": "{{ 'wss' if request.headers.get('X-Forwarded-Proto', request.scheme) == 'https' else 'ws' }}://{{ request.headers.get('X-Forwarded-Host', request.host) }}/terminal/ws"
+  "terminalWsUrl": "/terminal/ws"
 }
 </script>
 <script src="{{ static_url('js/terminal.js') }}"></script>

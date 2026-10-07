@@ -118,9 +118,9 @@ def verify_owner_auth(connection: AnyConnection) -> None:
     returns if authed; raises NotAuthorizedException if not authenticated.
     """
     accessor = authenticate(connection, db=get_db())
-    origin = get_connection_origin(connection)
 
     if isinstance(accessor, AuthenticatedUser):
+        origin = get_connection_origin(connection)
         if origin is not None and origin != connection.base_url.netloc:
             # if origin is set (it is set on all browser cross-origin requests and cannot be forged by js),
             # it must match the target URL. either router-to-router or same-app-origin is fine.

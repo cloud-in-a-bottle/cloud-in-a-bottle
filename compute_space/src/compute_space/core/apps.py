@@ -1122,17 +1122,8 @@ def get_app_from_hostname(host: str, db: sqlite3.Connection) -> App | None:
     matched = Domain.match(db, host)
     if matched is None:
         return None
-    zone_no_port = matched.name_no_port
-    host_no_port = host.split(":", 1)[0].lower()
-    if host_no_port == zone_no_port:
-        # the domain itself — the router, not an app
-        return None
-    # Domain.match guarantees host_no_port ends with "." + zone_no_port here
-    app_name = host_no_port[: -(len(zone_no_port) + 1)]
-    if "." not in app_name:
-        if app := find_app_by_name(app_name):
-            return app
-    return None
+    app_name = matched.app_name_from_hostname(host)
+    return find_app_by_name(app_name) if app_name is not None else None
 
 
 def is_public_path(app: App, request_path: str) -> bool:

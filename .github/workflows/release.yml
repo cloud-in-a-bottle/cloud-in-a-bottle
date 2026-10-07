@@ -1,12 +1,13 @@
 name: release
 
-# The one true OpenHost release process. Pushing a version tag (vMAJOR.MINOR.PATCH)
+# The one true Cloud in a Bottle release process. Pushing a version tag (vMAJOR.MINOR.PATCH)
 # does everything: it verifies the tree's pyproject version matches the tag, builds
 # the VM image artifacts, and publishes a GitHub release whose notes are the
 # auto-generated "What's Changed" changelog with the VM-image usage notes on top.
 #
-# To cut a release (the version lives in the root pyproject.toml — the openhost
-# distribution bundles the sub-packages, so that one field is the version of record):
+# To cut a release (the version lives in the root pyproject.toml; that distribution
+# bundles the sub-packages, so that one field is the version of record; the package
+# itself is still named `openhost`, only the release artifacts are rebranded):
 #   uv version 0.1.4                   # or edit pyproject.toml's [project] version
 #   git commit -am "Release v0.1.4" && git push
 #   git tag v0.1.4 && git push origin v0.1.4
@@ -14,11 +15,20 @@ name: release
 # The release is created as a draft so a human can review the changelog before it
 # goes public. The same vX.Y.Z tags drive the host auto-updater
 # (openhost_system_agent/update.py), so there is exactly one tag scheme.
+#
+# Images are built for amd64 (on the runner, with KVM) and arm64 (on an EC2
+# Graviton bare-metal host, via image/on_ec2.sh). Pull requests that touch the
+# image build, and manual runs on a branch, build without publishing.
 
 on:
   push:
     tags:
       - "v[0-9]+.[0-9]+.[0-9]+"
+  pull_request:
+    paths:
+      - "image/**"
+      - ".github/workflows/release.yml"
+  workflow_dispatch:
 
 # gh release create needs write access to create the release and upload assets.
 permissions:
@@ -28,6 +38,7 @@ jobs:
   # Fast gate: refuse to build if the root pyproject version doesn't match the tag.
   # This is what turns "we forgot to bump pyproject" into a loud, immediate failure.
   verify-version:
+    if: github.ref_type == 'tag'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -44,12 +55,21 @@ jobs:
           fi
           echo "version ok: pyproject.toml $got matches $TAG"
 
-  release:
+  build:
     needs: verify-version
+    # Run on workflow_dispatch too, where verify-version is skipped.
+    if: ${{ !failure() && !cancelled() }}
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [amd64, arm64]
     runs-on: ubuntu-latest
     # The build boots a VM and provisions it end to end; give it plenty of room.
     # build.sh has its own 30-min boot timeout inside this budget.
     timeout-minutes: 90
+    env:
+      # The ref provision.sh clones: the tag, or the PR / dispatched branch.
+      BRANCH: ${{ github.head_ref || github.ref_name }}
     steps:
       - name: Check out the release tag
         uses: actions/checkout@v4
@@ -57,48 +77,83 @@ jobs:
           fetch-depth: 0
 
       - name: Install image build dependencies
+        if: matrix.arch == 'amd64'
         run: |
           sudo apt-get update
           sudo apt-get install -y qemu-system-x86 qemu-utils cloud-image-utils
 
       - name: Enable KVM access
+        if: matrix.arch == 'amd64'
         run: |
           # GitHub's 2-vCPU+ Linux runners (incl. ubuntu-latest) ship /dev/kvm,
-          # but it's root:kvm 0660 — not writable by the runner user. Grant
-          # access via udev so build.sh uses hardware acceleration instead of
-          # the (much slower) TCG fallback. Same rule android-emulator-runner
-          # uses. See https://github.com/actions/runner-images/issues/7541.
+          # but it's root:kvm 0660, not writable by the runner user, which
+          # build.sh requires. Grant access via udev. Same rule
+          # android-emulator-runner uses. See
+          # https://github.com/actions/runner-images/issues/7541.
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
             | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
 
-      - name: Require KVM
-        run: |
-          ls -l /dev/kvm || true
-          if [ ! -w /dev/kvm ]; then
-            echo "::error::/dev/kvm is not usable. The build needs KVM; a TCG"
-            echo "fallback would exceed the boot timeout, so failing fast. If this"
-            echo "persists, the runner may lack nested virtualization — use a"
-            echo "larger runner or a self-hosted KVM runner."
-            exit 1
-          fi
-          echo "KVM available — build will use hardware acceleration."
-
       - name: Build VM images
-        run: |
-          image/build.sh --branch "${GITHUB_REF_NAME}" --version "${GITHUB_REF_NAME}"
+        if: matrix.arch == 'amd64'
+        run: image/build.sh --branch "$BRANCH" --version "${BRANCH//\//-}"
 
-      - name: List built artifacts
-        run: ls -lh image/out/
+      # GitHub's arm64 runners have no /dev/kvm, so build arm64 on an EC2
+      # Graviton bare-metal host, which does.
+      - name: Build VM images on EC2
+        if: matrix.arch == 'arm64'
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          EC2_KEY_NAME: ${{ secrets.EC2_KEY_NAME }}
+          EC2_SECURITY_GROUP: ${{ secrets.EC2_SECURITY_GROUP }}
+          EC2_SSH_PRIVATE_KEY: ${{ secrets.EC2_E2E_SSH_PRIVATE_KEY }}
+        run: |
+          export EC2_SSH_KEY="$RUNNER_TEMP/ec2_key"
+          printf '%s\n' "$EC2_SSH_PRIVATE_KEY" > "$EC2_SSH_KEY"
+          chmod 600 "$EC2_SSH_KEY"
+          image/on_ec2.sh "image/build.sh --cpus 8 --mem 16384 --branch '$BRANCH' --version '${BRANCH//\//-}'"
+
+      - name: Upload console log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: console-log-${{ matrix.arch }}
+          path: image/out/build-console.log
+          if-no-files-found: ignore
+
+      - name: Upload images
+        uses: actions/upload-artifact@v4
+        with:
+          name: images-${{ matrix.arch }}
+          path: |
+            image/out/*.qcow2
+            image/out/*.ova
+          if-no-files-found: error
+          # Already compressed; re-zipping only burns time.
+          compression-level: 0
+          retention-days: 7
+
+  publish:
+    needs: build
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download images
+        uses: actions/download-artifact@v4
+        with:
+          pattern: images-*
+          path: image/out
+          merge-multiple: true
 
       - name: Publish GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
         run: |
-          assets=(image/out/openhost-*.qcow2)
-          for ova in image/out/openhost-*.ova; do
+          assets=(image/out/cloud-in-a-bottle-*.qcow2)
+          for ova in image/out/cloud-in-a-bottle-*.ova; do
             [ -e "$ova" ] && assets+=("$ova")
           done
 
@@ -106,16 +161,18 @@ jobs:
           # "What's Changed" changelog. gh can't emit both at once, so create with
           # --generate-notes, then prepend our blurb to whatever it produced.
           gh release create "$TAG" \
-            --title "OpenHost $TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "Cloud in a Bottle $TAG" \
             --generate-notes \
             --draft \
             "${assets[@]}"
 
-          changelog="$(gh release view "$TAG" --json body --jq .body)"
-          preamble="OpenHost $TAG — VM images below.
+          changelog="$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json body --jq .body)"
+          preamble="Cloud in a Bottle $TAG. VM images below.
 
-          - \`*.qcow2\` — QEMU/KVM/libvirt (and most cloud importers)
-          - \`*.ova\` — VirtualBox / VMware
+          - \`*-amd64.qcow2\`: QEMU/KVM/libvirt (and most cloud importers)
+          - \`*-amd64.ova\`: VirtualBox / VMware
+          - \`*-arm64.qcow2\`: arm64 hosts (UTM on Apple silicon, QEMU/KVM on arm64 Linux); boots via UEFI
 
           Boot it, then reach the dashboard at \`http://<vm-ip>:8080\` and claim it
           (claiming is open by default — the image is private behind NAT).
@@ -123,5 +180,5 @@ jobs:
 
           ---
           "
-          gh release edit "$TAG" --notes "${preamble}
+          gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --notes "${preamble}
           ${changelog}"
