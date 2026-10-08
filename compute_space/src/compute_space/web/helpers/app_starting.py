@@ -35,7 +35,7 @@ def app_starting_response(request: Request[Any, Any, Any]) -> ASGIResponse:
         )
 
     zone = zone_for_request(request)
-    router_host = host_with_request_port(zone.name_no_port, request.url.netloc)
+    router_host = host_with_request_port(zone.router_host, request.url.netloc)
     router_url = f"{zone.scheme}://{router_host}"
 
     body = _JINJA_ENV.get_template("app_starting.html").render(

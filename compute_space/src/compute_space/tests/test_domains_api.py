@@ -282,6 +282,13 @@ def test_add_duplicate_rejected(cfg: Any, client: TestClient[Litestar]) -> None:
     assert resp.json()["detail"] == "domain is already configured"
 
 
+def test_add_router_subdomain_rejected(cfg: Any, client: TestClient[Litestar]) -> None:
+    client.cookies.update(_auth_cookie(cfg.db_path))
+    resp = client.post("/api/domains", json={"name": "bottle.host.example.com", "tls": True})
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == "domain is the router subdomain of a configured domain"
+
+
 def test_add_invalid_name_rejected(cfg: Any, client: TestClient[Litestar]) -> None:
     client.cookies.update(_auth_cookie(cfg.db_path))
     resp = client.post("/api/domains", json={"name": "not a domain"})

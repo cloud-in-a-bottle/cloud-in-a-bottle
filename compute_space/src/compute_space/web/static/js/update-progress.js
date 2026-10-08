@@ -50,10 +50,15 @@
 
   function dashboardReachable() {
     // Probe /health, not /settings: /settings answers HEAD with 405 (GET-only)
-    // and would never report reachable. The detached updater answers 503, so
-    // "ok" can only come from a live compute_space.
+    // and would never report reachable. Every updater response carries
+    // X-OpenHost-Updater, so any other answer comes from a live compute_space,
+    // except a gateway error from Caddy while it is still coming up. Don't
+    // require "ok": on an app's host (including the bare domain while an app is
+    // served there) /health reaches the app, which may well 404 it.
     return fetch('/health', { method: 'GET', cache: 'no-store' })
-      .then(function (r) { return r.ok; })
+      .then(function (r) {
+        return !r.headers.get('X-OpenHost-Updater') && [502, 503, 504].indexOf(r.status) === -1;
+      })
       .catch(function () { return false; });
   }
 

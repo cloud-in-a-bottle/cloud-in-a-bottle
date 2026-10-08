@@ -27,6 +27,7 @@ from compute_space.core import archive_backend
 from compute_space.core.auth.auth import read_owner_username
 from compute_space.core.auth.identity import load_identity_keys
 from compute_space.core.dns.coredns_provider.interface import InternalDnsProvider
+from compute_space.core.domains import ROUTER_SUBDOMAIN
 from compute_space.core.domains import Domain
 from compute_space.core.domains import host_with_request_port
 from compute_space.core.domains import primary_domain_or_none
@@ -37,6 +38,8 @@ from compute_space.core.logging import logger
 from compute_space.core.memory_guard import ensure_memory_guard
 from compute_space.core.org_rename import reconcile_app_repo_urls
 from compute_space.core.process_stream import cleanup_all as cleanup_process_streams
+from compute_space.core.root_app import ROUTER_ROOT_PATHS
+from compute_space.core.root_app import get_root_app_id
 from compute_space.core.startup import check_app_status
 from compute_space.core.startup import retry_pending_default_apps
 from compute_space.core.storage import start_storage_guard
@@ -53,6 +56,7 @@ from compute_space.web.routes.api.archive_backend import api_archive_backend_rou
 from compute_space.web.routes.api.domains import api_domains_routes
 from compute_space.web.routes.api.identity import identity_routes
 from compute_space.web.routes.api.permissions_v2 import api_permissions_v2_routes
+from compute_space.web.routes.api.root_app import api_root_app_routes
 from compute_space.web.routes.api.services_v2 import api_services_v2_routes
 from compute_space.web.routes.api.settings import api_settings_routes
 from compute_space.web.routes.api.system import system_routes
@@ -137,6 +141,13 @@ def _full_app_bootstrap(config: Config) -> None:
         # see that module for why this is a per-boot reconcile rather than a
         # versioned migration.
         reconcile_app_repo_urls(db)
+        # App names can no longer be the router subdomain, but one installed before that rule is still in the
+        # DB.  The router wins its subdomain, so the app is only reachable after a rename.
+        if db.execute("SELECT 1 FROM apps WHERE name = ?", (ROUTER_SUBDOMAIN,)).fetchone() is not None:
+            logger.warning(
+                "An app is named {!r}, which is now the router's subdomain; rename it to make it reachable again",
+                ROUTER_SUBDOMAIN,
+            )
     finally:
         db.close()
     check_app_status(config)
@@ -195,14 +206,24 @@ def _reject_app_subdomain_requests(request: Request[Any, Any, Any]) -> Response[
 
     App-subdomain traffic is supposed to be intercepted by SubdomainProxyMiddleware
     (outer ASGI) before Litestar ever sees it.  If a request reaches Litestar with
-    an app-subdomain Host of any configured domain — e.g. the middleware was
-    bypassed in a test or a deployment variant — refuse it rather than accidentally
-    serve a router route (like /health) under the app's hostname.
+    an app-subdomain Host of any configured domain, or the bare domain while an app is
+    served there — e.g. the middleware was bypassed in a test or a deployment variant —
+    refuse it rather than accidentally serve a router route (like /health) under the
+    app's hostname.
     """
     netloc = request.url.netloc
     with closing(get_db()) as db:
         matched = Domain.match(db, netloc)
+        root_app_id = get_root_app_id(db)
     if matched is not None and matched.looks_like_app_subdomain(netloc):
+        return Response(content=None, status_code=404)
+    # Likewise the bare domain while an app is served there, apart from the paths the router keeps.
+    if (
+        matched is not None
+        and matched.is_apex(netloc)
+        and root_app_id is not None
+        and request.url.path not in ROUTER_ROOT_PATHS
+    ):
         return Response(content=None, status_code=404)
     return None
 
@@ -244,6 +265,7 @@ def create_app(config: Config, dns_provider: InternalDnsProvider) -> ASGIApp:
             api_archive_backend_routes,
             api_domains_routes,
             api_permissions_v2_routes,
+            api_root_app_routes,
             api_services_v2_routes,
             api_settings_routes,
             system_routes,

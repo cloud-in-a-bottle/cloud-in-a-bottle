@@ -21,6 +21,7 @@ from compute_space.core.containers import ROUTER_INTERNAL_HOSTS
 from compute_space.core.domains import Domain
 from compute_space.core.logging import logger
 from compute_space.core.proxy_target import LocalPort
+from compute_space.core.root_app import ROUTER_ROOT_PATHS
 from compute_space.db import get_db
 from compute_space.web.auth.auth import login_required_redirect
 from compute_space.web.auth.auth import verify_owner_auth
@@ -145,6 +146,11 @@ class SubdomainProxyMiddleware:
             zone = Domain.match(db, netloc)
             app = get_app_from_hostname(netloc, db) if zone is not None else None
             looks_like_app = zone is not None and app is None and zone.looks_like_app_subdomain(netloc)
+        is_root_app = zone is not None and app is not None and zone.is_apex(netloc)
+        if is_root_app and scope["path"] in ROUTER_ROOT_PATHS:
+            # The router keeps a few well-known paths on the bare domain even while an app is served there.
+            app = None
+            is_root_app = False
 
         if zone is None:
             if netloc.split(":")[0].lower() in ROUTER_INTERNAL_HOSTS:
@@ -168,7 +174,8 @@ class SubdomainProxyMiddleware:
                 # falling through to the router.
                 await _send_not_found(scope, receive, send)
                 return
-            # The bare configured domain — the router itself; defer to Litestar.
+            # The router's own host (the `bottle.` subdomain, or the bare domain while no app is served
+            # there); defer to Litestar.
             await self.app(scope, receive, send)
             return
 
@@ -198,8 +205,10 @@ class SubdomainProxyMiddleware:
             verify_owner_auth(connection)
             extra_headers.append(IS_OWNER_HEADER)
         except NotAuthorizedException:
-            # Match a missing app's response so unauthorized callers cannot discover fully private apps.
-            if not app.public_paths:
+            # Match a missing app's response so unauthorized callers cannot discover fully private apps.  The
+            # bare domain always answers (the router redirects to login there by default), so a root app
+            # falls through to the login redirect instead.
+            if not app.public_paths and not is_root_app:
                 await _send_not_found(scope, receive, send)
                 return
             raw_path = scope.get("raw_path")

@@ -115,6 +115,7 @@ The router injects these environment variables into your app.
 | `BOTTLE_ROUTER_URL` | `http://host.containers.internal:8080` | internal URL of the router, used for constructing service requests. |
 | `BOTTLE_LOCAL_PORT` | `9137` | The host port the router expects the app on. Set only for `network_host` apps, which must bind this instead of their manifest port |
 | `BOTTLE_ZONE_DOMAIN` | `mycooldomain.com` | The instance's domain                                                                                      |
+| `BOTTLE_ROUTER_PUBLIC_URL` | `https://bottle.mycooldomain.com` | Public URL of the router, for service requests made from the browser. Don't assume the router is at `BOTTLE_ZONE_DOMAIN`: the owner may serve an app there instead. |
 | `BOTTLE_MY_REDIRECT_DOMAIN` | `my.selfhost.imbue.com` | The shared `my.*` OAuth redirect domain. This hosts a browser-local page that redirects the user to their zone. |
 | `BOTTLE_APP_DATA_DIR` | `/data/app_data/my-app` | Path to the app's persistent data directory. Set when `app_data` (default on), `sqlite`, or `access_all_app_data` is requested   |
 | `BOTTLE_APP_TEMP_DIR` | `/data/app_temp_data/my-app` | Path to the app's temporary data directory. Set when `app_temp_data` or `access_all_app_data` is requested          |

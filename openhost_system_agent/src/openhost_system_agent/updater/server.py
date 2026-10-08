@@ -56,15 +56,18 @@ _FALLBACK_BODY = (
 )
 # Keep behavior-parity with update-progress.js: authenticate /updates with the
 # URL token, and when /updates is not readable (no token / instance back) probe
-# /health and reload so no viewer is ever stranded on this page.
+# /health and reload so no viewer is ever stranded on this page.  The probe
+# treats any answer without the updater's marker header (and not a gateway
+# error) as "back", since on an app's host /health reaches the app.
 _FALLBACK_JS = (
     "var t=new URLSearchParams(location.search).get('token')||'';var e=0;"
-    "function r(){fetch('/health',{cache:'no-store'}).then(function(h){if(h.ok)location.reload()})"
+    "function b(h){return !h.headers.get('X-OpenHost-Updater')&&[502,503,504].indexOf(h.status)<0}"
+    "function r(){fetch('/health',{cache:'no-store'}).then(function(h){if(b(h))location.reload()})"
     ".catch(function(){})}"
     "function p(){fetch('/updates?token='+encodeURIComponent(t),{cache:'no-store'})"
     ".then(function(x){return x.ok?x.json():(r(),null)})"
     ".then(function(d){if(d){var n=(d.entries||[]).length;e=n?0:e+1;if(e>3)r();"
-    "if(d.terminal){fetch('/health').then(function(h){if(h.ok)location.href='/settings'})}}"
+    "if(d.terminal){fetch('/health').then(function(h){if(b(h))location.href='/settings'})}}"
     "setTimeout(p,1500)}).catch(function(){r();setTimeout(p,1500)})}p();"
 )
 
@@ -175,6 +178,9 @@ class _Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "no-store")
+            # Lets the page tell this updater apart from a live instance, whose
+            # /health may be answered by an app (see update-progress.js).
+            self.send_header("X-OpenHost-Updater", "1")
             if status == 503:
                 # Every app on the instance answers 503 for the length of the
                 # apply, so tell clients when to come back rather than letting

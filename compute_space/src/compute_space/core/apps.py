@@ -34,6 +34,7 @@ from compute_space.core.data import deprovision_temp_data
 from compute_space.core.data import make_data_dirs_and_env_vars
 from compute_space.core.data import rmtree_with_sudo_fallback
 from compute_space.core.domains import PRIMARY_DOMAIN_RESTART_MARKER
+from compute_space.core.domains import ROUTER_SUBDOMAIN
 from compute_space.core.domains import Domain
 from compute_space.core.domains import primary_domain
 from compute_space.core.git_ops import CloneFailed
@@ -55,6 +56,8 @@ from compute_space.core.oauth import OAuthRequired
 from compute_space.core.oauth import get_oauth_token
 from compute_space.core.ports import allocate_port
 from compute_space.core.ports import resolve_port_mappings
+from compute_space.core.root_app import clear_root_app_if
+from compute_space.core.root_app import get_root_app_id
 from compute_space.core.service_interface.services import register_services_provided_by_app
 from compute_space.db import get_db
 
@@ -84,6 +87,9 @@ RESERVED_PATHS = {
     "/settings",
     "/system",
     "/docs",
+    # Not a router path, but the router's subdomain (``bottle.<domain>``); kept here so every app-name check
+    # refuses it.
+    f"/{ROUTER_SUBDOMAIN}",
 }
 
 
@@ -345,7 +351,7 @@ def insert_and_deploy(
         temp_data_dir=config.temporary_data_dir,
         archive_dir=archive_backend.effective_archive_dir(config, db),
         my_openhost_redirect_domain=config.my_openhost_redirect_domain,
-        zone_domain=primary_domain(db).name,
+        primary=primary_domain(db),
         port=config.port,
         owner_username=read_owner_username(db) or DEFAULT_OWNER_USERNAME,
     )
@@ -518,7 +524,7 @@ def run_app_image(
                 temp_data_dir=config.temporary_data_dir,
                 archive_dir=archive_backend.effective_archive_dir(config, db),
                 my_openhost_redirect_domain=config.my_openhost_redirect_domain,
-                zone_domain=primary_domain(db).name,
+                primary=primary_domain(db),
                 port=config.port,
                 owner_username=read_owner_username(db) or DEFAULT_OWNER_USERNAME,
             )
@@ -1087,6 +1093,7 @@ def remove_app_background(app_id: str, keep_data: bool, config: Config) -> None:
         except Exception:
             logger.exception("Failed to deprovision data for {}", app_name)
 
+        clear_root_app_if(db, app_id)
         db.execute("DELETE FROM apps WHERE app_id = ?", (app_id,))
         db.commit()
         logger.info("Removed app {} (keep_data={})", app_name, keep_data)
@@ -1110,18 +1117,27 @@ def get_app_from_hostname(host: str, db: sqlite3.Connection) -> App | None:
 
     The host is matched against every configured Domain (see Domain.match), so an app is
     reachable under any domain the instance answers on (e.g. both `<app>.host.example.com` and
-    `<app>.myhost.local`).  Matching is case-insensitive.
+    `<app>.myhost.local`).  Matching is case-insensitive.  A bare domain resolves to the root app,
+    if the owner has chosen one (see ``core.root_app``).
 
     returns None if an app cannot be matched from the header.
 
     if a configured domain is host.imbue.com:
         ha-tunnel.zplizzi.host.imbue.com -> "ha-tunnel"
         zplizzi.host.imbue.com -> None
+        host.imbue.com -> the root app, or None
+        bottle.host.imbue.com -> None
         localhost:8080 -> None
     """
     matched = Domain.match(db, host)
     if matched is None:
         return None
+    if matched.is_apex(host):
+        root_app_id = get_root_app_id(db)
+        if root_app_id is None:
+            return None
+        row = db.execute("SELECT * FROM apps WHERE app_id = ?", (root_app_id,)).fetchone()
+        return App.from_row(row) if row else None
     app_name = matched.app_name_from_hostname(host)
     return find_app_by_name(app_name) if app_name is not None else None
 

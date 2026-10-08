@@ -420,20 +420,20 @@ class TestAccessedDomainUrls:
         # The browsing authority comes from the consumer app's Origin header.
         self._seed_primary(db)
         url = approve_grant_url("consumer-id", SVC_SECRETS, {"x": 1}, db, "consumer.lvh.me:8088")
-        assert url.startswith("http://lvh.me:8088/approve-permissions-v2?")
+        assert url.startswith("http://bottle.lvh.me:8088/approve-permissions-v2?")
 
     def test_grant_url_falls_back_to_primary_without_origin(self, db):
         # A server-side call has no Origin: stay on the primary (prior behavior).
         self._seed_primary(db)
         url = approve_grant_url("consumer-id", SVC_SECRETS, {"x": 1}, db, None)
-        assert url.startswith("http://lvh.me/approve-permissions-v2?")
+        assert url.startswith("http://bottle.lvh.me/approve-permissions-v2?")
 
     def test_grant_url_server_side_preserves_configured_primary_port(self, db):
         # Documented `lvh.me:8080` setup: the primary's configured name carries the port. A
-        # server-side call (no Origin) must keep it rather than dropping to bare `lvh.me`.
+        # server-side call (no Origin) must keep it rather than dropping it.
         seed_domains(db, Domain(name="lvh.me:8080", tls=False), [])
         url = approve_grant_url("consumer-id", SVC_SECRETS, {"x": 1}, db, None)
-        assert url.startswith("http://lvh.me:8080/approve-permissions-v2?")
+        assert url.startswith("http://bottle.lvh.me:8080/approve-permissions-v2?")
 
     def test_grant_url_is_relative_when_no_domain_known(self, db):
         # No configured domains at all → a relative path rather than a broken absolute URL.
@@ -448,9 +448,9 @@ class TestAccessedDomainUrls:
         self._seed_primary(db)
         request = self._request("lvh.me:8088", Domain(name="lvh.me", tls=False))
         # Absolute (with scheme), not protocol-relative — GitHub's device flow redirects from https.
-        assert _oauth_return_origin(db, request) == "http://lvh.me:8088"
+        assert _oauth_return_origin(db, request) == "http://bottle.lvh.me:8088"
 
     def test_oauth_return_origin_falls_back_to_primary(self, db):
         self._seed_primary(db)
         request = self._request("lvh.me", None)  # middleware stashed no zone
-        assert _oauth_return_origin(db, request) == "http://lvh.me"
+        assert _oauth_return_origin(db, request) == "http://bottle.lvh.me"

@@ -216,7 +216,9 @@ async def test_unauth_on_local_redirects_to_local_login_over_http(wrapped_app: A
         r = await c.get("http://mixedapp.myhost.local/secret")  # httpx doesn't auto-follow
     assert r.status_code == 302
     # bounced to the .local login over http, NOT the public/canonical domain
-    assert r.headers["location"] == ("http://myhost.local/login?next=http%3A%2F%2Fmixedapp.myhost.local%2Fsecret")
+    assert r.headers["location"] == (
+        "http://bottle.myhost.local/login?next=http%3A%2F%2Fmixedapp.myhost.local%2Fsecret"
+    )
 
 
 @pytest.mark.asyncio
@@ -225,7 +227,7 @@ async def test_unauth_on_public_redirects_to_public_login_over_https(wrapped_app
         r = await c.get("http://mixedapp.host.example.com/secret")
     assert r.status_code == 302
     assert r.headers["location"] == (
-        "https://host.example.com/login?next=https%3A%2F%2Fmixedapp.host.example.com%2Fsecret"
+        "https://bottle.host.example.com/login?next=https%3A%2F%2Fmixedapp.host.example.com%2Fsecret"
     )
 
 
@@ -321,7 +323,7 @@ async def test_startup_at_deep_app_url_then_running_proxies_same_url(
         assert backend.requests == []
         page = _PageElements(r.text)
         bases = [attrs.get("href") for tag, attrs in page.elements if tag == "base"]
-        assert bases == [f"{scheme}://{authority}/"]
+        assert bases == [f"{scheme}://bottle.{authority}/"]
         assert r.text.index("<base") < r.text.index("<link")
         links = [attrs.get("href") or "" for tag, attrs in page.elements if tag == "a"]
         assert not any(urlsplit(link).path.startswith(("/app_detail", "/dashboard")) for link in links)
@@ -337,7 +339,7 @@ async def test_startup_at_deep_app_url_then_running_proxies_same_url(
         }
         for asset in router_assets:
             assert asset.startswith("/static/"), asset
-            assert urljoin(bases[0], asset).startswith(f"{scheme}://{authority}/static/")
+            assert urljoin(bases[0], asset).startswith(f"{scheme}://bottle.{authority}/static/")
         assert all(urlsplit(urljoin(bases[0], asset)).scheme in ("http", "https") for asset in assets)
 
         private = await c.get(f"{scheme}://myapp.{authority}/private", headers={"Accept": "text/html"})

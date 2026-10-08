@@ -83,6 +83,8 @@ class DomainInfo:
     cert_status: DomainCertStatus
     error_message: str | None
     is_primary: bool
+    # `bottle.<name>`: always serves the router, whatever is served at the bare domain.
+    router_host: str
 
 
 @attr.s(auto_attribs=True, frozen=True)
@@ -123,6 +125,7 @@ def _domain_info(config: Config, domain: Domain, record: DomainRecord | None) ->
         cert_status=cert_status,
         error_message=error,
         is_primary=is_primary,
+        router_host=domain.router_host,
     )
 
 
@@ -173,6 +176,8 @@ def _validate_new_domain(
         return "Local domains are served over HTTP; set tls=false"
     if any(d.name_no_port == name for d in effective_domains(db)):
         return "domain is already configured"
+    if any(d.router_host == name for d in effective_domains(db)):
+        return "domain is the router subdomain of a configured domain"
     return None
 
 
