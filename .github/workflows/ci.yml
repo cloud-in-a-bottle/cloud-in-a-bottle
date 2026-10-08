@@ -33,7 +33,7 @@ jobs:
         uses: github/codeql-action/init@v4
         with:
           languages: actions,javascript-typescript,python
-          queries: security-extended
+          queries: security-extended,code-quality
       - name: Analyze with CodeQL
         if: ${{ !cancelled() && steps.codeql.outcome == 'success' }}
         uses: github/codeql-action/analyze@v4
