@@ -62,6 +62,8 @@ def get_connection_origin(connection: AnyConnection) -> str | None:
     - it includes the port if non-default (not 80 or 443).
 
     we don't use the Referer header, as it's not intended for use in CORS type origin validation.
+
+    note sec-fetch-site is potentially preferred to Origin for some uses.
     """
     raw = connection.headers.get("Origin")
     if raw is None:
@@ -78,51 +80,59 @@ def get_connection_origin(connection: AnyConnection) -> str | None:
 _SELF_INITIATED_FETCH_SITES = frozenset({"same-origin", "none"})
 
 
-def _is_same_origin_http(connection: AnyConnection) -> bool:
-    """Judge an HTTP request on Sec-Fetch-Site, with a concrete foreign Origin as a hard veto.
+def _is_safe_origin_for_cookie_auth_http(connection: Request[Any, Any, Any]) -> bool:
+    """HTTP path for `is_safe_origin_for_cookie_auth`.
 
-    The session cookie is zone-scoped, so the router and every app are one site with many origins. Only
-    Sec-Fetch-Site tells ``same-site`` (another app) apart from ``same-origin``, and Origin is absent on
-    GET/HEAD navigations and subresource loads, which is where the cross-app forgery lives.
+    Just using `Origin` is insufficient; Origin isn't set on some valid same-origin requests.
+    Instead we use Sec-Fetch-Site, with a concrete foreign Origin as a hard veto.
+    Sec-Fetch-Site:
+    - `same-origin` (exact same host, ie same-app)
+    - `same-site` (another app)
+    - `cross-site` (another site)
+    - `none` (typing URL in address bar, using bookmark, reloading the page.)
 
-    ``same-site`` is allowed only for a top-level document load with no Origin: a link the user clicked
-    from another app. Keying on ``Sec-Fetch-Dest: document`` rather than ``Sec-Fetch-Mode: navigate``
-    excludes iframes, which also report ``navigate``. Requiring no Origin excludes form POSTs.
-
-    A missing Sec-Fetch-Site fails closed: it means a pre-2023 browser or a non-browser client, and
-    falling back to Origin would reopen the Origin-less GET hole.
+    We want to allow links to be clicked from elsewhere in the instance (dashboard, other apps).
+    So for GET/HEADs with Sec-Fetch-Site in (same-site, none),
+    we allow them if Sec-Fetch-Dest == "document", which is only set on full-page navigations.
     """
-    origin = get_connection_origin(connection)
     site = connection.headers.get("Sec-Fetch-Site")
-
-    if origin is not None and origin != _OPAQUE_ORIGIN_TOKEN and origin != connection.base_url.netloc:
-        return False
     if site in _SELF_INITIATED_FETCH_SITES:
         return True
-    if site == "same-site":
-        return origin is None and connection.headers.get("Sec-Fetch-Dest") == "document"
+    if (
+        site == "same-site"
+        and connection.scope["method"] in ("GET", "HEAD")
+        and connection.headers.get("Sec-Fetch-Dest") == "document"
+    ):
+        return True
     return False
 
 
-def _is_same_origin_websocket(connection: AnyConnection) -> bool:
-    """Judge a WebSocket handshake on an exact Origin match.
+def _is_safe_origin_for_cookie_auth_websocket(connection: AnyConnection) -> bool:
+    """Websocket-path for `is_safe_origin_for_cookie_auth`
 
-    Chromium sends no Sec-Fetch-* on a handshake, so keying on it would fail open. Browsers always send a
-    concrete Origin here (a referrer policy does not null it), so null or absent is refused.
+    Browsers always send a concrete Origin, so we just check it directly.
     """
     return get_connection_origin(connection) == connection.base_url.netloc
 
 
-def is_same_origin_request(connection: AnyConnection) -> bool:
-    """Whether a browser request may carry the owner's session cookie authority to this target.
+def is_safe_origin_for_cookie_auth(connection: AnyConnection) -> bool:
+    """Whether the request is safe to allow cookie auth on.
 
-    Making cross-app links fully safe would need a capability token on the link; header checks can't
-    distinguish a router link from an app link, since both are Origin-less GETs and Referer is
-    suppressible.
+    A malicious app could make a request from the owner's browser to another app on their instance,
+    and by default their browser would send the user's instance auth cookies with this request,
+    because both the origin and target are on the same site.
+
+    We want to prevent such cross-app requests in general, with some narrow exceptions:
+    - a full-page navigation/redirect is allowed - one app show a link to eg approve a permission in another app,
+    and the user should be able to click this.
     """
     if connection.scope["type"] == ScopeType.WEBSOCKET:
-        return _is_same_origin_websocket(connection)
-    return _is_same_origin_http(connection)
+        return _is_safe_origin_for_cookie_auth_websocket(connection)
+    if connection.scope["type"] == ScopeType.HTTP:
+        return _is_safe_origin_for_cookie_auth_http(
+            Request(connection.scope, receive=connection.receive, send=connection.send)
+        )
+    return False
 
 
 def authenticate(connection: AnyConnection, db: sqlite3.Connection) -> AuthenticatedAccessor | None:
@@ -157,9 +167,8 @@ def verify_owner_auth(connection: AnyConnection) -> None:
     accessor = authenticate(connection, db=get_db())
 
     if isinstance(accessor, AuthenticatedUser):
-        # cross-origin requests bearing the owner's cookie could be forged by untrusted app js.
-        if not is_same_origin_request(connection):
-            raise NotAuthorizedException(detail="user authentication only valid for router-origin requests")
+        if not is_safe_origin_for_cookie_auth(connection):
+            raise NotAuthorizedException(detail="cookie authentication is only valid for safe-origin requests")
         return
     if isinstance(accessor, AuthenticatedAPIKey):
         # API key requests won't come from untrusted JS, so can be trusted regardless of origin.
@@ -226,7 +235,7 @@ def require_owner_or_app_auth(connection: AnyConnection, _route_handler: BaseRou
 def require_same_origin(connection: AnyConnection, _route_handler: BaseRouteHandler) -> None:
     """Route guard for unauthenticated state-changing endpoints (e.g. /logout) that still need CSRF
     protection."""
-    if not is_same_origin_request(connection):
+    if not is_safe_origin_for_cookie_auth(connection):
         raise NotAuthorizedException(detail="cross-origin request not allowed")
 
 
