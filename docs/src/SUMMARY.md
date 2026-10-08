@@ -10,6 +10,7 @@
 - [Deploying on a shared home machine](setup/shared_homeserver.md)
 - [Exposing a server with a static IP](setup/static_ip.md)
 - [Exposing a home server](setup/home_network.md)
+- [Managed Instances](setup/managed_instance.md)
 
 # Operation
 
