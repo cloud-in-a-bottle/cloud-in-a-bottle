@@ -27,6 +27,45 @@ from compute_space.db import provide_db
 from compute_space.web.helpers.zone import ZONE_SCOPE_KEY
 
 
+def make_http_scope(
+    method: str,
+    path: str,
+    *,
+    host: str,
+    headers: dict[str, str] | None = None,
+    cookie: str | None = None,
+    client: tuple[str, int] | None = None,
+    extra_scope: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build a minimal HTTP ASGI scope for auth / middleware unit tests.
+
+    Callers wrap the result however they need — ``Request(scope)``, ``ASGIConnection(scope)``, or pass
+    the raw dict straight into an ASGI middleware.  ``cookie`` (a raw ``name=value`` string) and
+    ``headers`` become request headers; ``extra_scope`` merges in extra scope keys (e.g. the
+    ``ZONE_SCOPE_KEY`` the proxy middleware would normally stash).
+    """
+    raw_headers: list[tuple[bytes, bytes]] = [(b"host", host.encode())]
+    if cookie is not None:
+        raw_headers.append((b"cookie", cookie.encode()))
+    for name, value in (headers or {}).items():
+        raw_headers.append((name.lower().encode(), value.encode()))
+    scope: dict[str, Any] = {
+        "type": "http",
+        "method": method,
+        "path": path,
+        "raw_path": path.encode(),
+        "query_string": b"",
+        "scheme": "http",
+        "server": ("127.0.0.1", 8080),
+        "root_path": "",
+        "headers": raw_headers,
+        **(extra_scope or {}),
+    }
+    if client is not None:
+        scope["client"] = client
+    return scope
+
+
 def stash_zone_middleware(app: ASGIApp) -> ASGIApp:
     """Test stand-in for the zone-stashing half of ``SubdomainProxyMiddleware``: put the DB primary
     in the request scope so ``zone_for_request`` / ``app_url`` resolve in minimal test apps that omit
@@ -76,10 +115,31 @@ def auth_cookie(cfg: Any, username: str = "owner") -> dict[str, str]:
     return {SESSION_COOKIE_NAME: token}
 
 
-def ws_cookie_header(cookies: dict[str, str]) -> dict[str, str]:
-    """A WebSocket handshake is a plain HTTP GET, so the session cookie rides in
-    a Cookie header just like a normal request."""
+# What a browser on the router's own origin sends on an ordinary navigation.  Owner (cookie) auth
+# requires Fetch-Metadata and fails closed without it (see _is_same_origin_http), and no test client
+# sends these on its own, so anything standing in for the owner's browser must supply them.
+BROWSER_FETCH_METADATA = {
+    "Sec-Fetch-Site": "same-origin",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Dest": "document",
+}
+
+
+def cookie_header(cookies: dict[str, str]) -> dict[str, str]:
+    """Just the session cookie, for a request whose other headers the caller controls."""
     return {"cookie": "; ".join(f"{k}={v}" for k, v in cookies.items())}
+
+
+def ws_cookie_header(cookies: dict[str, str], *, origin: str = "http://testserver.local") -> dict[str, str]:
+    """The headers a browser puts on an owner-authenticated WebSocket handshake.
+
+    A handshake is a plain HTTP GET, so the session cookie rides in a Cookie header just like a normal
+    request.  ``Origin`` is the auth-relevant one: browsers send no Fetch-Metadata at all on a
+    handshake, so owner auth judges a WebSocket on Origin alone (see _is_same_origin_websocket) and
+    refuses both an absent and a mismatched Origin.  The default matches TestClient's base_url; tests
+    driving another host must pass the origin that host's browser would send.
+    """
+    return {**cookie_header(cookies), "origin": origin}
 
 
 def make_test_app(*route_handlers: Any) -> Litestar:

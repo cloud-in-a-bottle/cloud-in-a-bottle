@@ -107,12 +107,25 @@ def test_nonowners_cannot_even_parse(
 
 
 @pytest.mark.parametrize("path", [PARSE, IMPORT])
-@pytest.mark.parametrize("origin", ["https://evil.example", "http://consumer.testzone.local", "null"])
+# A concrete foreign Origin is rejected on the Origin veto alone.  ``Origin: null`` is only an
+# attack when Fetch-Metadata says it did not come from this origin: a sandboxed iframe reports
+# cross-site.  A null Origin *with* ``Sec-Fetch-Site: same-origin`` is the app legitimately
+# posting to itself under a no-referrer policy, and is allowed on purpose.
+@pytest.mark.parametrize(
+    "origin,sec_fetch_site",
+    [
+        ("https://evil.example", "cross-site"),
+        ("http://consumer.testzone.local", "same-site"),
+        ("null", "cross-site"),
+    ],
+)
 def test_origin_auth_precedes_parse(
-    client: TestClient[Litestar], path: str, origin: str, monkeypatch: pytest.MonkeyPatch
+    client: TestClient[Litestar], path: str, origin: str, sec_fetch_site: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(app_definition_loader, "parse_definition", lambda *a: pytest.fail("cross-origin parse"))
-    response = client.post(path, json={"content": SENTINEL}, headers={"Origin": origin})
+    response = client.post(
+        path, json={"content": SENTINEL}, headers={"Origin": origin, "Sec-Fetch-Site": sec_fetch_site}
+    )
     assert response.status_code == 401
     assert_json_no_store(response)
 

@@ -568,7 +568,6 @@ def test_logout_allows_request_without_origin_header(cfg: Any, login_client: Tes
 @pytest.mark.parametrize(
     "bad_origin",
     [
-        "null",  # sandboxed/opaque iframe — must NOT be treated as "no header"
         "http://testserver.local.evil.com",  # suffix-style lookalike host
         "http://evil.testserver.local",  # subdomain of an attacker domain
         "http://testserver.local:1337",  # right host, wrong port
@@ -589,3 +588,46 @@ def test_logout_rejects_spoofed_or_opaque_origins(
 
     assert resp.status_code == 401, f"{bad_origin!r} -> {resp.status_code}: {resp.text}"
     assert _session_count(cfg.db_path) == 1, f"session revoked by spoofed origin {bad_origin!r}"
+
+
+@pytest.mark.parametrize("sec_fetch_site", ["cross-site", "same-site"])
+def test_logout_rejects_null_origin_from_opaque_context(
+    cfg: Any, login_client: TestClient[Litestar], sec_fetch_site: str
+) -> None:
+    """``Origin: null`` must not be treated as "no header".  A sandboxed iframe forging a logout has an
+    opaque origin and reports ``cross-site``; a cross-app forgery reports ``same-site``.  Only the
+    ``same-origin`` corroboration in the test below is honored."""
+    user_id = _seed_user(cfg.db_path, "alice", password="loginpass1")
+    token = _create_session_for(cfg.db_path, user_id)
+    assert _session_count(cfg.db_path) == 1
+
+    login_client.cookies.set(SESSION_COOKIE_NAME, token)
+    resp = login_client.post(
+        "/logout",
+        headers={"Origin": "null", "Sec-Fetch-Site": sec_fetch_site},
+        follow_redirects=False,
+    )
+
+    assert resp.status_code == 401, f"{sec_fetch_site} -> {resp.status_code}: {resp.text}"
+    assert _session_count(cfg.db_path) == 1
+
+
+def test_logout_allows_null_origin_when_fetch_site_is_same_origin(
+    cfg: Any, login_client: TestClient[Litestar]
+) -> None:
+    """A genuine same-origin logout that carries ``Origin: null`` (e.g. a referrer-policy or a redirect
+    in the POST chain opaque-ifies the Origin) must still log out — but only because the unforgeable
+    ``Sec-Fetch-Site: same-origin`` corroborates it.  A sandboxed-iframe forgery (also ``Origin: null``)
+    reports cross-site and is still rejected by test_logout_rejects_spoofed_or_opaque_origins."""
+    user_id = _seed_user(cfg.db_path, "alice", password="loginpass1")
+    token = _create_session_for(cfg.db_path, user_id)
+
+    login_client.cookies.set(SESSION_COOKIE_NAME, token)
+    resp = login_client.post(
+        "/logout",
+        headers={"Origin": "null", "Sec-Fetch-Site": "same-origin"},
+        follow_redirects=False,
+    )
+
+    assert resp.status_code in (200, 302), resp.text
+    assert _session_count(cfg.db_path) == 0

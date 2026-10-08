@@ -27,7 +27,7 @@ from compute_space.tests.conftest import _make_test_config
 from compute_space.tests.test_app_definitions import SENTINEL
 from compute_space.tests.test_app_definitions import seed_api_token
 from compute_space.tests.test_app_definitions import seed_app
-from compute_space.web.app import _login_required_redirect
+from compute_space.web.app import _auth_required_handler
 from compute_space.web.routes.api import app_definitions
 from compute_space.web.routes.api.app_definitions import api_app_definitions_routes
 from compute_space.web.routes.services_v2 import services_v2_routes
@@ -65,7 +65,7 @@ def client(tmp_path: Path) -> Iterator[TestClient[Litestar]]:
     app = Litestar(
         route_handlers=[api_app_definitions_routes, services_v2_routes],
         dependencies={"config": Provide(provide_config, sync_to_thread=False), "db": Provide(provide_db)},
-        exception_handlers={NotAuthorizedException: _login_required_redirect},
+        exception_handlers={NotAuthorizedException: _auth_required_handler},
         openapi_config=None,
     )
     with TestClient(app=app) as test_client:
@@ -155,10 +155,25 @@ def test_owner_export_denies_nonowners_with_json_no_store(
     assert "platform_api_tokens" not in response.json()
 
 
-@pytest.mark.parametrize("origin", ["https://evil.example", "http://consumer.testzone.local", "null"])
+# A concrete foreign Origin is rejected on the Origin veto alone.  ``Origin: null`` is only an
+# attack when Fetch-Metadata says it did not come from this origin: a sandboxed iframe reports
+# cross-site.  A null Origin *with* ``Sec-Fetch-Site: same-origin`` is the app legitimately
+# posting to itself under a no-referrer policy, and is allowed on purpose.
+@pytest.mark.parametrize(
+    "origin,sec_fetch_site",
+    [
+        ("https://evil.example", "cross-site"),
+        ("http://consumer.testzone.local", "same-site"),
+        ("null", "cross-site"),
+    ],
+)
 @pytest.mark.parametrize("accept", ["application/json", "application/yaml"])
-def test_owner_session_denies_cross_origin(client: TestClient[Litestar], origin: str, accept: str) -> None:
-    response = client.post(OWNER_PATH, json={}, headers={"Origin": origin, "Accept": accept})
+def test_owner_session_denies_cross_origin(
+    client: TestClient[Litestar], origin: str, sec_fetch_site: str, accept: str
+) -> None:
+    response = client.post(
+        OWNER_PATH, json={}, headers={"Origin": origin, "Accept": accept, "Sec-Fetch-Site": sec_fetch_site}
+    )
     assert response.status_code == 401
     assert_json_no_store(response)
 

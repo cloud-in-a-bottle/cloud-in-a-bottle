@@ -11,6 +11,7 @@ from typing import Any
 
 import pytest
 import requests
+from litestar.testing import TestClient
 
 from compute_space import COMPUTE_SPACE_PACKAGE_DIR
 from compute_space import OPENHOST_PROJECT_DIR
@@ -22,6 +23,7 @@ from compute_space.core.domains import primary_domain
 from compute_space.core.domains import seed_domains
 from compute_space.db.connection import init_db
 from compute_space.db.schema import schema_path
+from compute_space.tests._litestar_helpers import BROWSER_FETCH_METADATA
 from compute_space.tests.utils import kill_tree
 from compute_space.tests.utils import make_router_env
 from compute_space.tests.utils import managed_router
@@ -31,6 +33,28 @@ from compute_space.tests.utils import write_first_boot_beside
 ROUTER_PORT = 18080
 OWNER_PASSWORD = "testpass123"
 TEST_ZONE_DOMAIN = "testzone.local"
+
+
+@pytest.fixture(autouse=True, scope="session")
+def _test_clients_send_fetch_metadata() -> Iterator[None]:
+    """Make every TestClient look like a browser, so tests exercise the real auth path.
+
+    Defaults only: httpx lets per-request ``headers=`` win over client-level ones, so the tests that
+    deliberately forge a cross-origin or opaque request still override these and get rejected.
+    """
+    original_init = TestClient.__init__
+
+    def patched_init(self: TestClient[Any], *args: Any, **kwargs: Any) -> None:
+        original_init(self, *args, **kwargs)
+        for name, value in BROWSER_FETCH_METADATA.items():
+            if name not in self.headers:
+                self.headers[name] = value
+
+    TestClient.__init__ = patched_init  # type: ignore[method-assign]
+    try:
+        yield
+    finally:
+        TestClient.__init__ = original_init  # type: ignore[method-assign]
 
 
 @pytest.fixture(autouse=True, scope="session")
@@ -195,6 +219,9 @@ def admin_session(router_process: subprocess.Popen[bytes], config: Config) -> re
     """
     base_url = f"http://{primary_of(config).name}:{config.port}"
     s = requests.Session()
+    # Owner (cookie) auth requires Fetch-Metadata, which requests doesn't send; this session stands in
+    # for the owner's browser, so give it what a browser on the router's own origin would send.
+    s.headers.update(BROWSER_FETCH_METADATA)
     r = s.post(
         f"{base_url}/setup",
         data={
