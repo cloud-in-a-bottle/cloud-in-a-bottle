@@ -254,7 +254,7 @@ def auth_required_response(request: Request[Any, Any, Any]) -> Response[Any]:
 
     In general you should just raise a NotAuthorizedException and let litestar call this for you.
 
-    GET/HEAD redirect to /login with ?next= set to the requested URL. Other methods get a 403.
+    GET/HEAD redirect to /login with ?next= set to the requested URL. Other methods get a 401.
     """
     if request.method not in ("GET", "HEAD"):
         return Response(content="Authentication required", status_code=403, media_type=MediaType.TEXT)
