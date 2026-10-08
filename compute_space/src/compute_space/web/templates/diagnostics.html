@@ -8,10 +8,11 @@
 info, installed dependency versions, container runtime, disk usage, and every
 installed app. Copy or download it and include it in a bug report.</p>
 
+{# diagnostics.js enables Copy/Refresh once the snapshot loads; Download works without JS. #}
 <div class="action-bar">
-  <button class="btn btn--primary" id="copy-btn">Copy to clipboard</button>
+  <button class="btn btn--primary" id="copy-btn" disabled>Copy to clipboard</button>
   <a class="btn" id="download-btn" href="/api/diagnostics?download=1">Download JSON</a>
-  <button class="btn" id="refresh-btn">Refresh</button>
+  <button class="btn" id="refresh-btn" disabled>Refresh</button>
   <span class="hint" id="copy-status"></span>
 </div>
 

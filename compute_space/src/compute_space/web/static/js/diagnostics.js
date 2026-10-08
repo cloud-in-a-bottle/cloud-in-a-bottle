@@ -203,8 +203,19 @@ function renderReachability(data) {
   }));
 }
 
+// While a load is in flight, nothing in the action bar works: Copy has no
+// snapshot, and Refresh/Download would start a second collection.
+function setActionsBusy(busy) {
+  document.getElementById('copy-btn').disabled = busy || !latest;
+  document.getElementById('refresh-btn').disabled = busy;
+  // <a> has no disabled attribute; the click handler below honours this.
+  document.getElementById('download-btn').setAttribute('aria-disabled', busy ? 'true' : 'false');
+}
+
 function loadDiagnostics() {
   document.getElementById('copy-status').textContent = '';
+  latest = null;
+  setActionsBusy(true);
   fetch(config.diagnosticsUrl, {credentials: 'same-origin'})
     .then(function(r) {
       if (!r.ok) throw new Error('HTTP ' + r.status);
@@ -219,6 +230,9 @@ function loadDiagnostics() {
     })
     .catch(function(e) {
       document.getElementById('diag-json').textContent = 'Failed to load diagnostics: ' + e.message;
+    })
+    .finally(function() {
+      setActionsBusy(false);
     });
 }
 
@@ -241,6 +255,10 @@ document.getElementById('copy-btn').addEventListener('click', function() {
     try { document.execCommand('copy') ? done() : fail(); } catch (e) { fail(); }
     document.body.removeChild(ta);
   }
+});
+
+document.getElementById('download-btn').addEventListener('click', function(e) {
+  if (this.getAttribute('aria-disabled') === 'true') e.preventDefault();
 });
 
 document.getElementById('refresh-btn').addEventListener('click', loadDiagnostics);
