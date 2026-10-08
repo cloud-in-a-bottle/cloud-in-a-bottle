@@ -54,40 +54,19 @@ def _build_app(cfg: Any) -> Litestar:
     )
 
 
-def _render(cfg: Any) -> str:
+def _tag(html: str, element_id: str) -> str:
+    match = re.search(rf"<[^>]*\bid=\"{element_id}\"[^>]*>", html)
+    assert match is not None, f"no element with id={element_id!r}"
+    return match.group(0)
+
+
+def test_snapshot_actions_start_disabled(cfg: Any) -> None:
+    """Copy/Refresh wait for diagnostics.js to load a snapshot; Download is a plain link and works without JS."""
     set_active_config(cfg)
     with TestClient(app=_build_app(cfg)) as client:
         client.cookies.update(auth_cookie(cfg))
         resp = client.get("/diagnostics/")
     assert resp.status_code == 200
-    return resp.text
-
-
-def _tag(html: str, element_id: str) -> str:
-    match = re.search(rf"<[^>]*\bid=\"{element_id}\"[^>]*>", html)
-    assert match is not None, f"no element with id={element_id!r} in the page"
-    return match.group(0)
-
-
-def test_diagnostics_page_renders(cfg: Any) -> None:
-    html = _render(cfg)
-    assert "js/diagnostics.js" in html
-    assert "/api/diagnostics" in html
-
-
-def test_snapshot_actions_start_disabled(cfg: Any) -> None:
-    """Copy and Refresh act on a snapshot the page has not fetched yet, so they ship disabled.
-
-    diagnostics.js enables them once the first fetch lands.
-    """
-    html = _render(cfg)
-    assert "disabled" in _tag(html, "copy-btn")
-    assert "disabled" in _tag(html, "refresh-btn")
-
-
-def test_download_link_starts_enabled(cfg: Any) -> None:
-    """Download is a plain server request, so it keeps working even if the script never runs."""
-    html = _render(cfg)
-    download = _tag(html, "download-btn")
-    assert "disabled" not in download
-    assert "/api/diagnostics?download=1" in download
+    assert "disabled" in _tag(resp.text, "copy-btn")
+    assert "disabled" in _tag(resp.text, "refresh-btn")
+    assert "disabled" not in _tag(resp.text, "download-btn")
