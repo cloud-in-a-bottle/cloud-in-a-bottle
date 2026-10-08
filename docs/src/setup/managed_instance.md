@@ -8,13 +8,10 @@ You can always [migrate](../operation/backups.md#moving-to-another-machine) a ma
 
 ## What's included in a managed instance
 
-- your own VPS with CPU, memory, and local disk ([see plans](https://cloudinabottle.imbue.com/))
+- your own VPS with CPU, memory, local disk, a static IPv4, and bandwidth quota ([see plans](https://cloudinabottle.imbue.com/))
   - currently these are hosted in US-west - we will add more regions soon!
 - a subdomain of your choice at `bottle.cloud`, eg `johndoe.bottle.cloud`, and a TLS certificate covering this subdomain
 - coming soon: archive backend and backups auto-configured
-
-
-TODO: bandwidth
 
 ## Notes
 
