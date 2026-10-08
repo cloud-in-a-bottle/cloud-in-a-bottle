@@ -57,7 +57,7 @@ jobs:
   # blocking version of this check runs when a release is cut; see
   # the pin-drift job in release.yml.
   pin-drift:
-    if: github.event_name == 'push'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     continue-on-error: true
     timeout-minutes: 10
