@@ -252,8 +252,9 @@ def build_login_url(zone: Domain, netloc: str, path: str, query: str) -> str:
 def auth_required_response(request: Request[Any, Any, Any]) -> Response[Any]:
     """Response for an unauthenticated non-API HTTP request to a protected path.
 
-    GET/HEAD redirect to /login with ?next= set to the requested URL. Other methods get a 403, since a
-    browser follows a 302 as a bodyless GET, which would lose the request and typically 405 at the app.
+    In general you should just raise a NotAuthorizedException and let litestar call this for you.
+
+    GET/HEAD redirect to /login with ?next= set to the requested URL. Other methods get a 403.
     """
     if request.method not in ("GET", "HEAD"):
         return Response(content="Authentication required", status_code=403, media_type=MediaType.TEXT)
