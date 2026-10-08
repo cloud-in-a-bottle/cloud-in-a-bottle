@@ -33,6 +33,7 @@ from compute_space.core.logging import logger
 from compute_space.core.proxy_target import ProxyTarget
 from compute_space.core.proxy_target import client_for
 from compute_space.core.updates import wait_for_shutdown
+from compute_space.web.auth.auth import carries_openhost_credential
 
 # auth cookies must never reach a backend app
 _STRIPPED_COOKIES = frozenset({SESSION_COOKIE_NAME})
@@ -42,19 +43,24 @@ _STRIPPED_COOKIES = frozenset({SESSION_COOKIE_NAME})
 _OPENHOST_HEADER_PREFIX = "x-openhost-"
 
 
-def _sanitize_forwarded_headers(headers: Iterable[tuple[str, str]]) -> list[tuple[str, str]]:
+def _sanitize_forwarded_headers(
+    headers: Iterable[tuple[str, str]], *, strip_authorization: bool
+) -> list[tuple[str, str]]:
     """Filter inbound headers before forwarding to a backend app.
 
-    Drops X-OpenHost-* headers (the router is their sole authority) and strips
-    zone auth cookies from the Cookie header (apps must not see or replay the
-    owner's session).  Protocol-level filtering (Host, Connection, etc.) is
-    left to each caller.
+    Drops X-OpenHost-* headers (the router is their sole authority), strips zone
+    auth cookies from the Cookie header, and -- when ``strip_authorization`` is
+    set -- drops Authorization entirely.  Apps must not see or replay any
+    openhost credential the caller used to get here.  Protocol-level filtering
+    (Host, Connection, etc.) is left to each caller.
     """
     cookie_prefixes = tuple(f"{name}=" for name in _STRIPPED_COOKIES)
     sanitized: list[tuple[str, str]] = []
     for key, value in headers:
         lower = key.lower()
         if lower.startswith(_OPENHOST_HEADER_PREFIX):
+            continue
+        if lower == "authorization" and strip_authorization:
             continue
         if lower == "cookie":
             value = "; ".join(
@@ -69,7 +75,9 @@ def _sanitize_forwarded_headers(headers: Iterable[tuple[str, str]]) -> list[tupl
 def _build_forwarded_request_headers(
     headers: Headers, proto_excluded_headers: Set[str], extra_headers: Iterable[tuple[str, str]]
 ) -> list[tuple[str, str]]:
-    new_headers = _sanitize_forwarded_headers(headers.multi_items())
+    new_headers = _sanitize_forwarded_headers(
+        headers.multi_items(), strip_authorization=carries_openhost_credential(headers)
+    )
     new_headers = [(k, v) for k, v in new_headers if k.lower() not in proto_excluded_headers]
     new_headers.extend(extra_headers)
     return new_headers

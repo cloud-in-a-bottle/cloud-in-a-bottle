@@ -28,6 +28,8 @@ Owner sessions are refused on cross-origin requests, so JavaScript running in on
 
 The router is the sole authority for the `X-OpenHost-*` headers an app receives. Anything a client sends under those names is stripped before the app sees it, so an app can trust `X-OpenHost-Is-Owner` and a provider can trust the consumer name it is handed.
 
+None of those three credentials is ever forwarded to an app. The session cookie is stripped from `Cookie`, and an `Authorization` header is dropped whenever it carries a credential the router itself would accept. Otherwise an app you merely visited with an API token could replay that token against the dashboard API, and a provider app could replay its consumer's app token. Apps learn who the caller is from `X-OpenHost-Is-Owner` and `X-OpenHost-Consumer-Id` instead of from the credential.
+
 ## Catalog apps
 
 We review apps before including them in our curated catalog manifest (https://github.com/cloud-in-a-bottle/app-manifest), but don't guarantee they are safe. Additionally, app authors can push changes to their apps after they are included in the catalog, and we don't re-review these changes. Currently we alleviate this by only including apps we have packaged, or from authors that we have a relationship with. We plan to revisit this, but ultimately it is the responsibility of the instance owner to determine if they trust an app with the capabilities/permissions the app is requesting.
