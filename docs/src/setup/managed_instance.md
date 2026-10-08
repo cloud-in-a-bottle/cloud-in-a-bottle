@@ -11,7 +11,7 @@ You can always [migrate](../operation/backups.md#moving-to-another-machine) a ma
 - your own VPS with CPU, memory, local disk, a static IPv4, and bandwidth quota ([see plans](https://cloudinabottle.imbue.com/))
   - currently these are hosted in US-west - we will add more regions soon!
 - a subdomain of your choice at `bottle.cloud`, eg `johndoe.bottle.cloud`, and a TLS certificate covering this subdomain
-- coming soon: archive backend and backups auto-configured
+- coming soon: auto-configured archive backend and backups
 
 ## Notes
 
@@ -20,10 +20,10 @@ You can always [migrate](../operation/backups.md#moving-to-another-machine) a ma
   - the certificate provider that allows it to get TLS certificates for your `bottle.cloud` subdomain
   - soon: a S3 provider for archive/backup storage
   - soon: an email deliverability provider
-  - (self-hosted instances can be linked to a `cloudinabottle.imbue.com` account to get access to these services also)
+  - (coming soon: self-hosted instances can be linked to a `cloudinabottle.imbue.com` account to get access to these services also)
 
 ## Security/Privacy
 
 - Once your instance is provisioned, we don't keep a SSH key for it. This means we can't readily access your instance, nor can we recover your data if you lose access.
-  - (we do technically have low-level (eg serial terminal, or offline disk) access to the VPS your instance runs on. it is unfortunately hard to run a VPS without being able to access its data; we hope to enable this via SEV-VMs in the future)
+  - (we do technically have low-level (eg serial terminal, or offline disk) access to the VPS your instance runs on)
 - Data in the S3 archive/backup store is encrypted via your own key
