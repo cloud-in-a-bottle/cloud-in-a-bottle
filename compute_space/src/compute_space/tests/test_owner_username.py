@@ -26,6 +26,8 @@ import bcrypt
 import pytest
 from litestar import Litestar
 from litestar.di import Provide
+from litestar.plugins.jinja import JinjaTemplateEngine
+from litestar.template.config import TemplateConfig
 from litestar.testing import TestClient
 
 from compute_space.config import provide_config
@@ -41,6 +43,8 @@ from compute_space.db import provide_db
 from compute_space.db.connection import init_db
 from compute_space.tests._litestar_helpers import stash_zone_middleware
 from compute_space.tests.conftest import _make_test_config
+from compute_space.web import app as web_app
+from compute_space.web.app import _template_globals
 from compute_space.web.routes.api.settings import api_settings_routes
 from compute_space.web.routes.pages.login import pages_login_routes
 from compute_space.web.setup_app import create_setup_app
@@ -160,15 +164,31 @@ def _make_settings_app() -> Litestar:
     )
 
 
-def _make_login_app() -> Litestar:
-    """App exposing just /login and /logout."""
+def _make_login_app(cfg: Any = None) -> Litestar:
+    """App exposing just /login and /logout.
+
+    Templates are wired up so a test can assert on the rendered login form, not only on redirects.
+    """
+    web_dir = Path(web_app.__file__).resolve().parent
+    template_config: TemplateConfig[JinjaTemplateEngine] = TemplateConfig(
+        directory=web_dir / "templates",
+        engine=JinjaTemplateEngine,
+    )
+
+    def _install_globals(app: Litestar) -> None:
+        engine = app.template_engine
+        if isinstance(engine, JinjaTemplateEngine) and cfg is not None:
+            engine.engine.globals.update(_template_globals(cfg, web_dir / "static"))
+
     return Litestar(
         route_handlers=[pages_login_routes],
+        template_config=template_config,
         dependencies={
             "config": Provide(provide_config, sync_to_thread=False),
             "db": Provide(provide_db),
         },
         middleware=[stash_zone_middleware],
+        on_startup=[_install_globals],
         openapi_config=None,
     )
 
@@ -181,7 +201,7 @@ def settings_client(cfg: Any) -> Iterator[TestClient[Litestar]]:
 
 @pytest.fixture
 def login_client(cfg: Any) -> Iterator[TestClient[Litestar]]:
-    with TestClient(app=_make_login_app()) as c:
+    with TestClient(app=_make_login_app(cfg)) as c:
         yield c
 
 
@@ -631,3 +651,28 @@ def test_logout_allows_null_origin_when_fetch_site_is_same_origin(
 
     assert resp.status_code in (200, 302), resp.text
     assert _session_count(cfg.db_path) == 0
+
+
+def test_login_does_not_bounce_a_session_the_destination_would_reject(
+    cfg: Any, login_client: TestClient[Litestar]
+) -> None:
+    """A valid cookie that owner auth will refuse must land on the login form, not a redirect loop.
+
+    /login used to forward anyone ``authenticate()`` recognised, which is a weaker test than
+    verify_owner_auth applies at the destination: it skips the same-origin/Fetch-Metadata gate.  A
+    client with a good cookie but no Fetch-Metadata (a pre-2023 browser, or a script) was therefore
+    bounced /dashboard -> /login -> /dashboard until the browser gave up with too many redirects.
+    """
+    user_id = _seed_user(cfg.db_path, "alice", password="loginpass1")
+    token = _create_session_for(cfg.db_path, user_id)
+
+    login_client.cookies.set(SESSION_COOKIE_NAME, token)
+    # Strip the Fetch-Metadata the test client sends by default, leaving a cookie owner auth refuses.
+    response = login_client.get(
+        "/login?next=%2Fdashboard",
+        headers={"Sec-Fetch-Site": "", "Sec-Fetch-Mode": "", "Sec-Fetch-Dest": ""},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 200, f"expected the login form, got {response.status_code}"
+    assert "location" not in response.headers

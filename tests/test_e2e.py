@@ -19,6 +19,7 @@ import pytest
 import requests
 import websockets
 
+from compute_space.tests.local_stack import browser_session
 from compute_space.tests.utils import app_id_for
 from compute_space.tests.utils import wait_app_removed
 from compute_space.tests.utils import wait_app_running
@@ -63,8 +64,11 @@ def router_url(domain):
 
 @pytest.fixture(scope="module")
 def session(router_url):
-    """Starts unauthenticated; test_02 adds auth cookies via /setup."""
-    return requests.Session()
+    """Starts unauthenticated; test_02 adds auth cookies via /setup.
+
+    Browser-shaped (Fetch-Metadata) because owner auth fails closed without it.
+    """
+    return browser_session()
 
 
 @pytest.fixture(scope="module")
@@ -518,7 +522,7 @@ class TestSelfHost:
 
     def test_11b_login_good_password(self, router_url):
         """Login with correct credentials sets auth cookies."""
-        login_session = requests.Session()
+        login_session = browser_session()
         login_session.verify = True
         r = login_session.post(
             f"{router_url}/login",
@@ -542,7 +546,7 @@ class TestSelfHost:
     def test_11c_logout(self, router_url):
         """Logout clears the session."""
         # Create a fresh session, log in, then log out
-        s = requests.Session()
+        s = browser_session()
         s.verify = True
         r = s.post(
             f"{router_url}/login",

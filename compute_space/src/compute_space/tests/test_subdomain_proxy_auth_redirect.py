@@ -9,6 +9,7 @@ still redirecting navigational GETs so logged-out users reach the login page.
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from collections.abc import Iterator
 from pathlib import Path
@@ -33,11 +34,14 @@ def _seeded_db(tmp_path: Path) -> Iterator[None]:
     cfg = _make_test_config(tmp_path, zone_domain="testzone.local", tls_enabled=True)
     conn = sqlite3.connect(cfg.db_path)
     try:
-        # public_paths left at its '[]' default so PROTECTED_PATH requires owner auth.
+        # The app must be *partially* public for the auth challenge to be observable at all: a wholly
+        # private app (empty public_paths) is answered 404 instead, deliberately indistinguishable from
+        # a missing app so unauthorized callers can't discover it.  So make one unrelated path public
+        # and drive PROTECTED_PATH, which isn't covered by it and therefore requires owner auth.
         conn.execute(
-            """INSERT INTO apps (app_id, name, version, repo_path, local_port, status, installed_by)
-               VALUES (?, ?, ?, ?, ?, ?, NULL)""",
-            (new_app_id(), APP_NAME, "1.0.0", str(tmp_path / APP_NAME), 19700, "running"),
+            """INSERT INTO apps (app_id, name, version, repo_path, local_port, status, public_paths)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (new_app_id(), APP_NAME, "1.0.0", str(tmp_path / APP_NAME), 19700, "running", json.dumps(["/assets"])),
         )
         conn.commit()
     finally:
