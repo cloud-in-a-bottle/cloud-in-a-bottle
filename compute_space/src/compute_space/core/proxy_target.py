@@ -49,6 +49,10 @@ def client_for(target: ProxyTarget, timeout: httpx.Timeout | float) -> tuple[htt
             # MutableMappings; they are the same protocol.
             transport: httpx.AsyncBaseTransport | None = httpx.ASGITransport(app=cast(Any, app))
             base_url = BUILTIN_HOST
+            verify = True
         case LocalPort(port):
             transport, base_url = None, f"http://127.0.0.1:{port}"
-    return httpx.AsyncClient(transport=transport, timeout=timeout), base_url
+            # This target is always plain HTTP over loopback. Loading the system CA bundle
+            # for a new client on every proxied request is expensive and cannot verify it.
+            verify = False
+    return httpx.AsyncClient(transport=transport, timeout=timeout, verify=verify), base_url
