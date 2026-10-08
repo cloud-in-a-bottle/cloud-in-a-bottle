@@ -76,12 +76,8 @@ def get_connection_origin(connection: AnyConnection) -> str | None:
     return f"{host}:{port}" if port else host
 
 
-# the request came from this origin, or from the user directly (typed URL, bookmark).
-_SELF_INITIATED_FETCH_SITES = frozenset({"same-origin", "none"})
-
-
-def _is_safe_origin_for_cookie_auth_http(connection: Request[Any, Any, Any]) -> bool:
-    """HTTP path for `is_safe_origin_for_cookie_auth`.
+def _is_safe_for_cookie_auth_http(connection: Request[Any, Any, Any]) -> bool:
+    """HTTP path for `is_safe_for_cookie_auth`.
 
     Just using `Origin` is insufficient; Origin isn't set on some valid same-origin requests.
     Instead we use Sec-Fetch-Site, with a concrete foreign Origin as a hard veto.
@@ -96,7 +92,7 @@ def _is_safe_origin_for_cookie_auth_http(connection: Request[Any, Any, Any]) -> 
     we allow them if Sec-Fetch-Dest == "document", which is only set on full-page navigations.
     """
     site = connection.headers.get("Sec-Fetch-Site")
-    if site in _SELF_INITIATED_FETCH_SITES:
+    if site in {"same-origin", "none"}:
         return True
     if (
         site == "same-site"
@@ -107,15 +103,15 @@ def _is_safe_origin_for_cookie_auth_http(connection: Request[Any, Any, Any]) -> 
     return False
 
 
-def _is_safe_origin_for_cookie_auth_websocket(connection: AnyConnection) -> bool:
-    """Websocket-path for `is_safe_origin_for_cookie_auth`
+def _is_safe_for_cookie_auth_websocket(connection: AnyConnection) -> bool:
+    """Websocket-path for `is_safe_for_cookie_auth`
 
     Browsers always send a concrete Origin, so we just check it directly.
     """
     return get_connection_origin(connection) == connection.base_url.netloc
 
 
-def is_safe_origin_for_cookie_auth(connection: AnyConnection) -> bool:
+def is_safe_for_cookie_auth(connection: AnyConnection) -> bool:
     """Whether the request is safe to allow cookie auth on.
 
     A malicious app could make a request from the owner's browser to another app on their instance,
@@ -127,9 +123,9 @@ def is_safe_origin_for_cookie_auth(connection: AnyConnection) -> bool:
     and the user should be able to click this.
     """
     if connection.scope["type"] == ScopeType.WEBSOCKET:
-        return _is_safe_origin_for_cookie_auth_websocket(connection)
+        return _is_safe_for_cookie_auth_websocket(connection)
     if connection.scope["type"] == ScopeType.HTTP:
-        return _is_safe_origin_for_cookie_auth_http(
+        return _is_safe_for_cookie_auth_http(
             Request(connection.scope, receive=connection.receive, send=connection.send)
         )
     return False
@@ -167,7 +163,7 @@ def verify_owner_auth(connection: AnyConnection) -> None:
     accessor = authenticate(connection, db=get_db())
 
     if isinstance(accessor, AuthenticatedUser):
-        if not is_safe_origin_for_cookie_auth(connection):
+        if not is_safe_for_cookie_auth(connection):
             raise NotAuthorizedException(detail="cookie authentication is only valid for safe-origin requests")
         return
     if isinstance(accessor, AuthenticatedAPIKey):
@@ -230,13 +226,6 @@ def require_owner_or_app_auth(connection: AnyConnection, _route_handler: BaseRou
     except NotAuthorizedException:
         pass
     verify_app_auth(connection)
-
-
-def require_same_origin(connection: AnyConnection, _route_handler: BaseRouteHandler) -> None:
-    """Route guard for unauthenticated state-changing endpoints (e.g. /logout) that still need CSRF
-    protection."""
-    if not is_safe_origin_for_cookie_auth(connection):
-        raise NotAuthorizedException(detail="cross-origin request not allowed")
 
 
 def build_login_url(zone: Domain, netloc: str, path: str, query: str) -> str:
