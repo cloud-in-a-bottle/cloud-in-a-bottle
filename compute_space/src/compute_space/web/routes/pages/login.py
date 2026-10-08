@@ -47,11 +47,7 @@ async def login_get(
     db: NamedDependency[sqlite3.Connection],
 ) -> Response[Any]:
     next_param = request.query_params.get("next", "")
-    # Only send an already-signed-in visitor onward if the destination would actually accept them.
-    # authenticate() alone is a weaker test than verify_owner_auth applies there (it skips the
-    # same-origin/Fetch-Metadata gate), and redirecting on the weaker one loops: the destination
-    # rejects, bounces back here, and we bounce onward again until the browser gives up.  Failing to
-    # the login form instead is a dead end the user can see and act on.
+    # also check the origin gate verify_owner_auth applies, or a cookie it rejects would redirect-loop.
     if authenticate(request, db=db) is not None and is_same_origin_request(request):
         return Redirect(path=_validated_next(next_param, db) or "/")
     return Template(template_name="login.html", context={"next": next_param})

@@ -141,12 +141,7 @@ class LocalStack:
 
 
 def browser_session() -> requests.Session:
-    """A requests.Session that stands in for the owner's browser.
-
-    Owner (cookie) auth requires Fetch-Metadata and fails closed without it (see
-    _is_same_origin_http), and requests sends none, so a bare Session can never authenticate as the
-    owner however valid its cookie.  Anything driving the router as the owner needs these.
-    """
+    """A requests.Session sending the Fetch-Metadata that owner cookie auth requires."""
     session = requests.Session()
     session.headers.update(BROWSER_FETCH_METADATA)
     return session

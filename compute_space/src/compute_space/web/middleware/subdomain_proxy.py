@@ -206,10 +206,9 @@ class SubdomainProxyMiddleware:
             if raw_path is None or not is_public_request_path(app, raw_path):
                 # We're outer ASGI middleware — a raised NotAuthorizedException
                 # wouldn't reach Litestar's exception handlers, so produce the
-                # equivalent response ourselves.  HTTP: the same auth response the
-                # exception handler would emit — a /login redirect for navigational
-                # GET/HEAD, or a 403 for unsafe methods (a 302→/login there would be
-                # followed as a bodyless GET and 405 at the app).  WS: refuse the handshake.
+                # equivalent response ourselves.  HTTP: the same response the
+                # exception handler would emit, dispatched via Litestar's
+                # Response-to-ASGI machinery.  WS: refuse the handshake.
                 if scope["type"] == ScopeType.HTTP:
                     request: Request[Any, Any, Any] = Request(scope, receive, send)
                     response: Response[Any] = auth_required_response(request)

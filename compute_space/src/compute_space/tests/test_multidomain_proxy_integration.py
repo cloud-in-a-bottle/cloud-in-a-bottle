@@ -151,7 +151,6 @@ def wrapped_app(proxy_config: Config) -> Any:
 
 
 def _client(wrapped_app: Any) -> httpx.AsyncClient:
-    # Stands in for the owner's browser, so it sends the Fetch-Metadata owner auth requires.
     return httpx.AsyncClient(
         transport=httpx.ASGITransport(app=wrapped_app),
         base_url="http://unused",
@@ -437,8 +436,7 @@ async def test_startup_only_retries_html_get_navigation(
         await wrapped_app(scope, receive, record)
 
     async with _client(observe_response) as c:
-        # This test owns both inputs the startup heuristic reads, so drop the client's browser
-        # defaults for them and let the parametrization say exactly what arrives.
+        # the parametrization controls both inputs the startup heuristic reads.
         c.headers.pop("Accept", None)
         c.headers.pop("Sec-Fetch-Mode", None)
         headers = {}
@@ -643,13 +641,11 @@ async def test_missing_raw_path_requires_auth_before_forwarding(
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "method,expected",
-    [("HEAD", 302), ("POST", 403), ("PUT", 403), ("PATCH", 403), ("DELETE", 403), ("OPTIONS", 403)],
+    [("GET", 302), ("HEAD", 302), ("POST", 403), ("PUT", 403), ("PATCH", 403), ("DELETE", 403), ("OPTIONS", 403)],
 )
 async def test_ambiguous_public_path_requires_auth_for_every_method(
     wrapped_app: ASGIApp, partially_public_app: None, backend: _RecordingBackend, method: str, expected: int
 ) -> None:
-    # Only navigational GET/HEAD get the /login redirect: a 302 on an unsafe method is lossy, since
-    # the browser re-issues it as a bodyless GET and the app answers 405.  See auth_required_response.
     response = await _raw_path_request(wrapped_app, b"/dav/../private", method=method)
     assert response.status_code == expected
     assert backend.requests == []
@@ -674,8 +670,6 @@ async def _raw_websocket_request(
             "query_string": query.encode("ascii"),
             "headers": [
                 (b"host", b"myapp.myhost.local"),
-                # A browser sends no Fetch-Metadata on a handshake, so owner auth goes on Origin
-                # alone; supply the one this scope's host implies unless the caller set it.
                 *([(b"origin", b"http://myapp.myhost.local")] if "origin" not in (headers or {}) else []),
                 *((k.encode(), v.encode()) for k, v in (headers or {}).items()),
             ],

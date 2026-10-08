@@ -37,13 +37,7 @@ def make_http_scope(
     client: tuple[str, int] | None = None,
     extra_scope: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Build a minimal HTTP ASGI scope for auth / middleware unit tests.
-
-    Callers wrap the result however they need — ``Request(scope)``, ``ASGIConnection(scope)``, or pass
-    the raw dict straight into an ASGI middleware.  ``cookie`` (a raw ``name=value`` string) and
-    ``headers`` become request headers; ``extra_scope`` merges in extra scope keys (e.g. the
-    ``ZONE_SCOPE_KEY`` the proxy middleware would normally stash).
-    """
+    """Build a minimal HTTP ASGI scope for auth unit tests. ``cookie`` is a raw ``name=value`` string."""
     raw_headers: list[tuple[bytes, bytes]] = [(b"host", host.encode())]
     if cookie is not None:
         raw_headers.append((b"cookie", cookie.encode()))
@@ -115,9 +109,7 @@ def auth_cookie(cfg: Any, username: str = "owner") -> dict[str, str]:
     return {SESSION_COOKIE_NAME: token}
 
 
-# What a browser on the router's own origin sends on an ordinary navigation.  Owner (cookie) auth
-# requires Fetch-Metadata and fails closed without it (see _is_same_origin_http), and no test client
-# sends these on its own, so anything standing in for the owner's browser must supply them.
+# what a browser sends on a same-origin navigation. owner cookie auth fails closed without it.
 BROWSER_FETCH_METADATA = {
     "Sec-Fetch-Site": "same-origin",
     "Sec-Fetch-Mode": "navigate",
@@ -126,18 +118,14 @@ BROWSER_FETCH_METADATA = {
 
 
 def cookie_header(cookies: dict[str, str]) -> dict[str, str]:
-    """Just the session cookie, for a request whose other headers the caller controls."""
+    """A Cookie header carrying the given cookies."""
     return {"cookie": "; ".join(f"{k}={v}" for k, v in cookies.items())}
 
 
 def ws_cookie_header(cookies: dict[str, str], *, origin: str = "http://testserver.local") -> dict[str, str]:
-    """The headers a browser puts on an owner-authenticated WebSocket handshake.
+    """Headers for an owner-authenticated WebSocket handshake, which is judged on an exact Origin match.
 
-    A handshake is a plain HTTP GET, so the session cookie rides in a Cookie header just like a normal
-    request.  ``Origin`` is the auth-relevant one: browsers send no Fetch-Metadata at all on a
-    handshake, so owner auth judges a WebSocket on Origin alone (see _is_same_origin_websocket) and
-    refuses both an absent and a mismatched Origin.  The default matches TestClient's base_url; tests
-    driving another host must pass the origin that host's browser would send.
+    The default origin matches TestClient's base_url.
     """
     return {**cookie_header(cookies), "origin": origin}
 

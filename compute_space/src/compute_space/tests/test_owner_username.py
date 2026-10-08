@@ -164,11 +164,8 @@ def _make_settings_app() -> Litestar:
     )
 
 
-def _make_login_app(cfg: Any = None) -> Litestar:
-    """App exposing just /login and /logout.
-
-    Templates are wired up so a test can assert on the rendered login form, not only on redirects.
-    """
+def _make_login_app(cfg: Any) -> Litestar:
+    """App exposing just /login and /logout, with templates so the login form renders."""
     web_dir = Path(web_app.__file__).resolve().parent
     template_config: TemplateConfig[JinjaTemplateEngine] = TemplateConfig(
         directory=web_dir / "templates",
@@ -177,7 +174,7 @@ def _make_login_app(cfg: Any = None) -> Litestar:
 
     def _install_globals(app: Litestar) -> None:
         engine = app.template_engine
-        if isinstance(engine, JinjaTemplateEngine) and cfg is not None:
+        if isinstance(engine, JinjaTemplateEngine):
             engine.engine.globals.update(_template_globals(cfg, web_dir / "static"))
 
     return Litestar(
@@ -614,9 +611,7 @@ def test_logout_rejects_spoofed_or_opaque_origins(
 def test_logout_rejects_null_origin_from_opaque_context(
     cfg: Any, login_client: TestClient[Litestar], sec_fetch_site: str
 ) -> None:
-    """``Origin: null`` must not be treated as "no header".  A sandboxed iframe forging a logout has an
-    opaque origin and reports ``cross-site``; a cross-app forgery reports ``same-site``.  Only the
-    ``same-origin`` corroboration in the test below is honored."""
+    """A sandboxed iframe (cross-site) or another app (same-site) can't log the owner out."""
     user_id = _seed_user(cfg.db_path, "alice", password="loginpass1")
     token = _create_session_for(cfg.db_path, user_id)
     assert _session_count(cfg.db_path) == 1
@@ -635,10 +630,7 @@ def test_logout_rejects_null_origin_from_opaque_context(
 def test_logout_allows_null_origin_when_fetch_site_is_same_origin(
     cfg: Any, login_client: TestClient[Litestar]
 ) -> None:
-    """A genuine same-origin logout that carries ``Origin: null`` (e.g. a referrer-policy or a redirect
-    in the POST chain opaque-ifies the Origin) must still log out — but only because the unforgeable
-    ``Sec-Fetch-Site: same-origin`` corroborates it.  A sandboxed-iframe forgery (also ``Origin: null``)
-    reports cross-site and is still rejected by test_logout_rejects_spoofed_or_opaque_origins."""
+    """A same-origin POST under Referrer-Policy: no-referrer sends ``Origin: null``."""
     user_id = _seed_user(cfg.db_path, "alice", password="loginpass1")
     token = _create_session_for(cfg.db_path, user_id)
 
@@ -656,18 +648,11 @@ def test_logout_allows_null_origin_when_fetch_site_is_same_origin(
 def test_login_does_not_bounce_a_session_the_destination_would_reject(
     cfg: Any, login_client: TestClient[Litestar]
 ) -> None:
-    """A valid cookie that owner auth will refuse must land on the login form, not a redirect loop.
-
-    /login used to forward anyone ``authenticate()`` recognised, which is a weaker test than
-    verify_owner_auth applies at the destination: it skips the same-origin/Fetch-Metadata gate.  A
-    client with a good cookie but no Fetch-Metadata (a pre-2023 browser, or a script) was therefore
-    bounced /dashboard -> /login -> /dashboard until the browser gave up with too many redirects.
-    """
+    """A valid cookie without Fetch-Metadata gets the login form, not a /dashboard <-> /login loop."""
     user_id = _seed_user(cfg.db_path, "alice", password="loginpass1")
     token = _create_session_for(cfg.db_path, user_id)
 
     login_client.cookies.set(SESSION_COOKIE_NAME, token)
-    # Strip the Fetch-Metadata the test client sends by default, leaving a cookie owner auth refuses.
     response = login_client.get(
         "/login?next=%2Fdashboard",
         headers={"Sec-Fetch-Site": "", "Sec-Fetch-Mode": "", "Sec-Fetch-Dest": ""},

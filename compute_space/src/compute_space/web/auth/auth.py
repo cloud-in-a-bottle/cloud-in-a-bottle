@@ -41,8 +41,7 @@ def _get_bearer_token_if_set(connection: AnyConnection) -> str | None:
     return None
 
 
-# The opaque-origin token get_connection_origin returns for a present-but-hostless Origin (notably
-# ``Origin: null``).  Never equals a real host[:port], so origin-match checks fail closed on it.
+# what get_connection_origin returns for a present but hostless Origin, e.g. ``Origin: null``.
 _OPAQUE_ORIGIN_TOKEN = "null"
 
 
@@ -75,92 +74,51 @@ def get_connection_origin(connection: AnyConnection) -> str | None:
     return f"{host}:{port}" if port else host
 
 
-# Sec-Fetch-Site values that mean "this request did not come from another origin": the app or the
-# router calling itself, or a user-initiated load (typed URL, bookmark, no initiator at all).
+# the request came from this origin, or from the user directly (typed URL, bookmark).
 _SELF_INITIATED_FETCH_SITES = frozenset({"same-origin", "none"})
 
 
 def _is_same_origin_http(connection: AnyConnection) -> bool:
-    """Judge an HTTP request primarily on Fetch-Metadata, with ``Origin`` as a hard veto.
+    """Judge an HTTP request on Sec-Fetch-Site, with a concrete foreign Origin as a hard veto.
 
-    ``Sec-Fetch-Site`` is strictly more informative than ``Origin`` for this decision: the browser
-    derives both from the true initiator and JS can forge neither (they are forbidden header names),
-    but only Sec-Fetch-Site distinguishes ``same-site`` from ``cross-site``.  That distinction is the
-    whole game for us, because the session cookie is scoped to the zone (see build_session_cookie), so
-    every app subdomain and the router are one *site* with many *origins*.  ``Origin`` also can't help
-    on the requests that matter most: it is absent on all GET/HEAD navigations and subresource loads.
+    The session cookie is zone-scoped, so the router and every app are one site with many origins. Only
+    Sec-Fetch-Site tells ``same-site`` (another app) apart from ``same-origin``, and Origin is absent on
+    GET/HEAD navigations and subresource loads, which is where the cross-app forgery lives.
 
-    ``same-site`` means another app (or the router UI) initiated this request and the owner's cookie
-    rode along.  We allow it only for a genuine top-level document load, keyed on ``Sec-Fetch-Dest:
-    document`` *and* an absent Origin.  It must be Dest and not ``Sec-Fetch-Mode: navigate``: loading
-    an ``<iframe>`` is also a navigation and reports ``Mode: navigate``, so a Mode-keyed check would
-    still admit a hidden ``<iframe src="https://other-app.zone/delete?id=1">`` — silent, repeatable,
-    and leaving the attacking page running.  ``Dest: document`` is only ever a top-level browsing
-    context, which is user-visible.  The absent-Origin half narrows it to GET/HEAD, since browsers
-    send an Origin on every other method; without it a cross-app top-level *form POST* would also
-    report ``Dest: document`` and ride straight through.  What is left is the cross-app link we want
-    to keep working (e.g. one app linking the user into another to grant a permission), at the cost
-    of a loud, visible navigation forgery staying possible.
+    ``same-site`` is allowed only for a top-level document load with no Origin: a link the user clicked
+    from another app. Keying on ``Sec-Fetch-Dest: document`` rather than ``Sec-Fetch-Mode: navigate``
+    excludes iframes, which also report ``navigate``. Requiring no Origin excludes form POSTs.
 
-    A missing Sec-Fetch-Site fails closed.  Every browser that ships Fetch Metadata sends it on every
-    HTTP request, so absence means a pre-2023 browser or a non-browser client; falling back to Origin
-    there would reopen exactly the Origin-less GET hole this check exists to close.
+    A missing Sec-Fetch-Site fails closed: it means a pre-2023 browser or a non-browser client, and
+    falling back to Origin would reopen the Origin-less GET hole.
     """
     origin = get_connection_origin(connection)
     site = connection.headers.get("Sec-Fetch-Site")
 
-    # A concrete Origin naming another host is a hard reject whatever the Fetch-Metadata says: a
-    # browser never pairs a mismatched Origin with same-origin metadata, so the combination is a
-    # forgery by something that isn't a browser.  This is also what keeps a cross-app *form POST*
-    # out of the same-site carve-out below, since every non-GET/HEAD request carries an Origin.
     if origin is not None and origin != _OPAQUE_ORIGIN_TOKEN and origin != connection.base_url.netloc:
         return False
-
     if site in _SELF_INITIATED_FETCH_SITES:
         return True
     if site == "same-site":
-        # Another app initiated this.  Allow only a link the user visibly clicked: a top-level
-        # document load with no Origin at all.  Browsers omit Origin exactly on GET/HEAD navigations,
-        # so requiring its absence admits the cross-app link we want while excluding every
-        # state-changing shape — including an ``Origin: null`` form POST from a no-referrer app.
         return origin is None and connection.headers.get("Sec-Fetch-Dest") == "document"
     return False
 
 
 def _is_same_origin_websocket(connection: AnyConnection) -> bool:
-    """Judge a WebSocket handshake on ``Origin`` alone.  Fetch-Metadata is deliberately unused here.
+    """Judge a WebSocket handshake on an exact Origin match.
 
-    Browsers send no ``Sec-Fetch-*`` headers at all on a WebSocket handshake — verified on Chromium
-    151 over both ``ws://`` and ``wss://``, while an ordinary subresource from the very same page did
-    carry all three.  (Fetch defines a ``websocket`` request mode, but Chromium does not emit the
-    headers.)  Keying WS on Sec-Fetch-Site would therefore fail *open* on the dominant engine.
-
-    Browsers do always send a concrete ``Origin`` on a handshake, so an exact match is the check.
-    Unlike the HTTP case, ``Origin: null`` is refused outright rather than corroborated: a referrer
-    policy does not null a WebSocket's Origin (verified — a ``Referrer-Policy: no-referrer`` page
-    still sends its real origin on a handshake), so a null here only ever means a genuinely opaque
-    initiator such as a sandboxed iframe.  An absent Origin is refused for the same reason: no browser
-    omits it, and server-side callers authenticate with app/API tokens, which never reach this check.
+    Chromium sends no Sec-Fetch-* on a handshake, so keying on it would fail open. Browsers always send a
+    concrete Origin here (a referrer policy does not null it), so null or absent is refused.
     """
-    # An absent Origin (None) and an opaque one (_OPAQUE_ORIGIN_TOKEN) both fall out of this
-    # comparison on their own: neither can ever equal a real host[:port].
     return get_connection_origin(connection) == connection.base_url.netloc
 
 
 def is_same_origin_request(connection: AnyConnection) -> bool:
-    """Whether a browser request may carry owner (session-cookie) authority to this target.
+    """Whether a browser request may carry the owner's session cookie authority to this target.
 
-    The canonical check, used for owner auth and to guard unauthenticated state-changing endpoints
-    (e.g. /logout) against CSRF.  HTTP and WebSocket are judged on different headers because browsers
-    populate different headers for them; see the two helpers for why.
-
-    Rejected alternative: gate ``same-site`` on the Origin being the router's own domain rather than
-    another app's, which would close cross-app forgery completely.  It is not implementable with the
-    headers available — the requests it would have to discriminate are top-level GET navigations,
-    which carry no Origin at all, and ``Referer`` is no substitute because any app can suppress it
-    with ``Referrer-Policy: no-referrer`` (Miniflux already does).  It would also forbid app-to-app
-    links outright, which we want to keep.  Making those links safe wants a capability token on the
-    link itself, not a header check.
+    Making cross-app links fully safe would need a capability token on the link; header checks can't
+    distinguish a router link from an app link, since both are Origin-less GETs and Referer is
+    suppressible.
     """
     if connection.scope["type"] == ScopeType.WEBSOCKET:
         return _is_same_origin_websocket(connection)
@@ -199,9 +157,7 @@ def verify_owner_auth(connection: AnyConnection) -> None:
     accessor = authenticate(connection, db=get_db())
 
     if isinstance(accessor, AuthenticatedUser):
-        # User (session-cookie) auth is only valid for same-origin requests: we never trust a
-        # cross-origin request bearing the owner's cookie, since it could be forged by untrusted app js.
-        # See is_same_origin_request for how Origin + Fetch-Metadata decide this (incl. Origin: null).
+        # cross-origin requests bearing the owner's cookie could be forged by untrusted app js.
         if not is_same_origin_request(connection):
             raise NotAuthorizedException(detail="user authentication only valid for router-origin requests")
         return
@@ -268,12 +224,8 @@ def require_owner_or_app_auth(connection: AnyConnection, _route_handler: BaseRou
 
 
 def require_same_origin(connection: AnyConnection, _route_handler: BaseRouteHandler) -> None:
-    """Guard for unauthenticated state-changing endpoints (e.g. /logout) that have no owner-auth of
-    their own (they must work for any session state) but still need CSRF protection: reject unless the
-    request is same-origin with its target.  An ``Origin: null`` is honored only when
-    ``Sec-Fetch-Site: same-origin`` corroborates it, so a sandboxed-iframe forced-logout forgery — which
-    reports cross-site — stays blocked.  See is_same_origin_request.
-    """
+    """Route guard for unauthenticated state-changing endpoints (e.g. /logout) that still need CSRF
+    protection."""
     if not is_same_origin_request(connection):
         raise NotAuthorizedException(detail="cross-origin request not allowed")
 
@@ -299,33 +251,13 @@ def build_login_url(zone: Domain, netloc: str, path: str, query: str) -> str:
     return f"{proto}://{host_with_request_port(zone.name_no_port, netloc)}/login?next={quote(next_url, safe='')}"
 
 
-def login_required_redirect(request: Request[Any, Any, Any]) -> Response[Any]:
-    """Return a 302 redirecting the user to the login page, with ?next= set to the originally requested URL.
-
-    This should only be called for non-API HTTP requests.
-    In general you should just raise a NotAuthorizedException and let litestar call this for you.
-    """
-    zone = zone_for_request(request)
-    return Redirect(path=build_login_url(zone, request.url.netloc, request.url.path, request.url.query))
-
-
-# Methods a browser re-issues as a plain navigation when it follows a 302. For unsafe methods a
-# login redirect is lossy — the browser drops the method/body and re-requests as a bodyless GET —
-# so we only send the redirect for these, and give unsafe methods an honest 403.
-_LOGIN_REDIRECTABLE_METHODS = frozenset({"GET", "HEAD"})
-
-
-def is_login_redirectable_method(method: str) -> bool:
-    """True iff redirecting an unauthenticated request with this method to /login is non-lossy."""
-    return method.upper() in _LOGIN_REDIRECTABLE_METHODS
-
-
 def auth_required_response(request: Request[Any, Any, Any]) -> Response[Any]:
     """Response for an unauthenticated non-API HTTP request to a protected path.
 
-    GET/HEAD redirect to /login (and back to ``next`` after signing in). Unsafe methods get a 403
-    instead, since a login redirect would be re-issued as a bodyless GET and rejected with 405.
+    GET/HEAD redirect to /login with ?next= set to the requested URL. Other methods get a 403, since a
+    browser follows a 302 as a bodyless GET, which would lose the request and typically 405 at the app.
     """
-    if is_login_redirectable_method(request.method):
-        return login_required_redirect(request)
-    return Response(content="Authentication required", status_code=403, media_type=MediaType.TEXT)
+    if request.method not in ("GET", "HEAD"):
+        return Response(content="Authentication required", status_code=403, media_type=MediaType.TEXT)
+    zone = zone_for_request(request)
+    return Redirect(path=build_login_url(zone, request.url.netloc, request.url.path, request.url.query))

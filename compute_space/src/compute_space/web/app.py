@@ -163,11 +163,7 @@ def setup_already_done_post() -> None:
 
 
 def _auth_required_handler(request: Request[Any, Any, Any], exc: NotAuthorizedException) -> Response[Any]:
-    """Exception handler for an unauthorized request.
-
-    JSON clients get 401.  HTML clients get a /login redirect for navigational GET/HEAD, but a 403 for
-    unsafe methods — a 302→/login on a POST/PUT/PATCH/DELETE is lossy (the browser follows it as a
-    bodyless GET and the target answers 405), so ``auth_required_response`` refuses those honestly.
+    """Exception handler: JSON clients get 401; HTML clients get auth_required_response.
 
     websocket-type requests should never get here - they start as HTTP requests with `Upgrade: websocket`, and should fail then.
     """

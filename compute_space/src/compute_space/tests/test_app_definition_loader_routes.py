@@ -107,10 +107,6 @@ def test_nonowners_cannot_even_parse(
 
 
 @pytest.mark.parametrize("path", [PARSE, IMPORT])
-# A concrete foreign Origin is rejected on the Origin veto alone.  ``Origin: null`` is only an
-# attack when Fetch-Metadata says it did not come from this origin: a sandboxed iframe reports
-# cross-site.  A null Origin *with* ``Sec-Fetch-Site: same-origin`` is the app legitimately
-# posting to itself under a no-referrer policy, and is allowed on purpose.
 @pytest.mark.parametrize(
     "origin,sec_fetch_site",
     [

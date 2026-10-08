@@ -37,11 +37,7 @@ TEST_ZONE_DOMAIN = "testzone.local"
 
 @pytest.fixture(autouse=True, scope="session")
 def _test_clients_send_fetch_metadata() -> Iterator[None]:
-    """Make every TestClient look like a browser, so tests exercise the real auth path.
-
-    Defaults only: httpx lets per-request ``headers=`` win over client-level ones, so the tests that
-    deliberately forge a cross-origin or opaque request still override these and get rejected.
-    """
+    """Default every TestClient to browser Fetch-Metadata. Per-request ``headers=`` still win."""
     original_init = TestClient.__init__
 
     def patched_init(self: TestClient[Any], *args: Any, **kwargs: Any) -> None:
@@ -219,8 +215,6 @@ def admin_session(router_process: subprocess.Popen[bytes], config: Config) -> re
     """
     base_url = f"http://{primary_of(config).name}:{config.port}"
     s = requests.Session()
-    # Owner (cookie) auth requires Fetch-Metadata, which requests doesn't send; this session stands in
-    # for the owner's browser, so give it what a browser on the router's own origin would send.
     s.headers.update(BROWSER_FETCH_METADATA)
     r = s.post(
         f"{base_url}/setup",
