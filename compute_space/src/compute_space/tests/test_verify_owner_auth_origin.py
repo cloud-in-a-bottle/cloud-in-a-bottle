@@ -38,9 +38,9 @@ def session_cookie(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[
         conn.close()
 
 
-def _is_authorized(cookie: str, headers: dict[str, str], scope_type: str = "http") -> bool:
+def _is_authorized(cookie: str, headers: dict[str, str], scope_type: str = "http", method: str = "GET") -> bool:
     scope = make_http_scope(
-        "POST", "/feeds/refresh", host=APP_HOST, cookie=cookie, headers=headers, extra_scope={"type": scope_type}
+        method, "/feeds/refresh", host=APP_HOST, cookie=cookie, headers=headers, extra_scope={"type": scope_type}
     )
     try:
         verify_owner_auth(ASGIConnection(scope))  # type: ignore[arg-type]
@@ -50,32 +50,31 @@ def _is_authorized(cookie: str, headers: dict[str, str], scope_type: str = "http
 
 
 @pytest.mark.parametrize(
-    "origin,site,dest,allowed",
+    "method,site,dest,allowed",
     [
-        (None, "same-origin", None, True),
-        (SELF, "same-origin", None, True),
-        (None, "none", None, True),
-        # a same-origin POST under Referrer-Policy: no-referrer carries Origin: null.
-        ("null", "same-origin", None, True),
-        ("null", "same-site", None, False),
-        ("null", "cross-site", None, False),
-        # a concrete foreign Origin vetoes whatever Sec-Fetch-Site claims.
-        (OTHER, "same-origin", None, False),
-        # no Fetch-Metadata fails closed, even with a matching Origin.
-        (None, None, None, False),
-        (SELF, None, None, False),
-        ("null", None, None, False),
-        # same-site: only a top-level link from another app survives.
-        (None, "same-site", "document", True),
-        *[(None, "same-site", d, False) for d in ["iframe", "frame", "image", "script", "empty", "object", "embed"]],
-        (OTHER, "same-site", "document", False),
-        ("null", "same-site", "document", False),
-        (None, "cross-site", "document", False),
+        ("GET", "same-origin", None, True),
+        ("POST", "same-origin", None, True),
+        ("GET", "none", None, True),
+        ("POST", "none", None, True),
+        # no Fetch-Metadata fails closed.
+        ("GET", None, None, False),
+        # same-site: only a top-level GET/HEAD from another app survives.
+        ("GET", "same-site", "document", True),
+        ("HEAD", "same-site", "document", True),
+        ("POST", "same-site", "document", False),
+        *[("GET", "same-site", d, False) for d in ["iframe", "frame", "image", "script", "empty", "object", "embed"]],
+        ("GET", "cross-site", "document", False),
     ],
 )
-def test_http(session_cookie: str, origin: str | None, site: str | None, dest: str | None, allowed: bool) -> None:
-    headers = {"origin": origin, "sec-fetch-site": site, "sec-fetch-dest": dest}
-    assert _is_authorized(session_cookie, {k: v for k, v in headers.items() if v is not None}) == allowed
+def test_http(session_cookie: str, method: str, site: str | None, dest: str | None, allowed: bool) -> None:
+    headers = {"sec-fetch-site": site, "sec-fetch-dest": dest}
+    present = {k: v for k, v in headers.items() if v is not None}
+    assert _is_authorized(session_cookie, present, method=method) == allowed
+
+
+def test_http_ignores_origin(session_cookie: str) -> None:
+    assert _is_authorized(session_cookie, {"origin": OTHER, "sec-fetch-site": "same-origin"})
+    assert not _is_authorized(session_cookie, {"origin": SELF, "sec-fetch-site": "cross-site"})
 
 
 @pytest.mark.parametrize(

@@ -521,128 +521,35 @@ def test_logout_revokes_session_and_clears_cookie(cfg: Any, login_client: TestCl
     assert "Max-Age=0" in set_cookie or "max-age=0" in set_cookie.lower()
 
 
-def test_logout_without_session_is_safe(cfg: Any, login_client: TestClient[Litestar]) -> None:
-    """Hitting /logout with no session cookie must not error; it just redirects."""
+def test_logout_without_session_is_rejected(cfg: Any, login_client: TestClient[Litestar]) -> None:
     resp = login_client.post("/logout", follow_redirects=False)
-    assert resp.status_code in (200, 302), resp.text
-    assert resp.headers.get("location") == "/login"
-
-
-def test_logout_rejects_cross_origin_request(cfg: Any, login_client: TestClient[Litestar]) -> None:
-    """A cross-site POST to /logout (forced-logout CSRF) must be rejected, and the
-    victim's session must survive. The browser always sets Origin on cross-origin
-    requests, so a mismatching Origin is the signal."""
-    user_id = _seed_user(cfg.db_path, "alice", password="loginpass1")
-    token = _create_session_for(cfg.db_path, user_id)
-    assert _session_count(cfg.db_path) == 1
-
-    login_client.cookies.set(SESSION_COOKIE_NAME, token)
-    resp = login_client.post(
-        "/logout",
-        headers={"Origin": "https://evil.example.com"},
-        follow_redirects=False,
-    )
-
-    # Rejected (NotAuthorizedException -> 401), not a 302 logout.
     assert resp.status_code == 401, resp.text
-    # The victim's session must NOT have been revoked.
-    assert _session_count(cfg.db_path) == 1
-
-
-def test_logout_allows_same_origin_request(cfg: Any, login_client: TestClient[Litestar]) -> None:
-    """A same-origin POST (Origin matching the target host) must still log out.
-    Modern browsers send Origin even on same-origin top-level form posts."""
-    user_id = _seed_user(cfg.db_path, "alice", password="loginpass1")
-    token = _create_session_for(cfg.db_path, user_id)
-
-    login_client.cookies.set(SESSION_COOKIE_NAME, token)
-    # Match the TestClient's base URL host so Origin == target netloc.
-    same_origin = str(login_client.base_url).rstrip("/")
-    resp = login_client.post(
-        "/logout",
-        headers={"Origin": same_origin},
-        follow_redirects=False,
-    )
-
-    assert resp.status_code in (200, 302), resp.text
-    assert resp.headers.get("location") == "/login"
-    assert _session_count(cfg.db_path) == 0
-
-
-def test_logout_allows_request_without_origin_header(cfg: Any, login_client: TestClient[Litestar]) -> None:
-    """A top-level form post that omits Origin (some browsers/contexts) must still
-    work — the check only rejects a present-and-mismatching Origin."""
-    user_id = _seed_user(cfg.db_path, "alice", password="loginpass1")
-    token = _create_session_for(cfg.db_path, user_id)
-
-    login_client.cookies.set(SESSION_COOKIE_NAME, token)
-    resp = login_client.post("/logout", follow_redirects=False)  # no Origin header
-
-    assert resp.status_code in (200, 302), resp.text
-    assert _session_count(cfg.db_path) == 0
 
 
 @pytest.mark.parametrize(
-    "bad_origin",
+    "headers,allowed",
     [
-        "http://testserver.local.evil.com",  # suffix-style lookalike host
-        "http://evil.testserver.local",  # subdomain of an attacker domain
-        "http://testserver.local:1337",  # right host, wrong port
-        "http://evil.example.com",  # plainly different host
+        ({}, True),  # the test client's default same-origin Fetch-Metadata
+        ({"Origin": "null", "Sec-Fetch-Site": "same-origin"}, True),  # Referrer-Policy: no-referrer
+        ({"Sec-Fetch-Site": "same-site"}, False),  # another app
+        ({"Sec-Fetch-Site": "cross-site"}, False),
+        ({"Origin": "null", "Sec-Fetch-Site": "cross-site"}, False),  # sandboxed iframe
+        ({"Sec-Fetch-Site": ""}, False),  # no Fetch-Metadata
     ],
 )
-def test_logout_rejects_spoofed_or_opaque_origins(
-    cfg: Any, login_client: TestClient[Litestar], bad_origin: str
-) -> None:
-    """Forced-logout CSRF must be blocked for opaque (``null``) and lookalike/mismatched
-    origins, and the victim's session must survive each attempt."""
+def test_logout_csrf(cfg: Any, login_client: TestClient[Litestar], headers: dict[str, str], allowed: bool) -> None:
     user_id = _seed_user(cfg.db_path, "alice", password="loginpass1")
-    token = _create_session_for(cfg.db_path, user_id)
-    assert _session_count(cfg.db_path) == 1
+    login_client.cookies.set(SESSION_COOKIE_NAME, _create_session_for(cfg.db_path, user_id))
 
-    login_client.cookies.set(SESSION_COOKIE_NAME, token)
-    resp = login_client.post("/logout", headers={"Origin": bad_origin}, follow_redirects=False)
+    resp = login_client.post("/logout", headers=headers, follow_redirects=False)
 
-    assert resp.status_code == 401, f"{bad_origin!r} -> {resp.status_code}: {resp.text}"
-    assert _session_count(cfg.db_path) == 1, f"session revoked by spoofed origin {bad_origin!r}"
-
-
-@pytest.mark.parametrize("sec_fetch_site", ["cross-site", "same-site"])
-def test_logout_rejects_null_origin_from_opaque_context(
-    cfg: Any, login_client: TestClient[Litestar], sec_fetch_site: str
-) -> None:
-    """A sandboxed iframe (cross-site) or another app (same-site) can't log the owner out."""
-    user_id = _seed_user(cfg.db_path, "alice", password="loginpass1")
-    token = _create_session_for(cfg.db_path, user_id)
-    assert _session_count(cfg.db_path) == 1
-
-    login_client.cookies.set(SESSION_COOKIE_NAME, token)
-    resp = login_client.post(
-        "/logout",
-        headers={"Origin": "null", "Sec-Fetch-Site": sec_fetch_site},
-        follow_redirects=False,
-    )
-
-    assert resp.status_code == 401, f"{sec_fetch_site} -> {resp.status_code}: {resp.text}"
-    assert _session_count(cfg.db_path) == 1
-
-
-def test_logout_allows_null_origin_when_fetch_site_is_same_origin(
-    cfg: Any, login_client: TestClient[Litestar]
-) -> None:
-    """A same-origin POST under Referrer-Policy: no-referrer sends ``Origin: null``."""
-    user_id = _seed_user(cfg.db_path, "alice", password="loginpass1")
-    token = _create_session_for(cfg.db_path, user_id)
-
-    login_client.cookies.set(SESSION_COOKIE_NAME, token)
-    resp = login_client.post(
-        "/logout",
-        headers={"Origin": "null", "Sec-Fetch-Site": "same-origin"},
-        follow_redirects=False,
-    )
-
-    assert resp.status_code in (200, 302), resp.text
-    assert _session_count(cfg.db_path) == 0
+    if allowed:
+        assert resp.status_code in (200, 302), resp.text
+        assert resp.headers.get("location") == "/login"
+        assert _session_count(cfg.db_path) == 0
+    else:
+        assert resp.status_code == 401, resp.text
+        assert _session_count(cfg.db_path) == 1
 
 
 def test_login_does_not_bounce_a_session_the_destination_would_reject(

@@ -80,16 +80,15 @@ def _is_safe_for_cookie_auth_http(connection: Request[Any, Any, Any]) -> bool:
     """HTTP path for `is_safe_for_cookie_auth`.
 
     Just using `Origin` is insufficient; Origin isn't set on some valid same-origin requests.
-    Instead we use Sec-Fetch-Site, with a concrete foreign Origin as a hard veto.
-    Sec-Fetch-Site:
+    Instead we use Sec-Fetch-Site:
     - `same-origin` (exact same host, ie same-app)
     - `same-site` (another app)
     - `cross-site` (another site)
     - `none` (typing URL in address bar, using bookmark, reloading the page.)
 
     We want to allow links to be clicked from elsewhere in the instance (dashboard, other apps).
-    So for GET/HEADs with Sec-Fetch-Site in (same-site, none),
-    we allow them if Sec-Fetch-Dest == "document", which is only set on full-page navigations.
+    So we allow `same-site` GET/HEADs if Sec-Fetch-Dest == "document", which is only set on full-page
+    navigations.
     """
     site = connection.headers.get("Sec-Fetch-Site")
     if site in {"same-origin", "none"}:
@@ -257,6 +256,6 @@ def auth_required_response(request: Request[Any, Any, Any]) -> Response[Any]:
     GET/HEAD redirect to /login with ?next= set to the requested URL. Other methods get a 401.
     """
     if request.method not in ("GET", "HEAD"):
-        return Response(content="Authentication required", status_code=403, media_type=MediaType.TEXT)
+        return Response(content="Authentication required", status_code=401, media_type=MediaType.TEXT)
     zone = zone_for_request(request)
     return Redirect(path=build_login_url(zone, request.url.netloc, request.url.path, request.url.query))

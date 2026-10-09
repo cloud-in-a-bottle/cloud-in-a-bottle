@@ -641,7 +641,7 @@ async def test_missing_raw_path_requires_auth_before_forwarding(
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "method,expected",
-    [("GET", 302), ("HEAD", 302), ("POST", 403), ("PUT", 403), ("PATCH", 403), ("DELETE", 403), ("OPTIONS", 403)],
+    [("GET", 302), ("HEAD", 302), ("POST", 401), ("PUT", 401), ("PATCH", 401), ("DELETE", 401), ("OPTIONS", 401)],
 )
 async def test_ambiguous_public_path_requires_auth_for_every_method(
     wrapped_app: ASGIApp, partially_public_app: None, backend: _RecordingBackend, method: str, expected: int

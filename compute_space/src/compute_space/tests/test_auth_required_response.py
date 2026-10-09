@@ -13,10 +13,10 @@ from compute_space.web.helpers.zone import ZONE_SCOPE_KEY
 
 
 @pytest.mark.parametrize(
-    "method,expected", [("GET", 302), ("HEAD", 302), ("POST", 403), ("PUT", 403), ("PATCH", 403), ("DELETE", 403)]
+    "method,expected", [("GET", 302), ("HEAD", 302), ("POST", 401), ("PUT", 401), ("PATCH", 401), ("DELETE", 401)]
 )
 def test_only_get_and_head_redirect_to_login(tmp_path: Path, method: str, expected: int) -> None:
-    # a followed 302 is re-issued as a bodyless GET, so unsafe methods get a 403 instead.
+    # a followed 302 is re-issued as a bodyless GET, so unsafe methods get a 401 instead.
     _make_test_config(tmp_path, zone_domain="testzone.local", tls_enabled=True)
     scope = make_http_scope(
         method,
