@@ -27,6 +27,39 @@ from compute_space.db import provide_db
 from compute_space.web.helpers.zone import ZONE_SCOPE_KEY
 
 
+def make_http_scope(
+    method: str,
+    path: str,
+    *,
+    host: str,
+    headers: dict[str, str] | None = None,
+    cookie: str | None = None,
+    client: tuple[str, int] | None = None,
+    extra_scope: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build a minimal HTTP ASGI scope for auth unit tests. ``cookie`` is a raw ``name=value`` string."""
+    raw_headers: list[tuple[bytes, bytes]] = [(b"host", host.encode())]
+    if cookie is not None:
+        raw_headers.append((b"cookie", cookie.encode()))
+    for name, value in (headers or {}).items():
+        raw_headers.append((name.lower().encode(), value.encode()))
+    scope: dict[str, Any] = {
+        "type": "http",
+        "method": method,
+        "path": path,
+        "raw_path": path.encode(),
+        "query_string": b"",
+        "scheme": "http",
+        "server": ("127.0.0.1", 8080),
+        "root_path": "",
+        "headers": raw_headers,
+        **(extra_scope or {}),
+    }
+    if client is not None:
+        scope["client"] = client
+    return scope
+
+
 def stash_zone_middleware(app: ASGIApp) -> ASGIApp:
     """Test stand-in for the zone-stashing half of ``SubdomainProxyMiddleware``: put the DB primary
     in the request scope so ``zone_for_request`` / ``app_url`` resolve in minimal test apps that omit
@@ -76,10 +109,25 @@ def auth_cookie(cfg: Any, username: str = "owner") -> dict[str, str]:
     return {SESSION_COOKIE_NAME: token}
 
 
-def ws_cookie_header(cookies: dict[str, str]) -> dict[str, str]:
-    """A WebSocket handshake is a plain HTTP GET, so the session cookie rides in
-    a Cookie header just like a normal request."""
+# what a browser sends on a same-origin navigation. owner cookie auth fails closed without it.
+BROWSER_FETCH_METADATA = {
+    "Sec-Fetch-Site": "same-origin",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Dest": "document",
+}
+
+
+def cookie_header(cookies: dict[str, str]) -> dict[str, str]:
+    """A Cookie header carrying the given cookies."""
     return {"cookie": "; ".join(f"{k}={v}" for k, v in cookies.items())}
+
+
+def ws_cookie_header(cookies: dict[str, str], *, origin: str = "http://testserver.local") -> dict[str, str]:
+    """Headers for an owner-authenticated WebSocket handshake, which is judged on an exact Origin match.
+
+    The default origin matches TestClient's base_url.
+    """
+    return {**cookie_header(cookies), "origin": origin}
 
 
 def make_test_app(*route_handlers: Any) -> Litestar:

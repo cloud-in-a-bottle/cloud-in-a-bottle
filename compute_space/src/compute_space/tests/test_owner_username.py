@@ -26,6 +26,8 @@ import bcrypt
 import pytest
 from litestar import Litestar
 from litestar.di import Provide
+from litestar.plugins.jinja import JinjaTemplateEngine
+from litestar.template.config import TemplateConfig
 from litestar.testing import TestClient
 
 from compute_space.config import provide_config
@@ -41,6 +43,8 @@ from compute_space.db import provide_db
 from compute_space.db.connection import init_db
 from compute_space.tests._litestar_helpers import stash_zone_middleware
 from compute_space.tests.conftest import _make_test_config
+from compute_space.web import app as web_app
+from compute_space.web.app import _template_globals
 from compute_space.web.routes.api.settings import api_settings_routes
 from compute_space.web.routes.pages.login import pages_login_routes
 from compute_space.web.setup_app import create_setup_app
@@ -160,15 +164,28 @@ def _make_settings_app() -> Litestar:
     )
 
 
-def _make_login_app() -> Litestar:
-    """App exposing just /login and /logout."""
+def _make_login_app(cfg: Any) -> Litestar:
+    """App exposing just /login and /logout, with templates so the login form renders."""
+    web_dir = Path(web_app.__file__).resolve().parent
+    template_config: TemplateConfig[JinjaTemplateEngine] = TemplateConfig(
+        directory=web_dir / "templates",
+        engine=JinjaTemplateEngine,
+    )
+
+    def _install_globals(app: Litestar) -> None:
+        engine = app.template_engine
+        if isinstance(engine, JinjaTemplateEngine):
+            engine.engine.globals.update(_template_globals(cfg, web_dir / "static"))
+
     return Litestar(
         route_handlers=[pages_login_routes],
+        template_config=template_config,
         dependencies={
             "config": Provide(provide_config, sync_to_thread=False),
             "db": Provide(provide_db),
         },
         middleware=[stash_zone_middleware],
+        on_startup=[_install_globals],
         openapi_config=None,
     )
 
@@ -181,7 +198,7 @@ def settings_client(cfg: Any) -> Iterator[TestClient[Litestar]]:
 
 @pytest.fixture
 def login_client(cfg: Any) -> Iterator[TestClient[Litestar]]:
-    with TestClient(app=_make_login_app()) as c:
+    with TestClient(app=_make_login_app(cfg)) as c:
         yield c
 
 
@@ -504,88 +521,60 @@ def test_logout_revokes_session_and_clears_cookie(cfg: Any, login_client: TestCl
     assert "Max-Age=0" in set_cookie or "max-age=0" in set_cookie.lower()
 
 
-def test_logout_without_session_is_safe(cfg: Any, login_client: TestClient[Litestar]) -> None:
-    """Hitting /logout with no session cookie must not error; it just redirects."""
+def test_logout_without_session_is_rejected(cfg: Any, login_client: TestClient[Litestar]) -> None:
     resp = login_client.post("/logout", follow_redirects=False)
-    assert resp.status_code in (200, 302), resp.text
-    assert resp.headers.get("location") == "/login"
-
-
-def test_logout_rejects_cross_origin_request(cfg: Any, login_client: TestClient[Litestar]) -> None:
-    """A cross-site POST to /logout (forced-logout CSRF) must be rejected, and the
-    victim's session must survive. The browser always sets Origin on cross-origin
-    requests, so a mismatching Origin is the signal."""
-    user_id = _seed_user(cfg.db_path, "alice", password="loginpass1")
-    token = _create_session_for(cfg.db_path, user_id)
-    assert _session_count(cfg.db_path) == 1
-
-    login_client.cookies.set(SESSION_COOKIE_NAME, token)
-    resp = login_client.post(
-        "/logout",
-        headers={"Origin": "https://evil.example.com"},
-        follow_redirects=False,
-    )
-
-    # Rejected (NotAuthorizedException -> 401), not a 302 logout.
     assert resp.status_code == 401, resp.text
-    # The victim's session must NOT have been revoked.
-    assert _session_count(cfg.db_path) == 1
-
-
-def test_logout_allows_same_origin_request(cfg: Any, login_client: TestClient[Litestar]) -> None:
-    """A same-origin POST (Origin matching the target host) must still log out.
-    Modern browsers send Origin even on same-origin top-level form posts."""
-    user_id = _seed_user(cfg.db_path, "alice", password="loginpass1")
-    token = _create_session_for(cfg.db_path, user_id)
-
-    login_client.cookies.set(SESSION_COOKIE_NAME, token)
-    # Match the TestClient's base URL host so Origin == target netloc.
-    same_origin = str(login_client.base_url).rstrip("/")
-    resp = login_client.post(
-        "/logout",
-        headers={"Origin": same_origin},
-        follow_redirects=False,
-    )
-
-    assert resp.status_code in (200, 302), resp.text
-    assert resp.headers.get("location") == "/login"
-    assert _session_count(cfg.db_path) == 0
-
-
-def test_logout_allows_request_without_origin_header(cfg: Any, login_client: TestClient[Litestar]) -> None:
-    """A top-level form post that omits Origin (some browsers/contexts) must still
-    work — the check only rejects a present-and-mismatching Origin."""
-    user_id = _seed_user(cfg.db_path, "alice", password="loginpass1")
-    token = _create_session_for(cfg.db_path, user_id)
-
-    login_client.cookies.set(SESSION_COOKIE_NAME, token)
-    resp = login_client.post("/logout", follow_redirects=False)  # no Origin header
-
-    assert resp.status_code in (200, 302), resp.text
-    assert _session_count(cfg.db_path) == 0
 
 
 @pytest.mark.parametrize(
-    "bad_origin",
+    "headers,allowed",
     [
-        "null",  # sandboxed/opaque iframe — must NOT be treated as "no header"
-        "http://testserver.local.evil.com",  # suffix-style lookalike host
-        "http://evil.testserver.local",  # subdomain of an attacker domain
-        "http://testserver.local:1337",  # right host, wrong port
-        "http://evil.example.com",  # plainly different host
+        ({}, True),  # the test client's default same-origin Fetch-Metadata
+        ({"Origin": "null", "Sec-Fetch-Site": "same-origin"}, True),  # Referrer-Policy: no-referrer
+        ({"Sec-Fetch-Site": "same-site"}, False),  # another app
+        ({"Sec-Fetch-Site": "cross-site"}, False),
+        ({"Origin": "null", "Sec-Fetch-Site": "cross-site"}, False),  # sandboxed iframe
+        ({"Sec-Fetch-Site": ""}, False),  # no Fetch-Metadata
     ],
 )
-def test_logout_rejects_spoofed_or_opaque_origins(
-    cfg: Any, login_client: TestClient[Litestar], bad_origin: str
+def test_logout_csrf(cfg: Any, login_client: TestClient[Litestar], headers: dict[str, str], allowed: bool) -> None:
+    user_id = _seed_user(cfg.db_path, "alice", password="loginpass1")
+    login_client.cookies.set(SESSION_COOKIE_NAME, _create_session_for(cfg.db_path, user_id))
+
+    resp = login_client.post("/logout", headers=headers, follow_redirects=False)
+
+    if allowed:
+        assert resp.status_code in (200, 302), resp.text
+        assert resp.headers.get("location") == "/login"
+        assert _session_count(cfg.db_path) == 0
+    else:
+        assert resp.status_code == 401, resp.text
+        assert _session_count(cfg.db_path) == 1
+
+
+def test_login_does_not_bounce_a_session_the_destination_would_reject(
+    cfg: Any, login_client: TestClient[Litestar]
 ) -> None:
-    """Forced-logout CSRF must be blocked for opaque (``null``) and lookalike/mismatched
-    origins, and the victim's session must survive each attempt."""
+    """A valid cookie without Fetch-Metadata gets the login form, not a /dashboard <-> /login loop."""
     user_id = _seed_user(cfg.db_path, "alice", password="loginpass1")
     token = _create_session_for(cfg.db_path, user_id)
-    assert _session_count(cfg.db_path) == 1
 
     login_client.cookies.set(SESSION_COOKIE_NAME, token)
-    resp = login_client.post("/logout", headers={"Origin": bad_origin}, follow_redirects=False)
+    response = login_client.get(
+        "/login?next=%2Fdashboard",
+        headers={"Sec-Fetch-Site": "", "Sec-Fetch-Mode": "", "Sec-Fetch-Dest": ""},
+        follow_redirects=False,
+    )
 
-    assert resp.status_code == 401, f"{bad_origin!r} -> {resp.status_code}: {resp.text}"
-    assert _session_count(cfg.db_path) == 1, f"session revoked by spoofed origin {bad_origin!r}"
+    assert response.status_code == 200, f"expected the login form, got {response.status_code}"
+    assert "location" not in response.headers
+
+
+def test_login_redirects_a_signed_in_user_onward(cfg: Any, login_client: TestClient[Litestar]) -> None:
+    user_id = _seed_user(cfg.db_path, "alice", password="loginpass1")
+    login_client.cookies.set(SESSION_COOKIE_NAME, _create_session_for(cfg.db_path, user_id))
+
+    response = login_client.get("/login?next=%2Fdashboard", follow_redirects=False)
+
+    assert response.status_code == 302
+    assert response.headers["location"] == "/dashboard"

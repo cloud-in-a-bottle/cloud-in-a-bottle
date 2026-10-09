@@ -8,6 +8,7 @@ from litestar import Router
 from litestar import get
 from litestar import post
 from litestar.di import NamedDependency
+from litestar.exceptions import NotAuthorizedException
 from litestar.response import Redirect
 from litestar.response import Template
 
@@ -16,8 +17,8 @@ from compute_space.core.auth.auth import create_session
 from compute_space.core.auth.auth import revoke_session
 from compute_space.core.auth.auth import validate_password
 from compute_space.core.domains import Domain
-from compute_space.web.auth.auth import authenticate
-from compute_space.web.auth.auth import require_same_origin
+from compute_space.web.auth.auth import require_owner_auth
+from compute_space.web.auth.auth import verify_owner_auth
 from compute_space.web.auth.cookies import build_session_cookie
 from compute_space.web.auth.cookies import clear_session_cookie
 from compute_space.web.helpers.zone import zone_for_request
@@ -46,9 +47,11 @@ async def login_get(
     db: NamedDependency[sqlite3.Connection],
 ) -> Response[Any]:
     next_param = request.query_params.get("next", "")
-    if authenticate(request, db=db) is not None:
+    try:
+        verify_owner_auth(request)
         return Redirect(path=_validated_next(next_param, db) or "/")
-    return Template(template_name="login.html", context={"next": next_param})
+    except NotAuthorizedException:
+        return Template(template_name="login.html", context={"next": next_param})
 
 
 @post("/login", status_code=200)
@@ -74,9 +77,7 @@ async def login_post(
     return response
 
 
-# /logout has no owner-auth guard (it must work for any session state), so guard it against
-# cross-site POSTs to prevent forced-logout CSRF.
-@post("/logout", status_code=200, guards=[require_same_origin])
+@post("/logout", status_code=200, guards=[require_owner_auth])
 async def logout(
     request: Request[Any, Any, Any],
     db: NamedDependency[sqlite3.Connection],

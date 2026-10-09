@@ -25,6 +25,7 @@ from compute_space.core.domains import Domain
 from compute_space.core.domains import primary_domain
 from compute_space.core.domains import seed_domains
 from compute_space.db.connection import init_db
+from compute_space.tests._litestar_helpers import BROWSER_FETCH_METADATA
 from compute_space.tests.utils import poll
 from compute_space.tests.utils import wait_app_running
 
@@ -139,6 +140,13 @@ class LocalStack:
             subprocess.run(["podman", "rm", "-f", f"openhost-{app_name}"], capture_output=True, timeout=60)
 
 
+def browser_session() -> requests.Session:
+    """A requests.Session sending the Fetch-Metadata that owner cookie auth requires."""
+    session = requests.Session()
+    session.headers.update(BROWSER_FETCH_METADATA)
+    return session
+
+
 def complete_setup(stack: LocalStack, timeout: float = 60) -> requests.Session:
     """Provision the owner via /setup and return an authenticated session.
 
@@ -146,7 +154,7 @@ def complete_setup(stack: LocalStack, timeout: float = 60) -> requests.Session:
     into the full app — so we poll /dashboard until the full app answers with our
     cookie.
     """
-    session = requests.Session()
+    session = browser_session()
     r = session.post(
         f"{stack.router_url}/setup",
         data={"password": stack.owner_password, "confirm_password": stack.owner_password},

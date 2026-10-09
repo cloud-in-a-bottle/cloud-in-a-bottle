@@ -10,6 +10,8 @@ from litestar import Request
 from litestar import Response
 from litestar import WebSocket
 from litestar.connection import ASGIConnection
+from litestar.enums import MediaType
+from litestar.enums import ScopeType
 from litestar.exceptions import NotAuthorizedException
 from litestar.handlers.base import BaseRouteHandler
 from litestar.response import Redirect
@@ -39,6 +41,10 @@ def _get_bearer_token_if_set(connection: AnyConnection) -> str | None:
     return None
 
 
+# what get_connection_origin returns for a present but hostless Origin, e.g. ``Origin: null``.
+_OPAQUE_ORIGIN_TOKEN = "null"
+
+
 def get_connection_origin(connection: AnyConnection) -> str | None:
     """gets and formats the origin header as "sub.example.com" or "sub.example.com:1234", no protocol or path, if set.
     port is included if non-default.
@@ -56,6 +62,8 @@ def get_connection_origin(connection: AnyConnection) -> str | None:
     - it includes the port if non-default (not 80 or 443).
 
     we don't use the Referer header, as it's not intended for use in CORS type origin validation.
+
+    note sec-fetch-site is potentially preferred to Origin for some uses.
     """
     raw = connection.headers.get("Origin")
     if raw is None:
@@ -64,28 +72,62 @@ def get_connection_origin(connection: AnyConnection) -> str | None:
     host, port = parsed.hostname, parsed.port
     if not host:
         # present but opaque/unparseable (e.g. "null"): return a non-matching token, not None.
-        return raw.strip().lower() or "null"
+        return raw.strip().lower() or _OPAQUE_ORIGIN_TOKEN
     return f"{host}:{port}" if port else host
 
 
-def verify_same_origin(connection: AnyConnection) -> None:
-    """Reject cross-origin requests to unauthenticated state-changing endpoints (e.g. /logout).
+def _is_safe_for_cookie_auth_http(connection: Request[Any, Any, Any]) -> bool:
+    """HTTP path for `is_safe_for_cookie_auth`.
 
-    The ``Origin`` header is set by browsers on all cross-origin requests (including from subdomains
-    and from sandboxed/opaque contexts, which send ``Origin: null``) and cannot be forged by js. So
-    if an Origin header is present at all, it must match the target host; otherwise the request is
-    cross-site and is rejected. This stops a hostile page (including a sandboxed iframe sending
-    ``Origin: null``) from cross-site POSTing to endpoints like /logout, which has no owner-auth
-    guard of its own (it must work for any session state).
+    Just using `Origin` is insufficient; Origin isn't set on some valid same-origin requests.
+    Instead we use Sec-Fetch-Site:
+    - `same-origin` (exact same host, ie same-app)
+    - `same-site` (another app)
+    - `cross-site` (another site)
+    - `none` (typing URL in address bar, using bookmark, reloading the page.)
 
-    A genuinely same-origin top-level form post either omits Origin or sends the matching host, so
-    legitimate logout still works.
-
-    raises NotAuthorizedException on a cross-origin request.
+    We want to allow links to be clicked from elsewhere in the instance (dashboard, other apps).
+    So we allow `same-site` GET/HEADs if Sec-Fetch-Dest == "document", which is only set on full-page
+    navigations.
     """
-    origin = get_connection_origin(connection)
-    if origin is not None and origin != connection.base_url.netloc:
-        raise NotAuthorizedException(detail="cross-origin request not allowed")
+    site = connection.headers.get("Sec-Fetch-Site")
+    if site in {"same-origin", "none"}:
+        return True
+    if (
+        site == "same-site"
+        and connection.scope["method"] in ("GET", "HEAD")
+        and connection.headers.get("Sec-Fetch-Dest") == "document"
+    ):
+        return True
+    return False
+
+
+def _is_safe_for_cookie_auth_websocket(connection: AnyConnection) -> bool:
+    """Websocket-path for `is_safe_for_cookie_auth`
+
+    Browsers always send a concrete Origin, so we just check it directly.
+    """
+    return get_connection_origin(connection) == connection.base_url.netloc
+
+
+def is_safe_for_cookie_auth(connection: AnyConnection) -> bool:
+    """Whether the request is safe to allow cookie auth on.
+
+    A malicious app could make a request from the owner's browser to another app on their instance,
+    and by default their browser would send the user's instance auth cookies with this request,
+    because both the origin and target are on the same site.
+
+    We want to prevent such cross-app requests in general, with some narrow exceptions:
+    - a full-page navigation/redirect is allowed - one app show a link to eg approve a permission in another app,
+    and the user should be able to click this.
+    """
+    if connection.scope["type"] == ScopeType.WEBSOCKET:
+        return _is_safe_for_cookie_auth_websocket(connection)
+    if connection.scope["type"] == ScopeType.HTTP:
+        return _is_safe_for_cookie_auth_http(
+            Request(connection.scope, receive=connection.receive, send=connection.send)
+        )
+    return False
 
 
 def authenticate(connection: AnyConnection, db: sqlite3.Connection) -> AuthenticatedAccessor | None:
@@ -120,14 +162,8 @@ def verify_owner_auth(connection: AnyConnection) -> None:
     accessor = authenticate(connection, db=get_db())
 
     if isinstance(accessor, AuthenticatedUser):
-        origin = get_connection_origin(connection)
-        if origin is not None and origin != connection.base_url.netloc:
-            # if origin is set (it is set on all browser cross-origin requests and cannot be forged by js),
-            # it must match the target URL. either router-to-router or same-app-origin is fine.
-            # in theory router->app is also fine but idk if this happens in practice.
-            # we never allow cross-origin requests with user auth, even from other subdomains, as these could be forged by untrusted app js.
-            raise NotAuthorizedException(detail="user authentication only valid for router-origin requests")
-        # origin is not set on normal same-origin GETs, for example, so we allow these.
+        if not is_safe_for_cookie_auth(connection):
+            raise NotAuthorizedException(detail="cookie authentication is only valid for safe-origin requests")
         return
     if isinstance(accessor, AuthenticatedAPIKey):
         # API key requests won't come from untrusted JS, so can be trusted regardless of origin.
@@ -191,12 +227,6 @@ def require_owner_or_app_auth(connection: AnyConnection, _route_handler: BaseRou
     verify_app_auth(connection)
 
 
-def require_same_origin(connection: AnyConnection, _route_handler: BaseRouteHandler) -> None:
-    """Adapt verify_same_origin to be used as a route guard (for unauthenticated state-changing
-    endpoints like /logout that still need cross-origin/CSRF protection)."""
-    verify_same_origin(connection)
-
-
 def build_login_url(zone: Domain, netloc: str, path: str, query: str) -> str:
     """Build an absolute ``/login?next=<original>`` URL on ``zone`` — the domain the
     request arrived on.
@@ -218,11 +248,14 @@ def build_login_url(zone: Domain, netloc: str, path: str, query: str) -> str:
     return f"{proto}://{host_with_request_port(zone.name_no_port, netloc)}/login?next={quote(next_url, safe='')}"
 
 
-def login_required_redirect(request: Request[Any, Any, Any]) -> Response[Any]:
-    """Return a 302 redirecting the user to the login page, with ?next= set to the originally requested URL.
+def auth_required_response(request: Request[Any, Any, Any]) -> Response[Any]:
+    """Response for an unauthenticated non-API HTTP request to a protected path.
 
-    This should only be called for non-API HTTP requests.
     In general you should just raise a NotAuthorizedException and let litestar call this for you.
+
+    GET/HEAD redirect to /login with ?next= set to the requested URL. Other methods get a 401.
     """
+    if request.method not in ("GET", "HEAD"):
+        return Response(content="Authentication required", status_code=401, media_type=MediaType.TEXT)
     zone = zone_for_request(request)
     return Redirect(path=build_login_url(zone, request.url.netloc, request.url.path, request.url.query))
