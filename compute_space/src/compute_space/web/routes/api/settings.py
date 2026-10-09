@@ -9,6 +9,7 @@ from datetime import time
 from enum import StrEnum
 from typing import Any
 
+import anyio
 import attr
 import bcrypt
 from litestar import Request
@@ -40,11 +41,9 @@ from compute_space.core.domains import primary_domain
 from compute_space.core.identity_store import get_connect_base_url
 from compute_space.core.identity_store import get_instance_identity
 from compute_space.core.identity_store import set_instance_identity
-from compute_space.core.system_agent.apply import ApplyBlockedError
-from compute_space.core.system_agent.apply import apply_lock
-from compute_space.core.system_agent.apply import check_can_apply
-from compute_space.core.system_agent.apply import launch_apply
 from compute_space.core.system_agent.client import SystemAgentError
+from compute_space.core.system_agent.client import apply_lock
+from compute_space.core.system_agent.client import system_agent_apply
 from compute_space.core.system_agent.client import system_agent_fetch
 from compute_space.core.system_agent.client import system_agent_get_remote
 from compute_space.core.system_agent.client import system_agent_reset_restart_limit_sync
@@ -58,6 +57,7 @@ from compute_space.core.util import not_blank
 from compute_space.web.auth.auth import require_owner_auth
 from compute_space.web.exceptions import BadGatewayException
 from compute_space.web.exceptions import ConflictException
+from openhost_system_agent.detach import apply_is_running
 from openhost_system_agent.protocol import RemoteInfo
 
 # --- request / response types -----------------------------------------------
@@ -164,10 +164,6 @@ async def check_for_updates() -> CheckUpdatesResponse:
     return CheckUpdatesResponse(state=state, error=_GIT_STATE_NOTICE.get(fetch_result.state))
 
 
-async def _launch_apply() -> None:
-    await launch_apply()
-
-
 @post(
     "/api/settings/update",
     status_code=200,
@@ -183,11 +179,18 @@ async def apply_update() -> Response[ApplyUpdateResponse]:
     handed_off = False
     try:
         try:
-            await check_can_apply()
+            migration_status = await system_agent_status()
         except SystemAgentError as e:
             raise InternalServerException(detail="Failed to read migration status", extra={"output": str(e)}) from e
-        except ApplyBlockedError as e:
-            raise ConflictException(detail=str(e), extra={"code": e.code}) from e
+
+        if not migration_status.ok and migration_status.reason != "behind":
+            raise ConflictException(detail=migration_status.message, extra={"code": "migrations_not_ok"})
+
+        # Check the host too: the walk restarts us, so a fresh process can hold a
+        # free lock while an apply is still running, and minting a token then would
+        # overwrite the one the owner's tab is polling with.
+        if await anyio.to_thread.run_sync(apply_is_running):
+            raise ConflictException(detail="An update is already in progress.", extra={"code": "update_in_progress"})
 
         token = new_update_token()
         await persist_update_token(token)
@@ -195,7 +198,7 @@ async def apply_update() -> Response[ApplyUpdateResponse]:
         # A response background task, not create_task: the apply stops openhost
         # moments after launch, so the browser must already hold this response.
         response = Response(content=ApplyUpdateResponse(token=token), status_code=200)
-        response.background = BackgroundTask(_launch_apply)
+        response.background = BackgroundTask(system_agent_apply)
         handed_off = True
         return response
     finally:
@@ -215,7 +218,7 @@ class AutoUpdateResponse:
     enabled: bool
     time_utc: str
     last_run_at: str | None
-    last_run_result: str | None
+    last_run_message: str | None
 
 
 def _auto_update_response(db: sqlite3.Connection) -> AutoUpdateResponse:
@@ -225,7 +228,7 @@ def _auto_update_response(db: sqlite3.Connection) -> AutoUpdateResponse:
         enabled=config.enabled,
         time_utc=config.time_utc.strftime("%H:%M"),
         last_run_at=last_run.at.isoformat() if last_run else None,
-        last_run_result=last_run.result if last_run else None,
+        last_run_message=last_run.describe() if last_run else None,
     )
 
 

@@ -306,7 +306,7 @@ function renderAutoUpdate() {
   const last = document.getElementById('auto-update-last');
   if (autoUpdate.last_run_at) {
     last.textContent = 'Last automatic update: ' + new Date(autoUpdate.last_run_at).toLocaleString()
-      + '. ' + autoUpdate.last_run_result;
+      + '. ' + autoUpdate.last_run_message;
     last.hidden = false;
   } else {
     last.hidden = true;

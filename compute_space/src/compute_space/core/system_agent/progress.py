@@ -8,7 +8,6 @@ import openhost_system_agent.updater.progress as agent_progress
 from compute_space.core.logging import logger
 from compute_space.core.system_agent.client import SystemAgentError
 from compute_space.core.system_agent.client import system_agent_mark_boot_complete_sync
-from compute_space.core.system_agent.client import system_agent_record_update_failure
 
 
 @attr.s(auto_attribs=True, frozen=True)
@@ -35,17 +34,3 @@ def mark_boot_complete() -> None:
         system_agent_mark_boot_complete_sync()
     except SystemAgentError:
         logger.exception("failed to finalize the update progress log via the agent")
-
-
-async def record_apply_failure(message: str) -> None:
-    """Ensure the log ends terminal so the /updating page stops polling. Falls back
-    to the root agent for a root-owned log."""
-    try:
-        if agent_progress.record_failure_if_not_terminal(message):
-            return
-    except Exception:
-        logger.exception("failed to record apply failure directly")
-    try:
-        await system_agent_record_update_failure(message)
-    except SystemAgentError:
-        logger.exception("failed to record apply failure via the agent")

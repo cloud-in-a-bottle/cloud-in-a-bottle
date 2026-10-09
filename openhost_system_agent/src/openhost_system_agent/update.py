@@ -380,7 +380,10 @@ class ParsedRemote:
 
 
 def parse_remote(spec: str) -> ParsedRemote:
-    """Split ``<url>``, ``<url>#<branch>`` or ``<url>@<ref>`` into its parts. Mirrored client-side in settings.js.
+    """Split ``<url>``, ``<url>#<branch>`` or ``<url>@<ref>`` into its parts.
+
+    Mirrored by parseRemote in compute_space/web/static/js/settings.js, which shows the channel and validation errors
+    as the owner types. Keep the two in sync.
 
     The ``@`` is only looked for in the URL path, so ``user@host`` in the netloc is not mistaken for a ref.
     """
