@@ -50,10 +50,14 @@ jobs:
       - run: pixi run -e dev pytest -v
 
   # Advisory only: reports when a pin in tests/external_pins.toml has fallen
-  # behind what it tracks.  Deliberately does not gate the merge: a stale pin is
+  # behind what it tracks.  Deliberately does not gate anything: a stale pin is
   # something to review and bump, not a reason to block an unrelated change.
+  # Runs on main only, not per PR -- drift is a property of the repo over time,
+  # not of a branch, so checking it once per landed commit is enough.  The
+  # blocking version of this check runs when a release is cut; see
+  # the pin-drift job in release.yml.
   pin-drift:
-    if: github.event_name != 'schedule'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     continue-on-error: true
     timeout-minutes: 10

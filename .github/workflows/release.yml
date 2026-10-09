@@ -1,9 +1,10 @@
 name: release
 
 # The one true Cloud in a Bottle release process. Pushing a version tag (vMAJOR.MINOR.PATCH)
-# does everything: it verifies the tree's pyproject version matches the tag, builds
-# the VM image artifacts, and publishes a GitHub release whose notes are the
-# auto-generated "What's Changed" changelog with the VM-image usage notes on top.
+# does everything: it verifies the tree's pyproject version matches the tag and
+# that no external pin has drifted, builds the VM image artifacts, and publishes
+# a GitHub release whose notes are the auto-generated "What's Changed" changelog
+# with the VM-image usage notes on top.
 #
 # To cut a release (the version lives in the root pyproject.toml; that distribution
 # bundles the sub-packages, so that one field is the version of record; the package
@@ -55,9 +56,26 @@ jobs:
           fi
           echo "version ok: pyproject.toml $got matches $TAG"
 
+  # Blocking gate: a release ships the pins, so a pin that has fallen behind
+  # upstream must be reviewed and bumped (or deliberately re-pinned as-is)
+  # before we cut one.  --strict turns drift into a failure here; the same
+  # check runs advisory-only on main (see ci.yml).
+  pin-drift:
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: prefix-dev/setup-pixi@v0.8.10
+        with:
+          pixi-version: v0.70.2
+          environments: dev
+      - name: Fail on stale external pins
+        run: pixi run -e dev python scripts/check_pin_drift.py --strict
+
   build:
-    needs: verify-version
-    # Run on workflow_dispatch too, where verify-version is skipped.
+    needs: [verify-version, pin-drift]
+    # Run on workflow_dispatch too, where the tag-only gates are skipped.
     if: ${{ !failure() && !cancelled() }}
     strategy:
       fail-fast: false
