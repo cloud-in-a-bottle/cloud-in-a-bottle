@@ -568,3 +568,13 @@ def test_login_does_not_bounce_a_session_the_destination_would_reject(
 
     assert response.status_code == 200, f"expected the login form, got {response.status_code}"
     assert "location" not in response.headers
+
+
+def test_login_redirects_a_signed_in_user_onward(cfg: Any, login_client: TestClient[Litestar]) -> None:
+    user_id = _seed_user(cfg.db_path, "alice", password="loginpass1")
+    login_client.cookies.set(SESSION_COOKIE_NAME, _create_session_for(cfg.db_path, user_id))
+
+    response = login_client.get("/login?next=%2Fdashboard", follow_redirects=False)
+
+    assert response.status_code == 302
+    assert response.headers["location"] == "/dashboard"
