@@ -9,7 +9,6 @@ from datetime import time
 from enum import StrEnum
 from typing import Any
 
-import anyio
 import attr
 import bcrypt
 from litestar import Request
@@ -57,7 +56,6 @@ from compute_space.core.util import not_blank
 from compute_space.web.auth.auth import require_owner_auth
 from compute_space.web.exceptions import BadGatewayException
 from compute_space.web.exceptions import ConflictException
-from openhost_system_agent.detach import apply_is_running
 from openhost_system_agent.protocol import RemoteInfo
 
 # --- request / response types -----------------------------------------------
@@ -185,12 +183,6 @@ async def apply_update() -> Response[ApplyUpdateResponse]:
 
         if not migration_status.ok and migration_status.reason != "behind":
             raise ConflictException(detail=migration_status.message, extra={"code": "migrations_not_ok"})
-
-        # Check the host too: the walk restarts us, so a fresh process can hold a
-        # free lock while an apply is still running, and minting a token then would
-        # overwrite the one the owner's tab is polling with.
-        if await anyio.to_thread.run_sync(apply_is_running):
-            raise ConflictException(detail="An update is already in progress.", extra={"code": "update_in_progress"})
 
         token = new_update_token()
         await persist_update_token(token)
