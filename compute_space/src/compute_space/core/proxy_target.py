@@ -47,8 +47,9 @@ def client_for(target: ProxyTarget, timeout: httpx.Timeout | float) -> tuple[htt
         case InProcess(app):
             # cast: litestar types its ASGIApp with its own scope classes, httpx with the raw
             # MutableMappings; they are the same protocol.
-            transport: httpx.AsyncBaseTransport | None = httpx.ASGITransport(app=cast(Any, app))
-            base_url = BUILTIN_HOST
+            transport = httpx.ASGITransport(app=cast(Any, app))
+            return httpx.AsyncClient(transport=transport, timeout=timeout), BUILTIN_HOST
         case LocalPort(port):
-            transport, base_url = None, f"http://127.0.0.1:{port}"
-    return httpx.AsyncClient(transport=transport, timeout=timeout), base_url
+            # This target is always plain HTTP over loopback. Loading the system CA bundle
+            # for a new client on every proxied request is expensive and cannot verify it.
+            return httpx.AsyncClient(timeout=timeout, verify=False), f"http://127.0.0.1:{port}"
