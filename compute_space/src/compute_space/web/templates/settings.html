@@ -76,9 +76,33 @@
                placeholder="Loading…" disabled>
         {{ button("Save & update", variant="primary", id="set-remote-btn", onclick="setRemote()", disabled=true) }}
       </div>
-      <p class="hint" id="remote-hint">Repository this instance updates from. Saving pins the target
-        and, if it points at different code than what's running, starts the update immediately.</p>
+      <p class="hint" id="remote-hint">Repository this instance updates from: <code>url</code> follows
+        tagged releases, <code>url#branch</code> follows a branch, and <code>url@tag-or-commit</code> pins
+        a fixed version. Saving starts the update immediately if it points at different code than what's
+        running.</p>
+      <p class="msg" id="remote-channel" hidden></p>
+      <p class="msg msg--warn" id="remote-channel-warning" hidden>Saving this remote will pause
+        automatic updates: they only run when following tagged releases.</p>
       <p id="remote-msg" class="msg" hidden></p>
+    </div>
+
+    <hr class="rule">
+
+    <div class="field">
+      <span>Automatic updates</span>
+      <div class="field-row">
+        <label class="field field--check">
+          <input type="checkbox" id="auto-update-enabled" onchange="saveAutoUpdate()" disabled>
+          <span>Update automatically every day at</span>
+        </label>
+        <input type="time" id="auto-update-time" aria-label="Update time" onchange="saveAutoUpdate()" disabled>
+      </div>
+      <p class="msg msg--warn" id="auto-update-paused" hidden>Paused: automatic updates only run when the
+        remote follows tagged releases (a URL with no <code>#branch</code> or <code>@ref</code>).</p>
+      <p class="hint">Installs the latest tagged release, in your browser's timezone. Updating briefly makes
+        the dashboard and apps unavailable.</p>
+      <p class="msg" id="auto-update-last" hidden></p>
+      <p id="auto-update-msg" class="msg" hidden></p>
     </div>
 
     <hr class="rule">

@@ -14,6 +14,7 @@ from litestar.plugins.jinja import JinjaTemplateEngine
 from litestar.template.config import TemplateConfig
 from litestar.testing import TestClient
 
+import compute_space.core.system_agent.apply as apply_mod
 import compute_space.web.routes.api.settings as settings_mod
 from compute_space.config import provide_config
 from compute_space.config import set_active_config
@@ -40,14 +41,15 @@ async def _drain() -> None:
 @pytest.fixture(autouse=True)
 def _fresh_apply_lock() -> None:
     """A successful handoff deliberately never releases the lock -- in production
-    the process is stopped moments later. Tests need a fresh one each time."""
-    settings_mod._apply_lock = asyncio.Lock()
+    the process is stopped moments later. Tests need it released each time."""
+    if apply_mod.apply_lock.locked():
+        apply_mod.apply_lock.release()
 
 
 @pytest.fixture(autouse=True)
 def _no_walk_on_the_host(monkeypatch: pytest.MonkeyPatch) -> None:
     """No apply unit is running unless a test says otherwise (it shells systemctl)."""
-    monkeypatch.setattr(settings_mod, "apply_is_running", lambda: False)
+    monkeypatch.setattr(apply_mod, "apply_is_running", lambda: False)
 
 
 @pytest.fixture
@@ -61,7 +63,7 @@ def token_calls(monkeypatch: pytest.MonkeyPatch) -> dict[str, list[str]]:
         calls["clear"].append("x")
 
     monkeypatch.setattr(settings_mod, "persist_update_token", fake_persist)
-    monkeypatch.setattr(settings_mod, "clear_update_token", fake_clear)
+    monkeypatch.setattr(apply_mod, "clear_update_token", fake_clear)
     return calls
 
 
@@ -127,23 +129,24 @@ async def test_apply_third_call_after_failure_allowed(
     async def status() -> MigrationStatus:
         return _status()
 
-    monkeypatch.setattr(settings_mod, "system_agent_apply", failing)
+    monkeypatch.setattr(apply_mod, "system_agent_apply", failing)
     monkeypatch.setattr(settings_mod, "system_agent_status", status)
+    monkeypatch.setattr(apply_mod, "system_agent_status", status)
     await _apply_and_launch()
-    assert not settings_mod._apply_lock.locked()
+    assert not apply_mod.apply_lock.locked()
     assert token_calls["clear"] == ["x"]
     # Retry: a fresh apply is accepted.
 
     async def ok() -> None:
         return None
 
-    monkeypatch.setattr(settings_mod, "system_agent_apply", ok)
+    monkeypatch.setattr(apply_mod, "system_agent_apply", ok)
     resp2 = await settings_mod.apply_update.fn()
     assert resp2.content.token
     # Launched successfully: the lock stays held, because the walk is now about
     # to stop this process and a second click must not race it.
     await resp2.background()
-    assert settings_mod._apply_lock.locked()
+    assert apply_mod.apply_lock.locked()
 
 
 @pytest.mark.asyncio
@@ -158,11 +161,12 @@ async def test_apply_generic_exception_also_recorded(
     async def status() -> MigrationStatus:
         return _status()
 
-    monkeypatch.setattr(settings_mod, "system_agent_apply", failing)
+    monkeypatch.setattr(apply_mod, "system_agent_apply", failing)
     monkeypatch.setattr(settings_mod, "system_agent_status", status)
+    monkeypatch.setattr(apply_mod, "system_agent_status", status)
     await _apply_and_launch()
 
-    assert not settings_mod._apply_lock.locked()
+    assert not apply_mod.apply_lock.locked()
     assert token_calls["clear"] == ["x"]
     view = update_progress.read_progress()
     assert view.terminal is True
@@ -177,10 +181,11 @@ async def test_apply_status_error_500_releases_lock(
         raise SystemAgentError("agent unreachable")
 
     monkeypatch.setattr(settings_mod, "system_agent_status", status)
+    monkeypatch.setattr(apply_mod, "system_agent_status", status)
     with pytest.raises(HTTPException) as e:
         await settings_mod.apply_update.fn()
     assert e.value.status_code == 500
-    assert not settings_mod._apply_lock.locked()
+    assert not apply_mod.apply_lock.locked()
 
 
 # ─────────────── /updates endpoint (compute_space) ───────────────
@@ -316,12 +321,13 @@ async def test_apply_refuses_when_a_walk_is_already_running_on_the_host(
         pytest.fail("must not launch a second walk")
 
     monkeypatch.setattr(settings_mod, "system_agent_status", status)
-    monkeypatch.setattr(settings_mod, "system_agent_apply", apply_must_not_run)
-    monkeypatch.setattr(settings_mod, "apply_is_running", lambda: True)
+    monkeypatch.setattr(apply_mod, "system_agent_status", status)
+    monkeypatch.setattr(apply_mod, "system_agent_apply", apply_must_not_run)
+    monkeypatch.setattr(apply_mod, "apply_is_running", lambda: True)
 
     with pytest.raises(HTTPException) as e:
         await settings_mod.apply_update.fn()
 
     assert e.value.status_code == 409
     assert token_calls["persist"] == []  # the in-flight update's token is untouched
-    assert not settings_mod._apply_lock.locked()
+    assert not apply_mod.apply_lock.locked()

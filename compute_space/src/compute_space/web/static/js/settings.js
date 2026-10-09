@@ -119,28 +119,99 @@ function pollRestart() {
 }
 
 let savedRemote = '';
+// Update channel of the saved remote ('tags', 'branch' or 'pinned'), null until loaded.
+let savedChannel = null;
+// The saved auto-update settings, null until loaded.
+let autoUpdate = null;
+
+const REMOTE_SCHEMES = ['http:', 'https:', 'ssh:', 'git:', 'file:'];
+
+// Mirrors parse_remote in openhost_system_agent/update.py: <url> follows tags, <url>#branch follows a branch, and
+// <url>@ref pins a tag or commit. Returns {channel, ref} or {error}.
+function parseRemote(spec) {
+  spec = spec.trim();
+  if (/\s/.test(spec)) return {error: 'The remote must not contain spaces.'};
+  let parsed = null;
+  try { parsed = new URL(spec); } catch (e) { /* no scheme; retried with https below */ }
+  if (!parsed || !REMOTE_SCHEMES.includes(parsed.protocol)) {
+    try { parsed = new URL('https://' + spec); } catch (e) { return {error: 'Not a valid URL.'}; }
+  }
+  const branch = parsed.hash.slice(1);
+  if (spec.includes('#') && !branch) return {error: "Missing branch name after '#'."};
+  if (branch.includes('#')) return {error: "Only one '#branch' is allowed."};
+  const at = parsed.pathname.split('@');
+  if (at.length > 2) return {error: "Only one '@ref' is allowed."};
+  const ref = at.length === 2 ? at[1] : null;
+  if (ref === '') return {error: "Missing tag or commit after '@'."};
+  if (branch && ref) return {error: "Use either '#branch' or '@ref', not both."};
+  if (branch) return {channel: 'branch', ref: decodeRef(branch)};
+  if (ref) return {channel: 'pinned', ref: decodeRef(ref)};
+  return {channel: 'tags', ref: null};
+}
+
+function decodeRef(ref) {
+  try { return decodeURIComponent(ref); } catch (e) { return ref; }
+}
+
+function remoteSpec(info) {
+  const url = info.url || '';
+  // On the tags channel info.ref is just the current tag, shown elsewhere; appending it here would make re-saving
+  // silently pin the host to that tag.
+  if (!url || info.channel === 'tags') return url;
+  return url + (info.channel === 'branch' ? '#' : '@') + info.ref;
+}
+
+// True when saving `parsed` would move auto-updates from running to paused.
+function pausesAutoUpdate(parsed) {
+  return !parsed.error && parsed.channel !== 'tags' && savedChannel === 'tags'
+    && autoUpdate !== null && autoUpdate.enabled;
+}
+
+function renderRemoteChannel() {
+  const input = document.getElementById('remote-url');
+  const btn = document.getElementById('set-remote-btn');
+  const channel = document.getElementById('remote-channel');
+  const warning = document.getElementById('remote-channel-warning');
+  const value = input.value.trim();
+  if (!value) {
+    channel.hidden = true;
+    warning.hidden = true;
+    btn.disabled = true;
+    return;
+  }
+  const parsed = parseRemote(value);
+  if (parsed.error) {
+    channel.textContent = parsed.error;
+    channel.className = 'msg msg--error';
+  } else if (parsed.channel === 'tags') {
+    channel.textContent = 'Updates to the latest tagged release.';
+    channel.className = 'msg';
+  } else if (parsed.channel === 'branch') {
+    channel.textContent = 'Updates to the latest commit on the ' + parsed.ref + ' branch.';
+    channel.className = 'msg';
+  } else {
+    channel.textContent = 'Pinned to ' + parsed.ref + '; will not update.';
+    channel.className = 'msg';
+  }
+  channel.hidden = false;
+  warning.hidden = !pausesAutoUpdate(parsed);
+  btn.disabled = Boolean(parsed.error) || value === savedRemote;
+}
 
 async function loadRemote() {
   const input = document.getElementById('remote-url');
-  const btn = document.getElementById('set-remote-btn');
   try {
     const resp = await fetch('/api/settings/get-remote');
     if (!resp.ok) throw new Error('failed to load remote');
     const data = await resp.json();
-    savedRemote = data.url || '';
-    // Only reconstruct the url@ref pin when the instance is actually pinned.
-    // When unpinned, data.ref is just the resolved current tag shown elsewhere;
-    // appending it here would make re-saving silently pin the host to that tag.
-    if (savedRemote && data.pinned && data.ref) {
-      savedRemote = savedRemote + '@' + data.ref;
-    }
+    savedRemote = remoteSpec(data);
+    savedChannel = data.channel;
     input.value = savedRemote;
-    input.placeholder = 'https://github.com/user/repo@branch';
+    input.placeholder = 'https://github.com/user/repo';
     input.disabled = false;
-    btn.disabled = true;
-    input.addEventListener('input', () => {
-      btn.disabled = input.value.trim() === savedRemote;
-    });
+    input.addEventListener('input', renderRemoteChannel);
+    renderRemoteChannel();
+    renderAutoUpdate();
   } catch (e) {
     input.placeholder = '';
     const msg = document.getElementById('remote-msg');
@@ -157,6 +228,12 @@ async function setRemote() {
   const msg = document.getElementById('remote-msg');
   const url = input.value.trim();
   if (!url) return;
+  const parsed = parseRemote(url);
+  if (parsed.error) return;
+  if (pausesAutoUpdate(parsed) && !confirm(
+    'This will pause automatic updates, because they only run when following tagged releases. Save anyway?')) {
+    return;
+  }
 
   btn.disabled = true;
   msg.hidden = true;
@@ -172,10 +249,13 @@ async function setRemote() {
       throw new Error(responseErrorMessage(err, 'failed to set remote'));
     }
     // Re-baseline from the normalized RemoteInfo so the button stays greyed
-    // out until the operator edits again (mirrors loadRemote's url@ref shape).
+    // out until the operator edits again.
     const saved = await resp.json();
-    savedRemote = (saved.url || '') + (saved.pinned && saved.ref ? '@' + saved.ref : '');
+    savedRemote = remoteSpec(saved);
+    savedChannel = saved.channel;
     input.value = savedRemote;
+    renderRemoteChannel();
+    renderAutoUpdate();
     msg.textContent = 'Remote saved.';
     msg.className = 'msg';
     msg.hidden = false;
@@ -193,6 +273,88 @@ async function setRemote() {
     msg.hidden = false;
     btn.disabled = false;
   }
+}
+
+function pad2(n) { return String(n).padStart(2, '0'); }
+
+// The scheduled time is stored as HH:MM in UTC and shown in the browser's timezone.
+function utcTimeToLocal(hhmm) {
+  const [h, m] = hhmm.split(':').map(Number);
+  const d = new Date();
+  d.setUTCHours(h, m, 0, 0);
+  return pad2(d.getHours()) + ':' + pad2(d.getMinutes());
+}
+
+function localTimeToUtc(hhmm) {
+  const [h, m] = hhmm.split(':').map(Number);
+  const d = new Date();
+  d.setHours(h, m, 0, 0);
+  return pad2(d.getUTCHours()) + ':' + pad2(d.getUTCMinutes());
+}
+
+function renderAutoUpdate() {
+  if (autoUpdate === null || savedChannel === null) return;
+  const enabled = document.getElementById('auto-update-enabled');
+  const time = document.getElementById('auto-update-time');
+  const paused = savedChannel !== 'tags';
+  enabled.checked = autoUpdate.enabled;
+  enabled.disabled = paused;
+  time.value = utcTimeToLocal(autoUpdate.time_utc);
+  time.disabled = paused || !autoUpdate.enabled;
+  document.getElementById('auto-update-paused').hidden = !paused;
+
+  const last = document.getElementById('auto-update-last');
+  if (autoUpdate.last_run_at) {
+    last.textContent = 'Last automatic update: ' + new Date(autoUpdate.last_run_at).toLocaleString()
+      + '. ' + autoUpdate.last_run_result;
+    last.hidden = false;
+  } else {
+    last.hidden = true;
+  }
+}
+
+async function loadAutoUpdate() {
+  try {
+    const resp = await fetch('/api/settings/auto-update');
+    if (!resp.ok) throw new Error('failed to load');
+    autoUpdate = await resp.json();
+    renderAutoUpdate();
+    renderRemoteChannel();
+  } catch (e) {
+    const msg = document.getElementById('auto-update-msg');
+    msg.textContent = 'Failed to load automatic update settings. Reload the page to retry.';
+    msg.className = 'msg msg--error';
+    msg.hidden = false;
+  }
+}
+
+async function saveAutoUpdate() {
+  const msg = document.getElementById('auto-update-msg');
+  const time = document.getElementById('auto-update-time');
+  if (!time.value) return;
+  msg.hidden = true;
+  try {
+    const resp = await fetch('/api/settings/auto-update', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        enabled: document.getElementById('auto-update-enabled').checked,
+        time_utc: localTimeToUtc(time.value),
+      }),
+    });
+    if (!resp.ok) {
+      const err = await resp.json();
+      throw new Error(responseErrorMessage(err, 'failed to save'));
+    }
+    autoUpdate = await resp.json();
+    msg.textContent = 'Saved.';
+    msg.className = 'msg msg--ok';
+  } catch (e) {
+    msg.textContent = 'Failed to save automatic update settings: ' + e.message;
+    msg.className = 'msg msg--error';
+  }
+  msg.hidden = false;
+  renderAutoUpdate();
 }
 
 async function restartComputeSpace() {
@@ -741,6 +903,7 @@ async function connectImbue() {
 
 loadOwnerUsername();
 loadRemote();
+loadAutoUpdate();
 checkForUpdates();
 updateSshStatus();
 setInterval(updateSshStatus, 5000);

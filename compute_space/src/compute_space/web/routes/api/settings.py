@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import re
 import sqlite3
+from datetime import UTC
+from datetime import datetime
+from datetime import time
 from enum import StrEnum
 from typing import Any
 
-import anyio
 import attr
 import bcrypt
 from litestar import Request
@@ -27,23 +30,27 @@ from compute_space.config import Config
 from compute_space.core.auth.auth import read_owner_username
 from compute_space.core.auth.auth import update_owner_username
 from compute_space.core.auth.auth import validate_owner_username
+from compute_space.core.auto_update.config import AutoUpdateConfig
+from compute_space.core.auto_update.config import read_auto_update_config
+from compute_space.core.auto_update.config import read_last_run
+from compute_space.core.auto_update.config import write_auto_update_config
 from compute_space.core.connect import build_connect_url
 from compute_space.core.connect import exchange_code_for_credential
 from compute_space.core.domains import primary_domain
 from compute_space.core.identity_store import get_connect_base_url
 from compute_space.core.identity_store import get_instance_identity
 from compute_space.core.identity_store import set_instance_identity
-from compute_space.core.logging import logger
+from compute_space.core.system_agent.apply import ApplyBlockedError
+from compute_space.core.system_agent.apply import apply_lock
+from compute_space.core.system_agent.apply import check_can_apply
+from compute_space.core.system_agent.apply import launch_apply
 from compute_space.core.system_agent.client import SystemAgentError
-from compute_space.core.system_agent.client import system_agent_apply
 from compute_space.core.system_agent.client import system_agent_fetch
 from compute_space.core.system_agent.client import system_agent_get_remote
 from compute_space.core.system_agent.client import system_agent_reset_restart_limit_sync
 from compute_space.core.system_agent.client import system_agent_set_remote
 from compute_space.core.system_agent.client import system_agent_status
 from compute_space.core.system_agent.progress import read_progress
-from compute_space.core.system_agent.progress import record_apply_failure
-from compute_space.core.system_agent.update_token import clear_update_token
 from compute_space.core.system_agent.update_token import new_update_token
 from compute_space.core.system_agent.update_token import persist_update_token
 from compute_space.core.updates import trigger_restart
@@ -51,7 +58,6 @@ from compute_space.core.util import not_blank
 from compute_space.web.auth.auth import require_owner_auth
 from compute_space.web.exceptions import BadGatewayException
 from compute_space.web.exceptions import ConflictException
-from openhost_system_agent.detach import apply_is_running
 from openhost_system_agent.protocol import RemoteInfo
 
 # --- request / response types -----------------------------------------------
@@ -158,30 +164,8 @@ async def check_for_updates() -> CheckUpdatesResponse:
     return CheckUpdatesResponse(state=state, error=_GIT_STATE_NOTICE.get(fetch_result.state))
 
 
-# Serializes apply_update. Held for the rest of this process's life once the walk
-# is launched: the apply stops openhost moments later, so releasing early would
-# only let a second click race the walk. A launch failure releases it for a retry.
-_apply_lock = asyncio.Lock()
-
-# The agent's refusal when a walk is already running. Its log belongs to that walk,
-# so don't terminate it here.
-_ALREADY_RUNNING = "already in progress"
-
-
 async def _launch_apply() -> None:
-    """Hand the update to the detached apply unit, which stops openhost next."""
-    try:
-        await system_agent_apply()
-    except Exception as e:
-        if _ALREADY_RUNNING in str(e):
-            logger.warning("apply already in progress; leaving its progress log alone")
-            return
-        # Not just SystemAgentError: ANY failure must leave the log terminal, or
-        # the /updating page would poll forever with no explanation.
-        logger.exception("system agent apply failed")
-        await record_apply_failure(f"Update failed: {e}")
-        await clear_update_token()
-        _apply_lock.release()
+    await launch_apply()
 
 
 @post(
@@ -191,26 +175,19 @@ async def _launch_apply() -> None:
     raises=[ConflictException, InternalServerException],
 )
 async def apply_update() -> Response[ApplyUpdateResponse]:
-    if _apply_lock.locked():
+    if apply_lock.locked():
         raise ConflictException(detail="An update is already in progress.", extra={"code": "update_in_progress"})
-    await _apply_lock.acquire()
+    await apply_lock.acquire()
 
     # Any error before the apply task is scheduled must release the lock.
     handed_off = False
     try:
         try:
-            migration_status = await system_agent_status()
+            await check_can_apply()
         except SystemAgentError as e:
             raise InternalServerException(detail="Failed to read migration status", extra={"output": str(e)}) from e
-
-        if not migration_status.ok and migration_status.reason != "behind":
-            raise ConflictException(detail=migration_status.message, extra={"code": "migrations_not_ok"})
-
-        # Check the host too: the walk restarts us, so a fresh process can hold a
-        # free lock while an apply is still running, and minting a token then would
-        # overwrite the one the owner's tab is polling with.
-        if await anyio.to_thread.run_sync(apply_is_running):
-            raise ConflictException(detail="An update is already in progress.", extra={"code": "update_in_progress"})
+        except ApplyBlockedError as e:
+            raise ConflictException(detail=str(e), extra={"code": e.code}) from e
 
         token = new_update_token()
         await persist_update_token(token)
@@ -222,8 +199,51 @@ async def apply_update() -> Response[ApplyUpdateResponse]:
         handed_off = True
         return response
     finally:
-        if not handed_off and _apply_lock.locked():
-            _apply_lock.release()
+        if not handed_off and apply_lock.locked():
+            apply_lock.release()
+
+
+@attr.s(auto_attribs=True, frozen=True)
+class AutoUpdateRequest:
+    enabled: bool
+    # "HH:MM" in UTC; the browser converts to and from local time.
+    time_utc: str
+
+
+@attr.s(auto_attribs=True, frozen=True)
+class AutoUpdateResponse:
+    enabled: bool
+    time_utc: str
+    last_run_at: str | None
+    last_run_result: str | None
+
+
+def _auto_update_response(db: sqlite3.Connection) -> AutoUpdateResponse:
+    config = read_auto_update_config(db, datetime.now(UTC))
+    last_run = read_last_run(db)
+    return AutoUpdateResponse(
+        enabled=config.enabled,
+        time_utc=config.time_utc.strftime("%H:%M"),
+        last_run_at=last_run.at.isoformat() if last_run else None,
+        last_run_result=last_run.result if last_run else None,
+    )
+
+
+@get("/api/settings/auto-update", guards=[require_owner_auth])
+async def get_auto_update(db: NamedDependency[sqlite3.Connection]) -> AutoUpdateResponse:
+    return _auto_update_response(db)
+
+
+@post("/api/settings/auto-update", status_code=200, guards=[require_owner_auth], raises=[ValidationException])
+async def set_auto_update(data: AutoUpdateRequest, db: NamedDependency[sqlite3.Connection]) -> AutoUpdateResponse:
+    if not re.fullmatch(r"\d{2}:\d{2}", data.time_utc):
+        raise ValidationException(detail="Time must be HH:MM", extra={"code": "invalid_time"})
+    try:
+        time_utc = time.fromisoformat(data.time_utc)
+    except ValueError as e:
+        raise ValidationException(detail="Time must be HH:MM", extra={"code": "invalid_time"}) from e
+    write_auto_update_config(db, AutoUpdateConfig(enabled=data.enabled, time_utc=time_utc))
+    return _auto_update_response(db)
 
 
 @attr.s(auto_attribs=True, frozen=True)
@@ -428,6 +448,8 @@ api_settings_routes = Router(
         check_for_updates,
         apply_update,
         update_progress,
+        get_auto_update,
+        set_auto_update,
         restart_compute_space,
         connect_imbue_status,
         connect_imbue_start,

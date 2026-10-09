@@ -15,6 +15,7 @@ from pathlib import Path
 import pytest
 from litestar.exceptions import HTTPException
 
+import compute_space.core.system_agent.apply as apply_mod
 import compute_space.web.routes.api.settings as settings_mod
 from compute_space.core.system_agent.client import SystemAgentError
 from openhost_system_agent.protocol import FetchResult
@@ -24,14 +25,15 @@ from openhost_system_agent.protocol import MigrationStatus
 @pytest.fixture(autouse=True)
 def _fresh_apply_lock() -> None:
     """A successful handoff deliberately never releases the lock -- in production
-    the process is stopped moments later. Tests need a fresh one each time."""
-    settings_mod._apply_lock = asyncio.Lock()
+    the process is stopped moments later. Tests need it released each time."""
+    if apply_mod.apply_lock.locked():
+        apply_mod.apply_lock.release()
 
 
 @pytest.fixture(autouse=True)
 def _no_walk_on_the_host(monkeypatch: pytest.MonkeyPatch) -> None:
     """No apply unit is running unless a test says otherwise (it shells systemctl)."""
-    monkeypatch.setattr(settings_mod, "apply_is_running", lambda: False)
+    monkeypatch.setattr(apply_mod, "apply_is_running", lambda: False)
 
 
 async def _run_launch(response: object) -> None:
@@ -65,7 +67,7 @@ def token_calls(monkeypatch: pytest.MonkeyPatch) -> dict[str, list[str]]:
         calls["clear"].append("cleared")
 
     monkeypatch.setattr(settings_mod, "persist_update_token", fake_persist)
-    monkeypatch.setattr(settings_mod, "clear_update_token", fake_clear)
+    monkeypatch.setattr(apply_mod, "clear_update_token", fake_clear)
     return calls
 
 
@@ -79,6 +81,7 @@ async def test_check_for_updates_up_to_date(monkeypatch: pytest.MonkeyPatch) -> 
 
     monkeypatch.setattr(settings_mod, "system_agent_fetch", fake_fetch)
     monkeypatch.setattr(settings_mod, "system_agent_status", fake_status)
+    monkeypatch.setattr(apply_mod, "system_agent_status", fake_status)
 
     result = await settings_mod.check_for_updates.fn()
 
@@ -96,6 +99,7 @@ async def test_check_for_updates_update_available(monkeypatch: pytest.MonkeyPatc
 
     monkeypatch.setattr(settings_mod, "system_agent_fetch", fake_fetch)
     monkeypatch.setattr(settings_mod, "system_agent_status", fake_status)
+    monkeypatch.setattr(apply_mod, "system_agent_status", fake_status)
 
     result = await settings_mod.check_for_updates.fn()
 
@@ -115,6 +119,7 @@ async def test_check_for_updates_migration_behind_is_update_available(monkeypatc
 
     monkeypatch.setattr(settings_mod, "system_agent_fetch", fake_fetch)
     monkeypatch.setattr(settings_mod, "system_agent_status", fake_status)
+    monkeypatch.setattr(apply_mod, "system_agent_status", fake_status)
 
     result = await settings_mod.check_for_updates.fn()
 
@@ -137,6 +142,7 @@ async def test_check_for_updates_migration_missing_is_error(monkeypatch: pytest.
 
     monkeypatch.setattr(settings_mod, "system_agent_fetch", fake_fetch)
     monkeypatch.setattr(settings_mod, "system_agent_status", fake_status)
+    monkeypatch.setattr(apply_mod, "system_agent_status", fake_status)
 
     result = await settings_mod.check_for_updates.fn()
 
@@ -169,14 +175,15 @@ async def test_apply_update_refuses_with_409_when_not_prepared(
             ok=False, reason="missing", message="migration log missing", current_host_version=0, expected_version=2
         )
 
-    monkeypatch.setattr(settings_mod, "system_agent_apply", boom)
+    monkeypatch.setattr(apply_mod, "system_agent_apply", boom)
     monkeypatch.setattr(settings_mod, "system_agent_status", fake_status)
+    monkeypatch.setattr(apply_mod, "system_agent_status", fake_status)
 
     with pytest.raises(HTTPException) as excinfo:
         await settings_mod.apply_update.fn()
     assert excinfo.value.status_code == 409
     # The gate must not have left the serialization lock held, nor minted a token.
-    assert not settings_mod._apply_lock.locked()
+    assert not apply_mod.apply_lock.locked()
     assert token_calls["persist"] == []
 
 
@@ -194,8 +201,9 @@ async def test_apply_update_proceeds_when_migration_behind(
             ok=False, reason="behind", message="migrations needed", current_host_version=1, expected_version=2
         )
 
-    monkeypatch.setattr(settings_mod, "system_agent_apply", fake_apply)
+    monkeypatch.setattr(apply_mod, "system_agent_apply", fake_apply)
     monkeypatch.setattr(settings_mod, "system_agent_status", fake_status)
+    monkeypatch.setattr(apply_mod, "system_agent_status", fake_status)
 
     resp = await settings_mod.apply_update.fn()
     assert resp.content.token  # a token is minted for the browser
@@ -213,8 +221,9 @@ async def test_apply_update_persists_minted_token(
     async def fake_status() -> MigrationStatus:
         return MigrationStatus(ok=True, reason="", message="ok", current_host_version=1, expected_version=1)
 
-    monkeypatch.setattr(settings_mod, "system_agent_apply", fake_apply)
+    monkeypatch.setattr(apply_mod, "system_agent_apply", fake_apply)
     monkeypatch.setattr(settings_mod, "system_agent_status", fake_status)
+    monkeypatch.setattr(apply_mod, "system_agent_status", fake_status)
 
     resp = await settings_mod.apply_update.fn()
     await _run_launch(resp)
@@ -237,13 +246,14 @@ async def test_apply_update_rejects_concurrent_call(
     async def fake_status() -> MigrationStatus:
         return MigrationStatus(ok=True, reason="", message="ok", current_host_version=1, expected_version=1)
 
-    monkeypatch.setattr(settings_mod, "system_agent_apply", fake_apply)
+    monkeypatch.setattr(apply_mod, "system_agent_apply", fake_apply)
     monkeypatch.setattr(settings_mod, "system_agent_status", fake_status)
+    monkeypatch.setattr(apply_mod, "system_agent_status", fake_status)
 
     # First call hands off; the lock is held from the moment it is taken.
     resp = await settings_mod.apply_update.fn()
     assert resp.content.token
-    assert settings_mod._apply_lock.locked()
+    assert apply_mod.apply_lock.locked()
 
     # Second call is rejected while the first apply holds the lock.
     with pytest.raises(HTTPException) as excinfo:
@@ -256,7 +266,7 @@ async def test_apply_update_rejects_concurrent_call(
     assert called["n"] == 1
     # A successful handoff keeps the lock: the walk is about to stop this
     # process, and a second click must not race it.
-    assert settings_mod._apply_lock.locked()
+    assert apply_mod.apply_lock.locked()
 
 
 @pytest.mark.asyncio
@@ -269,10 +279,11 @@ async def test_apply_update_releases_lock_on_unexpected_precheck_error(
         raise RuntimeError("unexpected")
 
     monkeypatch.setattr(settings_mod, "system_agent_status", boom_status)
+    monkeypatch.setattr(apply_mod, "system_agent_status", boom_status)
 
     with pytest.raises(RuntimeError):
         await settings_mod.apply_update.fn()
-    assert not settings_mod._apply_lock.locked()
+    assert not apply_mod.apply_lock.locked()
     # Nothing was persisted since we failed before minting.
     assert token_calls["persist"] == []
 
@@ -290,13 +301,14 @@ async def test_apply_update_releases_lock_and_clears_token_on_failure(
     async def fake_status() -> MigrationStatus:
         return MigrationStatus(ok=True, reason="", message="ok", current_host_version=1, expected_version=1)
 
-    monkeypatch.setattr(settings_mod, "system_agent_apply", failing_apply)
+    monkeypatch.setattr(apply_mod, "system_agent_apply", failing_apply)
     monkeypatch.setattr(settings_mod, "system_agent_status", fake_status)
+    monkeypatch.setattr(apply_mod, "system_agent_status", fake_status)
 
     resp = await settings_mod.apply_update.fn()
     await _run_launch(resp)
 
     # A failed launch must free the lock (so the owner can retry) and clear the
     # token (so a later visitor doesn't see a stale progress log).
-    assert not settings_mod._apply_lock.locked()
+    assert not apply_mod.apply_lock.locked()
     assert token_calls["clear"] == ["cleared"]

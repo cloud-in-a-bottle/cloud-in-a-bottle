@@ -17,6 +17,7 @@ import git
 import pytest
 
 import openhost_system_agent.update as update_mod
+from openhost_system_agent.protocol import UpdateChannel
 from openhost_system_agent.updater import paths as updater_paths
 from openhost_system_agent.updater import progress as updater_progress
 
@@ -300,9 +301,9 @@ def test_get_remote_info_reports_current_tag(tmp_path: Path, monkeypatch: pytest
 
     assert info.ref == "v1.0.0"
     assert info.url is not None and "remote" in info.url
-    # Unpinned: ref is informational only and must not be flagged as a pin, so
-    # the dashboard won't round-trip it back into a silent pin.
-    assert info.pinned is False
+    # Tags channel: ref is informational only and must not be flagged as a pin,
+    # so the dashboard won't round-trip it back into a silent pin.
+    assert info.channel == UpdateChannel.TAGS
 
 
 # ── Pinned target ref (run from a branch/commit) ─────────────────────
@@ -379,7 +380,7 @@ def test_set_remote_url_pins_and_clears_target(tmp_path: Path, monkeypatch: pyte
     monkeypatch.setattr(update_mod, "_repo", lambda: local)
 
     head_before = local.head.commit.hexsha
-    update_mod.set_remote_url(f"file://{remote}@feature")
+    update_mod.set_remote_url(f"file://{remote}#feature")
     assert update_mod._get_target_ref(local) == "feature"
     # Pinning only records the target — the walk (update apply) does the checkout,
     # so HEAD must not move (moving it would boot new code before migrations run).
@@ -411,12 +412,12 @@ def test_get_remote_info_reports_pinned_target(tmp_path: Path, monkeypatch: pyte
 
     info = update_mod.get_remote_info()
     assert info.ref == "feature"
-    assert info.pinned is True  # actually pinned -> dashboard may reconstruct @feature
+    assert info.channel == UpdateChannel.BRANCH  # dashboard may reconstruct #feature
 
 
 def test_get_remote_info_unpinned_not_flagged_pinned(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # REGRESSION: an unpinned instance reports the resolved current tag as ref
-    # (for display) but must set pinned=False. Otherwise the dashboard round-
+    # (for display) but must report the tags channel. Otherwise the dashboard round-
     # trips url@ref into set_remote and silently pins the host to the current
     # tag, freezing it out of future auto-updates.
     remote = _make_repo(tmp_path / "remote", ["v1.0.0", "v1.1.0"])
@@ -426,20 +427,89 @@ def test_get_remote_info_unpinned_not_flagged_pinned(tmp_path: Path, monkeypatch
     assert update_mod._get_target_ref(local) is None  # unpinned
     info = update_mod.get_remote_info()
     assert info.ref == "v1.1.0"  # still shown for information
-    assert info.pinned is False  # but not a pin
+    assert info.channel == UpdateChannel.TAGS  # but not a pin
 
 
-def test_set_remote_url_reports_pinned_flag(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_set_remote_url_reports_channel(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     remote = _make_repo(tmp_path / "remote", ["v1.0.0"])
     _branch(remote, "feature", "f1")
     local = _clone_at(remote, tmp_path / "local", checkout="v1.0.0")
     monkeypatch.setattr(update_mod, "_repo", lambda: local)
 
-    pinned = update_mod.set_remote_url(f"file://{remote}@feature")
-    assert pinned.pinned is True and pinned.ref == "feature"
+    branch = update_mod.set_remote_url(f"file://{remote}#feature")
+    assert branch.channel == UpdateChannel.BRANCH and branch.ref == "feature"
 
-    unpinned = update_mod.set_remote_url(f"file://{remote}")
-    assert unpinned.pinned is False
+    pinned = update_mod.set_remote_url(f"file://{remote}@v1.0.0")
+    assert pinned.channel == UpdateChannel.PINNED and pinned.ref == "v1.0.0"
+    assert update_mod.get_remote_info().channel == UpdateChannel.PINNED
+
+    tags = update_mod.set_remote_url(f"file://{remote}")
+    assert tags.channel == UpdateChannel.TAGS
+
+
+def test_set_remote_url_pins_commit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    remote = _make_repo(tmp_path / "remote", ["v1.0.0"])
+    _branch(remote, "feature", "f1")
+    local = _clone_at(remote, tmp_path / "local", checkout="v1.0.0")
+    monkeypatch.setattr(update_mod, "_repo", lambda: local)
+    sha = _git(remote, "rev-parse", "feature")[:12]
+
+    info = update_mod.set_remote_url(f"file://{remote}@{sha}")
+    assert info.channel == UpdateChannel.PINNED
+    assert update_mod._get_target_ref(local) == sha
+
+
+def test_set_remote_url_rejects_branch_after_at(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # @ means a fixed ref, but a branch target-ref follows its tip, so @branch would silently not be pinned.
+    remote = _make_repo(tmp_path / "remote", ["v1.0.0"])
+    _branch(remote, "feature", "f1")
+    local = _clone_at(remote, tmp_path / "local", checkout="v1.0.0")
+    monkeypatch.setattr(update_mod, "_repo", lambda: local)
+
+    with pytest.raises(RuntimeError, match="is a branch"):
+        update_mod.set_remote_url(f"file://{remote}@feature")
+    assert update_mod._get_target_ref(local) is None
+
+
+def test_set_remote_url_rejects_non_branch_after_hash(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    remote = _make_repo(tmp_path / "remote", ["v1.0.0"])
+    local = _clone_at(remote, tmp_path / "local", checkout="v1.0.0")
+    monkeypatch.setattr(update_mod, "_repo", lambda: local)
+
+    with pytest.raises(RuntimeError, match="was not found"):
+        update_mod.set_remote_url(f"file://{remote}#v1.0.0")
+    assert update_mod._get_target_ref(local) is None
+
+
+@pytest.mark.parametrize(
+    ("spec", "url", "ref", "channel"),
+    [
+        ("github.com/o/r", "https://github.com/o/r", None, UpdateChannel.TAGS),
+        ("https://github.com/o/r#main", "https://github.com/o/r", "main", UpdateChannel.BRANCH),
+        ("https://github.com/o/r@v1.2.3", "https://github.com/o/r", "v1.2.3", UpdateChannel.PINNED),
+        ("ssh://git@github.com/o/r.git@abc123", "ssh://git@github.com/o/r.git", "abc123", UpdateChannel.PINNED),
+        ("ssh://git@github.com/o/r.git", "ssh://git@github.com/o/r.git", None, UpdateChannel.TAGS),
+        ("  https://github.com/o/r#feat/x  ", "https://github.com/o/r", "feat/x", UpdateChannel.BRANCH),
+    ],
+)
+def test_parse_remote(spec: str, url: str, ref: str | None, channel: UpdateChannel) -> None:
+    assert update_mod.parse_remote(spec) == update_mod.ParsedRemote(url=url, ref=ref, channel=channel)
+
+
+@pytest.mark.parametrize(
+    "spec",
+    [
+        "https://github.com/o/r@v1#main",
+        "https://github.com/o/r@",
+        "https://github.com/o/r#",
+        "https://github.com/o/r@a@b",
+        "https://github.com/o/r#a#b",
+        "https://github.com/o/r @v1",
+    ],
+)
+def test_parse_remote_rejects(spec: str) -> None:
+    with pytest.raises(ValueError):
+        update_mod.parse_remote(spec)
 
 
 # ── Extended: _next_step termination + stepping-stone topologies ─────
@@ -752,8 +822,8 @@ def test_set_remote_url_roundtrip_pin_is_idempotent(tmp_path: Path, monkeypatch:
     local = _clone_at(remote, tmp_path / "local", checkout="v1.0.0")
     monkeypatch.setattr(update_mod, "_repo", lambda: local)
 
-    update_mod.set_remote_url(f"file://{remote}@feature")
-    update_mod.set_remote_url(f"file://{remote}@feature")  # re-pin same ref
+    update_mod.set_remote_url(f"file://{remote}#feature")
+    update_mod.set_remote_url(f"file://{remote}#feature")  # re-pin same ref
     assert update_mod._get_target_ref(local) == "feature"
 
     update_mod.set_remote_url(f"file://{remote}")
@@ -786,7 +856,7 @@ def test_set_remote_url_bad_re_pin_keeps_prior_working_pin(tmp_path: Path, monke
     local = _clone_at(remote, tmp_path / "local", checkout="v1.0.0")
     monkeypatch.setattr(update_mod, "_repo", lambda: local)
 
-    update_mod.set_remote_url(f"file://{remote}@feature")
+    update_mod.set_remote_url(f"file://{remote}#feature")
     assert update_mod._get_target_ref(local) == "feature"
 
     with pytest.raises(RuntimeError, match="could not be resolved"):

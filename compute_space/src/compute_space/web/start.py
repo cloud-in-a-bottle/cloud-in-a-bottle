@@ -16,6 +16,7 @@ from compute_space.config import Config
 from compute_space.config import load_config
 from compute_space.config import set_active_config
 from compute_space.core.auth.keys import load_keys
+from compute_space.core.auto_update.runner import start_auto_update_task
 from compute_space.core.caddy import CaddyProcess
 from compute_space.core.caddy import config_cert_resolver
 from compute_space.core.caddy import reload_caddy_for_domains
@@ -274,6 +275,8 @@ async def _main() -> None:
             await _shutdown()
             await asyncio.sleep(0.1)
             os._exit(0)
+
+    background_tasks.append(start_auto_update_task())
 
     # Main web server
     app = create_app(config, dns_provider)

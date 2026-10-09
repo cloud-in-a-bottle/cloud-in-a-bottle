@@ -73,11 +73,9 @@ step through tags that are ancestors of the pinned target. Without both, a targe
 
 ## Pinning to a target ref
 
-By default the destination is the latest release tag. To pin a host to a specific branch or commit, append `@<ref>` to
-the remote URL (e.g. via `update set_remote` or the dashboard): `https://github.com/cloud-in-a-bottle/cloud-in-a-bottle@my-branch`.
-This persists `openhost.target-ref` in git config. Updates then walk the release tags the target contains as stepping
-stones and end on the target's tip instead of the latest tag. Passing a URL with no `@<ref>` clears the pin and
-restores latest-tag behavior.
+By default the destination is the latest release tag. To follow a branch instead, append `#<branch>` to the remote URL (e.g. via `update set-remote` or the dashboard): `https://github.com/cloud-in-a-bottle/cloud-in-a-bottle#my-branch`. To pin a fixed tag or commit, append `@<ref>`: `https://github.com/cloud-in-a-bottle/cloud-in-a-bottle@v1.2.3`. `set-remote` rejects a branch after `@` and a non-branch after `#`, so the two can't be confused.
+
+Both persist `openhost.target-ref` in git config. Updates then walk the release tags the target contains as stepping stones and end on the target instead of the latest tag. Because `origin/<ref>` is resolved first, a branch target follows its tip and a tag or commit stays put; that is also how `get-remote` tells the two apart. Passing a URL with no `#<branch>` or `@<ref>` clears the target and restores latest-tag behavior. Scheduled automatic updates (configured in the dashboard) only run in that latest-tag mode.
 
 Because the pin is persisted, be careful not to round-trip a resolved ref (like the current tag) back into the remote
 URL — doing so would pin the host to that tag and freeze it there.
