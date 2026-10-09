@@ -69,7 +69,7 @@ def grants_for_provider(consumer_app_id: str, service_url: str, provider_app_id:
 def approve_grant_url(
     consumer_app_id: str, service_url: str, grant: Any, db: sqlite3.Connection, browsing_netloc: str | None = None
 ) -> str:
-    """The owner-facing page (on the router) for approving a grant a provider asked for.
+    """The owner-facing page (on the router's ``bottle.`` subdomain) for approving a grant a provider asked for.
 
     Built on the domain the owner is actually browsing — ``browsing_netloc`` is the consumer
     app's ``Origin`` authority on a browser-driven call — so it stays on their domain rather
@@ -84,11 +84,11 @@ def approve_grant_url(
     matched = Domain.match(db, browsing_netloc) if browsing_netloc else None
     if matched is not None:
         # Browser-driven: keep the owner's domain and the access port they arrived on.
-        host = host_with_request_port(matched.name_no_port, browsing_netloc or "")
+        host = host_with_request_port(matched.router_host, browsing_netloc or "")
         return f"{matched.scheme}://{host}{approve_path}"
-    # Server-side (or an origin we don't recognize): the canonical primary, its configured name
-    # verbatim so a port baked into the primary (e.g. `lvh.me:8080`) is preserved.
+    # Server-side (or an origin we don't recognize): the canonical primary, keeping a port baked into
+    # its configured name (e.g. `lvh.me:8080`).
     primary = primary_domain_or_none(db)
     if primary is None:
         return approve_path
-    return f"{primary.scheme}://{primary.name}{approve_path}"
+    return f"{primary.router_url}{approve_path}"

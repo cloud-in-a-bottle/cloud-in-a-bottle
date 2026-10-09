@@ -134,6 +134,39 @@
 </section>
 
 <section class="section">
+  {% call section_head("Domain root") %}{% endcall %}
+  <div class="panel">
+    <p class="hint">Choose what is served at the bare domain (<code>{{ zone_domain() }}</code>). An app
+      chosen here is also still served at its own subdomain. The dashboard is always available at
+      <code>bottle.{{ zone_domain() }}</code>, and is also served at the bare domain by default.</p>
+
+    <div class="field-row">
+      <label class="field" for="root-app-select">
+        <span>Served at the bare domain</span>
+        <select id="root-app-select" disabled>
+          <option value="">Loading&hellip;</option>
+        </select>
+      </label>
+      {{ button("Save", variant="primary", id="root-app-save-btn", onclick="saveRootApp()", disabled=true) }}
+    </div>
+    <p id="root-app-msg" class="msg" hidden></p>
+
+    <div class="notice notice--warn">
+      <strong>Before choosing an app:</strong> anything that reaches the dashboard or its API at the
+      bare domain stops working, and must use <code>bottle.{{ zone_domain() }}</code> instead. This
+      includes:
+      <ul>
+        <li>CLI tools and scripts configured with the bare domain;</li>
+        <li>apps that make service requests from the browser to the bare domain, until they are updated
+          to use <code>OPENHOST_ROUTER_PUBLIC_URL</code>;</li>
+        <li>OAuth sign-in through the OAuth provider app, whose callbacks currently arrive at the bare
+          domain.</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<section class="section">
   {% call section_head("API tokens") %}{% endcall %}
   <div class="panel">
     <p class="hint">Bearer tokens for programmatic access (e.g. AI agents). Each token grants
@@ -245,6 +278,7 @@
 <script src="{{ static_url('js/username-validation.js') }}"></script>
 <script src="{{ static_url('js/tokens.js') }}"></script>
 <script src="{{ static_url('js/domains.js') }}"></script>
+<script src="{{ static_url('js/root-app.js') }}"></script>
 <script src="{{ static_url('js/settings.js') }}"></script>
 <script src="{{ static_url('js/services.js') }}"></script>
 <script src="{{ static_url('js/services.js') }}"></script>

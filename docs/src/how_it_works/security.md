@@ -28,6 +28,14 @@ Owner sessions are refused on cross-origin requests, so JavaScript running in on
 
 The router is the sole authority for the `X-OpenHost-*` headers an app receives. Anything a client sends under those names is stripped before the app sees it, so an app can trust `X-OpenHost-Is-Owner` and a provider can trust the consumer name it is handed.
 
+### Cookies shared between apps
+
+Apps on one instance are separate origins, but they are all the same site, since each app is a subdomain of the same domain. A browser lets any page set a cookie for a parent domain, so an app can set a cookie scoped to the whole domain, which the browser then sends to every app on it, including the app served at the bare domain if you choose one. This is "cookie tossing": an app can overwrite or shadow another app's cookies (for example, to plant its own session in another app). Apps can't read the router's session cookie, since it is stripped before a request reaches an app; the most an app can do to it is shadow it with a junk value, which signs you out.
+
+The app served at the bare domain has one extra exposure: a cookie it sets with an explicit `Domain` of its own host is scoped to the whole domain, so the browser sends it to every other app, whose servers can read it. Apps that set a cookie domain from their public hostname do this.
+
+Both are niche, since they take a malicious app on your own instance. Apps can protect themselves with the `__Host-` cookie prefix, which browsers only accept as a host-only cookie, so other subdomains can neither set nor receive it.
+
 ## Catalog apps
 
 We review apps before including them in our curated catalog manifest (https://github.com/cloud-in-a-bottle/app-manifest), but don't guarantee they are safe. Additionally, app authors can push changes to their apps after they are included in the catalog, and we don't re-review these changes. Currently we alleviate this by only including apps we have packaged, or from authors that we have a relationship with. We plan to revisit this, but ultimately it is the responsibility of the instance owner to determine if they trust an app with the capabilities/permissions the app is requesting.

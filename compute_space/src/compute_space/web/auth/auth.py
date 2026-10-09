@@ -228,8 +228,9 @@ def require_owner_or_app_auth(connection: AnyConnection, _route_handler: BaseRou
 
 
 def build_login_url(zone: Domain, netloc: str, path: str, query: str) -> str:
-    """Build an absolute ``/login?next=<original>`` URL on ``zone`` — the domain the
-    request arrived on.
+    """Build an absolute ``/login?next=<original>`` URL on the router subdomain of ``zone`` — the
+    domain the request arrived on.  Always ``bottle.<domain>``, since the bare domain may be
+    serving an app.
 
     Redirecting to the arriving domain (rather than always the canonical one) is what
     lets login happen on ``myhost.local`` when the user came in on ``myhost.local`` and
@@ -245,7 +246,7 @@ def build_login_url(zone: Domain, netloc: str, path: str, query: str) -> str:
     next_url = f"{proto}://{netloc}{path}"
     if query:
         next_url = f"{next_url}?{query}"
-    return f"{proto}://{host_with_request_port(zone.name_no_port, netloc)}/login?next={quote(next_url, safe='')}"
+    return f"{proto}://{host_with_request_port(zone.router_host, netloc)}/login?next={quote(next_url, safe='')}"
 
 
 def auth_required_response(request: Request[Any, Any, Any]) -> Response[Any]:

@@ -90,14 +90,12 @@ def _oauth_return_origin(db: sqlite3.Connection, request: Request[Any, Any, Any]
     Carries the scheme rather than a protocol-relative ``//host``: GitHub's device flow
     redirects from an HTTPS page, so ``//host`` would resolve as HTTPS and break an OAuth
     flow started on an http ``.local``/``lvh.me`` domain.  The operator kicks these off from
-    a browser, so return to the domain (and access port) they are on; fall back to the
-    canonical primary (its configured name verbatim) only if the middleware stashed no
-    Domain."""
+    a browser, so return to the router subdomain of the domain (and access port) they are on;
+    fall back to the canonical primary only if the middleware stashed no Domain."""
     zone = request.scope.get(ZONE_SCOPE_KEY)
     if isinstance(zone, Domain):
-        return f"{zone.scheme}://{host_with_request_port(zone.name_no_port, request.url.netloc)}"
-    primary = primary_domain(db)
-    return f"{primary.scheme}://{primary.name}"
+        return f"{zone.scheme}://{host_with_request_port(zone.router_host, request.url.netloc)}"
+    return primary_domain(db).router_url
 
 
 # ─── attrs request / response models ──────────────────────────────────────

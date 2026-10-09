@@ -675,6 +675,23 @@ def test_updater_503s_carry_retry_after(
             assert headers.get("retry-after") == str(server._RETRY_AFTER_SECONDS), path
 
 
+def test_updater_marks_every_response(
+    server_factory: Callable[[str | None, list[dict[str, object]]], int],
+) -> None:
+    # The page treats any /health answer without this marker as the instance being back, since on an app's host
+    # /health reaches the app (which may 404 it).  So every updater response, whatever its status, must carry it.
+    port = server_factory("tok", [])
+    for path, extra in (
+        ("/health", ""),
+        ("/", "Sec-Fetch-Dest: empty\r\n"),
+        ("/", "Sec-Fetch-Dest: document\r\n"),
+        ("/updates", ""),
+        ("/updates?token=tok", ""),
+    ):
+        _status, headers, _body = _request(port, path, extra)
+        assert headers.get("x-openhost-updater") == "1", path
+
+
 def test_updater_gives_up_when_the_service_never_goes_down(data_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # If the apply died before its stop (or the stop failed), compute_space stays
     # up and there is no downtime to cover. The updater must exit rather than idle:

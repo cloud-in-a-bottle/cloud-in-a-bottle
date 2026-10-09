@@ -8,6 +8,10 @@ import attr
 from compute_space.core.app_id import is_valid_app_name
 from compute_space.core.logging import logger
 
+# The label under every domain that always serves the router (dashboard, API, login).  The bare domain
+# serves the router too unless the owner picks an app for it (see ``core.root_app``).
+ROUTER_SUBDOMAIN = "bottle"
+
 
 def _lowercase(s: str) -> str:
     # mypy can't handle str.lower apparently
@@ -46,9 +50,28 @@ class Domain:
         host_no_port = host.split(":")[0].lower()
         return host_no_port == name or host_no_port.endswith("." + name)
 
+    @property
+    def router_host(self) -> str:
+        """``bottle.<domain>``, without a port: the host that always serves the router."""
+        return f"{ROUTER_SUBDOMAIN}.{self.name_no_port}"
+
+    @property
+    def router_url(self) -> str:
+        """Canonical router URL on this domain, keeping a port baked into the configured name."""
+        return f"{self.scheme}://{ROUTER_SUBDOMAIN}.{self.name}"
+
+    def is_apex(self, host: str) -> bool:
+        """True if ``host`` (port-insensitive) is this bare domain."""
+        return host.split(":")[0].lower() == self.name_no_port
+
+    def is_router_subdomain(self, host: str) -> bool:
+        """True if ``host`` (port-insensitive) is this domain's ``bottle.`` router subdomain."""
+        return host.split(":")[0].lower() == self.router_host
+
     def looks_like_app_subdomain(self, host: str) -> bool:
-        """Check for a subdomain of this domain, without checking whether an app exists."""
-        return self.owns(host) and host.split(":")[0].lower() != self.name_no_port
+        """Check for a subdomain of this domain, other than the router subdomain, without checking whether an app
+        exists."""
+        return self.owns(host) and not self.is_apex(host) and not self.is_router_subdomain(host)
 
     def app_name_from_hostname(self, host: str) -> str | None:
         """Extract a valid single app label under this domain, without looking up installed apps."""

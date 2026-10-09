@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 from compute_space.core.app_id import new_app_id
 from compute_space.core.apps import remove_app_background
+from compute_space.core.root_app import ROOT_APP_ID_KEY
 from compute_space.db.connection import init_db
 from compute_space.tests.conftest import _make_test_config
 
@@ -223,3 +224,25 @@ def test_remove_records_error_when_db_delete_path_explodes(tmp_path: Path) -> No
     assert row is not None
     assert row[0] == "error"
     assert "Removal failed" in (row[1] or "")
+
+
+def test_remove_hands_the_bare_domain_back_to_the_router(tmp_path: Path) -> None:
+    cfg = _make_test_config(tmp_path)
+    init_db(cfg.db_path)
+    app_id = _seed_app_with_children(cfg.db_path, "myapp")
+    db = sqlite3.connect(cfg.db_path)
+    try:
+        db.execute("INSERT INTO settings (key, value) VALUES (?, ?)", (ROOT_APP_ID_KEY, app_id))
+        db.commit()
+    finally:
+        db.close()
+
+    with (
+        patch("compute_space.core.apps.stop_app_process"),
+        patch("compute_space.core.apps.remove_image"),
+        patch("compute_space.core.apps.deprovision_data"),
+        patch("compute_space.core.apps.deprovision_temp_data"),
+    ):
+        remove_app_background(app_id, keep_data=False, config=cfg)
+
+    assert not _table_has_app(cfg.db_path, "settings", ROOT_APP_ID_KEY, key_col="key")
