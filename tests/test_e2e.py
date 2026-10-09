@@ -604,6 +604,8 @@ class TestSelfHost:
             async with websockets.connect(
                 uri,
                 additional_headers=extra_headers,
+                # owner auth on a handshake requires the Origin a browser would send.
+                origin=f"https://test-app.{domain}",
                 open_timeout=10,
                 close_timeout=5,
             ) as ws:
