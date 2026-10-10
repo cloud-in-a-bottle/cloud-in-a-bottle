@@ -3,8 +3,6 @@ from __future__ import annotations
 import asyncio
 import re
 import sqlite3
-from datetime import UTC
-from datetime import datetime
 from datetime import time
 from enum import StrEnum
 from typing import Any
@@ -34,6 +32,7 @@ from compute_space.core.auto_update.config import AutoUpdateConfig
 from compute_space.core.auto_update.config import read_auto_update_config
 from compute_space.core.auto_update.config import read_last_run
 from compute_space.core.auto_update.config import write_auto_update_config
+from compute_space.core.auto_update.runner import reschedule_auto_update
 from compute_space.core.connect import build_connect_url
 from compute_space.core.connect import exchange_code_for_credential
 from compute_space.core.domains import primary_domain
@@ -214,7 +213,7 @@ class AutoUpdateResponse:
 
 
 def _auto_update_response(db: sqlite3.Connection) -> AutoUpdateResponse:
-    config = read_auto_update_config(db, datetime.now(UTC))
+    config = read_auto_update_config(db)
     last_run = read_last_run(db)
     return AutoUpdateResponse(
         enabled=config.enabled,
@@ -238,6 +237,7 @@ async def set_auto_update(data: AutoUpdateRequest, db: NamedDependency[sqlite3.C
     except ValueError as e:
         raise ValidationException(detail="Time must be HH:MM", extra={"code": "invalid_time"}) from e
     write_auto_update_config(db, AutoUpdateConfig(enabled=data.enabled, time_utc=time_utc))
+    reschedule_auto_update()
     return _auto_update_response(db)
 
 

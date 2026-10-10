@@ -60,14 +60,16 @@ class AutoUpdateLastRun:
         return _OUTCOME_MESSAGES[self.outcome]
 
 
-def default_time_utc(now: datetime) -> time:
-    local = now.astimezone().replace(
-        hour=DEFAULT_LOCAL_TIME.hour, minute=DEFAULT_LOCAL_TIME.minute, second=0, microsecond=0
+def default_time_utc() -> time:
+    local = (
+        datetime.now(UTC)
+        .astimezone()
+        .replace(hour=DEFAULT_LOCAL_TIME.hour, minute=DEFAULT_LOCAL_TIME.minute, second=0, microsecond=0)
     )
     return local.astimezone(UTC).time()
 
 
-def read_auto_update_config(db: sqlite3.Connection, now: datetime) -> AutoUpdateConfig:
+def read_auto_update_config(db: sqlite3.Connection) -> AutoUpdateConfig:
     # No row means a fresh instance; migration v15 seeds "0" on instances that predate auto-updates, so they keep not
     # updating themselves until the owner opts in.
     enabled_raw = get_setting(db, ENABLED_KEY)
@@ -76,7 +78,7 @@ def read_auto_update_config(db: sqlite3.Connection, now: datetime) -> AutoUpdate
     time_raw = get_setting(db, TIME_UTC_KEY)
     return AutoUpdateConfig(
         enabled=enabled_raw != "0",
-        time_utc=time.fromisoformat(time_raw) if time_raw else default_time_utc(now),
+        time_utc=time.fromisoformat(time_raw) if time_raw else default_time_utc(),
     )
 
 

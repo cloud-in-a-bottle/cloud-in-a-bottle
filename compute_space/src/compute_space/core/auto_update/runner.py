@@ -21,16 +21,20 @@ from compute_space.core.system_agent.client import system_agent_status
 from compute_space.db import get_db
 from openhost_system_agent.protocol import UpdateChannel
 
-CHECK_INTERVAL = timedelta(hours=1)
+# Should be set when the schedule changes, so the sleeping task picks up the new time.
+_reschedule = asyncio.Event()
 
 
-def is_due(now: datetime, time_utc: time) -> bool:
-    """True during the CHECK_INTERVAL after the scheduled time. Checks are CHECK_INTERVAL apart, so exactly one lands
-    in it each day."""
+def next_run_at(time_utc: time) -> datetime:
+    now = datetime.now(UTC)
     scheduled = datetime.combine(now.date(), time_utc, tzinfo=UTC)
-    if scheduled > now:
-        scheduled -= timedelta(days=1)
-    return now - scheduled < CHECK_INTERVAL
+    if scheduled <= now:
+        scheduled += timedelta(days=1)
+    return scheduled
+
+
+def reschedule_auto_update() -> None:
+    _reschedule.set()
 
 
 def _record(run: AutoUpdateLastRun) -> None:
@@ -56,12 +60,8 @@ async def _check(now: datetime) -> AutoUpdateLastRun | None:
     return None
 
 
-async def run_auto_update_if_due(now: datetime) -> None:
-    with closing(get_db()) as db:
-        config = read_auto_update_config(db, now)
-    if not config.enabled or not is_due(now, config.time_utc):
-        return
-
+async def run_auto_update() -> None:
+    now = datetime.now(UTC)
     try:
         skipped = await _check(now)
     except SystemAgentError as e:
@@ -87,19 +87,30 @@ async def run_auto_update_if_due(now: datetime) -> None:
 
 
 def start_auto_update_task() -> asyncio.Task[None]:
-    """Check every CHECK_INTERVAL whether a scheduled update is due. The caller must keep the returned task alive."""
+    """Run the update at each scheduled time. A run missed while the process was down waits for the next day."""
 
     async def _run() -> None:
-        loop = asyncio.get_running_loop()
-        next_check = loop.time()
         while True:
-            # Sleep first, so a restart (including the one an update ends with) doesn't check again straight away.
-            # Scheduled off the previous tick rather than "now" so the interval doesn't drift and skip a day.
-            next_check += CHECK_INTERVAL.total_seconds()
-            await asyncio.sleep(next_check - loop.time())
+            with closing(get_db()) as db:
+                config = read_auto_update_config(db)
+            delay = (next_run_at(config.time_utc) - datetime.now(UTC)).total_seconds()
+
+            # Wait for the next scheduled time, or until the schedule changes.
             try:
-                await run_auto_update_if_due(datetime.now(UTC))
+                await asyncio.wait_for(_reschedule.wait(), delay)
+            except TimeoutError:
+                pass
+            else:
+                # schedule changed, so recalculate the next run time and wait again.
+                _reschedule.clear()
+                continue
+
+            if not config.enabled:
+                continue
+
+            try:
+                await run_auto_update()
             except Exception:
-                logger.exception("scheduled update check failed")
+                logger.exception("scheduled update failed")
 
     return asyncio.create_task(_run(), name="auto-update")
