@@ -83,7 +83,8 @@ echo "  /setup answers on $HOSTNAME_UNDER_TEST.local"
 echo "--- Querying mDNS for myapp.$HOSTNAME_UNDER_TEST.local ---"
 # A legacy (non-5353 source port) query, which the responder answers by unicast, so it comes back
 # through QEMU's user-mode NAT. The answer is the guest's address on the interface it arrived on.
-python3 - "$MDNS_PORT" "myapp.$HOSTNAME_UNDER_TEST.local" <<'PY'
+mdns_query() {
+python3 - "$MDNS_PORT" "$1" <<'PY'
 import socket, struct, sys
 
 port, name = int(sys.argv[1]), sys.argv[2]
@@ -112,6 +113,14 @@ if rtype != 1:
     sys.exit(f"first answer is type {rtype}, not A")
 print(f"  {name} -> {ip}")
 PY
+}
+if ! mdns_query "myapp.$HOSTNAME_UNDER_TEST.local"; then
+    # Tell a domain that wasn't taken from the hostname apart from a query that never reached us.
+    if mdns_query "myapp.bottle.local"; then
+        fail "the responder still publishes the default bottle.local, so the domain wasn't taken from the hostname"
+    fi
+    fail "no mDNS answer for either name"
+fi
 
 # The responder only publishes names under the instance's configured domains, so that answer also
 # shows the first-boot unit set the domain from the hostname.

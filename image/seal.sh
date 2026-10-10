@@ -105,15 +105,17 @@ set -euo pipefail
 name=$(hostname -s | tr '[:upper:]' '[:lower:]')
 sed -i "s/^domain = .*/domain = \"$name.local\"/" /home/host/.openhost/local_compute_space/first_boot.toml
 echo "bottle-raspi-domain: serving at http://$name.local"
+touch /var/lib/bottle-raspi-domain.done
 DOMAIN
     chmod 0755 /usr/local/sbin/bottle-raspi-domain
-    # ConditionFirstBoot: the generalized image ships an empty machine-id (below).
+    # Runs once, guarded by its own marker (not ConditionFirstBoot: systemd
+    # doesn't count the empty machine-id the image ships with as a first boot).
     # cloud-init.service / cloud-init-network.service: whichever this cloud-init
     # version uses for the stage that sets the hostname.
     cat > /etc/systemd/system/bottle-raspi-domain.service <<'UNIT'
 [Unit]
 Description=Use the hostname as the Cloud in a Bottle .local domain
-ConditionFirstBoot=yes
+ConditionPathExists=!/var/lib/bottle-raspi-domain.done
 After=cloud-init.service cloud-init-network.service
 Before=openhost.service
 
