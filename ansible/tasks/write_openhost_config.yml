@@ -75,7 +75,9 @@
     # router needs to build absolute URLs); fall back to :8080 only when it doesn't.
     base_url: >-
       {{ ('http://' + domain + ('' if ':' in domain else ':8080'))
-         if (local_http_only | default(false) | bool) else ('https://' + domain) }}
+         if (local_http_only | default(false) | bool)
+         else ('http://' + domain) if (mdns_mode | bool)
+         else ('https://' + domain) }}
   debug:
     msg: >-
       {{ ('Setup URL (ungated): ' + base_url + '/setup')

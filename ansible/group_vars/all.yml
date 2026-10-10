@@ -1,0 +1,7 @@
+---
+# Shared by every playbook in this directory (ansible loads playbook-adjacent group_vars automatically).
+
+# A `.local` domain means LAN mode: published over mDNS by the router itself and served over plain
+# http, with no public DNS or certs.  Eg a Raspberry Pi provisioned with `-e domain=bottle.local`
+# comes up as http://bottle.local (apps at http://<app>.bottle.local) on whatever network it joins.
+mdns_mode: "{{ (domain | default('')).split(':')[0].lower().endswith('.local') }}"

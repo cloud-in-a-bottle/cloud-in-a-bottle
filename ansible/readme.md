@@ -36,7 +36,7 @@ pass with `-e key=value`.
 
 | variable | default | purpose |
 |---|---|---|
-| `domain` | *(required)* | zone domain |
+| `domain` | *(required)* | zone domain; a `.local` name selects [LAN mode](#lan-mode-local-domain-eg-a-raspberry-pi) |
 | `initial_user` | `root` | SSH user for the first play (creates the `host` user) |
 | `public_ip` | target IP | public IP written into config / DNS |
 | `openhost_branch` | `main` | git branch to deploy |
@@ -69,6 +69,22 @@ version precedence: `openhost_branch` > `openhost_commit` > default `main`.
 | `cert_api_keycloak_issuer_url` | keycloak issuer (required with `cert_api`) |
 | `cert_api_keycloak_client_id` | keycloak client id (required with `cert_api`) |
 | `cert_api_keycloak_client_secret` | keycloak client secret (required with `cert_api`) |
+
+## LAN mode (`.local` domain, eg a Raspberry Pi)
+
+pass a `.local` domain to provision a box that is only reachable on its local network, with no public DNS or certs:
+
+```bash
+ansible-playbook ansible/setup.yml -i <IP>, -e domain=bottle.local --private-key=~/.ssh/YOUR_SSH_KEY
+```
+
+the router publishes `bottle.local` and every `<app>.bottle.local` over mDNS itself (answering with the address of whichever interface the query arrived on), and Caddy serves them over plain http. so a box provisioned this way can be shipped to someone and comes up at `http://bottle.local` on whatever network it is plugged into. no ACME key is needed.
+
+notes:
+
+- the responder shares udp 5353 with avahi. if the machine's own hostname is the same label (hostname `bottle` for `bottle.local`), avahi keeps answering for the bare name and the router only answers for the subdomains; otherwise the router answers both.
+- macOS and iOS resolve multi-label names like `myapp.bottle.local` out of the box. on Linux, recent nss-mdns versions only resolve two-label names unless `/etc/mdns.allow` lists `.local.`. Windows support for multi-label `.local` names is inconsistent.
+- two boxes on the same network with the same `.local` domain will both answer; give each its own name.
 
 ## re-deploying an existing instance
 
