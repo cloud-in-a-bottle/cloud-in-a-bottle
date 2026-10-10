@@ -30,6 +30,14 @@
       - fuse3
     state: present
 
+# LAN mode: avahi publishes the machine's own <hostname>.local (so `ssh host@<hostname>.local`
+# works); the router's own responder adds the `.local` domain's app subdomains on top.
+- name: Install avahi (LAN mode)
+  apt:
+    name: avahi-daemon
+    state: present
+  when: mdns_mode | bool
+
 # JuiceFS mounts the archive tier with -o allow_other so apps
 # running under rootless-podman's subuid namespace can traverse
 # it.  fusermount refuses allow_other unless this option is set

@@ -34,6 +34,7 @@ from compute_space.core.first_boot import seed_first_boot
 from compute_space.core.git_ops import SOURCE_URL
 from compute_space.core.image_pruner import start_image_pruner
 from compute_space.core.logging import logger
+from compute_space.core.mdns.responder import MdnsResponder
 from compute_space.core.memory_guard import ensure_memory_guard
 from compute_space.core.org_rename import reconcile_app_repo_urls
 from compute_space.core.process_stream import cleanup_all as cleanup_process_streams
@@ -207,7 +208,7 @@ def _reject_app_subdomain_requests(request: Request[Any, Any, Any]) -> Response[
     return None
 
 
-def create_app(config: Config, dns_provider: InternalDnsProvider) -> ASGIApp:
+def create_app(config: Config, dns_provider: InternalDnsProvider, mdns_responder: MdnsResponder) -> ASGIApp:
     """Build the full router ASGI app.  The returned app is the Litestar app wrapped
     in ``SubdomainProxyMiddleware`` so app-subdomain requests are diverted to backend
     containers before Litestar attempts any routing.  Caller must have already
@@ -264,6 +265,7 @@ def create_app(config: Config, dns_provider: InternalDnsProvider) -> ASGIApp:
             "config": Provide(provide_config, sync_to_thread=False),
             "db": Provide(provide_db),
             "dns_provider": Provide(lambda: dns_provider, sync_to_thread=False, use_cache=True),
+            "mdns_responder": Provide(lambda: mdns_responder, sync_to_thread=False, use_cache=True),
         },
         exception_handlers={
             NotAuthorizedException: _auth_required_handler,

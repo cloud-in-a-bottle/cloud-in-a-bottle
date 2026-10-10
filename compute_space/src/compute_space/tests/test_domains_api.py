@@ -31,6 +31,7 @@ from compute_space.core.dns.coredns_provider.interface import InternalDnsProvide
 from compute_space.core.domains import Domain
 from compute_space.core.domains import DomainCertStatus
 from compute_space.core.domains import seed_domains
+from compute_space.core.mdns.responder import MdnsResponder
 from compute_space.db import provide_db
 from compute_space.db.connection import init_db
 from compute_space.tests.conftest import _make_test_config
@@ -66,7 +67,9 @@ def _write_cert(cert_path: Path, key_path: Path, *, days_valid: int = 60) -> Non
     )
 
 
-def _make_app(dns_provider: Any) -> Litestar:
+def _make_app(dns_provider: Any, mdns_responder: MdnsResponder | None = None) -> Litestar:
+    # port 0: a real socket, but never the shared 5353
+    mdns_responder = mdns_responder or MdnsResponder(port=0)
     return Litestar(
         route_handlers=[api_domains_routes],
         dependencies={
@@ -74,6 +77,7 @@ def _make_app(dns_provider: Any) -> Litestar:
             "db": Provide(provide_db),
             # Mirrors create_app: the routes are always handed the running provider.
             "dns_provider": Provide(lambda: dns_provider, sync_to_thread=False, use_cache=True),
+            "mdns_responder": Provide(lambda: mdns_responder, sync_to_thread=False, use_cache=True),
         },
         openapi_config=None,
     )
@@ -271,6 +275,21 @@ def test_an_mdns_domain_never_reaches_the_dns_provider(
     assert list(dns_provider.zones) == [PRIMARY.name]
 
 
+def test_mdns_domains_are_published_by_the_responder_while_configured(
+    cfg: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    stub_coredns_spawn(monkeypatch)
+    responder = MdnsResponder(port=0)
+    with TestClient(app=_make_app(_unstarted_provider(tmp_path), responder)) as c:
+        c.cookies.update(_auth_cookie(cfg.db_path))
+        c.post("/api/domains", json={"name": "myhost.local", "mdns": True})
+        c.post("/api/domains", json={"name": "host.example.org", "tls": True})
+        assert responder.domains == ("myhost.local",)
+
+        c.delete("/api/domains/myhost.local")
+        assert responder.domains == ()
+
+
 # --- validation ---------------------------------------------------------------------
 
 
@@ -295,6 +314,13 @@ def test_add_mdns_with_tls_rejected(cfg: Any, client: TestClient[Litestar]) -> N
     resp = client.post("/api/domains", json={"name": "myhost.local", "tls": True, "mdns": True})
     assert resp.status_code == 400
     assert resp.json()["detail"] == "Local domains are served over HTTP; set tls=false"
+
+
+def test_add_mdns_outside_local_rejected(cfg: Any, client: TestClient[Litestar]) -> None:
+    client.cookies.update(_auth_cookie(cfg.db_path))
+    resp = client.post("/api/domains", json={"name": "myhost.example.com", "mdns": True})
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == "Local domains must end in .local"
 
 
 # --- remove -------------------------------------------------------------------------

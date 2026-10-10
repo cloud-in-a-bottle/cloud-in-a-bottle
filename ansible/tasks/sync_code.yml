@@ -57,7 +57,7 @@
 # has, not what's on the control machine:
 #
 #   first deploy  — host has neither → honor the cert_provider flag and push the
-#                   ACME key (unless cert_api / http_only). A genuinely missing
+#                   ACME key (unless cert_api / http_only / mdns). A genuinely missing
 #                   key fails the copy, which is correct: it's actually needed.
 #   re-deploy     — host already has an ACME key OR a keycloak secret → skip and
 #                   leave the working credential alone, without re-supplying it.
@@ -92,4 +92,5 @@
   when:
     - not (host_has_cert_credential | bool) or (overwrite_existing | default(false) | bool)
     - not (local_http_only | default(false) | bool)
+    - not (mdns_mode | bool)
     - (cert_provider | default('')) != 'cert_api'
