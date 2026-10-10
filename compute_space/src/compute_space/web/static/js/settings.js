@@ -184,10 +184,10 @@ function renderRemoteChannel() {
     channel.textContent = parsed.error;
     channel.className = 'notice notice--error';
   } else if (parsed.channel === 'tags') {
-    channel.textContent = 'Updates to the latest tagged release.';
+    channel.textContent = 'Updating will fetch the latest tagged release.';
     channel.className = 'notice';
   } else if (parsed.channel === 'branch') {
-    channel.textContent = 'Updates to the latest commit on the ' + parsed.ref + ' branch.';
+    channel.textContent = 'Updating will fetch the latest commit on the ' + parsed.ref + ' branch.';
     channel.className = 'notice';
   } else {
     channel.textContent = 'Pinned to ' + parsed.ref + '; will not update.';
