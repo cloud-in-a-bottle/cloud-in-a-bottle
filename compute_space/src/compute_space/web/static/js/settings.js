@@ -182,16 +182,16 @@ function renderRemoteChannel() {
   const parsed = parseRemote(value);
   if (parsed.error) {
     channel.textContent = parsed.error;
-    channel.className = 'msg msg--error';
+    channel.className = 'notice notice--error';
   } else if (parsed.channel === 'tags') {
     channel.textContent = 'Updates to the latest tagged release.';
-    channel.className = 'msg';
+    channel.className = 'notice';
   } else if (parsed.channel === 'branch') {
     channel.textContent = 'Updates to the latest commit on the ' + parsed.ref + ' branch.';
-    channel.className = 'msg';
+    channel.className = 'notice';
   } else {
     channel.textContent = 'Pinned to ' + parsed.ref + '; will not update.';
-    channel.className = 'msg';
+    channel.className = 'notice';
   }
   channel.hidden = false;
   warning.hidden = !pausesAutoUpdate(parsed);
@@ -299,9 +299,15 @@ function renderAutoUpdate() {
   const paused = savedChannel !== 'tags';
   enabled.checked = autoUpdate.enabled;
   enabled.disabled = paused;
+  if (paused) {
+    enabled.setAttribute('aria-describedby', 'auto-update-paused');
+  } else {
+    enabled.removeAttribute('aria-describedby');
+  }
   time.value = utcTimeToLocal(autoUpdate.time_utc);
   time.disabled = paused || !autoUpdate.enabled;
   document.getElementById('auto-update-paused').hidden = !paused;
+  document.getElementById('auto-update-row').classList.toggle('field-row--disabled', paused);
 
   const last = document.getElementById('auto-update-last');
   if (autoUpdate.last_run_at) {
