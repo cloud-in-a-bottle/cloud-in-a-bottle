@@ -17,7 +17,6 @@ from litestar.exceptions import HTTPException
 
 import compute_space.core.system_agent.client as client_mod
 import compute_space.web.routes.api.settings as settings_mod
-from compute_space.core.system_agent.client import SystemAgentError
 from openhost_system_agent.protocol import FetchResult
 from openhost_system_agent.protocol import MigrationStatus
 
@@ -143,7 +142,7 @@ async def test_check_for_updates_migration_missing_is_error(monkeypatch: pytest.
 @pytest.mark.asyncio
 async def test_check_for_updates_agent_unreachable(monkeypatch: pytest.MonkeyPatch) -> None:
     async def fake_fetch() -> FetchResult:
-        raise SystemAgentError("agent down")
+        raise client_mod.SystemAgentError("agent down")
 
     monkeypatch.setattr(settings_mod, "system_agent_fetch", fake_fetch)
 
@@ -281,7 +280,7 @@ async def test_apply_update_releases_lock_and_clears_token_on_failure(
     monkeypatch.setenv("OPENHOST_DATA_DIR", str(tmp_path))
 
     async def failing_apply() -> None:
-        raise SystemAgentError("apply blew up")
+        raise client_mod.SystemAgentError("apply blew up")
 
     async def fake_status() -> MigrationStatus:
         return MigrationStatus(ok=True, reason="", message="ok", current_host_version=1, expected_version=1)

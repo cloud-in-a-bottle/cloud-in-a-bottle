@@ -20,7 +20,6 @@ from compute_space.config import provide_config
 from compute_space.config import set_active_config
 from compute_space.core.system_agent import progress as update_progress
 from compute_space.core.system_agent import update_token as seamless_update
-from compute_space.core.system_agent.client import SystemAgentError
 from compute_space.db import provide_db
 from compute_space.db.connection import init_db
 from compute_space.web.app import _template_globals
@@ -118,7 +117,7 @@ async def test_apply_third_call_after_failure_allowed(
 ) -> None:
     # After a failed apply the lock frees, so a retry is accepted (not 409).
     async def failing() -> None:
-        raise SystemAgentError("boom")
+        raise client_mod.SystemAgentError("boom")
 
     async def status() -> MigrationStatus:
         return _status()
@@ -170,7 +169,7 @@ async def test_apply_status_error_500_releases_lock(
     monkeypatch: pytest.MonkeyPatch, token_calls: dict[str, list[str]]
 ) -> None:
     async def status() -> MigrationStatus:
-        raise SystemAgentError("agent unreachable")
+        raise client_mod.SystemAgentError("agent unreachable")
 
     monkeypatch.setattr(settings_mod, "system_agent_status", status)
     with pytest.raises(HTTPException) as e:
@@ -222,7 +221,7 @@ def test_mark_boot_complete_falls_back_to_agent(progress_env: Path, monkeypatch:
     # A log created by an older build is root-owned; the direct append fails and
     # the boot hook must route through the root agent instead of giving up.
     calls = {"agent": 0}
-    monkeypatch.setattr(update_progress.agent_progress, "mark_boot_complete", lambda: False)
+    monkeypatch.setattr(agent_progress, "mark_boot_complete", lambda: False)
     monkeypatch.setattr(
         update_progress, "system_agent_mark_boot_complete_sync", lambda: calls.__setitem__("agent", calls["agent"] + 1)
     )
@@ -237,7 +236,7 @@ async def test_record_apply_failure_falls_back_to_agent(progress_env: Path, monk
     async def fake_agent_fail(message: str) -> None:
         calls.append(message)
 
-    monkeypatch.setattr(client_mod.agent_progress, "record_failure_if_not_terminal", lambda m: False)
+    monkeypatch.setattr(agent_progress, "record_failure_if_not_terminal", lambda m: False)
     monkeypatch.setattr(client_mod, "system_agent_record_update_failure", fake_agent_fail)
     await client_mod.record_apply_failure("it broke")
     assert calls == ["it broke"]

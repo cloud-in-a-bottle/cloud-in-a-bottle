@@ -20,9 +20,7 @@ from compute_space.core.auto_update.config import read_auto_update_config
 from compute_space.core.auto_update.config import read_last_run
 from compute_space.core.auto_update.config import record_last_run
 from compute_space.core.auto_update.config import write_auto_update_config
-from compute_space.core.auto_update.runner import next_run_at
 from compute_space.core.settings_store import set_setting
-from compute_space.core.system_agent.client import SystemAgentError
 from compute_space.db import get_db
 from compute_space.db.connection import init_db
 from openhost_system_agent.protocol import FetchResult
@@ -44,7 +42,7 @@ def _next_run_at_from(now: datetime, time_utc: time, monkeypatch: pytest.MonkeyP
             return cls.fromtimestamp(now.timestamp(), tz)
 
     monkeypatch.setattr(runner_mod, "datetime", FrozenDatetime)
-    return next_run_at(time_utc)
+    return runner_mod.next_run_at(time_utc)
 
 
 def test_next_run_later_today(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -217,7 +215,7 @@ async def test_runner_records_agent_failure(
     agent: FakeAgent, migrated_db: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     async def failing() -> RemoteInfo:
-        raise SystemAgentError("agent unreachable")
+        raise client_mod.SystemAgentError("agent unreachable")
 
     monkeypatch.setattr(runner_mod, "system_agent_get_remote", failing)
     await runner_mod.run_auto_update()
@@ -234,7 +232,7 @@ async def test_runner_records_launch_failure_and_releases_lock(
 
     monkeypatch.setattr(client_mod, "record_apply_failure", noop)
     monkeypatch.setattr(client_mod, "system_agent_clear_update_token", noop)
-    agent.apply_error = SystemAgentError("boom")
+    agent.apply_error = client_mod.SystemAgentError("boom")
     await runner_mod.run_auto_update()
     assert _outcome(migrated_db) == AutoUpdateOutcome.FAILED
     assert not client_mod.apply_lock.locked()
