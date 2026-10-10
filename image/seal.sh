@@ -9,8 +9,15 @@
 # Why a systemd service instead of cloud-init: a distributed appliance boots
 # with NO cloud-init datasource (no seed ISO), so cloud-init does not run — its
 # growpart/ssh-keygen modules never fire. We must do this ourselves.
+#
+# --raspi: the image is the Raspberry Pi one (build.sh --raspi). There cloud-init
+# does run on first boot (it reads Raspberry Pi Imager's settings from the boot
+# partition), and the instance takes its .local domain from the hostname.
 
 set -euo pipefail
+
+RASPI="false"
+[ "${1:-}" = "--raspi" ] && RASPI="true"
 
 # growpart lives in cloud-guest-utils. Present on Ubuntu cloud images, but make
 # sure — the boot service below depends on it. Network is up during the build.
@@ -81,4 +88,47 @@ rm -f /etc/ssh/ssh_host_*
 cloud-init clean --logs --seed || true
 
 # The embedded provisioner has done its job.
-rm -f /root/provision.sh
+rm -f /root/provision.sh /root/pre-provision.sh
+
+if [ "$RASPI" = "true" ]; then
+    # Set by image/raspi/pre-provision.sh for the build VM; a real Pi identifies itself.
+    rm -f /etc/flash-kernel/machine
+
+    # The domain baked in at build time is a placeholder: on first boot, publish the
+    # instance at the hostname cloud-init just set (from Raspberry Pi Imager, or
+    # the image's default), so the name the user picked is the address they visit.
+    # first_boot.toml is read once, when the router first starts, so this must run
+    # before it.
+    cat > /usr/local/sbin/bottle-raspi-domain <<'DOMAIN'
+#!/usr/bin/env bash
+set -euo pipefail
+name=$(hostname -s | tr '[:upper:]' '[:lower:]')
+sed -i "s/^domain = .*/domain = \"$name.local\"/" /home/host/.openhost/local_compute_space/first_boot.toml
+echo "bottle-raspi-domain: serving at http://$name.local"
+DOMAIN
+    chmod 0755 /usr/local/sbin/bottle-raspi-domain
+    # ConditionFirstBoot: the generalized image ships an empty machine-id (below).
+    # cloud-init.service / cloud-init-network.service: whichever this cloud-init
+    # version uses for the stage that sets the hostname.
+    cat > /etc/systemd/system/bottle-raspi-domain.service <<'UNIT'
+[Unit]
+Description=Use the hostname as the Cloud in a Bottle .local domain
+ConditionFirstBoot=yes
+After=cloud-init.service cloud-init-network.service
+Before=openhost.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/bottle-raspi-domain
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+    systemctl enable bottle-raspi-domain.service
+
+    # Report how much of the disk provisioning used (sizes the image's --disk-size),
+    # then discard free blocks so the build's raw disk stays sparse and the
+    # compressed image small.
+    df -h /
+    fstrim -av || true
+fi

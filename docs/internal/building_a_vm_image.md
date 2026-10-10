@@ -73,6 +73,20 @@ image/build.sh \
 
 The build does not get a TLS certificate issued - That can only happen once it's running and has DNS pointing at it. Once it boots with the right public ip `--public-ip`, delegate DNS and open ports 53 / 80 / 443 to it (see [Exposing a server with a static IP](../src/setup/static_ip.md) or [Exposing a home server](../src/setup/home_network.md)), and the instance will acquire its wildcard certificate and start serving at `https://mycooldomain.com/`.
 
+### Building a Raspberry Pi image
+
+Pass `--raspi` to build an SD-card image for a Raspberry Pi 4 or 5 instead of VM images. It needs an arm64 Linux host with KVM (or `image/on_ec2.sh`, which is how CI builds it), plus `mtools`, `fdisk` and `xz-utils`. The output is `image/out/cloud-in-a-bottle-<version>-raspi.img.xz`, and a `.json` that lists it as a [Raspberry Pi Imager](https://www.raspberrypi.com/software/) repository.
+
+```bash
+image/build.sh --raspi
+```
+
+How it works: the build starts from Ubuntu's preinstalled Raspberry Pi server image (the same Ubuntu 24.04 as the VM images) and boots it under QEMU's generic `virt` machine using the image's own kernel, which runs there fine. Only the Pi's FAT boot partition is Pi-specific, and the build leaves it bootable. Since that image's cloud-init reads its seed from the boot partition, the build writes its user-data there with `mtools` (no root or loop mounts needed), and puts the image's own first-boot config back afterwards.
+
+The image provisions in LAN mode: a `.local` domain, published over mDNS by the router and served over plain http (see "LAN mode" in `ansible/readme.md`). On first boot the instance takes its domain from the hostname, so a Pi named `bottle` comes up at `http://bottle.local`, with apps at `http://<app>.bottle.local`. Claiming is open by default, like the HTTP-only VM image. The `host` account has no password; console access is the stock `ubuntu` / `ubuntu` login (changed on first use), and SSH access comes from a key set in Imager.
+
+To install it, write the `.img.xz` with Raspberry Pi Imager ("Use custom", or `rpi-imager --repo <url of the .json>` to list it in the OS menu). Imager's OS customisation sets the hostname, wifi and an SSH key, and the image reads them on first boot. The default `--disk-size` for `--raspi` is 14G, which fits a "16GB" card; the root filesystem grows to fill a larger one.
+
 ## Run it
 
 Boot the resulting qcow2 (QEMU / KVM / libvirt) or `.ova` (VirtualBox). An HTTP-only image is reached and claimed exactly like a release image; see [Deploying on a shared home machine](../src/setup/shared_homeserver.md#part-1-download-and-run-the-vm-image). A `--public` image instead needs its networking in place first (delegate DNS, open the ports, as above), then you claim at `https://<domain>`. Either way, the build prints the dashboard URL, the claim mode, and the console login when it finishes.

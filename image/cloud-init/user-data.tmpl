@@ -37,6 +37,15 @@ write_files:
     encoding: b64
     content: __PROVISION_B64__
 
+  # Image-specific setup to run before provision.sh (base64; empty, and so a
+  # no-op, unless build.sh has one for this image, eg image/raspi/pre-provision.sh).
+  - path: /root/pre-provision.sh
+    permissions: '0755'
+    owner: root:root
+    encoding: b64
+    content: |
+      __PRE_PROVISION_B64__
+
   # Seal (generalize) the golden image: strip build-VM identity so every install
   # is unique, and install a boot-time service that grows root to fill the
   # target disk. Embedded (base64) from image/seal.sh in the working tree.
@@ -64,15 +73,16 @@ runcmd:
   - |
     set -x
     chmod 700 /root/.ssh
-    ( bash /root/provision.sh \
+    ( bash /root/pre-provision.sh \
+        && bash /root/provision.sh \
              --domain "__DOMAIN__" \
              --repo "__REPO_URL__" \
              --branch "__BRANCH__" \
              __MODE_ARGS__ \
              __CLAIM_ARG__ \
              --swap-size "__SWAP_SIZE_GB__" \
-        && echo 'host:__HOST_PASSWORD__' | chpasswd \
-        && bash /root/seal.sh \
+        && { [ -z '__HOST_PASSWORD__' ] || echo 'host:__HOST_PASSWORD__' | chpasswd; } \
+        && bash /root/seal.sh __SEAL_ARGS__ \
         && echo "BOTTLE_IMAGE_BUILD_SUCCESS" > /dev/console ) \
       || echo "BOTTLE_IMAGE_BUILD_FAILED" > /dev/console
   # Explicit, deterministic poweroff (both on success and failure) so build.sh's
