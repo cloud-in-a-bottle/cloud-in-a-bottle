@@ -133,16 +133,21 @@ jobs:
           export EC2_SSH_KEY="$RUNNER_TEMP/ec2_key"
           printf '%s\n' "$EC2_SSH_PRIVATE_KEY" > "$EC2_SSH_KEY"
           chmod 600 "$EC2_SSH_KEY"
-          extra=""
-          [ "${{ matrix.arch }}" = raspi ] && extra="--raspi"
-          image/on_ec2.sh "image/build.sh $extra --cpus 8 --mem 16384 --branch '$BRANCH' --version '${BRANCH//\//-}'"
+          build="image/build.sh --cpus 8 --mem 16384 --branch '$BRANCH' --version '${BRANCH//\//-}'"
+          if [ "${{ matrix.arch }}" = raspi ]; then
+            # Then boot the result the way a user's first boot goes (see the script).
+            build="$build --raspi && image/raspi/smoke_test.sh image/out/cloud-in-a-bottle-*-raspi.img.xz"
+          fi
+          image/on_ec2.sh "$build"
 
       - name: Upload console log
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: console-log-${{ matrix.arch }}
-          path: image/out/build-console.log
+          path: |
+            image/out/build-console.log
+            image/out/smoke-console.log
           if-no-files-found: ignore
 
       - name: Upload images
