@@ -7,11 +7,12 @@
 # as the build does) and checks that:
 #   - the dashboard answers at http://<hostname>.local (so the first-boot unit picked up the
 #     hostname, and the router, Caddy and the open /setup are up), and
-#   - the mDNS responder answers for an app subdomain of it.
+#   - the mDNS responder answers a multicast query for an app subdomain of it, sent from inside the
+#     guest (over SSH, with a key set in the user-data as Imager would) like a LAN client's.
 #
 # Usage: image/raspi/smoke_test.sh <image.img.xz> [--timeout <sec>]
 #
-# Needs: qemu-system-aarch64, KVM, mtools, sfdisk, xz, curl, python3. The guest console is saved to
+# Needs: qemu-system-aarch64, KVM, mtools, sfdisk, xz, curl, ssh. The guest console is saved to
 # image/out/smoke-console.log.
 
 set -euo pipefail
@@ -22,7 +23,7 @@ TIMEOUT=900
 
 HOSTNAME_UNDER_TEST="smoketest"
 HTTP_PORT=18080
-MDNS_PORT=15353
+SSH_PORT=12222
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 OUT_DIR="$SCRIPT_DIR/../out"
 CONSOLE_LOG="$OUT_DIR/smoke-console.log"
@@ -41,10 +42,14 @@ xz -dc -T0 "$IMG_XZ" | dd of="$DISK" bs=1M iflag=fullblock conv=sparse status=no
 BOOT_START="$(sfdisk -d "$DISK" | awk -F'[=,]' '$1 ~ /1 :/ { gsub(/ /, "", $2); print $2 }')"
 BOOT_FAT="$DISK@@$((BOOT_START * 512))"
 
-# What Imager's OS customisation would write (it sets far more, but the hostname is what matters).
+# What Imager's OS customisation would write, minus wifi: a hostname and an SSH key for the default
+# user.
+ssh-keygen -q -t ed25519 -N "" -f "$WORK_DIR/id"
 cat > "$WORK_DIR/user-data" <<EOF
 #cloud-config
 hostname: $HOSTNAME_UNDER_TEST
+ssh_authorized_keys:
+  - $(cat "$WORK_DIR/id.pub")
 EOF
 mcopy -o -i "$BOOT_FAT" "$WORK_DIR/user-data" ::/user-data
 mcopy -n -i "$BOOT_FAT" ::/vmlinuz ::/initrd.img "$WORK_DIR/"
@@ -57,13 +62,21 @@ qemu-system-aarch64 \
     -kernel "$WORK_DIR/vmlinuz" -initrd "$WORK_DIR/initrd.img" \
     -append "root=LABEL=writable rootfstype=ext4 rootwait console=ttyAMA0 net.ifnames=0" \
     -drive "file=$DISK,if=virtio,format=raw" \
-    -netdev "user,id=n0,hostfwd=tcp:127.0.0.1:$HTTP_PORT-:80,hostfwd=udp:127.0.0.1:$MDNS_PORT-:5353" \
+    -netdev "user,id=n0,hostfwd=tcp:127.0.0.1:$HTTP_PORT-:80,hostfwd=tcp:127.0.0.1:$SSH_PORT-:22" \
     -device virtio-net-pci,netdev=n0 &
 QEMU_PID=$!
+
+guest() {
+    ssh -i "$WORK_DIR/id" -p "$SSH_PORT" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+        -o LogLevel=ERROR -o ConnectTimeout=10 ubuntu@127.0.0.1 "$@"
+}
 
 fail() {
     echo "Error: $1. Last console output:" >&2
     tail -n 60 "$CONSOLE_LOG" >&2 || true
+    echo "--- Guest diagnostics ---" >&2
+    guest 'sudo cat /home/host/.openhost/local_compute_space/first_boot.toml; sudo ss -ulpn;
+        sudo journalctl -b -u openhost --no-pager | grep -iE "mdns|error|traceback" | tail -n 40' >&2 || true
     exit 1
 }
 
@@ -80,48 +93,14 @@ done
 [ "$code" = "200" ] || fail "no 200 from /setup on $HOSTNAME_UNDER_TEST.local within ${TIMEOUT}s (last: ${code:-none})"
 echo "  /setup answers on $HOSTNAME_UNDER_TEST.local"
 
-echo "--- Querying mDNS for myapp.$HOSTNAME_UNDER_TEST.local ---"
-# A legacy (non-5353 source port) query, which the responder answers by unicast, so it comes back
-# through QEMU's user-mode NAT. The answer is the guest's address on the interface it arrived on.
-mdns_query() {
-python3 - "$MDNS_PORT" "$1" <<'PY'
-import socket, struct, sys
-
-port, name = int(sys.argv[1]), sys.argv[2]
-qname = b"".join(bytes([len(p)]) + p.encode() for p in name.split(".")) + b"\0"
-query = struct.pack("!HHHHHH", 0x1234, 0, 1, 0, 0, 0) + qname + struct.pack("!HH", 1, 1)
-with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
-    s.settimeout(5)
-    for _ in range(5):
-        s.sendto(query, ("127.0.0.1", port))
-        try:
-            reply = s.recv(9000)
-            break
-        except socket.timeout:
-            continue
-    else:
-        sys.exit("no mDNS reply")
-_, flags, qd, an, _, _ = struct.unpack_from("!HHHHHH", reply)
-if not (flags & 0x8000) or an < 1:
-    sys.exit(f"unexpected mDNS reply: {reply!r}")
-# The single echoed question is uncompressed and identical to ours; the first answer follows it.
-off = 12 + len(qname) + 4
-off += len(qname)
-rtype, _, _, rdlen = struct.unpack_from("!HHIH", reply, off)
-ip = socket.inet_ntoa(reply[off + 10 : off + 10 + rdlen])
-if rtype != 1:
-    sys.exit(f"first answer is type {rtype}, not A")
-print(f"  {name} -> {ip}")
-PY
-}
-if ! mdns_query "myapp.$HOSTNAME_UNDER_TEST.local"; then
-    # Tell a domain that wasn't taken from the hostname apart from a query that never reached us.
-    if mdns_query "myapp.bottle.local"; then
+echo "--- Querying mDNS for myapp.$HOSTNAME_UNDER_TEST.local, from the guest ---"
+if ! guest python3 - "myapp.$HOSTNAME_UNDER_TEST.local" < "$SCRIPT_DIR/mdns_query.py"; then
+    # Tell a domain that wasn't taken from the hostname apart from a responder that isn't answering.
+    if guest python3 - "myapp.bottle.local" < "$SCRIPT_DIR/mdns_query.py"; then
         fail "the responder still publishes the default bottle.local, so the domain wasn't taken from the hostname"
     fi
     fail "no mDNS answer for either name"
 fi
-
 # The responder only publishes names under the instance's configured domains, so that answer also
 # shows the first-boot unit set the domain from the hostname.
 echo "=== Smoke test passed ==="
