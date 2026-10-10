@@ -105,7 +105,8 @@ echo "--- Installing build dependencies ---"
 remote 'cloud-init status --wait >/dev/null;
     sudo apt-get update -q &&
     sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q \
-        qemu-system-arm qemu-efi-aarch64 qemu-utils cloud-image-utils >/dev/null &&
+        qemu-system-arm qemu-efi-aarch64 qemu-utils cloud-image-utils \
+        mtools fdisk xz-utils >/dev/null &&
     sudo chmod 666 /dev/kvm'
 
 echo "--- Shipping image/ and scripts/ ---"

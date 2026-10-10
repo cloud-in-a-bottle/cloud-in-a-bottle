@@ -18,8 +18,9 @@ name: release
 # (openhost_system_agent/update.py), so there is exactly one tag scheme.
 #
 # Images are built for amd64 (on the runner, with KVM) and arm64 (on an EC2
-# Graviton bare-metal host, via image/on_ec2.sh). Pull requests that touch the
-# image build, and manual runs on a branch, build without publishing.
+# Graviton bare-metal host, via image/on_ec2.sh), plus a Raspberry Pi SD-card
+# image (build.sh --raspi, also on EC2). Pull requests that touch the image
+# build, and manual runs on a branch, build without publishing.
 
 on:
   push:
@@ -80,7 +81,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        arch: [amd64, arm64]
+        # raspi: the Raspberry Pi SD-card image (arm64, built like arm64).
+        arch: [amd64, arm64, raspi]
     runs-on: ubuntu-latest
     # The build boots a VM and provisions it end to end; give it plenty of room.
     # build.sh has its own 30-min boot timeout inside this budget.
@@ -120,7 +122,7 @@ jobs:
       # GitHub's arm64 runners have no /dev/kvm, so build arm64 on an EC2
       # Graviton bare-metal host, which does.
       - name: Build VM images on EC2
-        if: matrix.arch == 'arm64'
+        if: matrix.arch != 'amd64'
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
@@ -131,14 +133,21 @@ jobs:
           export EC2_SSH_KEY="$RUNNER_TEMP/ec2_key"
           printf '%s\n' "$EC2_SSH_PRIVATE_KEY" > "$EC2_SSH_KEY"
           chmod 600 "$EC2_SSH_KEY"
-          image/on_ec2.sh "image/build.sh --cpus 8 --mem 16384 --branch '$BRANCH' --version '${BRANCH//\//-}'"
+          build="image/build.sh --cpus 8 --mem 16384 --branch '$BRANCH' --version '${BRANCH//\//-}'"
+          if [ "${{ matrix.arch }}" = raspi ]; then
+            # Then boot the result the way a user's first boot goes (see the script).
+            build="$build --raspi && image/raspi/smoke_test.sh image/out/cloud-in-a-bottle-*-raspi.img.xz"
+          fi
+          image/on_ec2.sh "$build"
 
       - name: Upload console log
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: console-log-${{ matrix.arch }}
-          path: image/out/build-console.log
+          path: |
+            image/out/build-console.log
+            image/out/smoke-console.log
           if-no-files-found: ignore
 
       - name: Upload images
@@ -148,6 +157,8 @@ jobs:
           path: |
             image/out/*.qcow2
             image/out/*.ova
+            image/out/*.img.xz
+            image/out/*.json
           if-no-files-found: error
           # Already compressed; re-zipping only burns time.
           compression-level: 0
@@ -171,8 +182,8 @@ jobs:
           TAG: ${{ github.ref_name }}
         run: |
           assets=(image/out/cloud-in-a-bottle-*.qcow2)
-          for ova in image/out/cloud-in-a-bottle-*.ova; do
-            [ -e "$ova" ] && assets+=("$ova")
+          for f in image/out/cloud-in-a-bottle-*.ova image/out/cloud-in-a-bottle-*-raspi.*; do
+            [ -e "$f" ] && assets+=("$f")
           done
 
           # The VM-image usage notes ride on top of GitHub's auto-generated
@@ -191,6 +202,9 @@ jobs:
           - \`*-amd64.qcow2\`: QEMU/KVM/libvirt (and most cloud importers)
           - \`*-amd64.ova\`: VirtualBox / VMware
           - \`*-arm64.qcow2\`: arm64 hosts (UTM on Apple silicon, QEMU/KVM on arm64 Linux); boots via UEFI
+          - \`*-raspi.img.xz\`: Raspberry Pi 4 / 5 SD card. Write it with Raspberry Pi Imager
+            (set a hostname, and wifi if needed), boot the Pi, then visit \`http://<hostname>.local\`.
+            \`*-raspi.json\` is a Raspberry Pi Imager repository for it (\`rpi-imager --repo <url>\`).
 
           Boot it, then reach the dashboard at \`http://<vm-ip>:8080\` and claim it
           (claiming is open by default — the image is private behind NAT).

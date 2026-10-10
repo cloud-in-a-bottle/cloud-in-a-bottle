@@ -1,0 +1,9 @@
+# Network config for the --raspi build VM only: QEMU's NIC is enp0s1, not the Pi's eth0. The stock
+# file is put back before the image is written.
+network:
+  version: 2
+  ethernets:
+    all-eth:
+      match:
+        name: "e*"
+      dhcp4: true

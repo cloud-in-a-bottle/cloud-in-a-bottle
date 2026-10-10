@@ -38,6 +38,9 @@ usage() {
     echo "          [--bind-host <addr>] [--claim-token <token>] [--swap-size <gb>] [--open-claim]"
     echo ""
     echo "  --domain            Required. Domain name (e.g., myhost.example.com)."
+    echo "                      A .local name (e.g. bottle.local) selects LAN mode:"
+    echo "                      published over mDNS and served over plain http, with"
+    echo "                      no TLS or public DNS."
     echo "                      In --local-http-only mode this is only used for app"
     echo "                      subdomain routing, not TLS/DNS -- include the port"
     echo "                      (e.g. lvh.me:8080), since the router builds absolute"
@@ -68,7 +71,8 @@ usage() {
     echo "                      can claim the instance without a token. For a private,"
     echo "                      unexposed instance (e.g. the distributed VM image behind"
     echo "                      NAT) where a shipped default token would be a public"
-    echo "                      non-secret. Requires --local-http-only: on a reachable"
+    echo "                      non-secret. Requires --local-http-only or a .local"
+    echo "                      domain (LAN mode): on a reachable"
     echo "                      instance the token is the only thing stopping a stranger"
     echo "                      from claiming it first. Re-enable via config if you later"
     echo "                      expose the instance on a network."
@@ -98,8 +102,14 @@ if [ -z "$DOMAIN" ]; then
     exit 1
 fi
 
-if [ "$OPEN_CLAIM" = "true" ] && [ "$LOCAL_HTTP_ONLY" != "true" ]; then
-    echo "Error: --open-claim requires --local-http-only"
+# LAN mode: a .local domain is published over mDNS and served over http (see ansible/group_vars/all.yml).
+MDNS="false"
+case "${DOMAIN%%:*}" in
+    *.local) MDNS="true" ;;
+esac
+
+if [ "$OPEN_CLAIM" = "true" ] && [ "$LOCAL_HTTP_ONLY" != "true" ] && [ "$MDNS" != "true" ]; then
+    echo "Error: --open-claim requires --local-http-only or a .local domain"
     echo "       Without the token, anyone who can reach /setup can claim this instance."
     exit 1
 fi
@@ -151,8 +161,9 @@ fi
 chown -R host:host "$OPENHOST_DIR"
 
 # ---- Public IP (explicit override, else auto-detect) ----
+# LAN mode has no public address; leave it at the 127.0.0.1 fallback below.
 PUBLIC_IP="$PUBLIC_IP_OVERRIDE"
-if [ -z "$PUBLIC_IP" ]; then
+if [ -z "$PUBLIC_IP" ] && [ "$MDNS" != "true" ]; then
     PUBLIC_IP=$(hostname -I 2>/dev/null | awk '{print $1}' || true)
     if [ -z "$PUBLIC_IP" ] || echo "$PUBLIC_IP" | grep -qE '^(10\.|172\.(1[6-9]|2[0-9]|3[01])\.|192\.168\.)'; then
         PUBLIC_IP=$(curl -sf --max-time 5 https://ifconfig.me 2>/dev/null || true)
@@ -191,7 +202,7 @@ ansible-playbook ansible/local_setup.yml \
     -i "localhost,"
 
 # ---- ACME account key (TLS mode only): install the provided one, else generate ----
-if [ "$LOCAL_HTTP_ONLY" != "true" ]; then
+if [ "$LOCAL_HTTP_ONLY" != "true" ] && [ "$MDNS" != "true" ]; then
     ACME_KEY_PATH="$OPENHOST_DIR/ansible/secrets/certbot_private_key.json"
     ACME_KEY_DIR="$(dirname "$ACME_KEY_PATH")"
     if [ -n "$ACME_KEY_SRC" ]; then
@@ -230,6 +241,12 @@ if [ "$LOCAL_HTTP_ONLY" = "true" ]; then
     fi
     echo "  Dashboard: http://localhost:8080  (SSH-tunnel to reach it:"
     echo "             ssh -L 8080:localhost:8080 host@<pi-ip>)"
+elif [ "$MDNS" = "true" ]; then
+    echo "  Mode:      LAN (mDNS, plain http)"
+    if [ "$OPEN_CLAIM" = "true" ]; then
+        echo "  Claim:     /setup is ungated (--open-claim); no token needed"
+    fi
+    echo "  Dashboard: http://$DOMAIN"
 else
     echo "  Dashboard: https://$DOMAIN"
     echo "  SSH:       ssh host@$DOMAIN"
