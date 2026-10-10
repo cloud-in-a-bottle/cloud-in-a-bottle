@@ -7,6 +7,7 @@ import urllib.parse
 from pathlib import Path
 from typing import NoReturn
 
+import attr
 import git
 from loguru import logger
 
@@ -21,6 +22,7 @@ from openhost_system_agent.protocol import DiffCommit
 from openhost_system_agent.protocol import DiffResult
 from openhost_system_agent.protocol import FetchResult
 from openhost_system_agent.protocol import RemoteInfo
+from openhost_system_agent.protocol import UpdateChannel
 from openhost_system_agent.reclaim import reclaim_host_ownership
 from openhost_system_agent.updater import progress
 from openhost_system_agent.updater.launcher import launch_updater
@@ -182,7 +184,7 @@ def _next_step(repo: git.Repo) -> str | None:
     if target is not None and target_sha is None:
         raise RuntimeError(
             f"Pinned target ref '{target}' could not be resolved on the remote. "
-            "Fix or clear the pin with 'set_remote' (a URL without an @ref clears it)."
+            "Fix or clear the pin with 'set_remote' (a URL with no #branch or @ref clears it)."
         )
 
     # Terminal: already sitting on the pinned destination.
@@ -225,7 +227,7 @@ def fetch_updates() -> FetchResult:
             # UP_TO_DATE, which would hide the operator's broken pin forever.
             raise RuntimeError(
                 f"Pinned target ref '{target}' could not be resolved on the remote. "
-                "Fix or clear the pin with 'set_remote' (a URL without an @ref clears it)."
+                "Fix or clear the pin with 'set_remote' (a URL with no #branch or @ref clears it)."
             )
         if repo.head.commit.hexsha != sha:
             return FetchResult(state="BEHIND_REMOTE")
@@ -370,41 +372,99 @@ def apply_update() -> NoReturn:
 # ── Remote management ────────────────────────────────────────────────
 
 
-def set_remote_url(url: str) -> RemoteInfo:
-    parsed = urllib.parse.urlparse(url)
-    if parsed.scheme not in _KNOWN_SCHEMES:
-        url = "https://" + url
-        parsed = urllib.parse.urlparse(url)
+@attr.s(auto_attribs=True, frozen=True)
+class ParsedRemote:
+    url: str
+    ref: str | None
+    channel: UpdateChannel
 
+
+def parse_remote(spec: str) -> ParsedRemote:
+    """Split ``<url>``, ``<url>#<branch>`` or ``<url>@<ref>`` into its parts.
+
+    Mirrored by parseRemote in compute_space/web/static/js/settings.js, which shows the channel and validation errors
+    as the owner types. Keep the two in sync.
+
+    The ``@`` is only looked for in the URL path, so ``user@host`` in the netloc is not mistaken for a ref.
+    """
+    spec = spec.strip()
+    parsed = urllib.parse.urlparse(spec)
+    if parsed.scheme not in _KNOWN_SCHEMES:
+        parsed = urllib.parse.urlparse("https://" + spec)
+    if any(c.isspace() for c in spec):
+        raise ValueError("The remote must not contain spaces.")
+
+    branch = parsed.fragment or None
+    if "#" in spec and branch is None:
+        raise ValueError("Missing branch name after '#'.")
+    path = parsed.path
     ref: str | None = None
-    if "@" in parsed.path:
-        base_path, ref = parsed.path.rsplit("@", 1)
-        url = parsed._replace(path=base_path).geturl()
+    if "@" in path:
+        if path.count("@") > 1:
+            raise ValueError("Only one '@ref' is allowed.")
+        path, ref = path.split("@")
+        if not ref:
+            raise ValueError("Missing tag or commit after '@'.")
+    if branch is not None and ref is not None:
+        raise ValueError("Use either '#branch' or '@ref', not both.")
+    if branch is not None and "#" in branch:
+        raise ValueError("Only one '#branch' is allowed.")
+
+    url = parsed._replace(path=path, fragment="").geturl()
+    if branch is not None:
+        return ParsedRemote(url=url, ref=branch, channel=UpdateChannel.BRANCH)
+    if ref is not None:
+        return ParsedRemote(url=url, ref=ref, channel=UpdateChannel.PINNED)
+    return ParsedRemote(url=url, ref=None, channel=UpdateChannel.TAGS)
+
+
+def _is_remote_branch(repo: git.Repo, name: str) -> bool:
+    try:
+        repo.git.rev_parse("--verify", "--quiet", f"refs/remotes/origin/{name}")
+        return True
+    except git.GitCommandError:
+        return False
+
+
+def set_remote_url(spec: str) -> RemoteInfo:
+    remote = parse_remote(spec)
 
     repo = _repo()
     try:
         with _get_remote(repo).config_writer as cw:
-            cw.set("url", url)
+            cw.set("url", remote.url)
     except RuntimeError:
-        repo.create_remote("origin", url)
+        repo.create_remote("origin", remote.url)
 
-    # An @ref pins to that branch/commit; the update walk (update apply) does the
-    # actual checkout+migrate+install+restart. Resolve it here so a bad @ref (typo,
-    # deleted branch) raises instead of leaving a broken pin that fetch_updates
-    # would report as UP_TO_DATE forever — but do NOT check out or restart, which
-    # would boot new code before its migrations run.
-    if ref:
-        _fetch_chown_host(repo, "origin")
-        if _resolve_ref_sha(repo, ref) is None:
-            raise RuntimeError(f"Ref '{ref}' could not be resolved on the remote. Check the branch or commit name.")
+    # Both channels persist the same target-ref; _resolve_ref_sha prefers origin/<ref>, so a branch follows its tip
+    # and a tag or commit stays put. That makes "is it a remote branch" the whole distinction, so check it here, and
+    # resolve so a typo raises instead of leaving a broken pin that fetch_updates would report as UP_TO_DATE forever.
+    # Do NOT check out or restart: the update walk does that, after running migrations.
+    if remote.ref is not None:
+        _fetch_chown_host(repo, "origin", "--tags")
+        is_branch = _is_remote_branch(repo, remote.ref)
+        if remote.channel == UpdateChannel.BRANCH and not is_branch:
+            raise RuntimeError(f"Branch '{remote.ref}' was not found on the remote.")
+        if remote.channel == UpdateChannel.PINNED and is_branch:
+            raise RuntimeError(
+                f"'{remote.ref}' is a branch. Use #{remote.ref} to follow it, or @<commit> to pin a commit."
+            )
+        if _resolve_ref_sha(repo, remote.ref) is None:
+            raise RuntimeError(f"'{remote.ref}' could not be resolved on the remote. Check the tag or commit.")
 
-    _set_target_ref(repo, ref)
+    _set_target_ref(repo, remote.ref)
 
     return RemoteInfo(
-        url=_strip_credentials(url),
-        ref=ref or (tags[-1] if (tags := _get_sorted_tags(repo)) else "HEAD"),
-        pinned=ref is not None,
+        url=_strip_credentials(remote.url),
+        ref=remote.ref or (tags[-1] if (tags := _get_sorted_tags(repo)) else "HEAD"),
+        channel=remote.channel,
     )
+
+
+def _channel_for_target(repo: git.Repo, target: str | None) -> UpdateChannel:
+    if target is None:
+        return UpdateChannel.TAGS
+    return UpdateChannel.BRANCH if _is_remote_branch(repo, target) else UpdateChannel.PINNED
 
 
 def get_remote_info() -> RemoteInfo:
@@ -412,7 +472,7 @@ def get_remote_info() -> RemoteInfo:
     remote = _get_remote(repo)
     url = _strip_credentials(remote.url) if remote.url else None
     target = _get_target_ref(repo)
-    # When unpinned, still report the resolved current tag for display, but flag
-    # it as not pinned so the dashboard doesn't round-trip it back into a pin.
+    # On the tags channel, still report the resolved current tag for display; the channel tells the dashboard not to
+    # round-trip it back into a pin.
     ref = target or _current_tag(repo) or _latest_ancestor_tag(repo) or repo.head.commit.hexsha[:8]
-    return RemoteInfo(url=url, ref=ref, pinned=target is not None)
+    return RemoteInfo(url=url, ref=ref, channel=_channel_for_target(repo, target))

@@ -39,9 +39,9 @@ detached unit via `systemd-run --setenv`), defaulting to the production data dir
 
 Updates track **release tags**, not a branch. The host checkout normally sits on
 a release tag (a detached HEAD by git's definition, which is expected here). To
-pin an instance to a specific branch or commit instead of the latest tag, use
-`update set_remote <url>@<ref>`; updates then walk the tags as usual but end on
-that ref.
+follow a branch instead of the latest tag, use `update set-remote <url>#<branch>`;
+to pin a fixed tag or commit, use `update set-remote <url>@<ref>`. Updates then
+walk the tags as usual but end on that ref.
 
 ## Adding a New Migration
 

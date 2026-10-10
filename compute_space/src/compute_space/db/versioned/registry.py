@@ -21,6 +21,9 @@ from compute_space.db.versioned.migrations.v0011_cpu_cores import Migration0011C
 from compute_space.db.versioned.migrations.v0012_archive_local_backend import Migration0012ArchiveLocalBackend
 from compute_space.db.versioned.migrations.v0013_domains_and_settings import Migration0013DomainsAndSettings
 from compute_space.db.versioned.migrations.v0014_drop_apps_installed_by import Migration0014DropAppsInstalledBy
+from compute_space.db.versioned.migrations.v0015_auto_update_off_for_existing import (
+    Migration0015AutoUpdateOffForExisting,
+)
 
 # Numbered migrations in apply order. Versions MUST start at 2 and be
 # contiguous. v0 (legacy) and v1 (baseline produced by the existing
@@ -39,4 +42,5 @@ REGISTRY: list[Migration] = [
     Migration0012ArchiveLocalBackend(),
     Migration0013DomainsAndSettings(),
     Migration0014DropAppsInstalledBy(),
+    Migration0015AutoUpdateOffForExisting(),
 ]

@@ -68,7 +68,7 @@ There is no way yet to give a named person their own login to your instance or t
 - **Archive storage.** Point the bulk-content tier at an S3 bucket instead of local disk. See [Data](../how_it_works/data.md#the-archive-tier).
 - **API tokens.** Create and revoke the tokens the [CLI](./cli.md) and any scripts use. They are owner-equivalent, so give them expiries.
 - **Owner account.** Change the username apps see, and your password.
-- **Updates.** Check for and apply new Cloud in a Bottle versions. It pulls the code, runs any host migrations, and restarts, streaming progress while it goes.
+- **Updates.** Check for and apply new Cloud in a Bottle versions. It pulls the code, runs any host migrations, and restarts, streaming progress while it goes. The remote decides what you update to: a plain URL follows tagged releases, `url#branch` follows a branch, and `url@tag-or-commit` pins a fixed version. When tracking a plain URL (and thus getting tagged releases), the instance can auto-update every day at a time you pick. An update briefly makes the dashboard and apps unavailable.
 
 ## Backups
 
