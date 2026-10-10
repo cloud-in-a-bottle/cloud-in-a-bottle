@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import errno
+import os
 import socket
 import struct
 
@@ -20,6 +21,14 @@ _MREQN = struct.Struct("@4s4si")
 # How often to look for new interfaces to join the group on (a USB NIC plugged in after boot, etc).
 _REJOIN_SECONDS = 30
 _MAX_PACKET = 9000
+_AVAHI_PID_FILE = "/run/avahi-daemon/pid"
+
+
+def _avahi_name() -> str | None:
+    """The name avahi publishes for this machine, if avahi is running."""
+    if not os.path.exists(_AVAHI_PID_FILE):
+        return None
+    return socket.gethostname().split(".")[0].lower() + ".local"
 
 
 class MdnsResponder:
@@ -129,8 +138,7 @@ class MdnsResponder:
             return
         if query is None:
             return
-        hostname = socket.gethostname().split(".")[0].lower()
-        reply = build_answer(query, addr[1], self._domains, hostname, local_ip)
+        reply = build_answer(query, addr[1], self._domains, _avahi_name(), local_ip)
         if reply is None:
             return
         # Legacy (non-5353) queriers get a unicast reply; everyone else a multicast one, so other

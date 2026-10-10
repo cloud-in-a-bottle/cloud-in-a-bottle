@@ -82,7 +82,7 @@ the router publishes `bottle.local` and every `<app>.bottle.local` over mDNS its
 
 notes:
 
-- the responder shares udp 5353 with avahi. if the machine's own hostname is the same label (hostname `bottle` for `bottle.local`), avahi keeps answering for the bare name and the router only answers for the subdomains; otherwise the router answers both.
+- LAN mode installs avahi, which publishes the machine's own `<hostname>.local`. the router's responder shares udp 5353 with it: when avahi is running and the hostname is the same label (hostname `bottle` for `bottle.local`), avahi answers for the bare name and the router only for the subdomains; otherwise the router answers both.
 - macOS and iOS resolve multi-label names like `myapp.bottle.local` out of the box. on Linux, recent nss-mdns versions only resolve two-label names unless `/etc/mdns.allow` lists `.local.`. Windows support for multi-label `.local` names is inconsistent.
 - two boxes on the same network with the same `.local` domain will both answer; give each its own name.
 

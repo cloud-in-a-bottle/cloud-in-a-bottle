@@ -48,10 +48,10 @@ def _records(packet: bytes) -> list[tuple[str, int, int, int, bytes]]:
     return out
 
 
-def _answer(*questions: tuple[str, int], port: int = MDNS_PORT, hostname: str = "raspberrypi") -> bytes | None:
+def _answer(*questions: tuple[str, int], port: int = MDNS_PORT, avahi_name: str | None = None) -> bytes | None:
     query = parse_query(_query_packet(*questions, query_id=7))
     assert query is not None
-    return build_answer(query, port, DOMAINS, hostname, IP)
+    return build_answer(query, port, DOMAINS, avahi_name, IP)
 
 
 def test_parse_query_follows_compression_pointers() -> None:
@@ -95,11 +95,12 @@ def test_other_names_are_ignored() -> None:
     assert _answer(("notmyhost.local", TYPE_A)) is None
 
 
-def test_bare_domain_is_left_to_avahi_when_it_is_the_hostname() -> None:
-    assert _answer(("myhost.local", TYPE_A), hostname="raspberrypi") is not None
-    assert _answer(("myhost.local", TYPE_A), hostname="myhost") is None
+def test_bare_domain_is_left_to_avahi_when_avahi_publishes_it() -> None:
+    assert _answer(("myhost.local", TYPE_A)) is not None
+    assert _answer(("myhost.local", TYPE_A), avahi_name="raspberrypi.local") is not None
+    assert _answer(("myhost.local", TYPE_A), avahi_name="myhost.local") is None
     # subdomains are always ours
-    assert _answer(("myapp.myhost.local", TYPE_A), hostname="myhost") is not None
+    assert _answer(("myapp.myhost.local", TYPE_A), avahi_name="myhost.local") is not None
 
 
 def test_legacy_unicast_reply_echoes_id_and_question_with_short_ttl() -> None:
