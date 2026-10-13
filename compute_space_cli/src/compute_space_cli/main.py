@@ -15,6 +15,8 @@ import httpx
 from cappa import Dep
 
 from compute_space_cli import config
+from compute_space_cli.discovery import DiscoveryError
+from compute_space_cli.discovery import discover_router_url
 from compute_space_cli.helpers import authorization_url
 from compute_space_cli.helpers import make_api_request
 from compute_space_cli.helpers import resolve_app_id_by_name
@@ -55,10 +57,35 @@ def resolve_instance(bottle: Bottle) -> config.Instance:
         raise SystemExit(1) from None
 
 
+def _discover_or_exit(base_url: str) -> str | None:
+    try:
+        return discover_router_url(base_url)
+    except DiscoveryError as e:
+        print(f"Could not find the instance's dashboard: {e}", file=sys.stderr)
+        raise SystemExit(1) from None
+
+
+def resolve_api_instance(bottle: Bottle) -> config.Instance:
+    """Like resolve_instance, but for commands that call the API: make sure we know where the router lives.
+
+    Instances configured before discovery existed are looked up on first use, and the answer saved.
+    """
+    inst = resolve_instance(bottle)
+    if inst.router_url is not None:
+        return inst
+    router_url = _discover_or_exit(inst.base_url)
+    if router_url is None:
+        # The instance predates discovery, so its router is at the configured URL; check again next time.
+        return inst
+    inst = attrs.evolve(inst, router_url=router_url)
+    _load_or_exit().upsert_instance(inst).save()
+    return inst
+
+
 @cappa.command(name="status", help="Check if your compute space is reachable.")
 @attrs.define
 class Status:
-    def __call__(self, cfg: Annotated[config.Instance, Dep(resolve_instance)]) -> None:
+    def __call__(self, cfg: Annotated[config.Instance, Dep(resolve_api_instance)]) -> None:
         try:
             resp = httpx.get(cfg.url, headers={"Authorization": f"Bearer {cfg.token}"}, timeout=10)
             print(f"{cfg.url} — up (HTTP {resp.status_code})")
@@ -77,7 +104,7 @@ class AppCmd:
     def deploy(
         self,
         repo_url: Annotated[str, cappa.Arg(help="Git repository URL")],
-        cfg: Annotated[config.Instance, Dep(resolve_instance)],
+        cfg: Annotated[config.Instance, Dep(resolve_api_instance)],
         name: Annotated[str | None, cappa.Arg(long=True, help="App name (default: from manifest)")] = None,
         wait: Annotated[bool, cappa.Arg(long=True, help="Wait for deploy to finish")] = False,
         port: Annotated[
@@ -133,7 +160,7 @@ class AppCmd:
     def status(
         self,
         app_name: Annotated[str, cappa.Arg(help="App name")],
-        cfg: Annotated[config.Instance, Dep(resolve_instance)],
+        cfg: Annotated[config.Instance, Dep(resolve_api_instance)],
     ) -> None:
         """Get app status."""
         app_id = resolve_app_id_by_name(cfg.url, cfg.token, app_name)
@@ -154,7 +181,7 @@ class AppCmd:
     def logs(
         self,
         app_name: Annotated[str, cappa.Arg(help="App name")],
-        cfg: Annotated[config.Instance, Dep(resolve_instance)],
+        cfg: Annotated[config.Instance, Dep(resolve_api_instance)],
         follow: Annotated[bool, cappa.Arg(long=True, help="Poll for new logs")] = False,
         interval: Annotated[int, cappa.Arg(long=True, help="Poll interval in seconds")] = 5,
     ) -> None:
@@ -175,7 +202,7 @@ class AppCmd:
     def reload(
         self,
         app_name: Annotated[str, cappa.Arg(help="App name")],
-        cfg: Annotated[config.Instance, Dep(resolve_instance)],
+        cfg: Annotated[config.Instance, Dep(resolve_api_instance)],
         update: Annotated[bool, cappa.Arg(long=True, help="Git pull before rebuilding")] = False,
         wait: Annotated[bool, cappa.Arg(long=True, help="Wait for reload to finish")] = False,
     ) -> None:
@@ -197,7 +224,7 @@ class AppCmd:
     def stop(
         self,
         app_name: Annotated[str, cappa.Arg(help="App name")],
-        cfg: Annotated[config.Instance, Dep(resolve_instance)],
+        cfg: Annotated[config.Instance, Dep(resolve_api_instance)],
     ) -> None:
         """Stop a running app."""
         app_id = resolve_app_id_by_name(cfg.url, cfg.token, app_name)
@@ -208,7 +235,7 @@ class AppCmd:
     def remove(
         self,
         app_name: Annotated[str, cappa.Arg(help="App name")],
-        cfg: Annotated[config.Instance, Dep(resolve_instance)],
+        cfg: Annotated[config.Instance, Dep(resolve_api_instance)],
         keep_data: Annotated[bool, cappa.Arg(long=True, help="Keep app data on disk")] = False,
     ) -> None:
         """Remove an app."""
@@ -226,7 +253,7 @@ class AppCmd:
         self,
         app_name: Annotated[str, cappa.Arg(help="Current app name")],
         new_name: Annotated[str, cappa.Arg(help="New app name")],
-        cfg: Annotated[config.Instance, Dep(resolve_instance)],
+        cfg: Annotated[config.Instance, Dep(resolve_api_instance)],
     ) -> None:
         """Rename an app."""
         app_id = resolve_app_id_by_name(cfg.url, cfg.token, app_name)
@@ -243,7 +270,7 @@ class AppCmd:
     def ssh(
         self,
         app_name: Annotated[str, cappa.Arg(help="App name")],
-        cfg: Annotated[config.Instance, Dep(resolve_instance)],
+        cfg: Annotated[config.Instance, Dep(resolve_api_instance)],
         shell: Annotated[str, cappa.Arg(long=True, help="Shell to invoke inside container")] = "sh",
         args: Annotated[
             list[str] | None,
@@ -284,7 +311,7 @@ class AppCmd:
     @cappa.command(name="list")
     def list_apps(
         self,
-        cfg: Annotated[config.Instance, Dep(resolve_instance)],
+        cfg: Annotated[config.Instance, Dep(resolve_api_instance)],
     ) -> None:
         """List all apps and their status."""
         apps = make_api_request(cfg.url, cfg.token, "GET", "/api/apps").json()
@@ -305,7 +332,7 @@ class AppCmd:
     def diagnostics(
         self,
         app_name: Annotated[str, cappa.Arg(help="App name")],
-        cfg: Annotated[config.Instance, Dep(resolve_instance)],
+        cfg: Annotated[config.Instance, Dep(resolve_api_instance)],
     ) -> None:
         """Print a per-app diagnostics bundle (JSON) for debugging."""
         app_id = resolve_app_id_by_name(cfg.url, cfg.token, app_name)
@@ -319,7 +346,7 @@ class TokensCmd:
     @cappa.command(name="list")
     def list_tokens(
         self,
-        cfg: Annotated[config.Instance, Dep(resolve_instance)],
+        cfg: Annotated[config.Instance, Dep(resolve_api_instance)],
     ) -> None:
         """List API tokens."""
         tokens = make_api_request(cfg.url, cfg.token, "GET", "/api/tokens").json()
@@ -334,7 +361,7 @@ class TokensCmd:
     @cappa.command(name="create")
     def create(
         self,
-        cfg: Annotated[config.Instance, Dep(resolve_instance)],
+        cfg: Annotated[config.Instance, Dep(resolve_api_instance)],
         name: Annotated[str, cappa.Arg(long=True, help="Token name")] = "Untitled",
         expiry_hours: Annotated[str, cappa.Arg(long=True, help='Hours until expiry, or "never"')] = "8",
     ) -> None:
@@ -354,7 +381,7 @@ class TokensCmd:
     def delete(
         self,
         token_id: Annotated[int, cappa.Arg(help="Token ID")],
-        cfg: Annotated[config.Instance, Dep(resolve_instance)],
+        cfg: Annotated[config.Instance, Dep(resolve_api_instance)],
     ) -> None:
         """Delete an API token."""
         make_api_request(cfg.url, cfg.token, "DELETE", f"/api/tokens/{token_id}")
@@ -367,7 +394,7 @@ class LogsCmd:
     follow: Annotated[bool, cappa.Arg(long=True, help="Poll for new logs")] = False
     interval: Annotated[int, cappa.Arg(long=True, help="Poll interval in seconds")] = 5
 
-    def __call__(self, cfg: Annotated[config.Instance, Dep(resolve_instance)]) -> None:
+    def __call__(self, cfg: Annotated[config.Instance, Dep(resolve_api_instance)]) -> None:
         if not self.follow:
             print(make_api_request(cfg.url, cfg.token, "GET", "/api/compute_space_logs").text)
             return
@@ -390,11 +417,13 @@ class InstanceCmd:
         if not url:
             print("No URL provided.", file=sys.stderr)
             raise SystemExit(1)
-        url = config.normalize_url(url)
-        hostname = config.hostname_from_url(url)
+        hostname = config.hostname_from_url(config.normalize_url(url))
+        router_url = _discover_or_exit(config.normalize_url(url))
+        # An instance from before discovery serves its router at the URL as given.
+        url = router_url or config.normalize_url(url)
 
         print("\nOpen this link and create an API token:")
-        print(f"  {url}")
+        print(f"  {url}/settings")
         print()
 
         token = input("Paste your API token here: ").strip()
@@ -419,7 +448,7 @@ class InstanceCmd:
         print("ok")
 
         alias = input(f"\nAlias for '{hostname}' (optional, press Enter to skip): ").strip() or None
-        inst = config.Instance(hostname=hostname, token=token, alias=alias)
+        inst = config.Instance(hostname=hostname, token=token, alias=alias, router_url=router_url)
         multi = _load_or_create()
         multi.upsert_instance(inst).save()
 
@@ -470,9 +499,12 @@ class InstanceCmd:
     ) -> None:
         """Add a new instance to the config."""
         hostname = config.hostname_from_url(config.normalize_url(url))
-        inst = config.Instance(hostname=hostname, token=token, alias=alias)
+        router_url = _discover_or_exit(config.normalize_url(url))
+        inst = config.Instance(hostname=hostname, token=token, alias=alias, router_url=router_url)
         _load_or_create().upsert_instance(inst, set_default=set_default).save()
         print(f"Added instance '{hostname}'")
+        if router_url:
+            print(f"  dashboard: {router_url}")
         if alias:
             print(f"  alias: {alias}")
         if set_default:
@@ -521,7 +553,7 @@ class InstanceCmd:
             print(str(e), file=sys.stderr)
             raise SystemExit(1) from None
         old = multi.instances[hostname]
-        updated = config.Instance(hostname=old.hostname, token=old.token, alias=new_alias)
+        updated = attrs.evolve(old, alias=new_alias)
         multi.upsert_instance(updated).save()
         print(f"Alias '{new_alias}' set for {hostname}")
 
@@ -546,12 +578,7 @@ class InstanceCmd:
             raise SystemExit(1)
 
         multi = _load_or_exit()
-        updated = config.Instance(
-            hostname=cfg.hostname,
-            token=cfg.token,
-            alias=cfg.alias,
-            ssh_key=str(resolved),
-        )
+        updated = attrs.evolve(cfg, ssh_key=str(resolved))
         multi.upsert_instance(updated).save()
         print(f"SSH key for {cfg.hostname} set to {resolved}")
 
@@ -595,7 +622,7 @@ class InstanceCmd:
 @cappa.command(name="version", help="Show the git branch/SHA of the running Cloud in a Bottle.")
 @attrs.define
 class Version:
-    def __call__(self, cfg: Annotated[config.Instance, Dep(resolve_instance)]) -> None:
+    def __call__(self, cfg: Annotated[config.Instance, Dep(resolve_api_instance)]) -> None:
         result = make_api_request(cfg.url, cfg.token, "GET", "/api/version").json()
         sha = result.get("sha") or ""
         short = result.get("short_sha") or (sha[:8] if sha else "")
@@ -611,7 +638,7 @@ class Version:
 @cappa.command(name="diagnostics", help="Print a full instance diagnostics bundle (JSON) for debugging.")
 @attrs.define
 class Diagnostics:
-    def __call__(self, cfg: Annotated[config.Instance, Dep(resolve_instance)]) -> None:
+    def __call__(self, cfg: Annotated[config.Instance, Dep(resolve_api_instance)]) -> None:
         result = make_api_request(cfg.url, cfg.token, "GET", "/api/diagnostics")
         print(json.dumps(result.json(), indent=2))
 

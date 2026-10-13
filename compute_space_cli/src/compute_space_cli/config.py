@@ -48,10 +48,19 @@ class Instance:
     token: str = attr.ib()
     alias: str | None = attr.ib(default=None)
     ssh_key: str | None = attr.ib(default=None)
+    # Where the router (dashboard and API) lives, as discovered from the instance (see ``discovery``).  None until
+    # discovered, or for an instance from before discovery existed, whose router is at ``hostname`` itself.
+    router_url: str | None = attr.ib(default=None)
+
+    @property
+    def base_url(self) -> str:
+        """The URL the instance was configured with."""
+        return f"https://{self.hostname}"
 
     @property
     def url(self) -> str:
-        return f"https://{self.hostname}"
+        """The router's URL, for API calls."""
+        return self.router_url or self.base_url
 
 
 @attr.s(auto_attribs=True, frozen=True)
@@ -78,6 +87,8 @@ class MultiConfig:
                 entry["alias"] = inst.alias
             if inst.ssh_key:
                 entry["ssh_key"] = inst.ssh_key
+            if inst.router_url:
+                entry["router_url"] = inst.router_url
             instances_raw[hostname] = entry
         if instances_raw:
             raw["instances"] = instances_raw
@@ -115,6 +126,7 @@ class MultiConfig:
                         token=raw_inst["token"],
                         alias=raw_inst.get("alias"),
                         ssh_key=raw_inst.get("ssh_key"),
+                        router_url=raw_inst.get("router_url"),
                     )
                 raw_default = data.get("default_instance")
                 if raw_default is not None and not isinstance(raw_default, str):

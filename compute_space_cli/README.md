@@ -83,6 +83,8 @@ bottle instance remove dev                       # remove (by hostname or alias)
 bottle instance token                            # print stored token for current instance
 ```
 
+`login` and `add` ask the instance where its dashboard and API live (`/.well-known/cloud-in-a-bottle`, usually `bottle.<domain>`) and save the answer, since the bare domain may be serving an app. Instances added before this are looked up the first time a command needs the API.
+
 ### Targeting instances
 
 ```bash
@@ -110,11 +112,11 @@ Note: `podman` is installed via pixi, not system-wide. Use the full path above o
 ## Authenticated HTTP requests
 
 ```bash
-bottle curl https://myzone.example.com/api/apps          # GET with bearer token injected
-bottle curl -X POST https://myzone.example.com/api/...   # any curl args work
+bottle curl https://bottle.myzone.example.com/api/apps          # GET with bearer token injected
+bottle curl -X POST https://bottle.myzone.example.com/api/...   # any curl args work
 ```
 
-`bottle curl` runs `curl` with `Authorization: Bearer <token>` pre-injected for the current instance. Useful for hitting the API or testing app endpoints without copying tokens by hand.
+`bottle curl` runs `curl` with `Authorization: Bearer <token>` pre-injected for the current instance. The dashboard and API live at `bottle.<domain>`; the bare domain may be serving an app, which would receive your token. Useful for hitting the API or testing app endpoints without copying tokens by hand.
 
 ## Update
 

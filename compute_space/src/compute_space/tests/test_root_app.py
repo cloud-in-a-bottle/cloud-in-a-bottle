@@ -31,6 +31,7 @@ from compute_space.tests.test_multidomain_proxy_integration import _seed_app
 from compute_space.tests.test_multidomain_proxy_integration import backend  # noqa: F401
 from compute_space.tests.test_multidomain_proxy_integration import backend_port  # noqa: F401
 from compute_space.web.middleware.subdomain_proxy import SubdomainProxyMiddleware
+from compute_space.web.routes.api.discovery import discovery_routes
 from compute_space.web.routes.api.root_app import api_root_app_routes
 
 PRIMARY = Domain(name="host.example.com", tls=True)
@@ -56,7 +57,9 @@ def root_config(tmp_path: Path, backend_port: int) -> Config:  # noqa: F811
 
 @pytest.fixture
 def wrapped_app(root_config: Config) -> Any:
-    return SubdomainProxyMiddleware(Litestar(route_handlers=[_router_health, _router_identity], openapi_config=None))
+    return SubdomainProxyMiddleware(
+        Litestar(route_handlers=[_router_health, _router_identity, discovery_routes], openapi_config=None)
+    )
 
 
 def _app_id(cfg: Config, name: str) -> str:
@@ -220,3 +223,24 @@ def test_settings_api_lists_sets_and_resets(root_config: Config) -> None:
 
         reset = client.post("/api/settings/root-app", json={"app_id": None})
         assert reset.status_code == 200 and reset.json()["app_id"] is None
+
+
+# --- discovery ----------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_discovery_points_at_router_subdomain_whatever_is_at_the_root(
+    wrapped_app: Any, root_config: Config
+) -> None:
+    for root in (None, "site"):
+        _set_root(root_config, root)
+        async with _client(wrapped_app) as c:
+            for host, expected in (
+                ("host.example.com", "https://bottle.host.example.com"),
+                ("bottle.host.example.com", "https://bottle.host.example.com"),
+                ("myhost.local:8080", "http://bottle.myhost.local:8080"),
+            ):
+                r = await c.get(f"http://{host}/.well-known/cloud-in-a-bottle")
+                assert r.status_code == 200, (root, host)
+                assert r.json() == {"router_url": expected}, (root, host)
+                assert r.headers["Access-Control-Allow-Origin"] == "*"

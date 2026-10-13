@@ -156,7 +156,7 @@
       bare domain stops working, and must use <code>bottle.{{ zone_domain() }}</code> instead. This
       includes:
       <ul>
-        <li>CLI tools and scripts configured with the bare domain;</li>
+        <li>older versions of the <code>bottle</code> CLI, and scripts configured with the bare domain;</li>
         <li>apps that make service requests from the browser to the bare domain, until they are updated
           to use <code>OPENHOST_ROUTER_PUBLIC_URL</code>;</li>
         <li>OAuth sign-in through the OAuth provider app, whose callbacks currently arrive at the bare

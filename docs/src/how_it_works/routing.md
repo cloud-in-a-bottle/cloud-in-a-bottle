@@ -10,11 +10,15 @@ By default the bare domain (`mycooldomain.com`) also serves the dashboard. In **
 
 While an app is served at the bare domain:
 
-- The dashboard, its API and the login page are only at `bottle.<domain>`. CLI tools and scripts configured with the bare domain need to be repointed.
+- The dashboard, its API and the login page are only at `bottle.<domain>`. The `bottle` CLI finds them on its own (see below), but older CLI versions and scripts configured with the bare domain need to be repointed.
 - Apps that make service requests from the browser to the bare domain stop working until they use `BOTTLE_ROUTER_PUBLIC_URL` (see [cross-app services](../creating_an_app/cross_app_services.md)).
 - OAuth sign-in through the OAuth provider app breaks, because its callbacks arrive at the bare domain.
-- The router keeps `/.well-known/openhost-identity` and `/.well-known/jwks.json`; every other path, including the rest of `/.well-known/`, goes to the app.
+- The router keeps `/.well-known/openhost-identity`, `/.well-known/jwks.json` and `/.well-known/cloud-in-a-bottle`; every other path, including the rest of `/.well-known/`, goes to the app.
 - Visitors who aren't signed in only reach the app's `public_paths`. Any other path redirects to the login page.
+
+### Finding the dashboard
+
+External clients that start from the bare domain can ask where the dashboard and API are: `GET https://<domain>/.well-known/cloud-in-a-bottle` returns `{"router_url": "https://bottle.<domain>"}`. It is public, needs no credentials, and can be read from any origin. Don't send a token with it, since the bare domain may be serving an app. Instances from before this endpoint existed answer 404, and serve the dashboard at the bare domain.
 
 ## Domains
 

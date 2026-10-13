@@ -10,9 +10,12 @@ from compute_space.core.settings_store import set_setting
 # served there, which is the default.  Global across every configured domain.
 ROOT_APP_ID_KEY = "root_app_id"
 
+# Where external clients look up the router's URL (see ``web.routes.api.discovery``).
+DISCOVERY_PATH = "/.well-known/cloud-in-a-bottle"
+
 # Paths on the bare domain that the router keeps even while an app is served there.  Exact matches only, so the
 # rest of ``/.well-known/`` still belongs to the app.
-ROUTER_ROOT_PATHS = frozenset({"/.well-known/openhost-identity", "/.well-known/jwks.json"})
+ROUTER_ROOT_PATHS = frozenset({"/.well-known/openhost-identity", "/.well-known/jwks.json", DISCOVERY_PATH})
 
 
 class RootAppNotFoundError(ValueError):
