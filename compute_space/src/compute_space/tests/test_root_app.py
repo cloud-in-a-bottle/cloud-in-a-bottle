@@ -1,13 +1,16 @@
 from __future__ import annotations
 
+import json
 from contextlib import closing
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 from urllib.parse import urlsplit
 
 import pytest
 from litestar import Litestar
 from litestar import get
+from litestar.testing import TestClient
 
 from compute_space.config import Config
 from compute_space.core.apps import validate_manifest
@@ -25,6 +28,7 @@ from compute_space.core.root_app import clear_root_app_if
 from compute_space.core.root_app import load_root_setting
 from compute_space.db.connection import init_db
 from compute_space.tests._litestar_helpers import auth_cookie
+from compute_space.tests._litestar_helpers import make_test_app
 from compute_space.tests.conftest import _make_test_config
 from compute_space.tests.conftest import open_db
 from compute_space.tests.test_multidomain_proxy_integration import _client
@@ -34,6 +38,7 @@ from compute_space.tests.test_multidomain_proxy_integration import backend  # no
 from compute_space.tests.test_multidomain_proxy_integration import backend_port  # noqa: F401
 from compute_space.web.middleware.subdomain_proxy import SubdomainProxyMiddleware
 from compute_space.web.routes.api.discovery import discovery_routes
+from compute_space.web.routes.api.root_app import api_root_app_routes
 
 PRIMARY = Domain(name="host.example.com", tls=True)
 LOCAL = Domain(name="myhost.local:8080", tls=False, mdns=True)
@@ -250,3 +255,56 @@ async def test_discovery_follows_the_dashboard(wrapped_app: Any, root_config: Co
         assert r.status_code == 200, (kind, host)
         assert r.json() == {"router_url": expected}, (kind, host)
         assert r.headers["Access-Control-Allow-Origin"] == "*"
+
+
+# --- settings API ------------------------------------------------------------------------
+
+
+def _api_client(cfg: Config) -> TestClient[Litestar]:
+    client = TestClient(app=make_test_app(api_root_app_routes), base_url="http://host.example.com")
+    client.cookies.update(auth_cookie(cfg))
+    return client
+
+
+def test_settings_api_reports_the_setting(root_config: Config) -> None:
+    with TestClient(app=make_test_app(api_root_app_routes), base_url="http://host.example.com") as client:
+        assert client.get("/api/settings/root-app").status_code == 401
+    with _api_client(root_config) as client:
+        body = client.get("/api/settings/root-app").json()
+    assert body["kind"] == "dashboard" and body["app_id"] is None and body["router_subdomain"] == "bottle"
+    assert [a["name"] for a in body["apps"]] == ["other", "site"]
+    assert body["router_url"] == "https://host.example.com"
+
+
+def test_settings_api_moves_the_dashboard_and_restarts(root_config: Config) -> None:
+    payload = {"kind": "app", "app_id": _app_id(root_config, "site"), "router_subdomain": "Dash "}
+    with (
+        patch("compute_space.web.routes.api.root_app.system_agent_reset_restart_limit_sync") as reset,
+        patch("compute_space.web.routes.api.root_app.trigger_restart") as restart,
+        _api_client(root_config) as client,
+    ):
+        body = client.post("/api/settings/root-app", content=json.dumps(payload)).json()
+        assert reset.called and restart.called
+        assert body["restarting"] is True
+        assert body["router_url"] == "https://dash.host.example.com"
+
+        # Swapping what's at the bare domain leaves the dashboard where it is.
+        reset.reset_mock()
+        restart.reset_mock()
+        body = client.post(
+            "/api/settings/root-app", json={"kind": "nothing", "app_id": None, "router_subdomain": "dash"}
+        ).json()
+        assert body["restarting"] is False and not reset.called and not restart.called
+
+
+def test_settings_api_rejects_bad_settings(root_config: Config) -> None:
+    with _api_client(root_config) as client:
+        unknown = client.post(
+            "/api/settings/root-app", json={"kind": "app", "app_id": "nope", "router_subdomain": "dash"}
+        )
+        taken = client.post(
+            "/api/settings/root-app", json={"kind": "nothing", "app_id": None, "router_subdomain": "site"}
+        )
+    assert unknown.status_code == 404
+    assert taken.status_code == 400
+    assert _setting(root_config) == RootSetting()

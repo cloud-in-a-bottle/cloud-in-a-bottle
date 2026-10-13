@@ -242,10 +242,13 @@ def compute_space_logs() -> Response[str]:
     sync_to_thread=False,
     responses={503: ResponseSpec(data_container=HealthRestarting, description="The service is restarting.")},
 )
-def health() -> Response[HealthRestarting] | HealthOk:
+def health() -> Response[HealthRestarting] | Response[HealthOk]:
+    # Public, and readable from any origin: after moving the dashboard, the settings page waits for the restarted
+    # router at its new address.
+    headers = {"Access-Control-Allow-Origin": "*"}
     if is_shutdown_pending():
-        return Response(content=HealthRestarting(status="restarting"), status_code=503)
-    return HealthOk(status="ok")
+        return Response(content=HealthRestarting(status="restarting"), status_code=503, headers=headers)
+    return Response(content=HealthOk(status="ok"), headers=headers)
 
 
 @get("/api/listening-ports", guards=[require_owner_auth], sync_to_thread=False)
