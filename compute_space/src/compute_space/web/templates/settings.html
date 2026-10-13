@@ -170,6 +170,45 @@
 </section>
 
 <section class="section">
+  {% call section_head("Domain root") %}{% endcall %}
+  <div class="panel">
+    <p class="hint">Choose what is served at the bare domain (<code>{{ zone_domain() }}</code>). By default
+      it serves the dashboard. An app chosen here is also still served at its own subdomain. If the
+      dashboard isn't at the bare domain, it moves to a subdomain of your choice.</p>
+
+    <div class="field-row">
+      <label class="field" for="root-kind-select">
+        <span>Served at the bare domain</span>
+        <select id="root-kind-select" disabled onchange="updateRootAppForm()">
+          <option value="">Loading&hellip;</option>
+        </select>
+      </label>
+      <label class="field" for="router-subdomain-input" id="router-subdomain-field" hidden>
+        <span>Dashboard subdomain</span>
+        <span class="field-row">
+          <input type="text" id="router-subdomain-input" pattern="[a-z0-9]([a-z0-9\-]*[a-z0-9])?"
+                 aria-describedby="router-subdomain-suffix">
+          <code id="router-subdomain-suffix">.{{ zone_domain() }}</code>
+        </span>
+      </label>
+      {{ button("Save", variant="primary", id="root-app-save-btn", onclick="saveRootApp()", disabled=true) }}
+    </div>
+    <p id="root-app-msg" class="msg" hidden></p>
+
+    <div class="notice notice--warn" id="root-app-warning" hidden>
+      <strong>Moving the dashboard</strong> to a subdomain restarts this instance and its running apps.
+      Afterwards, anything that reaches the dashboard or its API at the bare domain stops working. This
+      includes:
+      <ul>
+        <li>older versions of the <code>bottle</code> CLI, and scripts configured with the bare domain; and</li>
+        <li>apps that make service requests from the browser to the bare domain, until they are updated
+          to use <code>OPENHOST_ROUTER_PUBLIC_URL</code>.</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<section class="section">
   {% call section_head("API tokens") %}{% endcall %}
   <div class="panel">
     <p class="hint">Bearer tokens for programmatic access (e.g. AI agents). Each token grants
@@ -281,6 +320,7 @@
 <script src="{{ static_url('js/username-validation.js') }}"></script>
 <script src="{{ static_url('js/tokens.js') }}"></script>
 <script src="{{ static_url('js/domains.js') }}"></script>
+<script src="{{ static_url('js/root-app.js') }}"></script>
 <script src="{{ static_url('js/settings.js') }}"></script>
 <script src="{{ static_url('js/services.js') }}"></script>
 <script src="{{ static_url('js/services.js') }}"></script>
