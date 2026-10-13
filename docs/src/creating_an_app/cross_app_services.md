@@ -106,12 +106,14 @@ JavaScript running in the user's browser calls the router's public URL instead, 
 GET|POST|WS|... <public router URL>/api/services/v2/call/<shortname>/<rest>
 ```
 
-The router identifies your app by matching the request's `Origin` against its subdomain, and the owner's session cookie, which the browser sends automatically, authenticates the user. The router answers cross-origin preflights from app origins. Send requests with `credentials: "include"` so the cookie goes along.
+The router identifies your app by matching the request's `Origin` against its subdomain (or the bare domain, if the owner serves your app there), and the owner's session cookie, which the browser sends automatically, authenticates the user. The router answers cross-origin preflights from app origins. Send requests with `credentials: "include"` so the cookie goes along.
 
 To get the router's public URL:
 
 - Prefer the `X-OpenHost-Router-URL` header on the request that served the page, and pass it to your frontend. It's the router on whichever of the instance's domains the visitor used.
 - Fall back to `BOTTLE_ROUTER_PUBLIC_URL` (the router on the primary domain) only when there's no request to read the header from, as with a static frontend.
+
+Don't assume the router is at the bare domain (`BOTTLE_ZONE_DOMAIN`). It is by default, but the owner can move the dashboard to a subdomain and serve an app at the bare domain instead; browser calls sent to the bare domain then stop working.
 
 ### Provider selection
 
