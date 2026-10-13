@@ -12,7 +12,6 @@ While the dashboard is on a subdomain:
 
 - Older CLI versions and scripts configured with the bare domain need to be repointed. The `bottle` CLI finds the dashboard on its own (see below).
 - Apps that make service requests from the browser to the bare domain stop working until they use `BOTTLE_ROUTER_PUBLIC_URL` (see [cross-app services](../creating_an_app/cross_app_services.md)).
-- OAuth sign-in through the OAuth provider app breaks, because its callbacks arrive at the bare domain.
 - Visitors who aren't signed in only reach the root app's `public_paths`. Any other path redirects to the login page.
 
 Whatever the bare domain serves, the router keeps `/.well-known/openhost-identity`, `/.well-known/jwks.json` and `/.well-known/cloud-in-a-bottle` there. Every other path, including the rest of `/.well-known/`, goes to the root app.

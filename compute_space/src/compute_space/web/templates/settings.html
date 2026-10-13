@@ -164,11 +164,9 @@
       Afterwards, anything that reaches the dashboard or its API at the bare domain stops working. This
       includes:
       <ul>
-        <li>older versions of the <code>bottle</code> CLI, and scripts configured with the bare domain;</li>
+        <li>older versions of the <code>bottle</code> CLI, and scripts configured with the bare domain; and</li>
         <li>apps that make service requests from the browser to the bare domain, until they are updated
-          to use <code>OPENHOST_ROUTER_PUBLIC_URL</code>;</li>
-        <li>OAuth sign-in through the OAuth provider app, whose callbacks currently arrive at the bare
-          domain.</li>
+          to use <code>OPENHOST_ROUTER_PUBLIC_URL</code>.</li>
       </ul>
     </div>
   </div>
