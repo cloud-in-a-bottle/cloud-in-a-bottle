@@ -17,6 +17,7 @@ from compute_space.core.auth.permissions_v2 import get_granted_permissions_v2
 from compute_space.core.domains import Domain
 from compute_space.core.domains import host_with_request_port
 from compute_space.core.domains import primary_domain_or_none
+from compute_space.core.root_app import load_root_setting
 from compute_space.core.service_interface.builtin_services import Permissions
 
 CONSUMER_ID_HEADER = "X-OpenHost-Consumer-Id"
@@ -84,11 +85,11 @@ def approve_grant_url(
     matched = Domain.match(db, browsing_netloc) if browsing_netloc else None
     if matched is not None:
         # Browser-driven: keep the owner's domain and the access port they arrived on.
-        host = host_with_request_port(matched.name_no_port, browsing_netloc or "")
+        host = host_with_request_port(load_root_setting(db).router_host(matched), browsing_netloc or "")
         return f"{matched.scheme}://{host}{approve_path}"
-    # Server-side (or an origin we don't recognize): the canonical primary, its configured name
-    # verbatim so a port baked into the primary (e.g. `lvh.me:8080`) is preserved.
+    # Server-side (or an origin we don't recognize): the canonical primary, keeping a port baked into
+    # its configured name (e.g. `lvh.me:8080`).
     primary = primary_domain_or_none(db)
     if primary is None:
         return approve_path
-    return f"{primary.scheme}://{primary.name}{approve_path}"
+    return f"{load_root_setting(db).router_url(primary)}{approve_path}"
