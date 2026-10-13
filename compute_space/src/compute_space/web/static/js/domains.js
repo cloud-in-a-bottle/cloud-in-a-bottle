@@ -93,7 +93,8 @@ function makePrimaryDomain(name) {
 }
 
 function redirectAfterPrimaryRestart(promoted, previousGeneration) {
-  var target = promoted.scheme + '://' + promoted.name + '/settings';
+  // The router subdomain, not the bare domain, which may be serving an app.
+  var target = promoted.scheme + '://' + promoted.router_host + '/settings';
   var msg = document.getElementById('domain-msg');
   var deadline = Date.now() + 120000;
   msg.textContent = 'Primary changed. Waiting for the instance to restart…';

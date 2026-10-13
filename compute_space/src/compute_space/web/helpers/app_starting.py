@@ -3,9 +3,8 @@ from typing import Any
 from litestar import Request
 from litestar.response.base import ASGIResponse
 
-from compute_space.core.domains import host_with_request_port
 from compute_space.web.helpers.templates import STANDALONE_JINJA_ENV
-from compute_space.web.helpers.zone import zone_for_request
+from compute_space.web.helpers.zone import router_base_url
 
 RETRY_SECONDS = 3
 
@@ -28,9 +27,7 @@ def app_starting_response(request: Request[Any, Any, Any]) -> ASGIResponse:
             headers=headers,
         )
 
-    zone = zone_for_request(request)
-    router_host = host_with_request_port(zone.name_no_port, request.url.netloc)
-    router_url = f"{zone.scheme}://{router_host}"
+    router_url = router_base_url(request)
 
     body = STANDALONE_JINJA_ENV.get_template("app_starting.html").render(
         router_url=router_url,

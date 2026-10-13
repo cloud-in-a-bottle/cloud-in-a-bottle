@@ -24,12 +24,12 @@ LOCAL = Domain("myhost.local", tls=False)
 
 
 def test_login_url_on_local_domain_is_http_and_local() -> None:
-    url = build_login_url(LOCAL, "myapp.myhost.local", "/private", "")
+    url = build_login_url(LOCAL, LOCAL.name_no_port, "myapp.myhost.local", "/private", "")
     assert url == "http://myhost.local/login?next=http%3A%2F%2Fmyapp.myhost.local%2Fprivate"
 
 
 def test_login_url_on_public_domain_is_https_and_public() -> None:
-    url = build_login_url(PUBLIC, "myapp.host.example.com", "/x", "a=b")
+    url = build_login_url(PUBLIC, PUBLIC.name_no_port, "myapp.host.example.com", "/x", "a=b")
     assert url.startswith("https://host.example.com/login?next=")
     assert "https%3A%2F%2Fmyapp.host.example.com%2Fx%3Fa%3Db" in url
 
@@ -41,18 +41,18 @@ def test_login_url_on_public_domain_is_https_and_public() -> None:
 
 
 def test_login_url_preserves_request_port() -> None:
-    url = build_login_url(LOCAL, "myhost.local:8088", "/private", "")
+    url = build_login_url(LOCAL, LOCAL.name_no_port, "myhost.local:8088", "/private", "")
     assert url == "http://myhost.local:8088/login?next=http%3A%2F%2Fmyhost.local%3A8088%2Fprivate"
 
 
 def test_login_url_preserves_port_from_app_subdomain() -> None:
     # Arrived on an app subdomain with a port; /login goes to the router host, same port.
-    url = build_login_url(PUBLIC, "app.host.example.com:8443", "/x", "")
+    url = build_login_url(PUBLIC, PUBLIC.name_no_port, "app.host.example.com:8443", "/x", "")
     assert url.startswith("https://host.example.com:8443/login?next=")
 
 
 def test_login_url_no_port_when_default() -> None:
-    url = build_login_url(PUBLIC, "app.host.example.com", "/x", "")
+    url = build_login_url(PUBLIC, PUBLIC.name_no_port, "app.host.example.com", "/x", "")
     assert url.startswith("https://host.example.com/login?next=")
 
 
@@ -123,3 +123,9 @@ def test_clear_cookie_matches_scope_and_secure() -> None:
     assert local.domain == "myhost.local" and local.secure is False and local.max_age == 0
     public = clear_session_cookie(PUBLIC)
     assert public.domain == "host.example.com" and public.secure is True and public.max_age == 0
+
+
+def test_login_url_goes_to_the_router_host_it_is_given() -> None:
+    # Once the owner moves the dashboard to a subdomain, login happens there.
+    url = build_login_url(PUBLIC, "dash.host.example.com", "app.host.example.com:8443", "/x", "")
+    assert url.startswith("https://dash.host.example.com:8443/login?next=")

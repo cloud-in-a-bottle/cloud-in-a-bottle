@@ -54,9 +54,13 @@ class Domain:
         host_no_port = host.split(":")[0].lower()
         return host_no_port == name or host_no_port.endswith("." + name)
 
+    def is_apex(self, host: str) -> bool:
+        """True if ``host`` (port-insensitive) is this bare domain."""
+        return host.split(":")[0].lower() == self.name_no_port
+
     def looks_like_app_subdomain(self, host: str) -> bool:
         """Check for a subdomain of this domain, without checking whether an app exists."""
-        return self.owns(host) and host.split(":")[0].lower() != self.name_no_port
+        return self.owns(host) and not self.is_apex(host)
 
     def app_name_from_hostname(self, host: str) -> str | None:
         """Extract a valid single app label under this domain, without looking up installed apps."""
