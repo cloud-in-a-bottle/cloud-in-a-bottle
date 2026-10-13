@@ -63,6 +63,7 @@ def test_sqlite_provisioning():
             archive_dir=archive_dir,
             my_openhost_redirect_domain="my.test.example.com",
             zone_domain="test.example.com",
+            router_public_url="http://test.example.com",
             port=manifest.container_port,
             owner_username="owner",
         )

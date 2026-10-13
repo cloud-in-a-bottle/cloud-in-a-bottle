@@ -41,8 +41,8 @@ class TestInstance:
         assert _inst("example.com").url == "https://example.com"
 
     def test_url_prefers_discovered_router_url(self) -> None:
-        inst = Instance(hostname="example.com", token="t", router_url="https://bottle.example.com")
-        assert inst.url == "https://bottle.example.com"
+        inst = Instance(hostname="example.com", token="t", router_url="https://dash.example.com")
+        assert inst.url == "https://dash.example.com"
         assert inst.base_url == "https://example.com"
 
     def test_alias_defaults_none(self) -> None:
@@ -83,10 +83,10 @@ class TestMultiConfigSaveLoad:
         assert loaded.instances["b.com"].token == "tok-b"
         assert loaded.instances["b.com"].alias is None
 
-    def test_roundtrip_router_url(self, tmp_config: Path) -> None:
-        inst = Instance(hostname="a.com", token="t", router_url="https://bottle.a.com")
+    def test_router_url_is_never_saved(self, tmp_config: Path) -> None:
+        inst = Instance(hostname="a.com", token="t", router_url="https://dash.a.com")
         _make_multi(instances={"a.com": inst}).save(tmp_config)
-        assert MultiConfig.load(tmp_config).instances["a.com"].router_url == "https://bottle.a.com"
+        assert MultiConfig.load(tmp_config).instances["a.com"].router_url is None
 
     def test_load_legacy_format(self, tmp_config: Path) -> None:
         with open(tmp_config, "wb") as f:

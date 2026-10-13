@@ -136,24 +136,32 @@
 <section class="section">
   {% call section_head("Domain root") %}{% endcall %}
   <div class="panel">
-    <p class="hint">Choose what is served at the bare domain (<code>{{ zone_domain() }}</code>). An app
-      chosen here is also still served at its own subdomain. The dashboard is always available at
-      <code>bottle.{{ zone_domain() }}</code>, and is also served at the bare domain by default.</p>
+    <p class="hint">Choose what is served at the bare domain (<code>{{ zone_domain() }}</code>). By default
+      it serves the dashboard. An app chosen here is also still served at its own subdomain. If the
+      dashboard isn't at the bare domain, it moves to a subdomain of your choice.</p>
 
     <div class="field-row">
-      <label class="field" for="root-app-select">
+      <label class="field" for="root-kind-select">
         <span>Served at the bare domain</span>
-        <select id="root-app-select" disabled>
+        <select id="root-kind-select" disabled onchange="updateRootAppForm()">
           <option value="">Loading&hellip;</option>
         </select>
+      </label>
+      <label class="field" for="router-subdomain-input" id="router-subdomain-field" hidden>
+        <span>Dashboard subdomain</span>
+        <span class="field-row">
+          <input type="text" id="router-subdomain-input" pattern="[a-z0-9]([a-z0-9\-]*[a-z0-9])?"
+                 aria-describedby="router-subdomain-suffix">
+          <code id="router-subdomain-suffix">.{{ zone_domain() }}</code>
+        </span>
       </label>
       {{ button("Save", variant="primary", id="root-app-save-btn", onclick="saveRootApp()", disabled=true) }}
     </div>
     <p id="root-app-msg" class="msg" hidden></p>
 
-    <div class="notice notice--warn">
-      <strong>Before choosing an app:</strong> anything that reaches the dashboard or its API at the
-      bare domain stops working, and must use <code>bottle.{{ zone_domain() }}</code> instead. This
+    <div class="notice notice--warn" id="root-app-warning" hidden>
+      <strong>Moving the dashboard</strong> to a subdomain restarts this instance and its running apps.
+      Afterwards, anything that reaches the dashboard or its API at the bare domain stops working. This
       includes:
       <ul>
         <li>older versions of the <code>bottle</code> CLI, and scripts configured with the bare domain;</li>

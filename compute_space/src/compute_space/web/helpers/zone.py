@@ -1,8 +1,12 @@
+from contextlib import closing
 from typing import Any
 
 from litestar.connection import ASGIConnection
 
 from compute_space.core.domains import Domain
+from compute_space.core.domains import host_with_request_port
+from compute_space.core.root_app import load_root_setting
+from compute_space.db import get_db
 
 # Scope key under which SubdomainProxyMiddleware stashes the Domain a request
 # arrived on.  Both the middleware and request handlers share it to avoid an
@@ -21,3 +25,12 @@ def zone_for_request(connection: ASGIConnection[Any, Any, Any, Any]) -> Domain:
     if isinstance(stashed, Domain):
         return stashed
     raise RuntimeError("zone_for_request: no Domain in scope (SubdomainProxyMiddleware is required)")
+
+
+def router_base_url(connection: ASGIConnection[Any, Any, Any, Any]) -> str:
+    """``scheme://host[:port]`` of the router on the domain (and access port) the request arrived on: the bare
+    domain, or the subdomain the owner moved the dashboard to (see ``core.root_app``)."""
+    zone = zone_for_request(connection)
+    with closing(get_db()) as db:
+        router_host = load_root_setting(db).router_host(zone)
+    return f"{zone.scheme}://{host_with_request_port(router_host, connection.url.netloc)}"

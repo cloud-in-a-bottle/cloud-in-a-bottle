@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import json
 from contextlib import closing
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 from urllib.parse import urlsplit
 
 import pytest
@@ -11,15 +13,19 @@ from litestar import get
 from litestar.testing import TestClient
 
 from compute_space.config import Config
-from compute_space.core.apps import RESERVED_PATHS
-from compute_space.core.apps import get_app_from_hostname
+from compute_space.core.apps import validate_manifest
 from compute_space.core.domains import Domain
 from compute_space.core.domains import DomainRecord
 from compute_space.core.domains import seed_domains
+from compute_space.core.manifest import parse_manifest_from_string
+from compute_space.core.root_app import AppsBusyForDashboardMoveError
 from compute_space.core.root_app import RootAppNotFoundError
+from compute_space.core.root_app import RootKind
+from compute_space.core.root_app import RootSetting
+from compute_space.core.root_app import RootSettingError
+from compute_space.core.root_app import apply_root_setting
 from compute_space.core.root_app import clear_root_app_if
-from compute_space.core.root_app import get_root_app_id
-from compute_space.core.root_app import set_root_app_id
+from compute_space.core.root_app import load_root_setting
 from compute_space.db.connection import init_db
 from compute_space.tests._litestar_helpers import auth_cookie
 from compute_space.tests._litestar_helpers import make_test_app
@@ -35,7 +41,7 @@ from compute_space.web.routes.api.discovery import discovery_routes
 from compute_space.web.routes.api.root_app import api_root_app_routes
 
 PRIMARY = Domain(name="host.example.com", tls=True)
-LOCAL = Domain(name="myhost.local", tls=False, mdns=True)
+LOCAL = Domain(name="myhost.local:8080", tls=False, mdns=True)
 
 
 @get("/.well-known/openhost-identity", sync_to_thread=False)
@@ -67,180 +73,238 @@ def _app_id(cfg: Config, name: str) -> str:
         return str(db.execute("SELECT app_id FROM apps WHERE name = ?", (name,)).fetchone()["app_id"])
 
 
-def _set_root(cfg: Config, name: str | None) -> None:
+def _apply(cfg: Config, kind: RootKind, app: str | None = None, subdomain: str = "dash") -> bool:
     with closing(open_db(cfg)) as db:
-        set_root_app_id(db, _app_id(cfg, name) if name is not None else None)
+        app_id = _app_id(cfg, app) if app is not None else None
+        return apply_root_setting(db, RootSetting(kind=kind, app_id=app_id, router_subdomain=subdomain))
 
 
-# --- domain helpers -------------------------------------------------------------------
+def _move(cfg: Config, kind: RootKind, app: str | None = None) -> None:
+    """Apply, then stand in for the restart that brings the apps back up."""
+    _apply(cfg, kind, app=app)
+    with closing(open_db(cfg)) as db:
+        db.execute("UPDATE apps SET status = 'running', error_message = NULL")
+        db.commit()
 
 
-def test_router_host_and_url() -> None:
-    assert PRIMARY.router_host == "bottle.host.example.com"
-    assert PRIMARY.router_url == "https://bottle.host.example.com"
-    # A port baked into the configured name is kept.
-    assert Domain(name="lvh.me:8080").router_url == "http://bottle.lvh.me:8080"
+def _setting(cfg: Config) -> RootSetting:
+    with closing(open_db(cfg)) as db:
+        return load_root_setting(db)
 
 
-def test_router_subdomain_is_not_an_app_subdomain() -> None:
-    assert PRIMARY.is_router_subdomain("bottle.host.example.com:8443")
-    assert not PRIMARY.looks_like_app_subdomain("bottle.host.example.com")
-    assert PRIMARY.app_name_from_hostname("bottle.host.example.com") is None
-    assert PRIMARY.looks_like_app_subdomain("site.host.example.com")
+# --- the setting ----------------------------------------------------------------------------
 
 
-def test_router_subdomain_is_a_reserved_app_name() -> None:
-    assert "/bottle" in RESERVED_PATHS
+def test_default_is_dashboard_at_the_bare_domain(root_config: Config) -> None:
+    setting = _setting(root_config)
+    assert setting == RootSetting()
+    assert setting.router_label is None
+    assert setting.router_url(PRIMARY) == "https://host.example.com"
+    assert setting.router_url(LOCAL) == "http://myhost.local:8080"
 
 
-# --- setting ----------------------------------------------------------------------------
-
-
-def test_default_is_dashboard(root_config: Config) -> None:
-    with closing(open_db(root_config)) as db:
-        assert get_root_app_id(db) is None
-        assert get_app_from_hostname("host.example.com", db) is None
-
-
-def test_bare_domain_resolves_to_root_app_on_every_domain(root_config: Config) -> None:
-    _set_root(root_config, "site")
-    with closing(open_db(root_config)) as db:
-        for host in ("host.example.com", "myhost.local:8080"):
-            app = get_app_from_hostname(host, db)
-            assert app is not None and app.name == "site", host
-        assert get_app_from_hostname("bottle.host.example.com", db) is None
+def test_router_moves_to_the_chosen_subdomain() -> None:
+    setting = RootSetting(kind=RootKind.NOTHING, router_subdomain="dash")
+    assert setting.router_host(PRIMARY) == "dash.host.example.com"
+    assert setting.router_url(LOCAL) == "http://dash.myhost.local:8080"
+    assert setting.is_router_host(PRIMARY, "dash.host.example.com:8443")
+    assert not setting.is_router_host(PRIMARY, "host.example.com")
 
 
 def test_unknown_app_is_refused(root_config: Config) -> None:
     with closing(open_db(root_config)) as db:
         with pytest.raises(RootAppNotFoundError):
-            set_root_app_id(db, "nope")
+            apply_root_setting(db, RootSetting(kind=RootKind.APP, app_id="nope"))
 
 
-def test_removing_root_app_hands_root_back(root_config: Config) -> None:
-    _set_root(root_config, "site")
+@pytest.mark.parametrize("subdomain", ["site", "Bad_Name", "-x"])
+def test_dashboard_subdomain_must_be_free_and_valid(root_config: Config, subdomain: str) -> None:
+    with pytest.raises(RootSettingError):
+        _apply(root_config, RootKind.NOTHING, subdomain=subdomain)
+
+
+def test_dashboard_subdomain_is_only_checked_while_the_dashboard_is_on_it(root_config: Config) -> None:
+    # "site" is an app, but the subdomain is unused while the dashboard is at the bare domain.
+    assert _apply(root_config, RootKind.DASHBOARD, subdomain="site") is False
+
+
+def test_moving_the_dashboard_restarts_running_apps(root_config: Config) -> None:
+    assert _apply(root_config, RootKind.NOTHING) is True
+    with closing(open_db(root_config)) as db:
+        statuses = {row["name"]: row["status"] for row in db.execute("SELECT name, status FROM apps")}
+    assert statuses == {"site": "starting", "other": "starting"}
+
+
+def test_changing_the_root_without_moving_the_dashboard_restarts_nothing(root_config: Config) -> None:
+    _apply(root_config, RootKind.NOTHING)
+    with closing(open_db(root_config)) as db:
+        db.execute("UPDATE apps SET status = 'running'")
+        db.commit()
+    assert _apply(root_config, RootKind.APP, app="site") is False
+    with closing(open_db(root_config)) as db:
+        assert {row["status"] for row in db.execute("SELECT status FROM apps")} == {"running"}
+
+
+def test_moving_the_dashboard_waits_for_busy_apps(root_config: Config) -> None:
+    with closing(open_db(root_config)) as db:
+        db.execute("UPDATE apps SET status = 'building' WHERE name = 'other'")
+        db.commit()
+    with pytest.raises(AppsBusyForDashboardMoveError):
+        _apply(root_config, RootKind.NOTHING)
+    assert _setting(root_config) == RootSetting()
+
+
+def test_app_names_refuse_the_dashboard_subdomain_only_while_it_is_used(root_config: Config) -> None:
+    manifest = parse_manifest_from_string(
+        '[app]\nname = "dash"\nversion = "1.0.0"\n\n[runtime.container]\nimage = "Dockerfile"\nport = 8080\n'
+    )
+    with closing(open_db(root_config)) as db:
+        assert validate_manifest(manifest, db) is None
+    _apply(root_config, RootKind.NOTHING)
+    with closing(open_db(root_config)) as db:
+        assert validate_manifest(manifest, db) == "App name 'dash' is the dashboard's subdomain"
+
+
+def test_removing_the_root_app_leaves_the_bare_domain_empty(root_config: Config) -> None:
+    _apply(root_config, RootKind.APP, app="site")
     with closing(open_db(root_config)) as db:
         clear_root_app_if(db, _app_id(root_config, "other"))
-        assert get_root_app_id(db) == _app_id(root_config, "site")
+        assert load_root_setting(db).kind == RootKind.APP
         clear_root_app_if(db, _app_id(root_config, "site"))
-        assert get_root_app_id(db) is None
+        # The dashboard stays where it is, so apps needn't restart.
+        assert load_root_setting(db) == RootSetting(kind=RootKind.NOTHING, router_subdomain="dash")
 
 
-# --- routing through the middleware -----------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_router_subdomain_always_serves_router(wrapped_app: Any, root_config: Config) -> None:
-    for root in (None, "site"):
-        _set_root(root_config, root)
-        async with _client(wrapped_app) as c:
-            r = await c.get("http://bottle.host.example.com/health")
-        assert r.status_code == 200 and r.text == "router-ok", root
+# --- routing through the middleware -------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_bare_domain_serves_router_by_default(wrapped_app: Any) -> None:
+async def test_default_serves_the_dashboard_at_the_bare_domain_only(wrapped_app: Any) -> None:
     async with _client(wrapped_app) as c:
-        r = await c.get("http://host.example.com/health")
-    assert r.status_code == 200 and r.text == "router-ok"
+        root = await c.get("http://host.example.com/health")
+        dash = await c.get("http://dash.host.example.com/health")
+    assert root.text == "router-ok"
+    assert dash.status_code == 404
 
 
 @pytest.mark.asyncio
-async def test_bare_domain_serves_root_app_and_its_subdomain_still_works(
-    wrapped_app: Any, root_config: Config
-) -> None:
-    _set_root(root_config, "site")
+async def test_root_app_with_dashboard_on_a_subdomain(wrapped_app: Any, root_config: Config) -> None:
+    _move(root_config, RootKind.APP, app="site")
     async with _client(wrapped_app) as c:
         root = await c.get("http://host.example.com/health")
         sub = await c.get("http://site.host.example.com/health")
-    assert root.status_code == 200 and root.text == "backend-ok"
-    assert root.headers["X-Backend-Saw-Host"] == "host.example.com"
-    assert sub.status_code == 200 and sub.text == "backend-ok"
-
-
-@pytest.mark.asyncio
-async def test_router_keeps_reserved_well_known_paths(wrapped_app: Any, root_config: Config) -> None:
-    _set_root(root_config, "site")
-    async with _client(wrapped_app) as c:
+        dash = await c.get("http://dash.host.example.com/health")
         kept = await c.get("http://host.example.com/.well-known/openhost-identity")
         other = await c.get("http://host.example.com/.well-known/webfinger")
+    assert root.text == "backend-ok" and root.headers["X-Backend-Saw-Host"] == "host.example.com"
+    assert sub.text == "backend-ok"
+    assert dash.text == "router-ok"
     assert kept.text == "router-identity"
     assert other.text == "backend-ok"
 
 
 @pytest.mark.asyncio
-async def test_private_root_path_redirects_to_login_on_router_subdomain(wrapped_app: Any, root_config: Config) -> None:
-    _set_root(root_config, "site")
+async def test_nothing_at_the_bare_domain(wrapped_app: Any, root_config: Config) -> None:
+    _move(root_config, RootKind.NOTHING)
     async with _client(wrapped_app) as c:
-        r = await c.get("http://host.example.com/x", headers={"Accept": "text/html"})
-    assert r.status_code == 302
-    location = urlsplit(r.headers["location"])
-    assert (location.scheme, location.netloc, location.path) == ("https", "bottle.host.example.com", "/login")
+        root = await c.get("http://host.example.com/health")
+        kept = await c.get("http://host.example.com/.well-known/openhost-identity")
+        dash = await c.get("http://dash.host.example.com/health")
+    assert root.status_code == 404
+    assert kept.text == "router-identity"
+    assert dash.text == "router-ok"
+
+
+@pytest.mark.asyncio
+async def test_private_root_paths_redirect_to_login_on_the_dashboard(wrapped_app: Any, root_config: Config) -> None:
+    for app in ("site", "other"):  # partly and fully private
+        _move(root_config, RootKind.APP, app=app)
+        async with _client(wrapped_app) as c:
+            r = await c.get("http://host.example.com/x", headers={"Accept": "text/html"})
+        assert r.status_code == 302, app
+        location = urlsplit(r.headers["location"])
+        assert (location.scheme, location.netloc, location.path) == ("https", "dash.host.example.com", "/login")
 
 
 @pytest.mark.asyncio
 async def test_owner_reaches_private_root_path(wrapped_app: Any, root_config: Config) -> None:
-    _set_root(root_config, "site")
+    _move(root_config, RootKind.APP, app="site")
     async with _client(wrapped_app) as c:
         c.cookies.update(auth_cookie(root_config))
         r = await c.get("http://host.example.com/x")
     assert r.status_code == 200 and r.text == "backend-ok"
 
 
+# --- discovery ----------------------------------------------------------------------------
+
+
 @pytest.mark.asyncio
-async def test_fully_private_root_app_redirects_to_login_rather_than_404(
-    wrapped_app: Any, root_config: Config
-) -> None:
-    # A fully private app 404s on its subdomain, to hide that it exists; the bare domain always answers.
-    _set_root(root_config, "other")
-    async with _client(wrapped_app) as c:
-        root = await c.get("http://host.example.com/", headers={"Accept": "text/html"})
-        sub = await c.get("http://other.host.example.com/", headers={"Accept": "text/html"})
-    assert root.status_code == 302
-    assert urlsplit(root.headers["location"]).netloc == "bottle.host.example.com"
-    assert sub.status_code == 404
+async def test_discovery_follows_the_dashboard(wrapped_app: Any, root_config: Config) -> None:
+    cases = [
+        (None, "host.example.com", "https://host.example.com"),
+        (None, "myhost.local:8080", "http://myhost.local:8080"),
+        (RootKind.APP, "host.example.com", "https://dash.host.example.com"),
+        (RootKind.APP, "dash.host.example.com", "https://dash.host.example.com"),
+        (RootKind.NOTHING, "myhost.local:8080", "http://dash.myhost.local:8080"),
+    ]
+    for kind, host, expected in cases:
+        if kind is not None:
+            _move(root_config, kind, app="site" if kind == RootKind.APP else None)
+        async with _client(wrapped_app) as c:
+            r = await c.get(f"http://{host}/.well-known/cloud-in-a-bottle")
+        assert r.status_code == 200, (kind, host)
+        assert r.json() == {"router_url": expected}, (kind, host)
+        assert r.headers["Access-Control-Allow-Origin"] == "*"
 
 
 # --- settings API ------------------------------------------------------------------------
 
 
-def test_settings_api_lists_sets_and_resets(root_config: Config) -> None:
-    site_id = _app_id(root_config, "site")
+def _api_client(cfg: Config) -> TestClient[Litestar]:
+    client = TestClient(app=make_test_app(api_root_app_routes), base_url="http://host.example.com")
+    client.cookies.update(auth_cookie(cfg))
+    return client
+
+
+def test_settings_api_reports_the_setting(root_config: Config) -> None:
     with TestClient(app=make_test_app(api_root_app_routes), base_url="http://host.example.com") as client:
         assert client.get("/api/settings/root-app").status_code == 401
-        client.cookies.update(auth_cookie(root_config))
-
-        initial = client.get("/api/settings/root-app").json()
-        assert initial["app_id"] is None
-        assert [a["name"] for a in initial["apps"]] == ["other", "site"]
-        assert initial["router_url"] == "https://bottle.host.example.com"
-
-        chosen = client.post("/api/settings/root-app", json={"app_id": site_id})
-        assert chosen.status_code == 200 and chosen.json()["app_id"] == site_id
-
-        assert client.post("/api/settings/root-app", json={"app_id": "nope"}).status_code == 404
-        assert client.get("/api/settings/root-app").json()["app_id"] == site_id
-
-        reset = client.post("/api/settings/root-app", json={"app_id": None})
-        assert reset.status_code == 200 and reset.json()["app_id"] is None
+    with _api_client(root_config) as client:
+        body = client.get("/api/settings/root-app").json()
+    assert body["kind"] == "dashboard" and body["app_id"] is None and body["router_subdomain"] == "bottle"
+    assert [a["name"] for a in body["apps"]] == ["other", "site"]
+    assert body["router_url"] == "https://host.example.com"
 
 
-# --- discovery ----------------------------------------------------------------------------
+def test_settings_api_moves_the_dashboard_and_restarts(root_config: Config) -> None:
+    payload = {"kind": "app", "app_id": _app_id(root_config, "site"), "router_subdomain": "Dash "}
+    with (
+        patch("compute_space.web.routes.api.root_app.system_agent_reset_restart_limit_sync") as reset,
+        patch("compute_space.web.routes.api.root_app.trigger_restart") as restart,
+        _api_client(root_config) as client,
+    ):
+        body = client.post("/api/settings/root-app", content=json.dumps(payload)).json()
+        assert reset.called and restart.called
+        assert body["restarting"] is True
+        assert body["router_url"] == "https://dash.host.example.com"
+
+        # Swapping what's at the bare domain leaves the dashboard where it is.
+        reset.reset_mock()
+        restart.reset_mock()
+        body = client.post(
+            "/api/settings/root-app", json={"kind": "nothing", "app_id": None, "router_subdomain": "dash"}
+        ).json()
+        assert body["restarting"] is False and not reset.called and not restart.called
 
 
-@pytest.mark.asyncio
-async def test_discovery_points_at_router_subdomain_whatever_is_at_the_root(
-    wrapped_app: Any, root_config: Config
-) -> None:
-    for root in (None, "site"):
-        _set_root(root_config, root)
-        async with _client(wrapped_app) as c:
-            for host, expected in (
-                ("host.example.com", "https://bottle.host.example.com"),
-                ("bottle.host.example.com", "https://bottle.host.example.com"),
-                ("myhost.local:8080", "http://bottle.myhost.local:8080"),
-            ):
-                r = await c.get(f"http://{host}/.well-known/cloud-in-a-bottle")
-                assert r.status_code == 200, (root, host)
-                assert r.json() == {"router_url": expected}, (root, host)
-                assert r.headers["Access-Control-Allow-Origin"] == "*"
+def test_settings_api_rejects_bad_settings(root_config: Config) -> None:
+    with _api_client(root_config) as client:
+        unknown = client.post(
+            "/api/settings/root-app", json={"kind": "app", "app_id": "nope", "router_subdomain": "dash"}
+        )
+        taken = client.post(
+            "/api/settings/root-app", json={"kind": "nothing", "app_id": None, "router_subdomain": "site"}
+        )
+    assert unknown.status_code == 404
+    assert taken.status_code == 400
+    assert _setting(root_config) == RootSetting()

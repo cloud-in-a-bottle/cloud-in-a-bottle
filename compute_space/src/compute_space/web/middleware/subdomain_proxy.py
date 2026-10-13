@@ -22,6 +22,7 @@ from compute_space.core.domains import Domain
 from compute_space.core.logging import logger
 from compute_space.core.proxy_target import LocalPort
 from compute_space.core.root_app import ROUTER_ROOT_PATHS
+from compute_space.core.root_app import load_root_setting
 from compute_space.db import get_db
 from compute_space.web.auth.auth import login_required_redirect
 from compute_space.web.auth.auth import verify_owner_auth
@@ -144,13 +145,14 @@ class SubdomainProxyMiddleware:
         # Resolve which configured Domain this request arrived on.
         with closing(get_db()) as db:
             zone = Domain.match(db, netloc)
-            app = get_app_from_hostname(netloc, db) if zone is not None else None
-            looks_like_app = zone is not None and app is None and zone.looks_like_app_subdomain(netloc)
+            # The router's own host: the bare domain by default, or the subdomain the owner moved it to.  It also
+            # keeps a few well-known paths on the bare domain, whatever is served there.
+            is_router = zone is not None and (
+                load_root_setting(db).is_router_host(zone, netloc)
+                or (zone.is_apex(netloc) and scope["path"] in ROUTER_ROOT_PATHS)
+            )
+            app = get_app_from_hostname(netloc, db) if zone is not None and not is_router else None
         is_root_app = zone is not None and app is not None and zone.is_apex(netloc)
-        if is_root_app and scope["path"] in ROUTER_ROOT_PATHS:
-            # The router keeps a few well-known paths on the bare domain even while an app is served there.
-            app = None
-            is_root_app = False
 
         if zone is None:
             if netloc.split(":")[0].lower() in ROUTER_INTERNAL_HOSTS:
@@ -168,15 +170,14 @@ class SubdomainProxyMiddleware:
         # building) stay on it rather than the single canonical domain.
         scope[ZONE_SCOPE_KEY] = zone  # type: ignore[literal-required]
 
-        if app is None:
-            if looks_like_app:
-                # A subdomain of a configured domain, but no app is deployed there — 404 rather than
-                # falling through to the router.
-                await _send_not_found(scope, receive, send)
-                return
-            # The router's own host (the `bottle.` subdomain, or the bare domain while no app is served
-            # there); defer to Litestar.
+        if is_router:
             await self.app(scope, receive, send)
+            return
+
+        if app is None:
+            # A subdomain with no app deployed, or the bare domain while it serves nothing — 404 rather than
+            # falling through to the router.
+            await _send_not_found(scope, receive, send)
             return
 
         # Forwarding headers so the app can tell where the request originated.

@@ -93,7 +93,7 @@ systemctl status openhost
 journalctl -u openhost -f
 
 # Health check
-curl https://bottle.<domain>/health
+curl https://<domain>/health
 ```
 
 The dashboard is at `https://<domain>/`. On first visit you set the owner password.

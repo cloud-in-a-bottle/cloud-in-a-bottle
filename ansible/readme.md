@@ -113,5 +113,5 @@ ssh host@<IP> systemctl status openhost
 ssh host@<IP> journalctl -u openhost -f
 
 # verify
-curl https://bottle.<domain>/health
+curl https://<domain>/health
 ```

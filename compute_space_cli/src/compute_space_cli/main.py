@@ -66,20 +66,13 @@ def _discover_or_exit(base_url: str) -> str | None:
 
 
 def resolve_api_instance(bottle: Bottle) -> config.Instance:
-    """Like resolve_instance, but for commands that call the API: make sure we know where the router lives.
+    """Like resolve_instance, but for commands that call the API: look up where the router lives.
 
-    Instances configured before discovery existed are looked up on first use, and the answer saved.
+    Looked up on every run rather than saved, since the owner can move the dashboard between the bare domain and a
+    subdomain, and a stale URL could then send the token to an app.
     """
     inst = resolve_instance(bottle)
-    if inst.router_url is not None:
-        return inst
-    router_url = _discover_or_exit(inst.base_url)
-    if router_url is None:
-        # The instance predates discovery, so its router is at the configured URL; check again next time.
-        return inst
-    inst = attrs.evolve(inst, router_url=router_url)
-    _load_or_exit().upsert_instance(inst).save()
-    return inst
+    return attrs.evolve(inst, router_url=_discover_or_exit(inst.base_url))
 
 
 @cappa.command(name="status", help="Check if your compute space is reachable.")
@@ -448,7 +441,7 @@ class InstanceCmd:
         print("ok")
 
         alias = input(f"\nAlias for '{hostname}' (optional, press Enter to skip): ").strip() or None
-        inst = config.Instance(hostname=hostname, token=token, alias=alias, router_url=router_url)
+        inst = config.Instance(hostname=hostname, token=token, alias=alias)
         multi = _load_or_create()
         multi.upsert_instance(inst).save()
 
@@ -499,12 +492,9 @@ class InstanceCmd:
     ) -> None:
         """Add a new instance to the config."""
         hostname = config.hostname_from_url(config.normalize_url(url))
-        router_url = _discover_or_exit(config.normalize_url(url))
-        inst = config.Instance(hostname=hostname, token=token, alias=alias, router_url=router_url)
+        inst = config.Instance(hostname=hostname, token=token, alias=alias)
         _load_or_create().upsert_instance(inst, set_default=set_default).save()
         print(f"Added instance '{hostname}'")
-        if router_url:
-            print(f"  dashboard: {router_url}")
         if alias:
             print(f"  alias: {alias}")
         if set_default:

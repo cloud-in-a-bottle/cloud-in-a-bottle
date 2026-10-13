@@ -35,16 +35,16 @@ def _discover(response: MagicMock, base_url: str = "https://example.com") -> tup
 
 
 def test_returns_discovered_router_url_without_sending_a_token() -> None:
-    router_url, mock_get = _discover(_response(200, {"router_url": "https://bottle.example.com/"}))
-    assert router_url == "https://bottle.example.com"
+    router_url, mock_get = _discover(_response(200, {"router_url": "https://dash.example.com/"}))
+    assert router_url == "https://dash.example.com"
     assert mock_get.call_args.args == ("https://example.com/.well-known/cloud-in-a-bottle",)
     assert "headers" not in mock_get.call_args.kwargs
 
 
 def test_accepts_the_queried_host_itself() -> None:
-    response = _response(200, {"router_url": "https://bottle.example.com"})
-    router_url, _ = _discover(response, base_url="https://bottle.example.com")
-    assert router_url == "https://bottle.example.com"
+    response = _response(200, {"router_url": "https://dash.example.com"})
+    router_url, _ = _discover(response, base_url="https://dash.example.com")
+    assert router_url == "https://dash.example.com"
 
 
 def test_old_instance_is_none() -> None:
@@ -62,8 +62,8 @@ def test_other_statuses_fail_rather_than_fall_back(status_code: int) -> None:
     [
         {"router_url": "https://evil.example.org"},
         {"router_url": "https://notexample.com"},
-        {"router_url": "http://bottle.example.com"},
-        {"router_url": "https://bottle.example.com/path"},
+        {"router_url": "http://dash.example.com"},
+        {"router_url": "https://dash.example.com/path"},
         {"router_url": 5},
         {},
         ValueError("not json"),
@@ -81,18 +81,18 @@ def test_network_errors_fail() -> None:
 
 
 @pytest.mark.parametrize(
-    ("discovered", "expected_url"), [("https://bottle.a.com", "https://bottle.a.com"), (None, None)]
+    ("discovered", "expected_url"), [("https://dash.a.com", "https://dash.a.com"), (None, "https://a.com")]
 )
-def test_existing_config_is_upgraded_on_first_api_use(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, discovered: str | None, expected_url: str | None
+def test_api_commands_look_up_the_router_each_run_without_saving_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, discovered: str | None, expected_url: str
 ) -> None:
-    config_file = tmp_path / "config.toml"
-    monkeypatch.setattr(cli_config, "CONFIG_FILE", config_file)
+    monkeypatch.setattr(cli_config, "CONFIG_FILE", tmp_path / "config.toml")
     monkeypatch.setattr(cli_config, "LEGACY_CONFIG_FILE", tmp_path / "legacy.toml")
     MultiConfig(instances={"a.com": Instance(hostname="a.com", token="t")}, default_instance="a.com").save()
 
-    with patch("compute_space_cli.main.discover_router_url", return_value=discovered):
+    with patch("compute_space_cli.main.discover_router_url", return_value=discovered) as mock_discover:
         inst = resolve_api_instance(SimpleNamespace(instance=None))  # type: ignore[arg-type]
 
-    assert inst.url == (expected_url or "https://a.com")
-    assert MultiConfig.load().instances["a.com"].router_url == expected_url
+    mock_discover.assert_called_once_with("https://a.com")
+    assert inst.url == expected_url
+    assert MultiConfig.load().instances["a.com"].router_url is None

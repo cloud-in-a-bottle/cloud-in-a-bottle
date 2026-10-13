@@ -25,6 +25,7 @@ from compute_space.core.auth.auth import validate_app_token
 from compute_space.core.auth.auth import validate_session_token
 from compute_space.core.domains import Domain
 from compute_space.core.domains import host_with_request_port
+from compute_space.core.root_app import load_root_setting
 from compute_space.db import get_db
 from compute_space.web.helpers.zone import zone_for_request
 
@@ -197,10 +198,9 @@ def require_same_origin(connection: AnyConnection, _route_handler: BaseRouteHand
     verify_same_origin(connection)
 
 
-def build_login_url(zone: Domain, netloc: str, path: str, query: str) -> str:
-    """Build an absolute ``/login?next=<original>`` URL on the router subdomain of ``zone`` — the
-    domain the request arrived on.  Always ``bottle.<domain>``, since the bare domain may be
-    serving an app.
+def build_login_url(zone: Domain, router_host: str, netloc: str, path: str, query: str) -> str:
+    """Build an absolute ``/login?next=<original>`` URL on ``router_host`` — the router's host on
+    ``zone``, the domain the request arrived on.
 
     Redirecting to the arriving domain (rather than always the canonical one) is what
     lets login happen on ``myhost.local`` when the user came in on ``myhost.local`` and
@@ -216,7 +216,7 @@ def build_login_url(zone: Domain, netloc: str, path: str, query: str) -> str:
     next_url = f"{proto}://{netloc}{path}"
     if query:
         next_url = f"{next_url}?{query}"
-    return f"{proto}://{host_with_request_port(zone.router_host, netloc)}/login?next={quote(next_url, safe='')}"
+    return f"{proto}://{host_with_request_port(router_host, netloc)}/login?next={quote(next_url, safe='')}"
 
 
 def login_required_redirect(request: Request[Any, Any, Any]) -> Response[Any]:
@@ -226,4 +226,6 @@ def login_required_redirect(request: Request[Any, Any, Any]) -> Response[Any]:
     In general you should just raise a NotAuthorizedException and let litestar call this for you.
     """
     zone = zone_for_request(request)
-    return Redirect(path=build_login_url(zone, request.url.netloc, request.url.path, request.url.query))
+    with closing(get_db()) as db:
+        router_host = load_root_setting(db).router_host(zone)
+    return Redirect(path=build_login_url(zone, router_host, request.url.netloc, request.url.path, request.url.query))

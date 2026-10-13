@@ -34,7 +34,6 @@ from compute_space.core.data import deprovision_temp_data
 from compute_space.core.data import make_data_dirs_and_env_vars
 from compute_space.core.data import rmtree_with_sudo_fallback
 from compute_space.core.domains import PRIMARY_DOMAIN_RESTART_MARKER
-from compute_space.core.domains import ROUTER_SUBDOMAIN
 from compute_space.core.domains import Domain
 from compute_space.core.domains import primary_domain
 from compute_space.core.git_ops import CloneFailed
@@ -56,8 +55,10 @@ from compute_space.core.oauth import OAuthRequired
 from compute_space.core.oauth import get_oauth_token
 from compute_space.core.ports import allocate_port
 from compute_space.core.ports import resolve_port_mappings
+from compute_space.core.root_app import RootKind
 from compute_space.core.root_app import clear_root_app_if
-from compute_space.core.root_app import get_root_app_id
+from compute_space.core.root_app import is_router_subdomain
+from compute_space.core.root_app import load_root_setting
 from compute_space.core.service_interface.services import register_services_provided_by_app
 from compute_space.db import get_db
 
@@ -87,9 +88,6 @@ RESERVED_PATHS = {
     "/settings",
     "/system",
     "/docs",
-    # Not a router path, but the router's subdomain (``bottle.<domain>``); kept here so every app-name check
-    # refuses it.
-    f"/{ROUTER_SUBDOMAIN}",
 }
 
 
@@ -289,6 +287,9 @@ def validate_manifest(manifest: AppManifest, db: sqlite3.Connection, app_name: s
     if f"/{app_name}" in RESERVED_PATHS:
         return f"App name '{app_name}' conflicts with a reserved path"
 
+    if is_router_subdomain(db, app_name):
+        return f"App name '{app_name}' is the dashboard's subdomain"
+
     existing = db.execute("SELECT name FROM apps WHERE name = ?", (app_name,)).fetchone()
     if existing:
         return f"App name already in use by '{existing['name']}'"
@@ -351,7 +352,8 @@ def insert_and_deploy(
         temp_data_dir=config.temporary_data_dir,
         archive_dir=archive_backend.effective_archive_dir(config, db),
         my_openhost_redirect_domain=config.my_openhost_redirect_domain,
-        primary=primary_domain(db),
+        zone_domain=primary_domain(db).name,
+        router_public_url=load_root_setting(db).router_url(primary_domain(db)),
         port=config.port,
         owner_username=read_owner_username(db) or DEFAULT_OWNER_USERNAME,
     )
@@ -524,7 +526,8 @@ def run_app_image(
                 temp_data_dir=config.temporary_data_dir,
                 archive_dir=archive_backend.effective_archive_dir(config, db),
                 my_openhost_redirect_domain=config.my_openhost_redirect_domain,
-                primary=primary_domain(db),
+                zone_domain=primary_domain(db).name,
+                router_public_url=load_root_setting(db).router_url(primary_domain(db)),
                 port=config.port,
                 owner_username=read_owner_username(db) or DEFAULT_OWNER_USERNAME,
             )
@@ -1117,8 +1120,8 @@ def get_app_from_hostname(host: str, db: sqlite3.Connection) -> App | None:
 
     The host is matched against every configured Domain (see Domain.match), so an app is
     reachable under any domain the instance answers on (e.g. both `<app>.host.example.com` and
-    `<app>.myhost.local`).  Matching is case-insensitive.  A bare domain resolves to the root app,
-    if the owner has chosen one (see ``core.root_app``).
+    `<app>.myhost.local`).  Matching is case-insensitive.  The bare domain resolves to the root app,
+    if the owner serves one there, and the router's own host to nothing (see ``core.root_app``).
 
     returns None if an app cannot be matched from the header.
 
@@ -1126,17 +1129,18 @@ def get_app_from_hostname(host: str, db: sqlite3.Connection) -> App | None:
         ha-tunnel.zplizzi.host.imbue.com -> "ha-tunnel"
         zplizzi.host.imbue.com -> None
         host.imbue.com -> the root app, or None
-        bottle.host.imbue.com -> None
         localhost:8080 -> None
     """
     matched = Domain.match(db, host)
     if matched is None:
         return None
+    setting = load_root_setting(db)
+    if setting.is_router_host(matched, host):
+        return None
     if matched.is_apex(host):
-        root_app_id = get_root_app_id(db)
-        if root_app_id is None:
+        if setting.kind != RootKind.APP:
             return None
-        row = db.execute("SELECT * FROM apps WHERE app_id = ?", (root_app_id,)).fetchone()
+        row = db.execute("SELECT * FROM apps WHERE app_id = ?", (setting.app_id,)).fetchone()
         return App.from_row(row) if row else None
     app_name = matched.app_name_from_hostname(host)
     return find_app_by_name(app_name) if app_name is not None else None

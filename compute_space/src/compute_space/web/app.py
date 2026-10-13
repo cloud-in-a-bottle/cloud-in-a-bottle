@@ -27,7 +27,6 @@ from compute_space.core import archive_backend
 from compute_space.core.auth.auth import read_owner_username
 from compute_space.core.auth.identity import load_identity_keys
 from compute_space.core.dns.coredns_provider.interface import InternalDnsProvider
-from compute_space.core.domains import ROUTER_SUBDOMAIN
 from compute_space.core.domains import Domain
 from compute_space.core.domains import host_with_request_port
 from compute_space.core.domains import primary_domain_or_none
@@ -39,7 +38,7 @@ from compute_space.core.memory_guard import ensure_memory_guard
 from compute_space.core.org_rename import reconcile_app_repo_urls
 from compute_space.core.process_stream import cleanup_all as cleanup_process_streams
 from compute_space.core.root_app import ROUTER_ROOT_PATHS
-from compute_space.core.root_app import get_root_app_id
+from compute_space.core.root_app import load_root_setting
 from compute_space.core.startup import check_app_status
 from compute_space.core.startup import retry_pending_default_apps
 from compute_space.core.storage import start_storage_guard
@@ -142,13 +141,6 @@ def _full_app_bootstrap(config: Config) -> None:
         # see that module for why this is a per-boot reconcile rather than a
         # versioned migration.
         reconcile_app_repo_urls(db)
-        # App names can no longer be the router subdomain, but one installed before that rule is still in the
-        # DB.  The router wins its subdomain, so the app is only reachable after a rename.
-        if db.execute("SELECT 1 FROM apps WHERE name = ?", (ROUTER_SUBDOMAIN,)).fetchone() is not None:
-            logger.warning(
-                "An app is named {!r}, which is now the router's subdomain; rename it to make it reachable again",
-                ROUTER_SUBDOMAIN,
-            )
     finally:
         db.close()
     check_app_status(config)
@@ -203,30 +195,23 @@ def _log_unhandled_exception(request: Request[Any, Any, Any], exc: Exception) ->
 
 
 def _reject_app_subdomain_requests(request: Request[Any, Any, Any]) -> Response[Any] | None:
-    """Defense-in-depth: refuse any request whose Host is an app subdomain.
+    """Defense-in-depth: refuse any request on a configured domain whose Host isn't the router's.
 
-    App-subdomain traffic is supposed to be intercepted by SubdomainProxyMiddleware
-    (outer ASGI) before Litestar ever sees it.  If a request reaches Litestar with
-    an app-subdomain Host of any configured domain, or the bare domain while an app is
-    served there — e.g. the middleware was bypassed in a test or a deployment variant —
-    refuse it rather than accidentally serve a router route (like /health) under the
-    app's hostname.
+    Traffic for other hosts (app subdomains, or the bare domain while the router lives on a
+    subdomain) is supposed to be intercepted by SubdomainProxyMiddleware (outer ASGI) before
+    Litestar ever sees it.  If it reaches Litestar anyway — e.g. the middleware was bypassed in
+    a test or a deployment variant — refuse it rather than accidentally serve a router route
+    (like /health) under an app's hostname.
     """
     netloc = request.url.netloc
     with closing(get_db()) as db:
         matched = Domain.match(db, netloc)
-        root_app_id = get_root_app_id(db)
-    if matched is not None and matched.looks_like_app_subdomain(netloc):
-        return Response(content=None, status_code=404)
-    # Likewise the bare domain while an app is served there, apart from the paths the router keeps.
-    if (
-        matched is not None
-        and matched.is_apex(netloc)
-        and root_app_id is not None
-        and request.url.path not in ROUTER_ROOT_PATHS
-    ):
-        return Response(content=None, status_code=404)
-    return None
+        setting = load_root_setting(db)
+    if matched is None or setting.is_router_host(matched, netloc):
+        return None
+    if matched.is_apex(netloc) and request.url.path in ROUTER_ROOT_PATHS:
+        return None
+    return Response(content=None, status_code=404)
 
 
 def create_app(config: Config, dns_provider: InternalDnsProvider) -> ASGIApp:

@@ -36,7 +36,6 @@ from compute_space.core.auth.auth import read_owner_username
 from compute_space.core.auth.auth import update_owner_username
 from compute_space.core.auth.auth import validate_owner_username
 from compute_space.core.data import make_data_dirs_and_env_vars
-from compute_space.core.domains import Domain
 from compute_space.core.manifest import AppManifest
 from compute_space.db import provide_db
 from compute_space.db.connection import init_db
@@ -118,7 +117,8 @@ def _provision(tmp_path: Path, **kwargs: Any) -> dict[str, str]:
         str(tmp_path / "temp"),
         str(archive_dir),
         my_openhost_redirect_domain="my.example.com",
-        primary=Domain(name="example.com", tls=True),
+        zone_domain="example.com",
+        router_public_url="https://dash.example.com",
         port=8080,
         **kwargs,
     )
@@ -302,7 +302,7 @@ def test_make_data_dirs_and_env_vars_stamps_owner_username(tmp_path: Path) -> No
     assert env["OPENHOST_OWNER_USERNAME"] == "alice"
     assert env["OPENHOST_APP_NAME"] == "probe"
     assert env["OPENHOST_ZONE_DOMAIN"] == "example.com"
-    assert env["OPENHOST_ROUTER_PUBLIC_URL"] == "https://bottle.example.com"
+    assert env["OPENHOST_ROUTER_PUBLIC_URL"] == "https://dash.example.com"
 
 
 # ---------------------------------------------------------------------------

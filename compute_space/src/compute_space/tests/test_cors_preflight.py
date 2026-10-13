@@ -17,7 +17,9 @@ from compute_space.config import provide_config
 from compute_space.core.app_id import new_app_id
 from compute_space.core.domains import DomainRecord
 from compute_space.core.domains import upsert_record
-from compute_space.core.root_app import set_root_app_id
+from compute_space.core.root_app import RootKind
+from compute_space.core.root_app import RootSetting
+from compute_space.core.root_app import apply_root_setting
 from compute_space.db import provide_db
 from compute_space.tests.conftest import _make_test_config
 from compute_space.tests.conftest import open_db
@@ -79,7 +81,6 @@ def client(cfg: Config) -> Iterator[TestClient[Litestar]]:
         ("https://testzone.local", False),
         ("https://alternate.example:8443", False),
         ("https://evil.example.com", False),
-        ("https://bottle.testzone.local", False),
         (f"https://{APP_NAME}.testzone.local.evil.example", False),
         ("https://bad_name.testzone.local", False),
         ("https://-bad.testzone.local", False),
@@ -161,7 +162,11 @@ def test_preflight_allows_bare_domain_only_while_an_app_is_served_there(
     assert client.options(CALL_URL, headers=headers).status_code == 403
     _seed_app(cfg.db_path)
     with closing(open_db(cfg)) as db:
-        set_root_app_id(db, db.execute("SELECT app_id FROM apps WHERE name = ?", (APP_NAME,)).fetchone()["app_id"])
+        app_id = db.execute("SELECT app_id FROM apps WHERE name = ?", (APP_NAME,)).fetchone()["app_id"]
+        apply_root_setting(db, RootSetting(kind=RootKind.APP, app_id=app_id, router_subdomain="dash"))
     allowed = client.options(CALL_URL, headers=headers)
     assert allowed.status_code == 204
     assert allowed.headers["Access-Control-Allow-Origin"] == "https://testzone.local"
+    # The dashboard's subdomain isn't an app origin.
+    dash = {"Origin": "https://dash.testzone.local", "Access-Control-Request-Method": "POST"}
+    assert client.options(CALL_URL, headers=dash).status_code == 403

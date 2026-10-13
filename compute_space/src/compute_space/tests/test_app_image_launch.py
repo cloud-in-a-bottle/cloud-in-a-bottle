@@ -95,6 +95,7 @@ def test_run_existing_image_prepares_fresh_runtime_from_persisted_app(
         archive_dir=cfg.app_archive_dir,
         my_openhost_redirect_domain=cfg.my_openhost_redirect_domain,
         zone_domain="testzone.local",
+        router_public_url="http://testzone.local",
         port=cfg.port,
         owner_username="owner",
     )

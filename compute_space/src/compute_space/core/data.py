@@ -8,7 +8,6 @@ import subprocess
 
 from compute_space.core.containers import ROUTER_GATEWAY_HOST
 from compute_space.core.containers import ROUTER_LOOPBACK_HOST
-from compute_space.core.domains import Domain
 from compute_space.core.logging import logger
 from compute_space.core.manifest import AppManifest
 
@@ -83,7 +82,8 @@ def make_data_dirs_and_env_vars(
     temp_data_dir: str,
     archive_dir: str,
     my_openhost_redirect_domain: str,
-    primary: Domain,
+    zone_domain: str,
+    router_public_url: str,
     port: int,
     owner_username: str,
 ) -> dict[str, str]:
@@ -168,11 +168,11 @@ def make_data_dirs_and_env_vars(
         env_vars["OPENHOST_ROUTER_URL"] = f"http://{ROUTER_GATEWAY_HOST}:{port}"
 
     # Zone identity info so apps can build federated auth flows
-    env_vars["OPENHOST_ZONE_DOMAIN"] = primary.name
+    env_vars["OPENHOST_ZONE_DOMAIN"] = zone_domain
 
-    # Public router URL, for browser-side service calls from app JS.  The bare domain may be serving an app
-    # instead of the router (see ``core.root_app``), so app JS must not assume the router lives there.
-    env_vars["OPENHOST_ROUTER_PUBLIC_URL"] = primary.router_url
+    # Public router URL, for browser-side service calls from app JS.  The router may live on a subdomain while the
+    # bare domain serves an app or nothing (see ``core.root_app``), so app JS must not assume it's at the zone domain.
+    env_vars["OPENHOST_ROUTER_PUBLIC_URL"] = router_public_url
 
     env_vars["OPENHOST_MY_REDIRECT_DOMAIN"] = my_openhost_redirect_domain
 

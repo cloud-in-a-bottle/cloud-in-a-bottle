@@ -57,7 +57,6 @@ from compute_space.core.containers import stop_container
 from compute_space.core.diagnostics import AppDiagnostics
 from compute_space.core.diagnostics import collect_app_diagnostics
 from compute_space.core.domains import Domain
-from compute_space.core.domains import host_with_request_port
 from compute_space.core.domains import primary_domain
 from compute_space.core.git_ops import get_branch_name
 from compute_space.core.git_ops import get_head_sha
@@ -76,12 +75,15 @@ from compute_space.core.manifest import settings_changes_require_review
 from compute_space.core.oauth import OAuthRequired
 from compute_space.core.oauth import get_oauth_token
 from compute_space.core.ports import check_port_available
+from compute_space.core.root_app import is_router_subdomain
+from compute_space.core.root_app import load_root_setting
 from compute_space.core.updates import wait_for_shutdown
 from compute_space.db.connection import get_db
 from compute_space.web.auth.auth import require_owner_auth
 from compute_space.web.auth.auth import verify_owner_ws
 from compute_space.web.exceptions import ConflictException
 from compute_space.web.helpers.zone import ZONE_SCOPE_KEY
+from compute_space.web.helpers.zone import router_base_url
 
 
 def _oauth_return_origin(db: sqlite3.Connection, request: Request[Any, Any, Any]) -> str:
@@ -92,10 +94,9 @@ def _oauth_return_origin(db: sqlite3.Connection, request: Request[Any, Any, Any]
     flow started on an http ``.local``/``lvh.me`` domain.  The operator kicks these off from
     a browser, so return to the router subdomain of the domain (and access port) they are on;
     fall back to the canonical primary only if the middleware stashed no Domain."""
-    zone = request.scope.get(ZONE_SCOPE_KEY)
-    if isinstance(zone, Domain):
-        return f"{zone.scheme}://{host_with_request_port(zone.router_host, request.url.netloc)}"
-    return primary_domain(db).router_url
+    if isinstance(request.scope.get(ZONE_SCOPE_KEY), Domain):
+        return router_base_url(request)
+    return load_root_setting(db).router_url(primary_domain(db))
 
 
 # ─── attrs request / response models ──────────────────────────────────────
@@ -1105,6 +1106,9 @@ async def rename_app(
 
     if f"/{new_name}" in RESERVED_PATHS:
         raise ValidationException(detail=f"Name '{new_name}' conflicts with a reserved path")
+
+    if is_router_subdomain(db, new_name):
+        raise ValidationException(detail=f"Name '{new_name}' is the dashboard's subdomain")
 
     app_row = _resolve_app(app_id, db)
     if _is_removing(app_row):

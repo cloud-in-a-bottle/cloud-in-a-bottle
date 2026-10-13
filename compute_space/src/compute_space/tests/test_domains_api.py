@@ -31,6 +31,9 @@ from compute_space.core.dns.coredns_provider.interface import InternalDnsProvide
 from compute_space.core.domains import Domain
 from compute_space.core.domains import DomainCertStatus
 from compute_space.core.domains import seed_domains
+from compute_space.core.root_app import RootKind
+from compute_space.core.root_app import RootSetting
+from compute_space.core.root_app import apply_root_setting
 from compute_space.db import provide_db
 from compute_space.db.connection import init_db
 from compute_space.tests.conftest import _make_test_config
@@ -282,11 +285,13 @@ def test_add_duplicate_rejected(cfg: Any, client: TestClient[Litestar]) -> None:
     assert resp.json()["detail"] == "domain is already configured"
 
 
-def test_add_router_subdomain_rejected(cfg: Any, client: TestClient[Litestar]) -> None:
+def test_add_dashboard_subdomain_rejected(cfg: Any, client: TestClient[Litestar]) -> None:
     client.cookies.update(_auth_cookie(cfg.db_path))
-    resp = client.post("/api/domains", json={"name": "bottle.host.example.com", "tls": True})
+    with closing(open_db(cfg)) as db:
+        apply_root_setting(db, RootSetting(kind=RootKind.NOTHING, router_subdomain="dash"))
+    resp = client.post("/api/domains", json={"name": "dash.host.example.com", "tls": True})
     assert resp.status_code == 400
-    assert resp.json()["detail"] == "domain is the router subdomain of a configured domain"
+    assert resp.json()["detail"] == "domain is the dashboard subdomain of a configured domain"
 
 
 def test_add_invalid_name_rejected(cfg: Any, client: TestClient[Litestar]) -> None:
