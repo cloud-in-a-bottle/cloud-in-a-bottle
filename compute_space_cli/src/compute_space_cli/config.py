@@ -48,10 +48,20 @@ class Instance:
     token: str = attr.ib()
     alias: str | None = attr.ib(default=None)
     ssh_key: str | None = attr.ib(default=None)
+    # Where the router (dashboard and API) lives, looked up from the instance on each run (see ``discovery``) and
+    # never saved: the owner can move it.  None if not looked up, or for an instance from before discovery existed,
+    # whose router is at ``hostname`` itself.
+    router_url: str | None = attr.ib(default=None)
+
+    @property
+    def base_url(self) -> str:
+        """The URL the instance was configured with."""
+        return f"https://{self.hostname}"
 
     @property
     def url(self) -> str:
-        return f"https://{self.hostname}"
+        """The router's URL, for API calls."""
+        return self.router_url or self.base_url
 
 
 @attr.s(auto_attribs=True, frozen=True)
