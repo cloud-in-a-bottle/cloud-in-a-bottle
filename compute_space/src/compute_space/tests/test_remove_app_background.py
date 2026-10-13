@@ -8,6 +8,10 @@ from unittest.mock import patch
 
 from compute_space.core.app_id import new_app_id
 from compute_space.core.apps import remove_app_background
+from compute_space.core.root_app import RootKind
+from compute_space.core.root_app import RootSetting
+from compute_space.core.root_app import apply_root_setting
+from compute_space.core.root_app import load_root_setting
 from compute_space.db.connection import init_db
 from compute_space.tests.conftest import _make_test_config
 
@@ -223,3 +227,34 @@ def test_remove_records_error_when_db_delete_path_explodes(tmp_path: Path) -> No
     assert row is not None
     assert row[0] == "error"
     assert "Removal failed" in (row[1] or "")
+
+
+def test_remove_leaves_the_bare_domain_empty(tmp_path: Path) -> None:
+    cfg = _make_test_config(tmp_path)
+    init_db(cfg.db_path)
+    app_id = _seed_app_with_children(cfg.db_path, "myapp")
+    db = sqlite3.connect(cfg.db_path)
+    db.row_factory = sqlite3.Row
+    try:
+        db.execute("UPDATE apps SET status = 'running' WHERE app_id = ?", (app_id,))
+        db.commit()
+        apply_root_setting(db, RootSetting(kind=RootKind.APP, app_id=app_id))
+        db.execute("UPDATE apps SET status = 'removing' WHERE app_id = ?", (app_id,))
+        db.commit()
+    finally:
+        db.close()
+
+    with (
+        patch("compute_space.core.apps.stop_app_process"),
+        patch("compute_space.core.apps.remove_image"),
+        patch("compute_space.core.apps.deprovision_data"),
+        patch("compute_space.core.apps.deprovision_temp_data"),
+    ):
+        remove_app_background(app_id, keep_data=False, config=cfg)
+
+    db = sqlite3.connect(cfg.db_path)
+    db.row_factory = sqlite3.Row
+    try:
+        assert load_root_setting(db) == RootSetting(kind=RootKind.NOTHING)
+    finally:
+        db.close()
