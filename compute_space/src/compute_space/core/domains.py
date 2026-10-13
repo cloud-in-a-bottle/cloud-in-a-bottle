@@ -36,6 +36,11 @@ class Domain:
     def scheme(self) -> str:
         return "https" if self.tls else "http"
 
+    @property
+    def url(self) -> str:
+        """``scheme://name``, keeping a port baked into the configured name."""
+        return f"{self.scheme}://{self.name}"
+
     def owns(self, host: str) -> bool:
         """True if ``host`` is this domain itself or one of its ``<app>.<domain>`` subdomains.
         ``host`` may include a ``:port``; it's compared port-insensitively."""

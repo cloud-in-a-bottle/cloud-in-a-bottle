@@ -346,6 +346,7 @@ def insert_and_deploy(
         archive_dir=archive_backend.effective_archive_dir(config, db),
         my_openhost_redirect_domain=config.my_openhost_redirect_domain,
         zone_domain=primary_domain(db).name,
+        router_public_url=primary_domain(db).url,
         port=config.port,
         owner_username=read_owner_username(db) or DEFAULT_OWNER_USERNAME,
     )
@@ -519,6 +520,7 @@ def run_app_image(
                 archive_dir=archive_backend.effective_archive_dir(config, db),
                 my_openhost_redirect_domain=config.my_openhost_redirect_domain,
                 zone_domain=primary_domain(db).name,
+                router_public_url=primary_domain(db).url,
                 port=config.port,
                 owner_username=read_owner_username(db) or DEFAULT_OWNER_USERNAME,
             )

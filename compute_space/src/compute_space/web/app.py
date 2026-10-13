@@ -50,6 +50,7 @@ from compute_space.web.middleware.subdomain_proxy import SubdomainProxyMiddlewar
 from compute_space.web.routes.api.app_definitions import api_app_definitions_routes
 from compute_space.web.routes.api.apps import api_apps_routes
 from compute_space.web.routes.api.archive_backend import api_archive_backend_routes
+from compute_space.web.routes.api.discovery import discovery_routes
 from compute_space.web.routes.api.domains import api_domains_routes
 from compute_space.web.routes.api.identity import identity_routes
 from compute_space.web.routes.api.permissions_v2 import api_permissions_v2_routes
@@ -243,6 +244,7 @@ def create_app(config: Config, dns_provider: InternalDnsProvider) -> ASGIApp:
             api_apps_routes,
             api_archive_backend_routes,
             api_domains_routes,
+            discovery_routes,
             api_permissions_v2_routes,
             api_services_v2_routes,
             api_settings_routes,

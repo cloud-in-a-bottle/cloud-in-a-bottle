@@ -83,6 +83,7 @@ def make_data_dirs_and_env_vars(
     archive_dir: str,
     my_openhost_redirect_domain: str,
     zone_domain: str,
+    router_public_url: str,
     port: int,
     owner_username: str,
 ) -> dict[str, str]:
@@ -168,6 +169,10 @@ def make_data_dirs_and_env_vars(
 
     # Zone identity info so apps can build federated auth flows
     env_vars["OPENHOST_ZONE_DOMAIN"] = zone_domain
+
+    # Public router URL, for browser-side service calls from app JS, so apps needn't assume the router is at the zone
+    # domain.
+    env_vars["OPENHOST_ROUTER_PUBLIC_URL"] = router_public_url
 
     env_vars["OPENHOST_MY_REDIRECT_DOMAIN"] = my_openhost_redirect_domain
 

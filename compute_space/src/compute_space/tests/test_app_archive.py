@@ -56,6 +56,7 @@ def test_make_data_dirs_and_env_vars_creates_archive_subdir_when_opted_in(tmp_pa
         archive_dir=str(archive_dir),
         my_openhost_redirect_domain="my.example.com",
         zone_domain="example.com",
+        router_public_url="http://example.com",
         port=8080,
         owner_username="owner",
     )
@@ -85,6 +86,7 @@ def test_make_data_dirs_and_env_vars_skips_archive_when_not_opted_in(tmp_path) -
         archive_dir=str(archive_dir),
         my_openhost_redirect_domain="my.example.com",
         zone_domain="example.com",
+        router_public_url="http://example.com",
         port=8080,
         owner_username="owner",
     )
@@ -111,6 +113,7 @@ def test_make_data_dirs_and_env_vars_archive_subdir_under_access_all_app_data(tm
         archive_dir=str(archive_dir),
         my_openhost_redirect_domain="my.example.com",
         zone_domain="example.com",
+        router_public_url="http://example.com",
         port=8080,
         owner_username="owner",
     )
@@ -138,6 +141,7 @@ def test_make_data_dirs_and_env_vars_refuses_when_archive_dir_missing(tmp_path) 
             archive_dir=str(archive_dir),
             my_openhost_redirect_domain="my.example.com",
             zone_domain="example.com",
+            router_public_url="http://example.com",
             port=8080,
             owner_username="owner",
         )
@@ -161,6 +165,7 @@ def test_make_data_dirs_and_env_vars_skips_archive_for_access_all_app_data_when_
         archive_dir=str(archive_dir),
         my_openhost_redirect_domain="my.example.com",
         zone_domain="example.com",
+        router_public_url="http://example.com",
         port=8080,
         owner_username="owner",
     )
@@ -194,6 +199,7 @@ def test_make_data_dirs_and_env_vars_does_not_fail_when_archive_dir_missing_and_
         archive_dir=str(archive_dir),
         my_openhost_redirect_domain="my.example.com",
         zone_domain="example.com",
+        router_public_url="http://example.com",
         port=8080,
         owner_username="owner",
     )
@@ -217,6 +223,7 @@ def test_make_data_dirs_and_env_vars_archive_idempotent_on_redeploy(tmp_path) ->
         archive_dir=str(archive_dir),
         my_openhost_redirect_domain="my.example.com",
         zone_domain="example.com",
+        router_public_url="http://example.com",
         port=8080,
         owner_username="owner",
     )
@@ -232,6 +239,7 @@ def test_make_data_dirs_and_env_vars_archive_idempotent_on_redeploy(tmp_path) ->
         archive_dir=str(archive_dir),
         my_openhost_redirect_domain="my.example.com",
         zone_domain="example.com",
+        router_public_url="http://example.com",
         port=8080,
         owner_username="owner",
     )

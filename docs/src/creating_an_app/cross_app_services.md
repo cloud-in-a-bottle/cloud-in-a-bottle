@@ -87,7 +87,7 @@ This endpoint is app-specific - the router loads the consumer's manifest, finds 
 
 The router identifies and authenticates the calling app two ways:
 - **Server-side calls:** must include `Authorization: Bearer $BOTTLE_APP_TOKEN`. Each app gets a unique `BOTTLE_APP_TOKEN` injected as an env var at deploy time.
-- **Browser calls:** the request's `Origin` is matched against the app's subdomain, with the owner session cookie authenticating the user. No bearer token is needed for these; the browser provides the cookie automatically.
+- **Browser calls:** the request's `Origin` is matched against the app's subdomain, with the owner session cookie authenticating the user. No bearer token is needed for these; the browser provides the cookie automatically. Browser calls go to `$BOTTLE_ROUTER_PUBLIC_URL/api/services/v2/call/<shortname>/<rest>`, since `BOTTLE_ROUTER_URL` is only reachable from inside the instance. Don't build this URL from `BOTTLE_ZONE_DOMAIN`.
 
 Service calls should be API-only - the user's browser should never be redirected to a service endpoint, with the exception of permission grant pages.
 
