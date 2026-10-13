@@ -63,6 +63,7 @@ from compute_space.web.routes.pages.login import pages_login_routes
 from compute_space.web.routes.pages.permissions_v2 import pages_permissions_v2_routes
 from compute_space.web.routes.pages.settings import pages_settings_routes
 from compute_space.web.routes.pages.system import pages_system_routes
+from compute_space.web.routes.redirect import redirect_routes
 from compute_space.web.routes.services_v2 import services_v2_routes
 
 
@@ -256,6 +257,7 @@ def create_app(config: Config, dns_provider: InternalDnsProvider) -> ASGIApp:
             pages_permissions_v2_routes,
             pages_settings_routes,
             pages_system_routes,
+            redirect_routes,
             services_v2_routes,
             setup_already_done_get,
             setup_already_done_post,

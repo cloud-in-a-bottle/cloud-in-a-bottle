@@ -280,7 +280,7 @@ class DefaultConfig(Config):
 
     start_caddy: bool = True
 
-    my_openhost_redirect_domain: str = "my.selfhost.imbue.com"
+    my_openhost_redirect_domain: str = "my.cloudinabottle.org"
 
     # Data
     data_root_dir: str = "/opt/openhost"

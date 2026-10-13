@@ -60,10 +60,10 @@ info:
 
     ## Callback routing
 
-    OAuth providers redirect to a fixed callback URL on the zone's
-    redirect domain (`MY_REDIRECT_DOMAIN`). The router intercepts this
-    at `/api/services/v2/oauth_callback` and must forward it to whichever
-    oauth app initiated the flow.
+    OAuth providers redirect to a fixed callback URL on the shared
+    redirect domain (`MY_REDIRECT_DOMAIN`), which forwards the browser to
+    the router at `/redirect/oauth_callback`. The router must send it on to
+    whichever oauth app initiated the flow.
 
     To make this work, the oauth app encodes its identity in the OAuth
     `state` parameter as JSON:
@@ -71,8 +71,9 @@ info:
     {"app": "oauth", "nonce": "random-token"}
     ```
     The router parses `state` from the callback query string, reads the
-    `app` field, looks up that app's port, and proxies the full request
-    (code, state, scope, etc.) to the app's `/callback` handler. The
+    `app` field, and redirects the browser, with the full query (code,
+    state, scope, etc.), to that app's `/callback` handler, which must be
+    one of the app's public paths. The
     app matches the flow using the full `state` string as a dict key.
   version: 0.1.0
 
