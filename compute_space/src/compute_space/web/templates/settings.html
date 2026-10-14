@@ -86,6 +86,18 @@
       <p id="remote-msg" class="msg" hidden></p>
     </div>
 
+    <div class="field" id="prereleases-field" hidden>
+      <label class="field field--check">
+        <input type="checkbox" id="prereleases-enabled" aria-describedby="prereleases-hint"
+               onchange="savePrereleases()">
+        <span>Receive release-candidate updates (unstable)</span>
+      </label>
+      <p class="hint" id="prereleases-hint">Also update to release candidates (tags like
+        <code>v1.2.0-rc.1</code>), which get new versions early but may be broken. Turning this off
+        keeps the current version until the next stable release.</p>
+      <p id="prereleases-msg" class="msg" hidden></p>
+    </div>
+
     <hr class="rule">
 
     <div class="field">

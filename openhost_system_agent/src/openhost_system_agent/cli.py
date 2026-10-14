@@ -15,6 +15,7 @@ from openhost_system_agent.swap import get_swap_status
 from openhost_system_agent.swap import resize_swapfile
 from openhost_system_agent.update import fetch_updates
 from openhost_system_agent.update import get_remote_info
+from openhost_system_agent.update import set_prereleases
 from openhost_system_agent.update import set_remote_url
 from openhost_system_agent.update import show_diff
 from openhost_system_agent.update import start_apply
@@ -89,6 +90,16 @@ class UpdateCmd:
     ) -> None:
         try:
             _output(set_remote_url(url))
+        except Exception as e:
+            _error(str(e))
+
+    @cappa.command(name="set-prereleases", help="Opt in to or out of release-candidate updates on the tags channel.")
+    def set_prereleases(
+        self,
+        state: Annotated[str, cappa.Arg(choices=["on", "off"], help="'on' to receive release candidates")],
+    ) -> None:
+        try:
+            _output(set_prereleases(state == "on"))
         except Exception as e:
             _error(str(e))
 

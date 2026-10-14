@@ -189,6 +189,11 @@ def system_agent_set_remote(url: str) -> RemoteInfo:
 
 
 @async_wrap
+def system_agent_set_prereleases(enabled: bool) -> RemoteInfo:
+    return _call_system_agent_sync(RemoteInfo, "update", "set-prereleases", "on" if enabled else "off")
+
+
+@async_wrap
 def system_agent_get_remote() -> RemoteInfo:
     return _call_system_agent_sync(RemoteInfo, "update", "get-remote")
 

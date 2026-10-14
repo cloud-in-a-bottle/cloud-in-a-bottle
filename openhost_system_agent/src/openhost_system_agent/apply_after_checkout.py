@@ -13,7 +13,9 @@ ref's own code.
 
 The destination is the latest release tag, unless a target ref is pinned
 (git config openhost.target-ref, e.g. a feature branch) — then the tags are
-still walked as stepping stones and the pinned ref is the final hop.
+still walked as stepping stones and the pinned ref is the final hop. With no
+pin and the owner opted in (git config openhost.prereleases), the newest
+release candidate is the final hop when it is newer than the releases.
 
 Migrations run before `pixi install`, so a migration that upgrades the
 toolchain (e.g. pixi) takes effect before deps are installed.
@@ -43,14 +45,21 @@ from openhost_system_agent.updater import progress
 PIXI_BIN = "/home/host/.pixi/bin/pixi"
 
 # A release tag is "v" followed by dot-separated integers (v1, v1.2, v1.2.3).
-# Other v-prefixed tags (e.g. v1.2.0-rc1) are ignored so version parsing
-# can't crash on them.
+# A release candidate adds "-rc.N" (v1.2.0-rc.1); it is never a stepping stone,
+# only the optional last hop. Any other v-prefixed tag is ignored so version
+# parsing can't crash on it.
 _RELEASE_TAG = re.compile(r"v\d+(?:\.\d+)*")
+_RC_TAG = re.compile(r"v\d+(?:\.\d+)*-rc\.\d+")
 
 
 # When set, updates end on this ref (a branch tip or commit) instead of the
 # latest tag — kept in sync with update.py's _TARGET_REF_CONFIG.
 _TARGET_REF_CONFIG = "openhost.target-ref"
+
+# When true (and no target ref is pinned), the walk ends on the newest release
+# candidate if it is newer than the releases — kept in sync with update.py's
+# _PRERELEASES_CONFIG.
+_PRERELEASES_CONFIG = "openhost.prereleases"
 
 
 def _git(project: str, *args: str) -> subprocess.CompletedProcess[str]:
@@ -65,38 +74,58 @@ def _ensure_repo_trusted(project: str) -> None:
         _git(project, "config", "--global", "--add", "safe.directory", project)
 
 
-def _version_key(tag_name: str) -> tuple[int, ...]:
-    return tuple(int(x) for x in tag_name.lstrip("v").split("."))
+def _version_key(tag_name: str) -> tuple[tuple[int, ...], int, int]:
+    version, _, rc = tag_name.lstrip("v").partition("-rc.")
+    # A release sorts after its own candidates: v1.2.0-rc.1 < v1.2.0-rc.2 < v1.2.0.
+    return tuple(int(x) for x in version.split(".")), 0 if rc else 1, int(rc or 0)
+
+
+def _is_version_tag(name: str) -> bool:
+    return bool(_RELEASE_TAG.fullmatch(name) or _RC_TAG.fullmatch(name))
+
+
+def _tag_list(project: str, *args: str) -> list[str]:
+    result = _git(project, "tag", *args)
+    return result.stdout.split() if result.returncode == 0 else []
 
 
 def _get_sorted_tags(project: str) -> list[str]:
-    tags = [t for t in _git(project, "tag", "-l", "v*").stdout.strip().split("\n") if _RELEASE_TAG.fullmatch(t)]
-    return sorted(tags, key=_version_key)
+    return sorted((t for t in _tag_list(project, "-l", "v*") if _RELEASE_TAG.fullmatch(t)), key=_version_key)
+
+
+def _newest_candidate(project: str) -> str | None:
+    return max((t for t in _tag_list(project, "-l", "v*") if _RC_TAG.fullmatch(t)), key=_version_key, default=None)
 
 
 def _current_tag(project: str) -> str | None:
-    result = _git(project, "describe", "--tags", "--exact-match", "HEAD")
-    tag = result.stdout.strip()
-    return tag if result.returncode == 0 and _RELEASE_TAG.fullmatch(tag) else None
+    """The highest release or candidate tag on HEAD itself. Not ``git describe --exact-match``, which may name a
+    candidate sharing its release's commit. Kept in sync with update._current_tag."""
+    return max(
+        (t for t in _tag_list(project, "--points-at", "HEAD") if _is_version_tag(t)), key=_version_key, default=None
+    )
 
 
 def _latest_ancestor_tag(project: str) -> str | None:
-    """The highest release tag in HEAD's history (HEAD included). Not ``git describe``, which returns only the
-    nearest tag of any name, so a non-release tag nearer to HEAD would hide every release behind it.
+    """The highest release or candidate tag in HEAD's history (HEAD included). Candidates count so a host on one is
+    never walked back to an older line's release. Not ``git describe``, which returns only the nearest tag of any
+    name, so an unrecognized tag nearer to HEAD would hide every release behind it.
 
     Kept in sync with update._latest_ancestor_tag.
     """
-    result = _git(project, "tag", "--merged", "HEAD")
-    if result.returncode != 0:
-        return None
-    tags = sorted((t for t in result.stdout.split() if _RELEASE_TAG.fullmatch(t)), key=_version_key)
-    return tags[-1] if tags else None
+    return max(
+        (t for t in _tag_list(project, "--merged", "HEAD") if _is_version_tag(t)), key=_version_key, default=None
+    )
 
 
 def _target_ref(project: str) -> str | None:
     result = _git(project, "config", "--get", _TARGET_REF_CONFIG)
     value = result.stdout.strip()
     return value if result.returncode == 0 and value else None
+
+
+def _prereleases(project: str) -> bool:
+    result = _git(project, "config", "--get", "--bool", _PRERELEASES_CONFIG)
+    return result.returncode == 0 and result.stdout.strip() == "true"
 
 
 def _resolve_ref_sha(project: str, ref: str) -> str | None:
@@ -119,7 +148,8 @@ def _next_step(project: str) -> str | None:
 
     Release tags are walked in ascending version order as stepping stones, then
     the pinned target ref (if any) is the final hop. The destination is the
-    pinned target when set, otherwise the latest release tag.
+    pinned target when set, otherwise the latest release tag, or the newest
+    release candidate when the owner opted in and it is newer.
 
     When a target is pinned we must (1) treat "HEAD already at the target sha"
     as terminal *before* walking tags, and (2) only walk tags that are ancestors
@@ -155,6 +185,11 @@ def _next_step(project: str) -> str | None:
     # Tags exhausted (or none applicable): the pinned target is the final hop.
     if target_sha is not None:
         return target
+
+    # Releases exhausted on the tags channel: an opted-in host jumps straight to the newest candidate.
+    candidate = _newest_candidate(project) if _prereleases(project) else None
+    if candidate is not None and (base is None or _version_key(candidate) > _version_key(base)):
+        return candidate
     return None
 
 

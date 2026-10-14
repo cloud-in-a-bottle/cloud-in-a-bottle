@@ -45,6 +45,7 @@ from compute_space.core.system_agent.client import system_agent_apply
 from compute_space.core.system_agent.client import system_agent_fetch
 from compute_space.core.system_agent.client import system_agent_get_remote
 from compute_space.core.system_agent.client import system_agent_reset_restart_limit_sync
+from compute_space.core.system_agent.client import system_agent_set_prereleases
 from compute_space.core.system_agent.client import system_agent_set_remote
 from compute_space.core.system_agent.client import system_agent_status
 from compute_space.core.system_agent.progress import read_progress
@@ -90,6 +91,11 @@ class SetRemoteRequest:
 
 
 @attr.s(auto_attribs=True, frozen=True)
+class SetPrereleasesRequest:
+    enabled: bool
+
+
+@attr.s(auto_attribs=True, frozen=True)
 class SetOwnerUsernameRequest:
     username: str = attr.ib(validator=not_blank)
 
@@ -129,6 +135,16 @@ async def set_remote(data: SetRemoteRequest) -> RemoteInfo:
         return await system_agent_set_remote(data.url.strip())
     except SystemAgentError as e:
         raise InternalServerException(detail="Failed to set the git remote", extra={"output": str(e)}) from e
+
+
+@post("/api/settings/set-prereleases", status_code=200, guards=[require_owner_auth], raises=[InternalServerException])
+async def set_prereleases(data: SetPrereleasesRequest) -> RemoteInfo:
+    try:
+        return await system_agent_set_prereleases(data.enabled)
+    except SystemAgentError as e:
+        raise InternalServerException(
+            detail="Failed to save the release candidate setting", extra={"output": str(e)}
+        ) from e
 
 
 @get("/api/settings/update", guards=[require_owner_auth])
@@ -440,6 +456,7 @@ api_settings_routes = Router(
     route_handlers=[
         get_remote,
         set_remote,
+        set_prereleases,
         check_for_updates,
         apply_update,
         update_progress,

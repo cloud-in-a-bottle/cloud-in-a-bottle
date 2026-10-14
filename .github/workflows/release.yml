@@ -13,9 +13,17 @@ name: release
 #   git commit -am "Release v0.1.4" && git push
 #   git tag v0.1.4 && git push origin v0.1.4
 #
+# A release candidate is the same flow with a vMAJOR.MINOR.PATCH-rc.N tag (the dot
+# keeps rc.10 sorting after rc.9). uv writes the PEP 440 form to pyproject:
+#   uv version 0.3.0-rc.1              # pyproject.toml now says 0.3.0rc1
+#   git commit -am "Release v0.3.0-rc.1" && git push
+#   git tag v0.3.0-rc.1 && git push origin v0.3.0-rc.1
+# Its GitHub release is marked as a pre-release, so it never becomes "Latest".
+#
 # The release is created as a draft so a human can review the changelog before it
-# goes public. The same vX.Y.Z tags drive the host auto-updater
-# (openhost_system_agent/update.py), so there is exactly one tag scheme.
+# goes public. The same tags drive the host auto-updater
+# (openhost_system_agent/update.py), so there is exactly one tag scheme: hosts
+# follow vX.Y.Z, and also vX.Y.Z-rc.N once the owner opts in to release candidates.
 #
 # Images are built for amd64 (on the runner, with KVM) and arm64 (on an EC2
 # Graviton bare-metal host, via image/on_ec2.sh). Pull requests that touch the
@@ -25,6 +33,7 @@ on:
   push:
     tags:
       - "v[0-9]+.[0-9]+.[0-9]+"
+      - "v[0-9]+.[0-9]+.[0-9]+-rc.[0-9]+"
   pull_request:
     paths:
       - "image/**"
@@ -48,10 +57,12 @@ jobs:
           TAG: ${{ github.ref_name }}
         run: |
           want="${TAG#v}"
+          # PEP 440 spells a candidate 1.2.0rc1, which is what `uv version 1.2.0-rc.1` writes.
+          pep440="${want/-rc./rc}"
           got="$(sed -n 's/^version = "\([^"]*\)"/\1/p' pyproject.toml | head -1)"
-          if [ "$got" != "$want" ]; then
+          if [ "$got" != "$want" ] && [ "$got" != "$pep440" ]; then
             echo "::error::pyproject.toml is at '$got' but the tag is '$TAG'."
-            echo "Bump the [project] version in pyproject.toml to $want, commit, then re-tag."
+            echo "Bump the [project] version in pyproject.toml to $pep440, commit, then re-tag."
             exit 1
           fi
           echo "version ok: pyproject.toml $got matches $TAG"
@@ -170,6 +181,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
         run: |
+          prerelease=()
+          [[ "$TAG" == *-rc.* ]] && prerelease=(--prerelease)
+
           assets=(image/out/cloud-in-a-bottle-*.qcow2)
           for ova in image/out/cloud-in-a-bottle-*.ova; do
             [ -e "$ova" ] && assets+=("$ova")
@@ -183,6 +197,7 @@ jobs:
             --title "Cloud in a Bottle $TAG" \
             --generate-notes \
             --draft \
+            "${prerelease[@]}" \
             "${assets[@]}"
 
           changelog="$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json body --jq .body)"

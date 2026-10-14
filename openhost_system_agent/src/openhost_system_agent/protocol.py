@@ -39,6 +39,8 @@ class RemoteInfo:
     # For TAGS, ``ref`` is the resolved current release tag shown for information only; the dashboard must NOT
     # reconstruct a ``url@ref`` pin from it, or re-saving the remote would silently freeze the host on that tag.
     channel: UpdateChannel
+    # Whether the owner opted in to release candidates. Saved regardless of channel, but only TAGS acts on it.
+    prereleases: bool = False
 
 
 @attr.s(auto_attribs=True, frozen=True)

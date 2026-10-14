@@ -83,38 +83,54 @@ def _strip_credentials(url: str) -> str:
 
 
 # A release tag is "v" followed by dot-separated integers (v1, v1.2, v1.2.3).
-# Other v-prefixed tags (e.g. v1.2.0-rc1) are ignored so version parsing
-# can't crash on them.
+# A release candidate adds "-rc.N" (v1.2.0-rc.1); it is never a stepping stone,
+# only the optional last hop (see _next_step). Any other v-prefixed tag is
+# ignored so version parsing can't crash on it.
 _RELEASE_TAG = re.compile(r"v\d+(?:\.\d+)*")
+_RC_TAG = re.compile(r"v\d+(?:\.\d+)*-rc\.\d+")
 
 
-def _version_key(tag_name: str) -> tuple[int, ...]:
-    return tuple(int(x) for x in tag_name.lstrip("v").split("."))
+def _version_key(tag_name: str) -> tuple[tuple[int, ...], int, int]:
+    version, _, rc = tag_name.lstrip("v").partition("-rc.")
+    # A release sorts after its own candidates: v1.2.0-rc.1 < v1.2.0-rc.2 < v1.2.0.
+    return tuple(int(x) for x in version.split(".")), 0 if rc else 1, int(rc or 0)
+
+
+def _is_version_tag(name: str) -> bool:
+    return bool(_RELEASE_TAG.fullmatch(name) or _RC_TAG.fullmatch(name))
 
 
 def _get_sorted_tags(repo: git.Repo) -> list[str]:
     return sorted([t.name for t in repo.tags if _RELEASE_TAG.fullmatch(t.name)], key=_version_key)
 
 
+def _newest_candidate(repo: git.Repo) -> str | None:
+    return max((t.name for t in repo.tags if _RC_TAG.fullmatch(t.name)), key=_version_key, default=None)
+
+
 def _current_tag(repo: git.Repo) -> str | None:
-    try:
-        result: str = repo.git.describe("--tags", "--exact-match", "HEAD")
-    except git.GitCommandError:
-        return None
-    return result if _RELEASE_TAG.fullmatch(result) else None
+    """The highest release or candidate tag on HEAD itself.
+
+    Not ``git describe --exact-match``: a release is often tagged on its last candidate's commit, and describe may
+    name the candidate, which would make the walk "step" onto the release's (identical) commit forever.
+    """
+    tags = [t for t in repo.git.tag("--points-at", "HEAD").split() if _is_version_tag(t)]
+    return max(tags, key=_version_key, default=None)
 
 
 def _latest_ancestor_tag(repo: git.Repo) -> str | None:
-    """The highest release tag in HEAD's history (HEAD included).
+    """The highest release or candidate tag in HEAD's history (HEAD included).
 
-    Not ``git describe``: it returns only the nearest tag of any name, so a non-release tag (e.g. v1.3.0-rc1) nearer
-    to HEAD would hide every release behind it, and the walk would restart from the oldest tag.
+    Candidates count so that a host on one is measured from there: otherwise a fix release on the older line (v1.2.1
+    while on v1.3.0-rc.2) would walk it backwards, and with the candidate hop, back and forth forever.
+
+    Not ``git describe``: it returns only the nearest tag of any name, so an unrecognized tag nearer to HEAD would
+    hide every release behind it, and the walk would restart from the oldest tag.
 
     Kept in sync with apply_after_checkout._latest_ancestor_tag.
     """
     merged: str = repo.git.tag("--merged", "HEAD")
-    tags = sorted((t for t in merged.split() if _RELEASE_TAG.fullmatch(t)), key=_version_key)
-    return tags[-1] if tags else None
+    return max((t for t in merged.split() if _is_version_tag(t)), key=_version_key, default=None)
 
 
 # ── Target ref (pin to a branch/commit instead of the latest tag) ────
@@ -124,6 +140,12 @@ def _latest_ancestor_tag(repo: git.Repo) -> str | None:
 # end on this ref (a branch tip or commit) instead of the latest tag. Unset →
 # the latest tag is the destination. Kept in sync with apply_after_checkout.py.
 _TARGET_REF_CONFIG = "openhost.target-ref"
+
+# Persisted in git config. When true, the walk takes one more hop after the
+# releases: to the newest release candidate, if it is newer than where the
+# releases left the host. Only honored on the tags channel: a pinned target ref
+# decides the destination by itself. Kept in sync with apply_after_checkout.py.
+_PRERELEASES_CONFIG = "openhost.prereleases"
 
 # Without a ceiling a hung connection blocks every future update attempt.
 _FETCH_TIMEOUT_SECONDS = 300
@@ -145,6 +167,24 @@ def _set_target_ref(repo: git.Repo, ref: str | None) -> None:
         repo.git.config("--unset-all", _TARGET_REF_CONFIG)
     except git.GitCommandError:
         pass  # already unset
+
+
+def _get_prereleases_setting(repo: git.Repo) -> bool:
+    try:
+        value: str = repo.git.config("--get", "--bool", _PRERELEASES_CONFIG)
+    except git.GitCommandError:
+        return False
+    return value.strip() == "true"
+
+
+def _tags_destination(repo: git.Repo) -> str | None:
+    """Where the tags channel ends: the latest release, or the newest candidate if opted in and newer."""
+    tags = _get_sorted_tags(repo)
+    latest = tags[-1] if tags else None
+    candidate = _newest_candidate(repo) if _get_prereleases_setting(repo) else None
+    if candidate is not None and (latest is None or _version_key(candidate) > _version_key(latest)):
+        return candidate
+    return latest
 
 
 def _resolve_ref_sha(repo: git.Repo, ref: str) -> str | None:
@@ -172,7 +212,8 @@ def _next_step(repo: git.Repo) -> str | None:
 
     Release tags are walked in ascending version order as stepping stones, then
     the pinned target ref (if any) is the final hop. The destination is the
-    pinned target when set, otherwise the latest release tag.
+    pinned target when set, otherwise the latest release tag, or the newest
+    release candidate when the owner opted in and it is newer.
 
     When a target is pinned we must (1) treat "HEAD already at the target sha"
     as terminal *before* walking tags, and (2) only walk tags that are ancestors
@@ -208,6 +249,12 @@ def _next_step(repo: git.Repo) -> str | None:
     # Tags exhausted (or none applicable): the pinned target is the final hop.
     if target_sha is not None:
         return target
+
+    # Releases exhausted on the tags channel: an opted-in host jumps straight to the newest candidate. Never through
+    # the ones before it, as a release never goes through its candidates either.
+    candidate = _newest_candidate(repo) if _get_prereleases_setting(repo) else None
+    if candidate is not None and (base is None or _version_key(candidate) > _version_key(base)):
+        return candidate
     return None
 
 
@@ -238,11 +285,10 @@ def fetch_updates() -> FetchResult:
             return FetchResult(state="BEHIND_REMOTE")
         return FetchResult(state="UP_TO_DATE")
 
-    tags = _get_sorted_tags(repo)
-    if not tags:
+    latest = _tags_destination(repo)
+    if latest is None:
         return FetchResult(state="UP_TO_DATE")
 
-    latest = tags[-1]
     current = _current_tag(repo) or _latest_ancestor_tag(repo)
 
     if current is None or _version_key(current) < _version_key(latest):
@@ -260,8 +306,7 @@ def show_diff() -> DiffResult:
         dest: str | None = _resolve_ref_sha(repo, target)
         dest_label = target
     else:
-        tags = _get_sorted_tags(repo)
-        dest = tags[-1] if tags else None
+        dest = _tags_destination(repo)
         dest_label = dest
 
     if dest is None:
@@ -344,7 +389,8 @@ def apply_update() -> NoReturn:
 
         progress.record("fetch", "Fetching latest code\u2026")
         _fetch_chown_host(repo, "origin", "--tags", kill_after_timeout=_FETCH_TIMEOUT_SECONDS)
-        if not _get_sorted_tags(repo) and _get_target_ref(repo) is None:
+        # Candidates count here whatever the setting: this only refuses a remote with nothing tagged at all.
+        if not _get_sorted_tags(repo) and _newest_candidate(repo) is None and _get_target_ref(repo) is None:
             raise RuntimeError("No tags found on remote. Tag a release first.")
 
         # The first step; apply_after_checkout tail-calls through the rest.
@@ -461,9 +507,26 @@ def set_remote_url(spec: str) -> RemoteInfo:
 
     return RemoteInfo(
         url=_strip_credentials(remote.url),
-        ref=remote.ref or (tags[-1] if (tags := _get_sorted_tags(repo)) else "HEAD"),
+        ref=remote.ref or _tags_destination(repo) or "HEAD",
         channel=remote.channel,
+        prereleases=_get_prereleases_setting(repo),
     )
+
+
+def set_prereleases(enabled: bool) -> RemoteInfo:
+    """Opt in to (or out of) release candidates on the tags channel.
+
+    Like set_remote_url this only records the choice; the next update walk acts on it. Opting out while on a
+    candidate leaves the host there until the next release, since nothing older is walked back to.
+    """
+    repo = _repo()
+    try:
+        repo.git.config("--bool", _PRERELEASES_CONFIG, "true" if enabled else "false")
+    finally:
+        # git rewrites .git/config via rename, so a root write leaves it root-owned.
+        if os.geteuid() == 0:
+            reclaim_host_ownership()
+    return get_remote_info()
 
 
 def _channel_for_target(repo: git.Repo, target: str | None) -> UpdateChannel:
@@ -480,4 +543,9 @@ def get_remote_info() -> RemoteInfo:
     # On the tags channel, still report the resolved current tag for display; the channel tells the dashboard not to
     # round-trip it back into a pin.
     ref = target or _current_tag(repo) or _latest_ancestor_tag(repo) or repo.head.commit.hexsha[:8]
-    return RemoteInfo(url=url, ref=ref, channel=_channel_for_target(repo, target))
+    return RemoteInfo(
+        url=url,
+        ref=ref,
+        channel=_channel_for_target(repo, target),
+        prereleases=_get_prereleases_setting(repo),
+    )
