@@ -250,7 +250,12 @@ async def configure_archive_backend(
     # archive is already on S3, and configuring a new bucket copies the data to
     # the new bucket, re-points the volume, and reclaims the old bucket.  It is
     # fail-open, but it moves live data, so require confirm_migrate_s3.
-    if state.backend == "s3" and not data.confirm_migrate_s3:
+    # A preconfigured backend that never formatted holds no data: nothing to migrate or confirm.
+    if (
+        state.backend == "s3"
+        and not data.confirm_migrate_s3
+        and not archive_backend.is_unformatted_seed(config, state)
+    ):
         raise ConflictException(
             detail=(
                 "The archive tier is already on S3 (bucket "

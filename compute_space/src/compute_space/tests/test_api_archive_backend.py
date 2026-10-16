@@ -217,7 +217,7 @@ def test_configure_s3_requires_confirm_migrate_s3(
     db = sqlite3.connect(cfg.db_path)
     try:
         db.execute(
-            "UPDATE archive_backend SET backend='s3', s3_bucket='oldbucket', "
+            "UPDATE archive_backend SET backend='s3', configured_at='2026-01-01T00:00:00Z', s3_bucket='oldbucket', "
             "s3_access_key_id='ak', s3_secret_access_key='sk' WHERE id=1"
         )
         db.commit()
@@ -240,7 +240,7 @@ def test_configure_s3_to_s3_happy_path(cfg: Any, client: TestClient[Litestar], c
     db = sqlite3.connect(cfg.db_path)
     try:
         db.execute(
-            "UPDATE archive_backend SET backend='s3', s3_bucket='oldbucket', "
+            "UPDATE archive_backend SET backend='s3', configured_at='2026-01-01T00:00:00Z', s3_bucket='oldbucket', "
             "s3_access_key_id='ak', s3_secret_access_key='sk', "
             "s3_prefix='oh-zone-1', juicefs_volume_name='oh-zone-1' WHERE id=1"
         )
@@ -709,3 +709,27 @@ def test_get_surfaces_local_archive_apps(cfg: Any, client: TestClient[Litestar],
     assert body["local_archive_apps"] == ["nextcloud"]
     # The archive tier is always the JuiceFS mountpoint, both backends.
     assert body["archive_dir"] == archive_backend.juicefs_mount_dir(cfg)
+
+
+def test_configure_a_never_formatted_seed_needs_no_migration_confirm(
+    cfg: Any, client: TestClient[Litestar], cookies: dict[str, str]
+) -> None:
+    """A backend preconfigured at first boot that never formatted holds no data: the owner fixes its
+    credentials without being warned about (or asked to confirm) a data migration."""
+    db = sqlite3.connect(cfg.db_path)
+    try:
+        db.execute(
+            "UPDATE archive_backend SET backend='s3', s3_bucket='seeded', "
+            "s3_access_key_id='ak', s3_secret_access_key='sk', configured_at=NULL WHERE id=1"
+        )
+        db.commit()
+    finally:
+        db.close()
+    with mock.patch.object(archive_backend, "configure_backend") as mock_configure:
+        client.cookies.update(cookies)
+        resp = client.post(
+            "/api/storage/archive_backend/configure",
+            json={"s3_bucket": "seeded", "s3_access_key_id": "fixed", "s3_secret_access_key": "fixedsecret"},
+        )
+    assert resp.status_code == 200, resp.text
+    assert mock_configure.call_args.kwargs["s3_access_key_id"] == "fixed"

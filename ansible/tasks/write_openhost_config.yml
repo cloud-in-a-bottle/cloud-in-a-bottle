@@ -69,6 +69,9 @@
     mode: "0600"
   when: (overwrite_existing | default(false) | bool) or not existing_first_boot.stat.exists
   register: first_boot_file
+  # The rendered file carries credentials (Imbue client secret, archive S3 secret); keep them out of
+  # the provisioner's logs, including --diff output.
+  no_log: true
 
 # LAN mode: the hostname must match the domain (avahi publishes the bare <hostname>.local; see
 # apt_packages.yml), so it is set exactly when the domain is seeded.  A re-run with a different

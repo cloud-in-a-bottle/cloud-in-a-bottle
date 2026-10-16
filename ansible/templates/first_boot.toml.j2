@@ -1,5 +1,6 @@
 {# first_boot.toml: the fresh instance's primary domain + claim token, and (for managed spaces) the
-   shared Imbue credential. These values seed the DB once, then are ignored after. #}
+   shared Imbue credential and a preconfigured S3 archive backend. These values seed the DB once,
+   then are ignored after. #}
 domain = "{{ domain }}"
 tls = {{ 'true' if (tls | bool) else 'false' }}
 claim_token = "{{ effective_claim_token }}"
@@ -13,4 +14,14 @@ imbue_connect_base_url = "{{ imbue_connect_base_url }}"
 issuer_url = "{{ imbue_identity_issuer_url }}"
 client_id = "{{ imbue_identity_client_id }}"
 client_secret = "{{ imbue_identity_client_secret }}"
+{% endif %}
+{% if archive_backend_s3_bucket is defined and archive_backend_s3_bucket %}
+# Preconfigured S3 archive backend (e.g. managed storage), seeded onto a pristine instance on first
+# boot and formatted on the first boot after the claim. to_json quotes each value as a TOML string.
+[archive_backend]
+s3_bucket = {{ archive_backend_s3_bucket | to_json }}
+s3_endpoint = {{ archive_backend_s3_endpoint | to_json }}
+s3_region = {{ archive_backend_s3_region | default('auto', true) | to_json }}
+s3_access_key_id = {{ archive_backend_s3_access_key_id | to_json }}
+s3_secret_access_key = {{ archive_backend_s3_secret_access_key | to_json }}
 {% endif %}

@@ -1,8 +1,8 @@
 """First-boot seeding.
 
 A ``first_boot.toml`` next to the router config supplies a fresh instance's primary domain +
-claim token; they are seeded into the DB (the ``domains`` table + the ``settings`` claim token)
-exactly once, after which the DB is authoritative.  Old instances (whose domain lived in
+claim token (and, for managed spaces, the shared Imbue credential and a preconfigured S3 archive
+backend); they are seeded into the DB exactly once, after which the DB is authoritative.  Old instances (whose domain lived in
 ``config.toml``) are migrated into the DB out of band by the system-agent migration
 ``v0007_seed_domains_and_scrub``, which also scrubs the captured ``config.toml`` lines.
 """
@@ -18,6 +18,7 @@ from pathlib import Path
 import attr
 
 from compute_space.config import Config
+from compute_space.core import archive_backend
 from compute_space.core import identity_store
 from compute_space.core import settings_store
 from compute_space.core.domains import Domain
@@ -25,6 +26,59 @@ from compute_space.core.domains import seed_domains
 from compute_space.core.logging import logger
 from compute_space.core.tls.keycloak import KeycloakClientCredentials
 from compute_space.db import get_db
+
+
+@attr.s(auto_attribs=True, frozen=True)
+class FirstBootArchiveBackend:
+    """A preconfigured S3 archive backend (e.g. managed storage), delivered by the provisioner."""
+
+    s3_bucket: str
+    s3_endpoint: str
+    s3_region: str | None
+    s3_access_key_id: str
+    s3_secret_access_key: str = attr.ib(repr=False)
+
+
+def _archive_string(table: dict[str, object], key: str) -> str | None:
+    value = table.get(key)
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError(f"first_boot.toml: [archive_backend] {key} must be a string")
+    return value.strip() or None
+
+
+def _parse_archive_backend(raw: object) -> FirstBootArchiveBackend | None:
+    """Parse the optional ``[archive_backend]`` table.  Fails loudly on a malformed or partial table:
+    silently ignoring it would put a managed instance's archive on non-durable local disk."""
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise ValueError("first_boot.toml: [archive_backend] must be a table")
+    bucket = _archive_string(raw, "s3_bucket")
+    endpoint = _archive_string(raw, "s3_endpoint")
+    access_key_id = _archive_string(raw, "s3_access_key_id")
+    secret_access_key = _archive_string(raw, "s3_secret_access_key")
+    region = _archive_string(raw, "s3_region")
+    required = {
+        "s3_bucket": bucket,
+        "s3_endpoint": endpoint,
+        "s3_access_key_id": access_key_id,
+        "s3_secret_access_key": secret_access_key,
+    }
+    missing = [key for key, value in required.items() if value is None]
+    if missing:
+        raise ValueError(f"first_boot.toml: [archive_backend] is missing {', '.join(missing)}")
+    assert bucket and endpoint and access_key_id and secret_access_key
+    if not endpoint.startswith("https://"):
+        raise ValueError("first_boot.toml: [archive_backend] s3_endpoint must be an https:// URL")
+    return FirstBootArchiveBackend(
+        s3_bucket=bucket,
+        s3_endpoint=endpoint,
+        s3_region=region,
+        s3_access_key_id=access_key_id,
+        s3_secret_access_key=secret_access_key,
+    )
 
 
 @attr.s(auto_attribs=True, frozen=True)
@@ -36,9 +90,11 @@ class FirstBoot:
     # three parts present together, or all None (no identity seeded).
     imbue_identity_issuer_url: str | None = None
     imbue_identity_client_id: str | None = None
-    imbue_identity_client_secret: str | None = None
+    imbue_identity_client_secret: str | None = attr.ib(default=None, repr=False)
     # Base URL of the Imbue API for the "Connect to Imbue" flow (optional).
     imbue_connect_base_url: str | None = None
+    # Preconfigured S3 archive backend (optional), seeded once onto a pristine instance.
+    archive_backend: FirstBootArchiveBackend | None = None
 
 
 def _config_dir() -> Path | None:
@@ -74,6 +130,7 @@ def read_first_boot() -> FirstBoot | None:
         imbue_identity_client_id=(str(identity["client_id"]) if identity.get("client_id") else None),
         imbue_identity_client_secret=(str(identity["client_secret"]) if identity.get("client_secret") else None),
         imbue_connect_base_url=(str(data["imbue_connect_base_url"]) if data.get("imbue_connect_base_url") else None),
+        archive_backend=_parse_archive_backend(data.get("archive_backend")),
     )
 
 
@@ -104,6 +161,18 @@ def seed_first_boot(config: Config) -> None:
             primary = Domain(name=fb.domain, tls=fb.tls)
             seed_domains(db, primary, [])
             _seed_imbue_identity(db, fb)
+            if fb.archive_backend is not None and not owner_exists(config):
+                # Before the claim only (a stale file must not reconfigure an owned instance), and after
+                # seed_domains: the volume name derives from the primary domain.
+                archive_backend.seed_preconfigured_s3(
+                    config,
+                    db,
+                    s3_bucket=fb.archive_backend.s3_bucket,
+                    s3_region=fb.archive_backend.s3_region,
+                    s3_endpoint=fb.archive_backend.s3_endpoint,
+                    s3_access_key_id=fb.archive_backend.s3_access_key_id,
+                    s3_secret_access_key=fb.archive_backend.s3_secret_access_key,
+                )
 
         # Migrate the claim token into the settings store.  Relevant only pre-setup, so gate on
         # owner-absence + settings-absence rather than the domain-seeded flag — an instance that seeded

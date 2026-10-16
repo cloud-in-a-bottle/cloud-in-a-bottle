@@ -649,6 +649,61 @@ def _set_juicefs_volume_name(db: sqlite3.Connection, volume_name: str) -> None:
     db.commit()
 
 
+def seed_preconfigured_s3(
+    config: Config,
+    db: sqlite3.Connection,
+    *,
+    s3_bucket: str,
+    s3_region: str | None,
+    s3_endpoint: str,
+    s3_access_key_id: str,
+    s3_secret_access_key: str,
+) -> bool:
+    """Point a pristine instance's archive at a preconfigured S3 bucket (first boot, before the claim).
+
+    Only an untouched instance is seeded: backend still ``'local'`` with no bucket and no
+    configuration, and no volume formatted yet.  Anything else (an instance that already formatted
+    its local volume, or was configured from the dashboard) is left alone, so this can never strand
+    local data or overwrite an operator's choice; a stale ``first_boot.toml`` re-read on later boots
+    is inert.  ``configured_at`` stays NULL until :func:`attach_on_startup` has formatted and mounted
+    the volume, which marks a seeded-but-not-yet-formatted backend.  Returns whether it seeded.
+    """
+    # Pristine means no metadata DB at all. Not ``_local_volume_formatted``: that reads an unreadable
+    # (locked, corrupt) DB as unformatted, which must not relabel an existing local archive.
+    if os.path.exists(_juicefs_meta_db(config)):
+        logger.warning("Not seeding the preconfigured S3 archive backend: a JuiceFS metadata DB already exists")
+        return False
+    volume = default_volume_name_for_zone(db)
+    cursor = db.execute(
+        "UPDATE archive_backend SET backend='s3', s3_bucket=?, s3_region=?, s3_endpoint=?, s3_prefix=?, "
+        "s3_access_key_id=?, s3_secret_access_key=?, juicefs_volume_name=?, state_message=NULL "
+        "WHERE id = 1 AND backend = 'local' AND s3_bucket IS NULL AND configured_at IS NULL",
+        (s3_bucket, s3_region, s3_endpoint, volume, s3_access_key_id, s3_secret_access_key, volume),
+    )
+    db.commit()
+    if cursor.rowcount != 1:
+        state = read_state(db)
+        if state.backend != "s3" or state.s3_bucket != s3_bucket:
+            logger.warning("Not seeding the preconfigured S3 archive backend: the archive is already configured")
+        return False
+    logger.info("Seeded preconfigured S3 archive backend (bucket {}, volume {})", s3_bucket, volume)
+    return True
+
+
+def is_unformatted_seed(config: Config, state: BackendState) -> bool:
+    """A backend preconfigured at first boot whose volume was never formatted (e.g. its credentials were
+    rejected).  It holds no data, so configuring it is a fresh format, not a migration."""
+    return state.backend == "s3" and state.configured_at is None and not _local_volume_formatted(config)
+
+
+def _set_configured_now(db: sqlite3.Connection) -> None:
+    db.execute(
+        "UPDATE archive_backend SET configured_at = ? WHERE id = 1 AND configured_at IS NULL",
+        (time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),),
+    )
+    db.commit()
+
+
 def attach_on_startup(config: Config, db: sqlite3.Connection) -> None:
     """Bring the archive backend online at boot.  Failures don't crash boot;
     they're surfaced via state_message so the dashboard stays reachable.
@@ -662,7 +717,11 @@ def attach_on_startup(config: Config, db: sqlite3.Connection) -> None:
 
     For the ``local`` backend it also performs first-boot initialisation:
     if the volume has never been formatted, format it with the file backend
-    so the archive tier is available with zero operator configuration.
+    so the archive tier is available with zero operator configuration.  The
+    same holds for an ``s3`` backend preconfigured at first boot (see
+    :func:`seed_preconfigured_s3`): its volume is formatted on the bucket here.
+    A failure (bad credentials, bucket unreachable) is recorded and retried on
+    the next boot; it never falls back to local disk.
     """
     state = read_state(db)
     if state.backend in ("local", "s3") and not is_linux_host():
@@ -708,7 +767,27 @@ def attach_on_startup(config: Config, db: sqlite3.Connection) -> None:
                 "S3 credentials are missing from the archive_backend row.  Re-configure "
                 "the archive backend from the dashboard."
             )
+        if not _local_volume_formatted(config):
+            # A backend preconfigured at first boot (configured_at still NULL) is formatted here, on the
+            # first full boot after the claim.  An already-configured backend must never be re-formatted:
+            # a missing meta DB there means lost metadata, which needs an operator, not a fresh volume.
+            if state.configured_at is not None:
+                raise RuntimeError(
+                    "The S3 archive volume's metadata database is missing or unformatted; refusing to "
+                    "format over an existing archive.  Restore the JuiceFS meta DB or contact support."
+                )
+            assert state.s3_bucket is not None
+            format_s3_volume(
+                config,
+                s3_bucket=state.s3_bucket,
+                s3_region=state.s3_region,
+                s3_endpoint=state.s3_endpoint,
+                s3_access_key_id=state.s3_access_key_id,
+                s3_secret_access_key=state.s3_secret_access_key,
+                juicefs_volume_name=state.juicefs_volume_name,
+            )
         mount(config, state.s3_access_key_id, state.s3_secret_access_key)
+        _set_configured_now(db)
         _set_state_message(db, None)
     except Exception as exc:
         logger.exception("Failed to attach archive backend on startup")
@@ -716,7 +795,8 @@ def attach_on_startup(config: Config, db: sqlite3.Connection) -> None:
 
 
 def _local_volume_formatted(config: Config) -> bool:
-    """True iff a JuiceFS volume has actually been FORMATTED in the local meta DB.
+    """True iff a JuiceFS volume has actually been FORMATTED in the local meta DB (for any backend:
+    the meta DB is always local).
 
     IMPORTANT: this must NOT merely check that the meta.db *file* exists.  When
     JuiceFS opens a ``sqlite3://`` meta address it creates the sqlite file
@@ -1222,7 +1302,10 @@ def configure_backend(
         raise RuntimeError(f"cannot configure S3 from backend={state.backend!r}")
 
     migrating_from_local = state.backend == "local"
-    migrating_from_s3 = state.backend == "s3"
+    # A backend preconfigured at first boot that never formatted (e.g. its credentials were rejected)
+    # holds no data: configuring it formats the new bucket fresh, like a legacy 'disabled' zone.
+    seeded_unformatted = is_unformatted_seed(config, state)
+    migrating_from_s3 = state.backend == "s3" and not seeded_unformatted
     if migrating_from_s3:
         # Source creds must exist for an s3->s3 migration; without them we
         # cannot read the old bucket to copy it forward.
@@ -1250,7 +1333,7 @@ def configure_backend(
     # unique per-zone name, so this legacy branch only fires for old zones.
     #
     # disabled -> s3: no volume yet; pick a fresh (prefix/unique) name.
-    if migrating_from_s3:
+    if migrating_from_s3 or seeded_unformatted:
         volume = state.juicefs_volume_name or DEFAULT_VOLUME_NAME
     elif migrating_from_local:
         existing = state.juicefs_volume_name or DEFAULT_VOLUME_NAME
@@ -1323,7 +1406,8 @@ def configure_backend(
             # Restart the mount so the FUSE process talks to the NEW bucket now.
             _remount(config, s3_access_key_id, s3_secret_access_key)
         else:
-            # Legacy 'disabled' zone: no data, just format+mount S3 fresh.
+            # Legacy 'disabled' zone, or a preconfigured backend that never formatted: no data, just
+            # format+mount S3 fresh.
             format_s3_volume(
                 config,
                 s3_bucket=s3_bucket,
@@ -1333,6 +1417,16 @@ def configure_backend(
                 s3_secret_access_key=s3_secret_access_key,
                 juicefs_volume_name=volume,
             )
+            if seeded_unformatted:
+                # The volume now lives on the new bucket: record it before mounting, so a failed mount
+                # leaves the row matching the metadata (configured_at stays NULL until a mount succeeds;
+                # the next boot mounts it with these credentials).
+                db.execute(
+                    "UPDATE archive_backend SET s3_bucket=?, s3_region=?, s3_endpoint=?, s3_access_key_id=?, "
+                    "s3_secret_access_key=? WHERE id = 1",
+                    (s3_bucket, s3_region, s3_endpoint, s3_access_key_id, s3_secret_access_key),
+                )
+                db.commit()
             mount(config, s3_access_key_id, s3_secret_access_key)
 
         # Persist the new state.  If this fails after a successful re-point +

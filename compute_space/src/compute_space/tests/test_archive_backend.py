@@ -454,7 +454,7 @@ def test_is_archive_dir_healthy_disabled_returns_true(cfg, db):
 
 
 def test_is_archive_dir_healthy_s3_uses_is_mounted(cfg, db):
-    db.execute("UPDATE archive_backend SET backend='s3' WHERE id=1")
+    db.execute("UPDATE archive_backend SET backend='s3', configured_at='2026-01-01T00:00:00Z' WHERE id=1")
     db.commit()
     with mock.patch.object(archive_backend, "is_mounted", return_value=True) as m:
         assert archive_backend.is_archive_dir_healthy(cfg, db)
@@ -557,13 +557,14 @@ def test_attach_on_startup_local_records_error_on_failure(cfg, db):
 
 def test_attach_on_startup_s3_happy_path(cfg, db):
     db.execute(
-        "UPDATE archive_backend SET backend='s3', s3_bucket='b', "
+        "UPDATE archive_backend SET backend='s3', configured_at='2026-01-01T00:00:00Z', s3_bucket='b', "
         "s3_access_key_id='ak', s3_secret_access_key='sk' WHERE id=1"
     )
     db.commit()
     with (
         mock.patch.object(archive_backend, "is_juicefs_installed", return_value=True),
         mock.patch.object(archive_backend, "is_linux_host", return_value=True),
+        mock.patch.object(archive_backend, "_local_volume_formatted", return_value=True),
     ):
         with mock.patch.object(archive_backend, "mount") as mnt:
             archive_backend.attach_on_startup(cfg, db)
@@ -572,7 +573,9 @@ def test_attach_on_startup_s3_happy_path(cfg, db):
 
 
 def test_attach_on_startup_s3_missing_creds_records_error(cfg, db):
-    db.execute("UPDATE archive_backend SET backend='s3', s3_bucket='b' WHERE id=1")
+    db.execute(
+        "UPDATE archive_backend SET backend='s3', configured_at='2026-01-01T00:00:00Z', s3_bucket='b' WHERE id=1"
+    )
     db.commit()
     with (
         mock.patch.object(archive_backend, "is_juicefs_installed", return_value=True),
@@ -616,7 +619,7 @@ def test_attach_on_startup_disabled_backend_stays_quiet_off_linux(cfg, db):
 def test_effective_archive_dir_is_always_the_mount(cfg, db):
     """The archive tier is always the JuiceFS mountpoint regardless of backend."""
     assert archive_backend.effective_archive_dir(cfg, db) == juicefs_mount_dir(cfg)
-    db.execute("UPDATE archive_backend SET backend='s3' WHERE id=1")
+    db.execute("UPDATE archive_backend SET backend='s3', configured_at='2026-01-01T00:00:00Z' WHERE id=1")
     db.commit()
     assert archive_backend.effective_archive_dir(cfg, db) == juicefs_mount_dir(cfg)
     db.execute("UPDATE archive_backend SET backend='disabled' WHERE id=1")
@@ -644,7 +647,7 @@ def test_local_archive_apps_with_data_reads_mount(cfg, db):
         assert archive_backend.local_archive_apps_with_data(cfg, db) == ["nextcloud"]
 
     # Wrong backend -> empty regardless.
-    db.execute("UPDATE archive_backend SET backend='s3' WHERE id=1")
+    db.execute("UPDATE archive_backend SET backend='s3', configured_at='2026-01-01T00:00:00Z' WHERE id=1")
     db.commit()
     with mock.patch.object(archive_backend, "is_mounted", return_value=True):
         assert archive_backend.local_archive_apps_with_data(cfg, db) == []
@@ -656,7 +659,9 @@ def test_local_archive_apps_with_data_reads_mount(cfg, db):
 def test_configure_backend_s3_to_s3_refuses_without_source_creds(cfg, db):
     """An s3 zone missing its stored bucket/creds can't be read for a copy, so
     an s3->s3 migration is refused up front rather than losing data."""
-    db.execute("UPDATE archive_backend SET backend='s3', s3_bucket=NULL WHERE id=1")
+    db.execute(
+        "UPDATE archive_backend SET backend='s3', configured_at='2026-01-01T00:00:00Z', s3_bucket=NULL WHERE id=1"
+    )
     db.commit()
     with pytest.raises(RuntimeError, match="missing its bucket/credentials"):
         configure_backend(
@@ -675,7 +680,7 @@ def test_configure_backend_s3_to_s3_syncs_repoints_and_reclaims(cfg, db):
     """Migrating s3->s3 remounts the source, syncs old->new, re-points+remounts,
     flips the DB to the new bucket, and reclaims the OLD bucket's prefix."""
     db.execute(
-        "UPDATE archive_backend SET backend='s3', s3_bucket='oldbucket', s3_region='us-west-2', "
+        "UPDATE archive_backend SET backend='s3', configured_at='2026-01-01T00:00:00Z', s3_bucket='oldbucket', s3_region='us-west-2', "
         "s3_endpoint=NULL, s3_access_key_id='oldak', s3_secret_access_key='oldsk', "
         "s3_prefix='oh-zone-1234', juicefs_volume_name='oh-zone-1234' WHERE id=1"
     )
@@ -738,7 +743,7 @@ def test_configure_backend_s3_to_s3_preserves_legacy_openhost_volume(cfg, db):
     renaming would read from an empty prefix and copy nothing.  An operator
     prefix on the request must be ignored here."""
     db.execute(
-        "UPDATE archive_backend SET backend='s3', s3_bucket='oldbucket', s3_region='us-west-2', "
+        "UPDATE archive_backend SET backend='s3', configured_at='2026-01-01T00:00:00Z', s3_bucket='oldbucket', s3_region='us-west-2', "
         "s3_endpoint=NULL, s3_access_key_id='oldak', s3_secret_access_key='oldsk', "
         "s3_prefix='openhost', juicefs_volume_name='openhost' WHERE id=1"
     )
@@ -776,7 +781,7 @@ def test_configure_backend_s3_to_s3_same_location_skips_reclaim(cfg, db):
     """A no-op 'migration' to the SAME (bucket, volume) must NOT reclaim
     the prefix (that would delete the data we kept in place)."""
     db.execute(
-        "UPDATE archive_backend SET backend='s3', s3_bucket='b', s3_region='us-east-1', "
+        "UPDATE archive_backend SET backend='s3', configured_at='2026-01-01T00:00:00Z', s3_bucket='b', s3_region='us-east-1', "
         "s3_endpoint=NULL, s3_access_key_id='ak', s3_secret_access_key='sk', "
         "s3_prefix='oh-zone-1234', juicefs_volume_name='oh-zone-1234' WHERE id=1"
     )
@@ -809,7 +814,7 @@ def test_configure_backend_s3_to_s3_failopen_restores_old_bucket(cfg, db):
     """Fail-open: if the s3->s3 migration fails, the DB stays on the OLD bucket
     and the volume is re-pointed back to it + remounted; nothing is reclaimed."""
     db.execute(
-        "UPDATE archive_backend SET backend='s3', s3_bucket='oldbucket', s3_region='us-west-2', "
+        "UPDATE archive_backend SET backend='s3', configured_at='2026-01-01T00:00:00Z', s3_bucket='oldbucket', s3_region='us-west-2', "
         "s3_endpoint=NULL, s3_access_key_id='oldak', s3_secret_access_key='oldsk', "
         "s3_prefix='oh-zone-1234', juicefs_volume_name='oh-zone-1234' WHERE id=1"
     )
@@ -1251,7 +1256,7 @@ def test_storage_summary_local_backend(cfg, db):
 
 
 def test_storage_summary_s3_backend(cfg, db):
-    db.execute("UPDATE archive_backend SET backend='s3' WHERE id=1")
+    db.execute("UPDATE archive_backend SET backend='s3', configured_at='2026-01-01T00:00:00Z' WHERE id=1")
     db.commit()
     s = archive_backend.storage_summary(_ARCHIVE_MANIFEST, db)
     assert s.archive_backend == "s3"

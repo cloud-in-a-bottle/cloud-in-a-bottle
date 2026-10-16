@@ -114,7 +114,7 @@ def test_read_state_volume_name_default_on_missing_row(db):
 
 def test_read_state_preserves_s3_fields(db):
     db.execute(
-        "UPDATE archive_backend SET backend='s3', s3_bucket='bkt', s3_region='r', "
+        "UPDATE archive_backend SET backend='s3', configured_at='2026-01-01T00:00:00Z', s3_bucket='bkt', s3_region='r', "
         "s3_endpoint='http://e', s3_prefix='p', s3_access_key_id='ak', s3_secret_access_key='sk' WHERE id=1"
     )
     db.commit()
@@ -186,7 +186,7 @@ def test_local_apps_empty_when_not_mounted(db, cfg):
 
 
 def test_local_apps_empty_when_backend_s3(db, cfg):
-    db.execute("UPDATE archive_backend SET backend='s3' WHERE id=1")
+    db.execute("UPDATE archive_backend SET backend='s3', configured_at='2026-01-01T00:00:00Z' WHERE id=1")
     db.commit()
     with mock.patch.object(archive_backend, "is_mounted", return_value=True):
         assert archive_backend.local_archive_apps_with_data(cfg, db) == []
@@ -606,7 +606,7 @@ def _seed_s3(db, **overrides):
     }
     fields.update(overrides)
     db.execute(
-        "UPDATE archive_backend SET backend='s3', s3_bucket=?, s3_region=?, s3_endpoint=?, "
+        "UPDATE archive_backend SET backend='s3', configured_at='2026-01-01T00:00:00Z', s3_bucket=?, s3_region=?, s3_endpoint=?, "
         "s3_access_key_id=?, s3_secret_access_key=?, s3_prefix=?, juicefs_volume_name=? WHERE id=1",
         (
             fields["s3_bucket"],
