@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import sqlite3
 from collections.abc import Iterator
 from pathlib import Path
@@ -9,6 +10,7 @@ from litestar.connection import ASGIConnection
 from litestar.exceptions import NotAuthorizedException
 
 import compute_space.web.auth.auth as authmod
+from compute_space.core.app_id import new_app_id
 from compute_space.core.auth.auth import SESSION_COOKIE_NAME
 from compute_space.core.auth.auth import create_session
 from compute_space.db.schema import schema_path
@@ -23,7 +25,7 @@ OTHER = f"https://other.{ZONE}"
 
 
 @pytest.fixture
-def session_cookie(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
+def session_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[sqlite3.Connection]:
     _make_test_config(tmp_path, zone_domain=ZONE, tls_enabled=True)
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row
@@ -33,9 +35,14 @@ def session_cookie(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[
     conn.commit()
     monkeypatch.setattr(authmod, "get_db", lambda: conn)
     try:
-        yield f"{SESSION_COOKIE_NAME}={create_session(1, conn)}"
+        yield conn
     finally:
         conn.close()
+
+
+@pytest.fixture
+def session_cookie(session_db: sqlite3.Connection) -> str:
+    return f"{SESSION_COOKIE_NAME}={create_session(1, session_db)}"
 
 
 def _is_authorized(cookie: str, headers: dict[str, str], scope_type: str = "http", method: str = "GET") -> bool:
@@ -90,3 +97,73 @@ def test_http_ignores_origin(session_cookie: str) -> None:
 )
 def test_websocket(session_cookie: str, headers: dict[str, str], allowed: bool) -> None:
     assert _is_authorized(session_cookie, headers, scope_type="websocket") == allowed
+
+
+@pytest.fixture
+def owner_api_token(session_db: sqlite3.Connection) -> str:
+    token = "owner-api-token-for-origin-test"
+    session_db.execute(
+        "INSERT INTO api_tokens (token_hash, name, expires_at) VALUES (?, 'extension', '2100-01-01T00:00:00+00:00')",
+        (hashlib.sha256(token.encode()).hexdigest(),),
+    )
+    session_db.commit()
+    return token
+
+
+@pytest.fixture
+def app_token(session_db: sqlite3.Connection) -> str:
+    app_id = new_app_id()
+    token = "app-token-for-origin-test"
+    session_db.execute(
+        "INSERT INTO apps (app_id, name, version, runtime_type, repo_path, local_port) "
+        "VALUES (?, 'hister', '1.0', 'serverfull', '/repo', 9000)",
+        (app_id,),
+    )
+    session_db.execute(
+        "INSERT INTO app_tokens (app_id, token_hash) VALUES (?, ?)",
+        (app_id, hashlib.sha256(token.encode()).hexdigest()),
+    )
+    session_db.commit()
+    return token
+
+
+@pytest.mark.parametrize("scope_type", ["http", "websocket"])
+@pytest.mark.parametrize("cookie_state", ["valid", "expired", "absent"])
+def test_owner_bearer_is_not_shadowed_by_cookie(
+    session_db: sqlite3.Connection, session_cookie: str, owner_api_token: str, scope_type: str, cookie_state: str
+) -> None:
+    if cookie_state == "expired":
+        session_db.execute("UPDATE sessions SET expires_at = '2000-01-01T00:00:00+00:00'")
+    cookie = session_cookie if cookie_state != "absent" else ""
+    headers = {
+        "authorization": f"Bearer {owner_api_token}",
+        "origin": "chrome-extension://cciilamhchpmbdnniabclekddabkifhb",
+        "sec-fetch-site": "cross-site",
+    }
+    assert _is_authorized(cookie, headers, scope_type=scope_type, method="POST")
+
+
+@pytest.mark.parametrize("scope_type", ["http", "websocket"])
+@pytest.mark.parametrize("token_state", ["invalid", "expired", "app", "hister-header"])
+@pytest.mark.parametrize("cookie_state", ["valid", "expired", "absent"])
+def test_bad_bearer_cannot_rescue_cross_origin_cookie(
+    session_db: sqlite3.Connection,
+    session_cookie: str,
+    owner_api_token: str,
+    app_token: str,
+    token_state: str,
+    scope_type: str,
+    cookie_state: str,
+) -> None:
+    if cookie_state == "expired":
+        session_db.execute("UPDATE sessions SET expires_at = '2000-01-01T00:00:00+00:00'")
+    cookie = session_cookie if cookie_state != "absent" else ""
+    headers = {"origin": OTHER, "sec-fetch-site": "cross-site"}
+    if token_state == "expired":
+        session_db.execute("UPDATE api_tokens SET expires_at = '2000-01-01T00:00:00+00:00'")
+    if token_state == "hister-header":
+        headers["x-access-token"] = owner_api_token
+    else:
+        token = "invalid-token" if token_state == "invalid" else app_token if token_state == "app" else owner_api_token
+        headers["authorization"] = f"Bearer {token}"
+    assert not _is_authorized(cookie, headers, scope_type=scope_type, method="POST")
