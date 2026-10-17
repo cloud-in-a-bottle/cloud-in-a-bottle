@@ -11,3 +11,7 @@ local-stack *args:
 # same, but wipe the persisted data dir first so setup starts over
 local-stack-fresh *args:
     pixi run -e dev python scripts/run_local_stack.py --fresh {{args}}
+
+# rewrite compute_space/openapi.json from the routes, after an intended change to the router's API
+regenerate-openapi-spec:
+    pixi run -e dev python -m compute_space.web.openapi.regenerate

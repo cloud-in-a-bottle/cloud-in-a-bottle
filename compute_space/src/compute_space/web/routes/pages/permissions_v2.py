@@ -6,6 +6,7 @@ from litestar import get
 from litestar.di import NamedDependency
 from litestar.exceptions import NotFoundException
 from litestar.exceptions import ValidationException
+from litestar.params import FromQuery
 from litestar.response import Template
 
 from compute_space.core.auth.permissions_v2 import get_granted_permissions_v2
@@ -19,10 +20,10 @@ from compute_space.web.auth.auth import require_owner_auth
 )
 async def approve_permissions_v2(
     db: NamedDependency[sqlite3.Connection],
-    app: str,
-    service: str,
-    grant: str,
-    return_to: str | None = None,
+    app: FromQuery[str],
+    service: FromQuery[str],
+    grant: FromQuery[str],
+    return_to: FromQuery[str | None] = None,
 ) -> Template:
     """Owner-facing page: grant or deny a V2 permission request."""
     row = db.execute("SELECT name FROM apps WHERE app_id = ?", (app,)).fetchone()
