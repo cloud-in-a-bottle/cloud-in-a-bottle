@@ -14,6 +14,7 @@ from litestar.enums import RequestEncodingType
 from litestar.exceptions import ServiceUnavailableException
 from litestar.exceptions import ValidationException
 from litestar.params import Body
+from litestar.params import FromQuery
 from litestar.response import Redirect
 from litestar.response import Template
 
@@ -92,7 +93,9 @@ def openhost_identity(db: NamedDependency[sqlite3.Connection]) -> ZoneIdentityRe
 
 
 @get("/identity/approve", guards=[require_owner_auth], raises=[ValidationException])
-async def identity_approve(callback: str, app_name: str, requesting_domain: str) -> Template:
+async def identity_approve(
+    callback: FromQuery[str], app_name: FromQuery[str], requesting_domain: FromQuery[str]
+) -> Template:
     """Show the owner an approval page for a federated login request."""
     parsed = urllib.parse.urlparse(callback)
     if parsed.scheme not in ("https", "http") or not parsed.netloc:

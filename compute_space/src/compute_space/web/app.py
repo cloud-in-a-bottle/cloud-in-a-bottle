@@ -20,6 +20,7 @@ from litestar.response import Redirect
 from litestar.static_files import create_static_files_router
 from litestar.template.config import TemplateConfig
 from litestar.types import ASGIApp
+from litestar.types import ControllerRouterHandler
 
 from compute_space.config import Config
 from compute_space.config import provide_config
@@ -209,6 +210,29 @@ def _reject_app_subdomain_requests(request: Request[Any, Any, Any]) -> Response[
     return None
 
 
+ROUTE_HANDLERS: list[ControllerRouterHandler] = [
+    api_app_definitions_routes,
+    api_apps_routes,
+    api_archive_backend_routes,
+    api_domains_routes,
+    discovery_routes,
+    api_permissions_v2_routes,
+    api_services_v2_routes,
+    api_settings_routes,
+    system_routes,
+    identity_routes,
+    docs_routes,
+    pages_apps_routes,
+    pages_login_routes,
+    pages_permissions_v2_routes,
+    pages_settings_routes,
+    pages_system_routes,
+    services_v2_routes,
+    setup_already_done_get,
+    setup_already_done_post,
+]
+
+
 def create_app(config: Config, dns_provider: InternalDnsProvider, mdns_responder: MdnsResponder) -> ASGIApp:
     """Build the full router ASGI app.  The returned app is the Litestar app wrapped
     in ``SubdomainProxyMiddleware`` so app-subdomain requests are diverted to backend
@@ -239,28 +263,7 @@ def create_app(config: Config, dns_provider: InternalDnsProvider, mdns_responder
     atexit.register(cleanup_process_streams)
 
     litestar_app = Litestar(
-        route_handlers=[
-            static_router,
-            api_app_definitions_routes,
-            api_apps_routes,
-            api_archive_backend_routes,
-            api_domains_routes,
-            discovery_routes,
-            api_permissions_v2_routes,
-            api_services_v2_routes,
-            api_settings_routes,
-            system_routes,
-            identity_routes,
-            docs_routes,
-            pages_apps_routes,
-            pages_login_routes,
-            pages_permissions_v2_routes,
-            pages_settings_routes,
-            pages_system_routes,
-            services_v2_routes,
-            setup_already_done_get,
-            setup_already_done_post,
-        ],
+        route_handlers=[static_router, *ROUTE_HANDLERS],
         template_config=template_config,
         before_request=_reject_app_subdomain_requests,
         dependencies={
