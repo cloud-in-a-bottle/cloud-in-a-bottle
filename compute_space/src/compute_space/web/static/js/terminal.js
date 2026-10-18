@@ -4,6 +4,7 @@ var config = JSON.parse(document.getElementById('page-config').textContent);
   var term = new Terminal({
     cursorBlink: true,
     fontSize: 14,
+    fontFamily: getComputedStyle(document.documentElement).getPropertyValue('--font-mono').trim(),
     theme: {background: '#1e1e1e', brightBlack: '#8b8b8b'},
   });
   var fitAddon = new FitAddon.FitAddon();

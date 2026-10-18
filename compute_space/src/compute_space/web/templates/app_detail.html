@@ -91,8 +91,8 @@ None. All paths require Cloud in a Bottle login.
     {{ info_row("Description", app.description or "---") }}
     {{ info_row("URL", url_value()) }}
     {{ info_row("Public paths", public_paths_value()) }}
-    {{ info_row("Local port", app.local_port) }}
-    {{ info_row("Health check", app.health_check or "---") }}
+    {{ info_row("Local port", code_value(app.local_port)) }}
+    {{ info_row("Health check", code_value(app.health_check) if app.health_check else "---") }}
     {{ info_row("Memory", app.memory_mb ~ " MB") }}
     {{ info_row("CPU", app.cpu_cores ~ " cores") }}
     {% if app.repo_url %}

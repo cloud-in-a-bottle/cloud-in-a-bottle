@@ -8,11 +8,11 @@
   align-items: center;
   gap: var(--space-4);
   margin: 0 0 var(--space-6);
-  font-size: clamp(var(--text-xs), 2.2vw, var(--text-md));
-  font-weight: var(--weight-medium);
+  font-size: clamp(var(--text-body-sm), 2.2vw, var(--text-body-lg));
+  font-weight: var(--weight-emphasized);
   line-height: var(--leading-loose);
-  letter-spacing: var(--tracking-title);
-  text-transform: uppercase;
+  /* The owner name arrives lowercase; title case matches the Figma heading. */
+  text-transform: capitalize;
 }
 
 .banner::before,
@@ -111,10 +111,8 @@ a.banner__text:hover {
   border-bottom: var(--border-w) solid var(--color-border);
   /* Named for the same reason as .nav-back: the docs page links no base.css. */
   color: var(--color-text);
-  font-family: var(--font-mono);
-  font-size: var(--text-xs);
-  letter-spacing: var(--tracking-label);
-  text-transform: uppercase;
+  font-family: var(--font-sans);
+  font-size: var(--text-body-sm);
   text-decoration: none;
   white-space: nowrap;
 }
@@ -169,11 +167,9 @@ a.banner__text:hover {
   width: max-content;
   align-items: center;
   gap: var(--space-2);
-  font-family: var(--font-mono);
-  font-size: var(--text-xs);
+  font-family: var(--font-sans);
+  font-size: var(--text-body-sm);
   line-height: var(--leading-loose);
-  letter-spacing: var(--tracking-label);
-  text-transform: uppercase;
   text-decoration: none;
   /* Named rather than inherited: the docs page links only components.css, so
      there is no base.css anchor colour to fall back to. */
@@ -209,9 +205,9 @@ a.banner__text:hover {
 
 .section-label {
   margin: 0;
-  font-size: var(--text-xs);
-  font-weight: var(--weight-medium);
-  line-height: var(--leading-tight);
+  font-size: var(--text-body-sm);
+  font-weight: var(--weight-emphasized);
+  line-height: var(--leading-body-sm);
   letter-spacing: var(--tracking-label);
   text-transform: uppercase;
   opacity: 0.8;
@@ -272,9 +268,8 @@ h2.section-title {
   gap: var(--space-2);
   min-height: 28px;
   padding: 3px var(--space-3);
-  font-size: var(--text-xs);
-  line-height: var(--leading-tight);
-  letter-spacing: var(--tracking-body);
+  font-size: var(--text-body-sm);
+  line-height: var(--leading-body-sm);
   color: var(--color-text);
   background: var(--color-surface-raised);
   border: var(--border-w) solid var(--color-border);
@@ -308,8 +303,6 @@ h2.section-title {
 .btn--accent {
   background: var(--color-accent-alt);
   border-color: var(--color-accent-alt);
-  text-transform: uppercase;
-  letter-spacing: var(--tracking-label);
 }
 
 .btn--accent:hover {
@@ -376,17 +369,15 @@ h2.section-title {
 
 .card__title {
   margin: 0;
-  font-size: var(--text-sm);
-  font-weight: var(--weight-bold);
-  line-height: var(--leading-tight);
-  letter-spacing: var(--tracking-heading);
+  font-size: var(--text-body-md);
+  font-weight: var(--weight-emphasized);
+  line-height: var(--leading-body-md);
 }
 
 .card__desc {
   margin: 0;
-  font-size: var(--text-xs);
-  line-height: var(--leading-tight);
-  letter-spacing: var(--tracking-body);
+  font-size: var(--text-body-sm);
+  line-height: var(--leading-body-sm);
 }
 
 .card__footer {
@@ -440,9 +431,8 @@ h2.section-title {
   flex: 0 1 auto;
   min-width: 0;
   overflow: hidden;
-  font-size: var(--text-sm);
-  line-height: var(--leading-snug);
-  letter-spacing: var(--tracking-name);
+  font-size: var(--text-body-md);
+  line-height: var(--leading-body-md);
   text-overflow: ellipsis;
   text-decoration: none;
   white-space: nowrap;
@@ -454,15 +444,14 @@ h2.section-title {
 
 .app-row__alias {
   color: var(--color-text-muted);
-  font-size: var(--text-xs);
+  font-size: var(--text-body-sm);
 }
 
 .app-row__details {
   margin-left: auto;
   padding-left: var(--space-4);
   color: var(--color-text-muted);
-  font-size: var(--text-xs);
-  letter-spacing: var(--tracking-body);
+  font-size: var(--text-body-sm);
   text-decoration: none;
 }
 
@@ -512,12 +501,12 @@ h2.section-title {
 /* Status words, still rendered as text on the detail page. */
 .status-running {
   color: var(--color-ok-text);
-  font-weight: var(--weight-semibold);
+  font-weight: var(--weight-emphasized);
 }
 
 .status-error {
   color: var(--color-danger-text);
-  font-weight: var(--weight-semibold);
+  font-weight: var(--weight-emphasized);
 }
 
 .status-stopped {
@@ -589,7 +578,7 @@ input.search__input:not(:placeholder-shown) {
 .info-table th[scope="row"] {
   background: transparent;
   color: var(--color-text-subtle);
-  font-weight: var(--weight-semibold);
+  font-weight: var(--weight-emphasized);
   opacity: 1;
   white-space: normal;
 }
@@ -624,7 +613,7 @@ input.search__input:not(:placeholder-shown) {
   grid-template-columns: minmax(8rem, 13rem) 1fr;
   gap: var(--space-2) var(--space-4);
   margin: 0;
-  font-size: var(--text-xs);
+  font-size: var(--text-body-sm);
 }
 
 .spec-list dt {
@@ -654,12 +643,12 @@ input.search__input:not(:placeholder-shown) {
   background: var(--color-surface);
   border: var(--border-w) solid var(--color-border);
   box-shadow: var(--shadow-card);
-  font-size: var(--text-xs);
+  font-size: var(--text-body-sm);
   text-align: center;
 }
 
 .app-link {
-  font-weight: var(--weight-semibold);
+  font-weight: var(--weight-emphasized);
   text-decoration: none;
 }
 
@@ -677,7 +666,7 @@ input.search__input:not(:placeholder-shown) {
   border: var(--border-w) solid var(--color-border);
   border-left: 4px solid var(--color-status-pending);
   box-shadow: var(--shadow-card);
-  font-size: var(--text-xs);
+  font-size: var(--text-body-sm);
   z-index: 1000;
 }
 
@@ -708,14 +697,14 @@ input.search__input:not(:placeholder-shown) {
 }
 
 .pie-center-name {
-  font-size: 14px;
-  font-weight: var(--weight-semibold);
+  font-size: var(--text-body-md);
+  font-weight: var(--weight-emphasized);
   fill: var(--color-text);
   text-anchor: middle;
 }
 
 .pie-center-size {
-  font-size: 12px;
+  font-size: var(--text-body-sm);
   fill: var(--color-text-subtle);
   text-anchor: middle;
 }
@@ -728,7 +717,7 @@ input.search__input:not(:placeholder-shown) {
 table.form-table th {
   width: 12em;
   background: var(--color-surface-raised);
-  font-weight: var(--weight-medium);
+  font-weight: var(--weight-emphasized);
   letter-spacing: normal;
   text-transform: none;
   opacity: 1;
@@ -751,7 +740,7 @@ table.form-table input[type="password"] {
 
   table.form-table th {
     border-bottom: 0;
-    font-weight: var(--weight-semibold);
+    font-weight: var(--weight-emphasized);
   }
 
   table.form-table td {
@@ -789,11 +778,10 @@ table.form-table input[type="password"] {
 .field > span,
 .field > label,
 .field__head > label {
+  font-weight: var(--weight-emphasized);
   display: block;
   margin-bottom: var(--space-1);
-  font-size: var(--text-xs);
-  letter-spacing: var(--tracking-label);
-  text-transform: uppercase;
+  font-size: var(--text-body-sm);
   opacity: 0.8;
 }
 
@@ -854,7 +842,7 @@ table.form-table input[type="password"] {
 
 #app-definition-preview > summary {
   cursor: pointer;
-  font-size: var(--text-xs);
+  font-size: var(--text-body-sm);
 }
 
 #app-definition-preview > summary:focus-visible {
@@ -912,7 +900,7 @@ table.form-table input[type="password"] {
 .catalog-callout p {
   margin: 0;
   color: var(--color-text-subtle);
-  font-size: var(--text-xs);
+  font-size: var(--text-body-sm);
 }
 
 .catalog-callout .callout-action {
@@ -933,7 +921,7 @@ table.form-table input[type="password"] {
 details.url-help {
   margin-top: var(--space-3);
   color: var(--color-text-subtle);
-  font-size: var(--text-xs);
+  font-size: var(--text-body-sm);
 }
 
 details.url-help summary {
@@ -972,7 +960,7 @@ th.sortable:hover {
 
 .usage-chart h3 {
   margin: 0 0 var(--space-1);
-  font-size: var(--text-sm);
+  font-size: var(--text-body-md);
 }
 
 /* ── Info tip ───────────────────────────────────────────────────────── */
@@ -1023,9 +1011,9 @@ th.sortable:hover {
   border: var(--border-w) solid var(--color-border-strong);
   box-shadow: var(--shadow-card);
   color: var(--color-text-subtle);
-  font-size: var(--text-xs);
-  font-weight: var(--weight-medium);
-  line-height: var(--leading-snug);
+  font-size: var(--text-body-sm);
+  font-weight: var(--weight-regular);
+  line-height: var(--leading-body-sm);
   letter-spacing: normal;
   text-align: left;
   text-transform: none;
@@ -1056,10 +1044,11 @@ th.sortable:hover {
 
 /* ── Badge ──────────────────────────────────────────────────────────────
    Square status chip, derived from the "+ NEW" button in the Figma: flat
-   pastel fill, 1px border, uppercase and tracked. Replaces the ad-hoc
+   pastel fill, 1px border, body sm emphasized. Replaces the ad-hoc
    coloured <span>s the page scripts used to emit. */
 
 .badge {
+  font-weight: var(--weight-emphasized);
   display: inline-flex;
   align-items: center;
   gap: var(--space-1);
@@ -1067,10 +1056,8 @@ th.sortable:hover {
   border: var(--border-w) solid var(--color-border);
   background: #efefef;
   color: var(--color-text-subtle);
-  font-size: var(--text-xs);
-  line-height: var(--leading-tight);
-  letter-spacing: var(--tracking-label);
-  text-transform: uppercase;
+  font-size: var(--text-body-sm);
+  line-height: var(--leading-body-sm);
   white-space: nowrap;
 }
 
@@ -1108,7 +1095,7 @@ th.sortable:hover {
   background: #e6f2ff;
   border: var(--border-w) solid #b8d8f5;
   border-left-width: 3px;
-  font-size: var(--text-xs);
+  font-size: var(--text-body-sm);
 }
 
 .notice--ok {
@@ -1198,7 +1185,7 @@ select {
 }
 
 /* ── Field rows ─────────────────────────────────────────────────────────
-   .field stacks a tracked uppercase label over its control; .field-row is
+   .field stacks an emphasized label over its control; .field-row is
    the inline variant used by the "add domain" / "create token" bars. */
 
 .field-row {
@@ -1267,7 +1254,7 @@ select {
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
-  font-size: var(--text-xs);
+  font-size: var(--text-body-sm);
 }
 
 .field--check > span {
@@ -1308,7 +1295,7 @@ select {
   justify-content: center;
   gap: var(--space-1) var(--space-3);
   margin-top: var(--space-2);
-  font-size: var(--text-xs);
+  font-size: var(--text-body-sm);
 }
 
 .chart-legend__swatch {
@@ -1321,12 +1308,13 @@ select {
 /* ── Log list (update progress) ─────────────────────────────────────────── */
 
 .log-list {
+  font-family: var(--font-mono);
   margin: 0;
   padding: var(--space-3);
   list-style: none;
   background: #1e1e1e;
   color: #d4d4d4;
-  font-size: var(--text-xs);
+  font-size: var(--text-body-sm);
   max-height: 30em;
   overflow-y: auto;
 }
@@ -1351,7 +1339,7 @@ select {
    hex on style.color for these; they set a variant class now. */
 
 .msg {
-  font-size: var(--text-xs);
+  font-size: var(--text-body-sm);
 }
 
 .msg--ok { color: var(--color-ok-text); }
@@ -1408,9 +1396,8 @@ select {
 }
 
 .status-row td {
-  font-size: var(--text-md);
-  letter-spacing: var(--tracking-title);
-  text-transform: uppercase;
+  font-size: var(--text-body-lg);
+  text-transform: capitalize;
 }
 
 /* The dot is drawn on the status word itself, so it takes the word's colour
@@ -1449,8 +1436,7 @@ select {
   display: block;
   margin-top: var(--space-1);
   color: var(--color-text-muted);
-  font-weight: var(--weight-medium);
-  letter-spacing: var(--tracking-body);
+  font-weight: var(--weight-emphasized);
   text-transform: none;
 }
 
@@ -1460,7 +1446,7 @@ select {
 
 .action-msg {
   margin: var(--space-2) 0 0;
-  font-size: var(--text-xs);
+  font-size: var(--text-body-sm);
 }
 
 /* Two columns on a phone squeeze the notes into a sliver, so each action
@@ -1513,7 +1499,7 @@ select {
 /* An explainer inside a cell annotates 12px table text; at the prose size it
    outweighs the value it belongs to. */
 .panel table .hint {
-  font-size: var(--text-xs);
+  font-size: var(--text-body-sm);
 }
 
 /* An "empty" placeholder inside a panel is a line of prose, not a second box. */
@@ -1560,8 +1546,8 @@ td.col-actions .icon-btn {
 /* Status words are read, not clicked. A filled chip beside a real button
    reads as a second button, so these carry colour and weight only. */
 .status-text {
-  font-size: var(--text-xs);
-  font-weight: var(--weight-semibold);
+  font-size: var(--text-body-sm);
+  font-weight: var(--weight-emphasized);
   white-space: nowrap;
 }
 

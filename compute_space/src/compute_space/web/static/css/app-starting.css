@@ -1,6 +1,6 @@
 .app-starting h2 {
-  font-size: var(--text-lg);
-  line-height: 1.4;
+  font-size: var(--text-body-lg);
+  line-height: var(--leading-body-lg);
 }
 
 .app-starting p {

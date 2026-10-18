@@ -196,7 +196,7 @@ function renderPortMappings(mappings) {
       <td>
         <input type="number" class="port-host-input" data-label="${esc(pm.label)}"
                value="${pm.host_port}" min="0" max="65535"
-               style="width:6em; font-family:monospace;"
+               style="width:6em; font-family:var(--font-mono);"
                oninput="onPortInput(this)">
       </td>
       <td class="port-status" data-label="${esc(pm.label)}">
