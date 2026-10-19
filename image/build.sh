@@ -43,7 +43,9 @@
 #                         from the working tree, so the branch need not be pushed.
 #   --domain <domain>     App subdomain-routing domain baked in (default: lvh.me).
 #                         With --public this is the real domain served over TLS.
-#                         --raspi needs a .local one.
+#                         A .local one (e.g. bottle.local) builds a LAN-mode
+#                         image instead: published over mDNS, plain http. --raspi
+#                         needs one.
 #   --public              Build a TLS image (CoreDNS + Caddy + Let's Encrypt for
 #                         --domain) instead of the default HTTP-only image.
 #                         Requires --public-ip.
@@ -153,22 +155,27 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# ---- --raspi checks ----
+# LAN mode: a .local domain, as in provision.sh (published over mDNS, plain http).
+LAN="false"
+case "${DOMAIN%%:*}" in
+    *.local) LAN="true" ;;
+esac
+if [ "$PUBLIC" = "true" ] && [ "$LAN" = "true" ]; then
+    echo "Error: --public needs a real domain, not a .local one (got $DOMAIN)." >&2
+    exit 1
+fi
+
 if [ "$RASPI" = "true" ]; then
     if [ "$ARCH" != "arm64" ]; then
         echo "Error: --raspi needs an arm64 host (it boots the Pi image's arm64 kernel under KVM/HVF)." >&2
         exit 1
     fi
-    if [ "$PUBLIC" = "true" ]; then
-        echo "Error: --raspi and --public are exclusive (the Pi image is LAN-only)." >&2
+    # The Pi image is LAN-only. Its domain is a placeholder (first boot replaces
+    # it with <hostname>.local), but it must be .local to provision LAN mode.
+    if [ "$LAN" != "true" ]; then
+        echo "Error: --raspi needs a .local --domain (got $DOMAIN), eg --domain bottle.local." >&2
         exit 1
     fi
-    # The domain is a placeholder (first boot replaces it with <hostname>.local),
-    # but it must be .local for provision.sh to set up LAN mode.
-    case "${DOMAIN%%:*}" in
-        *.local) ;;
-        *) echo "Error: --raspi needs a .local --domain (got $DOMAIN), eg --domain bottle.local." >&2; exit 1 ;;
-    esac
 fi
 
 # ---- Per-arch settings ----
@@ -289,9 +296,9 @@ if [ "$PUBLIC" = "true" ]; then
     echo "  Public IP:    $PUBLIC_IP"
     echo "  ACME key:     ${ACME_KEY_FILE:-generated during build}"
     echo "  Claim:        ${CLAIM_TOKEN:+token '$CLAIM_TOKEN'}${CLAIM_TOKEN:-token-gated (random, printed on first boot)}"
-elif [ "$RASPI" = "true" ]; then
-    echo "  Target:       Raspberry Pi SD-card image"
-    echo "  Domain:       <hostname>.local, set on first boot   (LAN mode: mDNS, plain http)"
+elif [ "$LAN" = "true" ]; then
+    echo "  Domain:       $DOMAIN   (LAN mode: mDNS, plain http)"
+    [ "$RASPI" = "true" ] && echo "                (Raspberry Pi: replaced with <hostname>.local on first boot)"
     echo "  Claim:        ${CLAIM_TOKEN:+token '$CLAIM_TOKEN'}${CLAIM_TOKEN:-open (no token required)}"
 else
     echo "  Domain:       $DOMAIN   (HTTP-only, bound 0.0.0.0)"
@@ -374,13 +381,14 @@ else
 fi
 
 # Mode args passed to provision.sh: HTTP-only + LAN bind by default, or TLS with
-# the baked public IP (and optional ACME account key / email) under --public.
+# the baked public IP (and optional ACME account key / email) under --public. A
+# .local domain needs none: provision.sh sets up LAN mode from the domain.
 if [ "$PUBLIC" = "true" ]; then
     MODE_ARGS="--public-ip \"$PUBLIC_IP\""
     [ -n "$ACME_KEY_FILE" ] && MODE_ARGS="$MODE_ARGS --acme-key /root/acme_account_key.json"
     [ -n "$ACME_EMAIL" ]    && MODE_ARGS="$MODE_ARGS --acme-email \"$ACME_EMAIL\""
-elif [ "$RASPI" = "true" ]; then
-    MODE_ARGS=""  # the .local domain selects LAN mode
+elif [ "$LAN" = "true" ]; then
+    MODE_ARGS=""
 else
     MODE_ARGS="--local-http-only --bind-host 0.0.0.0"
 fi

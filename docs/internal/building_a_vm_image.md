@@ -36,7 +36,7 @@ These customize the image in any mode:
 
 | Option | Purpose |
 | --- | --- |
-| `--domain <domain>` | subdomain-routing domain baked in (default `lvh.me`) |
+| `--domain <domain>` | subdomain-routing domain baked in (default `lvh.me`). A `.local` one, eg `bottle.local`, builds a LAN-mode image (published over mDNS, plain http; see "LAN mode" in `ansible/readme.md`) |
 | `--claim-token <tok>` | bake in a specific `/setup` token instead of the default |
 | `--ssh-pubkey <path>` | authorize an SSH key for `host` (SSH is key-only; otherwise console-only) |
 
