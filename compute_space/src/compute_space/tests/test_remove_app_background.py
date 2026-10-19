@@ -8,10 +8,10 @@ from unittest.mock import patch
 
 from compute_space.core.app_id import new_app_id
 from compute_space.core.apps import remove_app_background
-from compute_space.core.root_app import RootKind
-from compute_space.core.root_app import RootSetting
-from compute_space.core.root_app import apply_root_setting
-from compute_space.core.root_app import load_root_setting
+from compute_space.core.domain_root import DomainRootKind
+from compute_space.core.domain_root import DomainRootSetting
+from compute_space.core.domain_root import apply_domain_root_setting
+from compute_space.core.domain_root import load_domain_root_setting
 from compute_space.db.connection import init_db
 from compute_space.tests.conftest import _make_test_config
 
@@ -238,7 +238,7 @@ def test_remove_leaves_the_bare_domain_empty(tmp_path: Path) -> None:
     try:
         db.execute("UPDATE apps SET status = 'running' WHERE app_id = ?", (app_id,))
         db.commit()
-        apply_root_setting(db, RootSetting(kind=RootKind.APP, app_id=app_id))
+        apply_domain_root_setting(db, DomainRootSetting(kind=DomainRootKind.APP, app_id=app_id))
         db.execute("UPDATE apps SET status = 'removing' WHERE app_id = ?", (app_id,))
         db.commit()
     finally:
@@ -255,6 +255,6 @@ def test_remove_leaves_the_bare_domain_empty(tmp_path: Path) -> None:
     db = sqlite3.connect(cfg.db_path)
     db.row_factory = sqlite3.Row
     try:
-        assert load_root_setting(db) == RootSetting(kind=RootKind.NOTHING)
+        assert load_domain_root_setting(db) == DomainRootSetting(kind=DomainRootKind.NOTHING)
     finally:
         db.close()

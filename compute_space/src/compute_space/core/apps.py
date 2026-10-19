@@ -33,6 +33,10 @@ from compute_space.core.data import deprovision_data
 from compute_space.core.data import deprovision_temp_data
 from compute_space.core.data import make_data_dirs_and_env_vars
 from compute_space.core.data import rmtree_with_sudo_fallback
+from compute_space.core.domain_root import DomainRootKind
+from compute_space.core.domain_root import clear_domain_root_app_if
+from compute_space.core.domain_root import is_router_subdomain
+from compute_space.core.domain_root import load_domain_root_setting
 from compute_space.core.domains import PRIMARY_DOMAIN_RESTART_MARKER
 from compute_space.core.domains import Domain
 from compute_space.core.domains import primary_domain
@@ -55,10 +59,6 @@ from compute_space.core.oauth import OAuthRequired
 from compute_space.core.oauth import get_oauth_token
 from compute_space.core.ports import allocate_port
 from compute_space.core.ports import resolve_port_mappings
-from compute_space.core.root_app import RootKind
-from compute_space.core.root_app import clear_root_app_if
-from compute_space.core.root_app import is_router_subdomain
-from compute_space.core.root_app import load_root_setting
 from compute_space.core.service_interface.services import register_services_provided_by_app
 from compute_space.db import get_db
 
@@ -353,7 +353,7 @@ def insert_and_deploy(
         archive_dir=archive_backend.effective_archive_dir(config, db),
         my_openhost_redirect_domain=config.my_openhost_redirect_domain,
         zone_domain=primary_domain(db).name,
-        router_public_url=load_root_setting(db).router_url(primary_domain(db)),
+        router_public_url=load_domain_root_setting(db).router_url(primary_domain(db)),
         port=config.port,
         owner_username=read_owner_username(db) or DEFAULT_OWNER_USERNAME,
     )
@@ -527,7 +527,7 @@ def run_app_image(
                 archive_dir=archive_backend.effective_archive_dir(config, db),
                 my_openhost_redirect_domain=config.my_openhost_redirect_domain,
                 zone_domain=primary_domain(db).name,
-                router_public_url=load_root_setting(db).router_url(primary_domain(db)),
+                router_public_url=load_domain_root_setting(db).router_url(primary_domain(db)),
                 port=config.port,
                 owner_username=read_owner_username(db) or DEFAULT_OWNER_USERNAME,
             )
@@ -1096,7 +1096,7 @@ def remove_app_background(app_id: str, keep_data: bool, config: Config) -> None:
         except Exception:
             logger.exception("Failed to deprovision data for {}", app_name)
 
-        clear_root_app_if(db, app_id)
+        clear_domain_root_app_if(db, app_id)
         db.execute("DELETE FROM apps WHERE app_id = ?", (app_id,))
         db.commit()
         logger.info("Removed app {} (keep_data={})", app_name, keep_data)
@@ -1121,7 +1121,7 @@ def get_app_from_hostname(host: str, db: sqlite3.Connection) -> App | None:
     The host is matched against every configured Domain (see Domain.match), so an app is
     reachable under any domain the instance answers on (e.g. both `<app>.host.example.com` and
     `<app>.myhost.local`).  Matching is case-insensitive.  The bare domain resolves to the root app,
-    if the owner serves one there, and the router's own host to nothing (see ``core.root_app``).
+    if the owner serves one there, and the router's own host to nothing (see ``core.domain_root``).
 
     returns None if an app cannot be matched from the header.
 
@@ -1134,11 +1134,11 @@ def get_app_from_hostname(host: str, db: sqlite3.Connection) -> App | None:
     matched = Domain.match(db, host)
     if matched is None:
         return None
-    setting = load_root_setting(db)
+    setting = load_domain_root_setting(db)
     if setting.is_router_host(matched, host):
         return None
     if matched.is_apex(host):
-        if setting.kind != RootKind.APP:
+        if setting.kind != DomainRootKind.APP:
             return None
         row = db.execute("SELECT * FROM apps WHERE app_id = ?", (setting.app_id,)).fetchone()
         return App.from_row(row) if row else None

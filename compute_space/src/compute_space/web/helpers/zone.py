@@ -3,9 +3,9 @@ from typing import Any
 
 from litestar.connection import ASGIConnection
 
+from compute_space.core.domain_root import load_domain_root_setting
 from compute_space.core.domains import Domain
 from compute_space.core.domains import host_with_request_port
-from compute_space.core.root_app import load_root_setting
 from compute_space.db import get_db
 
 # Scope key under which SubdomainProxyMiddleware stashes the Domain a request
@@ -29,8 +29,8 @@ def zone_for_request(connection: ASGIConnection[Any, Any, Any, Any]) -> Domain:
 
 def router_base_url(connection: ASGIConnection[Any, Any, Any, Any]) -> str:
     """``scheme://host[:port]`` of the router on the domain (and access port) the request arrived on: the bare
-    domain, or the subdomain the owner moved the dashboard to (see ``core.root_app``)."""
+    domain, or the subdomain the owner moved the dashboard to (see ``core.domain_root``)."""
     zone = zone_for_request(connection)
     with closing(get_db()) as db:
-        router_host = load_root_setting(db).router_host(zone)
+        router_host = load_domain_root_setting(db).router_host(zone)
     return f"{zone.scheme}://{host_with_request_port(router_host, connection.url.netloc)}"

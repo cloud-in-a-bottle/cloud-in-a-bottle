@@ -18,11 +18,11 @@ from litestar.types.asgi_types import WebSocketCloseEvent
 from compute_space.core.apps import get_app_from_hostname
 from compute_space.core.apps import is_public_request_path
 from compute_space.core.containers import ROUTER_INTERNAL_HOSTS
+from compute_space.core.domain_root import ROUTER_DOMAIN_ROOT_PATHS
+from compute_space.core.domain_root import load_domain_root_setting
 from compute_space.core.domains import Domain
 from compute_space.core.logging import logger
 from compute_space.core.proxy_target import LocalPort
-from compute_space.core.root_app import ROUTER_ROOT_PATHS
-from compute_space.core.root_app import load_root_setting
 from compute_space.db import get_db
 from compute_space.web.auth.auth import auth_required_response
 from compute_space.web.auth.auth import verify_owner_auth
@@ -150,11 +150,11 @@ class SubdomainProxyMiddleware:
             # The router's own host: the bare domain by default, or the subdomain the owner moved it to.  It also
             # keeps a few well-known paths on the bare domain, whatever is served there.
             is_router = zone is not None and (
-                load_root_setting(db).is_router_host(zone, netloc)
-                or (zone.is_apex(netloc) and scope["path"] in ROUTER_ROOT_PATHS)
+                load_domain_root_setting(db).is_router_host(zone, netloc)
+                or (zone.is_apex(netloc) and scope["path"] in ROUTER_DOMAIN_ROOT_PATHS)
             )
             app = get_app_from_hostname(netloc, db) if zone is not None and not is_router else None
-        is_root_app = zone is not None and app is not None and zone.is_apex(netloc)
+        is_domain_root_app = zone is not None and app is not None and zone.is_apex(netloc)
 
         if zone is None:
             if netloc.split(":")[0].lower() in ROUTER_INTERNAL_HOSTS:
@@ -214,7 +214,7 @@ class SubdomainProxyMiddleware:
             # Match a missing app's response so unauthorized callers cannot discover fully private apps.  The
             # bare domain always answers (the router redirects to login there by default), so a root app
             # falls through to the login redirect instead.
-            if not app.public_paths and not is_root_app:
+            if not app.public_paths and not is_domain_root_app:
                 await _send_not_found(scope, receive, send)
                 return
             raw_path = scope.get("raw_path")

@@ -8,7 +8,7 @@ from litestar import Response
 from litestar import Router
 from litestar import get
 
-from compute_space.core.root_app import DISCOVERY_PATH
+from compute_space.core.domain_root import DISCOVERY_PATH
 from compute_space.web.helpers.zone import router_base_url
 
 

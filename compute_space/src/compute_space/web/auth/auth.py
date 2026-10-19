@@ -25,9 +25,9 @@ from compute_space.core.auth.auth import AuthenticatedUser
 from compute_space.core.auth.auth import validate_api_token
 from compute_space.core.auth.auth import validate_app_token
 from compute_space.core.auth.auth import validate_session_token
+from compute_space.core.domain_root import load_domain_root_setting
 from compute_space.core.domains import Domain
 from compute_space.core.domains import host_with_request_port
-from compute_space.core.root_app import load_root_setting
 from compute_space.db import get_db
 from compute_space.web.helpers.zone import zone_for_request
 
@@ -260,5 +260,5 @@ def auth_required_response(request: Request[Any, Any, Any]) -> Response[Any]:
         return Response(content="Authentication required", status_code=401, media_type=MediaType.TEXT)
     zone = zone_for_request(request)
     with closing(get_db()) as db:
-        router_host = load_root_setting(db).router_host(zone)
+        router_host = load_domain_root_setting(db).router_host(zone)
     return Redirect(path=build_login_url(zone, router_host, request.url.netloc, request.url.path, request.url.query))

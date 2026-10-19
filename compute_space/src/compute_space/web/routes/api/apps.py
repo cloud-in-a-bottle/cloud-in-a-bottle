@@ -56,6 +56,8 @@ from compute_space.core.containers import stop_app_process
 from compute_space.core.containers import stop_container
 from compute_space.core.diagnostics import AppDiagnostics
 from compute_space.core.diagnostics import collect_app_diagnostics
+from compute_space.core.domain_root import is_router_subdomain
+from compute_space.core.domain_root import load_domain_root_setting
 from compute_space.core.domains import Domain
 from compute_space.core.domains import primary_domain
 from compute_space.core.git_ops import get_branch_name
@@ -75,8 +77,6 @@ from compute_space.core.manifest import settings_changes_require_review
 from compute_space.core.oauth import OAuthRequired
 from compute_space.core.oauth import get_oauth_token
 from compute_space.core.ports import check_port_available
-from compute_space.core.root_app import is_router_subdomain
-from compute_space.core.root_app import load_root_setting
 from compute_space.core.updates import wait_for_shutdown
 from compute_space.db.connection import get_db
 from compute_space.web.auth.auth import require_owner_auth
@@ -96,7 +96,7 @@ def _oauth_return_origin(db: sqlite3.Connection, request: Request[Any, Any, Any]
     fall back to the canonical primary only if the middleware stashed no Domain."""
     if isinstance(request.scope.get(ZONE_SCOPE_KEY), Domain):
         return router_base_url(request)
-    return load_root_setting(db).router_url(primary_domain(db))
+    return load_domain_root_setting(db).router_url(primary_domain(db))
 
 
 # ─── attrs request / response models ──────────────────────────────────────

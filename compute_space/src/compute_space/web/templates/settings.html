@@ -165,9 +165,9 @@
       dashboard isn't at the bare domain, it moves to a subdomain of your choice.</p>
 
     <div class="field-row">
-      <label class="field" for="root-kind-select">
+      <label class="field" for="domain-root-kind-select">
         <span>Served at the bare domain</span>
-        <select id="root-kind-select" disabled onchange="updateRootAppForm()">
+        <select id="domain-root-kind-select" disabled onchange="updateDomainRootAppForm()">
           <option value="">Loading&hellip;</option>
         </select>
       </label>
@@ -179,11 +179,11 @@
           <code id="router-subdomain-suffix">.{{ zone_domain() }}</code>
         </span>
       </label>
-      {{ button("Save", variant="primary", id="root-app-save-btn", onclick="saveRootApp()", disabled=true) }}
+      {{ button("Save", variant="primary", id="domain-root-app-save-btn", onclick="saveDomainRootApp()", disabled=true) }}
     </div>
-    <p id="root-app-msg" class="msg" hidden></p>
+    <p id="domain-root-app-msg" class="msg" hidden></p>
 
-    <div class="notice notice--warn" id="root-app-warning" hidden>
+    <div class="notice notice--warn" id="domain-root-app-warning" hidden>
       <strong>Moving the dashboard</strong> to a subdomain restarts this instance and its running apps.
       Afterwards, anything that reaches the dashboard or its API at the bare domain stops working. This
       includes:
@@ -308,7 +308,7 @@
 <script src="{{ static_url('js/username-validation.js') }}"></script>
 <script src="{{ static_url('js/tokens.js') }}"></script>
 <script src="{{ static_url('js/domains.js') }}"></script>
-<script src="{{ static_url('js/root-app.js') }}"></script>
+<script src="{{ static_url('js/domain-root.js') }}"></script>
 <script src="{{ static_url('js/settings.js') }}"></script>
 <script src="{{ static_url('js/services.js') }}"></script>
 <script src="{{ static_url('js/services.js') }}"></script>
