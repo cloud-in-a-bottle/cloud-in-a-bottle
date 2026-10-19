@@ -43,11 +43,11 @@ from litestar.params import FromPath
 from litestar.response import Response
 from litestar.response.base import ASGIResponse
 
+from compute_space.core.domain_root import DomainRootKind
+from compute_space.core.domain_root import load_domain_root_setting
 from compute_space.core.domains import Domain
 from compute_space.core.proxy_target import InProcess
 from compute_space.core.proxy_target import ProxyTarget
-from compute_space.core.root_app import RootKind
-from compute_space.core.root_app import load_root_setting
 from compute_space.core.service_interface.headers import app_consumer_headers
 from compute_space.core.service_interface.headers import approve_grant_url
 from compute_space.core.service_interface.provider import ProviderUnavailable
@@ -166,10 +166,10 @@ async def service_call_cors(
     if domain is None:
         raise PermissionDeniedException(detail="Forbidden")
     # App-shaped: an app subdomain other than the router's, or the bare domain while it serves an app.
-    setting = load_root_setting(db)
+    setting = load_domain_root_setting(db)
     is_app_subdomain = domain.app_name_from_hostname(host) is not None and not setting.is_router_host(domain, host)
-    is_root_app_origin = domain.is_apex(host) and setting.kind == RootKind.APP
-    if not is_app_subdomain and not is_root_app_origin:
+    is_domain_root_app_origin = domain.is_apex(host) and setting.kind == DomainRootKind.APP
+    if not is_app_subdomain and not is_domain_root_app_origin:
         raise PermissionDeniedException(detail="Forbidden")
     return Response(content="", status_code=204, headers=_cors_headers(origin))
 

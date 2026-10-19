@@ -15,17 +15,17 @@ from litestar.exceptions import ServiceUnavailableException
 from litestar.exceptions import ValidationException
 
 from compute_space.config import Config
+from compute_space.core.domain_root import AppsBusyForDashboardMoveError
+from compute_space.core.domain_root import DomainRootAppNotFoundError
+from compute_space.core.domain_root import DomainRootKind
+from compute_space.core.domain_root import DomainRootSetting
+from compute_space.core.domain_root import DomainRootSettingError
+from compute_space.core.domain_root import apply_domain_root_setting
+from compute_space.core.domain_root import load_domain_root_setting
+from compute_space.core.domain_root import validate_domain_root_setting
 from compute_space.core.domains import host_with_request_port
 from compute_space.core.operation_locks import detach_operation
 from compute_space.core.operation_locks import start_exclusive_operation
-from compute_space.core.root_app import AppsBusyForDashboardMoveError
-from compute_space.core.root_app import RootAppNotFoundError
-from compute_space.core.root_app import RootKind
-from compute_space.core.root_app import RootSetting
-from compute_space.core.root_app import RootSettingError
-from compute_space.core.root_app import apply_root_setting
-from compute_space.core.root_app import load_root_setting
-from compute_space.core.root_app import validate_root_setting
 from compute_space.core.system_agent.client import SystemAgentError
 from compute_space.core.system_agent.client import system_agent_reset_restart_limit_sync
 from compute_space.core.updates import PROCESS_GENERATION
@@ -37,19 +37,19 @@ from compute_space.web.helpers.zone import zone_for_request
 
 
 @attr.s(auto_attribs=True, frozen=True)
-class RootAppOption:
+class DomainRootAppOption:
     app_id: str
     name: str
 
 
 @attr.s(auto_attribs=True, frozen=True)
-class RootAppResponse:
-    kind: RootKind
+class DomainRootAppResponse:
+    kind: DomainRootKind
     # Set iff kind is "app".
     app_id: str | None
     # Where the dashboard lives while it isn't at the bare domain.
     router_subdomain: str
-    apps: list[RootAppOption]
+    apps: list[DomainRootAppOption]
     # The router on the domain (and access port) the request arrived on, under this setting.
     router_url: str
     # True if saving moved the dashboard: the instance is restarting, and so are running apps, to pick up the new
@@ -59,46 +59,52 @@ class RootAppResponse:
 
 
 @attr.s(auto_attribs=True, frozen=True)
-class SetRootAppRequest:
-    kind: RootKind
+class SetDomainRootAppRequest:
+    kind: DomainRootKind
     app_id: str | None
     router_subdomain: str
 
 
-def _response(db: sqlite3.Connection, request: Request[Any, Any, Any], restarting: bool = False) -> RootAppResponse:
-    setting = load_root_setting(db)
+def _response(
+    db: sqlite3.Connection, request: Request[Any, Any, Any], restarting: bool = False
+) -> DomainRootAppResponse:
+    setting = load_domain_root_setting(db)
     zone = zone_for_request(request)
     rows = db.execute("SELECT app_id, name FROM apps WHERE status != 'removing' ORDER BY name").fetchall()
-    return RootAppResponse(
+    return DomainRootAppResponse(
         kind=setting.kind,
         app_id=setting.app_id,
         router_subdomain=setting.router_subdomain,
-        apps=[RootAppOption(app_id=row["app_id"], name=row["name"]) for row in rows],
+        apps=[DomainRootAppOption(app_id=row["app_id"], name=row["name"]) for row in rows],
         router_url=f"{zone.scheme}://{host_with_request_port(setting.router_host(zone), request.url.netloc)}",
         restarting=restarting,
     )
 
 
-@get("/api/settings/root-app", guards=[require_owner_auth])
-async def get_root_app(db: NamedDependency[sqlite3.Connection], request: Request[Any, Any, Any]) -> RootAppResponse:
+@get("/api/settings/domain-root", guards=[require_owner_auth])
+async def get_domain_root_app(
+    db: NamedDependency[sqlite3.Connection], request: Request[Any, Any, Any]
+) -> DomainRootAppResponse:
     return _response(db, request)
 
 
 @post(
-    "/api/settings/root-app",
+    "/api/settings/domain-root",
     status_code=200,
     guards=[require_owner_auth],
     raises=[NotFoundException, ValidationException, ServiceUnavailableException],
 )
-async def set_root_app(
-    data: SetRootAppRequest,
+async def set_domain_root_app(
+    data: SetDomainRootAppRequest,
     config: NamedDependency[Config],
     db: NamedDependency[sqlite3.Connection],
     request: Request[Any, Any, Any],
-) -> RootAppResponse:
+) -> DomainRootAppResponse:
     """Choose what the bare domain serves.  Moving the dashboard restarts the instance and its running apps, the same
     way a primary-domain change does."""
-    setting = RootSetting(kind=data.kind, app_id=data.app_id, router_subdomain=data.router_subdomain.strip().lower())
+    setting = DomainRootSetting(
+        kind=data.kind, app_id=data.app_id, router_subdomain=data.router_subdomain.strip().lower()
+    )
     if is_shutdown_pending():
         raise ConflictException(detail="the instance is already restarting", extra={"code": "restart_pending"})
 
@@ -106,11 +112,11 @@ async def set_root_app(
         worker_db = sqlite3.connect(config.db_path)
         worker_db.row_factory = sqlite3.Row
         try:
-            if load_root_setting(worker_db).router_label != setting.router_label:
-                # Refuse a bad setting before touching the system agent; apply_root_setting checks again.
-                validate_root_setting(worker_db, setting)
+            if load_domain_root_setting(worker_db).router_label != setting.router_label:
+                # Refuse a bad setting before touching the system agent; apply_domain_root_setting checks again.
+                validate_domain_root_setting(worker_db, setting)
                 system_agent_reset_restart_limit_sync()
-            return apply_root_setting(worker_db, setting)
+            return apply_domain_root_setting(worker_db, setting)
         finally:
             worker_db.close()
 
@@ -137,9 +143,9 @@ async def set_root_app(
         raise ServiceUnavailableException(
             detail="could not prepare the instance for a safe restart", extra={"code": "restart_unavailable"}
         ) from exc
-    except RootAppNotFoundError as exc:
+    except DomainRootAppNotFoundError as exc:
         raise NotFoundException(detail="App not found") from exc
-    except RootSettingError as exc:
+    except DomainRootSettingError as exc:
         raise ValidationException(detail=str(exc)) from exc
     except AppsBusyForDashboardMoveError as exc:
         raise ConflictException(
@@ -149,4 +155,4 @@ async def set_root_app(
     return _response(db, request, restarting=moved)
 
 
-api_root_app_routes = Router(path="/", route_handlers=[get_root_app, set_root_app])
+api_domain_root_app_routes = Router(path="/", route_handlers=[get_domain_root_app, set_domain_root_app])

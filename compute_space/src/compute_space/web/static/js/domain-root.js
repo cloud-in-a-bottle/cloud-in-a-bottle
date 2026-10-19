@@ -1,12 +1,12 @@
 // ─── Domain root ───
-// Owner-facing UI over /api/settings/root-app: choose what the bare domain serves (the dashboard, which is the
+// Owner-facing UI over /api/settings/domain-root: choose what the bare domain serves (the dashboard, which is the
 // default, nothing, or an app) and, when it isn't the dashboard, the subdomain the dashboard lives on.
 
-var ROOT_APP_URL = '/api/settings/root-app';
+var ROOT_APP_URL = '/api/settings/domain-root';
 var APP_VALUE_PREFIX = 'app:';
 
-function renderRootApp(data) {
-  var select = document.getElementById('root-kind-select');
+function renderDomainRootApp(data) {
+  var select = document.getElementById('domain-root-kind-select');
   var options = [
     dom.el('option', {value: 'dashboard', text: 'Dashboard and API (default)'}),
     dom.el('option', {value: 'nothing', text: 'Nothing'}),
@@ -18,31 +18,31 @@ function renderRootApp(data) {
   select.value = data.kind === 'app' ? APP_VALUE_PREFIX + data.app_id : data.kind;
   select.disabled = false;
   document.getElementById('router-subdomain-input').value = data.router_subdomain;
-  document.getElementById('root-app-save-btn').disabled = false;
+  document.getElementById('domain-root-app-save-btn').disabled = false;
   // The dashboard's current subdomain, or '' while it's at the bare domain.
   select.dataset.savedRouterLabel = data.kind === 'dashboard' ? '' : data.router_subdomain;
-  updateRootAppForm();
+  updateDomainRootAppForm();
 }
 
-function updateRootAppForm() {
-  var dashboardAtRoot = document.getElementById('root-kind-select').value === 'dashboard';
-  document.getElementById('router-subdomain-field').hidden = dashboardAtRoot;
-  document.getElementById('root-app-warning').hidden = dashboardAtRoot;
+function updateDomainRootAppForm() {
+  var dashboardAtDomainRoot = document.getElementById('domain-root-kind-select').value === 'dashboard';
+  document.getElementById('router-subdomain-field').hidden = dashboardAtDomainRoot;
+  document.getElementById('domain-root-app-warning').hidden = dashboardAtDomainRoot;
 }
 
-function showRootAppMsg(text, isError) {
-  var msg = document.getElementById('root-app-msg');
+function showDomainRootAppMsg(text, isError) {
+  var msg = document.getElementById('domain-root-app-msg');
   msg.textContent = text;
   msg.className = isError ? 'notice notice--error' : 'msg';
   msg.hidden = false;
 }
 
-function loadRootApp() {
+function loadDomainRootApp() {
   fetch(ROOT_APP_URL, {credentials: 'same-origin', cache: 'no-store'})
     .then(readJsonResponse)
     .then(function(res) {
-      if (!res.ok) { showRootAppMsg(responseErrorMessage(res.data, 'Failed to load the domain root.'), true); return; }
-      renderRootApp(res.data);
+      if (!res.ok) { showDomainRootAppMsg(responseErrorMessage(res.data, 'Failed to load the domain root.'), true); return; }
+      renderDomainRootApp(res.data);
     });
 }
 
@@ -51,7 +51,7 @@ function loadRootApp() {
 function waitForMovedDashboard(routerUrl, previousGeneration) {
   var target = routerUrl + '/settings';
   var deadline = Date.now() + 180000;
-  showRootAppMsg('Moving the dashboard to ' + routerUrl + '. Waiting for the instance to restart…', false);
+  showDomainRootAppMsg('Moving the dashboard to ' + routerUrl + '. Waiting for the instance to restart…', false);
 
   function poll() {
     fetch(routerUrl + '/health', {cache: 'no-store'})
@@ -68,7 +68,7 @@ function waitForMovedDashboard(routerUrl, previousGeneration) {
 
   function retry() {
     if (Date.now() >= deadline) {
-      showRootAppMsg('The restart did not complete. Restart the instance manually, then open ' + target, true);
+      showDomainRootAppMsg('The restart did not complete. Restart the instance manually, then open ' + target, true);
       return;
     }
     setTimeout(poll, 500);
@@ -77,8 +77,8 @@ function waitForMovedDashboard(routerUrl, previousGeneration) {
   poll();
 }
 
-function saveRootApp() {
-  var value = document.getElementById('root-kind-select').value;
+function saveDomainRootApp() {
+  var value = document.getElementById('domain-root-kind-select').value;
   var isApp = value.indexOf(APP_VALUE_PREFIX) === 0;
   var body = {
     kind: isApp ? 'app' : value,
@@ -86,11 +86,11 @@ function saveRootApp() {
     router_subdomain: document.getElementById('router-subdomain-input').value.trim(),
   };
   var newRouterLabel = body.kind === 'dashboard' ? '' : body.router_subdomain;
-  if (newRouterLabel !== document.getElementById('root-kind-select').dataset.savedRouterLabel) {
+  if (newRouterLabel !== document.getElementById('domain-root-kind-select').dataset.savedRouterLabel) {
     var where = newRouterLabel ? 'the ' + newRouterLabel + ' subdomain' : 'the bare domain';
     if (!confirm('Move the dashboard to ' + where + '? This instance and its running apps will restart.')) return;
   }
-  var btn = document.getElementById('root-app-save-btn');
+  var btn = document.getElementById('domain-root-app-save-btn');
   btn.disabled = true;
   fetch(ROOT_APP_URL, {
     method: 'POST',
@@ -101,7 +101,7 @@ function saveRootApp() {
     .then(readJsonResponse)
     .then(function(res) {
       if (!res.ok) {
-        showRootAppMsg(responseErrorMessage(res.data, 'Failed to save the domain root.'), true);
+        showDomainRootAppMsg(responseErrorMessage(res.data, 'Failed to save the domain root.'), true);
         btn.disabled = false;
         return;
       }
@@ -109,10 +109,10 @@ function saveRootApp() {
         waitForMovedDashboard(res.data.router_url, res.data.generation);
         return;
       }
-      renderRootApp(res.data);
-      showRootAppMsg('Saved.', false);
+      renderDomainRootApp(res.data);
+      showDomainRootAppMsg('Saved.', false);
       btn.disabled = false;
     });
 }
 
-loadRootApp();
+loadDomainRootApp();

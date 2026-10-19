@@ -34,6 +34,8 @@ from compute_space.config import get_config
 from compute_space.core.caddy import reload_caddy_for_domains
 from compute_space.core.dns.coredns_provider.interface import DnsNotEnabled
 from compute_space.core.dns.coredns_provider.interface import InternalDnsProvider
+from compute_space.core.domain_root import DomainRootSetting
+from compute_space.core.domain_root import load_domain_root_setting
 from compute_space.core.domains import AppsBusyForPrimaryChangeError
 from compute_space.core.domains import Domain
 from compute_space.core.domains import DomainCertStatus
@@ -50,8 +52,6 @@ from compute_space.core.logging import logger
 from compute_space.core.mdns.responder import MdnsResponder
 from compute_space.core.operation_locks import detach_operation
 from compute_space.core.operation_locks import start_exclusive_operation
-from compute_space.core.root_app import RootSetting
-from compute_space.core.root_app import load_root_setting
 from compute_space.core.system_agent.client import SystemAgentError
 from compute_space.core.system_agent.client import system_agent_reset_restart_limit_sync
 from compute_space.core.tls.domain_certs import ensure_cert_for
@@ -111,7 +111,9 @@ def _tls_cert_display(config: Config, name: str, record: DomainRecord | None) ->
     return DomainCertStatus.NONE, None
 
 
-def _domain_info(config: Config, domain: Domain, record: DomainRecord | None, setting: RootSetting) -> DomainInfo:
+def _domain_info(
+    config: Config, domain: Domain, record: DomainRecord | None, setting: DomainRootSetting
+) -> DomainInfo:
     name = domain.name_no_port
     is_primary = record.is_primary if record is not None else False
     if not domain.tls:
@@ -131,7 +133,7 @@ def _domain_info(config: Config, domain: Domain, record: DomainRecord | None, se
 
 def _domain_list(config: Config, db: sqlite3.Connection) -> list[DomainInfo]:
     """The API view of the full domain set, loading all records in one query."""
-    setting = load_root_setting(db)
+    setting = load_domain_root_setting(db)
     return [_domain_info(config, r.to_domain(), r, setting) for r in load_records(db)]
 
 
@@ -176,7 +178,7 @@ def _validate_new_domain(
         return "Local domains are served over HTTP; set tls=false"
     if any(d.name_no_port == name for d in effective_domains(db)):
         return "domain is already configured"
-    setting = load_root_setting(db)
+    setting = load_domain_root_setting(db)
     if setting.router_label is not None and any(setting.router_host(d) == name for d in effective_domains(db)):
         return "domain is the dashboard subdomain of a configured domain"
     return None
