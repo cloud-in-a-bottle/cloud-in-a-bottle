@@ -79,6 +79,8 @@
     - first_boot_file is changed
     - domain.split(':')[0].lower().endswith('.local')
   become: true
+  # local_setup.yml runs this play with become_user: host.
+  become_user: root
   vars:
     lan_hostname: "{{ domain.split(':')[0].split('.')[0] | lower }}"
   block:
