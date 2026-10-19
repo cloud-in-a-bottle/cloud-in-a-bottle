@@ -139,7 +139,7 @@ def test_a_public_domain_is_accepted_when_dns_is_not_bound(cfg: Any, tmp_path: P
     # recorded and served by Caddy; only the zone this instance would answer for is missing.
     with TestClient(app=_make_app(_unstarted_provider(tmp_path, bind_ip=None))) as c:
         c.cookies.update(_auth_cookie(cfg.db_path))
-        r = c.post("/api/domains", json={"name": "host.example.org", "tls": False, "mdns": False})
+        r = c.post("/api/domains", json={"name": "host.example.org", "tls": False})
         assert r.status_code == 202
         assert "host.example.org" in [d["name"] for d in c.get("/api/domains").json()["domains"]]
 
@@ -206,7 +206,7 @@ def test_primary_with_expired_cert_not_active(cfg: Any, client: TestClient[Lites
 
 def test_add_local_domain_is_active_and_routable(cfg: Any, client: TestClient[Litestar]) -> None:
     client.cookies.update(_auth_cookie(cfg.db_path))
-    resp = client.post("/api/domains", json={"name": "myhost.local", "mdns": True})
+    resp = client.post("/api/domains", json={"name": "myhost.local", "tls": False})
     assert resp.status_code == 202
     # POST returns the full updated list (so the UI repaints without a follow-up GET).
     body = resp.json()
@@ -269,7 +269,7 @@ def test_an_mdns_domain_never_reaches_the_dns_provider(
     # .local is served by the wildcard mDNS responder; CoreDNS never sees it.
     dns_provider, client = dns_client
 
-    client.post("/api/domains", json={"name": "myhost.local", "mdns": True})
+    client.post("/api/domains", json={"name": "myhost.local", "tls": False})
     client.delete("/api/domains/myhost.local")
 
     assert list(dns_provider.zones) == [PRIMARY.name]
@@ -282,7 +282,7 @@ def test_mdns_domains_are_published_by_the_responder_while_configured(
     responder = MdnsResponder(port=0)
     with TestClient(app=_make_app(_unstarted_provider(tmp_path), responder)) as c:
         c.cookies.update(_auth_cookie(cfg.db_path))
-        c.post("/api/domains", json={"name": "myhost.local", "mdns": True})
+        c.post("/api/domains", json={"name": "myhost.local", "tls": False})
         c.post("/api/domains", json={"name": "host.example.org", "tls": True})
         assert responder.domains == ("myhost.local",)
 
@@ -303,24 +303,22 @@ def test_add_duplicate_rejected(cfg: Any, client: TestClient[Litestar]) -> None:
 
 def test_add_invalid_name_rejected(cfg: Any, client: TestClient[Litestar]) -> None:
     client.cookies.update(_auth_cookie(cfg.db_path))
-    resp = client.post("/api/domains", json={"name": "not a domain"})
+    resp = client.post("/api/domains", json={"name": "not a domain", "tls": False})
     assert resp.status_code == 400
     assert resp.json()["detail"] == "invalid domain name"
-    assert client.post("/api/domains", json={"name": "nodot"}).status_code == 400
+    assert client.post("/api/domains", json={"name": "nodot", "tls": False}).status_code == 400
+
+
+def test_add_without_tls_rejected(cfg: Any, client: TestClient[Litestar]) -> None:
+    client.cookies.update(_auth_cookie(cfg.db_path))
+    assert client.post("/api/domains", json={"name": "myhost.local"}).status_code == 400
 
 
 def test_add_mdns_with_tls_rejected(cfg: Any, client: TestClient[Litestar]) -> None:
     client.cookies.update(_auth_cookie(cfg.db_path))
-    resp = client.post("/api/domains", json={"name": "myhost.local", "tls": True, "mdns": True})
+    resp = client.post("/api/domains", json={"name": "myhost.local", "tls": True})
     assert resp.status_code == 400
     assert resp.json()["detail"] == "Local domains are served over HTTP; set tls=false"
-
-
-def test_add_mdns_outside_local_rejected(cfg: Any, client: TestClient[Litestar]) -> None:
-    client.cookies.update(_auth_cookie(cfg.db_path))
-    resp = client.post("/api/domains", json={"name": "myhost.example.com", "mdns": True})
-    assert resp.status_code == 400
-    assert resp.json()["detail"] == "Local domains must end in .local"
 
 
 # --- remove -------------------------------------------------------------------------
@@ -328,7 +326,7 @@ def test_add_mdns_outside_local_rejected(cfg: Any, client: TestClient[Litestar])
 
 def test_remove_runtime_domain(cfg: Any, client: TestClient[Litestar]) -> None:
     client.cookies.update(_auth_cookie(cfg.db_path))
-    client.post("/api/domains", json={"name": "myhost.local", "mdns": True})
+    client.post("/api/domains", json={"name": "myhost.local", "tls": False})
     assert client.delete("/api/domains/myhost.local").status_code == 200
     names = {d["name"] for d in client.get("/api/domains").json()["domains"]}
     assert names == {"host.example.com"}
@@ -350,13 +348,13 @@ def test_remove_unknown_domain_404(cfg: Any, client: TestClient[Litestar]) -> No
 
 def test_make_primary_requires_auth(cfg: Any, client: TestClient[Litestar]) -> None:
     with closing(open_db(cfg)) as db:
-        domains.upsert_record(db, domains.DomainRecord("new.local", tls=False, mdns=True))
+        domains.upsert_record(db, domains.DomainRecord("new.local", tls=False))
     assert client.post("/api/domains/new.local/primary").status_code == 401
 
 
 def test_make_primary_requires_usable_tls_certificate(cfg: Any, client: TestClient[Litestar]) -> None:
     with closing(open_db(cfg)) as db:
-        domains.upsert_record(db, domains.DomainRecord("new.example.com", tls=True, mdns=False))
+        domains.upsert_record(db, domains.DomainRecord("new.example.com", tls=True))
     client.cookies.update(_auth_cookie(cfg.db_path))
     resp = client.post("/api/domains/new.example.com/primary")
     assert resp.status_code == 409
@@ -367,7 +365,7 @@ def test_make_primary_returns_updated_list_then_schedules_restart(
     cfg: Any, client: TestClient[Litestar], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     with closing(open_db(cfg)) as db:
-        domains.upsert_record(db, domains.DomainRecord("new.local", tls=False, mdns=True))
+        domains.upsert_record(db, domains.DomainRecord("new.local", tls=False))
     restart_steps: list[str] = []
     monkeypatch.setattr(
         domains, "system_agent_reset_restart_limit_sync", lambda: restart_steps.append("reset-start-limit")
@@ -387,7 +385,7 @@ def test_make_primary_does_not_restart_when_start_limit_reset_fails(
     cfg: Any, client: TestClient[Litestar], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     with closing(open_db(cfg)) as db:
-        domains.upsert_record(db, domains.DomainRecord("new.local", tls=False, mdns=True))
+        domains.upsert_record(db, domains.DomainRecord("new.local", tls=False))
     monkeypatch.setattr(
         domains,
         "system_agent_reset_restart_limit_sync",

@@ -112,11 +112,16 @@ def test_settings_is_key_value(tmp_path: Path) -> None:
 
 def test_domains_ddl_identical_across_all_three_sources() -> None:
     """schema.sql, the v13 migration, and the frozen system-agent _SCHEMA are three hand-maintained
-    copies of the domains/settings DDL — they must define these objects identically."""
+    copies of the domains/settings DDL.  The v13 and agent copies are frozen at v13 and must match
+    each other exactly; schema.sql is the current baseline, so it must match v13 as later migrations
+    have since changed it."""
     fresh = _ddl_fingerprint(Path(schema_path()).read_text())
-    v13 = _ddl_fingerprint(Migration0013DomainsAndSettings()._load_sql())
+    v13_sql = Migration0013DomainsAndSettings()._load_sql()
+    v13 = _ddl_fingerprint(v13_sql)
     agent = _ddl_fingerprint(_AGENT_SCHEMA)
+    # v15 dropped domains.mdns.
+    v13_now = _ddl_fingerprint(v13_sql + "ALTER TABLE domains DROP COLUMN mdns;")
 
     assert set(fresh) == set(_DDL_OBJECTS), "db/schema.sql is missing a domains/settings object"
-    assert fresh == v13, "db/schema.sql and the v13 migration DDL diverged"
-    assert fresh == agent, "db/schema.sql and the system-agent v0007 _SCHEMA diverged"
+    assert v13 == agent, "the v13 migration DDL and the system-agent v0007 _SCHEMA diverged"
+    assert fresh == v13_now, "db/schema.sql diverged from the v13 migration DDL plus later changes"

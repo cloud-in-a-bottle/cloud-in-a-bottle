@@ -56,15 +56,23 @@ _FALLBACK_BODY = (
 )
 # Keep behavior-parity with update-progress.js: authenticate /updates with the
 # URL token, and when /updates is not readable (no token / instance back) probe
-# /health and reload so no viewer is ever stranded on this page.
+# the requested URL and reload so no viewer is ever stranded on this page.  The
+# probe treats a redirect, or any answer without the updater's marker header
+# that isn't a 502/503/504, as "back" -- and so too an unmarked 502/503/504 once
+# 90s have passed since the first unmarked answer, so a dead app can't strand it.
 _FALLBACK_JS = (
-    "var t=new URLSearchParams(location.search).get('token')||'';var e=0;"
-    "function r(){fetch('/health',{cache:'no-store'}).then(function(h){if(h.ok)location.reload()})"
+    "var t=new URLSearchParams(location.search).get('token')||'';var e=0;var u=null;"
+    "function b(h){if(h.type==='opaqueredirect')return true;"
+    "if(h.headers.get('X-OpenHost-Updater'))return false;"
+    "if([502,503,504].indexOf(h.status)<0)return true;"
+    "if(u===null)u=Date.now();return Date.now()-u>90000}"
+    "function q(){return fetch(location.href,{cache:'no-store',redirect:'manual'})}"
+    "function r(){q().then(function(h){if(b(h))location.reload()})"
     ".catch(function(){})}"
     "function p(){fetch('/updates?token='+encodeURIComponent(t),{cache:'no-store'})"
     ".then(function(x){return x.ok?x.json():(r(),null)})"
     ".then(function(d){if(d){var n=(d.entries||[]).length;e=n?0:e+1;if(e>3)r();"
-    "if(d.terminal){fetch('/health').then(function(h){if(h.ok)location.href='/settings'})}}"
+    "if(d.terminal){q().then(function(h){if(b(h))location.href='/settings'})}}"
     "setTimeout(p,1500)}).catch(function(){r();setTimeout(p,1500)})}p();"
 )
 
@@ -146,8 +154,8 @@ class _Handler(BaseHTTPRequestHandler):
             self._serve_updates()
             return
         if path == "/health":
-            # 503 while the updater owns the port: the page probes /health to
-            # know when the real dashboard is back.
+            # 503 while the updater owns the port, so health checks don't
+            # mistake it for the real router.
             self._respond(503, "text/plain; charset=utf-8", b"updating")
             return
         # HTML page only for browser document navigations; XHR/fetch (e.g. the
@@ -175,6 +183,9 @@ class _Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "no-store")
+            # Lets the page tell this updater apart from a live instance, which
+            # may answer the same URL with anything (see update-progress.js).
+            self.send_header("X-OpenHost-Updater", "1")
             if status == 503:
                 # Every app on the instance answers 503 for the length of the
                 # apply, so tell clients when to come back rather than letting

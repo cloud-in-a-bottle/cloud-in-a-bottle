@@ -60,7 +60,7 @@ def cfg(tmp_path: Path) -> Config:
 @pytest.fixture
 def client(cfg: Config) -> Iterator[TestClient[Litestar]]:
     with closing(open_db(cfg)) as db:
-        upsert_record(db, DomainRecord("alternate.example", tls=True, mdns=False))
+        upsert_record(db, DomainRecord("alternate.example", tls=True))
     with TestClient(app=_make_app()) as c:
         yield c
 

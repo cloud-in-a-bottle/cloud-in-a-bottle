@@ -54,12 +54,18 @@ def _read_name(buf: bytes, offset: int) -> tuple[str, int]:
                 end = offset + 2
             offset = ((length & 0x3F) << 8) | buf[offset + 1]
             continue
+        if length & 0xC0:
+            # 0x40 / 0x80 are reserved label types; anything real is at most 63 bytes.
+            raise MalformedPacket("reserved label type")
         if length == 0:
             return ".".join(labels).lower(), end if end is not None else offset + 1
         label = buf[offset + 1 : offset + 1 + length]
         if len(label) != length:
             raise MalformedPacket("truncated label")
-        labels.append(label.decode("utf-8", errors="replace"))
+        try:
+            labels.append(label.decode("utf-8"))
+        except UnicodeDecodeError as e:
+            raise MalformedPacket("label isn't utf-8") from e
         offset += 1 + length
     raise MalformedPacket("compression pointer loop")
 

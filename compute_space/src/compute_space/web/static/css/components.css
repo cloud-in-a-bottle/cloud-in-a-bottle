@@ -822,6 +822,7 @@ table.form-table input[type="password"] {
 
 .field > .hint,
 .field > .msg,
+.field > .notice,
 .field > .field-error {
   margin-top: var(--space-2);
   margin-bottom: 0;
@@ -1250,6 +1251,16 @@ select {
 .field > select,
 .field > .field-row {
   max-width: 32rem;
+}
+
+/* Controls that can't be used in the current state; a notice under the row says why. */
+.field-row--disabled {
+  opacity: 0.45;
+}
+
+.field-row--disabled,
+.field-row--disabled * {
+  cursor: not-allowed;
 }
 
 .field--check {

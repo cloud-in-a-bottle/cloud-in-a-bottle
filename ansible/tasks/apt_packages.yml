@@ -30,13 +30,23 @@
       - fuse3
     state: present
 
-# LAN mode: avahi publishes the machine's own <hostname>.local (so `ssh host@<hostname>.local`
-# works); the router's own responder adds the `.local` domain's app subdomains on top.
-- name: Install avahi (LAN mode)
-  apt:
-    name: avahi-daemon
-    state: present
-  when: mdns_mode | bool
+# LAN mode (a `.local` domain) splits the names in two: avahi publishes the bare domain, which is
+# the machine's own <hostname>.local, and the router's responder publishes every app subdomain under
+# it.  So the hostname must be the domain's label (`bottle` for bottle.local); it is set alongside
+# the domain seed, in write_openhost_config.yml.  Leaving the bare name to avahi also keeps the box
+# findable (`ssh host@bottle.local`) when openhost is down or mid-upgrade.
+- name: LAN mode avahi
+  when: (domain | default('')).split(':')[0].lower().endswith('.local')
+  block:
+    - name: Check the LAN mode domain is a single label under .local
+      assert:
+        that: domain.split(':')[0].split('.') | length == 2
+        fail_msg: "LAN mode needs a domain like bottle.local (the machine's hostname plus .local), got {{ domain }}"
+
+    - name: Install avahi
+      apt:
+        name: avahi-daemon
+        state: present
 
 # JuiceFS mounts the archive tier with -o allow_other so apps
 # running under rootless-podman's subuid namespace can traverse

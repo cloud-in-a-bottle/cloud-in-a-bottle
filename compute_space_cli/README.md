@@ -83,6 +83,8 @@ bottle instance remove dev                       # remove (by hostname or alias)
 bottle instance token                            # print stored token for current instance
 ```
 
+Commands that call the API first ask the instance where its dashboard and API live (`/.well-known/cloud-in-a-bottle`), since the owner may have moved them from the bare domain to a subdomain. The answer isn't saved, so a move is picked up on the next run. No token is sent with that lookup.
+
 ### Targeting instances
 
 ```bash
@@ -114,7 +116,7 @@ bottle curl https://myzone.example.com/api/apps          # GET with bearer token
 bottle curl -X POST https://myzone.example.com/api/...   # any curl args work
 ```
 
-`bottle curl` runs `curl` with `Authorization: Bearer <token>` pre-injected for the current instance. Useful for hitting the API or testing app endpoints without copying tokens by hand.
+`bottle curl` runs `curl` with `Authorization: Bearer <token>` pre-injected for the current instance. If the owner has moved the dashboard to a subdomain, use that subdomain: the bare domain may be serving an app, which would receive your token. `GET https://<domain>/.well-known/cloud-in-a-bottle` (no token) tells you where it is. Useful for hitting the API or testing app endpoints without copying tokens by hand.
 
 ## Update
 

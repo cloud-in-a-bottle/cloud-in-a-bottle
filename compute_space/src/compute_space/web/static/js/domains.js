@@ -152,7 +152,7 @@ function addDomain() {
   var msg = document.getElementById('domain-msg');
   if (!name) { return; }
   var type = document.getElementById('domain-type').value;
-  var body = {name: name, tls: type === 'public', mdns: type === 'mdns'};
+  var body = {name: name, tls: type === 'public'};
   fetch(DOMAINS_URL, {
     method: 'POST',
     credentials: 'same-origin',

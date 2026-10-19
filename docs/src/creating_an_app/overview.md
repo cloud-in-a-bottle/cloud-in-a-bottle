@@ -114,8 +114,9 @@ The router injects these environment variables into your app.
 | `BOTTLE_APP_TOKEN` | `kF3xP_2qA-bN4...` (43-char url-safe token) | Random per-app token used to authenticate cross-app service calls                                               |
 | `BOTTLE_ROUTER_URL` | `http://host.containers.internal:8080` | internal URL of the router, used for constructing service requests. |
 | `BOTTLE_LOCAL_PORT` | `9137` | The host port the router expects the app on. Set only for `network_host` apps, which must bind this instead of their manifest port |
-| `BOTTLE_ZONE_DOMAIN` | `mycooldomain.com` | The instance's domain                                                                                      |
-| `BOTTLE_MY_REDIRECT_DOMAIN` | `my.selfhost.imbue.com` | The shared `my.*` OAuth redirect domain. This hosts a browser-local page that redirects the user to their zone. |
+| `BOTTLE_ZONE_DOMAIN` | `mycooldomain.com` | The instance's primary domain. Use it for the instance's identity, or to build your app's own URL when there's no request to read it from. Don't use it to find the router: see `BOTTLE_ROUTER_PUBLIC_URL`. |
+| `BOTTLE_ROUTER_PUBLIC_URL` | `https://mycooldomain.com` | Public URL of the router on the primary domain, for service requests made from the browser. Only for when there's no request to read the router's URL from (a static frontend, or a background job); otherwise prefer the `X-OpenHost-Router-URL` request header, which is right whichever of the instance's domains the visitor used. |
+| `BOTTLE_MY_REDIRECT_DOMAIN` | `my.cloudinabottle.org` | The shared `my.*` OAuth redirect domain. This hosts a browser-local page that redirects the user to their zone. |
 | `BOTTLE_APP_DATA_DIR` | `/data/app_data/my-app` | Path to the app's persistent data directory. Set when `app_data` (default on), `sqlite`, or `access_all_app_data` is requested   |
 | `BOTTLE_APP_TEMP_DIR` | `/data/app_temp_data/my-app` | Path to the app's temporary data directory. Set when `app_temp_data` or `access_all_app_data` is requested          |
 | `BOTTLE_APP_ARCHIVE_DIR` | `/data/app_archive/my-app` | Path to the app's elastic archive directory. Set when `app_archive` or `access_all_app_data` is requested and the archive mount is available |

@@ -68,16 +68,51 @@
     group: host
     mode: "0600"
   when: (overwrite_existing | default(false) | bool) or not existing_first_boot.stat.exists
+  register: first_boot_file
+
+# LAN mode: the hostname must match the domain (avahi publishes the bare <hostname>.local; see
+# apt_packages.yml), so it is set exactly when the domain is seeded.  A re-run with a different
+# domain leaves both alone, since the router's domain is in its DB by then and changes through the
+# domains API; renaming only the host would split the two.
+- name: LAN mode hostname
+  when:
+    - first_boot_file is changed
+    - domain.split(':')[0].lower().endswith('.local')
+  become: true
+  vars:
+    lan_hostname: "{{ domain.split(':')[0].split('.')[0] | lower }}"
+  block:
+    - name: Set the hostname to the LAN mode domain's label
+      hostname:
+        name: "{{ lan_hostname }}"
+      register: lan_hostname_result
+
+    - name: Resolve the new hostname locally
+      lineinfile:
+        path: /etc/hosts
+        regexp: '^127\.0\.1\.1\s'
+        line: "127.0.1.1 {{ lan_hostname }}"
+
+    - name: Stat avahi
+      stat:
+        path: /usr/sbin/avahi-daemon
+      register: avahi_binary
+
+    # avahi reads the hostname only at startup.
+    - name: Restart avahi to publish the new hostname
+      systemd:
+        name: avahi-daemon
+        state: restarted
+      when: lan_hostname_result is changed and avahi_binary.stat.exists
 
 - name: Show claim URL
   vars:
-    # In HTTP-only mode the domain usually carries its own port (e.g. `lvh.me:8080`, which the
-    # router needs to build absolute URLs); fall back to :8080 only when it doesn't.
+    # In HTTP-only mode the router serves directly, and the domain usually carries its own port
+    # (e.g. `lvh.me:8080`, which the router needs to build absolute URLs); fall back to :8080 only
+    # when it doesn't.
     base_url: >-
-      {{ ('http://' + domain + ('' if ':' in domain else ':8080'))
-         if (local_http_only | default(false) | bool)
-         else ('http://' + domain) if (mdns_mode | bool)
-         else ('https://' + domain) }}
+      {{ ('https://' if (tls | bool) else 'http://') + domain
+         + (':8080' if (local_http_only | default(false) | bool) and ':' not in domain else '') }}
   debug:
     msg: >-
       {{ ('Setup URL (ungated): ' + base_url + '/setup')

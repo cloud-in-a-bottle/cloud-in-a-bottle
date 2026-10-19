@@ -25,7 +25,7 @@ def _db(domains: tuple[Domain, ...] = ()) -> sqlite3.Connection:
     with open(schema_path()) as f:
         conn.executescript(f.read())
     if domains:
-        seed_domains(conn, domains[0], [DomainRecord(d.name, d.tls, d.mdns) for d in domains[1:]])
+        seed_domains(conn, domains[0], [DomainRecord(d.name, d.tls) for d in domains[1:]])
     return conn
 
 
@@ -61,7 +61,7 @@ def _multi() -> sqlite3.Connection:
     return _db(
         (
             Domain(name="host.example.com", tls=True),
-            Domain(name="myhost.local", tls=False, mdns=True),
+            Domain(name="myhost.local", tls=False),
         )
     )
 

@@ -15,24 +15,16 @@ _TTL = 120
 _LEGACY_TTL = 10
 
 
-def _is_ours(name: str, domains: tuple[str, ...], avahi_name: str | None) -> bool:
-    """``name`` is one of ``domains`` or any name under one.  The bare domain is left alone when avahi
-    is already publishing it (``avahi_name``, the machine's own ``<hostname>.local``): answering it too,
-    with possibly different addresses, would make avahi see a conflict and rename the host."""
-    for domain in domains:
-        if name.endswith("." + domain):
-            return True
-        if name == domain and domain != avahi_name:
-            return True
-    return False
+def _is_ours(name: str, domains: tuple[str, ...]) -> bool:
+    """``name`` is a name under one of ``domains``.  The bare domain itself is avahi's: it is the
+    machine's own ``<hostname>.local``, and answering it too, with possibly different addresses, would
+    make avahi see a conflict and rename the host."""
+    return any(name.endswith("." + domain) for domain in domains)
 
 
-def build_answer(
-    query: Query, source_port: int, domains: tuple[str, ...], avahi_name: str | None, ip: str
-) -> bytes | None:
-    """The reply to ``query`` for a box reachable at ``ip`` and publishing ``domains`` (and every name
-    under them), or None if it asks about nothing we publish.  ``avahi_name`` is the name a running
-    avahi publishes for this machine, if any."""
+def build_answer(query: Query, source_port: int, domains: tuple[str, ...], ip: str) -> bytes | None:
+    """The reply to ``query`` for a box reachable at ``ip`` and publishing every name under
+    ``domains``, or None if it asks about nothing we publish."""
     legacy = source_port != MDNS_PORT
     ttl = _LEGACY_TTL if legacy else _TTL
     # Legacy queriers are plain DNS resolvers that don't understand the cache-flush bit.
@@ -41,7 +33,7 @@ def build_answer(
     additionals: list[bytes] = []
     answered = []
     for q in query.questions:
-        if not _is_ours(q.name, domains, avahi_name):
+        if not _is_ours(q.name, domains):
             continue
         if q.qtype in (TYPE_A, TYPE_ANY):
             answers.append(a_record(q.name, ip, ttl, cache_flush))

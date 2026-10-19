@@ -28,8 +28,10 @@ from compute_space.web.helpers.app_starting import app_starting_response
 from compute_space.web.helpers.proxy import proxy_http_request
 from compute_space.web.helpers.proxy import proxy_websocket_request
 from compute_space.web.helpers.zone import ZONE_SCOPE_KEY
+from compute_space.web.helpers.zone import router_base_url
 
 IS_OWNER_HEADER = ("X-OpenHost-Is-Owner", "true")
+ROUTER_URL_HEADER = "X-OpenHost-Router-URL"
 
 # Caddy (our front proxy) reaches hypercorn over loopback and, by default,
 # strips client-spoofed X-Forwarded-* before forwarding.  So we trust the
@@ -190,6 +192,9 @@ class SubdomainProxyMiddleware:
         extra_headers = [
             ("X-Forwarded-Host", netloc),
             ("X-Forwarded-Proto", zone.scheme),
+            # Where the router is on the domain this request arrived on, for the app's browser-side service calls.
+            # Per request, unlike OPENHOST_ROUTER_PUBLIC_URL, so it's right whichever domain the visitor used.
+            (ROUTER_URL_HEADER, router_base_url(connection)),
         ]
         if forwarded_for := _resolve_forwarded_for(connection):
             extra_headers.append(("X-Forwarded-For", forwarded_for))

@@ -62,12 +62,13 @@ def test_seed_prefers_first_boot(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 def test_seed_first_boot_local_mdns(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     cfg = _cfg(tmp_path)
     config_dir = _point_config_env(monkeypatch, tmp_path)
-    (config_dir / "first_boot.toml").write_text('domain = "myhost.local"\ntls = false\nmdns = true\n')
+    # A `.local` domain is mDNS by its name, and defaults to plain http.
+    (config_dir / "first_boot.toml").write_text('domain = "myhost.local"\n')
 
     seed_first_boot(cfg)
     with closing(open_db(cfg)) as db:
         recs = load_records(db)
-    assert recs[0].name == "myhost.local" and recs[0].tls is False and recs[0].mdns is True
+    assert recs[0].name == "myhost.local" and recs[0].tls is False and recs[0].to_domain().mdns is True
 
 
 def test_seed_migrates_legacy_claim_file_without_first_boot(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

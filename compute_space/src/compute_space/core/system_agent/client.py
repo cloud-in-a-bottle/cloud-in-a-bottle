@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import subprocess
 import time
+from enum import StrEnum
 
 import cattrs
 
+import openhost_system_agent.updater.progress as agent_progress
 from compute_space.core.logging import logger
 from compute_space.core.util import async_wrap
 from openhost_system_agent.protocol import DiffResult
@@ -116,14 +119,68 @@ def system_agent_show_diff() -> DiffResult:
     return _call_system_agent_sync(DiffResult, "update", "show-diff")
 
 
+# Serializes update launches from the Settings button and the auto-update schedule.
+apply_lock = asyncio.Lock()
+
+# The agent's refusal when a walk is already running. Its log belongs to that walk,
+# so don't terminate it here.
+_ALREADY_RUNNING = "already in progress"
+
+
 @async_wrap
-def system_agent_apply() -> None:
+def _start_apply() -> None:
     # The agent hands the walk to openhost-apply.service and returns immediately,
     # so this call is just the handoff — no output worth parsing. The walk then
     # stops openhost (killing this process), and the freshly started
-    # compute_space reads the progress log for results. A failure here means the
-    # walk never started, which the caller turns into a terminal log entry.
+    # compute_space reads the progress log for results.
     _run_system_agent("update", "apply", timeout=60)
+
+
+class ApplyLaunch(StrEnum):
+    STARTED = "started"
+    ALREADY_RUNNING = "already_running"
+    FAILED = "failed"
+
+
+async def system_agent_apply() -> ApplyLaunch:
+    """Hand the update to the detached apply unit, which stops openhost next. The caller must hold ``apply_lock``.
+
+    The lock stays held only when this started the walk. Otherwise it is released so a retry can run, and on FAILED
+    the failure is also recorded in the progress log and the update token cleared.
+    """
+    try:
+        await _start_apply()
+    except Exception as e:
+        apply_lock.release()
+        if _ALREADY_RUNNING in str(e):
+            # Started outside this process (e.g. from the CLI). Don't hold the lock for it: if it fails before
+            # stopping openhost, nothing would ever release it.
+            logger.warning("apply already in progress; leaving its progress log alone")
+            return ApplyLaunch.ALREADY_RUNNING
+        # Not just SystemAgentError: ANY failure must leave the log terminal, or
+        # the /updating page would poll forever with no explanation.
+        logger.exception("system agent apply failed")
+        await record_apply_failure(f"Update failed: {e}")
+        try:
+            await system_agent_clear_update_token()
+        except SystemAgentError:
+            logger.exception("failed to clear update token")
+        return ApplyLaunch.FAILED
+    return ApplyLaunch.STARTED
+
+
+async def record_apply_failure(message: str) -> None:
+    """Ensure the log ends terminal so the /updating page stops polling. Falls back
+    to the root agent for a root-owned log."""
+    try:
+        if agent_progress.record_failure_if_not_terminal(message):
+            return
+    except Exception:
+        logger.exception("failed to record apply failure directly")
+    try:
+        await system_agent_record_update_failure(message)
+    except SystemAgentError:
+        logger.exception("failed to record apply failure via the agent")
 
 
 @async_wrap

@@ -208,7 +208,7 @@ class TestDiscoverProvidersAppAuth:
                 headers=_auth_headers(),
             )
             assert resp.status_code == 200
-            providers = resp.json()
+            providers = resp.json()["providers"]
             assert len(providers) == 2
             app_ids = {p["app_id"] for p in providers}
             assert a_id in app_ids

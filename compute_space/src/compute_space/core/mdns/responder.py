@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import errno
-import os
 import socket
 import struct
+import time
 
 from compute_space.core.domains import Domain
 from compute_space.core.logging import logger
@@ -21,19 +21,14 @@ _MREQN = struct.Struct("@4s4si")
 # How often to look for new interfaces to join the group on (a USB NIC plugged in after boot, etc).
 _REJOIN_SECONDS = 30
 _MAX_PACKET = 9000
-_AVAHI_PID_FILE = "/run/avahi-daemon/pid"
-
-
-def _avahi_name() -> str | None:
-    """The name avahi publishes for this machine, if avahi is running."""
-    if not os.path.exists(_AVAHI_PID_FILE):
-        return None
-    return socket.gethostname().split(".")[0].lower() + ".local"
+# A packet that trips a bug is logged at most this often, so a querier repeating it can't flood the log.
+_ERROR_LOG_INTERVAL_SECONDS = 60
 
 
 class MdnsResponder:
-    """Answers mDNS queries for the instance's ``.local`` domains and every name under them, so
-    ``myapp.myhost.local`` resolves on the LAN without any per-app registration.
+    """Answers mDNS queries for every name under the instance's ``.local`` domains, so
+    ``myapp.myhost.local`` resolves on the LAN without any per-app registration.  The bare domain is
+    the machine's own ``<hostname>.local``, which avahi publishes; this only adds the subdomains.
 
     Each query is answered with the address of the interface it arrived on, so the answer tracks DHCP
     renewals and interface changes without any polling.  The socket shares port 5353 with avahi (or any
@@ -47,20 +42,32 @@ class MdnsResponder:
         self._sock: socket.socket | None = None
         self._joined: set[int] = set()
         self._rejoin_task: asyncio.Task[None] | None = None
+        self._last_error_logged = float("-inf")
 
     @property
     def domains(self) -> tuple[str, ...]:
         return self._domains
 
     async def update(self, domains: tuple[Domain, ...]) -> None:
-        """Publish exactly the mDNS domains among ``domains``, starting or stopping the listener as needed."""
+        """Publish exactly the mDNS domains among ``domains``, starting or stopping the listener as needed.
+
+        mDNS is an extra, so failing to listen is logged rather than raised: the router still serves
+        everything else, and the next call (a domain change, or the next boot) tries again."""
         self._domains = tuple(d.name_no_port for d in domains if d.mdns)
         if self._domains and self._sock is None:
-            self._start()
+            try:
+                self._start()
+            except OSError:
+                logger.exception(
+                    f"mDNS: can't listen on udp {self._port}, so names under {', '.join(self._domains)} won't "
+                    "resolve on the LAN (another process may hold the port without SO_REUSEADDR); "
+                    "retrying on the next domain change or restart"
+                )
+                return
         elif not self._domains and self._sock is not None:
             await self.stop()
         if self._domains:
-            logger.info(f"mDNS: publishing {', '.join(self._domains)} and every name under them")
+            logger.info(f"mDNS: publishing every name under {', '.join(self._domains)}")
 
     def _start(self) -> None:
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -68,7 +75,14 @@ class MdnsResponder:
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
         sock.setsockopt(socket.IPPROTO_IP, socket.IP_PKTINFO, 1)
         sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 255)  # RFC 6762 section 11
-        sock.bind(("", self._port))
+        # Bound to the group, not to every address: the kernel then delivers only datagrams sent to
+        # the mDNS group (from the link, since multicast to 224.0.0.0/24 isn't routed), never unicast
+        # from elsewhere.  Replies still get a real source address, from the interface they leave on.
+        try:
+            sock.bind((_MDNS_GROUP, self._port))
+        except OSError:
+            sock.close()
+            raise
         sock.setblocking(False)
         self._sock = sock
         asyncio.get_running_loop().add_reader(sock.fileno(), self._on_readable)
@@ -81,7 +95,7 @@ class MdnsResponder:
             try:
                 await self._rejoin_task
             except asyncio.CancelledError:
-                pass
+                pass  # the cancellation we just asked for
             self._rejoin_task = None
         if self._sock is not None:
             asyncio.get_running_loop().remove_reader(self._sock.fileno())
@@ -119,15 +133,23 @@ class MdnsResponder:
                 data, ancdata, _flags, addr = self._sock.recvmsg(_MAX_PACKET, socket.CMSG_SPACE(_PKTINFO.size))
             except BlockingIOError:
                 return
-            pktinfo = next(
-                (d for level, kind, d in ancdata if level == socket.IPPROTO_IP and kind == socket.IP_PKTINFO), None
-            )
-            if pktinfo is None:
-                raise RuntimeError("mDNS: received a packet without IP_PKTINFO, which the socket enables")
-            self._handle(data, pktinfo, addr)
+            # One bad packet mustn't stop the rest: anything it raises is a bug, logged (rate-limited,
+            # since anyone on the LAN can resend it) and skipped.
+            try:
+                self._handle(data, ancdata, addr)
+            except Exception:
+                now = time.monotonic()
+                if now - self._last_error_logged >= _ERROR_LOG_INTERVAL_SECONDS:
+                    self._last_error_logged = now
+                    logger.exception(f"mDNS: failed to handle a packet from {addr}; skipping it")
 
-    def _handle(self, data: bytes, pktinfo: bytes, addr: tuple[str, int]) -> None:
+    def _handle(self, data: bytes, ancdata: list[tuple[int, int, bytes]], addr: tuple[str, int]) -> None:
         assert self._sock is not None
+        pktinfo = next(
+            (d for level, kind, d in ancdata if level == socket.IPPROTO_IP and kind == socket.IP_PKTINFO), None
+        )
+        if pktinfo is None:
+            raise RuntimeError("received a packet without IP_PKTINFO, which the socket enables")
         ifindex, local_addr, _ = _PKTINFO.unpack_from(pktinfo)
         local_ip = socket.inet_ntoa(local_addr)
         if local_ip == "0.0.0.0":
@@ -138,7 +160,7 @@ class MdnsResponder:
             return
         if query is None:
             return
-        reply = build_answer(query, addr[1], self._domains, _avahi_name(), local_ip)
+        reply = build_answer(query, addr[1], self._domains, local_ip)
         if reply is None:
             return
         # Legacy (non-5353) queriers get a unicast reply; everyone else a multicast one, so other

@@ -18,6 +18,11 @@ from compute_space.web.auth.auth import require_owner_or_app_auth
 
 
 @attr.s(auto_attribs=True, frozen=True)
+class DiscoverProvidersResponse:
+    providers: list[ServiceProvider]
+
+
+@attr.s(auto_attribs=True, frozen=True)
 class OkResponse:
     ok: bool
 
@@ -42,8 +47,13 @@ async def list_services_v2(db: NamedDependency[sqlite3.Connection]) -> list[Serv
 @get("/api/services/v2/providers", guards=[require_owner_or_app_auth])
 async def discover_providers(
     db: NamedDependency[sqlite3.Connection], service: FromQuery[str]
-) -> list[ServiceProvider]:
-    return list_all_service_providers(db, service)
+) -> DiscoverProvidersResponse:
+    """Discover providers for a service.
+
+    Wrapped in an object rather than returned as a bare list because consumer apps call this
+    at runtime, so fields can be added later without breaking them.
+    """
+    return DiscoverProvidersResponse(providers=list_all_service_providers(db, service))
 
 
 @post("/api/services/v2/defaults", status_code=200, guards=[require_owner_auth], raises=[NotFoundException])

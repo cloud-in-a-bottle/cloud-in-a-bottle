@@ -42,7 +42,7 @@ def _cfg(tmp_path: Path) -> Any:
     with closing(open_db(cfg)) as db:
         upsert_record(
             db,
-            DomainRecord("new.example.com", tls=True, mdns=False, cert_status=DomainCertStatus.ACTIVE),
+            DomainRecord("new.example.com", tls=True, cert_status=DomainCertStatus.ACTIVE),
         )
     return cfg
 
@@ -158,7 +158,7 @@ def test_startup_completes_promoted_app_recovery_synchronously(
 
 def _add_local_domain(cfg: Any, name: str) -> None:
     with closing(open_db(cfg)) as db:
-        upsert_record(db, DomainRecord(name, tls=False, mdns=True, cert_status=DomainCertStatus.ACTIVE))
+        upsert_record(db, DomainRecord(name, tls=False, cert_status=DomainCertStatus.ACTIVE))
 
 
 @pytest.mark.asyncio
@@ -403,7 +403,7 @@ def test_startup_checks_the_promoted_primary_certificate_path(tmp_path: Path, mo
 def test_startup_skips_certificate_checks_for_http_primary(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     cfg = _make_test_config(tmp_path, zone_domain="old.example.com", tls_enabled=True)
     with closing(open_db(cfg)) as db:
-        upsert_record(db, DomainRecord("new.local", tls=False, mdns=True, cert_status=DomainCertStatus.ACTIVE))
+        upsert_record(db, DomainRecord("new.local", tls=False, cert_status=DomainCertStatus.ACTIVE))
         set_primary_domain(db, "new.local")
         monkeypatch.setattr(start_mod, "get_cert_status", lambda *_args: pytest.fail("unexpected check"))
         asyncio.run(start_mod._ensure_tls_cert(cfg, db, object()))  # type: ignore[arg-type]

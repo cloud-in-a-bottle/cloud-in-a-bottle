@@ -42,7 +42,7 @@ def _seed_dns_cfg(tmp_path: Path, *domains: Domain, **kw: Any) -> DefaultConfig:
     cfg.make_all_dirs()
     init_db(cfg.db_path)
     with closing(open_db(cfg)) as db:
-        seed_domains(db, domains[0], [DomainRecord(d.name, d.tls, d.mdns) for d in domains[1:]])
+        seed_domains(db, domains[0], [DomainRecord(d.name, d.tls) for d in domains[1:]])
     return cfg
 
 
@@ -177,7 +177,7 @@ def test_zone_set_covers_every_public_domain_and_skips_mdns(tmp_path: Path) -> N
         tmp_path,
         Domain(name="host.example.com", tls=True),
         Domain(name="host.example.org", tls=True),
-        Domain(name="myhost.local", tls=False, mdns=True),
+        Domain(name="myhost.local", tls=False),
     )
     with closing(open_db(config)) as db:
         zones = _zones(db)
@@ -232,7 +232,7 @@ async def test_adding_a_zone_regenerates_the_corefile_and_restarts(
             assert dns._coredns is not None
             first_proc = dns._coredns.proc
 
-            upsert_record(db, DomainRecord("host.example.org", tls=True, mdns=False))
+            upsert_record(db, DomainRecord("host.example.org", tls=True))
             await dns.add_zone("host.example.org")
 
             cf = config.coredns_corefile_path.read_text()
@@ -390,7 +390,7 @@ async def test_a_new_zone_serves_the_records_written_before_it_existed(
         dns = _provider(config, _zones(db))
         dns.set_records("www", RecordType.A, ["198.51.100.7"])
 
-        upsert_record(db, DomainRecord("host.example.org", tls=True, mdns=False))
+        upsert_record(db, DomainRecord("host.example.org", tls=True))
         await dns.add_zone("host.example.org")
     await dns.cleanup()
 

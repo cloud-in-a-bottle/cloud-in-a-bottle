@@ -1,7 +1,10 @@
 ---
 # Shared by every playbook in this directory (ansible loads playbook-adjacent group_vars automatically).
 
-# A `.local` domain means LAN mode: published over mDNS by the router itself and served over plain
-# http, with no public DNS or certs.  Eg a Raspberry Pi provisioned with `-e domain=bottle.local`
-# comes up as http://bottle.local (apps at http://<app>.bottle.local) on whatever network it joins.
-mdns_mode: "{{ (domain | default('')).split(':')[0].lower().endswith('.local') }}"
+# Serve https with an ACME cert, proved over DNS-01 by the built-in CoreDNS.  Off in
+# local_http_only mode, which has no public DNS yet, and for a `.local` domain (LAN mode: published
+# over mDNS, which no public CA can verify).  Templates and tasks key off this rather than off the
+# mode, so a new mode only has to say whether it gets certs.
+tls: >-
+  {{ not (local_http_only | default(false) | bool)
+     and not (domain | default('')).split(':')[0].lower().endswith('.local') }}

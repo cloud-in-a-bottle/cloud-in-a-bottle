@@ -3,10 +3,12 @@ from __future__ import annotations
 import asyncio
 import socket
 import struct
+from typing import Any
 
 import pytest
 
 from compute_space.core.domains import Domain
+from compute_space.core.mdns import responder as responder_module
 from compute_space.core.mdns.answers import MDNS_PORT
 from compute_space.core.mdns.answers import build_answer
 from compute_space.core.mdns.packets import TYPE_A
@@ -48,10 +50,10 @@ def _records(packet: bytes) -> list[tuple[str, int, int, int, bytes]]:
     return out
 
 
-def _answer(*questions: tuple[str, int], port: int = MDNS_PORT, avahi_name: str | None = None) -> bytes | None:
+def _answer(*questions: tuple[str, int], port: int = MDNS_PORT) -> bytes | None:
     query = parse_query(_query_packet(*questions, query_id=7))
     assert query is not None
-    return build_answer(query, port, DOMAINS, avahi_name, IP)
+    return build_answer(query, port, DOMAINS, IP)
 
 
 def test_parse_query_follows_compression_pointers() -> None:
@@ -70,6 +72,16 @@ def test_parse_query_ignores_responses_and_rejects_garbage() -> None:
         parse_query(b"\x00\x01")
     with pytest.raises(MalformedPacket):
         parse_query(struct.pack("!HHHHHH", 0, 0, 1, 0, 0, 0) + b"\xc0\x0c")  # pointer to itself
+
+
+def test_parse_query_rejects_reserved_label_types_and_non_utf8() -> None:
+    # A 0x80-prefixed "length" would otherwise read as a 191-byte label.
+    reserved = b"\xbf" + b"\xff" * 191 + b"\x06myhost\x05local\x00" + struct.pack("!HH", TYPE_A, 1)
+    with pytest.raises(MalformedPacket):
+        parse_query(struct.pack("!HHHHHH", 0, 0, 1, 0, 0, 0) + reserved)
+    not_utf8 = b"\x02\xff\xfe\x06myhost\x05local\x00" + struct.pack("!HH", TYPE_A, 1)
+    with pytest.raises(MalformedPacket):
+        parse_query(struct.pack("!HHHHHH", 0, 0, 1, 0, 0, 0) + not_utf8)
 
 
 def test_any_app_subdomain_gets_an_a_record() -> None:
@@ -95,12 +107,9 @@ def test_other_names_are_ignored() -> None:
     assert _answer(("notmyhost.local", TYPE_A)) is None
 
 
-def test_bare_domain_is_left_to_avahi_when_avahi_publishes_it() -> None:
-    assert _answer(("myhost.local", TYPE_A)) is not None
-    assert _answer(("myhost.local", TYPE_A), avahi_name="raspberrypi.local") is not None
-    assert _answer(("myhost.local", TYPE_A), avahi_name="myhost.local") is None
-    # subdomains are always ours
-    assert _answer(("myapp.myhost.local", TYPE_A), avahi_name="myhost.local") is not None
+def test_bare_domain_is_left_to_avahi() -> None:
+    assert _answer(("myhost.local", TYPE_A)) is None
+    assert _answer(("myhost.local", TYPE_AAAA)) is None
 
 
 def test_legacy_unicast_reply_echoes_id_and_question_with_short_ttl() -> None:
@@ -116,18 +125,71 @@ def test_legacy_unicast_reply_echoes_id_and_question_with_short_ttl() -> None:
 @pytest.mark.asyncio
 async def test_responder_answers_over_the_wire() -> None:
     responder = MdnsResponder(port=0)
-    await responder.update((Domain("example.com", tls=True), Domain("myhost.local", mdns=True)))
+    await responder.update((Domain("example.com", tls=True), Domain("myhost.local")))
     assert responder._sock is not None
     port = responder._sock.getsockname()[1]
     loop = asyncio.get_running_loop()
+    query = _query_packet(("myapp.myhost.local", TYPE_A), query_id=42)
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as client:
         client.setblocking(False)
-        client.connect(("127.0.0.1", port))
-        await loop.sock_sendall(client, _query_packet(("myapp.myhost.local", TYPE_A), query_id=42))
+        # Sent to the group over loopback, like a (legacy, so unicast-answered) querier on the LAN.
+        client.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_IF, socket.inet_aton("127.0.0.1"))
+        await loop.sock_sendto(client, query, ("224.0.0.251", port))
         reply = await asyncio.wait_for(loop.sock_recv(client, 9000), timeout=5)
+        # The socket is bound to the group, so unicast straight to it is never seen.
+        await loop.sock_sendto(client, query, ("127.0.0.1", port))
+        with pytest.raises(TimeoutError):
+            await asyncio.wait_for(loop.sock_recv(client, 9000), timeout=0.5)
     a = _records(reply)[0]
     # answered with the address the query arrived on
     assert socket.inet_ntoa(a[4]) == "127.0.0.1"
 
     await responder.update((Domain("example.com", tls=True),))
     assert responder._sock is None
+
+
+async def _query_over_loopback(port: int, name: str, timeout: float = 5) -> bytes:
+    loop = asyncio.get_running_loop()
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as client:
+        client.setblocking(False)
+        client.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_IF, socket.inet_aton("127.0.0.1"))
+        await loop.sock_sendto(client, _query_packet((name, TYPE_A)), ("224.0.0.251", port))
+        return await asyncio.wait_for(loop.sock_recv(client, 9000), timeout=timeout)
+
+
+@pytest.mark.asyncio
+async def test_a_packet_that_raises_is_skipped_and_the_next_one_answered(monkeypatch: pytest.MonkeyPatch) -> None:
+    responder = MdnsResponder(port=0)
+    await responder.update((Domain("myhost.local"),))
+    assert responder._sock is not None
+    port = responder._sock.getsockname()[1]
+    real_build_answer = build_answer
+    calls = 0
+
+    def flaky_build_answer(*args: Any) -> bytes | None:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise ValueError("boom")
+        return real_build_answer(*args)
+
+    monkeypatch.setattr(responder_module, "build_answer", flaky_build_answer)
+    with pytest.raises(TimeoutError):
+        await _query_over_loopback(port, "first.myhost.local", timeout=0.5)
+    reply = await _query_over_loopback(port, "second.myhost.local")
+    assert _records(reply)[0][0] == "second.myhost.local"
+    await responder.stop()
+
+
+@pytest.mark.asyncio
+async def test_failing_to_listen_is_logged_not_raised_and_retried() -> None:
+    # A socket on the same port without SO_REUSEADDR keeps the responder from binding.
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as blocker:
+        blocker.bind(("", 0))
+        port = blocker.getsockname()[1]
+        responder = MdnsResponder(port=port)
+        await responder.update((Domain("myhost.local"),))
+        assert responder._sock is None
+    await responder.update((Domain("myhost.local"),))
+    assert responder._sock is not None
+    await responder.stop()

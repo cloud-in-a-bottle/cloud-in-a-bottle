@@ -16,7 +16,7 @@ The OAuth provider is one of the apps [installed with every instance](https://cl
 - **Google** needs the instance owner to bring their own OAuth client. It works, but it is a real errand, and worth knowing before you promise it to a user:
 
   1. Create a Google Cloud project, enable the APIs the scopes belong to (Gmail, Calendar, ...), and create an OAuth client of type **Web application**.
-  2. Register the redirect URI. It is not on your own domain: the provider always sends Google to the shared redirect domain, `https://my.selfhost.imbue.com/api/services/v2/oauth_callback` unless `BOTTLE_MY_REDIRECT_DOMAIN` says otherwise. That page is static and bounces the browser on to your instance. Google's console may want the domain listed as an authorized domain, which is awkward for a domain you do not control.
+  2. Register the redirect URI. It is not on your own domain: the provider always sends Google to the shared redirect domain, `https://my.cloudinabottle.org/redirect/oauth_callback` unless `BOTTLE_MY_REDIRECT_DOMAIN` says otherwise. That page is static and bounces the browser on to your instance. Google's console may want the domain listed as an authorized domain, which is awkward for a domain you do not control.
   3. Store `GOOGLE_OAUTH_CLIENT_ID` and `GOOGLE_OAUTH_CLIENT_SECRET` in the `secrets` app. The provider fetches them lazily, so its container starts cleanly before they exist and fails only when a Google token is actually requested.
   4. Gmail and the other sensitive scopes need Google to verify your app before anyone outside your test-user list can consent. Until then, expect the unverified-app warning and add yourself as a test user on the consent screen.
 
@@ -45,9 +45,9 @@ Tokens are stored with an `account` label, keyed by `(provider, scopes, account)
 
 The `authorize_url` points directly to Google's consent page. After the user authorizes:
 
-1. Google redirects to the shared redirect domain (`BOTTLE_MY_REDIRECT_DOMAIN`, `my.selfhost.imbue.com` by default): `https://my.selfhost.imbue.com/api/services/v2/oauth_callback?code=...&state=...`
-2. That page is static and browser-local: it knows which instance this browser belongs to and forwards to `<zone_domain>/api/services/v2/oauth_callback?code=...&state=...`
-3. The router has an explicit route for `/api/services/v2/oauth_callback` that proxies to the OAuth provider app
+1. Google redirects to the shared redirect domain (`BOTTLE_MY_REDIRECT_DOMAIN`, `my.cloudinabottle.org` by default): `https://my.cloudinabottle.org/redirect/oauth_callback?code=...&state=...`
+2. That page is static and browser-local: it knows which instance this browser belongs to (the owner enters it once), asks the instance where its dashboard lives (`/.well-known/cloud-in-a-bottle`), and forwards to `<dashboard>/redirect/oauth_callback?code=...&state=...`
+3. The router reads the app name from `state` and redirects the browser to that app's `/callback` (which the app must list in its public paths)
 4. The OAuth provider exchanges the code for tokens, fetches the user's identity (email), stores the token under that account name, and redirects to `return_to`
 
 Google tokens always request `email` and `openid` scopes in addition to the requested scopes, so the identity can be resolved. The callback also verifies that all requested scopes were granted (Google's granular consent lets users uncheck scopes).
@@ -149,7 +149,7 @@ The `oauth.js` library handles the popup lifecycle, postMessage communication, a
 
 - OAuth client type: **Web application**
 - Created at https://console.cloud.google.com/apis/credentials
-- Redirect URI: the shared redirect domain, `https://my.selfhost.imbue.com/api/services/v2/oauth_callback` by default
+- Redirect URI: the shared redirect domain, `https://my.cloudinabottle.org/redirect/oauth_callback` by default
 - Enable needed APIs at https://console.cloud.google.com/apis/library
 - No authorized JavaScript origins needed (server-side flow)
 - Tokens expire (~1 hour) but have refresh tokens for automatic renewal
@@ -192,7 +192,7 @@ Add an entry to the providers configuration in the OAuth provider app with eithe
 },
 ```
 
-For auth code providers, register the redirect URI: `https://my.<base_domain>/api/services/v2/oauth_callback`
+For auth code providers, register the redirect URI: `https://<BOTTLE_MY_REDIRECT_DOMAIN>/redirect/oauth_callback`
 
 For device flow providers, no redirect URI is needed.
 

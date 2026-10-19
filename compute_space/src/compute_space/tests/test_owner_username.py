@@ -122,6 +122,7 @@ def _provision(tmp_path: Path, **kwargs: Any) -> dict[str, str]:
         str(archive_dir),
         my_openhost_redirect_domain="my.example.com",
         zone_domain="example.com",
+        router_public_url="https://example.com",
         port=8080,
         **kwargs,
     )
@@ -318,6 +319,7 @@ def test_make_data_dirs_and_env_vars_stamps_owner_username(tmp_path: Path) -> No
     assert env["OPENHOST_OWNER_USERNAME"] == "alice"
     assert env["OPENHOST_APP_NAME"] == "probe"
     assert env["OPENHOST_ZONE_DOMAIN"] == "example.com"
+    assert env["OPENHOST_ROUTER_PUBLIC_URL"] == "https://example.com"
 
 
 # ---------------------------------------------------------------------------

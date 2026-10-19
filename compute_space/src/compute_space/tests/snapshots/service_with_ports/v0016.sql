@@ -79,7 +79,6 @@ INSERT INTO "archive_backend" VALUES(1,'local',NULL,NULL,NULL,NULL,NULL,NULL,'op
 CREATE TABLE domains (
     name          TEXT PRIMARY KEY,
     tls           INTEGER NOT NULL DEFAULT 0,
-    mdns          INTEGER NOT NULL DEFAULT 0,
     is_primary    INTEGER NOT NULL DEFAULT 0,
     cert_status   TEXT NOT NULL DEFAULT 'none' CHECK(cert_status IN ('none', 'acquiring', 'active', 'error')),
     error_message TEXT,
@@ -98,7 +97,7 @@ CREATE TABLE schema_version (
     id INTEGER PRIMARY KEY CHECK (id = 1),
     version INTEGER NOT NULL
 );
-INSERT INTO "schema_version" VALUES(1,14);
+INSERT INTO "schema_version" VALUES(1,16);
 CREATE TABLE "service_defaults" (
                 service_url TEXT PRIMARY KEY,
                 app_id TEXT NOT NULL,
@@ -121,6 +120,7 @@ CREATE TABLE settings (
     key   TEXT PRIMARY KEY,
     value TEXT
 );
+INSERT INTO "settings" VALUES('auto_update_enabled','0');
 CREATE TABLE users (
     user_id INTEGER PRIMARY KEY AUTOINCREMENT,
     username TEXT NOT NULL UNIQUE,

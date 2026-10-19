@@ -111,6 +111,17 @@ def test_current_and_ancestor_tag(tmp_path: Path) -> None:
     assert aac._latest_ancestor_tag(str(repo)) == "v1.1.0"
 
 
+def test_ancestor_tag_skips_nearer_non_release_tag(tmp_path: Path) -> None:
+    # REGRESSION: see the same test in test_update.py.
+    repo = _make_repo(tmp_path / "repo", ["v0.1.0", "v0.2.0"])
+    _commit(repo, "rc")
+    _git(repo, "tag", "v0.3.0-rc1")
+    _commit(repo, "past the rc")
+
+    assert aac._latest_ancestor_tag(str(repo)) == "v0.2.0"
+    assert aac._next_step(str(repo)) is None
+
+
 def test_is_ancestor_helper(tmp_path: Path) -> None:
     remote = _make_repo(tmp_path / "remote", ["v1.0.0", "v1.1.0"])
     _branch_from(remote, "feature", "v1.0.0", "off old")

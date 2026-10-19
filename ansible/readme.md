@@ -78,11 +78,11 @@ pass a `.local` domain to provision a box that is only reachable on its local ne
 ansible-playbook ansible/setup.yml -i <IP>, -e domain=bottle.local --private-key=~/.ssh/YOUR_SSH_KEY
 ```
 
-the router publishes `bottle.local` and every `<app>.bottle.local` over mDNS itself (answering with the address of whichever interface the query arrived on), and Caddy serves them over plain http. so a box provisioned this way can be shipped to someone and comes up at `http://bottle.local` on whatever network it is plugged into. no ACME key is needed.
+avahi publishes `bottle.local` and the router publishes every `<app>.bottle.local` over mDNS itself (answering with the address of whichever interface the query arrived on), and Caddy serves them over plain http. so a box provisioned this way can be shipped to someone and comes up at `http://bottle.local` on whatever network it is plugged into. no ACME key is needed.
 
 notes:
 
-- LAN mode installs avahi, which publishes the machine's own `<hostname>.local`. the router's responder shares udp 5353 with it: when avahi is running and the hostname is the same label (hostname `bottle` for `bottle.local`), avahi answers for the bare name and the router only for the subdomains; otherwise the router answers both.
+- the domain must be a single label under `.local`, and LAN mode sets the machine's hostname to that label (`bottle` for `bottle.local`) when it seeds the domain. a re-run with a different domain changes neither: change the domain through the dashboard instead. avahi, which LAN mode installs, publishes the bare `bottle.local` as the machine's own name; the router's responder publishes only the subdomains alongside it, on the same udp 5353.
 - macOS and iOS resolve multi-label names like `myapp.bottle.local` out of the box. on Linux, recent nss-mdns versions only resolve two-label names unless `/etc/mdns.allow` lists `.local.`. Windows support for multi-label `.local` names is inconsistent.
 - two boxes on the same network with the same `.local` domain will both answer; give each its own name.
 

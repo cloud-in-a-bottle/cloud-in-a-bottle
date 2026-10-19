@@ -5,7 +5,6 @@ Routes:
     OPTIONS /api/services/v2/call/{shortname}/{rest:path} — CORS preflight
     *       /api/services/v2/call/{shortname}/{rest:path} — proxied call
     WS      /api/services/v2/call/{shortname}/{rest:path} — proxied WS call
-    GET     /api/services/v2/oauth_callback              — OAuth callback fan-out
 
 The HTTP call route proxies the response back to the client.  Small responses
 (including 403s) are automatically buffered by ``proxy_http_request``, so we
@@ -30,7 +29,6 @@ from litestar import MediaType
 from litestar import Request
 from litestar import Router
 from litestar import WebSocket
-from litestar import get
 from litestar import route
 from litestar import websocket
 from litestar.datastructures import MutableScopeHeaders
@@ -45,11 +43,8 @@ from litestar.params import FromPath
 from litestar.response import Response
 from litestar.response.base import ASGIResponse
 
-from compute_space.core.apps import find_app_by_name
-from compute_space.core.apps import is_public_path
 from compute_space.core.domains import Domain
 from compute_space.core.proxy_target import InProcess
-from compute_space.core.proxy_target import LocalPort
 from compute_space.core.proxy_target import ProxyTarget
 from compute_space.core.service_interface.headers import app_consumer_headers
 from compute_space.core.service_interface.headers import approve_grant_url
@@ -296,56 +291,6 @@ async def service_call_ws(
     )
 
 
-@get(
-    "/api/services/v2/oauth_callback",
-    raises=[ClientException, ServiceUnavailableException],
-    responses={
-        502: ResponseSpec(
-            data_container=str, media_type=MediaType.TEXT, description="The OAuth provider app is unavailable."
-        ),
-        504: ResponseSpec(
-            data_container=str, media_type=MediaType.TEXT, description="The OAuth provider app timed out."
-        ),
-    },
-)
-async def oauth_callback_proxy_v2(request: Request[Any, Any, Any]) -> ASGIResponse:
-    """Proxy OAuth provider callbacks to the correct oauth service app.
-
-    OAuth providers (Google, GitHub, etc.) redirect to a fixed callback URL on
-    MY_REDIRECT_DOMAIN after user authorization. This endpoint receives that
-    redirect and forwards it to the oauth app that initiated the flow.
-
-    The oauth app encodes its app name in the OAuth ``state`` parameter as
-    JSON: ``{"app": "<app_name>", "nonce": "<random>"}``. This endpoint parses
-    that to determine which app should receive the callback, then proxies the
-    full request to that app's ``/callback`` handler.
-    """
-    state_raw = request.query_params.get("state", "")
-    if not state_raw:
-        raise ClientException(detail="Missing state parameter", extra={"code": "bad_request"})
-
-    try:
-        state = json.loads(state_raw)
-    except json.JSONDecodeError as e:
-        raise ClientException(detail="Invalid state parameter", extra={"code": "bad_request"}) from e
-
-    app_name = state.get("app")
-    if not app_name or not isinstance(app_name, str):
-        raise ClientException(detail="Missing app in state", extra={"code": "bad_request"})
-
-    app_row = find_app_by_name(app_name)
-    if not app_row or not is_public_path(app_row, "/callback"):
-        raise ServiceUnavailableException(
-            detail=f"App '{app_name}' not found", extra={"code": "service_not_available"}
-        )
-    if app_row.status != "running":
-        raise ServiceUnavailableException(
-            detail=f"App '{app_name}' is not running", extra={"code": "service_not_available"}
-        )
-
-    return await proxy_http_request(request, target=LocalPort(app_row.local_port), override_path="/callback")
-
-
 # ─── Router ─────────────────────────────────────────────────────────────────
 
 
@@ -355,5 +300,5 @@ services_v2_routes = Router(
     # bug where registering a non-OPTIONS handler first causes an auto-generated
     # OPTIONS handler to be appended, which then silently overwrites any explicit
     # OPTIONS handler via last-writer-wins in route_handler_method_map.
-    route_handlers=[service_call_cors, service_call, service_call_ws, oauth_callback_proxy_v2],
+    route_handlers=[service_call_cors, service_call, service_call_ws],
 )
