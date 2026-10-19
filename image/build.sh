@@ -41,9 +41,9 @@
 #                         provision.sh to embed and run in the build VM
 #                         (default: this repo's scripts/provision.sh). Embedded
 #                         from the working tree, so the branch need not be pushed.
-#   --domain <domain>     App subdomain-routing domain baked in (default: lvh.me,
-#                         or bottle.local with --raspi). With --public this is
-#                         the real domain served over TLS.
+#   --domain <domain>     App subdomain-routing domain baked in (default: lvh.me).
+#                         With --public this is the real domain served over TLS.
+#                         --raspi needs a .local one.
 #   --public              Build a TLS image (CoreDNS + Caddy + Let's Encrypt for
 #                         --domain) instead of the default HTTP-only image.
 #                         Requires --public-ip.
@@ -58,22 +58,18 @@
 #                         the image is private behind NAT. Set this to require a
 #                         token (e.g. for a customized image you distribute).
 #   --password <pw>       Default console password for the `host` user
-#                         (default: cloudinabottle; with --raspi, none: the
-#                         account is locked, and console/SSH access comes from
-#                         Raspberry Pi Imager's settings or the stock `ubuntu`
-#                         console login)
+#                         (default: cloudinabottle). Empty leaves the account
+#                         without one.
 #   --ssh-pubkey <path>   Optional SSH public key file to authorize for `host`
 #                         (SSH is key-only; without this, access is console-only)
 #   --version <v>         Version string used in artifact filenames
 #                         (default: `git describe` or "dev")
 #   --disk-size <size>    Virtual disk size baked into the image — the default
-#                         floor only (default: 20G; 14G with --raspi, which
-#                         fits a "16GB" SD card). The image grows its root
+#                         floor only (default: 20G). The image grows its root
 #                         filesystem to fill whatever disk it is installed onto
 #                         on first boot, so users pick the real size by sizing
 #                         the VM disk (or the physical disk on bare metal).
-#   --swap-size <gib>     Swap file size in GiB baked into the image (default: 4;
-#                         2 with --raspi).
+#   --swap-size <gib>     Swap file size in GiB baked into the image (default: 4).
 #                         Tweak after install by SSHing in and resizing /swapfile
 #                         (or from the dashboard settings page).
 #   --mem <mb>            Build VM memory in MB (default: 4096)
@@ -83,7 +79,9 @@
 #                         (always skipped for arm64)
 #   --raspi               Build a Raspberry Pi SD-card image (.img.xz, plus a
 #                         Raspberry Pi Imager repository entry) instead of VM
-#                         images. arm64 hosts only.
+#                         images. arm64 hosts only. See "Building a Raspberry
+#                         Pi image" in docs/internal/building_a_vm_image.md for
+#                         the options to build it with.
 #   --timeout <sec>       Max seconds to wait for the build boot (default: 1800)
 #   -h, --help            Show this help
 #
@@ -102,14 +100,13 @@ case "$(uname -m)" in
 esac
 BRANCH="main"
 REPO_URL="https://github.com/cloud-in-a-bottle/cloud-in-a-bottle.git"
-DOMAIN=""         # default depends on --raspi; resolved after parsing
+DOMAIN="lvh.me"
 CLAIM_TOKEN=""   # empty => open claim (no token required); set to bake a token
-HOST_PASSWORD=""  # default depends on --raspi; resolved after parsing
-HOST_PASSWORD_SET="false"
+HOST_PASSWORD="cloudinabottle"
 SSH_PUBKEY_FILE=""
 VERSION=""
-DISK_SIZE=""
-SWAP_SIZE_GB=""
+DISK_SIZE="20G"
+SWAP_SIZE_GB="4"
 MEM_MB="4096"
 CPUS="2"
 BUILD_TIMEOUT="1800"
@@ -136,7 +133,7 @@ while [[ $# -gt 0 ]]; do
         --provision-script) PROVISION_SCRIPT="$2"; shift 2 ;;
         --domain)       DOMAIN="$2"; shift 2 ;;
         --claim-token)  CLAIM_TOKEN="$2"; shift 2 ;;
-        --password)     HOST_PASSWORD="$2"; HOST_PASSWORD_SET="true"; shift 2 ;;
+        --password)     HOST_PASSWORD="$2"; shift 2 ;;
         --ssh-pubkey)   SSH_PUBKEY_FILE="$2"; shift 2 ;;
         --version)      VERSION="$2"; shift 2 ;;
         --disk-size)    DISK_SIZE="$2"; shift 2 ;;
@@ -156,7 +153,7 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# ---- Defaults that depend on --raspi ----
+# ---- --raspi checks ----
 if [ "$RASPI" = "true" ]; then
     if [ "$ARCH" != "arm64" ]; then
         echo "Error: --raspi needs an arm64 host (it boots the Pi image's arm64 kernel under KVM/HVF)." >&2
@@ -166,20 +163,12 @@ if [ "$RASPI" = "true" ]; then
         echo "Error: --raspi and --public are exclusive (the Pi image is LAN-only)." >&2
         exit 1
     fi
-    DOMAIN="${DOMAIN:-bottle.local}"
+    # The domain is a placeholder (first boot replaces it with <hostname>.local),
+    # but it must be .local for provision.sh to set up LAN mode.
     case "${DOMAIN%%:*}" in
         *.local) ;;
-        *) echo "Error: --raspi needs a .local --domain (got $DOMAIN)." >&2; exit 1 ;;
+        *) echo "Error: --raspi needs a .local --domain (got $DOMAIN), eg --domain bottle.local." >&2; exit 1 ;;
     esac
-    [ "$HOST_PASSWORD_SET" = "true" ] || HOST_PASSWORD=""
-    DISK_SIZE="${DISK_SIZE:-14G}"
-    SWAP_SIZE_GB="${SWAP_SIZE_GB:-2}"
-    MAKE_OVA="false"
-else
-    DOMAIN="${DOMAIN:-lvh.me}"
-    [ "$HOST_PASSWORD_SET" = "true" ] || HOST_PASSWORD="cloudinabottle"
-    DISK_SIZE="${DISK_SIZE:-20G}"
-    SWAP_SIZE_GB="${SWAP_SIZE_GB:-4}"
 fi
 
 # ---- Per-arch settings ----
