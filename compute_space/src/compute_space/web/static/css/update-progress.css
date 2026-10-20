@@ -8,7 +8,7 @@
 body {
   margin: 0;
   padding: 3em 1em;
-  color: #000;
+  color: #121212;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 14px;
   font-weight: 500;
@@ -67,9 +67,9 @@ ul {
   margin: 0;
   padding: 12px;
   list-style: none;
-  background: #1e1e1e;
-  color: #d4d4d4;
-  border: 1px solid #dadada;
+  background: #121212;
+  color: #ffffff;
+  border: 1px solid #d0d0d0;
   box-shadow: 2px 2px 0 rgba(0, 0, 0, 0.1);
   font-size: 12px;
   max-height: 30em;
@@ -88,11 +88,11 @@ li.failed { border-left-color: #ff4d4d; color: #ff9d9d; }
 
 .ts {
   flex: none;
-  color: #7f7f7f;
+  color: rgb(255 255 255 / 0.6);
 }
 
 .hint {
   margin-top: 1.5em;
-  color: #5c5c5c;
+  color: rgb(18 18 18 / 0.6);
   font-size: 12px;
 }

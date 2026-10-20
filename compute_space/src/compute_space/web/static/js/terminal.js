@@ -4,7 +4,10 @@ var config = JSON.parse(document.getElementById('page-config').textContent);
   var term = new Terminal({
     cursorBlink: true,
     fontSize: 14,
-    theme: {background: '#1e1e1e', brightBlack: '#8b8b8b'},
+    theme: {
+      background: getComputedStyle(document.documentElement).getPropertyValue('--fg-primary').trim(),
+      brightBlack: '#8b8b8b',
+    },
   });
   var fitAddon = new FitAddon.FitAddon();
   term.loadAddon(fitAddon);

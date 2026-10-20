@@ -27,8 +27,8 @@ body {
   font-size: var(--text-sm);
   font-weight: var(--weight-medium);
   line-height: var(--leading-snug);
-  color: var(--color-text);
-  background: linear-gradient(180deg, var(--color-sky) 0%, var(--color-sky) 80%, var(--color-meadow) 100%) fixed;
+  color: var(--fg-primary);
+  background: linear-gradient(180deg, var(--bg-sky) 0%, var(--bg-sky) 80%, var(--bg-meadow) 100%) fixed;
 }
 
 /* Decorative bands. The clouds scroll with the document, the grass stays
@@ -162,7 +162,7 @@ p {
 }
 
 a {
-  color: var(--color-text);
+  color: var(--fg-primary);
   text-underline-offset: 2px;
 }
 
@@ -184,15 +184,15 @@ table {
   border-collapse: collapse;
   width: 100%;
   margin: var(--space-4) 0;
-  background: var(--color-surface);
-  border: var(--border-w) solid var(--color-border);
+  background: var(--bg-surface);
+  border: var(--border-w) solid var(--fg-border);
   font-size: var(--text-xs);
 }
 
 th,
 td {
   padding: var(--space-2) var(--space-4);
-  border-bottom: var(--border-w) solid var(--color-border);
+  border-bottom: var(--border-w) solid var(--fg-border);
   text-align: left;
   vertical-align: top;
 }
@@ -202,7 +202,7 @@ tr:last-child td {
 }
 
 th {
-  background: var(--color-surface-raised);
+  background: var(--bg-primary);
   font-size: var(--text-xs);
   font-weight: var(--weight-semibold);
   letter-spacing: var(--tracking-label);
@@ -241,8 +241,8 @@ select,
 textarea {
   width: 100%;
   padding: var(--space-1) var(--space-2);
-  background: var(--color-surface-raised);
-  border: var(--border-w) solid var(--color-border);
+  background: var(--bg-primary);
+  border: var(--border-w) solid var(--fg-border);
   border-radius: var(--radius-none);
   font-size: var(--text-xs);
 }
@@ -253,12 +253,12 @@ textarea:focus-visible,
 button:focus-visible,
 a:focus-visible,
 [tabindex]:focus-visible {
-  outline: 2px solid var(--color-text);
+  outline: 2px solid var(--fg-primary);
   outline-offset: 1px;
 }
 
 input.invalid {
-  border-color: var(--color-danger-text);
+  border-color: var(--fg-status-negative);
 }
 
 label {
@@ -268,7 +268,7 @@ label {
 /* Utilities carried over from the previous stylesheet so existing pages keep
    working while they are migrated. */
 .muted {
-  color: var(--color-text-muted);
+  color: var(--fg-secondary);
   font-size: var(--text-xs);
 }
 
@@ -276,23 +276,23 @@ label {
    text, with the roomier leading, because these are sentences to be read
    rather than labels to be scanned. */
 .hint {
-  color: var(--color-text-subtle);
+  color: var(--fg-secondary);
   font-size: var(--text-sm);
   line-height: var(--leading-snug);
 }
 
 .error {
-  color: var(--color-danger-text);
+  color: var(--fg-status-negative);
 }
 
 .field-error {
-  color: var(--color-danger-text);
+  color: var(--fg-status-negative);
   font-size: var(--text-xs);
 }
 
 .error-inline {
-  background: var(--color-danger-bg);
-  border: var(--border-w) solid var(--color-danger-border);
+  background: var(--bg-status-negative);
+  border: var(--border-w) solid var(--fg-border);
   padding: var(--space-2);
   margin-top: var(--space-1);
   font-size: var(--text-xs);
@@ -303,8 +303,8 @@ label {
 }
 
 .log-output {
-  background: #1e1e1e;
-  color: #d4d4d4;
+  background: var(--fg-primary);
+  color: var(--fg-inverted);
   padding: var(--space-4);
   font-size: var(--text-xs);
   overflow: auto;

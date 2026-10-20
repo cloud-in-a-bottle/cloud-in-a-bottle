@@ -2,39 +2,50 @@
    else references these, so a palette or scale change happens here only. */
 
 :root {
-  /* Palette */
-  --color-sky: #eef8ff;
-  --color-meadow: #ecffe1;
-  --color-surface: #fcfcfc;
-  --color-surface-raised: #ffffff;
-  --color-surface-sunken: #f2f2f2;
-  --color-border: #dadada;
-  --color-border-strong: #b4b4b4;
+  /* Color. Names match the Figma variables one to one: bg/status/info is
+     --bg-status-info. Translucent values are fg/primary (#121212) at an opacity, so they
+     tint whatever surface they sit on. */
 
-  --color-text: #000000;
-  --color-text-muted: #6b6b6b;
-  --color-text-subtle: #5c5c5c;
+  /* bg */
+  --bg-surface: #fcfcfc;
+  --bg-primary: #ffffff;
+  --bg-secondary: #f2f2f2;
+  --bg-sky: #eef8ff;
+  --bg-meadow: #ecffe1;
+  --bg-disabled: #dadada;
 
-  --color-accent: #a2d9ff;
-  --color-accent-hover: #8bcdfb;
-  --color-accent-alt: #d4ffbc;
-  --color-accent-alt-hover: #c1f7a2;
-  --color-danger-bg: #ffe4e4;
-  --color-danger-hover: #ffd0d0;
-  --color-danger-border: #f0a9a9;
-  --color-danger-text: #a11212;
-  --color-ok-text: #1d5c00;
-  --color-warn-text: #6b4c00;
+  /* bg/status */
+  --bg-status-negative: #ffe4e4;
+  --bg-status-positive: #f2ffe9;
+  --bg-status-warning: #fff8e6;
+  --bg-status-info: #e6f2ff;
+
+  /* fg */
+  --fg-primary: #121212;
+  --fg-secondary: rgb(18 18 18 / 0.6);
+  --fg-border: rgb(18 18 18 / 0.2);
+  --fg-disabled: rgb(18 18 18 / 0.5);
+  --fg-inverted: #ffffff;
+  --fg-inverted-secondary: rgb(255 255 255 / 0.6);
+
+  /* fg/status */
+  --fg-status-negative: #9f3a34;
+  --fg-status-positive: #486839;
+  --fg-status-warning: #7e5f2e;
+  --fg-status-info: #375a66;
+
+  /* interactive. Hover and active are overlays: apply them as
+     background-image: linear-gradient(var(--interactive-hover), var(--interactive-hover));
+     so they darken any fill without a separate hover color per component. */
+  --interactive-primary: #a2d9ff;
+  --interactive-accent: #d4ffbc;
+  --interactive-hover: rgb(18 18 18 / 0.05);
+  --interactive-active: rgb(18 18 18 / 0.1);
 
   /* Donut neutrals. Free headroom reads as a pale wash, host-but-not-app as a
      deep blue, so neither competes with the pastel per-app slices. */
   --color-chart-unused: #d9ecfa;
   --color-chart-system: #3f6f9c;
-
-  --color-status-running: #76ff2d;
-  --color-status-stopped: #c4c4c4;
-  --color-status-error: #ff4d4d;
-  --color-status-pending: #ffc02d;
 
   /* Type */
   --font-mono: "Atkinson Hyperlegible Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;

@@ -90,14 +90,14 @@ function setActionsBusy(label) {
   buttons.forEach(function(b) { b.disabled = true; });
   var msg = document.getElementById('app-action-msg');
   if (msg) {
-    msg.style.color = '#d97706';
+    msg.style.color = 'var(--fg-status-warning)';
     msg.textContent = label + '\u2026';
   }
   return function clear(errText) {
     buttons.forEach(function(b) { b.disabled = false; });
     if (msg) {
       if (errText) {
-        msg.style.color = '#dc3545';
+        msg.style.color = 'var(--fg-status-negative)';
         msg.textContent = errText;
       } else {
         msg.textContent = '';

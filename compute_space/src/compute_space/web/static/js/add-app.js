@@ -83,25 +83,25 @@ function renderManifest(m, url, storage) {
   function section(title, bg) { rows += `<tr><th colspan="2" style="background:${bg};">${title}</th></tr>`; }
   function row(label, val) { rows += `<tr><td>${label}</td><td>${val}</td></tr>`; }
 
-  section('App', '#e8f0fe');
+  section('App', 'var(--bg-status-info)');
   row('Name', `<strong>${esc(m.name)}</strong> v${esc(m.version)}`);
   if (m.description) row('Description', esc(m.description));
   if (url) row('Source', `<a href="${esc(url)}" target="_blank">${esc(url)}</a>`);
 
-  section('Resources', '#e8f0fe');
+  section('Resources', 'var(--bg-status-info)');
   row('Memory', m.memory_mb + ' MB');
   row('CPU', m.cpu_cores + ' cores');
   if (m.gpu) row('GPU', 'Yes');
 
   if (m.sqlite_dbs.length) {
-    section('Data', '#e8f0fe');
+    section('Data', 'var(--bg-status-info)');
     row('SQLite databases', m.sqlite_dbs.map(esc).join(', '));
   }
 
   const wantsAllAppData = m.access_all_app_data;
   const hasFs = m.app_data || m.app_temp_data || wantsAllAppData || m.app_archive || m.sqlite_dbs.length;
   if (hasFs) {
-    section('Filesystem Permissions', '#fff3cd');
+    section('Filesystem Permissions', 'var(--bg-status-warning)');
     if (wantsAllAppData) {
       row('Full app data access', 'Read/write to ALL apps\u2019 permanent, temporary, and archive data when available');
     } else {
@@ -116,7 +116,7 @@ function renderManifest(m, url, storage) {
 
   // Storage tier summary + durability notice (mirrors the permissions UX).
   if (storage.uses_archive) {
-    section('Storage', '#fff3cd');
+    section('Storage', 'var(--bg-status-warning)');
     if (storage.archive_backend === 's3') {
       row('Archive tier', 'S3-backed (durable object storage)');
     } else if (storage.archive_backend === 'local') {
@@ -125,19 +125,19 @@ function renderManifest(m, url, storage) {
   }
 
   if (m.public_paths.length) {
-    section('Public Routes', '#fff3cd');
+    section('Public Routes', 'var(--bg-status-warning)');
     row('Accessible without login', m.public_paths.map(p => `<code>${esc(p)}</code>`).join(', '));
   }
 
   if (m.links && m.links.length) {
-    section('Links', '#e8f0fe');
+    section('Links', 'var(--bg-status-info)');
     for (const link of m.links) {
       row(esc(link.name), `<code>${esc(link.path)}</code>`);
     }
   }
 
   if (m.network_host) {
-    section('Host Networking', '#f8d7da');
+    section('Host Networking', 'var(--bg-status-negative)');
     row('<strong>WARNING</strong>',
       '<strong>This app uses host networking, which disables all network isolation. ' +
       'It can access any port on the host, including other apps. ' +
@@ -145,14 +145,14 @@ function renderManifest(m, url, storage) {
   }
 
   if (m.capabilities.length || m.devices.length || m.shm_mb) {
-    section('Container Permissions', '#fff3cd');
+    section('Container Permissions', 'var(--bg-status-warning)');
     if (m.capabilities.length) row('Linux capabilities', m.capabilities.join(', '));
     if (m.devices.length) row('Devices', m.devices.join(', '));
     if (m.shm_mb) row('Shared memory', m.shm_mb + ' MB');
   }
 
   if (m.consumes_services_v2 && m.consumes_services_v2.length) {
-    section('Service Permissions', '#fff3cd');
+    section('Service Permissions', 'var(--bg-status-warning)');
     let permIdx = 0;
     for (const svc of m.consumes_services_v2) {
       for (const g of svc.grants) {
@@ -200,7 +200,7 @@ function renderPortMappings(mappings) {
                oninput="onPortInput(this)">
       </td>
       <td class="port-status" data-label="${esc(pm.label)}">
-        ${pm.host_port === 0 ? '<span style="color:#888">auto-assign</span>' : ''}
+        ${pm.host_port === 0 ? '<span style="color:var(--fg-secondary)">auto-assign</span>' : ''}
       </td>
     </tr>`;
   }

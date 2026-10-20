@@ -35,7 +35,7 @@ function renderSettings(changes) {
   });
   var rows = '<tr><th>Setting</th><th>Current</th><th>After update</th></tr>';
   order.forEach(function(group) {
-    rows += '<tr><th colspan="3" style="background:#f0f3f8;">' + esc(group) + '</th></tr>';
+    rows += '<tr><th colspan="3" style="background:var(--bg-sky);">' + esc(group) + '</th></tr>';
     byGroup[group].forEach(function(c) {
       rows += '<tr><td>' + esc(c.label) + '</td>'
         + '<td><code>' + esc(c.old) + '</code></td>'

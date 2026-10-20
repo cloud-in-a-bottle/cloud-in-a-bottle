@@ -16,8 +16,8 @@
 .app-starting__indicator span {
   width: 12px;
   height: 12px;
-  background: var(--color-accent);
-  border: var(--border-w) solid var(--color-border-strong);
+  background: var(--interactive-primary);
+  border: var(--border-w) solid var(--fg-border);
 }
 
 @media (prefers-reduced-motion: no-preference) {
@@ -27,5 +27,5 @@
 }
 
 @keyframes app-starting-pulse {
-  50% { background: var(--color-accent-alt); transform: translateY(-4px); }
+  50% { background: var(--interactive-accent); transform: translateY(-4px); }
 }
