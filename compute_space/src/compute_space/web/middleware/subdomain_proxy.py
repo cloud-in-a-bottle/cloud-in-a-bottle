@@ -18,6 +18,8 @@ from litestar.types.asgi_types import WebSocketCloseEvent
 from compute_space.core.apps import get_app_from_hostname
 from compute_space.core.apps import is_public_request_path
 from compute_space.core.containers import ROUTER_INTERNAL_HOSTS
+from compute_space.core.domain_root import ROUTER_DOMAIN_ROOT_PATHS
+from compute_space.core.domain_root import load_domain_root_setting
 from compute_space.core.domains import Domain
 from compute_space.core.logging import logger
 from compute_space.core.proxy_target import LocalPort
@@ -145,8 +147,14 @@ class SubdomainProxyMiddleware:
         # Resolve which configured Domain this request arrived on.
         with closing(get_db()) as db:
             zone = Domain.match(db, netloc)
-            app = get_app_from_hostname(netloc, db) if zone is not None else None
-            looks_like_app = zone is not None and app is None and zone.looks_like_app_subdomain(netloc)
+            # The router's own host: the bare domain by default, or the subdomain the owner moved it to.  It also
+            # keeps a few well-known paths on the bare domain, whatever is served there.
+            is_router = zone is not None and (
+                load_domain_root_setting(db).is_router_host(zone, netloc)
+                or (zone.is_apex(netloc) and scope["path"] in ROUTER_DOMAIN_ROOT_PATHS)
+            )
+            app = get_app_from_hostname(netloc, db) if zone is not None and not is_router else None
+        is_domain_root_app = zone is not None and app is not None and zone.is_apex(netloc)
 
         if zone is None:
             if netloc.split(":")[0].lower() in ROUTER_INTERNAL_HOSTS:
@@ -164,14 +172,14 @@ class SubdomainProxyMiddleware:
         # building) stay on it rather than the single canonical domain.
         scope[ZONE_SCOPE_KEY] = zone  # type: ignore[literal-required]
 
-        if app is None:
-            if looks_like_app:
-                # A subdomain of a configured domain, but no app is deployed there — 404 rather than
-                # falling through to the router.
-                await _send_not_found(scope, receive, send)
-                return
-            # The bare configured domain — the router itself; defer to Litestar.
+        if is_router:
             await self.app(scope, receive, send)
+            return
+
+        if app is None:
+            # A subdomain with no app deployed, or the bare domain while it serves nothing — 404 rather than
+            # falling through to the router.
+            await _send_not_found(scope, receive, send)
             return
 
         # Forwarding headers so the app can tell where the request originated.
@@ -203,8 +211,10 @@ class SubdomainProxyMiddleware:
             verify_owner_auth(connection)
             extra_headers.append(IS_OWNER_HEADER)
         except NotAuthorizedException:
-            # Match a missing app's response so unauthorized callers cannot discover fully private apps.
-            if not app.public_paths:
+            # Match a missing app's response so unauthorized callers cannot discover fully private apps.  The
+            # bare domain always answers (the router redirects to login there by default), so a root app
+            # falls through to the login redirect instead.
+            if not app.public_paths and not is_domain_root_app:
                 await _send_not_found(scope, receive, send)
                 return
             raw_path = scope.get("raw_path")

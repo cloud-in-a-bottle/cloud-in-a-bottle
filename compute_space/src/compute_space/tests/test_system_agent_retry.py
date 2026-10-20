@@ -157,4 +157,5 @@ async def test_legacy_restart_endpoint_uses_safe_background_restart(monkeypatch:
 
 def test_health_exposes_process_generation() -> None:
     response = system_api.health.fn()
-    assert response.generation == system_api.PROCESS_GENERATION
+    assert isinstance(response.content, system_api.HealthOk)
+    assert response.content.generation == system_api.PROCESS_GENERATION

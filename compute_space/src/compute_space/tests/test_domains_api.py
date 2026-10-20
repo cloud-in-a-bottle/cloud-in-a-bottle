@@ -28,6 +28,9 @@ from compute_space.core import caddy
 from compute_space.core.auth.auth import SESSION_COOKIE_NAME
 from compute_space.core.auth.auth import create_session
 from compute_space.core.dns.coredns_provider.interface import InternalDnsProvider
+from compute_space.core.domain_root import DomainRootKind
+from compute_space.core.domain_root import DomainRootSetting
+from compute_space.core.domain_root import apply_domain_root_setting
 from compute_space.core.domains import Domain
 from compute_space.core.domains import DomainCertStatus
 from compute_space.core.domains import seed_domains
@@ -299,6 +302,15 @@ def test_add_duplicate_rejected(cfg: Any, client: TestClient[Litestar]) -> None:
     assert resp.status_code == 400
     # 4xx keeps `detail` unmasked, so the reason reaches the client verbatim.
     assert resp.json()["detail"] == "domain is already configured"
+
+
+def test_add_dashboard_subdomain_rejected(cfg: Any, client: TestClient[Litestar]) -> None:
+    client.cookies.update(_auth_cookie(cfg.db_path))
+    with closing(open_db(cfg)) as db:
+        apply_domain_root_setting(db, DomainRootSetting(kind=DomainRootKind.NOTHING, router_subdomain="dash"))
+    resp = client.post("/api/domains", json={"name": "dash.host.example.com", "tls": True})
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == "domain is the dashboard subdomain of a configured domain"
 
 
 def test_add_invalid_name_rejected(cfg: Any, client: TestClient[Litestar]) -> None:

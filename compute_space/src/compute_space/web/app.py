@@ -27,6 +27,8 @@ from compute_space.core import archive_backend
 from compute_space.core.auth.auth import read_owner_username
 from compute_space.core.auth.identity import load_identity_keys
 from compute_space.core.dns.coredns_provider.interface import InternalDnsProvider
+from compute_space.core.domain_root import ROUTER_DOMAIN_ROOT_PATHS
+from compute_space.core.domain_root import load_domain_root_setting
 from compute_space.core.domains import Domain
 from compute_space.core.domains import host_with_request_port
 from compute_space.core.domains import primary_domain_or_none
@@ -52,6 +54,7 @@ from compute_space.web.routes.api.app_definitions import api_app_definitions_rou
 from compute_space.web.routes.api.apps import api_apps_routes
 from compute_space.web.routes.api.archive_backend import api_archive_backend_routes
 from compute_space.web.routes.api.discovery import discovery_routes
+from compute_space.web.routes.api.domain_root import api_domain_root_app_routes
 from compute_space.web.routes.api.domains import api_domains_routes
 from compute_space.web.routes.api.identity import identity_routes
 from compute_space.web.routes.api.permissions_v2 import api_permissions_v2_routes
@@ -194,20 +197,23 @@ def _log_unhandled_exception(request: Request[Any, Any, Any], exc: Exception) ->
 
 
 def _reject_app_subdomain_requests(request: Request[Any, Any, Any]) -> Response[Any] | None:
-    """Defense-in-depth: refuse any request whose Host is an app subdomain.
+    """Defense-in-depth: refuse any request on a configured domain whose Host isn't the router's.
 
-    App-subdomain traffic is supposed to be intercepted by SubdomainProxyMiddleware
-    (outer ASGI) before Litestar ever sees it.  If a request reaches Litestar with
-    an app-subdomain Host of any configured domain — e.g. the middleware was
-    bypassed in a test or a deployment variant — refuse it rather than accidentally
-    serve a router route (like /health) under the app's hostname.
+    Traffic for other hosts (app subdomains, or the bare domain while the router lives on a
+    subdomain) is supposed to be intercepted by SubdomainProxyMiddleware (outer ASGI) before
+    Litestar ever sees it.  If it reaches Litestar anyway — e.g. the middleware was bypassed in
+    a test or a deployment variant — refuse it rather than accidentally serve a router route
+    (like /health) under an app's hostname.
     """
     netloc = request.url.netloc
     with closing(get_db()) as db:
         matched = Domain.match(db, netloc)
-    if matched is not None and matched.looks_like_app_subdomain(netloc):
-        return Response(content=None, status_code=404)
-    return None
+        setting = load_domain_root_setting(db)
+    if matched is None or setting.is_router_host(matched, netloc):
+        return None
+    if matched.is_apex(netloc) and request.url.path in ROUTER_DOMAIN_ROOT_PATHS:
+        return None
+    return Response(content=None, status_code=404)
 
 
 def create_app(config: Config, dns_provider: InternalDnsProvider, mdns_responder: MdnsResponder) -> ASGIApp:
@@ -248,6 +254,7 @@ def create_app(config: Config, dns_provider: InternalDnsProvider, mdns_responder
             api_domains_routes,
             discovery_routes,
             api_permissions_v2_routes,
+            api_domain_root_app_routes,
             api_services_v2_routes,
             api_settings_routes,
             system_routes,

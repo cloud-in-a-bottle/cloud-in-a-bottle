@@ -8,15 +8,14 @@ from litestar import Response
 from litestar import Router
 from litestar import get
 
+from compute_space.core.domain_root import DISCOVERY_PATH
 from compute_space.web.helpers.zone import router_base_url
-
-DISCOVERY_PATH = "/.well-known/cloud-in-a-bottle"
 
 
 @attr.s(auto_attribs=True, frozen=True)
 class DiscoveryResponse:
-    # Where the dashboard and API live on the domain the request arrived on.  External clients (the CLI, the my.
-    # redirect page) look this up rather than assume they're at the bare domain.
+    # Where the dashboard and API live on the domain the request arrived on.  The owner may have moved them to a
+    # subdomain, so external clients (the CLI, the my. redirect page) look this up rather than assume.
     router_url: str
 
 
