@@ -21,6 +21,15 @@
 # once you delegate DNS and open ports 53/80/443. Claiming is token-gated in
 # this mode (open claiming is refused on a reachable instance).
 #
+# Pass --raspi (on an arm64 host) to build a Raspberry Pi SD-card image
+# instead: the same recipe, starting from Ubuntu's preinstalled Raspberry Pi
+# image and booting its own kernel on a generic QEMU machine (the Pi kernel runs
+# there fine; only the Pi's FAT boot partition is Pi-specific, and the build
+# leaves it bootable). It provisions in LAN mode (a .local domain, published
+# over mDNS, plain http), and on first boot the instance takes its address from
+# the hostname: http://<hostname>.local. Write the .img.xz with Raspberry Pi
+# Imager, whose OS customisation (hostname, wifi, SSH key) the image honors.
+#
 # Usage (run on a Linux host with KVM, or an Apple silicon Mac for arm64):
 #   image/build.sh [options]
 #
@@ -34,6 +43,9 @@
 #                         from the working tree, so the branch need not be pushed.
 #   --domain <domain>     App subdomain-routing domain baked in (default: lvh.me).
 #                         With --public this is the real domain served over TLS.
+#                         A .local one (e.g. bottle.local) builds a LAN-mode
+#                         image instead: published over mDNS, plain http. --raspi
+#                         needs one.
 #   --public              Build a TLS image (CoreDNS + Caddy + Let's Encrypt for
 #                         --domain) instead of the default HTTP-only image.
 #                         Requires --public-ip.
@@ -48,7 +60,8 @@
 #                         the image is private behind NAT. Set this to require a
 #                         token (e.g. for a customized image you distribute).
 #   --password <pw>       Default console password for the `host` user
-#                         (default: cloudinabottle)
+#                         (default: cloudinabottle). Empty leaves the account
+#                         without one.
 #   --ssh-pubkey <path>   Optional SSH public key file to authorize for `host`
 #                         (SSH is key-only; without this, access is console-only)
 #   --version <v>         Version string used in artifact filenames
@@ -66,13 +79,19 @@
 #   --output-dir <dir>    Where artifacts land (default: image/out)
 #   --no-ova              Skip the VirtualBox OVA; produce only the qcow2
 #                         (always skipped for arm64)
+#   --raspi               Build a Raspberry Pi SD-card image (.img.xz, plus a
+#                         Raspberry Pi Imager repository entry) instead of VM
+#                         images. arm64 hosts only. See "Building a Raspberry
+#                         Pi image" in docs/internal/building_a_vm_image.md for
+#                         the options to build it with.
 #   --timeout <sec>       Max seconds to wait for the build boot (default: 1800)
 #   -h, --help            Show this help
 #
 # Requirements: qemu-system-x86_64 (amd64) or qemu-system-aarch64 plus UEFI
 # firmware from qemu-efi-aarch64 (arm64), qemu-img, cloud-localds
 # (cloud-image-utils) or xorriso/genisoimage/mkisofs, curl, tar, timeout, and
-# KVM (/dev/kvm) or HVF on macOS.
+# KVM (/dev/kvm) or HVF on macOS. --raspi needs an arm64 Linux host with KVM,
+# plus mtools, sfdisk (fdisk), xz and sha256sum.
 
 set -euo pipefail
 
@@ -98,6 +117,7 @@ PUBLIC="false"
 PUBLIC_IP=""
 ACME_KEY_FILE=""
 ACME_EMAIL=""
+RASPI="false"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 OUTPUT_DIR="$SCRIPT_DIR/out"
@@ -129,10 +149,34 @@ while [[ $# -gt 0 ]]; do
         --public-ip)    PUBLIC_IP="$2"; shift 2 ;;
         --acme-key)     ACME_KEY_FILE="$2"; shift 2 ;;
         --acme-email)   ACME_EMAIL="$2"; shift 2 ;;
+        --raspi)        RASPI="true"; shift ;;
         -h|--help)      usage; exit 0 ;;
         *)              echo "Unknown option: $1" >&2; usage; exit 1 ;;
     esac
 done
+
+# LAN mode: a .local domain, as in provision.sh (published over mDNS, plain http).
+LAN="false"
+case "${DOMAIN%%:*}" in
+    *.local) LAN="true" ;;
+esac
+if [ "$PUBLIC" = "true" ] && [ "$LAN" = "true" ]; then
+    echo "Error: --public needs a real domain, not a .local one (got $DOMAIN)." >&2
+    exit 1
+fi
+
+if [ "$RASPI" = "true" ]; then
+    if [ "$ARCH" != "arm64" ]; then
+        echo "Error: --raspi needs an arm64 host (it boots the Pi image's arm64 kernel under KVM/HVF)." >&2
+        exit 1
+    fi
+    # The Pi image is LAN-only. Its domain is a placeholder (first boot replaces
+    # it with <hostname>.local), but it must be .local to provision LAN mode.
+    if [ "$LAN" != "true" ]; then
+        echo "Error: --raspi needs a .local --domain (got $DOMAIN), eg --domain bottle.local." >&2
+        exit 1
+    fi
+fi
 
 # ---- Per-arch settings ----
 case "$ARCH" in
@@ -151,6 +195,8 @@ case "$ARCH" in
         UEFI_FW=/usr/share/qemu-efi-aarch64/QEMU_EFI.fd
         [ -f "$UEFI_FW" ] || UEFI_FW=edk2-aarch64-code.fd
         QEMU_MACHINE=(-machine virt -bios "$UEFI_FW")
+        # The Pi image has no UEFI bootloader; build.sh boots its kernel directly.
+        [ "$RASPI" = "true" ] && QEMU_MACHINE=(-machine virt)
         # The VirtualBox OVF below describes an x86 machine.
         MAKE_OVA="false"
         ;;
@@ -186,6 +232,12 @@ need "$QEMU"         "Install qemu-system-x86 (amd64) or qemu-system-arm (arm64)
 need curl           "Install curl."
 need tar            "Install tar."
 need timeout        "Install coreutils."
+if [ "$RASPI" = "true" ]; then
+    need mcopy      "Install mtools."
+    need sfdisk     "Install fdisk."
+    need xz         "Install xz-utils."
+    need sha256sum  "Install coreutils."
+fi
 
 if [ -w /dev/kvm ]; then
     KVM_ARGS=(-enable-kvm -cpu host)
@@ -198,8 +250,11 @@ else
 fi
 
 # Seed-ISO builder: prefer cloud-localds, fall back to xorriso/genisoimage/mkisofs.
+# (--raspi needs none: its cloud-init reads the seed from the Pi's boot partition.)
 SEED_TOOL=""
-if command -v cloud-localds >/dev/null 2>&1; then
+if [ "$RASPI" = "true" ]; then
+    :
+elif command -v cloud-localds >/dev/null 2>&1; then
     SEED_TOOL="cloud-localds"
 elif command -v xorriso >/dev/null 2>&1; then
     SEED_TOOL="xorriso"
@@ -220,6 +275,7 @@ fi
 # published download names are decided in exactly one place. .github/workflows/
 # release.yml globs `cloud-in-a-bottle-*` to collect them, so keep the two in sync.
 ARTIFACT_BASE="cloud-in-a-bottle-$VERSION-$ARCH"
+[ "$RASPI" = "true" ] && ARTIFACT_BASE="cloud-in-a-bottle-$VERSION-raspi"
 
 if [ ! -f "$PROVISION_SCRIPT" ]; then
     echo "Error: provision script not found: $PROVISION_SCRIPT" >&2
@@ -240,6 +296,10 @@ if [ "$PUBLIC" = "true" ]; then
     echo "  Public IP:    $PUBLIC_IP"
     echo "  ACME key:     ${ACME_KEY_FILE:-generated during build}"
     echo "  Claim:        ${CLAIM_TOKEN:+token '$CLAIM_TOKEN'}${CLAIM_TOKEN:-token-gated (random, printed on first boot)}"
+elif [ "$LAN" = "true" ]; then
+    echo "  Domain:       $DOMAIN   (LAN mode: mDNS, plain http)"
+    [ "$RASPI" = "true" ] && echo "                (Raspberry Pi: replaced with <hostname>.local on first boot)"
+    echo "  Claim:        ${CLAIM_TOKEN:+token '$CLAIM_TOKEN'}${CLAIM_TOKEN:-open (no token required)}"
 else
     echo "  Domain:       $DOMAIN   (HTTP-only, bound 0.0.0.0)"
     echo "  Claim:        ${CLAIM_TOKEN:+token '$CLAIM_TOKEN'}${CLAIM_TOKEN:-open (no token required)}"
@@ -248,21 +308,58 @@ echo "  Disk size:    $DISK_SIZE"
 echo "  Output dir:   $OUTPUT_DIR"
 echo ""
 
-# ---- 1. Fetch the Ubuntu cloud base image (cached) ----
-BASE_IMG="$CACHE_DIR/noble-server-cloudimg-$ARCH.img"
-if [ ! -f "$BASE_IMG" ]; then
-    echo "--- Downloading Ubuntu 24.04 cloud image ---"
-    curl -fSL "$CLOUD_IMG_URL" -o "$BASE_IMG.tmp"
-    mv "$BASE_IMG.tmp" "$BASE_IMG"
+# ---- 1. Fetch the Ubuntu base image (cached) ----
+if [ "$RASPI" = "true" ]; then
+    # The newest 24.04 point release of Ubuntu's preinstalled Raspberry Pi server
+    # image, checked against Canonical's published checksum.
+    RASPI_RELEASE_URL="https://cdimage.ubuntu.com/releases/noble/release"
+    RASPI_SUM_LINE="$(curl -fsSL "$RASPI_RELEASE_URL/SHA256SUMS" \
+        | grep 'preinstalled-server-arm64+raspi\.img\.xz$' | sort -k2 -V | tail -n1)"
+    [ -n "$RASPI_SUM_LINE" ] || { echo "Error: no Raspberry Pi image in $RASPI_RELEASE_URL/SHA256SUMS" >&2; exit 1; }
+    RASPI_XZ_NAME="${RASPI_SUM_LINE##*\*}"
+    RASPI_XZ_SHA="${RASPI_SUM_LINE%% *}"
+    BASE_IMG="$CACHE_DIR/${RASPI_XZ_NAME%.xz}"
+    if [ ! -f "$BASE_IMG" ]; then
+        echo "--- Downloading $RASPI_XZ_NAME ---"
+        curl -fSL "$RASPI_RELEASE_URL/$RASPI_XZ_NAME" -o "$WORK_DIR/$RASPI_XZ_NAME"
+        echo "$RASPI_XZ_SHA  $WORK_DIR/$RASPI_XZ_NAME" | sha256sum -c -
+        xz -dc -T0 "$WORK_DIR/$RASPI_XZ_NAME" > "$BASE_IMG.tmp"
+        rm -f "$WORK_DIR/$RASPI_XZ_NAME"
+        mv "$BASE_IMG.tmp" "$BASE_IMG"
+    else
+        echo "--- Using cached base image: $BASE_IMG ---"
+    fi
 else
-    echo "--- Using cached base image: $BASE_IMG ---"
+    BASE_IMG="$CACHE_DIR/noble-server-cloudimg-$ARCH.img"
+    if [ ! -f "$BASE_IMG" ]; then
+        echo "--- Downloading Ubuntu 24.04 cloud image ---"
+        curl -fSL "$CLOUD_IMG_URL" -o "$BASE_IMG.tmp"
+        mv "$BASE_IMG.tmp" "$BASE_IMG"
+    else
+        echo "--- Using cached base image: $BASE_IMG ---"
+    fi
 fi
 
 # ---- 2. Working disk = copy of base, grown to the target size ----
-DISK="$WORK_DIR/disk.qcow2"
 echo "--- Preparing working disk ($DISK_SIZE) ---"
-qemu-img convert -O qcow2 "$BASE_IMG" "$DISK"
-qemu-img resize "$DISK" "$DISK_SIZE"
+if [ "$RASPI" = "true" ]; then
+    # Raw, since the result is written to an SD card as-is and mtools edits its
+    # FAT boot partition in place. cloud-init's growpart fills the extra space
+    # with the root partition on the build boot.
+    DISK="$WORK_DIR/disk.img"
+    DISK_FORMAT="raw"
+    cp --sparse=always "$BASE_IMG" "$DISK"
+    qemu-img resize -f raw "$DISK" "$DISK_SIZE"
+    # mtools addresses the boot partition (partition 1, FAT) by byte offset.
+    BOOT_START="$(sfdisk -d "$DISK" | awk -F'[=,]' '$1 ~ /1 :/ { gsub(/ /, "", $2); print $2 }')"
+    [ -n "$BOOT_START" ] || { echo "Error: no boot partition found in $BASE_IMG" >&2; exit 1; }
+    BOOT_FAT="$DISK@@$((BOOT_START * 512))"
+else
+    DISK="$WORK_DIR/disk.qcow2"
+    DISK_FORMAT="qcow2"
+    qemu-img convert -O qcow2 "$BASE_IMG" "$DISK"
+    qemu-img resize "$DISK" "$DISK_SIZE"
+fi
 
 # ---- 3. Render cloud-init user-data and build the seed ISO ----
 echo "--- Building cloud-init seed ---"
@@ -284,11 +381,14 @@ else
 fi
 
 # Mode args passed to provision.sh: HTTP-only + LAN bind by default, or TLS with
-# the baked public IP (and optional ACME account key / email) under --public.
+# the baked public IP (and optional ACME account key / email) under --public. A
+# .local domain needs none: provision.sh sets up LAN mode from the domain.
 if [ "$PUBLIC" = "true" ]; then
     MODE_ARGS="--public-ip \"$PUBLIC_IP\""
     [ -n "$ACME_KEY_FILE" ] && MODE_ARGS="$MODE_ARGS --acme-key /root/acme_account_key.json"
     [ -n "$ACME_EMAIL" ]    && MODE_ARGS="$MODE_ARGS --acme-email \"$ACME_EMAIL\""
+elif [ "$LAN" = "true" ]; then
+    MODE_ARGS=""
 else
     MODE_ARGS="--local-http-only --bind-host 0.0.0.0"
 fi
@@ -301,6 +401,12 @@ PROVISION_B64="$(b64 "$PROVISION_SCRIPT")"
 SEAL_B64="$(b64 "$SCRIPT_DIR/seal.sh")"
 ACME_KEY_B64=""
 [ -n "$ACME_KEY_FILE" ] && ACME_KEY_B64="$(b64 "$ACME_KEY_FILE")"
+PRE_PROVISION_B64=""
+SEAL_ARGS=""
+if [ "$RASPI" = "true" ]; then
+    PRE_PROVISION_B64="$(b64 "$SCRIPT_DIR/raspi/pre-provision.sh")"
+    SEAL_ARGS="--raspi"
+fi
 
 USER_DATA="$WORK_DIR/user-data"
 # Use a non-/ delimiter for sed since URLs contain slashes.
@@ -316,9 +422,12 @@ sed \
     -e "s|__PROVISION_B64__|$PROVISION_B64|g" \
     -e "s|__SEAL_B64__|$SEAL_B64|g" \
     -e "s|__ACME_KEY_B64__|$ACME_KEY_B64|g" \
+    -e "s|__PRE_PROVISION_B64__|$PRE_PROVISION_B64|g" \
+    -e "s|__SEAL_ARGS__|$SEAL_ARGS|g" \
     "$SCRIPT_DIR/cloud-init/user-data.tmpl" > "$USER_DATA"
 
 SEED_ISO="$WORK_DIR/seed.iso"
+SEED_DRIVE=(-drive "file=$SEED_ISO,if=virtio,format=raw")
 case "$SEED_TOOL" in
     cloud-localds)
         cloud-localds "$SEED_ISO" "$USER_DATA" "$SCRIPT_DIR/cloud-init/meta-data"
@@ -331,7 +440,24 @@ case "$SEED_TOOL" in
         "$SEED_TOOL" -output "$SEED_ISO" -volid cidata -joliet -rock \
             "$USER_DATA" "$SCRIPT_DIR/cloud-init/meta-data"
         ;;
+    "")
+        # --raspi: the Pi image's cloud-init only reads its seed from the boot
+        # partition, so swap the build's in there (keeping the stock network and
+        # meta-data files to put back afterwards). Also take its kernel + initrd,
+        # which QEMU boots directly.
+        mcopy -n -i "$BOOT_FAT" ::/network-config ::/meta-data ::/vmlinuz ::/initrd.img "$WORK_DIR/"
+        mcopy -o -i "$BOOT_FAT" "$USER_DATA" ::/user-data
+        mcopy -o -i "$BOOT_FAT" "$SCRIPT_DIR/cloud-init/meta-data" ::/meta-data
+        mcopy -o -i "$BOOT_FAT" "$SCRIPT_DIR/raspi/network-config" ::/network-config
+        SEED_DRIVE=()
+        ;;
 esac
+
+BOOT_ARGS=()
+if [ "$RASPI" = "true" ]; then
+    BOOT_ARGS=(-kernel "$WORK_DIR/vmlinuz" -initrd "$WORK_DIR/initrd.img"
+               -append "root=LABEL=writable rootfstype=ext4 rootwait console=ttyAMA0")
+fi
 
 # ---- 4. Boot once under QEMU: cloud-init provisions, then powers off ----
 echo "--- Provisioning (booting build VM; this takes a while) ---"
@@ -353,8 +479,9 @@ timeout "$BUILD_TIMEOUT" "$QEMU" \
     -display none \
     -monitor none \
     -serial "file:$CONSOLE_LOG" \
-    -drive "file=$DISK,if=virtio,format=qcow2" \
-    -drive "file=$SEED_ISO,if=virtio,format=raw" \
+    ${BOOT_ARGS[@]+"${BOOT_ARGS[@]}"} \
+    -drive "file=$DISK,if=virtio,format=$DISK_FORMAT,discard=unmap" \
+    ${SEED_DRIVE[@]+"${SEED_DRIVE[@]}"} \
     -netdev user,id=n0 \
     -device virtio-net-pci,netdev=n0 \
     -no-reboot
@@ -377,6 +504,64 @@ else
     echo "Error: no build sentinel found (VM powered off unexpectedly?). Console:" >&2
     tail -n 60 "$CONSOLE_LOG" >&2 || true
     exit 1
+fi
+
+# ---- 5 (--raspi). Restore the boot partition's first-boot config, compress ----
+if [ "$RASPI" = "true" ]; then
+    echo "--- Finalizing Raspberry Pi image ---"
+    # Ship the image's own first-boot user-data (Raspberry Pi Imager replaces it
+    # with the user's settings) and the stock network/meta-data files.
+    mcopy -o -i "$BOOT_FAT" "$SCRIPT_DIR/raspi/user-data" ::/user-data
+    mcopy -o -i "$BOOT_FAT" "$WORK_DIR/network-config" ::/network-config
+    mcopy -o -i "$BOOT_FAT" "$WORK_DIR/meta-data" ::/meta-data
+
+    IMG_XZ="$OUTPUT_DIR/$ARTIFACT_BASE.img.xz"
+    EXTRACT_SIZE="$(file_size "$DISK")"
+    EXTRACT_SHA="$(sha256sum "$DISK" | cut -d' ' -f1)"
+    xz -T0 -c "$DISK" > "$IMG_XZ"
+    DOWNLOAD_SIZE="$(file_size "$IMG_XZ")"
+    DOWNLOAD_SHA="$(sha256sum "$IMG_XZ" | cut -d' ' -f1)"
+
+    # A Raspberry Pi Imager repository listing this image: `rpi-imager --repo
+    # <url of this file>` offers it in the OS menu. init_format=cloudinit is what
+    # makes Imager write its OS customisation (hostname, wifi, SSH key) as
+    # cloud-init config, which this image reads on first boot.
+    IMAGER_JSON="$OUTPUT_DIR/$ARTIFACT_BASE.json"
+    cat > "$IMAGER_JSON" <<JSON
+{
+  "os_list": [
+    {
+      "name": "Cloud in a Bottle $VERSION",
+      "description": "Your own cloud on your local network. Reach it at http://<hostname>.local after first boot.",
+      "url": "https://github.com/cloud-in-a-bottle/cloud-in-a-bottle/releases/download/$VERSION/$ARTIFACT_BASE.img.xz",
+      "release_date": "$(date -u +%Y-%m-%d)",
+      "extract_size": $EXTRACT_SIZE,
+      "extract_sha256": "$EXTRACT_SHA",
+      "image_download_size": $DOWNLOAD_SIZE,
+      "image_download_sha256": "$DOWNLOAD_SHA",
+      "init_format": "cloudinit",
+      "devices": ["pi5-64bit", "pi4-64bit"]
+    }
+  ]
+}
+JSON
+
+    echo ""
+    echo "  SD-card image: $IMG_XZ"
+    echo "  Imager repo:   $IMAGER_JSON"
+    echo ""
+    echo "=== Build complete ==="
+    echo ""
+    echo "Write it to an SD card (${DISK_SIZE} or larger) with Raspberry Pi Imager: pick"
+    echo "\"Use custom\" (or run \`rpi-imager --repo <url of the .json>\`) and set a"
+    echo "hostname, plus wifi if the Pi won't be on ethernet. Then boot the Pi and visit"
+    echo "    http://<hostname>.local   (default hostname: bottle)"
+    if [ -n "$CLAIM_TOKEN" ]; then
+        echo "and claim it at /setup?claim=$CLAIM_TOKEN"
+    else
+        echo "and claim it at /setup (open, no token)."
+    fi
+    exit 0
 fi
 
 # ---- 5. Compact the qcow2 (drop freed blocks) ----

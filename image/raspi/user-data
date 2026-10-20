@@ -1,0 +1,17 @@
+#cloud-config
+# First-boot config for the Cloud in a Bottle Raspberry Pi image, read by cloud-init from the boot
+# partition. Raspberry Pi Imager's "OS customisation" replaces this file with your settings.
+#
+# The hostname becomes the instance's address: http://<hostname>.local, with apps at
+# http://<app>.<hostname>.local.
+hostname: bottle
+
+# Console login (HDMI + keyboard) as `ubuntu` / `ubuntu`, changed on first login; same as the stock
+# Ubuntu image. SSH stays key-only: set a key in Raspberry Pi Imager to get SSH access.
+chpasswd:
+  expire: true
+  users:
+    - name: ubuntu
+      password: ubuntu
+      type: text
+ssh_pwauth: false
