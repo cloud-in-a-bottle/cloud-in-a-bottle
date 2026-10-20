@@ -147,6 +147,9 @@ def _port_is_bindable(port: int) -> bool:
     """Check if a port is bindable on 0.0.0.0 for both TCP and UDP."""
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            # Match restart-friendly TCP listeners: TIME_WAIT is not a live service.
+            # UDP below must remain exclusive, even when an existing socket allows reuse.
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             s.bind(("0.0.0.0", port))
     except OSError:
         return False
