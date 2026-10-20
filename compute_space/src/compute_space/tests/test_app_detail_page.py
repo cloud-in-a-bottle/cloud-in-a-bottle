@@ -146,3 +146,72 @@ def test_app_detail_shows_private_default(cfg: Config) -> None:
     assert response.status_code == 200
     assert '<th scope="row">Public paths</th>' in response.text
     assert "None. All paths require Cloud in a Bottle login." in response.text
+
+
+_CONSUMER_MANIFEST = (
+    '[app]\nname = "consumer"\nversion = "1.0.0"\n'
+    '[runtime.container]\nimage = "Dockerfile"\nport = 8000\n'
+    "[[services.v2.consumes]]\n"
+    'service = "github.com/example/health-data"\nshortname = "health"\nversion = ">=0.1.0"\n'
+)
+
+
+def test_app_detail_shows_consumed_service_without_grants(cfg: Config) -> None:
+    """A consumed service with no grants declared still appears, with the provider it routes to."""
+    set_active_config(cfg)
+    with sqlite3.connect(cfg.db_path) as conn:
+        conn.execute(
+            """INSERT INTO apps (app_id, name, version, repo_path, local_port, status, manifest_raw)
+               VALUES ('consumer-id', 'consumer', '1.0.0', '/tmp/consumer', 19125, 'running', ?),
+                      ('provider-id', 'health-provider', '1.0.0', '/tmp/provider', 19126, 'running', NULL)""",
+            (_CONSUMER_MANIFEST,),
+        )
+        conn.execute(
+            """INSERT INTO service_providers_v2 (service_url, app_id, service_version, endpoint)
+               VALUES ('github.com/example/health-data', 'provider-id', '0.1.0', '/api/')"""
+        )
+
+    with TestClient(app=_build_app(cfg)) as client:
+        client.cookies.update(auth_cookie(cfg))
+        response = client.get("/app_detail/consumer")
+
+    assert response.status_code == 200
+    assert "Services Consumed" in response.text
+    assert "<td>github.com/example/health-data</td>" in response.text
+    assert "<td>health</td>" in response.text
+    assert "<code>&gt;=0.1.0</code>" in response.text
+    assert '<a href="/app_detail/health-provider">health-provider</a>' in response.text
+
+
+def test_app_detail_shows_consumed_service_without_provider(cfg: Config) -> None:
+    set_active_config(cfg)
+    with sqlite3.connect(cfg.db_path) as conn:
+        conn.execute(
+            """INSERT INTO apps (app_id, name, version, repo_path, local_port, status, manifest_raw)
+               VALUES ('consumer-id', 'consumer', '1.0.0', '/tmp/consumer', 19125, 'running', ?)""",
+            (_CONSUMER_MANIFEST,),
+        )
+
+    with TestClient(app=_build_app(cfg)) as client:
+        client.cookies.update(auth_cookie(cfg))
+        response = client.get("/app_detail/consumer")
+
+    assert response.status_code == 200
+    assert "<td>github.com/example/health-data</td>" in response.text
+    assert "Unavailable: No provider for service" in response.text
+
+
+def test_app_detail_omits_consumed_section_when_none(cfg: Config) -> None:
+    set_active_config(cfg)
+    with sqlite3.connect(cfg.db_path) as conn:
+        conn.execute(
+            """INSERT INTO apps (app_id, name, version, repo_path, local_port, status)
+               VALUES ('plain-id', 'plain-app', '1.0.0', '/tmp/plain', 19125, 'running')"""
+        )
+
+    with TestClient(app=_build_app(cfg)) as client:
+        client.cookies.update(auth_cookie(cfg))
+        response = client.get("/app_detail/plain-app")
+
+    assert response.status_code == 200
+    assert "Services Consumed" not in response.text

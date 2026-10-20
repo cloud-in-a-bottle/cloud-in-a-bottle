@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode
 
+import attr
 from litestar import Request
 from litestar import Router
 from litestar import get
@@ -15,6 +16,7 @@ from litestar.params import FromQuery
 from litestar.response import Template
 
 from compute_space.config import Config
+from compute_space.core.app_id import ROUTER_APP_ID
 from compute_space.core.app_id import is_valid_app_name
 from compute_space.core.apps import deserialize_links
 from compute_space.core.auth.permissions_v2 import get_all_permissions_v2
@@ -24,6 +26,7 @@ from compute_space.core.git_ops import get_head_sha
 from compute_space.core.git_ops import get_remote_url
 from compute_space.core.git_ops import parse_repo_url
 from compute_space.core.logging import logger
+from compute_space.core.manifest import ServiceConsumes
 from compute_space.core.manifest import manifest_ungranted_permissions_v2
 from compute_space.core.manifest import parse_manifest_from_string
 from compute_space.core.service_interface.provider import ProviderUnavailable
@@ -97,6 +100,7 @@ async def app_detail(
         for p in granted_records
     ]
     ungranted_perms: list[dict[str, object]] = []
+    services_consumed: list[ConsumedService] = []
     manifest_raw = app_row["manifest_raw"]
     if manifest_raw:
         try:
@@ -110,8 +114,9 @@ async def app_detail(
                         "shortname": shortname_by_service.get(pg.service_url, ""),
                     }
                 )
+            services_consumed = [_describe_consumed_service(c, db) for c in manifest.consumes_services_v2]
         except Exception:
-            logger.opt(exception=True).warning("Failed to parse manifest for permission display (app {})", app_id)
+            logger.opt(exception=True).warning("Failed to parse manifest for service display (app {})", app_id)
 
     edit_app = await _resolve_edit_app(
         app_row["repo_url"], app_row["repo_path"], db, config, zone_for_request(request), request.url.netloc
@@ -126,11 +131,47 @@ async def app_detail(
             "databases": databases,
             "port_mappings": port_mappings,
             "services_provided": services_provided,
+            "services_consumed": services_consumed,
             "next_url": next,
             "granted_permissions": granted_perms,
             "ungranted_permissions": ungranted_perms,
             "edit_app": edit_app,
         },
+    )
+
+
+@attr.s(auto_attribs=True, frozen=True)
+class ConsumedService:
+    service_url: str
+    shortname: str
+    version: str
+    # Name of the app the router would route this app's calls to right now, or None with the reason in
+    # ``provider_error`` when no provider can currently serve it.
+    provider_name: str | None
+    # False for builtin services the router serves itself, which have no app detail page to link to.
+    provider_is_app: bool
+    provider_error: str | None
+
+
+def _describe_consumed_service(consumes: ServiceConsumes, db: sqlite3.Connection) -> ConsumedService:
+    try:
+        provider = resolve_provider(consumes.service, consumes.version, db)
+    except ProviderUnavailable as e:
+        return ConsumedService(
+            service_url=consumes.service,
+            shortname=consumes.shortname,
+            version=consumes.version,
+            provider_name=None,
+            provider_is_app=False,
+            provider_error=str(e),
+        )
+    return ConsumedService(
+        service_url=consumes.service,
+        shortname=consumes.shortname,
+        version=consumes.version,
+        provider_name=provider.app_name,
+        provider_is_app=provider.app_id != ROUTER_APP_ID,
+        provider_error=None,
     )
 
 

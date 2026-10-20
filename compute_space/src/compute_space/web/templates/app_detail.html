@@ -157,6 +157,28 @@ None. All paths require Cloud in a Bottle login.
 </div>
 {% endif %}
 
+{% if services_consumed %}
+{% call section_head("Services Consumed", level=3) %}{% endcall %}
+<div class="table-scroll">
+  <table>
+    <tr><th>Service URL</th><th>Shortname</th><th>Version</th><th>Provider</th></tr>
+    {% for svc in services_consumed %}
+    <tr>
+      <td>{{ svc.service_url }}</td>
+      <td>{{ svc.shortname }}</td>
+      <td><code>{{ svc.version }}</code></td>
+      <td>
+        {%- if svc.provider_is_app %}<a href="/app_detail/{{ svc.provider_name }}">{{ svc.provider_name }}</a>
+        {%- elif svc.provider_name %}{{ svc.provider_name }}
+        {%- else %}<span class="hint">Unavailable: {{ svc.provider_error }}</span>
+        {%- endif -%}
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+</div>
+{% endif %}
+
 {% if databases %}
 {% call section_head("SQLite Databases", level=3) %}{% endcall %}
 <div class="table-scroll">
