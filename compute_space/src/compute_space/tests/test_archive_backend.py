@@ -564,6 +564,7 @@ def test_attach_on_startup_s3_happy_path(cfg, db):
     with (
         mock.patch.object(archive_backend, "is_juicefs_installed", return_value=True),
         mock.patch.object(archive_backend, "is_linux_host", return_value=True),
+        mock.patch.object(archive_backend, "_local_volume_formatted", return_value=True),
     ):
         with mock.patch.object(archive_backend, "mount") as mnt:
             archive_backend.attach_on_startup(cfg, db)

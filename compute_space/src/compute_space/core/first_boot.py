@@ -18,6 +18,7 @@ from pathlib import Path
 import attr
 
 from compute_space.config import Config
+from compute_space.core import archive_backend
 from compute_space.core import identity_store
 from compute_space.core import settings_store
 from compute_space.core.domains import Domain
@@ -25,6 +26,36 @@ from compute_space.core.domains import seed_domains
 from compute_space.core.logging import logger
 from compute_space.core.tls.keycloak import KeycloakClientCredentials
 from compute_space.db import get_db
+
+
+@attr.s(auto_attribs=True, frozen=True)
+class FirstBootArchiveBackend:
+    """A preconfigured S3 archive backend (e.g. managed storage), delivered by the provisioner."""
+
+    s3_bucket: str
+    s3_endpoint: str
+    s3_region: str | None
+    s3_access_key_id: str
+    s3_secret_access_key: str = attr.ib(repr=False)
+
+
+def _parse_archive_backend(raw: object) -> FirstBootArchiveBackend | None:
+    """Parse the optional ``[archive_backend]`` table.  A partial table fails loudly: ignoring it would
+    silently put the archive on local disk."""
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise ValueError("first_boot.toml: [archive_backend] must be a table")
+    try:
+        return FirstBootArchiveBackend(
+            s3_bucket=str(raw["s3_bucket"]),
+            s3_endpoint=str(raw["s3_endpoint"]),
+            s3_region=str(raw["s3_region"]) if raw.get("s3_region") else None,
+            s3_access_key_id=str(raw["s3_access_key_id"]),
+            s3_secret_access_key=str(raw["s3_secret_access_key"]),
+        )
+    except KeyError as exc:
+        raise ValueError(f"first_boot.toml: [archive_backend] is missing {exc.args[0]}") from None
 
 
 @attr.s(auto_attribs=True, frozen=True)
@@ -39,6 +70,8 @@ class FirstBoot:
     imbue_identity_client_secret: str | None = None
     # Base URL of the Imbue API for the "Connect to Imbue" flow (optional).
     imbue_connect_base_url: str | None = None
+    # Preconfigured S3 archive backend (optional).
+    archive_backend: FirstBootArchiveBackend | None = None
 
 
 def _config_dir() -> Path | None:
@@ -74,6 +107,7 @@ def read_first_boot() -> FirstBoot | None:
         imbue_identity_client_id=(str(identity["client_id"]) if identity.get("client_id") else None),
         imbue_identity_client_secret=(str(identity["client_secret"]) if identity.get("client_secret") else None),
         imbue_connect_base_url=(str(data["imbue_connect_base_url"]) if data.get("imbue_connect_base_url") else None),
+        archive_backend=_parse_archive_backend(data.get("archive_backend")),
     )
 
 
@@ -104,6 +138,18 @@ def seed_first_boot(config: Config) -> None:
             primary = Domain(name=fb.domain, tls=fb.tls)
             seed_domains(db, primary, [])
             _seed_imbue_identity(db, fb)
+            # Before the claim only, and after seed_domains (the volume name derives from the domain).
+            if fb.archive_backend is not None and not owner_exists(config):
+                ab = fb.archive_backend
+                archive_backend.seed_preconfigured_s3(
+                    config,
+                    db,
+                    s3_bucket=ab.s3_bucket,
+                    s3_region=ab.s3_region,
+                    s3_endpoint=ab.s3_endpoint,
+                    s3_access_key_id=ab.s3_access_key_id,
+                    s3_secret_access_key=ab.s3_secret_access_key,
+                )
 
         # Migrate the claim token into the settings store.  Relevant only pre-setup, so gate on
         # owner-absence + settings-absence rather than the domain-seeded flag — an instance that seeded

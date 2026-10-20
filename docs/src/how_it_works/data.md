@@ -23,7 +23,7 @@ An app can also request `access_all_app_data`, which mounts every app's director
 The archive is always a JuiceFS volume, so an app that asks for it installs anywhere. Only the object storage underneath differs:
 
 - **Local (default)**: objects live on the instance's own disk. Nothing to configure, but there is no copy anywhere else, and the bundled backup app skips the archive tier.
-- **S3**: objects live in a bucket you supply, configured in the dashboard. This stores them outside the instance, at the cost of tens to hundreds of milliseconds on an uncached first read. The bundled backup app still skips the archive tier.
+- **S3**: objects live in a bucket you supply, configured in the dashboard, or one provisioned with a managed instance, which starts on S3 from its first boot. This stores them outside the instance, at the cost of tens to hundreds of milliseconds on an uncached first read. The bundled backup app still skips the archive tier.
 
 JuiceFS keeps the mappings from filenames to objects in a local SQLite metadata database. It also writes metadata dumps to its object store. With S3, the dashboard's archive settings show the latest available dump. If the local metadata is lost, recovery requires a usable metadata dump and a manual `juicefs load`; restoring a snapshot in the backup app does not perform this step. S3 objects alone are not enough to reconstruct the archive filesystem.
 

@@ -60,6 +60,18 @@ version precedence: `openhost_branch` > `openhost_commit` > default `main`.
 > `openhost_commit`/`openhost_branch` from **before** that change will boot with **no domain seeded**;
 > deploy a matching or newer ref.
 
+### preconfigured S3 archive backend (optional, e.g. managed storage)
+
+When `archive_backend_s3_bucket` is set, `first_boot.toml` carries an `[archive_backend]` table. A fresh instance's archive is then pointed at that bucket on first boot and formatted there on the first boot after the claim, instead of on local disk. An instance that already formatted its archive keeps it. Pass these as an extra-vars file (`-e @vars.json`), never on the command line.
+
+| variable | purpose |
+|---|---|
+| `archive_backend_s3_bucket` | bucket name |
+| `archive_backend_s3_endpoint` | S3 endpoint, `https://...` (e.g. `https://<account>.r2.cloudflarestorage.com`) |
+| `archive_backend_s3_region` | region (optional, default `auto`) |
+| `archive_backend_s3_access_key_id` | access key ID, scoped to the bucket |
+| `archive_backend_s3_secret_access_key` | secret access key |
+
 ### cert_api broker (opt-in, alternative to the bring-your-own ACME key)
 
 | variable | purpose |

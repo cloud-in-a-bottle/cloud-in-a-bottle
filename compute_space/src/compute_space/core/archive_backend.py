@@ -649,6 +649,33 @@ def _set_juicefs_volume_name(db: sqlite3.Connection, volume_name: str) -> None:
     db.commit()
 
 
+def seed_preconfigured_s3(
+    config: Config,
+    db: sqlite3.Connection,
+    *,
+    s3_bucket: str,
+    s3_region: str | None,
+    s3_endpoint: str,
+    s3_access_key_id: str,
+    s3_secret_access_key: str,
+) -> None:
+    """Point a fresh instance's archive at a preconfigured S3 bucket (first boot, before the claim).
+
+    Only while no JuiceFS volume exists yet, so this never strands local data.  The volume is formatted on
+    the bucket by :func:`attach_on_startup` on the first full boot."""
+    if os.path.exists(_juicefs_meta_db(config)):
+        logger.warning("Not seeding the preconfigured S3 archive backend: a JuiceFS volume already exists")
+        return
+    volume = default_volume_name_for_zone(db)
+    db.execute(
+        "UPDATE archive_backend SET backend='s3', s3_bucket=?, s3_region=?, s3_endpoint=?, s3_prefix=?, "
+        "s3_access_key_id=?, s3_secret_access_key=?, juicefs_volume_name=? WHERE id = 1",
+        (s3_bucket, s3_region, s3_endpoint, volume, s3_access_key_id, s3_secret_access_key, volume),
+    )
+    db.commit()
+    logger.info("Seeded preconfigured S3 archive backend (bucket {}, volume {})", s3_bucket, volume)
+
+
 def attach_on_startup(config: Config, db: sqlite3.Connection) -> None:
     """Bring the archive backend online at boot.  Failures don't crash boot;
     they're surfaced via state_message so the dashboard stays reachable.
@@ -707,6 +734,19 @@ def attach_on_startup(config: Config, db: sqlite3.Connection) -> None:
             raise RuntimeError(
                 "S3 credentials are missing from the archive_backend row.  Re-configure "
                 "the archive backend from the dashboard."
+            )
+        if not _local_volume_formatted(config):
+            # First boot of a backend preconfigured by seed_preconfigured_s3.  JuiceFS refuses to format
+            # over a bucket prefix that already holds data, so this cannot clobber an existing archive.
+            assert state.s3_bucket is not None
+            format_s3_volume(
+                config,
+                s3_bucket=state.s3_bucket,
+                s3_region=state.s3_region,
+                s3_endpoint=state.s3_endpoint,
+                s3_access_key_id=state.s3_access_key_id,
+                s3_secret_access_key=state.s3_secret_access_key,
+                juicefs_volume_name=state.juicefs_volume_name,
             )
         mount(config, state.s3_access_key_id, state.s3_secret_access_key)
         _set_state_message(db, None)
