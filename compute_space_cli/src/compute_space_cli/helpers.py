@@ -114,3 +114,24 @@ def wait_for_app_removed(url: str, token: str, app_id: str, app_name: str, timeo
             print(f"{app_name} removal failed: {result.get('error', 'unknown error')}", file=sys.stderr)
             raise SystemExit(1)
         print(f"  status: {s}...")
+
+
+def exit_if_reload_refused(body: object, app_name: str) -> None:
+    """Exit nonzero when ``/reload_app`` answered 200 but declined to reload.
+
+    The server holds an update whose manifest needs the owner's review and replies ``{"ok": false, ...}`` with the
+    diff, leaving the app running its old version. The app's status stays ``running``, so without this check the CLI
+    reports success, and ``--wait`` sees "running" straight away.
+    """
+    if not isinstance(body, dict) or body.get("ok") is not False:
+        return
+    print(f"{app_name} was not reloaded: {body.get('error') or 'the server refused the reload'}", file=sys.stderr)
+    for change in body.get("settings_changed") or []:
+        print(
+            f"  {change.get('group')}: {change.get('label')}: {change.get('old')} -> {change.get('new')}",
+            file=sys.stderr,
+        )
+    for perm in body.get("permissions_required") or []:
+        print(f"  new permission: {perm.get('service_url')} {perm.get('grant')}", file=sys.stderr)
+    print("Review and approve the update on the app's page in the dashboard.", file=sys.stderr)
+    raise SystemExit(1)

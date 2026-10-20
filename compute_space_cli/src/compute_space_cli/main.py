@@ -18,6 +18,7 @@ from compute_space_cli import config
 from compute_space_cli.discovery import DiscoveryError
 from compute_space_cli.discovery import discover_router_url
 from compute_space_cli.helpers import authorization_url
+from compute_space_cli.helpers import exit_if_reload_refused
 from compute_space_cli.helpers import make_api_request
 from compute_space_cli.helpers import resolve_app_id_by_name
 from compute_space_cli.helpers import wait_for_app_removed
@@ -207,7 +208,8 @@ class AppCmd:
         # approve_new_permissions so the dashboard's change-review gate doesn't
         # silently refuse the update (the browser reviews changes interactively).
         data = {"update": "1", "approve_new_permissions": "1"} if update else None
-        make_api_request(cfg.url, cfg.token, "POST", f"/reload_app/{app_id}", data=data)
+        result = make_api_request(cfg.url, cfg.token, "POST", f"/reload_app/{app_id}", data=data)
+        exit_if_reload_refused(result.json(), app_name)
         if wait:
             wait_for_app_running(cfg.url, cfg.token, app_id, app_name)
         else:
