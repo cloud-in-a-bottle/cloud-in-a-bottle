@@ -425,7 +425,7 @@ _TEMPLATE = """{% from "_components/icon_nav.html" import icon_nav %}{% from "_c
   <link rel="icon" type="image/svg+xml" href="{{ static_url('img/favicon.svg') }}">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible+Mono:wght@500;600;700&display=swap">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Inter:wght@400;500&display=swap">
   <link rel="stylesheet" href="{{ static_url('css/tokens.css') }}">
   <link rel="stylesheet" href="{{ static_url('css/components.css') }}">
   <style>
@@ -624,8 +624,8 @@ _TEMPLATE = """{% from "_components/icon_nav.html" import icon_nav %}{% from "_c
        reserves a band tall enough to hold it rather than sitting under it. */
     .nav-back + .space-header { padding-top: 3em; }
     .space-header h1.space-title {
-      font-family: var(--font-mono); font-size: 1.15em; font-weight: 500;
-      letter-spacing: var(--tracking-title); text-transform: uppercase; margin: 0 0 0.5em;
+      font-family: var(--font-sans); font-size: var(--text-body-lg); font-weight: var(--weight-emphasized);
+      margin: 0 0 0.5em;
     }
     .space-header h1.space-title a { color: inherit; text-decoration: none; }
     .space-header h1.space-title a:hover { text-decoration: underline; }

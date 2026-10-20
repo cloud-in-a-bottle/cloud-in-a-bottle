@@ -3,15 +3,15 @@
  * Values are literal rather than var(--token): the updater inlines this file
  * into a self-contained page it serves while compute_space is down, so neither
  * tokens.css nor the webfont is reachable. Keep it in visual step with
- * tokens.css by hand, and stick to the system mono stack. */
+ * tokens.css by hand, and stick to the system font stacks. */
 
 body {
   margin: 0;
   padding: 3em 1em;
   color: #000;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   font-size: 14px;
-  font-weight: 500;
+  font-weight: 400;
   background: linear-gradient(180deg, #eef8ff 0%, #eef8ff 80%, #ecffe1 100%) fixed;
 }
 
@@ -27,8 +27,6 @@ h1 {
   margin: 0 0 1.2em;
   font-size: 16px;
   font-weight: 500;
-  letter-spacing: 0.48px;
-  text-transform: uppercase;
 }
 
 /* Blocky three-cell pulse rather than a rotating ring — sharp corners
@@ -64,6 +62,7 @@ h1 {
 }
 
 ul {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   margin: 0;
   padding: 12px;
   list-style: none;
