@@ -29,10 +29,6 @@ class HttpCookieConfirmationRequired(NotAuthorizedException):
 def _origin(value: str, *, referer: bool = False) -> Origin | None:
     if not value or any(c.isspace() or ord(c) < 32 or ord(c) == 127 for c in value):
         return None
-    if referer and any(marker in value.lower() for marker in (",http://", ",https://")):
-        # A proxy may join duplicate provenance fields with commas. Preserve
-        # ordinary commas in paths/queries, but reject ambiguous URL lists.
-        return None
     try:
         parsed = urlsplit(value)
         if parsed.scheme not in ("http", "https") or not parsed.hostname:

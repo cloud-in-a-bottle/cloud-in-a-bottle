@@ -186,6 +186,8 @@ def assert_landing(response: httpx.Response, *, head: bool = False) -> str | Non
         (APP_HOST, {"origin": f"http://NOTES.{ZONE.upper()}"}),
         (APP_HOST, {"referer": SELF + "/landing?return=1"}),
         (APP_HOST, {"referer": SELF + "/reports/one,two?columns=a,b"}),
+        (APP_HOST, {"referer": SELF + "/page," + OTHER + "/page"}),
+        (APP_HOST, {"referer": SELF + "/export?urls=http://a.example,http://b.example"}),
         (APP_HOST + ":8080", {"origin": SELF + ":8080"}),
         (APP_HOST + ":8080", {"referer": SELF + ":8080/landing"}),
         (APP_HOST, {"origin": SELF, "referer": SELF + "/landing"}),
@@ -214,8 +216,6 @@ BAD_SOURCES = [
     SELF + " ",
     SELF + "\t",
     SELF + "," + OTHER,
-    SELF + "/page," + OTHER + "/page",
-    SELF + "/page," + OTHER.upper() + "/page",
     SELF + " " + OTHER,
     SELF + ":bad",
     SELF + ":65536",
@@ -239,7 +239,7 @@ def test_bad_origin_is_closed_and_matching_referer_never_rescues_it(
     assert not isinstance(exc.value, HttpCookieConfirmationRequired)
 
 
-@pytest.mark.parametrize("source", [SELF + "/", SELF + "?query", SELF + "?"])
+@pytest.mark.parametrize("source", [SELF + "/", SELF + "?query", SELF + "?", SELF + "/page," + OTHER + "/page"])
 def test_origin_cannot_contain_path_or_query(cookie: str, source: str) -> None:
     conn = connection(cookie, {"origin": source, "referer": SELF + "/", "accept": "text/html"})
     assert not is_same_origin_http_cookie_request(conn)
@@ -532,6 +532,7 @@ def full_app(config: Config, monkeypatch: pytest.MonkeyPatch) -> Any:
     # Skip machine/bootstrap work; request routing, DB/domain lookup, guards,
     # exception handling, templates, and response hooks are all production code.
     monkeypatch.setattr(appmod, "_full_app_bootstrap", lambda _config: None)
+    monkeypatch.setattr(appmod.atexit, "register", Mock())
     return appmod.create_app(config, Mock(), Mock())
 
 
@@ -729,6 +730,7 @@ def test_root_and_login_cookie_navigation_confirm_before_owner_content(cookie: s
             "/already%2Fencoded",
             "a=1&b=%23fragment&c=two%20words",
         ),
+        ("/export", "urls=http://a.example,http://b.example", "/export", "urls=http://a.example,http://b.example"),
     ],
 )
 def test_confirmation_link_is_absolute_escaped_and_preserves_target(
