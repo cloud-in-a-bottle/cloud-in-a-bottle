@@ -76,6 +76,23 @@ rm -f /var/lib/dbus/machine-id
 # Never ship the build VM's SSH host keys; bottle-prepare regenerates them.
 rm -f /etc/ssh/ssh_host_*
 
+# cloud-init's netplan config matches the build VM's NIC by MAC, so an install whose hypervisor assigns any other MAC
+# gets no network. Use DHCP on every ethernet NIC instead.
+rm -f /etc/netplan/50-cloud-init.yaml
+cat > /etc/netplan/50-bottle.yaml <<'NETPLAN'
+network:
+  version: 2
+  ethernets:
+    all-ethernet:
+      match:
+        name: "en*"
+      dhcp4: true
+      dhcp6: true
+NETPLAN
+chmod 600 /etc/netplan/50-bottle.yaml
+# If a hypervisor does provide a cloud-init datasource, don't let it write a MAC-pinned config again.
+echo 'network: {config: disabled}' > /etc/cloud/cloud.cfg.d/99-bottle-network.cfg
+
 # Drop build-time cloud-init instance data + logs. Hygiene only; cloud-init
 # won't run on the distributed image anyway (no datasource).
 cloud-init clean --logs --seed || true
