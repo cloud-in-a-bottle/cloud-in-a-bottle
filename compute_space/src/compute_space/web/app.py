@@ -45,6 +45,9 @@ from compute_space.core.terminal import cleanup_all as cleanup_terminal
 from compute_space.db import get_db
 from compute_space.db import provide_db
 from compute_space.web.auth.auth import auth_required_response
+from compute_space.web.auth.http_cookie import HttpCookieConfirmationRequired
+from compute_space.web.auth.http_cookie import http_cookie_confirmation
+from compute_space.web.auth.http_cookie import protect_owner_html
 from compute_space.web.helpers.static import make_static_url
 from compute_space.web.helpers.zone import ZONE_SCOPE_KEY
 from compute_space.web.middleware.subdomain_proxy import SubdomainProxyMiddleware
@@ -170,6 +173,8 @@ def _auth_required_handler(request: Request[Any, Any, Any], exc: NotAuthorizedEx
 
     websocket-type requests should never get here - they start as HTTP requests with `Upgrade: websocket`, and should fail then.
     """
+    if isinstance(exc, HttpCookieConfirmationRequired):
+        return http_cookie_confirmation(request)
     if "application/json" in request.headers.get("Accept", "") or (exc.extra and "authorize_url" in exc.extra):
         content: dict[str, Any] = {"error": exc.detail}
         if exc.extra:
@@ -276,5 +281,6 @@ def create_app(config: Config, dns_provider: InternalDnsProvider, mdns_responder
             Exception: _log_unhandled_exception,
         },
         on_startup=[_install_template_globals],
+        after_request=protect_owner_html,
     )
     return SubdomainProxyMiddleware(litestar_app)

@@ -21,6 +21,8 @@ from compute_space.web.auth.auth import require_owner_auth
 from compute_space.web.auth.auth import verify_owner_auth
 from compute_space.web.auth.cookies import build_session_cookie
 from compute_space.web.auth.cookies import clear_session_cookie
+from compute_space.web.auth.http_cookie import HttpCookieConfirmationRequired
+from compute_space.web.auth.http_cookie import http_cookie_confirmation
 from compute_space.web.helpers.zone import zone_for_request
 
 
@@ -50,6 +52,8 @@ async def login_get(
     try:
         verify_owner_auth(request)
         return Redirect(path=_validated_next(next_param, db) or "/")
+    except HttpCookieConfirmationRequired:
+        return http_cookie_confirmation(request)
     except NotAuthorizedException:
         return Template(template_name="login.html", context={"next": next_param})
 

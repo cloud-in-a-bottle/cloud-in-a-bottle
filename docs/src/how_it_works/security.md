@@ -26,6 +26,14 @@ Three credentials authenticate as you, all documented in [Overview](./overview.m
 
 Owner sessions are refused on cross-origin requests, so JavaScript running in one app cannot make owner-authenticated calls to the router or to another app on your behalf.
 
+### HTTP and LAN browser access
+
+HTTPS cookie authentication uses browser Fetch Metadata. Browsers usually omit those headers on HTTP-only domains, so those domains instead require matching Origin or Referer evidence, including the scheme and access port. A foreign or opaque Origin cannot be rescued by a matching Referer. Requests with partial Fetch Metadata keep failing closed; forwarded headers cannot turn a TLS domain into an HTTP exception.
+
+When a signed-in browser opens a page without that evidence—for example, from a bookmark or a link between apps—it may show a **Continue** page. That page contains no private data, scripts, or network-loaded resources and cannot be framed. The protected route or app is not called until you follow the link, which provides same-origin navigation evidence. Speculative prefetch/prerender requests do not obtain this cookie-auth exception.
+
+State-changing requests without origin evidence are rejected. HTTP scripts should use an owner API token, and applications that deliberately suppress Origin/Referer cannot rely on ambient owner-cookie authentication for those requests. WebSocket origin checks and app-service authentication retain their separate rules.
+
 The router is the sole authority for the `X-OpenHost-*` headers an app receives. Anything a client sends under those names is stripped before the app sees it, so an app can trust `X-OpenHost-Is-Owner` and a provider can trust the consumer name it is handed.
 
 ## Catalog apps

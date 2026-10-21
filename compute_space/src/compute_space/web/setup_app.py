@@ -43,6 +43,7 @@ from compute_space.core.updates import is_shutdown_pending
 from compute_space.core.updates import trigger_restart
 from compute_space.db import get_db
 from compute_space.web.auth.cookies import build_session_cookie
+from compute_space.web.auth.http_cookie import protect_owner_html
 from compute_space.web.helpers.static import STATIC_DIR
 from compute_space.web.helpers.static import make_static_url
 
@@ -221,4 +222,5 @@ def create_setup_app(config: Config) -> Litestar:
         template_config=template_config,
         dependencies={"config": Provide(provide_config, sync_to_thread=False)},
         on_startup=[_install_template_globals],
+        after_request=protect_owner_html,
     )

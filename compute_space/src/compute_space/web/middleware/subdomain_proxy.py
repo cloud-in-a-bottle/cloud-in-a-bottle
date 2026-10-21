@@ -24,6 +24,8 @@ from compute_space.core.proxy_target import LocalPort
 from compute_space.db import get_db
 from compute_space.web.auth.auth import auth_required_response
 from compute_space.web.auth.auth import verify_owner_auth
+from compute_space.web.auth.http_cookie import HttpCookieConfirmationRequired
+from compute_space.web.auth.http_cookie import http_cookie_confirmation
 from compute_space.web.helpers.app_starting import app_starting_response
 from compute_space.web.helpers.proxy import proxy_http_request
 from compute_space.web.helpers.proxy import proxy_websocket_request
@@ -202,7 +204,12 @@ class SubdomainProxyMiddleware:
         try:
             verify_owner_auth(connection)
             extra_headers.append(IS_OWNER_HEADER)
-        except NotAuthorizedException:
+        except NotAuthorizedException as exc:
+            if isinstance(exc, HttpCookieConfirmationRequired):
+                confirmation_request: Request[Any, Any, Any] = Request(scope, receive, send)
+                confirmation_response = http_cookie_confirmation(confirmation_request)
+                await confirmation_response.to_asgi_response(None, request=confirmation_request)(scope, receive, send)
+                return
             # Match a missing app's response so unauthorized callers cannot discover fully private apps.
             if not app.public_paths:
                 await _send_not_found(scope, receive, send)
