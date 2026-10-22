@@ -1,9 +1,6 @@
 """Cookie provenance for HTTP domains where browsers omit Fetch Metadata."""
 
-from html import escape
 from typing import Any
-from urllib.parse import quote
-from urllib.parse import quote_from_bytes
 from urllib.parse import urlsplit
 
 from litestar import Response
@@ -114,31 +111,16 @@ def needs_http_cookie_confirmation(connection: Connection) -> bool:
 
 def http_cookie_confirmation(connection: Connection) -> Response[str]:
     """Return no private content and make no request until the user clicks."""
-    raw_path = connection.scope.get("raw_path")
-    path = (
-        quote_from_bytes(raw_path.split(b"?", 1)[0], safe="/%:@!$&'()*+,;=-._~")
-        if raw_path is not None
-        else quote(connection.url.path or "/", safe="/:@!$&'()*+,;=-._~")
-    )
-    query = quote(connection.url.query, safe="!$&'()*+,;=:/?@-._~%")
-    destination = f"http://{connection.url.netloc}{path}" + (f"?{query}" if query else "")
-    # Keep the link on the exact authority that supplied the landing. A path,
-    # query, or forwarded header must never turn it into an external redirect.
-    assert _origin(destination, referer=True) == _target(connection)
-    body = (
-        """<!doctype html><html lang="en"><meta charset="utf-8">
+    # An empty reference navigates to this document's URL, preserving the raw
+    # path and query without interpolating either into HTML. It is not '#'.
+    body = """<!doctype html><html lang="en"><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <link rel="icon" href="data:,"><title>Continue to Cloud in a Bottle</title>
 <style>body{font:16px system-ui;max-width:36rem;margin:4rem auto;padding:1rem}
 a{display:inline-block;padding:.7rem 1rem;border:1px solid}</style>
 <h1>Continue to this page</h1>
 <p>Continuing opens the requested URL with your owner access.</p>
-<a href="""
-        + '"'
-        + escape(destination, quote=True)
-        + '"'
-        + ">Continue</a></html>"
-    )
+<a href="">Continue</a></html>"""
     return Response(
         content="" if connection.scope.get("method") == "HEAD" else body,
         media_type=MediaType.HTML,

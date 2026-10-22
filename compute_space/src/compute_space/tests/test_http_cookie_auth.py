@@ -10,6 +10,7 @@ from typing import Any
 from unittest.mock import Mock
 from urllib.parse import quote
 from urllib.parse import unquote
+from urllib.parse import urljoin
 from urllib.parse import urlsplit
 
 import httpx
@@ -25,6 +26,7 @@ from litestar.enums import MediaType
 from litestar.exceptions import NotAuthorizedException
 from litestar.response.base import ASGIResponse
 from litestar.testing import TestClient
+from litestar.types import Empty
 
 import compute_space.web.app as appmod
 import compute_space.web.middleware.subdomain_proxy as proxymod
@@ -46,6 +48,7 @@ from compute_space.web.auth.http_cookie import is_same_origin_http_cookie_reques
 from compute_space.web.auth.http_cookie import needs_http_cookie_confirmation
 from compute_space.web.auth.http_cookie import protect_owner_html
 from compute_space.web.helpers.zone import ZONE_SCOPE_KEY
+from compute_space.web.routes.pages.apps import dashboard
 from compute_space.web.setup_app import create_setup_app
 
 ZONE = "testzone.local"
@@ -129,6 +132,14 @@ def without_metadata(client: TestClient[Any]) -> None:
     assert not any(name in client.headers for name in FETCH_HEADERS)
 
 
+def assert_cookie_rejected(conn: ASGIConnection[Any, Any, Any, Any]) -> None:
+    assert not is_same_origin_http_cookie_request(conn)
+    assert not needs_http_cookie_confirmation(conn)
+    with pytest.raises(NotAuthorizedException) as exc:
+        verify_owner_auth(conn)
+    assert not isinstance(exc.value, HttpCookieConfirmationRequired)
+
+
 class Document(HTMLParser):
     def __init__(self, text: str) -> None:
         super().__init__()
@@ -173,7 +184,8 @@ def assert_landing(response: httpx.Response, *, head: bool = False) -> str | Non
             links.append(attrs["href"])
     assert len(links) == 1 and isinstance(links[0], str)
     assert "url(" not in response.text.lower() and "@import" not in response.text.lower()
-    return links[0]
+    assert links[0] == ""
+    return urljoin(str(response.url), links[0])
 
 
 @pytest.mark.parametrize("method", ["GET", "HEAD", "POST"])
@@ -232,20 +244,13 @@ def test_bad_origin_is_closed_and_matching_referer_never_rescues_it(
     if same_referer:
         headers["referer"] = SELF + "/landing"
     conn = connection(cookie, headers)
-    assert not is_same_origin_http_cookie_request(conn)
-    assert not needs_http_cookie_confirmation(conn)
-    with pytest.raises(NotAuthorizedException) as exc:
-        verify_owner_auth(conn)
-    assert not isinstance(exc.value, HttpCookieConfirmationRequired)
+    assert_cookie_rejected(conn)
 
 
 @pytest.mark.parametrize("source", [SELF + "/", SELF + "?query", SELF + "?", SELF + "/page," + OTHER + "/page"])
 def test_origin_cannot_contain_path_or_query(cookie: str, source: str) -> None:
     conn = connection(cookie, {"origin": source, "referer": SELF + "/", "accept": "text/html"})
-    assert not is_same_origin_http_cookie_request(conn)
-    assert not needs_http_cookie_confirmation(conn)
-    with pytest.raises(NotAuthorizedException):
-        verify_owner_auth(conn)
+    assert_cookie_rejected(conn)
 
 
 @pytest.mark.parametrize("source", BAD_SOURCES)
@@ -261,10 +266,7 @@ def test_bad_or_foreign_referer_cannot_prove_origin(cookie: str, source: str) ->
 @pytest.mark.parametrize("referer", [OTHER + "/", "null", "", SELF + "#fragment"])
 def test_same_origin_header_does_not_override_conflicting_referer(cookie: str, referer: str) -> None:
     conn = connection(cookie, {"origin": SELF, "referer": referer, "accept": "text/html"})
-    assert not is_same_origin_http_cookie_request(conn)
-    assert not needs_http_cookie_confirmation(conn)
-    with pytest.raises(NotAuthorizedException):
-        verify_owner_auth(conn)
+    assert_cookie_rejected(conn)
 
 
 @pytest.mark.parametrize("name,value", [("origin", SELF), ("referer", SELF + "/"), ("host", APP_HOST)])
@@ -274,10 +276,7 @@ def test_duplicate_provenance_or_host_fails_closed(cookie: str, name: str, value
     if name != "host":
         headers[name] = value
     conn = connection(cookie, headers, duplicates=((name, value if duplicate == "same" else "http://evil.example"),))
-    assert not is_same_origin_http_cookie_request(conn)
-    assert not needs_http_cookie_confirmation(conn)
-    with pytest.raises(NotAuthorizedException):
-        verify_owner_auth(conn)
+    assert_cookie_rejected(conn)
 
 
 @pytest.mark.parametrize("zone", [None, "not-a-domain", Domain(name=ZONE, tls=True)])
@@ -285,18 +284,12 @@ def test_duplicate_provenance_or_host_fails_closed(cookie: str, name: str, value
 def test_fallback_requires_stashed_non_tls_domain(cookie: str, zone: Any, headers: dict[str, str]) -> None:
     conn = connection(cookie, headers, zone=zone)
     assert conn.scope["scheme"] == "http"  # TLS termination must not enable fallback.
-    assert not is_same_origin_http_cookie_request(conn)
-    assert not needs_http_cookie_confirmation(conn)
-    with pytest.raises(NotAuthorizedException):
-        verify_owner_auth(conn)
+    assert_cookie_rejected(conn)
 
 
 def test_websocket_context_never_uses_http_referer_or_confirmation(cookie: str) -> None:
     conn = connection(cookie, {"referer": SELF + "/", "accept": "text/html"}, scope_type="websocket")
-    assert not is_same_origin_http_cookie_request(conn)
-    assert not needs_http_cookie_confirmation(conn)
-    with pytest.raises(NotAuthorizedException):
-        verify_owner_auth(conn)
+    assert_cookie_rejected(conn)
 
 
 @pytest.mark.parametrize("name", FETCH_HEADERS[1:])
@@ -307,10 +300,7 @@ def test_partial_fetch_metadata_blocks_http_fallback(cookie: str, name: str, val
     if proof:
         headers["referer"] = SELF + "/"
     conn = connection(cookie, headers)
-    assert not is_same_origin_http_cookie_request(conn)
-    assert not needs_http_cookie_confirmation(conn)
-    with pytest.raises(NotAuthorizedException):
-        verify_owner_auth(conn)
+    assert_cookie_rejected(conn)
 
 
 @pytest.mark.parametrize("name", ["purpose", "sec-purpose", "x-moz"])
@@ -320,11 +310,7 @@ def test_explicit_prefetch_blocks_proof_and_confirmation(cookie: str, name: str,
     if proof:
         headers["referer"] = SELF + "/"
     conn = connection(cookie, headers)
-    assert not is_same_origin_http_cookie_request(conn)
-    assert not needs_http_cookie_confirmation(conn)
-    with pytest.raises(NotAuthorizedException) as exc:
-        verify_owner_auth(conn)
-    assert not isinstance(exc.value, HttpCookieConfirmationRequired)
+    assert_cookie_rejected(conn)
 
 
 @pytest.mark.parametrize("tls", [False, True])
@@ -337,18 +323,12 @@ def test_forwarded_headers_cannot_supply_or_change_provenance(cookie: str, tls: 
         "forwarded": f'host="other.{ZONE}";proto=http',
     }
     conn = connection(cookie, headers, zone=Domain(name=ZONE, tls=tls))
-    assert not is_same_origin_http_cookie_request(conn)
-    assert not needs_http_cookie_confirmation(conn)
-    with pytest.raises(NotAuthorizedException):
-        verify_owner_auth(conn)
+    assert_cookie_rejected(conn)
     # Even a forged HTTP hint plus a matching Origin cannot downgrade TLS.
     if tls:
         headers["origin"] = SELF
         conn = connection(cookie, headers, zone=Domain(name=ZONE, tls=True))
-        assert not is_same_origin_http_cookie_request(conn)
-        assert not needs_http_cookie_confirmation(conn)
-        with pytest.raises(NotAuthorizedException):
-            verify_owner_auth(conn)
+        assert_cookie_rejected(conn)
 
 
 def guarded_app(calls: list[str], *, alternative: bool = False) -> Litestar:
@@ -533,6 +513,14 @@ def full_app(config: Config, monkeypatch: pytest.MonkeyPatch) -> Any:
     # exception handling, templates, and response hooks are all production code.
     monkeypatch.setattr(appmod, "_full_app_bootstrap", lambda _config: None)
     monkeypatch.setattr(appmod.atexit, "register", Mock())
+    # Earlier dashboard tests cache conversion without this app's hook on the
+    # shared handler. Resolve a fresh converter for this independent test app.
+    for route in appmod.pages_apps_routes.routes:
+        for handler in route.route_handlers:
+            if handler.fn is dashboard.fn:
+                monkeypatch.setattr(
+                    handler, "_response_handler_mapping", {"default_handler": Empty, "response_type_handler": Empty}
+                )
     return appmod.create_app(config, Mock(), Mock())
 
 
@@ -604,7 +592,9 @@ def test_outer_middleware_confirms_before_backend_startup_or_public_path(
         assert response.headers["content-type"].startswith("text/html")
         assert response.headers["referrer-policy"] == "same-origin"
         assert response.headers["cache-control"] == "no-store"
-        assert "http://testzone.local:8080" in response.text
+        assert [attrs["href"] for tag, attrs in Document(response.text).elements if tag == "base"] == [
+            f"http://{ZONE}:8080/"
+        ]
         starting.assert_called_once()
         assert backend == []
 
@@ -753,15 +743,18 @@ def test_confirmation_link_is_absolute_escaped_and_preserves_target(
     result = http_cookie_confirmation(conn)
     # Assert the actual rendered HTML as well as the decoded link, to catch
     # attribute injection and accidental external resources/automatic actions.
-    response = httpx.Response(200, text=result.content, headers={**result.headers, "content-type": "text/html"})
+    response = httpx.Response(
+        200,
+        text=result.content,
+        headers={**result.headers, "content-type": "text/html"},
+        request=httpx.Request("GET", SELF + ":8080" + expected_path + "?" + expected_query),
+    )
     destination = assert_landing(response)
     assert destination == SELF + ":8080" + expected_path + "?" + expected_query
     parsed = urlsplit(destination)
     assert (parsed.scheme, parsed.hostname, parsed.port) == ("http", APP_HOST, 8080)
     assert parsed.fragment == ""
-    if "&" in query:
-        assert "&amp;" in response.text
-    assert 'href="http://' in response.text
+    assert 'href=""' in response.text
     assert '"<tag>' not in response.text
 
 
@@ -770,8 +763,4 @@ def test_invalid_target_never_qualifies_for_confirmation_or_reaches_assertion(co
     # An empty Host must not acquire cookie provenance from Litestar's fallback
     # to scope['server']; qualification requires the browser's actual authority.
     conn = connection(cookie, {"accept": "text/html"}, host=host)
-    assert not is_same_origin_http_cookie_request(conn)
-    assert not needs_http_cookie_confirmation(conn)
-    with pytest.raises(NotAuthorizedException) as exc:
-        verify_owner_auth(conn)
-    assert not isinstance(exc.value, HttpCookieConfirmationRequired)
+    assert_cookie_rejected(conn)
