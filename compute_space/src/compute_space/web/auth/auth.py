@@ -28,6 +28,9 @@ from compute_space.core.auth.auth import validate_session_token
 from compute_space.core.domains import Domain
 from compute_space.core.domains import host_with_request_port
 from compute_space.db import get_db
+from compute_space.web.auth.http_cookie import HttpCookieConfirmationRequired
+from compute_space.web.auth.http_cookie import is_same_origin_http_cookie_request
+from compute_space.web.auth.http_cookie import needs_http_cookie_confirmation
 from compute_space.web.helpers.zone import zone_for_request
 
 AnyConnection = ASGIConnection[Any, Any, Any, Any]
@@ -68,8 +71,11 @@ def get_connection_origin(connection: AnyConnection) -> str | None:
     raw = connection.headers.get("Origin")
     if raw is None:
         return None
-    parsed = urlparse(raw)
-    host, port = parsed.hostname, parsed.port
+    try:
+        parsed = urlparse(raw)
+        host, port = parsed.hostname, parsed.port
+    except ValueError:
+        return _OPAQUE_ORIGIN_TOKEN
     if not host:
         # present but opaque/unparseable (e.g. "null"): return a non-matching token, not None.
         return raw.strip().lower() or _OPAQUE_ORIGIN_TOKEN
@@ -91,6 +97,8 @@ def _is_safe_for_cookie_auth_http(connection: Request[Any, Any, Any]) -> bool:
     navigations.
     """
     site = connection.headers.get("Sec-Fetch-Site")
+    if site is None:
+        return is_same_origin_http_cookie_request(connection)
     if site in {"same-origin", "none"}:
         return True
     if (
@@ -169,6 +177,8 @@ def verify_owner_auth(connection: AnyConnection) -> None:
             if token := _get_bearer_token_if_set(connection):
                 if validate_api_token(token, db) is not None:
                     return
+            if needs_http_cookie_confirmation(connection):
+                raise HttpCookieConfirmationRequired(detail="Same-origin navigation required for HTTP cookie access")
             raise NotAuthorizedException(detail="cookie authentication is only valid for safe-origin requests")
         return
     if isinstance(accessor, AuthenticatedAPIKey):
@@ -225,12 +235,20 @@ def require_app_auth(connection: AnyConnection, _route_handler: BaseRouteHandler
 
 def require_owner_or_app_auth(connection: AnyConnection, _route_handler: BaseRouteHandler) -> None:
     """Guard that passes if the caller is either an owner (user/API key) or an app."""
+    confirmation = None
     try:
         verify_owner_auth(connection)
         return
+    except HttpCookieConfirmationRequired as exc:
+        confirmation = exc
     except NotAuthorizedException:
         pass
-    verify_app_auth(connection)
+    try:
+        verify_app_auth(connection)
+    except NotAuthorizedException:
+        if confirmation is not None:
+            raise confirmation from None
+        raise
 
 
 def build_login_url(zone: Domain, netloc: str, path: str, query: str) -> str:
