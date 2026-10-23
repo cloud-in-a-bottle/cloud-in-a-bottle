@@ -24,6 +24,7 @@ from compute_space.core.proxy_target import LocalPort
 from compute_space.db import get_db
 from compute_space.web.auth.auth import auth_required_response
 from compute_space.web.auth.auth import verify_owner_auth
+from compute_space.web.auth.confirm_navigation import NavigationConfirmationRequired
 from compute_space.web.helpers.app_starting import app_starting_response
 from compute_space.web.helpers.proxy import proxy_http_request
 from compute_space.web.helpers.proxy import proxy_websocket_request
@@ -202,13 +203,15 @@ class SubdomainProxyMiddleware:
         try:
             verify_owner_auth(connection)
             extra_headers.append(IS_OWNER_HEADER)
-        except NotAuthorizedException:
-            # Match a missing app's response so unauthorized callers cannot discover fully private apps.
-            if not app.public_paths:
-                await _send_not_found(scope, receive, send)
-                return
+        except NotAuthorizedException as exc:
+            # Public paths are served anonymously, even to an owner whose cookie was refused.
             raw_path = scope.get("raw_path")
-            if raw_path is None or not is_public_request_path(app, raw_path):
+            if not app.public_paths or raw_path is None or not is_public_request_path(app, raw_path):
+                # Match a missing app's response so unauthorized callers cannot discover fully private apps.
+                # A Continue page is only offered on a valid owner cookie, so it reveals nothing.
+                if not app.public_paths and not isinstance(exc, NavigationConfirmationRequired):
+                    await _send_not_found(scope, receive, send)
+                    return
                 # We're outer ASGI middleware — a raised NotAuthorizedException
                 # wouldn't reach Litestar's exception handlers, so produce the
                 # equivalent response ourselves.  HTTP: the same response the
@@ -216,7 +219,7 @@ class SubdomainProxyMiddleware:
                 # Response-to-ASGI machinery.  WS: refuse the handshake.
                 if scope["type"] == ScopeType.HTTP:
                     request: Request[Any, Any, Any] = Request(scope, receive, send)
-                    response: Response[Any] = auth_required_response(request)
+                    response: Response[Any] = auth_required_response(request, exc)
                     await response.to_asgi_response(None, request=request)(scope, receive, send)
                 else:
                     await send(

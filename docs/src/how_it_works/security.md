@@ -26,6 +26,12 @@ Three credentials authenticate as you, all documented in [Overview](./overview.m
 
 Owner sessions are refused on cross-origin requests, so JavaScript running in one app cannot make owner-authenticated calls to the router or to another app on your behalf.
 
+### Plain-HTTP domains
+
+On HTTPS this check uses the browser's Fetch Metadata headers, which browsers don't send to plain-HTTP sites such as a LAN address or a `.local` name. There, the session is accepted only when the `Origin` or `Referer` header shows the request came from the same app or router page.
+
+A request with neither header, such as a typed URL, a bookmark, or a link from another app, gets a **Continue** page instead. It contains no private data, can't be embedded in another page, and doesn't reach the router route or app until you click through. This stops another app from showing your pages in a hidden frame and tricking you into clicking their buttons. Scripts talking to a plain-HTTP instance should use an API token.
+
 The router is the sole authority for the `X-OpenHost-*` headers an app receives. Anything a client sends under those names is stripped before the app sees it, so an app can trust `X-OpenHost-Is-Owner` and a provider can trust the consumer name it is handed.
 
 ## Catalog apps

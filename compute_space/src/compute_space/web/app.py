@@ -176,7 +176,7 @@ def _auth_required_handler(request: Request[Any, Any, Any], exc: NotAuthorizedEx
             content["extra"] = exc.extra
         return Response(content=content, status_code=401)
 
-    return auth_required_response(request)
+    return auth_required_response(request, exc)
 
 
 def _log_unhandled_exception(request: Request[Any, Any, Any], exc: Exception) -> Response[Any]:
