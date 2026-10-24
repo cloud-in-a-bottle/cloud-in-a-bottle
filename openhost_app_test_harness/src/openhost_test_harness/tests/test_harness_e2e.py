@@ -92,7 +92,19 @@ class TestHarness:
         assert stack.manifest.name == "echo-provider"
         assert stack.manifest.app_archive
         assert stack.owner_username == "owner"
-        assert stack.url.startswith(f"http://{stack.manifest.name}.{stack.zone_domain.split(':')[0]}")
+        assert stack.zone_domain == "harness.localhost"
+        assert stack.url.startswith(f"http://{stack.manifest.name}.{stack.zone_domain}:")
+
+    def test_app_sees_portless_zone_domain(self, stack: OpenhostStack) -> None:
+        """Real zones never have a port in their domain, so apps building identifiers from it must not see one."""
+        out = subprocess.run(
+            ["podman", "exec", stack.container_name, "printenv", "OPENHOST_ZONE_DOMAIN"],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        assert out.stdout.strip() == "harness.localhost"
 
     def test_data_dirs_and_container_name(self, stack: OpenhostStack) -> None:
         """The host data dirs are the ones mounted into the container, which also has the archive tier."""

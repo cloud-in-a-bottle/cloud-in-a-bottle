@@ -391,7 +391,7 @@ class OpenhostStack:
         """The zone's primary domain, as apps see it in ``OPENHOST_ZONE_DOMAIN``."""
         with contextlib.closing(sqlite3.connect(self._local_stack.config.db_path)) as db:
             db.row_factory = sqlite3.Row
-            return primary_domain(db).name
+            return primary_domain(db).name_no_port
 
     def _local_port(self, app_name: str) -> int:
         db = sqlite3.connect(self._local_stack.config.db_path)
