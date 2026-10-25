@@ -308,11 +308,6 @@ h2.section-title {
   border-color: var(--interactive-accent);
 }
 
-.btn--success {
-  background: var(--interactive-accent);
-  border-color: var(--interactive-accent);
-}
-
 .btn--danger,
 .btn-danger {
   background: var(--bg-status-negative);
