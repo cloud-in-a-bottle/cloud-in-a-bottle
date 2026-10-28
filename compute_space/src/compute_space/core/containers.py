@@ -572,6 +572,32 @@ def container_image_storage_bytes() -> tuple[int | None, int | None]:
         return None, None
 
 
+def _podman_container_ids(*extra_args: str) -> set[str]:
+    cmd = ["podman", "ps", "--all", "--quiet", "--no-trunc", *extra_args]
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+    if result.returncode != 0:
+        raise RuntimeError((result.stdout + result.stderr).strip() or "podman ps failed")
+    return set(result.stdout.split())
+
+
+def _remove_build_containers() -> None:
+    """Remove buildah working containers left behind by interrupted builds.
+
+    ``podman build`` only removes its per-step working containers when it exits cleanly. Ones left by a killed
+    build are listed only by ``podman ps --external``, are never cleaned up, and pin their images and writable
+    layers, so ``podman image prune`` can neither remove those images nor reclaim the space. A build that is
+    running right now also has such containers, so it fails and must be retried.
+    """
+    build_container_ids = _podman_container_ids("--external") - _podman_container_ids()
+    if not build_container_ids:
+        return
+    logger.info("Removing {} leftover build containers", len(build_container_ids))
+    cmd = ["podman", "rm", "--force", *sorted(build_container_ids)]
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+    if result.returncode != 0:
+        raise RuntimeError((result.stdout + result.stderr).strip() or "podman rm failed")
+
+
 def drop_docker_build_cache() -> str:
     """Reclaim container-engine disk space via ``podman image prune``.
 
@@ -580,7 +606,11 @@ def drop_docker_build_cache() -> str:
     Does not reclaim ``RUN --mount=type=cache`` build mounts.  The
     function and HTTP endpoint path retain "docker" in their names
     for external API compatibility.
+
+    First removes leftover build containers (see ``_remove_build_containers``),
+    which would otherwise keep their images and layers out of reach of the prune.
     """
+    _remove_build_containers()
     cmd = ["podman", "image", "prune", "--all", "--force"]
     logger.info("Dropping container build cache: {}", " ".join(cmd))
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
