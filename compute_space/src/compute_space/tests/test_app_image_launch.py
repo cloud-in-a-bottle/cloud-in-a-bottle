@@ -364,3 +364,32 @@ def test_start_build_failure_is_not_retried(
 
     build.assert_called_once()
     run.assert_not_called()
+
+
+@pytest.mark.parametrize("healthy", [False, True])
+def test_an_app_requiring_the_archive_never_starts_on_an_unmounted_archive(
+    cfg: Any, app_db: tuple[sqlite3.Connection, str, Path], healthy: bool
+) -> None:
+    """While the archive is down its mountpoint is a plain local directory: the app's archive writes would land
+    on local disk, hidden under the archive once it mounts again."""
+    db, app_id, _ = app_db
+    manifest = parse_manifest_from_string(MANIFEST_TEXT + "\n[data]\napp_archive = true\n")
+    with (
+        mock.patch.object(apps_mod.archive_backend, "is_archive_dir_healthy", return_value=healthy),
+        mock.patch.object(apps_mod, "make_data_dirs_and_env_vars", return_value={}) as prepare,
+        mock.patch.object(apps_mod, "run_container", return_value="container-123") as run,
+        mock.patch.object(apps_mod, "wait_for_ready", return_value=True),
+    ):
+        if healthy:
+            run_app_image(app_id, "existing:image", manifest, db, cfg)
+        else:
+            with pytest.raises(RuntimeError, match="archive tier is not mounted"):
+                run_app_image(app_id, "existing:image", manifest, db, cfg)
+    row = db.execute("SELECT status, error_message FROM apps WHERE app_id = ?", (app_id,)).fetchone()
+    if healthy:
+        run.assert_called_once()
+        assert row["status"] == "running"
+    else:
+        prepare.assert_not_called()
+        run.assert_not_called()
+        assert row["status"] == "error" and "archive tier is not mounted" in row["error_message"]

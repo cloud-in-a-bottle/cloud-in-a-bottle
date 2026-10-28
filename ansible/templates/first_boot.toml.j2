@@ -17,11 +17,16 @@ client_secret = "{{ imbue_identity_client_secret }}"
 {% endif %}
 {% if archive_backend_s3_bucket is defined and archive_backend_s3_bucket %}
 # Preconfigured S3 archive backend (e.g. managed storage), seeded onto a pristine instance on first
-# boot and formatted on the first boot after the claim. to_json quotes each value as a TOML string.
+# boot and brought up on the first boot after the claim: restored from its newest metadata backup in the
+# bucket (volume_name, when a provisioner reuses one volume per account), else formatted. to_json quotes
+# each value as a TOML string.
 [archive_backend]
 s3_bucket = {{ archive_backend_s3_bucket | to_json }}
 s3_endpoint = {{ archive_backend_s3_endpoint | to_json }}
 s3_region = {{ archive_backend_s3_region | default('auto', true) | to_json }}
 s3_access_key_id = {{ archive_backend_s3_access_key_id | to_json }}
 s3_secret_access_key = {{ archive_backend_s3_secret_access_key | to_json }}
+{% if archive_backend_volume_name is defined and archive_backend_volume_name %}
+volume_name = {{ archive_backend_volume_name | to_json }}
+{% endif %}
 {% endif %}

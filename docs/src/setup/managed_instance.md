@@ -11,7 +11,7 @@ You can always [migrate](../operation/backups.md#moving-to-another-machine) a ma
 - your own VPS with CPU, memory, local disk, a static IPv4, and bandwidth quota ([see plans](https://cloudinabottle.imbue.com/))
   - currently these are hosted in US-west - we will add more regions soon!
 - a subdomain of your choice at `bottle.cloud`, eg `johndoe.bottle.cloud`, and a TLS certificate covering this subdomain
-- an auto-configured S3 archive backend (Cloudflare R2), billed at cost after a free monthly amount
+- an auto-configured S3 archive backend (Cloudflare R2), billed at cost after a free monthly amount. It belongs to your account: if you delete your instance and create another, the new one starts with your archive (losing at most the last 15 minutes of archive writes). Your instance's local data is not kept.
 - coming soon: backups
 
 ## Notes

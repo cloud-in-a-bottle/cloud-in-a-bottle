@@ -19,7 +19,7 @@ User=host
 EnvironmentFile={{ juicefs_env_file }}
 # systemd does not shell-expand $VAR in ExecStart; we use /bin/sh
 # so the env vars from EnvironmentFile are expanded correctly.
-ExecStart=/bin/sh -c '"$JUICEFS_BINARY" --no-agent mount --no-usage-report -o allow_other "$JUICEFS_META_DSN" "$JUICEFS_MOUNT_DIR"'
+ExecStart=/bin/sh -c '"$JUICEFS_BINARY" --no-agent mount --no-usage-report --backup-meta 15m -o allow_other "$JUICEFS_META_DSN" "$JUICEFS_MOUNT_DIR"'
 # -f: force/lazy unmount so a busy mount (e.g. a still-attached app bind
 # mount) still detaches promptly instead of blocking until the FUSE process
 # force-exits.  compute_space quiesces archive-using apps before restarting

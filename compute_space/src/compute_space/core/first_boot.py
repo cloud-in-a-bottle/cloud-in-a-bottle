@@ -37,6 +37,9 @@ class FirstBootArchiveBackend:
     s3_region: str | None
     s3_access_key_id: str
     s3_secret_access_key: str = attr.ib(repr=False)
+    # Set by a provisioner that gives each of an account's instances the same volume, so a new instance restores
+    # the previous one's archive (see archive_backend.seed_preconfigured_s3).
+    volume_name: str | None = None
 
 
 def _parse_archive_backend(raw: object) -> FirstBootArchiveBackend | None:
@@ -46,6 +49,9 @@ def _parse_archive_backend(raw: object) -> FirstBootArchiveBackend | None:
         return None
     if not isinstance(raw, dict):
         raise ValueError("first_boot.toml: [archive_backend] must be a table")
+    volume_name = str(raw["volume_name"]) if raw.get("volume_name") else None
+    if volume_name is not None and not archive_backend.VOLUME_NAME_RE.fullmatch(volume_name):
+        raise ValueError("first_boot.toml: [archive_backend] volume_name is not a valid JuiceFS volume name")
     try:
         return FirstBootArchiveBackend(
             s3_bucket=str(raw["s3_bucket"]),
@@ -53,6 +59,7 @@ def _parse_archive_backend(raw: object) -> FirstBootArchiveBackend | None:
             s3_region=str(raw["s3_region"]) if raw.get("s3_region") else None,
             s3_access_key_id=str(raw["s3_access_key_id"]),
             s3_secret_access_key=str(raw["s3_secret_access_key"]),
+            volume_name=volume_name,
         )
     except KeyError as exc:
         raise ValueError(f"first_boot.toml: [archive_backend] is missing {exc.args[0]}") from None
@@ -148,6 +155,7 @@ def seed_first_boot(config: Config) -> None:
                     s3_endpoint=ab.s3_endpoint,
                     s3_access_key_id=ab.s3_access_key_id,
                     s3_secret_access_key=ab.s3_secret_access_key,
+                    volume_name=ab.volume_name,
                 )
 
         # Migrate the claim token into the settings store.  Relevant only pre-setup, so gate on

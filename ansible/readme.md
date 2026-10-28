@@ -62,7 +62,7 @@ version precedence: `openhost_branch` > `openhost_commit` > default `main`.
 
 ### preconfigured S3 archive backend (optional, e.g. managed storage)
 
-When `archive_backend_s3_bucket` is set, `first_boot.toml` carries an `[archive_backend]` table. A fresh instance's archive is then pointed at that bucket on first boot and formatted there on the first boot after the claim, instead of on local disk. An instance that already formatted its archive keeps it. Pass these as an extra-vars file (`-e @vars.json`), never on the command line.
+When `archive_backend_s3_bucket` is set, `first_boot.toml` carries an `[archive_backend]` table. A fresh instance's archive is then pointed at that bucket on first boot and brought up there on the first boot after the claim, instead of on local disk: restored from the volume's newest metadata backup if the bucket holds one, otherwise formatted. An instance that already formatted its archive keeps it. Pass these as an extra-vars file (`-e @vars.json`), never on the command line.
 
 | variable | purpose |
 |---|---|
@@ -71,6 +71,7 @@ When `archive_backend_s3_bucket` is set, `first_boot.toml` carries an `[archive_
 | `archive_backend_s3_region` | region (optional, default `auto`) |
 | `archive_backend_s3_access_key_id` | access key ID, scoped to the bucket |
 | `archive_backend_s3_secret_access_key` | secret access key |
+| `archive_backend_volume_name` | JuiceFS volume name (optional). Set it when the provisioner hands the same bucket to an account's next instance: that instance then restores the archive from the volume's newest metadata backup instead of starting empty, and a volume left with data but no backup is cleared. Without it the volume is per-zone, and existing data is never touched |
 
 ### cert_api broker (opt-in, alternative to the bring-your-own ACME key)
 

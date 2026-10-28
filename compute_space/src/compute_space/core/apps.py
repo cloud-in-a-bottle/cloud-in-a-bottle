@@ -510,6 +510,13 @@ def run_app_image(
     container_id: str | None = None
     launch_started = False
     try:
+        if manifest.app_archive and not archive_backend.is_archive_dir_healthy(config, db):
+            # The mountpoint is a plain local directory while the archive is down: starting the app would put its
+            # archive writes on local disk, hidden under the archive once it mounts again.
+            raise RuntimeError(
+                "The archive tier is not mounted, so this app (which requires app_archive) was not started. "
+                "See the dashboard's Archive backend panel."
+            )
         if env_vars is None:
             env_vars = make_data_dirs_and_env_vars(
                 app_id=app_id,

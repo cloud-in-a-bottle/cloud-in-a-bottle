@@ -31,14 +31,17 @@ if we ever want it.
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import re
+import secrets
 import shutil
 import sqlite3
 import subprocess
 import time
 import tomllib
 from collections.abc import Callable
+from contextlib import closing
 from typing import Any
 
 import attr
@@ -46,6 +49,7 @@ import boto3
 import botocore.exceptions  # noqa: F401  -- imported for ``except`` matching downstream
 
 from compute_space.config import Config
+from compute_space.core import settings_store
 from compute_space.core.domains import primary_domain_or_none
 from compute_space.core.logging import logger
 from compute_space.core.pinned_binary import get_pinned_binary
@@ -74,6 +78,12 @@ DEFAULT_VOLUME_NAME = "openhost"
 # JuiceFS volume names must match cmd/format.go validName: [a-z0-9-], 3..63 chars,
 # not starting/ending with '-'.
 _VOLUME_NAME_MAX = 63
+VOLUME_NAME_RE = re.compile(r"[a-z0-9][a-z0-9-]{1,61}[a-z0-9]")
+
+# Settings key: the seeded volume was named by the provisioner, which hands each new instance of an account the
+# same bucket and volume (managed storage).  Such a volume is restored from its newest metadata backup, and one
+# that can't be restored (no backup yet) is cleared rather than set aside, so the next instance still finds it.
+_ADOPT_VOLUME_KEY = "archive_backend_adopt_volume"
 
 
 def default_volume_name_for_zone(db: sqlite3.Connection) -> str:
@@ -658,15 +668,24 @@ def seed_preconfigured_s3(
     s3_endpoint: str,
     s3_access_key_id: str,
     s3_secret_access_key: str,
+    volume_name: str | None = None,
 ) -> None:
     """Point a fresh instance's archive at a preconfigured S3 bucket (first boot, before the claim).
 
-    Only while no JuiceFS volume exists yet, so this never strands local data.  The volume is formatted on
-    the bucket by :func:`attach_on_startup` on the first full boot."""
+    Only while no JuiceFS volume exists yet, so this never strands local data.  :func:`attach_on_startup` brings
+    the volume up on the first full boot: restored from its newest metadata backup if the bucket holds one (a
+    previous instance's archive), otherwise formatted.  ``volume_name`` is set by a provisioner that reuses one
+    volume across an account's instances; without it the volume is per-zone."""
     if os.path.exists(_juicefs_meta_db(config)):
         logger.warning("Not seeding the preconfigured S3 archive backend: a JuiceFS volume already exists")
         return
-    volume = default_volume_name_for_zone(db)
+    if volume_name is not None and not VOLUME_NAME_RE.fullmatch(volume_name):
+        raise ValueError("invalid preconfigured archive volume name")
+    volume = volume_name or default_volume_name_for_zone(db)
+    if volume_name is not None:
+        settings_store.set_setting(db, _ADOPT_VOLUME_KEY, "1")
+    else:
+        settings_store.delete_setting(db, _ADOPT_VOLUME_KEY)
     db.execute(
         "UPDATE archive_backend SET backend='s3', s3_bucket=?, s3_region=?, s3_endpoint=?, s3_prefix=?, "
         "s3_access_key_id=?, s3_secret_access_key=?, juicefs_volume_name=? WHERE id = 1",
@@ -736,23 +755,154 @@ def attach_on_startup(config: Config, db: sqlite3.Connection) -> None:
                 "the archive backend from the dashboard."
             )
         if not _local_volume_formatted(config):
-            # First boot of a backend preconfigured by seed_preconfigured_s3.  JuiceFS refuses to format
-            # over a bucket prefix that already holds data, so this cannot clobber an existing archive.
-            assert state.s3_bucket is not None
-            format_s3_volume(
-                config,
-                s3_bucket=state.s3_bucket,
-                s3_region=state.s3_region,
-                s3_endpoint=state.s3_endpoint,
-                s3_access_key_id=state.s3_access_key_id,
-                s3_secret_access_key=state.s3_secret_access_key,
-                juicefs_volume_name=state.juicefs_volume_name,
-            )
+            # First full boot of a backend seeded by seed_preconfigured_s3 (or a later boot retrying it).
+            _bring_up_seeded_s3_volume(config, db, state)
         mount(config, state.s3_access_key_id, state.s3_secret_access_key)
         _set_state_message(db, None)
     except Exception as exc:
         logger.exception("Failed to attach archive backend on startup")
         _set_state_message(db, f"Failed to attach archive backend: {exc}")
+
+
+def _bring_up_seeded_s3_volume(config: Config, db: sqlite3.Connection, state: BackendState) -> None:
+    """Create the local metadata for a seeded S3 volume: restore it from the newest metadata backup in the
+    bucket if there is one, otherwise format the volume.
+
+    JuiceFS writes those backups (``<volume>/meta/dump-*.json.gz``) itself, hourly by default and every 15
+    minutes with our mount unit, so restoring loses at most the writes since the last one.  A volume that holds
+    data but no backup can't be read without its lost metadata: an adopted volume (see ``_ADOPT_VOLUME_KEY``)
+    is cleared and formatted, any other is left alone and a fresh volume name is used instead.  Listing errors
+    raise, so a transient S3 failure is retried next boot rather than mistaken for an empty bucket.
+    """
+    assert state.s3_bucket is not None
+    assert state.s3_access_key_id is not None and state.s3_secret_access_key is not None
+    client = _s3_client(state.s3_region, state.s3_endpoint, state.s3_access_key_id, state.s3_secret_access_key)
+    volume = state.juicefs_volume_name
+    dump_key = _newest_meta_dump_key(client, state.s3_bucket, volume)
+    if dump_key is not None:
+        _restore_volume_from_dump(config, client, state, dump_key)
+        return
+    if _prefix_has_objects(client, state.s3_bucket, f"{volume}/"):
+        if settings_store.get_setting(db, _ADOPT_VOLUME_KEY) == "1":
+            logger.warning(
+                "Archive volume {} holds data but no metadata backup, so it can't be restored; clearing it",
+                volume,
+            )
+            _delete_prefix(client, state.s3_bucket, f"{volume}/")
+        else:
+            volume = _fresh_volume_name(volume)
+            logger.warning(
+                "Archive volume {} holds data but no metadata backup; leaving it and using {} instead",
+                state.juicefs_volume_name,
+                volume,
+            )
+            db.execute(
+                "UPDATE archive_backend SET juicefs_volume_name = ?, s3_prefix = ? WHERE id = 1", (volume, volume)
+            )
+            db.commit()
+    format_s3_volume(
+        config,
+        s3_bucket=state.s3_bucket,
+        s3_region=state.s3_region,
+        s3_endpoint=state.s3_endpoint,
+        s3_access_key_id=state.s3_access_key_id,
+        s3_secret_access_key=state.s3_secret_access_key,
+        juicefs_volume_name=volume,
+    )
+
+
+def _fresh_volume_name(volume: str) -> str:
+    suffix = secrets.token_hex(4)
+    return f"{volume[: _VOLUME_NAME_MAX - len(suffix) - 1].rstrip('-')}-{suffix}"
+
+
+def _newest_meta_dump_key(client: Any, bucket: str, volume: str) -> str | None:
+    """The newest JuiceFS metadata backup of ``volume``, or None.  Names sort by time (dump-YYYY-MM-DD-HHMMSS)."""
+    newest: str | None = None
+    for page in client.get_paginator("list_objects_v2").paginate(Bucket=bucket, Prefix=f"{volume}/meta/"):
+        for obj in page.get("Contents") or []:
+            key = obj.get("Key", "")
+            name = key.rsplit("/", 1)[-1]
+            if name.startswith("dump-") and name.endswith(".json.gz") and (newest is None or key > newest):
+                newest = key
+    return newest
+
+
+def _prefix_has_objects(client: Any, bucket: str, prefix: str) -> bool:
+    resp = client.list_objects_v2(Bucket=bucket, Prefix=prefix, MaxKeys=1)
+    return bool(resp.get("Contents"))
+
+
+def _delete_prefix(client: Any, bucket: str, prefix: str) -> None:
+    for page in client.get_paginator("list_objects_v2").paginate(Bucket=bucket, Prefix=prefix):
+        keys = [{"Key": obj["Key"]} for obj in page.get("Contents") or []]
+        if keys:
+            result = client.delete_objects(Bucket=bucket, Delete={"Objects": keys, "Quiet": True})
+            if result.get("Errors"):
+                raise RuntimeError(f"could not clear {len(result['Errors'])} object(s) under {prefix}")
+
+
+def _restore_volume_from_dump(config: Config, client: Any, state: BackendState, dump_key: str) -> None:
+    """``juicefs load`` a metadata backup into a scratch DB, give it this instance's credentials, and only then
+    move it into place, so an interrupted restore never leaves a half-loaded meta DB that looks formatted."""
+    assert state.s3_bucket is not None
+    assert state.s3_access_key_id is not None and state.s3_secret_access_key is not None
+    state_dir = _juicefs_state_dir(config)
+    os.makedirs(state_dir, exist_ok=True)
+    dump_path = os.path.join(state_dir, "restore-dump.json.gz")
+    scratch = os.path.join(state_dir, "restore-meta.db")
+    for path in (dump_path, scratch, scratch + "-wal", scratch + "-shm"):
+        if os.path.exists(path):
+            os.remove(path)
+    logger.info("Restoring archive volume {} from {}", state.juicefs_volume_name, dump_key)
+    try:
+        client.download_file(state.s3_bucket, dump_key, dump_path)
+        os.chmod(dump_path, 0o600)
+        _run_juicefs(config, ["load", f"sqlite3://{scratch}", dump_path], what="load", timeout=60 * 60)
+        # Backups omit the object storage secret; ``config`` takes it as a literal (see _reconfigure_volume_storage).
+        _run_juicefs(
+            config,
+            [
+                "config",
+                f"sqlite3://{scratch}",
+                "--access-key",
+                state.s3_access_key_id,
+                "--secret-key",
+                state.s3_secret_access_key,
+                "--yes",
+                "--force",
+            ],
+            what="config",
+            timeout=120,
+            redact=state.s3_secret_access_key,
+        )
+        with closing(sqlite3.connect(scratch)) as conn:
+            row = conn.execute("SELECT value FROM jfs_setting WHERE name = 'format'").fetchone()
+            conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        name = json.loads(row[0]).get("Name") if row else None
+        if name != state.juicefs_volume_name:
+            raise RuntimeError(f"metadata backup {dump_key} is for volume {name!r}, not {state.juicefs_volume_name!r}")
+        meta_db = _juicefs_meta_db(config)
+        for path in (meta_db + "-wal", meta_db + "-shm"):
+            if os.path.exists(path):
+                os.remove(path)
+        os.replace(scratch, meta_db)
+    finally:
+        for path in (dump_path, scratch, scratch + "-wal", scratch + "-shm"):
+            if os.path.exists(path):
+                os.remove(path)
+    logger.info("Restored archive volume {} from {}", state.juicefs_volume_name, dump_key)
+
+
+def _run_juicefs(config: Config, args: list[str], *, what: str, timeout: int, redact: str | None = None) -> None:
+    result = subprocess.run(
+        [_juicefs_binary(config), "--no-agent", *args], capture_output=True, text=True, timeout=timeout
+    )
+    if result.returncode != 0:
+        detail = (result.stderr or "").strip() or (result.stdout or "").strip() or f"exit {result.returncode}"
+        message = f"juicefs {what} failed: {detail}"
+        # The message reaches the dashboard (state_message); keep a secret argument out of it.
+        raise RuntimeError(message.replace(redact, "***") if redact else message)
 
 
 def _local_volume_formatted(config: Config) -> bool:
