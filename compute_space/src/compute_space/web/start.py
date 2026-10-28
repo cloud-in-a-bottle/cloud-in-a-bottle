@@ -40,6 +40,8 @@ from compute_space.core.mdns.responder import MdnsResponder
 from compute_space.core.operation_locks import wait_for_operations
 from compute_space.core.pinned_binary import get_pinned_binary
 from compute_space.core.pinned_binary import install_pinned_binary
+from compute_space.core.platform_wake.client import WakeApi
+from compute_space.core.platform_wake.schedule import start_platform_wake_task
 from compute_space.core.system_agent.client import system_agent_stop_updater_sync
 from compute_space.core.system_agent.progress import mark_boot_complete
 from compute_space.core.terminal import cleanup_all as cleanup_terminal_sessions
@@ -282,6 +284,9 @@ async def _main() -> None:
             os._exit(0)
 
     background_tasks.append(start_auto_update_task())
+    wake_api = WakeApi.load()
+    if wake_api is not None:
+        background_tasks.append(start_platform_wake_task(wake_api))
 
     # Main web server
     app = create_app(config, dns_provider, mdns_responder)

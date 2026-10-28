@@ -12,6 +12,7 @@ from compute_space.core.auto_update.config import AutoUpdateOutcome
 from compute_space.core.auto_update.config import read_auto_update_config
 from compute_space.core.auto_update.config import record_last_run
 from compute_space.core.logging import logger
+from compute_space.core.platform_wake.client import hold_awake
 from compute_space.core.system_agent.client import ApplyLaunch
 from compute_space.core.system_agent.client import SystemAgentError
 from compute_space.core.system_agent.client import apply_lock
@@ -24,6 +25,8 @@ from openhost_system_agent.protocol import UpdateChannel
 
 # Pause after an unexpected error before trying again, so a persistent one doesn't spin.
 ERROR_BACKOFF = timedelta(minutes=5)
+# Asked of a hosting platform that sleeps idle instances, so it doesn't put this one to sleep mid-update.
+UPDATE_HOLD = timedelta(minutes=30)
 
 # Should be set when the schedule changes, so the sleeping task picks up the new time.
 _reschedule = asyncio.Event()
@@ -86,6 +89,7 @@ async def run_auto_update() -> None:
     # Held for the rest of this process's life once the walk is launched: the apply stops openhost moments later, so
     # releasing early would only let a Settings click race the walk. system_agent_apply releases it if no walk starts.
     await apply_lock.acquire()
+    await hold_awake(UPDATE_HOLD)
     launch = await system_agent_apply()
     if launch == ApplyLaunch.ALREADY_RUNNING:
         _record(AutoUpdateLastRun(at=now, outcome=AutoUpdateOutcome.ALREADY_RUNNING))
