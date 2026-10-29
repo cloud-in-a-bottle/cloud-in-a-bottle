@@ -606,9 +606,6 @@ def drop_docker_build_cache() -> str:
     Does not reclaim ``RUN --mount=type=cache`` build mounts.  The
     function and HTTP endpoint path retain "docker" in their names
     for external API compatibility.
-
-    First removes leftover build containers (see ``_remove_build_containers``),
-    which would otherwise keep their images and layers out of reach of the prune.
     """
     _remove_build_containers()
     cmd = ["podman", "image", "prune", "--all", "--force"]

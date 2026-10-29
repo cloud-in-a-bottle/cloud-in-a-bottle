@@ -49,9 +49,6 @@ _BUILD_CONTAINER_2 = "c" * 64
 
 
 class _FakePodman:
-    """Records podman invocations and answers ``ps``/``rm``/``image prune`` like a podman with leftover build
-    containers."""
-
     def __init__(
         self,
         build_containers: list[str],
@@ -98,7 +95,6 @@ def test_drop_docker_build_cache_runs_podman_image_prune(
     output = drop_docker_build_cache()
 
     assert output == "Total reclaimed space: 12.3MB"
-    # With no leftover build containers nothing is removed before the prune.
     assert [c for c in podman.cmds if c[:2] == ["podman", "rm"]] == []
     assert podman.cmds[-1] == ["podman", "image", "prune", "--all", "--force"]
 
@@ -112,7 +108,6 @@ def test_drop_docker_build_cache_removes_leftover_build_containers_first(
     drop_docker_build_cache()
 
     rm_cmds = [c for c in podman.cmds if c[:2] == ["podman", "rm"]]
-    # Only the containers podman lists solely under --external are removed, never app containers.
     assert rm_cmds == [["podman", "rm", "--force", _BUILD_CONTAINER_1, _BUILD_CONTAINER_2]]
     assert podman.cmds.index(rm_cmds[0]) < podman.cmds.index(["podman", "image", "prune", "--all", "--force"])
 
