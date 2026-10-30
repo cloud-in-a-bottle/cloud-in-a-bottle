@@ -1571,3 +1571,364 @@ td.col-actions .icon-btn {
     max-width: none;
   }
 }
+
+/* ── Plain look ─────────────────────────────────────────────────────────
+   The flat, system-font look the dashboard had before the sky redesign (the
+   6 July version): the browser's own blue underlined links, plain headings,
+   bordered tables, small grey buttons and a text nav. The design tokens above
+   carry most of it; these rules cover what tokens cannot reach. Each selector
+   starts with :root so it outranks the single-class rules earlier in this file. */
+
+:root .deco-clouds,
+:root .deco-grass {
+  display: none;
+}
+
+/* Banner: a plain left-aligned page title instead of the dashed pixel rule. */
+:root .banner {
+  display: block;
+  margin: 0 0 var(--space-4);
+  font-size: 32px;
+  font-weight: 700;
+  line-height: 40px;
+  text-transform: none;
+}
+
+:root .banner::before,
+:root .banner::after {
+  display: none;
+}
+
+:root .banner__text {
+  color: inherit;
+  text-align: left;
+  text-decoration: none;
+}
+
+/* Links are the browser's own: blue and underlined. Buttons that are links keep the button look. */
+:root a {
+  color: #0000ee;
+  text-decoration: underline;
+}
+
+:root a.btn {
+  color: #222222;
+  text-decoration: none;
+}
+
+:root a.btn--primary,
+:root a.btn--accent {
+  color: #3366cc;
+}
+
+/* Headings: plain h2 and h3, no rules under them. */
+:root h2,
+:root .section-label {
+  margin-top: 2em;
+  font-size: 24px;
+  font-weight: 700;
+  line-height: 28px;
+  text-transform: none;
+  opacity: 1;
+}
+
+:root h3 {
+  font-size: 18.72px;
+  line-height: 22px;
+}
+
+:root .section {
+  margin: 0;
+}
+
+:root .section--tiles {
+  margin-top: var(--space-4);
+}
+
+/* The heading carries the space above it: some pages use it with no .section around it. */
+:root .section-head {
+  margin: 2em 0 var(--space-3);
+}
+
+:root .section-head .section-label {
+  margin-top: 0;
+}
+
+:root h3.section-label {
+  font-size: 18.72px;
+  line-height: 22px;
+}
+
+:root .panel > h2:first-child {
+  margin-top: 0;
+}
+
+:root .rule {
+  display: none;
+}
+
+/* Panels lose their card, and each field is a bold label with its control stacked under it. */
+:root .panel {
+  padding: 0;
+  background: none;
+  border: 0;
+}
+
+:root .field > span,
+:root .field > label,
+:root .field__head > label {
+  font-size: 18.72px;
+  font-weight: 700;
+  line-height: 22px;
+  text-transform: none;
+  opacity: 1;
+}
+
+:root .field--check > span,
+:root .field--check > label {
+  font-size: 16px;
+  font-weight: 400;
+}
+
+/* Controls */
+:root .btn,
+:root .btn-primary,
+:root .btn-danger {
+  min-height: 0;
+  padding: 6px 14px;
+  background: #f9f9f9;
+  border-color: #cccccc;
+}
+
+:root .btn:hover {
+  background: #f0f0f0;
+}
+
+:root .btn--primary,
+:root .btn-primary,
+:root .btn--accent {
+  background: #e8f0fe;
+  border-color: #3366cc;
+  color: #3366cc;
+  text-transform: none;
+}
+
+:root .btn--primary:hover,
+:root .btn-primary:hover,
+:root .btn--accent:hover {
+  background: #d6e4fd;
+}
+
+:root .btn--danger,
+:root .btn-danger {
+  background: #ffeeee;
+  border-color: #cc0000;
+  color: #cc0000;
+}
+
+:root input[type="text"],
+:root input[type="password"],
+:root input[type="number"],
+:root select {
+  padding: 6px;
+  border: var(--border-w) solid #767676;
+  border-radius: 2px;
+}
+
+:root select {
+  padding-right: var(--space-7);
+}
+
+/* Tables: full grid, shaded plain-case header cells. */
+:root table {
+  font-size: 16px;
+}
+
+:root th,
+:root td {
+  padding: 8px 13px;
+  border: var(--border-w) solid #dddddd;
+}
+
+:root td {
+  overflow-wrap: anywhere;
+}
+
+:root th {
+  background: #f5f5f5;
+  font-weight: 700;
+  font-size: 16px;
+  text-transform: none;
+  white-space: normal;
+  opacity: 1;
+}
+
+/* Navigation: the icon links become a row of plain text links under the title, with a rule under the row.
+   The label is each link's own title attribute, so there is no text to keep in sync here. The back link
+   sits in the same row, ahead of them. */
+:root .icon-nav {
+  line-height: 24px;
+  justify-content: flex-start;
+  gap: 0;
+  margin-bottom: 0;
+  padding-bottom: var(--space-3);
+  border-bottom: var(--border-w) solid #999999;
+}
+
+:root .nav-back + .layout .icon-nav,
+:root .nav-back + .space-header .icon-nav {
+  padding-left: 7em;
+}
+
+:root .icon-btn {
+  width: auto;
+  height: auto;
+  margin-right: 1.5em;
+  padding: 0;
+  color: #0000ee;
+  font-size: 16px;
+  text-decoration: underline;
+  opacity: 1;
+}
+
+:root .icon-btn::after {
+  content: attr(title);
+}
+
+:root .icon-btn .icon {
+  display: none;
+}
+
+:root .nav-back {
+  top: calc(var(--space-8) + 40px + var(--space-4));
+  left: max(var(--layout-gutter), calc((100% - var(--layout-width)) / 2));
+  font-family: var(--font-sans);
+  font-size: 16px;
+  line-height: 24px;
+  letter-spacing: 0;
+  text-transform: none;
+  opacity: 1;
+}
+
+:root .nav-back .icon {
+  display: none;
+}
+
+/* Dashboard: the three tiles become a plain row of links, and the app list a bordered table-like list with
+   a plain Details link. */
+:root .section--tiles .section-head {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+
+:root .section--tiles .card-grid {
+  display: flex;
+  gap: 1.5em;
+  margin-top: var(--space-4);
+}
+
+:root .section--tiles .card {
+  display: block;
+  background: none;
+  border: 0;
+}
+
+:root .section--tiles .card__body {
+  display: none;
+}
+
+:root .section--tiles .card__footer {
+  padding: 0;
+}
+
+:root .section--tiles .card__footer .btn {
+  padding: 0;
+  background: none;
+  border: 0;
+  color: #0000ee;
+  font-size: 16px;
+  text-decoration: underline;
+}
+
+:root .app-list {
+  box-shadow: none;
+}
+
+:root .app-row {
+  min-height: 0;
+  padding: 8px 13px;
+}
+
+:root .app-row__name {
+  font-weight: 400;
+}
+
+:root .status-dot {
+  display: none;
+}
+
+:root .app-row__status {
+  position: static;
+  width: 6.5em;
+  height: auto;
+  margin: 0 0 0 auto;
+  clip-path: none;
+  overflow: visible;
+  white-space: normal;
+  font-size: 16px;
+}
+
+:root [data-status="running"] .app-row__status {
+  color: #006b00;
+  font-weight: 700;
+}
+
+:root [data-status="error"] .app-row__status {
+  color: #cc0000;
+  font-weight: 700;
+}
+
+:root [data-status="stopped"] .app-row__status {
+  color: #6b6b6b;
+}
+
+:root [data-status="building"] .app-row__status,
+:root [data-status="starting"] .app-row__status,
+:root [data-status="removing"] .app-row__status {
+  color: #8a5a00;
+}
+
+:root .app-row__details {
+  margin-left: var(--space-3);
+  padding-left: 0;
+  color: #0000ee;
+  font-size: 16px;
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* Login, setup and the other single-purpose pages keep a bordered card in a narrow column. */
+:root .layout--narrow .panel {
+  padding: var(--space-6);
+  background: #ffffff;
+  border: var(--border-w) solid #dddddd;
+}
+
+/* The manual has its own page template; give its header the same plain title. */
+:root .space-header h1.space-title {
+  margin: 0 0 var(--space-4);
+  font-size: 32px;
+  font-weight: 700;
+  line-height: 40px;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+:root .info-table th {
+  color: #222222;
+  font-weight: 700;
+}

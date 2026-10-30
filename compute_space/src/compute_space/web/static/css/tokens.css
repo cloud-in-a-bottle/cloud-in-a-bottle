@@ -7,38 +7,38 @@
      tint whatever surface they sit on. */
 
   /* bg */
-  --bg-surface: #fcfcfc;
+  --bg-surface: #ffffff;
   --bg-primary: #ffffff;
-  --bg-secondary: #f2f2f2;
-  --bg-sky: #eef8ff;
-  --bg-meadow: #ecffe1;
+  --bg-secondary: #f5f5f5;
+  --bg-sky: #ffffff;
+  --bg-meadow: #ffffff;
   --bg-disabled: #dadada;
 
   /* bg/status */
-  --bg-status-negative: #ffe4e4;
+  --bg-status-negative: #ffeeee;
   --bg-status-positive: #f2ffe9;
   --bg-status-warning: #fff8e6;
   --bg-status-info: #e6f2ff;
 
   /* fg */
-  --fg-primary: #121212;
-  --fg-secondary: rgb(18 18 18 / 0.6);
-  --fg-border: rgb(18 18 18 / 0.2);
+  --fg-primary: #222222;
+  --fg-secondary: #666666;
+  --fg-border: #dddddd;
   --fg-disabled: rgb(18 18 18 / 0.5);
   --fg-inverted: #ffffff;
   --fg-inverted-secondary: rgb(255 255 255 / 0.6);
 
   /* fg/status */
-  --fg-status-negative: #9f3a34;
-  --fg-status-positive: #486839;
-  --fg-status-warning: #7e5f2e;
+  --fg-status-negative: #cc0000;
+  --fg-status-positive: #006b00;
+  --fg-status-warning: #8a5a00;
   --fg-status-info: #375a66;
 
   /* interactive. Hover and active are overlays: apply them as
      background-image: linear-gradient(var(--interactive-hover), var(--interactive-hover));
      so they darken any fill without a separate hover color per component. */
-  --interactive-primary: #a2d9ff;
-  --interactive-accent: #d4ffbc;
+  --interactive-primary: #e8f0fe;
+  --interactive-accent: #e8f0fe;
   --interactive-hover: rgb(18 18 18 / 0.05);
   --interactive-active: rgb(18 18 18 / 0.1);
 
@@ -50,12 +50,12 @@
   /* Type. Names match the Figma text styles: "body md / emphasized" is
      --text-body-md + --leading-body-md + --weight-emphasized. Interface text is
      Inter; IBM Plex Mono is only for code-like values (code, logs, terminal). */
-  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-sans: -apple-system, system-ui, "Segoe UI", Helvetica, Arial, sans-serif;
   --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 
-  --text-body-lg: 16px;
-  --text-body-md: 14px;
-  --text-body-sm: 12px;
+  --text-body-lg: 18.72px;
+  --text-body-md: 16px;
+  --text-body-sm: 14px;
 
   /* Figma "auto" line height is the font's own (normal); body md is 130%. */
   --leading-body-lg: normal;
@@ -66,7 +66,7 @@
   --weight-emphasized: 500;
 
   /* Uppercase labels (section labels, table headers) keep a little tracking. */
-  --tracking-label: 0.72px;
+  --tracking-label: 0;
 
   /* Layout, not type: the banner and back link sit in a fixed-height band. */
   --leading-loose: 36px;
@@ -88,12 +88,12 @@
   --radius-md: 8px;
   --radius-lg: 10px;
   --border-w: 1px;
-  --shadow-card: 2px 2px 0 rgba(0, 0, 0, 0.1);
+  --shadow-card: none;
 
   /* Layout */
   /* One content width for every page. Terminal and logs opt out entirely via
      .layout--full: they are viewers, and want the whole window. */
-  --layout-width: 800px;
+  --layout-width: 960px;
   --layout-width-narrow: 420px;
   --layout-gutter: 16px;
   --grass-height: 24px;
