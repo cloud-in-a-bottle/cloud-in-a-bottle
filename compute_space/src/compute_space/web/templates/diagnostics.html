@@ -2,6 +2,7 @@
 {% block title_suffix %} - Diagnostics{% endblock %}
 {% from "_components/section.html" import section_head %}
 {% from "_components/info_table.html" import info_table %}
+{% from "_components/button.html" import button %}
 {% block content %}
 {% call section_head("Diagnostics") %}{% endcall %}
 <p class="hint">A snapshot of this instance for debugging: Cloud in a Bottle version, host system
@@ -10,9 +11,9 @@ installed app. Copy or download it and include it in a bug report.</p>
 
 {# diagnostics.js enables Copy/Refresh once the snapshot loads; Download works without JS. #}
 <div class="action-bar">
-  <button class="btn btn--primary" id="copy-btn" disabled>Copy to clipboard</button>
-  <a class="btn" id="download-btn" href="/api/diagnostics?download=1">Download JSON</a>
-  <button class="btn" id="refresh-btn" disabled>Refresh</button>
+  {{ button("Copy to clipboard", variant="primary", id="copy-btn", disabled=true) }}
+  {{ button("Download JSON", href="/api/diagnostics?download=1", id="download-btn") }}
+  {{ button("Refresh", id="refresh-btn", disabled=true) }}
   <span class="hint" id="copy-status"></span>
 </div>
 

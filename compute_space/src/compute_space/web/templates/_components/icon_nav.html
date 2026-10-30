@@ -12,7 +12,7 @@
     row, since hiding them takes their section heading with them.
 
     The way home is not here — see _components/nav_back.html. -#}
-{% from "_components/icon.html" import icon %}
+{% from "_components/icon_button.html" import icon_button %}
 {# with context: nav_menu calls app_url(), which reads `request` to keep the catalog link on the arriving domain + port #}
 {% from "_components/nav_menu.html" import nav_menu with context %}
 
@@ -22,9 +22,9 @@
   <h2 class="section-label icon-nav__label">Dashboard</h2>
   {%- endif %}
   <div class="icon-nav__icons">
-    <a class="icon-btn" href="/terminal/" title="Terminal">{{ icon("code", 16, alt="Terminal") }}</a>
-    <a class="icon-btn" href="/system/" title="System info">{{ icon("box", 15, alt="System info") }}</a>
-    <a class="icon-btn" href="/settings" title="Settings">{{ icon("gear", 12, alt="Settings") }}</a>
+    {{ icon_button("code", "Terminal", href="/terminal/", icon_size=16) }}
+    {{ icon_button("box", "System info", href="/system/", icon_size=15) }}
+    {{ icon_button("gear", "Settings", href="/settings", icon_size=12) }}
   </div>
   {%- if on_dashboard %}
   {{ nav_menu(catalog_app_name, catalog_installed) }}

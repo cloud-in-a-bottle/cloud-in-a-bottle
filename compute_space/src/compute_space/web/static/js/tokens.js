@@ -3,11 +3,7 @@
 var TOKENS_URL = '/api/tokens';
 
 function deleteTokenButton(t) {
-  var label = 'Delete token ' + t.name;
-  return dom.el('button', {class: 'icon-btn', type: 'button', title: label, 'aria-label': label,
-                           onclick: function() { deleteToken(t.id); }},
-    dom.el('img', {class: 'icon', src: '/static/img/icons/trash.svg',
-                   width: '14', height: '14', alt: '', 'aria-hidden': 'true'}));
+  return dom.iconButton('trash', 'Delete token ' + t.name, function() { deleteToken(t.id); });
 }
 
 function loadTokens() {

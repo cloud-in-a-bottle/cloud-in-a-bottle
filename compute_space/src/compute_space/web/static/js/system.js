@@ -195,7 +195,7 @@ function renderStorageStatus(data) {
     ? dom.el('span', {class: 'muted', text: 'unavailable'})
     : formatBytes(reclaimable);
   var cleanCacheButton = dom.el('button', {
-    class: 'btn btn-danger',
+    class: 'btn btn--danger',
     id: 'clean-cache-btn',
     disabled: cleanCacheInFlight,
     onclick: cleanBuildCache,

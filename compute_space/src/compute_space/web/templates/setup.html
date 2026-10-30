@@ -1,5 +1,6 @@
 {% extends "_layout_narrow.html" %}
 {% from "_components/info_tip.html" import info_tip %}
+{% from "_components/button.html" import button %}
 {% block title_suffix %} - Setup{% endblock %}
 
 {% block content %}
@@ -39,7 +40,7 @@
   </label>
 
   <div class="actions">
-    <input type="submit" id="submit-btn" class="btn btn--primary" value="Set password">
+    {{ button("Set password", variant="primary", type="submit", id="submit-btn") }}
   </div>
 </form>
 
@@ -88,7 +89,7 @@
     }
     var btn = document.getElementById('submit-btn');
     btn.disabled = true;
-    btn.value = 'Setting up…';
+    btn.textContent = 'Setting up…';
   });
 </script>
 {% endblock %}

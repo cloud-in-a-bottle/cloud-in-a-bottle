@@ -1,20 +1,15 @@
 {% extends "layout.html" %}
 {% from "_components/button.html" import button %}
-{% from "_components/icon.html" import icon %}
+{% from "_components/icon_button.html" import icon_button %}
 {% from "_components/info_table.html" import info_table, info_row %}
 {% from "_components/section.html" import section_head %}
-
-{% macro edit_button(label, onclick) -%}
-<button class="icon-btn" type="button" title="{{ label }}" aria-label="{{ label }}"
-        onclick="{{ onclick }}">{{ icon("pencil", 14) }}</button>
-{%- endmacro %}
 
 {#- Name and git upstream are edited in place: a display span and an edit span
     that app-detail.js swaps by toggling `hidden`. -#}
 {% macro url_value() -%}
 <span class="info-value" id="name-display">
   <a href="{{ app_url(app.name) }}" class="app-link" target="_blank" rel="noopener">{{ app_url(app.name) }}</a>
-  {{ edit_button("Edit app name", "editName()") }}
+  {{ icon_button("pencil", "Edit app name", onclick="editName()") }}
 </span>
 <span class="info-value" id="name-edit" hidden>
   <input type="text" id="name-input" value="{{ app.name }}" style="max-width:15em;">
@@ -27,7 +22,7 @@
 {% macro remote_value() -%}
 <span class="info-value" id="remote-display">
   <code>{{ app.repo_url }}</code>
-  {{ edit_button("Edit git URL", "editRemote()") }}
+  {{ icon_button("pencil", "Edit git URL", onclick="editRemote()") }}
 </span>
 <span class="info-value" id="remote-edit" hidden>
   <input type="text" id="remote-input" value="{{ app.repo_url }}"
@@ -181,9 +176,8 @@ None. All paths require Cloud in a Bottle login.
       <td><code>{{ p.service_url }}</code></td>
       <td><code>{{ p.grant | tojson }}</code></td>
       <td>{{ p.scope }}</td>
-      <td><button class="btn btn--danger"
-        data-perm-idx="{{ loop.index0 }}"
-        onclick="revokePermission(this)">Revoke</button></td>
+      <td>{{ button("Revoke", variant="danger", data={"perm-idx": loop.index0},
+                    onclick="revokePermission(this)") }}</td>
     </tr>
     {% endfor %}
   </table>
@@ -199,9 +193,8 @@ None. All paths require Cloud in a Bottle login.
     <tr>
       <td><code>{{ p.service_url }}</code></td>
       <td><code>{{ p.grant | tojson }}</code></td>
-      <td><button class="btn btn--primary"
-        data-perm-idx="{{ loop.index0 }}"
-        onclick="grantPermission(this)">Grant</button></td>
+      <td>{{ button("Grant", variant="primary", data={"perm-idx": loop.index0},
+                    onclick="grantPermission(this)") }}</td>
     </tr>
     {% endfor %}
   </table>
@@ -234,10 +227,10 @@ None. All paths require Cloud in a Bottle login.
       <form method="POST" action="{{ edit_app.action }}" target="_blank" style="display:contents;">
         <input type="hidden" name="repo" value="{{ edit_app.repo }}">
         <input type="hidden" name="ref" value="{{ edit_app.ref }}">
-        <button class="btn" type="submit">Edit App</button>
+        {{ button("Edit App", type="submit") }}
       </form>
       {% else %}
-      <a href="{{ edit_app.href }}" class="btn" target="_blank" rel="noopener">Edit App</a>
+      {{ button("Edit App", href=edit_app.href, new_tab=true) }}
       {% endif %}
     </td>
   </tr>

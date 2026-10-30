@@ -61,7 +61,7 @@ function renderServices(providers) {
       + '<td><select aria-label="Default provider for ' + escServiceHtml(svc)
       + '" data-service="' + escServiceHtml(svc) + '">' + options + '</select></td>'
       + '<td style="white-space:nowrap;">'
-      + '<button class="btn btn-primary" onclick="saveDefaultProvider(this)">Save</button> '
+      + '<button class="btn btn--primary" onclick="saveDefaultProvider(this)">Save</button> '
       + '<span class="muted default-msg"></span>'
       + '</td>'
       + '</tr>';

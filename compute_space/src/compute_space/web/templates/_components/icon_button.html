@@ -1,0 +1,17 @@
+{#- A bare icon button (.icon-btn): 28px like a .btn, or 36px on touch screens. `icon` is any
+    name in static/img/icons and `label` is its accessible name and tooltip.
+    Renders an <a> when href is given, a <button> otherwise. dom.iconButton()
+    builds the same markup for the page scripts. -#}
+{% from "_components/icon.html" import icon as icon_img %}
+
+{% macro icon_button(icon, label, href=none, onclick=none, icon_size=14, id=none, disabled=false) -%}
+{%- if href -%}
+<a class="icon-btn" href="{{ href }}" title="{{ label }}" aria-label="{{ label }}"
+   {%- if id %} id="{{ id }}"{% endif %}>{{ icon_img(icon, icon_size) }}</a>
+{%- else -%}
+<button class="icon-btn" type="button" title="{{ label }}" aria-label="{{ label }}"
+   {%- if id %} id="{{ id }}"{% endif %}
+   {%- if disabled %} disabled{% endif %}
+   {%- if onclick %} onclick="{{ onclick }}"{% endif %}>{{ icon_img(icon, icon_size) }}</button>
+{%- endif -%}
+{%- endmacro %}

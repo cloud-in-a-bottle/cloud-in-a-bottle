@@ -1,4 +1,5 @@
 {% extends "layout.html" %}
+{% from "_components/button.html" import button %}
 {% block title_suffix %} - Review Update{% endblock %}
 {% block content %}
 <h2>Review Update &mdash; {{ app.name }}</h2>
@@ -25,10 +26,11 @@ them to apply the update, mirroring the approval required when the app was insta
     <table id="permissions-table"></table>
   </div>
 
-  <br>
-  <button id="approve-btn" onclick="approveUpdate()" class="btn btn-primary">Approve &amp; Update</button>
-  <button onclick="cancelReview()" class="btn" style="margin-left:0.5em;">Cancel</button>
-  <span id="review-msg" style="margin-left:0.5em;"></span>
+  <div class="actions">
+    {{ button("Approve & Update", variant="primary", id="approve-btn", onclick="approveUpdate()") }}
+    {{ button("Cancel", onclick="cancelReview()") }}
+    <span id="review-msg"></span>
+  </div>
 </div>
 
 <script id="page-config" type="application/json">
