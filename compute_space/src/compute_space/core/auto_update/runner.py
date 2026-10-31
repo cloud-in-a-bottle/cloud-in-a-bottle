@@ -7,7 +7,6 @@ from datetime import datetime
 from datetime import time
 from datetime import timedelta
 
-from compute_space.core.auto_update.config import AutoUpdateConfig
 from compute_space.core.auto_update.config import AutoUpdateLastRun
 from compute_space.core.auto_update.config import AutoUpdateOutcome
 from compute_space.core.auto_update.config import read_auto_update_config
@@ -32,12 +31,9 @@ ERROR_BACKOFF = timedelta(minutes=5)
 # after the VM resumes.
 POLL_INTERVAL = timedelta(minutes=1)
 
-# Scheduled times before this were not missed: a fresh instance waits for its first scheduled time rather than
-# updating at boot.
-_process_started_at = datetime.now(UTC)
-# Set when the owner changes the schedule, so picking an earlier time (or turning updates on) doesn't count today's
-# already-passed time as missed and update immediately.
-_schedule_changed_at: datetime | None = None
+# Scheduled times at or before this are dealt with; a run is due once a later one passes. Set when the task starts
+# (see _initial_handled_until), when the schedule changes, and when a run starts.
+_handled_until: datetime | None = None
 
 
 def last_scheduled_at(time_utc: time, now: datetime) -> datetime:
@@ -48,16 +44,11 @@ def last_scheduled_at(time_utc: time, now: datetime) -> datetime:
     return scheduled
 
 
-def is_due(config: AutoUpdateConfig, since: datetime, now: datetime) -> bool:
-    """True if a scheduled time has passed since ``since``, so a run missed while the VM was paused or the process was
-    down happens as soon as it can."""
-    return config.enabled and last_scheduled_at(config.time_utc, now) > since
-
-
 def reschedule_auto_update() -> None:
-    """Call after the schedule changes."""
-    global _schedule_changed_at
-    _schedule_changed_at = datetime.now(UTC)
+    """Call after the schedule changes, so a newly chosen time that already passed today waits for tomorrow rather
+    than counting as missed."""
+    global _handled_until
+    _handled_until = datetime.now(UTC)
 
 
 def _record(run: AutoUpdateLastRun) -> None:
@@ -112,15 +103,24 @@ async def run_auto_update() -> None:
         _record(AutoUpdateLastRun(at=now, outcome=AutoUpdateOutcome.FAILED, detail="the update could not be started."))
 
 
+def _initial_handled_until() -> datetime:
+    """The last recorded run, so one missed while the router was down still happens. A fresh instance has none, and
+    waits for its first scheduled time rather than updating at boot."""
+    with closing(get_db()) as db:
+        last_run = read_last_run(db)
+    return last_run.at if last_run is not None else datetime.now(UTC)
+
+
 async def _run_if_due() -> None:
+    global _handled_until
+    if _handled_until is None:
+        _handled_until = _initial_handled_until()
     with closing(get_db()) as db:
         config = read_auto_update_config(db)
-        last_run = read_last_run(db)
-    # The last run, not the process start, once there is one: a restart mustn't hide a run missed while it was down.
-    since = last_run.at if last_run is not None else _process_started_at
-    if _schedule_changed_at is not None:
-        since = max(since, _schedule_changed_at)
-    if is_due(config, since, datetime.now(UTC)):
+    now = datetime.now(UTC)
+    if config.enabled and last_scheduled_at(config.time_utc, now) > _handled_until:
+        # Before running, so a run that fails waits for the next scheduled time rather than retrying all day.
+        _handled_until = now
         await run_auto_update()
 
 

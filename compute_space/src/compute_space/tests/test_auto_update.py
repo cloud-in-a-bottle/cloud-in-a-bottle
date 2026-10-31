@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import sqlite3
+from collections.abc import Callable
 from collections.abc import Iterator
 from contextlib import closing
 from datetime import UTC
@@ -37,9 +38,6 @@ _AT_4 = time(4, 0)
 # ─────────────── schedule ───────────────
 
 
-_ENABLED = AutoUpdateConfig(enabled=True, time_utc=_AT_4)
-
-
 def test_last_scheduled_earlier_today() -> None:
     assert runner_mod.last_scheduled_at(_AT_4, _NOW) == datetime(2026, 10, 9, 4, 0, tzinfo=UTC)
 
@@ -52,25 +50,6 @@ def test_last_scheduled_yesterday_before_todays_time() -> None:
 def test_last_scheduled_at_the_scheduled_time_is_now() -> None:
     now = datetime(2026, 10, 9, 4, 0, tzinfo=UTC)
     assert runner_mod.last_scheduled_at(_AT_4, now) == now
-
-
-def test_due_once_the_scheduled_time_passes() -> None:
-    yesterday = datetime(2026, 10, 8, 4, 1, tzinfo=UTC)
-    assert runner_mod.is_due(_ENABLED, since=yesterday, now=_NOW)
-
-
-def test_not_due_again_after_running() -> None:
-    assert not runner_mod.is_due(_ENABLED, since=datetime(2026, 10, 9, 4, 0, 30, tzinfo=UTC), now=_NOW)
-
-
-def test_due_after_a_pause_that_spanned_several_scheduled_times() -> None:
-    a_week_ago = _NOW - timedelta(days=7)
-    assert runner_mod.is_due(_ENABLED, since=a_week_ago, now=datetime(2026, 10, 9, 13, 0, tzinfo=UTC))
-
-
-def test_never_due_when_disabled() -> None:
-    disabled = AutoUpdateConfig(enabled=False, time_utc=_AT_4)
-    assert not runner_mod.is_due(disabled, since=_NOW - timedelta(days=7), now=_NOW)
 
 
 # ─────────────── config ───────────────
@@ -336,23 +315,25 @@ async def test_scheduler_survives_an_error(monkeypatch: pytest.MonkeyPatch) -> N
 
 
 @pytest.fixture
-def started_at_now(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A process that has just started, with no schedule change since."""
-    monkeypatch.setattr(runner_mod, "_process_started_at", datetime.now(UTC))
-    monkeypatch.setattr(runner_mod, "_schedule_changed_at", None)
+def handled_until(monkeypatch: pytest.MonkeyPatch) -> Callable[[datetime | None], None]:
+    def set_handled_until(at: datetime | None) -> None:
+        monkeypatch.setattr(runner_mod, "_handled_until", at)
+
+    set_handled_until(None)
+    return set_handled_until
 
 
 @pytest.mark.asyncio
 async def test_fresh_instance_waits_for_its_first_scheduled_time(
-    agent: FakeAgent, migrated_db: sqlite3.Connection, started_at_now: None
+    agent: FakeAgent, migrated_db: sqlite3.Connection, handled_until: Callable[[datetime | None], None]
 ) -> None:
     await runner_mod._run_if_due()
     assert agent.applied == 0
 
 
 @pytest.mark.asyncio
-async def test_catches_up_a_run_missed_while_down(
-    agent: FakeAgent, migrated_db: sqlite3.Connection, started_at_now: None
+async def test_catches_up_a_run_missed_while_the_router_was_down(
+    agent: FakeAgent, migrated_db: sqlite3.Connection, handled_until: Callable[[datetime | None], None]
 ) -> None:
     two_days_ago = datetime.now(UTC) - timedelta(days=2)
     record_last_run(migrated_db, AutoUpdateLastRun(at=two_days_ago, outcome=AutoUpdateOutcome.UP_TO_DATE))
@@ -361,12 +342,51 @@ async def test_catches_up_a_run_missed_while_down(
 
 
 @pytest.mark.asyncio
-async def test_schedule_change_does_not_count_as_a_missed_run(
-    agent: FakeAgent, migrated_db: sqlite3.Connection, started_at_now: None
+async def test_catches_up_once_after_a_long_pause(
+    agent: FakeAgent, migrated_db: sqlite3.Connection, handled_until: Callable[[datetime | None], None]
 ) -> None:
-    two_days_ago = datetime.now(UTC) - timedelta(days=2)
-    record_last_run(migrated_db, AutoUpdateLastRun(at=two_days_ago, outcome=AutoUpdateOutcome.UP_TO_DATE))
+    handled_until(datetime.now(UTC) - timedelta(days=7))
+    await runner_mod._run_if_due()
+    await runner_mod._run_if_due()
+    assert agent.applied == 1
+
+
+@pytest.mark.asyncio
+async def test_failed_run_waits_for_the_next_scheduled_time(
+    migrated_db: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch, handled_until: Callable[[datetime | None], None]
+) -> None:
+    write_auto_update_config(migrated_db, AutoUpdateConfig(enabled=True, time_utc=_AT_4))
+    calls = 0
+
+    async def failing_run() -> None:
+        nonlocal calls
+        calls += 1
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(runner_mod, "run_auto_update", failing_run)
+    handled_until(datetime.now(UTC) - timedelta(days=2))
+    with pytest.raises(sqlite3.OperationalError):
+        await runner_mod._run_if_due()
+    await runner_mod._run_if_due()
+    assert calls == 1
+
+
+@pytest.mark.asyncio
+async def test_schedule_change_does_not_count_as_a_missed_run(
+    agent: FakeAgent, migrated_db: sqlite3.Connection, handled_until: Callable[[datetime | None], None]
+) -> None:
+    handled_until(datetime.now(UTC) - timedelta(days=2))
     runner_mod.reschedule_auto_update()
+    await runner_mod._run_if_due()
+    assert agent.applied == 0
+
+
+@pytest.mark.asyncio
+async def test_disabled_never_runs(
+    agent: FakeAgent, migrated_db: sqlite3.Connection, handled_until: Callable[[datetime | None], None]
+) -> None:
+    write_auto_update_config(migrated_db, AutoUpdateConfig(enabled=False, time_utc=_AT_4))
+    handled_until(datetime.now(UTC) - timedelta(days=2))
     await runner_mod._run_if_due()
     assert agent.applied == 0
 
