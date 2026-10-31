@@ -30,6 +30,7 @@ from compute_space.core.auth.auth import is_openhost_credential
 from compute_space.core.auth.auth import validate_api_token
 from compute_space.core.auth.auth import validate_app_token
 from compute_space.core.auth.auth import validate_session_token
+from compute_space.core.auto_suspend.activity import record_valid_request
 from compute_space.core.domains import Domain
 from compute_space.core.domains import host_with_request_port
 from compute_space.db import get_db
@@ -238,6 +239,15 @@ def authenticate(connection: AnyConnection, db: sqlite3.Connection) -> Authentic
 
     TODO: we should probs have some rate-limiting or other abuse mitigation here.
     """
+    accessor = _resolve_accessor(connection, db)
+    # Only requests that arrived on one of this instance's domains: an app calling the router from inside the
+    # instance isn't inbound traffic, and shouldn't keep the instance awake.
+    if accessor is not None and ZONE_SCOPE_KEY in connection.scope:
+        record_valid_request()
+    return accessor
+
+
+def _resolve_accessor(connection: AnyConnection, db: sqlite3.Connection) -> AuthenticatedAccessor | None:
 
     # session token in cookie
     if session_token := connection.cookies.get(SESSION_COOKIE_NAME):

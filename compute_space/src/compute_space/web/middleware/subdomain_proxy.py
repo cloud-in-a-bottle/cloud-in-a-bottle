@@ -17,6 +17,7 @@ from litestar.types.asgi_types import WebSocketCloseEvent
 
 from compute_space.core.apps import get_app_from_hostname
 from compute_space.core.apps import is_public_request_path
+from compute_space.core.auto_suspend.activity import record_valid_request
 from compute_space.core.containers import ROUTER_INTERNAL_HOSTS
 from compute_space.core.domains import Domain
 from compute_space.core.logging import logger
@@ -206,7 +207,9 @@ class SubdomainProxyMiddleware:
         except NotAuthorizedException as exc:
             # Public paths are served anonymously, even to an owner whose cookie was refused.
             raw_path = scope.get("raw_path")
-            if not app.public_paths or raw_path is None or not is_public_request_path(app, raw_path):
+            if app.public_paths and raw_path is not None and is_public_request_path(app, raw_path):
+                record_valid_request()
+            else:
                 # Match a missing app's response so unauthorized callers cannot discover fully private apps.
                 # A Continue page is only offered on a valid owner cookie, so it reveals nothing.
                 if not app.public_paths and not isinstance(exc, NavigationConfirmationRequired):
