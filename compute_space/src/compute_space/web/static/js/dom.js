@@ -70,5 +70,14 @@
     });
   }
 
-  global.dom = {el: el, clear: clear, replace: replace, badge: badge, infoRow: infoRow};
+  // A bare .icon-btn <button>. Mirrors the icon_button() Jinja macro so server-
+  // and client-rendered icon buttons can't drift apart.
+  function iconButton(icon, label, onclick, iconSize) {
+    var size = String(iconSize || 14);
+    return el('button', {class: 'icon-btn', type: 'button', title: label, 'aria-label': label, onclick: onclick},
+      el('img', {class: 'icon', src: '/static/img/icons/' + icon + '.svg',
+                 width: size, height: size, alt: '', 'aria-hidden': 'true'}));
+  }
+
+  global.dom = {el: el, clear: clear, replace: replace, badge: badge, infoRow: infoRow, iconButton: iconButton};
 })(window);

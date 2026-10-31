@@ -237,8 +237,9 @@ h2.section-title {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 24px;
-  height: 24px;
+  /* Matches the .btn min-height, so icon and text buttons line up in a row. */
+  width: 28px;
+  height: 28px;
   padding: 0;
   border: 0;
   background: none;
@@ -246,8 +247,13 @@ h2.section-title {
   opacity: 0.8;
 }
 
-.icon-btn:hover {
+.icon-btn:not(:disabled):hover {
   opacity: 1;
+}
+
+.icon-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 @media (hover: none) {
@@ -259,9 +265,7 @@ h2.section-title {
 
 /* ── Buttons ────────────────────────────────────────────────────────── */
 
-.btn,
-.btn-primary,
-.btn-danger {
+.btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -279,15 +283,12 @@ h2.section-title {
   cursor: pointer;
 }
 
-.btn:hover,
-.btn-primary:hover,
-.btn-danger:hover {
+/* Disabled buttons get no hover or press feedback. */
+.btn:not(:disabled, [aria-disabled="true"]):hover {
   background-image: linear-gradient(var(--interactive-hover), var(--interactive-hover));
 }
 
-.btn:active,
-.btn-primary:active,
-.btn-danger:active {
+.btn:not(:disabled, [aria-disabled="true"]):active {
   background-image: linear-gradient(var(--interactive-active), var(--interactive-active));
 }
 
@@ -297,8 +298,12 @@ h2.section-title {
   cursor: not-allowed;
 }
 
-.btn--primary,
-.btn-primary {
+/* A link can't be truly disabled, so stop it taking clicks. */
+.btn[aria-disabled="true"] {
+  pointer-events: none;
+}
+
+.btn--primary {
   background: var(--interactive-primary);
   border-color: var(--interactive-primary);
 }
@@ -308,13 +313,7 @@ h2.section-title {
   border-color: var(--interactive-accent);
 }
 
-.btn--success {
-  background: var(--interactive-accent);
-  border-color: var(--interactive-accent);
-}
-
-.btn--danger,
-.btn-danger {
+.btn--danger {
   background: var(--bg-status-negative);
   border-color: var(--fg-border);
   color: var(--fg-status-negative);
@@ -325,9 +324,7 @@ h2.section-title {
 }
 
 @media (hover: none) {
-  .btn,
-  .btn-primary,
-  .btn-danger {
+  .btn {
     min-height: 36px;
   }
 }

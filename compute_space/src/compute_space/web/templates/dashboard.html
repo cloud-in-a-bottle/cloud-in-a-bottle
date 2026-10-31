@@ -1,6 +1,7 @@
 {% extends "layout.html" %}
 {# with context: app_row calls app_url(), which reads `request` to keep app links on the arriving domain + port #}
 {% from "_components/app_row.html" import app_row with context %}
+{% from "_components/button.html" import button %}
 {% from "_components/card.html" import card %}
 {% from "_components/icon.html" import icon %}
 {% from "_components/section.html" import section_head %}
@@ -34,7 +35,7 @@
              autocomplete="off" aria-label="Filter apps by name">
     </div>
     {% endif %}
-    <a class="btn btn--accent" href="/add_app">+ New</a>
+    {{ button("+ New", href="/add_app", variant="accent") }}
   {% endcall %}
 
   {% if apps %}

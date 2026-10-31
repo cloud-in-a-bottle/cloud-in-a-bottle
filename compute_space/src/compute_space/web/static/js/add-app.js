@@ -276,7 +276,7 @@ async function recheckAllPorts() {
 }
 
 function updateDeployButton() {
-  const btn = document.querySelector('#confirm-section .btn--primary');
+  const btn = document.getElementById('authorize-deploy-btn');
   if (btn) btn.disabled = portConflicts.size > 0;
 }
 

@@ -2,6 +2,7 @@
 {% block title_suffix %} — Approve Permission{% endblock %}
 {% from "_components/section.html" import section_head %}
 {% from "_components/spec.html" import spec_list, spec_row %}
+{% from "_components/button.html" import button %}
 {% block content %}
 {% call section_head("Permission request") %}{% endcall %}
 
@@ -17,7 +18,7 @@
   <p class="notice notice--ok">This permission is already granted.</p>
 {% else %}
   <div class="actions">
-    <button type="button" class="btn btn--primary" id="grant-btn">Grant</button>
+    {{ button("Grant", variant="primary", id="grant-btn") }}
   </div>
 <script src="{{ static_url('js/http-errors.js') }}"></script>
 <script>

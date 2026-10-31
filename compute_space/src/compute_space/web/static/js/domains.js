@@ -21,11 +21,7 @@ function domainCertCell(d) {
 }
 
 function removeDomainButton(name) {
-  var label = 'Remove ' + name;
-  return dom.el('button', {class: 'icon-btn', type: 'button', title: label, 'aria-label': label,
-                           onclick: function() { removeDomain(name); }},
-    dom.el('img', {class: 'icon', src: '/static/img/icons/trash.svg',
-                   width: '14', height: '14', alt: '', 'aria-hidden': 'true'}));
+  return dom.iconButton('trash', 'Remove ' + name, function() { removeDomain(name); });
 }
 
 function makePrimaryButton(domain) {
