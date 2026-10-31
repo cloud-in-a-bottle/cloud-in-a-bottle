@@ -7,7 +7,6 @@ import attr
 
 from compute_space.core.auto_update.config import read_auto_update_config
 from compute_space.core.auto_update.runner import scheduled_run_in_progress
-from compute_space.core.operation_locks import operation_lock
 from compute_space.core.system_agent.client import apply_lock
 from compute_space.core.tls.provision import cert_issuance_in_progress
 from compute_space.core.util import async_wrap
@@ -25,8 +24,6 @@ class BusyReason(StrEnum):
     PLATFORM_UPDATE = "platform_update"
     OS_PACKAGES = "os_packages"
     TLS_CERTIFICATE = "tls_certificate"
-    # A domain or archive backend change, which can restart the router.
-    PLATFORM_OPERATION = "platform_operation"
 
 
 @attr.s(auto_attribs=True, frozen=True)
@@ -56,8 +53,6 @@ async def get_auto_suspend_status(db: sqlite3.Connection) -> AutoSuspendStatus:
         reasons.append(BusyReason.OS_PACKAGES)
     if cert_issuance_in_progress():
         reasons.append(BusyReason.TLS_CERTIFICATE)
-    if operation_lock.locked():
-        reasons.append(BusyReason.PLATFORM_OPERATION)
     auto_update = read_auto_update_config(db)
     return AutoSuspendStatus(
         busy_reasons=tuple(reasons),
