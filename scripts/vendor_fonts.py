@@ -26,7 +26,9 @@ FONTS_DIR = STATIC_DIR / "fonts"
 FONTS_CSS = STATIC_DIR / "css" / "fonts.css"
 # Keep in sync with --weight-regular / --weight-emphasized in tokens.css.
 WEIGHTS = (400, 500)
-_SRC = re.compile(r"src: url\(\./files/(?P<name>[\w.-]+\.woff2)\) format\('woff2'\)(?:, url\([^)]*\) format\('woff'\))?;")
+_SRC = re.compile(
+    r"src: url\(\./files/(?P<name>[\w.-]+\.woff2)\) format\('woff2'\)(?:, url\([^)]*\) format\('woff'\))?;"
+)
 
 
 @attr.s(auto_attribs=True, frozen=True)
