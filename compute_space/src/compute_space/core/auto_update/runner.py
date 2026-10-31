@@ -10,7 +10,6 @@ from datetime import timedelta
 from compute_space.core.auto_update.config import AutoUpdateLastRun
 from compute_space.core.auto_update.config import AutoUpdateOutcome
 from compute_space.core.auto_update.config import read_auto_update_config
-from compute_space.core.auto_update.config import read_last_run
 from compute_space.core.auto_update.config import record_last_run
 from compute_space.core.logging import logger
 from compute_space.core.system_agent.client import ApplyLaunch
@@ -23,32 +22,9 @@ from compute_space.core.system_agent.client import system_agent_status
 from compute_space.db import get_db
 from openhost_system_agent.protocol import UpdateChannel
 
-# Pause after an unexpected error before trying again, so a persistent one doesn't spin.
-ERROR_BACKOFF = timedelta(minutes=5)
-
-# How often to check whether a run is due. asyncio's timers stop while the VM is paused, so a long sleep until the
-# scheduled time would fire late by however long the pause lasted; a short poll against the wall clock catches up soon
-# after the VM resumes.
 POLL_INTERVAL = timedelta(minutes=1)
 
-# Scheduled times at or before this are dealt with; a run is due once a later one passes. Set when the task starts
-# (see _initial_handled_until), when the schedule changes, and when a run starts.
-_handled_until: datetime | None = None
-
-
-def last_scheduled_at(time_utc: time, now: datetime) -> datetime:
-    """The most recent scheduled time at or before ``now``."""
-    scheduled = datetime.combine(now.date(), time_utc, tzinfo=UTC)
-    if scheduled > now:
-        scheduled -= timedelta(days=1)
-    return scheduled
-
-
-def reschedule_auto_update() -> None:
-    """Call after the schedule changes, so a newly chosen time that already passed today waits for tomorrow rather
-    than counting as missed."""
-    global _handled_until
-    _handled_until = datetime.now(UTC)
+_update_due: datetime | None = None
 
 
 def _record(run: AutoUpdateLastRun) -> None:
@@ -57,7 +33,7 @@ def _record(run: AutoUpdateLastRun) -> None:
         record_last_run(db, run)
 
 
-async def _check(now: datetime) -> AutoUpdateLastRun | None:
+async def _check_if_update_possible(now: datetime) -> AutoUpdateLastRun | None:
     """The outcome that stops this scheduled run from updating, or None to go ahead."""
     remote = await system_agent_get_remote()
     if remote.channel != UpdateChannel.TAGS:
@@ -77,14 +53,14 @@ async def _check(now: datetime) -> AutoUpdateLastRun | None:
 async def run_auto_update() -> None:
     now = datetime.now(UTC)
     try:
-        skipped = await _check(now)
+        invalid_outcome = await _check_if_update_possible(now)
     except SystemAgentError as e:
         _record(
             AutoUpdateLastRun(at=now, outcome=AutoUpdateOutcome.FAILED, detail=f"could not check for updates: {e}")
         )
         return
-    if skipped is not None:
-        _record(skipped)
+    if invalid_outcome is not None:
+        _record(invalid_outcome)
         return
 
     if apply_lock.locked():
@@ -103,41 +79,55 @@ async def run_auto_update() -> None:
         _record(AutoUpdateLastRun(at=now, outcome=AutoUpdateOutcome.FAILED, detail="the update could not be started."))
 
 
-def _initial_handled_until() -> datetime:
-    """The last recorded run, so one missed while the router was down still happens. A fresh instance has none, and
-    waits for its first scheduled time rather than updating at boot."""
-    with closing(get_db()) as db:
-        last_run = read_last_run(db)
-    return last_run.at if last_run is not None else datetime.now(UTC)
+def _next_datetime_at(target: time, now: datetime) -> datetime:
+    """Return the next datetime at which the clock reads `target`."""
+    candidate = datetime.combine(now.date(), target, tzinfo=now.tzinfo)
+    if candidate <= now:
+        candidate += timedelta(days=1)
+    return candidate
+
+
+def reschedule_auto_update(time_utc: time) -> None:
+    """Call after the schedule changes, so a newly chosen time that already passed today waits for tomorrow rather
+    than counting as missed."""
+    global _update_due
+    _update_due = _next_datetime_at(time_utc, datetime.now(UTC))
 
 
 async def _run_if_due() -> None:
-    global _handled_until
-    if _handled_until is None:
-        _handled_until = _initial_handled_until()
+    global _update_due
+    now = datetime.now(UTC)
     with closing(get_db()) as db:
         config = read_auto_update_config(db)
-    now = datetime.now(UTC)
-    if config.enabled and last_scheduled_at(config.time_utc, now) > _handled_until:
-        # Before running, so a run that fails waits for the next scheduled time rather than retrying all day.
-        _handled_until = now
+
+    if _update_due is None:
+        # Schedule on first run: the next instance of the configured time.
+        _update_due = _next_datetime_at(config.time_utc, now)
+
+    if config.enabled and now > _update_due:
         await run_auto_update()
+        _update_due = _next_datetime_at(config.time_utc, now)
 
 
 def start_auto_update_task() -> asyncio.Task[None]:
-    """Run the update once after each scheduled time, catching up on one missed while the VM was paused or the process
-    was down."""
+    """Run the update automatically on a schedule.
+
+    The intended logic is:
+    - Updates are scheduled to run daily at a specific time of day, set by the user.
+    - If that window is missed (VM paused for example), the update runs the next time it is up.
+    - (for autosuspending VMs, we'll wake the instance daily sometime around (after) the requested time to allow the update to run)
+    - If the update fails, it does not retry until the next scheduled time.
+    - If the update time is rescheduled, the next run is scheduled for when the new time is next reached.
+    """
 
     async def _run() -> None:
         while True:
-            # Everything inside the try: an escaped exception would end the task, silently stopping auto-updates
-            # until the next restart.
+            # Everything inside the try: an escaped exception would end the task, silently stopping auto-updates.
             try:
                 await _run_if_due()
             except Exception:
-                logger.exception(f"scheduled update failed; retrying in {ERROR_BACKOFF}")
-                await asyncio.sleep(ERROR_BACKOFF.total_seconds())
-                continue
+                logger.exception("scheduled update failed; retrying at next window")
+                reschedule_auto_update(time_utc=read_auto_update_config(get_db()).time_utc)
             await asyncio.sleep(POLL_INTERVAL.total_seconds())
 
     return asyncio.create_task(_run(), name="auto-update")
