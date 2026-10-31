@@ -102,6 +102,10 @@ class Config:
     # /api/add_app and do not need to be present on disk ahead of time.
     default_apps: list[str]
 
+    # Bearer token the host that suspends this instance when it's idle presents to /api/auto-suspend-status. None (the
+    # route doesn't exist) on an instance that isn't auto-suspended.
+    auto_suspend_status_token: str | None = attr.ib(repr=False)
+
     def __attrs_post_init__(self) -> None:
         # Validate cert provider selection up front so any Config object can be
         # trusted as valid by the rest of the system (rather than discovering a
@@ -292,6 +296,8 @@ class DefaultConfig(Config):
     # different threshold (or to disable it) set this in the router config and
     # reboot.
     storage_min_free_mb: int = 500
+
+    auto_suspend_status_token: str | None = attr.ib(default=None, repr=False)
 
     # How often (seconds) the periodic pruner removes dangling container images
     # (0 = disabled).  Rebuilds re-tag ``openhost-{app}:latest`` and orphan the

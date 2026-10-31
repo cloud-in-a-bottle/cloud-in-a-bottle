@@ -1,5 +1,6 @@
 # note: we don't need to handle CORS in the main auth path because cross-origin requests are not allowed.
 # the only allowed cross-origin requests go thru the services interface which handles its own CORS.
+import hmac
 import sqlite3
 from contextlib import closing
 from typing import Any
@@ -14,9 +15,11 @@ from litestar.datastructures import Headers
 from litestar.enums import MediaType
 from litestar.enums import ScopeType
 from litestar.exceptions import NotAuthorizedException
+from litestar.exceptions import NotFoundException
 from litestar.handlers.base import BaseRouteHandler
 from litestar.response import Redirect
 
+from compute_space.config import get_config
 from compute_space.core.apps import get_app_from_hostname
 from compute_space.core.auth.auth import SESSION_COOKIE_NAME
 from compute_space.core.auth.auth import AuthenticatedAPIKey
@@ -327,6 +330,17 @@ async def verify_owner_ws(socket: WebSocket[Any, Any, Any]) -> bool:
 def require_app_auth(connection: AnyConnection, _route_handler: BaseRouteHandler) -> None:
     """Adapt verify_app_auth to be used as a route guard."""
     verify_app_auth(connection)
+
+
+def require_auto_suspend_auth(connection: AnyConnection, _route_handler: BaseRouteHandler) -> None:
+    """Guard for the host that suspends this instance, which authenticates with the status token from config.toml.
+    An instance without one isn't auto-suspended, so the route doesn't exist there."""
+    expected = get_config().auto_suspend_status_token
+    if expected is None:
+        raise NotFoundException()
+    token = _get_bearer_token_if_set(connection)
+    if token is None or not hmac.compare_digest(token.encode(), expected.encode()):
+        raise NotAuthorizedException(detail="auto-suspend status token required")
 
 
 def require_owner_or_app_auth(connection: AnyConnection, _route_handler: BaseRouteHandler) -> None:

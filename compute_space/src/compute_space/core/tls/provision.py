@@ -30,6 +30,11 @@ def _issuance_lock() -> asyncio.Lock:
     return lock
 
 
+def cert_issuance_in_progress() -> bool:
+    lock = _ISSUANCE_LOCKS.get(asyncio.get_running_loop())
+    return lock is not None and lock.locked()
+
+
 async def acquire_cert_for_domain(
     config: Config,
     domain: str,

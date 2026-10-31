@@ -8,7 +8,6 @@ from datetime import UTC
 from datetime import datetime
 from datetime import time
 from datetime import timedelta
-from datetime import tzinfo
 from pathlib import Path
 
 import pytest
@@ -38,28 +37,40 @@ _AT_4 = time(4, 0)
 # ─────────────── schedule ───────────────
 
 
-def _next_run_at_from(now: datetime, time_utc: time, monkeypatch: pytest.MonkeyPatch) -> datetime:
-    class FrozenDatetime(datetime):
-        @classmethod
-        def now(cls, tz: tzinfo | None = None) -> FrozenDatetime:
-            return cls.fromtimestamp(now.timestamp(), tz)
-
-    monkeypatch.setattr(runner_mod, "datetime", FrozenDatetime)
-    return runner_mod.next_run_at(time_utc)
+_ENABLED = AutoUpdateConfig(enabled=True, time_utc=_AT_4)
 
 
-def test_next_run_later_today(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_last_scheduled_earlier_today() -> None:
+    assert runner_mod.last_scheduled_at(_AT_4, _NOW) == datetime(2026, 10, 9, 4, 0, tzinfo=UTC)
+
+
+def test_last_scheduled_yesterday_before_todays_time() -> None:
     now = datetime(2026, 10, 9, 3, 59, tzinfo=UTC)
-    assert _next_run_at_from(now, _AT_4, monkeypatch) == datetime(2026, 10, 9, 4, 0, tzinfo=UTC)
+    assert runner_mod.last_scheduled_at(_AT_4, now) == datetime(2026, 10, 8, 4, 0, tzinfo=UTC)
 
 
-def test_next_run_tomorrow_once_today_has_passed(monkeypatch: pytest.MonkeyPatch) -> None:
-    assert _next_run_at_from(_NOW, _AT_4, monkeypatch) == datetime(2026, 10, 10, 4, 0, tzinfo=UTC)
-
-
-def test_next_run_at_the_scheduled_time_is_tomorrow(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_last_scheduled_at_the_scheduled_time_is_now() -> None:
     now = datetime(2026, 10, 9, 4, 0, tzinfo=UTC)
-    assert _next_run_at_from(now, _AT_4, monkeypatch) == datetime(2026, 10, 10, 4, 0, tzinfo=UTC)
+    assert runner_mod.last_scheduled_at(_AT_4, now) == now
+
+
+def test_due_once_the_scheduled_time_passes() -> None:
+    yesterday = datetime(2026, 10, 8, 4, 1, tzinfo=UTC)
+    assert runner_mod.is_due(_ENABLED, since=yesterday, now=_NOW)
+
+
+def test_not_due_again_after_running() -> None:
+    assert not runner_mod.is_due(_ENABLED, since=datetime(2026, 10, 9, 4, 0, 30, tzinfo=UTC), now=_NOW)
+
+
+def test_due_after_a_pause_that_spanned_several_scheduled_times() -> None:
+    a_week_ago = _NOW - timedelta(days=7)
+    assert runner_mod.is_due(_ENABLED, since=a_week_ago, now=datetime(2026, 10, 9, 13, 0, tzinfo=UTC))
+
+
+def test_never_due_when_disabled() -> None:
+    disabled = AutoUpdateConfig(enabled=False, time_utc=_AT_4)
+    assert not runner_mod.is_due(disabled, since=_NOW - timedelta(days=7), now=_NOW)
 
 
 # ─────────────── config ───────────────
@@ -314,7 +325,7 @@ async def test_scheduler_survives_an_error(monkeypatch: pytest.MonkeyPatch) -> N
         second_call.set()
         await asyncio.Event().wait()
 
-    monkeypatch.setattr(runner_mod, "_wait_and_run", wait_and_run)
+    monkeypatch.setattr(runner_mod, "_run_if_due", wait_and_run)
     monkeypatch.setattr(runner_mod, "ERROR_BACKOFF", timedelta(0))
     task = runner_mod.start_auto_update_task()
     try:
@@ -322,6 +333,42 @@ async def test_scheduler_survives_an_error(monkeypatch: pytest.MonkeyPatch) -> N
     finally:
         task.cancel()
     assert calls == 2
+
+
+@pytest.fixture
+def started_at_now(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A process that has just started, with no schedule change since."""
+    monkeypatch.setattr(runner_mod, "_process_started_at", datetime.now(UTC))
+    monkeypatch.setattr(runner_mod, "_schedule_changed_at", None)
+
+
+@pytest.mark.asyncio
+async def test_fresh_instance_waits_for_its_first_scheduled_time(
+    agent: FakeAgent, migrated_db: sqlite3.Connection, started_at_now: None
+) -> None:
+    await runner_mod._run_if_due()
+    assert agent.applied == 0
+
+
+@pytest.mark.asyncio
+async def test_catches_up_a_run_missed_while_down(
+    agent: FakeAgent, migrated_db: sqlite3.Connection, started_at_now: None
+) -> None:
+    two_days_ago = datetime.now(UTC) - timedelta(days=2)
+    record_last_run(migrated_db, AutoUpdateLastRun(at=two_days_ago, outcome=AutoUpdateOutcome.UP_TO_DATE))
+    await runner_mod._run_if_due()
+    assert agent.applied == 1
+
+
+@pytest.mark.asyncio
+async def test_schedule_change_does_not_count_as_a_missed_run(
+    agent: FakeAgent, migrated_db: sqlite3.Connection, started_at_now: None
+) -> None:
+    two_days_ago = datetime.now(UTC) - timedelta(days=2)
+    record_last_run(migrated_db, AutoUpdateLastRun(at=two_days_ago, outcome=AutoUpdateOutcome.UP_TO_DATE))
+    runner_mod.reschedule_auto_update()
+    await runner_mod._run_if_due()
+    assert agent.applied == 0
 
 
 def test_last_run_roundtrip(migrated_db: sqlite3.Connection) -> None:
