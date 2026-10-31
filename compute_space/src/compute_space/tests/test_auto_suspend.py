@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import sqlite3
 import subprocess
 from collections.abc import Iterator
 from contextlib import closing
@@ -105,17 +104,6 @@ def test_reports_os_package_updates(client: TestClient[Litestar], cfg: Config, a
     _configure_token(cfg)
     apt_running[0] = True
     assert _get_status(client).json()["busy_reasons"] == ["os_packages"]
-
-
-def test_reports_apps_building(client: TestClient[Litestar], cfg: Config) -> None:
-    _configure_token(cfg)
-    with closing(sqlite3.connect(cfg.db_path)) as db:
-        db.execute(
-            "INSERT INTO apps (app_id, name, version, repo_path, local_port, status)"
-            " VALUES ('buildingappid', 'building-app', '0.1.0', '/tmp/building-app', 19124, 'building')"
-        )
-        db.commit()
-    assert _get_status(client).json()["busy_reasons"] == ["apps"]
 
 
 @pytest.mark.asyncio

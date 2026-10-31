@@ -25,8 +25,6 @@ class BusyReason(StrEnum):
     PLATFORM_UPDATE = "platform_update"
     OS_PACKAGES = "os_packages"
     TLS_CERTIFICATE = "tls_certificate"
-    # An app is building, starting or being removed.
-    APPS = "apps"
     # A domain or archive backend change, which can restart the router.
     PLATFORM_OPERATION = "platform_operation"
 
@@ -50,11 +48,6 @@ def _apt_running() -> bool:
     return any(state in _SYSTEMD_ACTIVE_STATES for state in states)
 
 
-def _apps_busy(db: sqlite3.Connection) -> bool:
-    row = db.execute("SELECT 1 FROM apps WHERE status IN ('building', 'starting', 'removing') LIMIT 1").fetchone()
-    return row is not None
-
-
 async def get_auto_suspend_status(db: sqlite3.Connection) -> AutoSuspendStatus:
     reasons: list[BusyReason] = []
     if apply_lock.locked() or scheduled_run_in_progress():
@@ -63,8 +56,6 @@ async def get_auto_suspend_status(db: sqlite3.Connection) -> AutoSuspendStatus:
         reasons.append(BusyReason.OS_PACKAGES)
     if cert_issuance_in_progress():
         reasons.append(BusyReason.TLS_CERTIFICATE)
-    if _apps_busy(db):
-        reasons.append(BusyReason.APPS)
     if operation_lock.locked():
         reasons.append(BusyReason.PLATFORM_OPERATION)
     auto_update = read_auto_update_config(db)
