@@ -14,7 +14,7 @@ async def auto_suspend_status(db: NamedDependency[sqlite3.Connection]) -> AutoSu
     """For the host that suspends this instance when it's idle: whether a suspend now would stall work in progress.
     While an openhost update has the router stopped, the downtime updater answers 503 instead; the host should treat that
     as busy."""
-    return await get_auto_suspend_status(db)
+    return get_auto_suspend_status(db)
 
 
 api_auto_suspend_routes = Router(path="/", route_handlers=[auto_suspend_status])

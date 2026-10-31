@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import subprocess
 from collections.abc import Iterator
 from contextlib import closing
 from datetime import time
@@ -40,18 +39,7 @@ def cfg(tmp_path: Path) -> Iterator[Config]:
 
 
 @pytest.fixture
-def apt_running(monkeypatch: pytest.MonkeyPatch) -> list[bool]:
-    running = [False]
-
-    async def fake() -> bool:
-        return running[0]
-
-    monkeypatch.setattr(status_mod, "_apt_running", fake)
-    return running
-
-
-@pytest.fixture
-def client(cfg: Config, apt_running: list[bool]) -> Iterator[TestClient[Litestar]]:
+def client(cfg: Config) -> Iterator[TestClient[Litestar]]:
     app = Litestar(
         route_handlers=[auto_suspend_status],
         dependencies={
@@ -100,18 +88,12 @@ def test_idle_instance_has_no_busy_reasons(client: TestClient[Litestar], cfg: Co
     assert resp.json()["busy_reasons"] == []
 
 
-def test_reports_os_package_updates(client: TestClient[Litestar], cfg: Config, apt_running: list[bool]) -> None:
-    _configure_token(cfg)
-    apt_running[0] = True
-    assert _get_status(client).json()["busy_reasons"] == ["os_packages"]
-
-
 @pytest.mark.asyncio
-async def test_reports_a_platform_update_being_started(cfg: Config, apt_running: list[bool]) -> None:
+async def test_reports_a_platform_update_being_started(cfg: Config) -> None:
     await client_mod.apply_lock.acquire()
     try:
         with closing(get_db()) as db:
-            status = await status_mod.get_auto_suspend_status(db)
+            status = status_mod.get_auto_suspend_status(db)
     finally:
         client_mod.apply_lock.release()
     assert status.busy_reasons == (status_mod.BusyReason.PLATFORM_UPDATE,)
@@ -132,41 +114,8 @@ def test_no_auto_update_time_when_auto_updates_are_off(client: TestClient[Litest
 
 
 @pytest.mark.asyncio
-async def test_reports_a_scheduled_update_checking_for_a_release(
-    cfg: Config, apt_running: list[bool], monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_reports_a_scheduled_update_checking_for_a_release(cfg: Config, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(runner_mod, "_scheduled_run_in_progress", True)
     with closing(get_db()) as db:
-        status = await status_mod.get_auto_suspend_status(db)
+        status = status_mod.get_auto_suspend_status(db)
     assert status.busy_reasons == (status_mod.BusyReason.PLATFORM_UPDATE,)
-
-
-# ─────────────── apt units ───────────────
-
-
-def _fake_systemctl(monkeypatch: pytest.MonkeyPatch, stdout: str, returncode: int) -> None:
-    def run(argv: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
-        assert argv == ["systemctl", "is-active", "apt-daily.service", "apt-daily-upgrade.service"]
-        return subprocess.CompletedProcess(argv, returncode, stdout=stdout, stderr="")
-
-    monkeypatch.setattr(status_mod.subprocess, "run", run)
-
-
-@pytest.mark.asyncio
-async def test_apt_idle(monkeypatch: pytest.MonkeyPatch) -> None:
-    _fake_systemctl(monkeypatch, "inactive\ninactive\n", returncode=3)
-    assert not await status_mod._apt_running()
-
-
-@pytest.mark.asyncio
-async def test_apt_upgrade_running(monkeypatch: pytest.MonkeyPatch) -> None:
-    # Oneshot units sit in "activating" while they run.
-    _fake_systemctl(monkeypatch, "inactive\nactivating\n", returncode=0)
-    assert await status_mod._apt_running()
-
-
-@pytest.mark.asyncio
-async def test_apt_unknown_state_fails_loudly(monkeypatch: pytest.MonkeyPatch) -> None:
-    _fake_systemctl(monkeypatch, "", returncode=1)
-    with pytest.raises(RuntimeError):
-        await status_mod._apt_running()
