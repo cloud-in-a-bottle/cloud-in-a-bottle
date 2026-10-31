@@ -25,6 +25,9 @@ from compute_space.db import get_db
 # Renew well before expiry so transient ACME/DNS failures have days of retries left, not hours.
 RENEW_BEFORE = datetime.timedelta(days=7)
 CHECK_INTERVAL = datetime.timedelta(hours=12)
+# asyncio's timers stop while the VM is paused, so CHECK_INTERVAL is measured on the wall clock by polling at this
+# interval. Otherwise every pause would push the next check back by its length.
+WALL_CLOCK_POLL_INTERVAL = datetime.timedelta(minutes=1)
 RETRY_INTERVAL = datetime.timedelta(hours=1)
 
 INITIAL_RETRY_INTERVAL = datetime.timedelta(seconds=15)
@@ -143,6 +146,12 @@ async def renew_cert_if_needed(
     return renewed
 
 
+async def _sleep_wall_clock(duration: datetime.timedelta) -> None:
+    deadline = datetime.datetime.now(datetime.UTC) + duration
+    while datetime.datetime.now(datetime.UTC) < deadline:
+        await asyncio.sleep(WALL_CLOCK_POLL_INTERVAL.total_seconds())
+
+
 def start_renewal_task(
     reload_caddy: Callable[[Config, sqlite3.Connection], Awaitable[object]],
     dns_provider: InternalDnsProvider,
@@ -171,6 +180,6 @@ def start_renewal_task(
                 retry = min(retry * 2, RETRY_INTERVAL)
                 continue
             retry = INITIAL_RETRY_INTERVAL
-            await asyncio.sleep(CHECK_INTERVAL.total_seconds())
+            await _sleep_wall_clock(CHECK_INTERVAL)
 
     return asyncio.create_task(_run(), name="tls-cert-renewal")
