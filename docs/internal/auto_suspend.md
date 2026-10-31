@@ -40,6 +40,6 @@ It's read at startup, so the host rotates it by rewriting the file and restartin
 
 asyncio's timers stop while the VM is paused, so scheduled work polls the wall clock once a minute instead of sleeping until it's due:
 
-- **Auto-update** runs once after each scheduled time. A scheduled time that passed while the VM was paused (or the router was down) runs within a minute of resuming.
+- **Auto-update** runs once after each scheduled time. A scheduled time that passed while the VM was paused runs within a minute of resuming. One missed while the router was stopped waits for the next day.
 - **TLS renewal** checks every 12 hours of wall-clock time. Certs renew 7 days before expiry, so a daily wake is plenty.
 - **Ubuntu's apt timers** are systemd calendar timers, which fire on resume once the clock is corrected.

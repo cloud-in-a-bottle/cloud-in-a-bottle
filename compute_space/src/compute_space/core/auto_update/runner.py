@@ -116,7 +116,8 @@ async def _run_if_due() -> None:
             await run_auto_update()
         finally:
             _scheduled_run_in_progress = False
-        _update_due = _next_datetime_at(config.time_utc, now)
+            # Even if the run raised, so a failure waits for the next scheduled time.
+            _update_due = _next_datetime_at(config.time_utc, now)
 
 
 def start_auto_update_task() -> asyncio.Task[None]:
@@ -137,7 +138,6 @@ def start_auto_update_task() -> asyncio.Task[None]:
                 await _run_if_due()
             except Exception:
                 logger.exception("scheduled update failed; retrying at next window")
-                reschedule_auto_update(time_utc=read_auto_update_config(get_db()).time_utc)
             await asyncio.sleep(POLL_INTERVAL.total_seconds())
 
     return asyncio.create_task(_run(), name="auto-update")
