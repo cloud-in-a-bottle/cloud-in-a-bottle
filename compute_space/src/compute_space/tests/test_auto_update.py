@@ -367,6 +367,7 @@ async def test_failed_run_waits_for_the_next_scheduled_time(
     handled_until(datetime.now(UTC) - timedelta(days=2))
     with pytest.raises(sqlite3.OperationalError):
         await runner_mod._run_if_due()
+    assert not runner_mod.scheduled_run_in_progress()
     await runner_mod._run_if_due()
     assert calls == 1
 

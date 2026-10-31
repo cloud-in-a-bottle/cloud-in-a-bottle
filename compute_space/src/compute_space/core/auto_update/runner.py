@@ -25,6 +25,12 @@ from openhost_system_agent.protocol import UpdateChannel
 POLL_INTERVAL = timedelta(minutes=1)
 
 _update_due: datetime | None = None
+# True from the start of a scheduled run, including the check for a new release before apply_lock is taken.
+_scheduled_run_in_progress = False
+
+
+def scheduled_run_in_progress() -> bool:
+    return _scheduled_run_in_progress
 
 
 def _record(run: AutoUpdateLastRun) -> None:
@@ -95,7 +101,7 @@ def reschedule_auto_update(time_utc: time) -> None:
 
 
 async def _run_if_due() -> None:
-    global _update_due
+    global _update_due, _scheduled_run_in_progress
     now = datetime.now(UTC)
     with closing(get_db()) as db:
         config = read_auto_update_config(db)
@@ -105,7 +111,11 @@ async def _run_if_due() -> None:
         _update_due = _next_datetime_at(config.time_utc, now)
 
     if config.enabled and now > _update_due:
-        await run_auto_update()
+        _scheduled_run_in_progress = True
+        try:
+            await run_auto_update()
+        finally:
+            _scheduled_run_in_progress = False
         _update_due = _next_datetime_at(config.time_utc, now)
 
 
