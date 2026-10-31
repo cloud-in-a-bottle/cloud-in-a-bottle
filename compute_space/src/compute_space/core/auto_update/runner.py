@@ -34,6 +34,12 @@ POLL_INTERVAL = timedelta(minutes=1)
 # Scheduled times at or before this are dealt with; a run is due once a later one passes. Set when the task starts
 # (see _initial_handled_until), when the schedule changes, and when a run starts.
 _handled_until: datetime | None = None
+# True from the start of a scheduled run, including the check for a new release before apply_lock is taken.
+_scheduled_run_in_progress = False
+
+
+def scheduled_run_in_progress() -> bool:
+    return _scheduled_run_in_progress
 
 
 def last_scheduled_at(time_utc: time, now: datetime) -> datetime:
@@ -112,7 +118,7 @@ def _initial_handled_until() -> datetime:
 
 
 async def _run_if_due() -> None:
-    global _handled_until
+    global _handled_until, _scheduled_run_in_progress
     if _handled_until is None:
         _handled_until = _initial_handled_until()
     with closing(get_db()) as db:
@@ -121,7 +127,11 @@ async def _run_if_due() -> None:
     if config.enabled and last_scheduled_at(config.time_utc, now) > _handled_until:
         # Before running, so a run that fails waits for the next scheduled time rather than retrying all day.
         _handled_until = now
-        await run_auto_update()
+        _scheduled_run_in_progress = True
+        try:
+            await run_auto_update()
+        finally:
+            _scheduled_run_in_progress = False
 
 
 def start_auto_update_task() -> asyncio.Task[None]:

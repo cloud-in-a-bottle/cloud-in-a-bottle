@@ -1,9 +1,12 @@
 import sqlite3
 import subprocess
+from datetime import time
 from enum import StrEnum
 
 import attr
 
+from compute_space.core.auto_update.config import read_auto_update_config
+from compute_space.core.auto_update.runner import scheduled_run_in_progress
 from compute_space.core.operation_locks import operation_lock
 from compute_space.core.system_agent.client import apply_lock
 from compute_space.core.tls.provision import cert_issuance_in_progress
@@ -17,7 +20,7 @@ _SYSTEMD_IDLE_STATES = frozenset({"inactive", "failed"})
 
 
 class BusyReason(StrEnum):
-    # An openhost update is being started. Once it is underway this process is stopped, and the downtime updater
+    # An openhost update is being checked for or started. Once it is underway this process is stopped, and the downtime updater
     # answers 503 until the updated instance is back.
     PLATFORM_UPDATE = "platform_update"
     OS_PACKAGES = "os_packages"
@@ -32,6 +35,9 @@ class BusyReason(StrEnum):
 class AutoSuspendStatus:
     # Work that suspending the instance now would stall. Empty when it can be suspended.
     busy_reasons: tuple[BusyReason, ...]
+    # When the owner has openhost update itself each day, or None with auto-updates off. A hint for when to schedule
+    # the daily wake: the update runs on the first wake after this time.
+    auto_update_time_utc: time | None
 
 
 @async_wrap
@@ -51,7 +57,7 @@ def _apps_busy(db: sqlite3.Connection) -> bool:
 
 async def get_auto_suspend_status(db: sqlite3.Connection) -> AutoSuspendStatus:
     reasons: list[BusyReason] = []
-    if apply_lock.locked():
+    if apply_lock.locked() or scheduled_run_in_progress():
         reasons.append(BusyReason.PLATFORM_UPDATE)
     if await _apt_running():
         reasons.append(BusyReason.OS_PACKAGES)
@@ -61,4 +67,8 @@ async def get_auto_suspend_status(db: sqlite3.Connection) -> AutoSuspendStatus:
         reasons.append(BusyReason.APPS)
     if operation_lock.locked():
         reasons.append(BusyReason.PLATFORM_OPERATION)
-    return AutoSuspendStatus(busy_reasons=tuple(reasons))
+    auto_update = read_auto_update_config(db)
+    return AutoSuspendStatus(
+        busy_reasons=tuple(reasons),
+        auto_update_time_utc=auto_update.time_utc if auto_update.enabled else None,
+    )
