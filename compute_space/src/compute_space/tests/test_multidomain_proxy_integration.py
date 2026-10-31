@@ -42,6 +42,7 @@ from websockets.asyncio.server import serve
 
 from compute_space.config import Config
 from compute_space.core.app_id import new_app_id
+from compute_space.core.auto_suspend import activity
 from compute_space.core.domains import Domain
 from compute_space.core.domains import DomainRecord
 from compute_space.core.domains import seed_domains
@@ -825,3 +826,48 @@ async def test_authorized_websocket_preserves_encoded_path_and_query(
     assert events[0]["type"] == "websocket.accept"
     assert any(event.get("text") == "backend-ok" for event in events)
     assert received_targets == [f"{raw_path.decode('ascii')}?{query}"]
+
+
+# --- Auto-suspend: which inbound requests count as someone using the instance ----------
+
+
+@pytest.fixture
+def no_valid_request_yet(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(activity, "_last_valid_request_at", None)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("url", ["http://mixedapp.host.example.com/public", "http://myapp.myhost.local/anything"])
+async def test_public_path_counts_as_a_valid_request(wrapped_app: Any, no_valid_request_yet: None, url: str) -> None:
+    async with _client(wrapped_app) as c:
+        await c.get(url)
+    assert activity.last_valid_request_at() is not None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://mixedapp.host.example.com/secret",  # private path: bounced to login
+        "http://privapp.host.example.com/",  # private app: 404
+        "http://nope.host.example.com/",  # no such app
+        "http://host.example.com/health",  # the router, without auth
+        "http://unknown.example.org/",  # not one of this instance's domains
+    ],
+)
+async def test_anonymous_requests_off_public_paths_dont_count(
+    wrapped_app: Any, no_valid_request_yet: None, url: str
+) -> None:
+    async with _client(wrapped_app) as c:
+        await c.get(url)
+    assert activity.last_valid_request_at() is None
+
+
+@pytest.mark.asyncio
+async def test_owner_request_to_a_private_app_counts(
+    wrapped_app: Any, proxy_config: Config, no_valid_request_yet: None
+) -> None:
+    cookies = auth_cookie(proxy_config)
+    async with _client(wrapped_app) as c:
+        await c.get("http://privapp.host.example.com/", headers=cookie_header(cookies))
+    assert activity.last_valid_request_at() is not None

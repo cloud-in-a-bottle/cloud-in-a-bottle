@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from contextlib import closing
+from datetime import datetime
 from datetime import time
 from pathlib import Path
 from typing import Any
@@ -9,6 +10,7 @@ from typing import Any
 import attr
 import pytest
 from litestar import Litestar
+from litestar.connection import ASGIConnection
 from litestar.di import Provide
 from litestar.testing import TestClient
 
@@ -18,14 +20,20 @@ import compute_space.core.system_agent.client as client_mod
 from compute_space.config import Config
 from compute_space.config import provide_config
 from compute_space.config import set_active_config
+from compute_space.core.auto_suspend import activity
 from compute_space.core.auto_update.config import AutoUpdateConfig
 from compute_space.core.auto_update.config import write_auto_update_config
 from compute_space.db import get_db
 from compute_space.db import provide_db
 from compute_space.db.connection import init_db
+from compute_space.web.auth.auth import authenticate
+from compute_space.web.helpers.zone import ZONE_SCOPE_KEY
 from compute_space.web.routes.api.auto_suspend import auto_suspend_status
 
+from ._litestar_helpers import auth_cookie
+from ._litestar_helpers import make_http_scope
 from .conftest import _make_test_config
+from .conftest import primary_of
 
 _TOKEN = "host-status-token"
 
@@ -36,6 +44,11 @@ def cfg(tmp_path: Path) -> Iterator[Config]:
     init_db(config.db_path)
     set_active_config(config)
     yield config
+
+
+@pytest.fixture(autouse=True)
+def no_valid_request_yet(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(activity, "_last_valid_request_at", None)
 
 
 @pytest.fixture
@@ -86,6 +99,7 @@ def test_idle_instance_has_no_busy_reasons(client: TestClient[Litestar], cfg: Co
     resp = _get_status(client)
     assert resp.status_code == 200
     assert resp.json()["busy_reasons"] == []
+    assert resp.json()["last_valid_request_at"] is None
 
 
 @pytest.mark.asyncio
@@ -119,3 +133,34 @@ async def test_reports_a_scheduled_update_checking_for_a_release(cfg: Config, mo
     with closing(get_db()) as db:
         status = status_mod.get_auto_suspend_status(db)
     assert status.busy_reasons == (status_mod.BusyReason.PLATFORM_UPDATE,)
+
+
+# ─────────────── last valid request ───────────────
+
+
+def test_reports_the_last_valid_request(client: TestClient[Litestar], cfg: Config) -> None:
+    _configure_token(cfg)
+    activity.record_valid_request()
+    at = _get_status(client).json()["last_valid_request_at"]
+    assert at is not None
+    assert datetime.fromisoformat(at) == activity.last_valid_request_at()
+
+
+def test_status_request_itself_is_not_activity(client: TestClient[Litestar], cfg: Config) -> None:
+    _configure_token(cfg)
+    _get_status(client)
+    assert activity.last_valid_request_at() is None
+
+
+@pytest.mark.parametrize("on_a_domain", [True, False])
+def test_authenticated_request_counts_only_when_inbound(cfg: Config, on_a_domain: bool) -> None:
+    ((name, token),) = auth_cookie(cfg).items()
+    # The proxy stashes the matched domain on inbound requests; an app calling the router from inside the instance
+    # arrives on an internal host and has none.
+    extra_scope = {ZONE_SCOPE_KEY: primary_of(cfg)} if on_a_domain else None
+    scope = make_http_scope(
+        "GET", "/api/apps", host="host.containers.internal", cookie=f"{name}={token}", extra_scope=extra_scope
+    )
+    with closing(get_db()) as db:
+        assert authenticate(ASGIConnection(scope), db) is not None
+    assert (activity.last_valid_request_at() is not None) == on_a_domain
