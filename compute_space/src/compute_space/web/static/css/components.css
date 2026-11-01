@@ -841,8 +841,9 @@ table.form-table input[type="password"] {
   cursor: not-allowed;
 }
 
+/* The hint stays fg-secondary: it may say why the field is disabled, and fg-disabled fails WCAG AA contrast. */
 .field:has(> input:disabled, > select:disabled, > .field-row > input:disabled, > .field-row > select:disabled)
-  > :is(label, .field__head > label, .hint) {
+  > :is(label, .field__head > label) {
   color: var(--fg-disabled);
 }
 
