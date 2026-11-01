@@ -354,19 +354,28 @@ COMPONENTS = (
         name="Field",
         group="Forms",
         summary="A label, a control and an explainer, treated as one unit.",
-        template="""<div class="field">
-  <label for="library-field">{{ v.label }}</label>
-  <input id="library-field" type="text"{% if v.invalid %} class="invalid"{% endif %} value="alice">
-  {%- if v.hint %}
-  <p class="hint">Lowercase letters and digits.</p>
-  {%- endif %}
-  {%- if v.invalid %}
-  <p class="field-error">That username is taken.</p>
-  {%- endif %}
-</div>""",
-        classes=("field", "field__head", "hint", "field-error", "invalid", "field-stack"),
-        selectors=('input[type="text"]', "textarea"),
-        controls=(Text("label", "Username"), Toggle("hint", True, label="Hint"), Toggle("invalid", label="Error")),
+        macro="field",
+        template="""{% call field(v.label, "library-field", hint="Lowercase letters and digits." if v.hint else none,
+                     error="That username is taken." if v.state == "error" else none) %}
+  <input id="library-field" type="text"{% if v.state == "error" %} class="invalid"{% endif %}{% if v.state == "disabled" %} disabled{% endif %} value="alice"
+         aria-describedby="library-field-hint library-field-error">
+{% endcall %}""",
+        usage="""{% call field("$label", "username", hint="Lowercase letters and digits.") %}
+  <input type="text" id="username" aria-describedby="username-hint username-error">
+{% endcall %}""",
+        classes=("field", "field__head", "field-error", "invalid", "field-stack"),
+        controls=(
+            Text("label", "Username"),
+            Choice("state", ("default", "error", "disabled"), label="State"),
+            Toggle("hint", True, label="Hint"),
+        ),
+        notes=(
+            "An error replaces the hint, and editing the input or select clears it.",
+            "On touch screens the input is 36px with 16px text, and the label, hint and error are 14px. Phone width here does not switch this on.",
+            "A field is either disabled or in error. If it is both, disabled wins and the error stays hidden.",
+            "Hover the input for an fg/secondary border, and click into it for fg/primary. There is no focus ring.",
+            "The 8 rows in Settings with a title and buttons still use .field by hand.",
+        ),
     ),
     Component(
         id="field-row",

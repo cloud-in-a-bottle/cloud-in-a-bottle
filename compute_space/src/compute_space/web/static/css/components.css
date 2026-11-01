@@ -769,12 +769,9 @@ table.form-table input[type="password"] {
   display: block;
   margin-bottom: var(--space-1);
   font-size: var(--text-body-sm);
-  opacity: 0.8;
 }
 
-/* Carries whatever sits beside the label -- an info tip, a badge. The dimming
-   stays on the label itself: `opacity` on this row would group the tip's
-   popover into it and render it translucent. */
+/* Carries whatever sits beside the label -- an info tip, a badge. */
 .field__head {
   display: flex;
   align-items: center;
@@ -795,12 +792,94 @@ table.form-table input[type="password"] {
   margin-top: 0;
 }
 
-.field > .hint,
 .field > .msg,
-.field > .notice,
-.field > .field-error {
+.field > .notice {
   margin-top: var(--space-2);
   margin-bottom: 0;
+}
+
+.field > .hint,
+.field > .field-error {
+  margin-top: var(--space-1);
+  margin-bottom: 0;
+}
+
+.field > .hint {
+  font-size: var(--text-body-sm);
+  line-height: var(--leading-body-sm);
+}
+
+/* An error takes the hint's place rather than stacking under it. */
+.field:has(> .field-error:not([hidden])):not(:has(> input:disabled, > select:disabled, > .field-row > input:disabled, > .field-row > select:disabled)) > .hint,
+.field:has(> .msg--error:not([hidden])) > .hint {
+  display: none;
+}
+
+/* The same height as a desktop .btn, so a control and its Save button line up. */
+.field input:not([type="checkbox"], [type="radio"], [type="file"]),
+.field select {
+  height: 28px;
+}
+
+/* Touch browsers apply :hover on tap and keep it after, which would flash this border. */
+@media (hover: hover) {
+  .field input:not([type="checkbox"], [type="radio"], [type="file"], .invalid, :disabled):hover,
+  .field select:not(.invalid, :disabled):hover {
+    border-color: var(--fg-secondary);
+  }
+}
+
+.field input:not([type="checkbox"], [type="radio"], [type="file"], .invalid, :disabled):focus,
+.field select:not(.invalid, :disabled):focus {
+  border-color: var(--fg-primary);
+}
+
+/* The same treatment as a disabled .btn, so a field and its Save button fade together. */
+.field input:not([type="checkbox"], [type="radio"], [type="file"]):disabled,
+.field select:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* The hint stays fg-secondary: it may say why the field is disabled, and fg-disabled fails WCAG AA contrast. */
+.field:has(> input:disabled, > select:disabled, > .field-row > input:disabled, > .field-row > select:disabled)
+  > :is(label, .field__head > label) {
+  color: var(--fg-disabled);
+}
+
+/* A field is either disabled or in error, and disabled wins: nobody can fix an input they can't edit. */
+.field:has(> input:disabled, > select:disabled, > .field-row > input:disabled, > .field-row > select:disabled)
+  > .field-error {
+  display: none;
+}
+
+.field input.invalid:disabled,
+.field select.invalid:disabled {
+  border-color: var(--fg-border);
+}
+
+/* The darker border marks focus here, so the global outline is switched off. */
+.field input:not([type="checkbox"], [type="radio"], [type="file"]):focus-visible,
+.field select:focus-visible {
+  outline: none;
+}
+
+/* The same height as a touch .btn. iOS zooms the page into any input under 16px. */
+@media (hover: none) {
+  .field input:not([type="checkbox"], [type="radio"], [type="file"]),
+  .field select {
+    height: 36px;
+    font-size: var(--text-body-lg);
+  }
+
+  .field > span,
+  .field > label,
+  .field__head > label,
+  .field > .hint,
+  .field > .field-error {
+    font-size: var(--text-body-md);
+    line-height: var(--leading-body-md);
+  }
 }
 
 .actions {

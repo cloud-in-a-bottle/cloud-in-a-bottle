@@ -432,7 +432,9 @@ def build_page(repo: Repo, fragment: bool) -> str:
         "icons": list(repo.icons),
         "assets": assets,
         "productCss": product_css,
-        "frameScripts": "\n".join((static / "js" / name).read_text() for name in ("info-tip.js", "nav-menu.js")),
+        "frameScripts": "\n".join(
+            (static / "js" / name).read_text() for name in ("info-tip.js", "nav-menu.js", "field.js")
+        ),
         "repo": repo_state(repo.root),
         "tokensUrl": f"{GITHUB}{WEB}/static/css/tokens.css",
     }
