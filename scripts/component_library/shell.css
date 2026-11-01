@@ -234,6 +234,89 @@ body {
   line-height: 20px;
 }
 
+/* Layers. Purple marks a subcomponent and blue any other layer, as Figma's outlines do. */
+
+.lib__subs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-bottom: var(--border-w) solid var(--fg-border);
+  font-size: var(--text-body-sm);
+}
+
+.lib__subs-title {
+  color: var(--fg-secondary);
+}
+
+.lib__layers {
+  max-height: 340px;
+  overflow-y: auto;
+  padding-block: var(--space-1);
+  font-size: var(--text-body-sm);
+}
+
+.lib__layer {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 26px;
+  padding-right: var(--space-3);
+}
+
+.lib__layer.is-hot,
+.lib__layer:hover,
+.lib__layer:focus {
+  background: var(--interactive-hover);
+  outline: none;
+}
+
+.lib__layer.is-hidden > * {
+  opacity: 0.45;
+}
+
+.lib__glyph {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 10px;
+  height: 10px;
+  color: #0d99ff;
+  font-size: 11px;
+  font-weight: var(--weight-emphasized);
+  line-height: 1;
+}
+
+.lib__glyph--frame {
+  border: var(--border-w) solid #0d99ff;
+}
+
+.lib__glyph--part {
+  background: #9747ff;
+  transform: rotate(45deg) scale(0.8);
+}
+
+.lib__layer-name {
+  flex: none;
+}
+
+.lib__layer-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--fg-secondary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lib__layer-size {
+  flex: none;
+  color: var(--fg-secondary);
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
 .lib__gallery {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
