@@ -1,0 +1,32 @@
+{#- A label, a control and an explainer, treated as one unit. The caller is the
+    control, and its id must match ``id`` so the label points at it. The hint is
+    {id}-hint and the error is {id}-error: list them in the control's
+    aria-describedby. Showing the error, or an .msg--error in ``extra``, hides
+    the hint, unless the control is disabled: a disabled field never shows
+    an error. Editing the control clears the error (field.js). ``hint`` and
+    ``extra`` take markup from a {% set %} block; ``tip`` is an info_tip beside
+    the label and ``extra`` is anything under the hint.
+
+    {% call field("Password", "login-password", hint="At least 8 characters.") %}
+      <input type="password" id="login-password" aria-describedby="login-password-hint">
+    {% endcall %} -#}
+{% macro field(label, id, hint=none, error=none, tip=none, extra=none) -%}
+<div class="field">
+  {%- if tip %}
+  <div class="field__head">
+    <label for="{{ id }}">{{ label }}</label>
+    {{- tip }}
+  </div>
+  {%- else %}
+  <label for="{{ id }}">{{ label }}</label>
+  {%- endif %}
+  {{ caller() }}
+  {%- if hint %}
+  <p class="hint" id="{{ id }}-hint">{{ hint }}</p>
+  {%- endif %}
+  <p class="field-error" id="{{ id }}-error"{% if not error %} hidden{% endif %}>{{ error or "" }}</p>
+  {%- if extra %}
+  {{ extra }}
+  {%- endif %}
+</div>
+{%- endmacro %}

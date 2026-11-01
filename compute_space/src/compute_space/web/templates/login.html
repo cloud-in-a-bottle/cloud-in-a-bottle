@@ -1,5 +1,6 @@
 {% extends "_layout_narrow.html" %}
 {% from "_components/button.html" import button %}
+{% from "_components/field.html" import field %}
 {% block title_suffix %} - Login{% endblock %}
 
 {% block content %}
@@ -7,10 +8,9 @@
 {% if error %}<p class="error">{{ error }}</p>{% endif %}
 <form method="post">
   <input type="hidden" name="next" value="{{ next }}">
-  <label class="field">
-    <span>Password</span>
-    <input type="password" name="password" autocomplete="current-password" required autofocus>
-  </label>
+  {% call field("Password", "password") %}
+    <input type="password" id="password" name="password" autocomplete="current-password" required autofocus>
+  {% endcall %}
   <div class="actions">
     {{ button("Log in", variant="primary", type="submit") }}
   </div>

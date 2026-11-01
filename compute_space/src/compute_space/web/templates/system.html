@@ -5,6 +5,7 @@
 {% from "_components/info_tip.html" import info_tip %}
 {% from "_components/info_table.html" import info_table %}
 {% from "_components/button.html" import button %}
+{% from "_components/field.html" import field %}
 {% call section_head("Resource Usage") %}{% endcall %}
 <div class="usage-charts">
   <div class="usage-chart">
@@ -72,12 +73,11 @@
 
 <section id="app-definition-load" aria-labelledby="app-definition-load-title">
   <h3 id="app-definition-load-title">Load apps</h3>
-  <div class="field">
-    <label for="app-definition-file">Exported app YAML</label>
+  {% call field("Exported app YAML", "app-definition-file",
+                hint="Choose a YAML file up to 1 MiB. Existing apps and unavailable sources are skipped.") %}
     <input type="file" id="app-definition-file" accept=".yaml,.yml" autocomplete="off"
-           aria-describedby="app-definition-load-hint">
-    <p class="hint" id="app-definition-load-hint">Choose a YAML file up to 1 MiB. Existing apps and unavailable sources are skipped.</p>
-  </div>
+           aria-describedby="app-definition-file-hint">
+  {% endcall %}
   <ul id="app-definition-apps" hidden></ul>
   <p class="hint" id="app-definition-api-tokens" hidden></p>
   <div class="action-bar">

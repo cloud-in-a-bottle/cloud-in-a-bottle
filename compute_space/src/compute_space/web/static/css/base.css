@@ -258,7 +258,8 @@ a:focus-visible,
   outline-offset: 1px;
 }
 
-input.invalid {
+input.invalid,
+select.invalid {
   border-color: var(--fg-status-negative);
 }
 

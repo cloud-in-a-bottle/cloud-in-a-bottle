@@ -1,6 +1,7 @@
 {% extends "_layout_narrow.html" %}
 {% from "_components/info_tip.html" import info_tip %}
 {% from "_components/button.html" import button %}
+{% from "_components/field.html" import field %}
 {% block title_suffix %} - Setup{% endblock %}
 
 {% block content %}
@@ -11,10 +12,8 @@
 <form method="post" id="setup-form">
   {% if claim %}<input type="hidden" name="claim" value="{{ claim }}">{% endif %}
 
-  <div class="field">
-    <div class="field__head">
-      <label for="username">Username (optional)</label>
-      {%- call info_tip("username-hint", "What the username is for") %}
+  {% set username_tip %}
+      {%- call info_tip("username-tip", "What the username is for") %}
       <p>Used by apps you install (PeerTube, Mastodon, etc.) as your account name. Leave
         blank to use the default <code>owner</code>; you can change this later from the
         Settings page. Sign-in only requires the password.</p>
@@ -22,22 +21,20 @@
         <code>-</code>; must start with a letter or digit; max&nbsp;30 characters. No
         <code>@</code>, spaces, or uppercase.</p>
       {%- endcall %}
-    </div>
+  {%- endset %}
+  {% call field("Username (optional)", "username", tip=username_tip) %}
     <input type="text" name="username" id="username" autocomplete="username"
            value="{{ username or '' }}"
            pattern="[a-z0-9][a-z0-9._\-]{0,29}" maxlength="30"
            aria-describedby="username-error">
-    <p class="field-error" id="username-error" hidden></p>
-  </div>
+  {% endcall %}
 
-  <label class="field">
-    <span>Password</span>
-    <input type="password" name="password" autocomplete="new-password" required>
-  </label>
-  <label class="field">
-    <span>Confirm password</span>
-    <input type="password" name="confirm_password" autocomplete="new-password" required>
-  </label>
+  {% call field("Password", "password") %}
+    <input type="password" id="password" name="password" autocomplete="new-password" required>
+  {% endcall %}
+  {% call field("Confirm password", "confirm-password") %}
+    <input type="password" id="confirm-password" name="confirm_password" autocomplete="new-password" required>
+  {% endcall %}
 
   <div class="actions">
     {{ button("Set password", variant="primary", type="submit", id="submit-btn") }}
