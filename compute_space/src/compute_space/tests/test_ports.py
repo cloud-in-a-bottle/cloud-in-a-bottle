@@ -131,8 +131,7 @@ class TestCheckPortAvailable:
 
         app_id = _seed(db, "myapp", 9500)
         db.execute(
-            "INSERT INTO app_port_mappings (app_id, label, container_port, host_port) "
-            "VALUES (?, 'svc', 8080, ?)",
+            "INSERT INTO app_port_mappings (app_id, label, container_port, host_port) VALUES (?, 'svc', 8080, ?)",
             (app_id, port),
         )
         db.commit()
@@ -251,8 +250,7 @@ class TestReloadPortRaceScope:
         app_id = _seed(db, "myapp", 9500)
         held = 59250  # the app's own existing host_port, held by the old container
         db.execute(
-            "INSERT INTO app_port_mappings (app_id, label, container_port, host_port) "
-            "VALUES (?, 'a', 8080, ?)",
+            "INSERT INTO app_port_mappings (app_id, label, container_port, host_port) VALUES (?, 'a', 8080, ?)",
             (app_id, held),
         )
         db.commit()
@@ -271,8 +269,8 @@ class TestReloadPortRaceScope:
             resolved = resolve_port_mappings(to_resolve, db, 59200, 59300, exclude_app_id=app_id)
 
         ports = {r.label: r.host_port for r in resolved}
-        assert ports["a"] == held        # own held port kept (self-conflict skipped)
-        assert ports["b"] != held        # new label got a different free port
+        assert ports["a"] == held  # own held port kept (self-conflict skipped)
+        assert ports["b"] != held  # new label got a different free port
         assert 59200 <= ports["b"] <= 59300
 
     def test_single_port_app_reload_runs_no_port_check(self, db):
@@ -297,8 +295,7 @@ class TestReloadPortRaceScope:
         app_id = _seed(db, "myapp", 9500)
         held = 59250
         db.execute(
-            "INSERT INTO app_port_mappings (app_id, label, container_port, host_port) "
-            "VALUES (?, 'old', 8080, ?)",
+            "INSERT INTO app_port_mappings (app_id, label, container_port, host_port) VALUES (?, 'old', 8080, ?)",
             (app_id, held),
         )
         db.commit()

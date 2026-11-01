@@ -96,14 +96,10 @@ def _port_reserved_by_app(port: int, db: sqlite3.Connection, app_id: str) -> boo
     but it is removed before the new container binds them, so a failed bind
     here is a self-conflict, not a real one.
     """
-    if db.execute(
-        "SELECT 1 FROM apps WHERE app_id = ? AND local_port = ?", (app_id, port)
-    ).fetchone():
+    if db.execute("SELECT 1 FROM apps WHERE app_id = ? AND local_port = ?", (app_id, port)).fetchone():
         return True
     return bool(
-        db.execute(
-            "SELECT 1 FROM app_port_mappings WHERE app_id = ? AND host_port = ?", (app_id, port)
-        ).fetchone()
+        db.execute("SELECT 1 FROM app_port_mappings WHERE app_id = ? AND host_port = ?", (app_id, port)).fetchone()
     )
 
 
