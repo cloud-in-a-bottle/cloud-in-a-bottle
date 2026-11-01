@@ -13,7 +13,7 @@
   ];
   var SURFACES = {Sky: 'var(--bg-sky)', White: 'var(--bg-primary)', Panel: 'var(--bg-surface)'};
 
-  var state = {width: 'Desktop', surface: 'Sky', tab: 'Usage', query: ''};
+  var state = {width: 'Desktop', surface: 'Sky', tab: 'Usage', query: '', view: 'Design'};
   var frameCount = 0;
   var frames = {};
   var said = null;
@@ -87,7 +87,7 @@
     return "var ID=" + JSON.stringify(id) + ";" +
       "function report(){parent.postMessage({libFrame:ID,height:document.documentElement.scrollHeight},'*')}" +
       "new ResizeObserver(report).observe(document.getElementById('root'));" +
-      "window.addEventListener('message',function(e){var m=e.data;if(!m||!('html' in m))return;" +
+      "window.addEventListener('message',function(e){var m=e.data;if(e.source!==parent||!m||!('html' in m))return;" +
       "document.getElementById('root').innerHTML=m.html;document.body.style.background=m.surface;report()});" +
       "document.addEventListener('click',function(e){" +
       "var a=e.target.closest&&e.target.closest('a[href]');" +
@@ -98,28 +98,146 @@
       "parent.postMessage({libFrame:ID,ready:true},'*');";
   };
 
+  // Runs inside the preview frame, so the layer tree comes from the real DOM and sizes.
+  function frameInspector(id) {
+    var root = document.getElementById('root');
+    var overlay = document.createElement('div');
+    var nodes = [];
+    var matchers = null;
+    var queued = false;
+
+    overlay.id = 'lib-hi';
+    overlay.hidden = true;
+    overlay.appendChild(document.createElement('span'));
+    document.body.appendChild(overlay);
+
+    function firstMatch(node, kind) {
+      for (var i = 0; i < matchers.length; i++) {
+        if (matchers[i].kind === kind && node.matches(matchers[i].selector)) return i;
+      }
+      return -1;
+    }
+
+    function ownText(node) {
+      if (node.tagName === 'SELECT') return node.selectedOptions[0] ? node.selectedOptions[0].textContent : '';
+      if (node.tagName === 'INPUT') return node.type === 'password' ? '' : node.value;
+      return Array.prototype.filter.call(node.childNodes, function (child) { return child.nodeType === 3; })
+        .map(function (child) { return child.textContent.trim(); }).join(' ').trim();
+    }
+
+    function walk(node, depth, list) {
+      var index = nodes.length;
+      var box = node.getBoundingClientRect();
+      var leaf = /^(SELECT|SVG|IMG)$/i.test(node.tagName);
+      var kids = leaf ? [] : Array.prototype.filter.call(node.children, function (child) {
+        return !/^(SCRIPT|STYLE|TEMPLATE)$/.test(child.tagName);
+      });
+      nodes.push(node);
+      list.push({
+        index: index, depth: depth, tag: node.tagName.toUpperCase(), classes: Array.prototype.slice.call(node.classList),
+        text: ownText(node), width: Math.round(box.width), height: Math.round(box.height),
+        hidden: !node.getClientRects().length, part: firstMatch(node, 'part'), owner: firstMatch(node, 'page'),
+        leaf: !kids.length,
+      });
+      kids.forEach(function (child) { walk(child, depth + 1, list); });
+    }
+
+    function scan() {
+      queued = false;
+      if (!matchers) return;
+      var list = [];
+      nodes = [];
+      Array.prototype.forEach.call(root.children, function (child) { walk(child, 0, list); });
+      parent.postMessage({libFrame: id, layers: list}, '*');
+    }
+
+    function queueScan() {
+      if (queued) return;
+      queued = true;
+      setTimeout(scan, 0);
+    }
+
+    function highlight(index, label) {
+      var node = nodes[index];
+      var box = node && node.getBoundingClientRect();
+      if (!box || !box.width) {
+        overlay.hidden = true;
+        return;
+      }
+      overlay.style.cssText = 'left:' + box.left + 'px;top:' + box.top + 'px;width:' + box.width + 'px;height:' + box.height + 'px';
+      overlay.firstChild.textContent = label;
+      overlay.hidden = false;
+    }
+
+    new MutationObserver(queueScan).observe(root, {
+      subtree: true, childList: true, attributes: true, attributeFilter: ['class', 'hidden', 'disabled', 'style'],
+    });
+    new ResizeObserver(queueScan).observe(root);
+    document.addEventListener('input', queueScan);
+
+    // The page can be opened from disk, where it has no origin to compare, so check the sender.
+    window.addEventListener('message', function (e) {
+      var message = e.data;
+      if (e.source !== parent || !message) return;
+      if ('matchers' in message) matchers = message.matchers;
+      if ('outline' in message) document.documentElement.classList.toggle('lib-outline', message.outline);
+      if ('marks' in message) {
+        nodes.forEach(function (node, index) { node.toggleAttribute('data-lib-part', message.marks.indexOf(index) >= 0); });
+      }
+      if ('highlight' in message) {
+        if (message.highlight === null) overlay.hidden = true;
+        else highlight(message.highlight, message.label);
+      }
+      if ('html' in message) queueScan();
+    });
+
+    root.addEventListener('mouseover', function (e) {
+      if (document.documentElement.classList.contains('lib-outline')) {
+        parent.postMessage({libFrame: id, hover: nodes.indexOf(e.target)}, '*');
+      }
+    });
+    root.addEventListener('mouseleave', function () { parent.postMessage({libFrame: id, hover: -1}, '*'); });
+  }
+
+  var FRAME_CSS = 'html.lib-outline body{background:#fff!important}' +
+    'html.lib-outline #root *{background:none!important;box-shadow:none!important;border-color:transparent!important;' +
+    'outline:1px solid #0d99ff!important;outline-offset:-1px!important}' +
+    'html.lib-outline #root [data-lib-part]{outline-color:#9747ff!important}' +
+    '#lib-hi{position:fixed;z-index:9999;pointer-events:none;outline:2px solid #9747ff;background:rgb(151 71 255 / 0.1)}' +
+    '#lib-hi[hidden]{display:none}' +
+    '#lib-hi span{position:absolute;left:-2px;bottom:calc(100% + 2px);padding:1px 4px;background:#9747ff;color:#fff;' +
+    'font:11px/16px var(--font-mono);white-space:nowrap}';
+
   function frameDoc(id, padding) {
-    var css = data.productCss +
+    var css = data.productCss + FRAME_CSS +
       'html{scrollbar-gutter:auto}body{min-height:0;padding:' + padding + 'px;background:transparent}';
     return '<!doctype html><html lang="en"><head><meta charset="utf-8">' +
       '<meta name="viewport" content="width=device-width,initial-scale=1">' +
       '<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Inter:wght@400;500&display=swap">' +
       '<style>' + css + '</style></head><body><div id="root"></div>' +
-      '<script>' + data.frameScripts + '<\/script><script>' + FRAME_SCRIPT(id) + '<\/script></body></html>';
+      '<script>' + data.frameScripts + '<\/script><script>' + FRAME_SCRIPT(id) +
+      '(' + frameInspector + ')(' + JSON.stringify(id) + ');<\/script></body></html>';
   }
 
-  function makeFrame(title, padding, onHeight) {
+  function makeFrame(title, padding, onHeight, inspect) {
     frameCount += 1;
     var id = 'f' + frameCount;
     var frame = el('iframe', {title: title, loading: 'eager'});
-    frames[id] = {node: frame, ready: false, pending: null, onHeight: onHeight};
+    frames[id] = {node: frame, ready: false, pending: null, onHeight: onHeight, inspect: inspect};
     frame.srcdoc = frameDoc(id, padding);
     return {
       node: frame,
       show: function (html, surface) {
         var message = {html: withAssets(html), surface: surface};
+        if (inspect) {
+          message.matchers = inspect.matchers;
+          message.outline = state.view === 'Outline';
+        }
         if (frames[id].ready) frame.contentWindow.postMessage(message, '*');
         else frames[id].pending = message;
+      },
+      send: function (message) {
+        if (frames[id].ready) frame.contentWindow.postMessage(message, '*');
       },
     };
   }
@@ -128,7 +246,7 @@
     var message = e.data;
     if (!message || !message.libFrame) return;
     var entry = frames[message.libFrame];
-    if (!entry) return;
+    if (!entry || e.source !== entry.node.contentWindow) return;
     if (message.ready) {
       entry.ready = true;
       if (entry.pending) entry.node.contentWindow.postMessage(entry.pending, '*');
@@ -136,6 +254,8 @@
     }
     if (message.height && entry.onHeight) entry.onHeight(message.height);
     if (message.said && said) said.textContent = message.said;
+    if (message.layers && entry.inspect) entry.inspect.onLayers(message.layers);
+    if ('hover' in message && entry.inspect) entry.inspect.onHover(message.hover);
   });
 
   function segmented(label, options, current, onPick) {
@@ -295,6 +415,119 @@
     ]);
   }
 
+  // Named parts of this page first, then anything another page owns.
+  function layerMatchers(page) {
+    var matchers = page.parts.map(function (part) {
+      return {kind: 'part', selector: part.match, name: part.name};
+    });
+    data.pages.forEach(function (other) {
+      if (other.id === page.id || !Object.keys(other.combos).length) return;
+      other.classes.map(function (name) { return '.' + name; }).concat(other.selectors).forEach(function (selector) {
+        matchers.push({kind: 'page', selector: selector, name: other.name, page: other.id});
+      });
+    });
+    return matchers;
+  }
+
+  var TAG_NAMES = {
+    A: 'Link', BUTTON: 'Button', DIV: 'Frame', IMG: 'Icon', INPUT: 'Input', LABEL: 'Label', LI: 'Item', P: 'Text',
+    SECTION: 'Section', SELECT: 'Select', SPAN: 'Text', SVG: 'Icon', TABLE: 'Table', TD: 'Cell', TH: 'Heading cell',
+    TR: 'Row', UL: 'List',
+  };
+
+  function layerName(layer) {
+    var base = layer.classes.filter(function (name) { return name.indexOf('--') < 0 && name.indexOf('lib-') !== 0; })[0];
+    if (!base) return TAG_NAMES[layer.tag] || layer.tag.charAt(0) + layer.tag.slice(1).toLowerCase();
+    var words = base.split('__').pop().replace(/-/g, ' ');
+    return words.charAt(0).toUpperCase() + words.slice(1);
+  }
+
+  // Each layer knows its name and, when it's a subcomponent, the page that documents it.
+  // A cell inside a table is part of the table, so a run of one owner only counts once.
+  function describeLayers(layers, matchers) {
+    var owners = [];
+    return layers.map(function (layer) {
+      var owner = layer.owner >= 0 ? matchers[layer.owner] : null;
+      owners.length = layer.depth;
+      var nested = owner && owners.indexOf(owner.page) >= 0;
+      owners[layer.depth] = owner ? owner.page : null;
+      var part = layer.part >= 0 ? matchers[layer.part] : null;
+      var link = owner && !nested ? owner : null;
+      return {
+        index: layer.index, depth: layer.depth, hidden: layer.hidden, sub: !!(part || link),
+        name: part ? part.name : link ? link.name : layerName(layer),
+        page: link ? link.page : null,
+        text: layer.text, size: layer.width + ' x ' + layer.height,
+        glyph: part || link ? 'part' : layer.leaf && layer.text ? 'text' : 'frame',
+      };
+    });
+  }
+
+  function renderLayers(getStage) {
+    var subs = el('div', {class: 'lib__subs'});
+    var list = el('div', {class: 'lib__layers'});
+    var rows = {};
+    var hot = null;
+
+    function point(row) {
+      if (hot) hot.classList.remove('is-hot');
+      hot = row || null;
+      if (hot) hot.classList.add('is-hot');
+    }
+
+    function row(layer) {
+      function show() { getStage().send({highlight: layer.index, label: layer.name + '  ' + layer.size}); }
+      function clear() { getStage().send({highlight: null}); }
+      return el('div', {
+        class: 'lib__layer' + (layer.hidden ? ' is-hidden' : ''), tabindex: '0',
+        style: 'padding-left:' + (12 + layer.depth * 16) + 'px',
+        onmouseenter: show, onmouseleave: clear, onfocus: show, onblur: clear,
+      }, [
+        el('span', {class: 'lib__glyph lib__glyph--' + layer.glyph, text: layer.glyph === 'text' ? 'T' : null, 'aria-hidden': 'true'}),
+        layer.page ? el('a', {class: 'lib__layer-name', href: '#' + layer.page, text: layer.name}) : el('span', {class: 'lib__layer-name', text: layer.name}),
+        el('span', {class: 'lib__layer-text', text: layer.text}),
+        el('span', {class: 'lib__layer-size', text: layer.hidden ? 'Hidden' : layer.size}),
+      ]);
+    }
+
+    return {
+      node: el('section', {class: 'lib__box', 'aria-label': 'Layers'}, [
+        el('div', {class: 'lib__box-head'}, el('h3', {class: 'lib__box-title', text: 'Layers'})),
+        subs,
+        list,
+      ]),
+      update: function (layers) {
+        var seen = {};
+        var chips = layers.filter(function (layer) {
+          if (!layer.sub || seen[layer.name]) return false;
+          return (seen[layer.name] = true);
+        });
+        subs.hidden = !chips.length;
+        subs.textContent = '';
+        subs.appendChild(el('span', {class: 'lib__subs-title', text: 'Subcomponents'}));
+        chips.forEach(function (layer) {
+          subs.appendChild(layer.page
+            ? el('a', {class: 'badge badge--info', href: '#' + layer.page, text: layer.name})
+            : el('span', {class: 'badge', text: layer.name}));
+        });
+        list.textContent = '';
+        rows = {};
+        hot = null;
+        layers.forEach(function (layer) {
+          rows[layer.index] = row(layer);
+          list.appendChild(rows[layer.index]);
+        });
+      },
+      point: function (index) {
+        point(rows[index]);
+        if (!hot) return;
+        var top = hot.offsetTop - list.offsetTop;
+        if (top < list.scrollTop) list.scrollTop = top;
+        else if (top + hot.offsetHeight > list.scrollTop + list.clientHeight) list.scrollTop = top + hot.offsetHeight - list.clientHeight;
+      },
+    };
+  }
+
   function renderComponent(page) {
     var nodes = [renderHead(page)];
     var hasPreview = Object.keys(page.combos).length > 0;
@@ -313,8 +546,23 @@
     var values = controlValues(page);
     var width = page.phone ? 'Phone' : state.width;
     var preview = el('div', {class: 'lib__preview' + (width === 'Phone' ? ' lib__preview--phone' : '')});
+    var matchers = layerMatchers(page);
+    var layers = renderLayers(function () { return stage; });
+    var described = [];
     var stage = makeFrame(page.name + ' preview', 24, function (height) {
       stage.node.style.height = Math.max(150, height) + 'px';
+    }, {
+      matchers: matchers,
+      onLayers: function (list) {
+        described = describeLayers(list, matchers);
+        layers.update(described);
+        stage.send({marks: described.filter(function (layer) { return layer.sub; }).map(function (layer) { return layer.index; })});
+      },
+      onHover: function (index) {
+        var layer = described.filter(function (item) { return item.index === index; })[0];
+        layers.point(index);
+        stage.send(layer ? {highlight: index, label: layer.name + '  ' + layer.size} : {highlight: null});
+      },
     });
     preview.appendChild(stage.node);
     said = el('p', {class: 'lib__said', text: 'Hover, click and tab through the preview. It is the real markup and CSS.'});
@@ -342,6 +590,10 @@
       el('div', {class: 'lib__box-head'}, [
         el('h3', {class: 'lib__box-title', text: 'Try it'}),
         el('div', {class: 'lib__options'}, [
+          segmented('View', ['Design', 'Outline'], state.view, function (next) {
+            state.view = next;
+            stage.send({outline: next === 'Outline'});
+          }),
           segmented('Preview width', ['Desktop', 'Phone'], width, function (next) {
             state.width = next;
             preview.classList.toggle('lib__preview--phone', next === 'Phone');
@@ -356,6 +608,7 @@
       el('div', {class: 'lib__stage'}, [preview, el('div', {class: 'lib__controls'}, controlsList)]),
       said,
     ]));
+    nodes.push(layers.node);
 
     var gallery = page.gallery.map(function (item) {
       var frame = makeFrame(item.label, 10, null);
@@ -525,9 +778,14 @@
   });
 
   document.addEventListener('keydown', function (e) {
-    if (e.key === '/' && !/^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName)) {
+    if (/^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName)) return;
+    if (e.key === '/') {
       e.preventDefault();
       filter.focus();
+    }
+    if (e.key === 'O') {
+      var other = document.querySelector('[aria-label="View"] [aria-pressed="false"]');
+      if (other) other.click();
     }
   });
 

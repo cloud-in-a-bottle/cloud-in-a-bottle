@@ -1,6 +1,7 @@
 from model import ICONS
 from model import Choice
 from model import Component
+from model import Part
 from model import Text
 from model import Toggle
 
@@ -357,8 +358,16 @@ COMPONENTS = (
         macro="field",
         template="""{% call field(v.label, "library-field", hint="Lowercase letters and digits." if v.hint else none,
                      error="That username is taken." if v.state == "error" else none) %}
+  {% if v.control == "select" %}
+  <select id="library-field"{% if v.state == "error" %} class="invalid"{% endif %}{% if v.state == "disabled" %} disabled{% endif %}
+          aria-describedby="library-field-hint library-field-error">
+    <option>alice</option>
+    <option>bob</option>
+  </select>
+  {% else %}
   <input id="library-field" type="text"{% if v.state == "error" %} class="invalid"{% endif %}{% if v.state == "disabled" %} disabled{% endif %} value="alice"
          aria-describedby="library-field-hint library-field-error">
+  {% endif %}
 {% endcall %}""",
         usage="""{% call field("$label", "username", hint="Lowercase letters and digits.") %}
   <input type="text" id="username" aria-describedby="username-hint username-error">
@@ -367,7 +376,15 @@ COMPONENTS = (
         controls=(
             Text("label", "Username"),
             Choice("state", ("default", "error", "disabled"), label="State"),
+            Choice("control", ("input", "select"), label="Control"),
             Toggle("hint", True, label="Hint"),
+        ),
+        parts=(
+            Part(".field__head", "Label row"),
+            Part("label", "Label"),
+            Part('input[type="text"]', "Input"),
+            Part(".hint", "Hint text"),
+            Part(".field-error", "Error text"),
         ),
         notes=(
             "An error replaces the hint, and editing the input or select clears it.",

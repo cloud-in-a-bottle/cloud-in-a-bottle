@@ -32,6 +32,14 @@ ICONS: tuple[str, ...] = ("__icons__",)
 
 
 @attr.s(auto_attribs=True, frozen=True)
+class Part:
+    """A named piece of a component in the Layers view. match is a CSS selector."""
+
+    match: str
+    name: str
+
+
+@attr.s(auto_attribs=True, frozen=True)
 class Component:
     """One page of the library.
 
@@ -45,6 +53,8 @@ class Component:
     classes: the CSS classes this page owns. Variants come along, so "btn" also covers btn--primary.
     selectors: element selectors this page owns, for rules with no class such as select.
     phone: open at phone width, for components that only appear there.
+    parts: names for the pieces of this component, which the Layers view lists as subcomponents. Anything owned by
+        another page is found from that page's classes and selectors, so it doesn't need naming here.
     """
 
     id: str
@@ -61,3 +71,4 @@ class Component:
     selectors: tuple[str, ...] = ()
     notes: tuple[str, ...] = ()
     phone: bool = False
+    parts: tuple[Part, ...] = ()

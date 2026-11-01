@@ -17,5 +17,6 @@ This writes `scripts/component_library/cloud-in-a-bottle-components.html`, which
 - **A new macro in `_components/`** appears on the next rebuild under **New**, with placeholder content and a control for each required argument and on/off option.
 - **New CSS** with no matching page appears under **No preview yet**, showing its styles.
 - **To finish a page**, add a `Component` to `catalog.py`. That gives it realistic sample content, its controls, notes and a place in the list.
+- **To name its pieces**, add `parts` to the `Component`. The **Layers** box and the **Outline** view read the live preview, so every page has them, and anything another page owns is linked there automatically.
 
 The build stops with an error if `catalog.py` names a macro that no longer exists. A catalog entry that can't render also stops the build.
