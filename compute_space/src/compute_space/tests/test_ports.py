@@ -1,5 +1,6 @@
 """Unit tests for port allocation and availability checking."""
 
+import socket
 import sqlite3
 from collections.abc import Iterator
 from unittest import mock
@@ -8,6 +9,7 @@ import pytest
 
 from compute_space.core.app_id import new_app_id
 from compute_space.core.manifest import PortMapping
+from compute_space.core.ports import _port_is_bindable
 from compute_space.core.ports import check_port_available
 from compute_space.core.ports import resolve_port_mappings
 
@@ -94,6 +96,74 @@ class TestCheckPortAvailable:
         _seed(db, "other", 9500)
         available, used_by = check_port_available(9500, db, exclude_app_id=new_app_id())
         assert available is False
+
+    @pytest.fixture
+    def _held_port(self) -> Iterator[tuple[int, socket.socket]]:
+        """A real listening socket on 0.0.0.0:<ephemeral>, like a running container.
+
+        Yields (port, socket); the socket is closed on teardown. The port is
+        genuinely un-bindable for the duration (a second bind without
+        SO_REUSEADDR gets EADDRINUSE), so this exercises the live-bind path
+        for real instead of mocking _port_is_bindable.
+        """
+        holder = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        holder.bind(("0.0.0.0", 0))
+        holder.listen(1)
+        port = holder.getsockname()[1]
+        try:
+            yield port, holder
+        finally:
+            holder.close()
+
+    def test_reload_skips_live_bind_for_own_running_port(self, db, _held_port):
+        """Regression: reloading a running port-holding app must not self-conflict.
+
+        The app's own old container still holds its host ports when the reload's
+        port check runs (resolve_port_mappings -> check_port_available runs
+        before run_container removes the old container). check_port_available
+        already excluded the app's own DB rows (exclude_app_id), but it then ran
+        a live bind test that the app's own still-running container made fail,
+        so every reload of a running multi-port app (e.g. rustdesk on 21115-21119)
+        errored with "Port N ... already in use by host-level service".
+        """
+        port, _holder = _held_port
+        assert _port_is_bindable(port) is False  # port is genuinely held
+
+        app_id = _seed(db, "myapp", 9500)
+        db.execute(
+            "INSERT INTO app_port_mappings (app_id, label, container_port, host_port) "
+            "VALUES (?, 'svc', 8080, ?)",
+            (app_id, port),
+        )
+        db.commit()
+
+        available, used_by = check_port_available(port, db, exclude_app_id=app_id)
+        assert available is True, used_by
+
+    def test_reload_skips_live_bind_for_own_main_port(self, db, _held_port):
+        """Same self-conflict protection for the app's own main local_port."""
+        port, _holder = _held_port
+        assert _port_is_bindable(port) is False
+
+        app_id = _seed(db, "myapp", port)
+        available, used_by = check_port_available(port, db, exclude_app_id=app_id)
+        assert available is True, used_by
+
+    def test_reload_still_blocks_foreign_port_holder(self, db, _held_port):
+        """A port held by a *foreign* host service (not the app being reloaded)
+        still blocks the reload.
+
+        The self-conflict skip must not mask a genuine conflict: a port held
+        by some other host process that is not one of the reloaded app's own
+        reserved ports is still reported as a host-level service.
+        """
+        port, _holder = _held_port
+        assert _port_is_bindable(port) is False
+
+        app_id = _seed(db, "myapp", 9500)  # owns a *different* port
+        available, used_by = check_port_available(port, db, exclude_app_id=app_id)
+        assert available is False
+        assert used_by == {"type": "host_service"}
 
 
 @pytest.fixture
