@@ -34,6 +34,7 @@ tests/pebble/
 
 # ACME account key (provided out-of-band; CI writes from secrets.ACME_ACCOUNT_KEY)
 ansible/secrets/certbot_private_key.json
+scripts/component_library/cloud-in-a-bottle-components.html
 .claude/*
 !.claude/settings.json
 .claude/settings.local.json

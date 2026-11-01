@@ -15,3 +15,7 @@ local-stack-fresh *args:
 # cut a release (eg `just release 0.3.1`): bump PR, tag, watch the build, publish. interactive.
 release version:
     pixi run -e dev python scripts/release.py {{version}}
+
+# build the component library page into scripts/component_library/ (extra args pass through, eg --repo ../other-checkout)
+components *args:
+    pixi run -e dev python scripts/component_library/build.py {{args}}
