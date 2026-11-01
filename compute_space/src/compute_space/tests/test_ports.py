@@ -227,3 +227,92 @@ class TestResolvePortMappings:
         assert ports["fixed"] == 59200
         assert ports["auto"] != 59200  # should pick different port
         assert 59200 <= ports["auto"] <= 59300
+
+
+class TestReloadPortRaceScope:
+    """Scope coverage for the reload port-self-conflict fix.
+
+    The fix lives in check_port_available (skip the live-bind test for the
+    reloaded app's own reserved ports) and is reached only from
+    resolve_port_mappings' fixed/preserved-port branch (the reload path,
+    which passes exclude_app_id). These tests pin where that fix does and does
+    not apply, so a future refactor can't silently widen or narrow its scope.
+    """
+
+    def test_multi_port_reload_keeps_held_port_and_auto_assigns_new_label(self, db):
+        """The reported case: a running multi-port app reload.
+
+        Its existing label's host_port is held by the old container (the
+        live-bind would fail) but is the app's own reserved port, so the reload
+        keeps it; a new auto label gets a different free port. Before the fix
+        this raised `Port N ... already in use by host-level service` on the
+        existing label and aborted the whole reload.
+        """
+        app_id = _seed(db, "myapp", 9500)
+        held = 59250  # the app's own existing host_port, held by the old container
+        db.execute(
+            "INSERT INTO app_port_mappings (app_id, label, container_port, host_port) "
+            "VALUES (?, 'a', 8080, ?)",
+            (app_id, held),
+        )
+        db.commit()
+
+        # Old container holds `held`; every other port is bindable.
+        with mock.patch(
+            "compute_space.core.ports._port_is_bindable",
+            side_effect=lambda p: p != held,
+        ):
+            # _sync_port_mappings preserves the existing label's host_port;
+            # the new label is auto-assigned (host_port=0).
+            to_resolve = [
+                PortMapping(label="a", container_port=8080, host_port=held),
+                PortMapping(label="b", container_port=8081, host_port=0),
+            ]
+            resolved = resolve_port_mappings(to_resolve, db, 59200, 59300, exclude_app_id=app_id)
+
+        ports = {r.label: r.host_port for r in resolved}
+        assert ports["a"] == held        # own held port kept (self-conflict skipped)
+        assert ports["b"] != held        # new label got a different free port
+        assert 59200 <= ports["b"] <= 59300
+
+    def test_single_port_app_reload_runs_no_port_check(self, db):
+        """A single-port app (no [[ports]] mappings) has nothing for
+        _sync_port_mappings to validate on reload: resolve_port_mappings gets
+        an empty list and returns it without any live-bind. The fix is
+        intentionally a no-op here -- the main local_port is allocated once at
+        install and is not re-validated on reload, so there is no live-bind
+        self-conflict to guard against.
+        """
+        app_id = _seed(db, "single", 9500)
+        assert resolve_port_mappings([], db, exclude_app_id=app_id) == []
+
+    def test_auto_assign_never_reuses_app_own_held_port(self, db):
+        """A new auto-assigned label on reload never picks a port the app's own
+        old container still holds. This is guaranteed independently of the
+        check_port_available fix: _find_free_host_port already excludes the
+        app's own app_port_mappings host_ports (exclude_app_id), so it can't
+        re-offer a port the old container holds. This pins that guarantee so
+        the fix in check_port_available isn't relied on for the auto path.
+        """
+        app_id = _seed(db, "myapp", 9500)
+        held = 59250
+        db.execute(
+            "INSERT INTO app_port_mappings (app_id, label, container_port, host_port) "
+            "VALUES (?, 'old', 8080, ?)",
+            (app_id, held),
+        )
+        db.commit()
+
+        with mock.patch(
+            "compute_space.core.ports._port_is_bindable",
+            side_effect=lambda p: p != held,
+        ):
+            resolved = resolve_port_mappings(
+                [PortMapping(label="new", container_port=8081, host_port=0)],
+                db,
+                59200,
+                59300,
+                exclude_app_id=app_id,
+            )
+        assert resolved[0].host_port != held
+        assert 59200 <= resolved[0].host_port <= 59300

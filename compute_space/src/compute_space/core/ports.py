@@ -67,6 +67,17 @@ def check_port_available(
     # multi-port app (e.g. rustdesk holding 21115-21119) self-conflicts and
     # lands in `error: Port N ... already in use by host-level service`.
     # This mirrors the DB-row exclusion above for the live-bind test.
+    #
+    # Scope: this only affects the reload validation of fixed/preserved
+    # [[ports]] mappings (the only callers that pass exclude_app_id are
+    # resolve_port_mappings' fixed-port branch). It is a no-op for:
+    #   - single-port apps (no [[ports]]): _sync_port_mappings resolves an
+    #     empty list, so no live-bind runs on reload;
+    #   - auto-assigned (host_port=0) labels: _find_free_host_port already
+    #     excludes the app's own app_port_mappings host_ports, so it never
+    #     re-offers a port the old container holds;
+    #   - the install path: it calls resolve_port_mappings without
+    #     exclude_app_id, so this branch is skipped.
     if exclude_app_id and _port_reserved_by_app(port, db, exclude_app_id):
         return True, None
 
