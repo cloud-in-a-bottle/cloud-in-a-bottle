@@ -287,10 +287,11 @@ class TestReloadPortRaceScope:
     def test_auto_assign_never_reuses_app_own_held_port(self, db):
         """A new auto-assigned label on reload never picks a port the app's own
         old container still holds. This is guaranteed independently of the
-        check_port_available fix: _find_free_host_port already excludes the
-        app's own app_port_mappings host_ports (exclude_app_id), so it can't
-        re-offer a port the old container holds. This pins that guarantee so
-        the fix in check_port_available isn't relied on for the auto path.
+        check_port_available fix: _find_free_host_port selects a port by
+        live-bind (so a port the old container holds is skipped), and it won't
+        reuse a port already claimed by a fixed mapping in the same batch (the
+        `claimed` set). This pins that guarantee so the check_port_available
+        fix isn't relied on for the auto path.
         """
         app_id = _seed(db, "myapp", 9500)
         held = 59250

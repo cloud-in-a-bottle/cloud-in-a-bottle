@@ -73,9 +73,11 @@ def check_port_available(
     # resolve_port_mappings' fixed-port branch). It is a no-op for:
     #   - single-port apps (no [[ports]]): _sync_port_mappings resolves an
     #     empty list, so no live-bind runs on reload;
-    #   - auto-assigned (host_port=0) labels: _find_free_host_port already
-    #     excludes the app's own app_port_mappings host_ports, so it never
-    #     re-offers a port the old container holds;
+    #   - auto-assigned (host_port=0) labels: _find_free_host_port picks a
+    #     port by live-bind, so it naturally skips ports the old container
+    #     holds, and it won't reuse a port already claimed by a fixed
+    #     mapping in the same batch (the `claimed` set) -- no self-conflict,
+    #     and no need for this skip;
     #   - the install path: it calls resolve_port_mappings without
     #     exclude_app_id, so this branch is skipped.
     if exclude_app_id and _port_reserved_by_app(port, db, exclude_app_id):
