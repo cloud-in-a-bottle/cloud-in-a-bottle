@@ -87,7 +87,7 @@
     return "var ID=" + JSON.stringify(id) + ";" +
       "function report(){parent.postMessage({libFrame:ID,height:document.documentElement.scrollHeight},'*')}" +
       "new ResizeObserver(report).observe(document.getElementById('root'));" +
-      "window.addEventListener('message',function(e){var m=e.data;if(!m||!('html' in m))return;" +
+      "window.addEventListener('message',function(e){var m=e.data;if(e.source!==parent||!m||!('html' in m))return;" +
       "document.getElementById('root').innerHTML=m.html;document.body.style.background=m.surface;report()});" +
       "document.addEventListener('click',function(e){" +
       "var a=e.target.closest&&e.target.closest('a[href]');" +
@@ -175,9 +175,10 @@
     new ResizeObserver(queueScan).observe(root);
     document.addEventListener('input', queueScan);
 
+    // The page can be opened from disk, where it has no origin to compare, so check the sender.
     window.addEventListener('message', function (e) {
       var message = e.data;
-      if (!message) return;
+      if (e.source !== parent || !message) return;
       if ('matchers' in message) matchers = message.matchers;
       if ('outline' in message) document.documentElement.classList.toggle('lib-outline', message.outline);
       if ('marks' in message) {
@@ -245,7 +246,7 @@
     var message = e.data;
     if (!message || !message.libFrame) return;
     var entry = frames[message.libFrame];
-    if (!entry) return;
+    if (!entry || e.source !== entry.node.contentWindow) return;
     if (message.ready) {
       entry.ready = true;
       if (entry.pending) entry.node.contentWindow.postMessage(entry.pending, '*');
