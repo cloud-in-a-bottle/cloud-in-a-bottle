@@ -1,15 +1,13 @@
 {% extends "layout.html" %}
 {% block title_suffix %} - Terminal{% endblock %}
 {% block layout_class %}layout--full{% endblock %}
-{% block head %}
-<link rel="stylesheet" href="{{ static_url('vendor/xterm/xterm.css') }}">
-{% endblock %}
 {% block content %}
 <div class="terminal-frame">
   <div id="terminal"></div>
 </div>
-<script src="{{ static_url('vendor/xterm/xterm.js') }}"></script>
-<script src="{{ static_url('vendor/addon-fit/addon-fit.js') }}"></script>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.min.css">
+<script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js"></script>
 <script id="page-config" type="application/json">
 {
   "terminalWsUrl": "/terminal/ws"
