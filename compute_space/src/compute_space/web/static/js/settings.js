@@ -347,6 +347,64 @@ function localTimeToUtc(hhmm) {
   return pad2(d.getUTCHours()) + ':' + pad2(d.getUTCMinutes());
 }
 
+// The IANA name of the browser's timezone (e.g. "America/New_York"), or null if the browser doesn't report one.
+function browserTimeZone() {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || null;
+  } catch (e) {
+    return null;
+  }
+}
+
+// The browser's current offset from UTC, e.g. "UTC-05:00", "UTC+05:30", or "UTC" when there is none.
+function utcOffsetLabel(date) {
+  const minutes = -date.getTimezoneOffset();
+  if (minutes === 0) return 'UTC';
+  const abs = Math.abs(minutes);
+  return 'UTC' + (minutes < 0 ? '-' : '+') + pad2(Math.floor(abs / 60)) + ':' + pad2(abs % 60);
+}
+
+// True when the browser's timezone has a different UTC offset at some point in the year, i.e. observes daylight
+// saving time.
+function observesDaylightSaving(now) {
+  const year = now.getFullYear();
+  return new Date(year, 0, 1).getTimezoneOffset() !== new Date(year, 6, 1).getTimezoneOffset();
+}
+
+// The browser's readable name for its timezone right now (e.g. "Eastern Standard Time"), or null if it only has a
+// "GMT-05:00"-style name, which would just repeat the offset.
+function browserTimeZoneName(now) {
+  try {
+    const part = new Intl.DateTimeFormat(undefined, {timeZoneName: 'long'}).formatToParts(now)
+      .find(function(p) { return p.type === 'timeZoneName'; });
+    if (!part || /^(GMT|UTC)([+-]|$)/.test(part.value)) return null;
+    return part.value;
+  } catch (e) {
+    return null;
+  }
+}
+
+// Names the timezone the schedule is shown in, since it is the browser's and the owner may not know what that is.
+function autoUpdateTimezoneText(timeUtc) {
+  const now = new Date();
+  const zone = browserTimeZone();
+  const offset = utcOffsetLabel(now);
+  const name = browserTimeZoneName(now);
+  // A zone named "UTC" would repeat the offset.
+  const details = zone && zone !== offset ? [zone, offset] : [offset];
+  let label;
+  if (name) label = name + ' (' + details.join(', ') + ')';
+  else if (details.length > 1) label = details[0] + ' (' + details[1] + ')';
+  else label = details[0];
+  let text = "The time is in your browser's timezone: " + label + '.';
+  const dst = observesDaylightSaving(now);
+  // Always at UTC+0, the saved UTC time would just repeat the time shown.
+  if (offset === 'UTC' && !dst) return text;
+  text += ' It is saved as ' + timeUtc + ' UTC';
+  if (dst) text += ', so the local time shown here shifts when daylight saving time starts or ends';
+  return text + '.';
+}
+
 function renderAutoUpdate() {
   if (autoUpdate === null || savedChannel === null) return;
   const enabled = document.getElementById('auto-update-enabled');
@@ -361,12 +419,14 @@ function renderAutoUpdate() {
   }
   time.value = utcTimeToLocal(autoUpdate.time_utc);
   time.disabled = paused || !autoUpdate.enabled;
+  document.getElementById('auto-update-timezone').textContent = autoUpdateTimezoneText(autoUpdate.time_utc);
   document.getElementById('auto-update-paused').hidden = !paused;
   document.getElementById('auto-update-row').classList.toggle('field-row--disabled', paused);
 
   const last = document.getElementById('auto-update-last');
   if (autoUpdate.last_run_at) {
-    last.textContent = 'Last automatic update: ' + new Date(autoUpdate.last_run_at).toLocaleString()
+    last.textContent = 'Last automatic update: '
+      + new Date(autoUpdate.last_run_at).toLocaleString(undefined, {timeZoneName: 'short'})
       + '. ' + autoUpdate.last_run_message;
     last.hidden = false;
   } else {
