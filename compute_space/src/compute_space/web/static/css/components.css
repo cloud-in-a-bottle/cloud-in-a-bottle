@@ -804,11 +804,6 @@ table.form-table input[type="password"] {
   margin-bottom: 0;
 }
 
-.field > .hint {
-  font-size: var(--text-body-sm);
-  line-height: var(--leading-body-sm);
-}
-
 /* An error takes the hint's place rather than stacking under it. */
 .field:has(> .field-error:not([hidden])):not(:has(> input:disabled, > select:disabled, > .field-row > input:disabled, > .field-row > select:disabled)) > .hint,
 .field:has(> .msg--error:not([hidden])) > .hint {
@@ -875,7 +870,7 @@ table.form-table input[type="password"] {
   .field > span,
   .field > label,
   .field__head > label,
-  .field > .hint,
+  .hint,
   .field > .field-error {
     font-size: var(--text-body-md);
     line-height: var(--leading-body-md);
@@ -1565,8 +1560,8 @@ select {
   box-shadow: none;
 }
 
-/* An explainer inside a cell annotates 12px table text; at the prose size it
-   outweighs the value it belongs to. */
+/* An explainer inside a cell annotates 12px table text, so it stays 12px on
+   touch screens rather than outweighing the value it belongs to. */
 .panel table .hint {
   font-size: var(--text-body-sm);
 }

@@ -274,10 +274,16 @@ label {
   font-size: var(--text-body-sm);
 }
 
-/* Explanatory prose under a control. One step up the scale from the smallest
-   text, with the roomier leading, because these are sentences to be read
-   rather than labels to be scanned. */
+/* A short note tied to one control. It grows to --text-body-md on touch screens,
+   with the rest of the field text. */
 .hint {
+  color: var(--fg-secondary);
+  font-size: var(--text-body-sm);
+  line-height: var(--leading-body-sm);
+}
+
+/* Text that describes a page or a section rather than one control. */
+.desc {
   color: var(--fg-secondary);
   font-size: var(--text-body-md);
   line-height: var(--leading-body-md);
