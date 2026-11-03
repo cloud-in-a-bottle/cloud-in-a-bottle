@@ -123,7 +123,7 @@ function cleanBuildCache() {
     })
     .then(function() {
       cleanCacheInFlight = false;
-      updateStorageStatus();
+      updateStorageStatus(true);
     });
 }
 
@@ -173,12 +173,34 @@ function renderStorageDonut(data) {
   wireDonut('storage-usage-pie');
 }
 
-function updateStorageStatus() {
-  fetch(config.storageStatusUrl, {credentials: 'same-origin'})
+var storageRefreshInFlight = false;
+
+function setStorageRefreshInFlight(inFlight) {
+  storageRefreshInFlight = inFlight;
+  var btn = document.getElementById('storage-refresh-btn');
+  if (!btn) return;
+  btn.disabled = inFlight;
+  btn.textContent = inFlight ? 'Measuring...' : 'Refresh';
+}
+
+// refresh=true re-measures usage now instead of returning the background snapshot.
+function updateStorageStatus(refresh) {
+  if (refresh) setStorageRefreshInFlight(true);
+  var url = config.storageStatusUrl + (refresh ? '?refresh=true' : '');
+  fetch(url, {credentials: 'same-origin'})
     .then(function(r) { return r.json(); })
+    .finally(function() { if (refresh) setStorageRefreshInFlight(false); })
     .then(function(data) {
       presentSection('storage', function() { renderStorageStatus(data); });
     });
+}
+
+function measuredAgoText(epochSeconds) {
+  if (epochSeconds == null) return 'unknown';
+  var mins = Math.floor((Date.now() / 1000 - epochSeconds) / 60);
+  if (mins < 1) return 'just now';
+  if (mins < 60) return mins + ' min ago';
+  return Math.floor(mins / 60) + ' h ago';
 }
 
 function renderStorageStatus(data) {
@@ -208,7 +230,15 @@ function renderStorageStatus(data) {
     ' ',
     cleanCacheButton,
   ]);
+  var refreshButton = dom.el('button', {
+    class: 'btn',
+    id: 'storage-refresh-btn',
+    disabled: storageRefreshInFlight,
+    onclick: function() { updateStorageStatus(true); },
+    text: storageRefreshInFlight ? 'Measuring...' : 'Refresh',
+  });
   var rows = [
+    dom.infoRow('Usage measured', [measuredAgoText(data.usage_measured_at), dom.el('span', {style: 'float: right'}, [refreshButton])]),
     dom.infoRow('Disk free', freeText, (hasMinFree && isLow) ? 'status-error' : null),
     dom.infoRow('Cloud in a Bottle data', formatBytes(data.openhost_data_used_bytes || 0)),
     dom.infoRow('Swap file', formatBytes(data.swap_file_bytes || 0)),
