@@ -155,8 +155,7 @@ def _is_safe_for_cookie_auth_http(connection: Request[Any, Any, Any], allow_cros
     navigations.
 
     `allow_cross_site_navigation` also allows `cross-site` full-page GET/HEADs (as SameSite=Lax would), so that
-    eg OAuth redirects into an app arrive authenticated. Only the app proxy sets it: the router's own routes have
-    no reason to be navigated to cross-origin.
+    eg OAuth redirects arrive authenticated.
 
     Browsers only send Fetch Metadata to secure origins, so plain-HTTP domains (LAN, `.local`) fall back to
     `_is_safe_for_cookie_auth_plain_http`, which may raise NavigationConfirmationRequired.
