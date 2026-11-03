@@ -140,7 +140,7 @@ def _plain_http_zone(connection: AnyConnection) -> Domain | None:
     return zone if isinstance(zone, Domain) and not zone.tls else None
 
 
-def _is_safe_for_cookie_auth_http(connection: Request[Any, Any, Any]) -> bool:
+def _is_safe_for_cookie_auth_http(connection: Request[Any, Any, Any], allow_cross_site_navigation: bool) -> bool:
     """HTTP path for `is_safe_for_cookie_auth`.
 
     Just using `Origin` is insufficient; Origin isn't set on some valid same-origin requests.
@@ -154,6 +154,11 @@ def _is_safe_for_cookie_auth_http(connection: Request[Any, Any, Any]) -> bool:
     So we allow `same-site` GET/HEADs if Sec-Fetch-Dest == "document", which is only set on full-page
     navigations.
 
+    With `allow_cross_site_navigation`, `cross-site` full-page GET/HEADs are allowed too, as SameSite=Lax cookies
+    would be. The proxy sets it for app subdomains so third-party redirects into an app (eg an OAuth callback from
+    the provider) arrive authenticated. Apps must keep GETs free of side effects, as they already must for
+    `same-site`. The router's own routes leave it off: some of them act on GET.
+
     Browsers only send Fetch Metadata to secure origins, so plain-HTTP domains (LAN, `.local`) fall back to
     `_is_safe_for_cookie_auth_plain_http`, which may raise NavigationConfirmationRequired.
     """
@@ -163,7 +168,7 @@ def _is_safe_for_cookie_auth_http(connection: Request[Any, Any, Any]) -> bool:
     if site in {"same-origin", "none"}:
         return True
     if (
-        site == "same-site"
+        (site == "same-site" or (site == "cross-site" and allow_cross_site_navigation))
         and connection.scope["method"] in ("GET", "HEAD")
         and connection.headers.get("Sec-Fetch-Dest") == "document"
     ):
@@ -213,7 +218,7 @@ def _is_safe_for_cookie_auth_websocket(connection: AnyConnection) -> bool:
     return get_connection_origin(connection) == connection.base_url.netloc
 
 
-def is_safe_for_cookie_auth(connection: AnyConnection) -> bool:
+def is_safe_for_cookie_auth(connection: AnyConnection, *, allow_cross_site_navigation: bool = False) -> bool:
     """Whether the request is safe to allow cookie auth on.
 
     A malicious app could make a request from the owner's browser to another app on their instance,
@@ -228,7 +233,7 @@ def is_safe_for_cookie_auth(connection: AnyConnection) -> bool:
         return _is_safe_for_cookie_auth_websocket(connection)
     if connection.scope["type"] == ScopeType.HTTP:
         return _is_safe_for_cookie_auth_http(
-            Request(connection.scope, receive=connection.receive, send=connection.send)
+            Request(connection.scope, receive=connection.receive, send=connection.send), allow_cross_site_navigation
         )
     return False
 
@@ -257,8 +262,11 @@ def authenticate(connection: AnyConnection, db: sqlite3.Connection) -> Authentic
     return None
 
 
-def verify_owner_auth(connection: AnyConnection) -> None:
+def verify_owner_auth(connection: AnyConnection, *, allow_cross_site_navigation: bool = False) -> None:
     """Verify that the request is authenticated as an "owner" (either a user or an API key, with valid Origin).
+
+    `allow_cross_site_navigation` also accepts the session cookie on full-page GETs from other sites; see
+    `_is_safe_for_cookie_auth_http`.
 
     returns if authed; raises NotAuthorizedException if not authenticated.
     """
@@ -268,7 +276,7 @@ def verify_owner_auth(connection: AnyConnection) -> None:
     if isinstance(accessor, AuthenticatedUser):
         confirmation = None
         try:
-            if is_safe_for_cookie_auth(connection):
+            if is_safe_for_cookie_auth(connection, allow_cross_site_navigation=allow_cross_site_navigation):
                 return
         except NavigationConfirmationRequired as exc:
             confirmation = exc
