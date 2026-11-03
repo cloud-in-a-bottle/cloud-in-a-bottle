@@ -99,13 +99,7 @@ class TestCheckPortAvailable:
 
     @pytest.fixture
     def _held_port(self) -> Iterator[tuple[int, socket.socket]]:
-        """A real listening socket on 0.0.0.0:<ephemeral>, like a running container.
-
-        Yields (port, socket); the socket is closed on teardown. The port is
-        genuinely un-bindable for the duration (a second bind without
-        SO_REUSEADDR gets EADDRINUSE), so this exercises the live-bind path
-        for real instead of mocking _port_is_bindable.
-        """
+        """Hold a real listening port, like a running container, instead of mocking _port_is_bindable."""
         holder = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         holder.bind(("0.0.0.0", 0))
         holder.listen(1)
@@ -116,15 +110,10 @@ class TestCheckPortAvailable:
             holder.close()
 
     def test_reload_skips_live_bind_for_own_running_port(self, db, _held_port):
-        """Regression: reloading a running port-holding app must not self-conflict.
+        """Reload must not self-conflict on a port the app's own old container still holds.
 
-        The app's own old container still holds its host ports when the reload's
-        port check runs (resolve_port_mappings -> check_port_available runs
-        before run_container removes the old container). check_port_available
-        already excluded the app's own DB rows (exclude_app_id), but it then ran
-        a live bind test that the app's own still-running container made fail,
-        so every reload of a running multi-port app (e.g. rustdesk on 21115-21119)
-        errored with "Port N ... already in use by host-level service".
+        The port check runs before run_container removes the old container, so the live bind fails on the app's
+        own mapped port ("Port N ... already in use by host-level service", seen on rustdesk's 21115-21119).
         """
         port, _holder = _held_port
         assert _port_is_bindable(port) is False  # port is genuinely held
@@ -140,7 +129,7 @@ class TestCheckPortAvailable:
         assert available is True, used_by
 
     def test_reload_skips_live_bind_for_own_main_port(self, db, _held_port):
-        """Same self-conflict protection for the app's own main local_port."""
+        """Same, for the app's own main local_port."""
         port, _holder = _held_port
         assert _port_is_bindable(port) is False
 
@@ -149,17 +138,11 @@ class TestCheckPortAvailable:
         assert available is True, used_by
 
     def test_reload_still_blocks_foreign_port_holder(self, db, _held_port):
-        """A port held by a *foreign* host service (not the app being reloaded)
-        still blocks the reload.
-
-        The self-conflict skip must not mask a genuine conflict: a port held
-        by some other host process that is not one of the reloaded app's own
-        reserved ports is still reported as a host-level service.
-        """
+        """A port held by something other than the reloaded app is still a conflict."""
         port, _holder = _held_port
         assert _port_is_bindable(port) is False
 
-        app_id = _seed(db, "myapp", 9500)  # owns a *different* port
+        app_id = _seed(db, "myapp", 9500)  # owns a different port
         available, used_by = check_port_available(port, db, exclude_app_id=app_id)
         assert available is False
         assert used_by == {"type": "host_service"}
@@ -229,26 +212,15 @@ class TestResolvePortMappings:
 
 
 class TestReloadPortRaceScope:
-    """Scope coverage for the reload port-self-conflict fix.
+    """Where the reload self-conflict fix applies and where it doesn't.
 
-    The fix lives in check_port_available (skip the live-bind test for the
-    reloaded app's own reserved ports) and is reached only from
-    resolve_port_mappings' fixed/preserved-port branch (the reload path,
-    which passes exclude_app_id). These tests pin where that fix does and does
-    not apply, so a future refactor can't silently widen or narrow its scope.
+    Only resolve_port_mappings' fixed-port branch reaches it, since that is the one path passing exclude_app_id.
     """
 
     def test_multi_port_reload_keeps_held_port_and_auto_assigns_new_label(self, db):
-        """The reported case: a running multi-port app reload.
-
-        Its existing label's host_port is held by the old container (the
-        live-bind would fail) but is the app's own reserved port, so the reload
-        keeps it; a new auto label gets a different free port. Before the fix
-        this raised `Port N ... already in use by host-level service` on the
-        existing label and aborted the whole reload.
-        """
+        """A running multi-port app keeps its held port on reload; a new auto label gets a different one."""
         app_id = _seed(db, "myapp", 9500)
-        held = 59250  # the app's own existing host_port, held by the old container
+        held = 59250  # the app's own host_port, held by its old container
         db.execute(
             "INSERT INTO app_port_mappings (app_id, label, container_port, host_port) VALUES (?, 'a', 8080, ?)",
             (app_id, held),
@@ -260,8 +232,7 @@ class TestReloadPortRaceScope:
             "compute_space.core.ports._port_is_bindable",
             side_effect=lambda p: p != held,
         ):
-            # _sync_port_mappings preserves the existing label's host_port;
-            # the new label is auto-assigned (host_port=0).
+            # The existing label keeps its host_port; the new label is auto-assigned (host_port=0).
             to_resolve = [
                 PortMapping(label="a", container_port=8080, host_port=held),
                 PortMapping(label="b", container_port=8081, host_port=0),
@@ -274,24 +245,14 @@ class TestReloadPortRaceScope:
         assert 59200 <= ports["b"] <= 59300
 
     def test_single_port_app_reload_runs_no_port_check(self, db):
-        """A single-port app (no [[ports]] mappings) has nothing for
-        _sync_port_mappings to validate on reload: resolve_port_mappings gets
-        an empty list and returns it without any live-bind. The fix is
-        intentionally a no-op here -- the main local_port is allocated once at
-        install and is not re-validated on reload, so there is no live-bind
-        self-conflict to guard against.
-        """
+        """A single-port app has no [[ports]] mappings, so reload runs no port check and the fix is a no-op."""
         app_id = _seed(db, "single", 9500)
         assert resolve_port_mappings([], db, exclude_app_id=app_id) == []
 
     def test_auto_assign_never_reuses_app_own_held_port(self, db):
-        """A new auto-assigned label on reload never picks a port the app's own
-        old container still holds. This is guaranteed independently of the
-        check_port_available fix: _find_free_host_port selects a port by
-        live-bind (so a port the old container holds is skipped), and it won't
-        reuse a port already claimed by a fixed mapping in the same batch (the
-        `claimed` set). This pins that guarantee so the check_port_available
-        fix isn't relied on for the auto path.
+        """A new auto-assigned label never reuses a port the app's old container holds, with or without the fix.
+
+        _find_free_host_port picks by live bind, so it skips held ports on its own.
         """
         app_id = _seed(db, "myapp", 9500)
         held = 59250
