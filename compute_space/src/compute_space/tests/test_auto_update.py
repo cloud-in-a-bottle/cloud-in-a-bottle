@@ -52,6 +52,20 @@ def test_next_run_at_the_scheduled_time_is_tomorrow() -> None:
     assert runner_mod._next_datetime_at(_AT_4, now) == datetime(2026, 10, 10, 4, 0, tzinfo=UTC)
 
 
+def test_first_due_catches_up_a_time_missed_across_a_restart() -> None:
+    yesterday = datetime(2026, 10, 8, 4, 1, tzinfo=UTC)
+    assert runner_mod._first_update_due(_AT_4, yesterday, _NOW) == datetime(2026, 10, 9, 4, 0, tzinfo=UTC)
+
+
+def test_first_due_waits_when_the_most_recent_time_already_ran() -> None:
+    today = datetime(2026, 10, 9, 4, 1, tzinfo=UTC)
+    assert runner_mod._first_update_due(_AT_4, today, _NOW) == datetime(2026, 10, 10, 4, 0, tzinfo=UTC)
+
+
+def test_first_due_waits_without_a_recorded_run() -> None:
+    assert runner_mod._first_update_due(_AT_4, None, _NOW) == datetime(2026, 10, 10, 4, 0, tzinfo=UTC)
+
+
 # ─────────────── config ───────────────
 
 
@@ -341,6 +355,41 @@ async def test_runs_once_when_due_after_a_long_pause(
     await runner_mod._run_if_due()
     assert agent.applied == 1
     assert runner_mod._update_due is not None and runner_mod._update_due > datetime.now(UTC)
+
+
+@pytest.mark.asyncio
+async def test_first_check_catches_up_a_run_missed_across_a_restart(
+    agent: FakeAgent, migrated_db: sqlite3.Connection, update_due: Callable[[datetime | None], None]
+) -> None:
+    record_last_run(
+        migrated_db, AutoUpdateLastRun(at=datetime.now(UTC) - timedelta(days=2), outcome=AutoUpdateOutcome.UP_TO_DATE)
+    )
+    await runner_mod._run_if_due()
+    assert agent.applied == 1
+
+
+@pytest.mark.asyncio
+async def test_run_across_the_scheduled_time_does_not_run_again(
+    migrated_db: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch, update_due: Callable[[datetime | None], None]
+) -> None:
+    clock = datetime(2026, 10, 9, 3, 58, tzinfo=UTC)
+
+    class FakeDatetime(datetime):
+        @classmethod
+        def now(cls, tz: object = None) -> FakeDatetime:  # type: ignore[override]
+            return cls.fromtimestamp(clock.timestamp(), UTC)
+
+    async def slow_run() -> None:
+        nonlocal clock
+        clock = datetime(2026, 10, 9, 4, 3, tzinfo=UTC)
+
+    monkeypatch.setattr(runner_mod, "datetime", FakeDatetime)
+    monkeypatch.setattr(runner_mod, "run_auto_update", slow_run)
+    write_auto_update_config(migrated_db, AutoUpdateConfig(enabled=True, time_utc=_AT_4))
+    # A catch-up for yesterday's run, starting just before today's and ending after it.
+    update_due(datetime(2026, 10, 8, 4, 0, tzinfo=UTC))
+    await runner_mod._run_if_due()
+    assert runner_mod._update_due == datetime(2026, 10, 10, 4, 0, tzinfo=UTC)
 
 
 @pytest.mark.asyncio

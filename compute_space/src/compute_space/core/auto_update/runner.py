@@ -10,6 +10,7 @@ from datetime import timedelta
 from compute_space.core.auto_update.config import AutoUpdateLastRun
 from compute_space.core.auto_update.config import AutoUpdateOutcome
 from compute_space.core.auto_update.config import read_auto_update_config
+from compute_space.core.auto_update.config import read_last_run
 from compute_space.core.auto_update.config import record_last_run
 from compute_space.core.logging import logger
 from compute_space.core.system_agent.client import ApplyLaunch
@@ -93,6 +94,16 @@ def _next_datetime_at(target: time, now: datetime) -> datetime:
     return candidate
 
 
+def _first_update_due(target: time, last_run_at: datetime | None, now: datetime) -> datetime:
+    """When the update is first due after the router starts. The most recent scheduled time is still due if no run has
+    happened since, so a restart across it (a cold boot, say) doesn't skip that day. With no run on record, as on a fresh
+    install, it waits for the next scheduled time rather than updating on first boot."""
+    most_recent = _next_datetime_at(target, now) - timedelta(days=1)
+    if last_run_at is not None and last_run_at < most_recent:
+        return most_recent
+    return _next_datetime_at(target, now)
+
+
 def reschedule_auto_update(time_utc: time) -> None:
     """Call after the schedule changes, so a newly chosen time that already passed today waits for tomorrow rather
     than counting as missed."""
@@ -105,10 +116,9 @@ async def _run_if_due() -> None:
     now = datetime.now(UTC)
     with closing(get_db()) as db:
         config = read_auto_update_config(db)
-
-    if _update_due is None:
-        # Schedule on first run: the next instance of the configured time.
-        _update_due = _next_datetime_at(config.time_utc, now)
+        if _update_due is None:
+            last_run = read_last_run(db)
+            _update_due = _first_update_due(config.time_utc, last_run.at if last_run else None, now)
 
     if config.enabled and now > _update_due:
         _scheduled_run_in_progress = True
@@ -116,8 +126,9 @@ async def _run_if_due() -> None:
             await run_auto_update()
         finally:
             _scheduled_run_in_progress = False
-            # Even if the run raised, so a failure waits for the next scheduled time.
-            _update_due = _next_datetime_at(config.time_utc, now)
+            # Even if the run raised, so a failure waits for the next scheduled time. From the time the run ended, not
+            # started: a catch-up that runs across today's scheduled time already covers it.
+            _update_due = _next_datetime_at(config.time_utc, datetime.now(UTC))
 
 
 def start_auto_update_task() -> asyncio.Task[None]:
@@ -125,7 +136,7 @@ def start_auto_update_task() -> asyncio.Task[None]:
 
     The intended logic is:
     - Updates are scheduled to run daily at a specific time of day, set by the user.
-    - If that window is missed (VM paused for example), the update runs the next time it is up.
+    - If that window is missed (VM paused for example), the update runs the next time it is up, including after a router restart.
     - (for autosuspending VMs, we'll wake the instance daily sometime around (after) the requested time to allow the update to run)
     - If the update fails, it does not retry until the next scheduled time.
     - If the update time is rescheduled, the next run is scheduled for when the new time is next reached.
