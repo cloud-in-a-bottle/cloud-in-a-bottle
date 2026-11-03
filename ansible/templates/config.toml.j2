@@ -42,3 +42,7 @@ cert_api_keycloak_client_id = "{{ cert_api_keycloak_client_id }}"
 cert_api_keycloak_client_secret = "{{ cert_api_keycloak_client_secret }}"
 {% endif %}
 {% endif %}
+{% if auto_suspend_status_token is defined and auto_suspend_status_token %}
+# Lets the host that suspends this instance when it's idle read /api/auto-suspend-status.
+auto_suspend_status_token = {{ auto_suspend_status_token | to_json }}
+{% endif %}
