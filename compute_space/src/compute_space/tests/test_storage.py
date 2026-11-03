@@ -234,6 +234,56 @@ def test_per_app_usage(tmp_path):
     assert result["docs"] == 8192
 
 
+def test_storage_status_serves_cached_usage_with_live_disk_free(tmp_path, monkeypatch):
+    config = _make_test_config(tmp_path)
+    usage = namedtuple("usage", ["total", "used", "free"])
+    measured = []
+
+    def fake_measure(_config):
+        measured.append(True)
+        return {"per_app": {"notes": len(measured)}}
+
+    free = [6 * 1024**3]
+    monkeypatch.setattr(storage, "_measure_usage", fake_measure)
+    monkeypatch.setattr(
+        storage.shutil, "disk_usage", lambda _p: usage(total=10 * 1024**3, used=4 * 1024**3, free=free[0])
+    )
+
+    first = cast(dict[str, Any], storage.storage_status(config))
+    free[0] = 5 * 1024**3
+    second = cast(dict[str, Any], storage.storage_status(config))
+
+    assert len(measured) == 1
+    assert second["per_app"] == {"notes": 1}
+    assert second["usage_measured_at"] == first["usage_measured_at"]
+    assert second["disk"]["free_bytes"] == 5 * 1024**3
+
+    refreshed = cast(dict[str, Any], storage.storage_status(config, refresh=True))
+    assert len(measured) == 2
+    assert refreshed["per_app"] == {"notes": 2}
+    assert storage.storage_status(config)["per_app"] == {"notes": 2}
+
+
+def test_guard_loop_refreshes_snapshot_then_enforces(tmp_path, monkeypatch):
+    config = _make_test_config(tmp_path)
+    calls = []
+
+    class _Stop(Exception):
+        pass
+
+    monkeypatch.setattr(storage, "refresh_usage_snapshot", lambda _c: calls.append("refresh"))
+    monkeypatch.setattr(storage, "enforce_storage_guard", lambda _c: calls.append("enforce"))
+
+    def fake_sleep(seconds):
+        calls.append(seconds)
+        raise _Stop
+
+    monkeypatch.setattr(storage.time, "sleep", fake_sleep)
+    with pytest.raises(_Stop):
+        storage._storage_guard_loop(config)
+    assert calls == ["refresh", "enforce", 300]
+
+
 def test_format_bytes():
     assert storage.format_bytes(0) == "0 B"
     assert storage.format_bytes(512) == "512 B"
@@ -338,7 +388,8 @@ def test_enforce_guard_skips_when_paused(tmp_path, monkeypatch):
     assert row[0] == "running"
 
 
-def test_start_storage_guard_noop_without_threshold(tmp_path, monkeypatch):
+def test_start_storage_guard_runs_without_threshold(tmp_path, monkeypatch):
+    # The thread also refreshes the usage snapshot, so it runs even with enforcement off.
     config = _make_test_config(tmp_path, storage_min_free_mb=0)
     storage._guard_db_paths.clear()
 
@@ -346,15 +397,15 @@ def test_start_storage_guard_noop_without_threshold(tmp_path, monkeypatch):
 
     class FakeThread:
         def __init__(self, target, args, daemon):
-            started.append(True)
+            pass
 
         def start(self):
-            pass
+            started.append(True)
 
     monkeypatch.setattr(storage.threading, "Thread", FakeThread)
 
     storage.start_storage_guard(config)
-    assert len(started) == 0
+    assert len(started) == 1
 
 
 def test_start_storage_guard_starts_with_threshold(tmp_path, monkeypatch):

@@ -1,8 +1,8 @@
 """Storage usage helpers and the storage guard.
 
 Reports disk usage totals and per-app breakdowns for the System page.
-The storage guard runs as a daemon thread that periodically checks disk free
-space and stops apps when free space drops below ``storage_min_free_mb``.  It is
+The storage guard runs as a daemon thread that periodically measures usage for
+the System page and checks disk free space and stops apps when free space drops below ``storage_min_free_mb``.  It is
 enabled by default with a modest threshold so a runaway disk can't silently take
 an instance fully down; operators change the threshold (or disable it by setting
 0) in the router config and reboot.  It can be paused from the System page so a
@@ -31,11 +31,17 @@ _MIB = 1024 * 1024
 # Guard state
 # ---------------------------------------------------------------------------
 
-_STORAGE_GUARD_INTERVAL_SECONDS = 60
+_STORAGE_GUARD_INTERVAL_SECONDS = 300
 
 _guard_paused: bool = False
 _guard_lock = threading.Lock()
 _guard_db_paths: set[str] = set()
+
+# Walking app data and querying podman take seconds on a busy instance, so the
+# guard loop measures usage in the background and requests read the latest
+# snapshot.  Keyed by data_root_dir: ``(measured_at_epoch, usage)``.
+_usage_snapshots: dict[str, tuple[float, dict[str, object]]] = {}
+_usage_lock = threading.Lock()
 
 
 def is_guard_paused() -> bool:
@@ -227,18 +233,9 @@ def check_before_deploy(config: Config) -> None:
         raise RuntimeError(f"Storage too low ({format_bytes(free)} free, {format_bytes(min_free)} required)")
 
 
-def storage_status(config: Config) -> dict[str, object]:
-    """Return disk totals and usage for the System page / API.
-
-    Both persistent and temporary data live on the same disk (under
-    ``data_root_dir``), so we report a single unified disk metric.
-    """
+def _measure_usage(config: Config) -> dict[str, object]:
+    """Walk app data and query podman for the slow part of the storage status."""
     _ensure_storage_roots(config)
-
-    disk = shutil.disk_usage(config.data_root_dir)
-
-    min_free = storage_min_free_bytes(config)
-
     # The podman queries are slow (``ps --size`` walks every container layer),
     # so they run alongside the directory walks.
     with ThreadPoolExecutor(max_workers=2) as pool:
@@ -249,11 +246,6 @@ def storage_status(config: Config) -> dict[str, object]:
         image_storage = image_future.result()
 
     return {
-        "disk": {
-            "total_bytes": disk.total,
-            "used_bytes": disk.used,
-            "free_bytes": disk.free,
-        },
         "openhost_data_used_bytes": openhost_data_usage_bytes(config),
         "app_data_used_bytes": sum(per_app.values())
         + _loose_file_bytes(os.path.join(config.persistent_data_dir, "app_data")),
@@ -261,7 +253,52 @@ def storage_status(config: Config) -> dict[str, object]:
         "build_cache_bytes": image_storage[0],
         "build_cache_reclaimable_bytes": image_storage[1],
         "per_app": per_app,
-        "storage_min_free_bytes": min_free,
+    }
+
+
+def _store_usage_snapshot(config: Config) -> tuple[float, dict[str, object]]:
+    entry = (time.time(), _measure_usage(config))
+    _usage_snapshots[config.data_root_dir] = entry
+    return entry
+
+
+def refresh_usage_snapshot(config: Config) -> tuple[float, dict[str, object]]:
+    """Measure usage now and store it as the latest snapshot."""
+    with _usage_lock:
+        return _store_usage_snapshot(config)
+
+
+def _usage_snapshot(config: Config) -> tuple[float, dict[str, object]]:
+    """Latest snapshot; measured on demand if the background loop hasn't produced one yet."""
+    entry = _usage_snapshots.get(config.data_root_dir)
+    if entry is not None:
+        return entry
+    with _usage_lock:
+        entry = _usage_snapshots.get(config.data_root_dir)
+        return entry if entry is not None else _store_usage_snapshot(config)
+
+
+def storage_status(config: Config, refresh: bool = False) -> dict[str, object]:
+    """Return disk totals and usage for the System page / API.
+
+    Disk free and guard state are read live; the per-app breakdown comes from
+    the latest background snapshot (``usage_measured_at``, epoch seconds)
+    unless *refresh* forces a new measurement.  Both persistent and temporary
+    data live on the same disk (under ``data_root_dir``), so we report a
+    single unified disk metric.
+    """
+    _ensure_storage_roots(config)
+    measured_at, usage = refresh_usage_snapshot(config) if refresh else _usage_snapshot(config)
+    disk = shutil.disk_usage(config.data_root_dir)
+    return {
+        "disk": {
+            "total_bytes": disk.total,
+            "used_bytes": disk.used,
+            "free_bytes": disk.free,
+        },
+        **usage,
+        "usage_measured_at": measured_at,
+        "storage_min_free_bytes": storage_min_free_bytes(config),
         "storage_low": storage_low(config),
         "guard_paused": is_guard_paused(),
     }
@@ -324,6 +361,10 @@ def enforce_storage_guard(config: Config) -> None:
 def _storage_guard_loop(config: Config) -> None:
     while True:
         try:
+            refresh_usage_snapshot(config)
+        except Exception:
+            logger.exception("Storage usage measurement failed")
+        try:
             enforce_storage_guard(config)
         except Exception:
             logger.exception("Storage guard check failed")
@@ -331,12 +372,11 @@ def _storage_guard_loop(config: Config) -> None:
 
 
 def start_storage_guard(config: Config) -> None:
-    """Start the storage guard daemon thread (once per db_path).
+    """Start the storage daemon thread (once per db_path).
 
-    Only starts if a minimum free space threshold is configured.
+    It refreshes the usage snapshot and, if a minimum free space threshold is
+    configured, enforces it.
     """
-    if storage_min_free_bytes(config) is None:
-        return
     db_key = os.path.abspath(config.db_path)
     if db_key in _guard_db_paths:
         return
