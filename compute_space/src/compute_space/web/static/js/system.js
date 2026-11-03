@@ -136,11 +136,11 @@ function toggleStorageGuard(pause) {
   }).then(function() { updateStorageStatus(); });
 }
 
-// Donut of disk usage: per-app data as coloured slices (largest first), then the
-// rest of the used disk — OS / Cloud in a Bottle / build cache — as
-// "OS + Cloud in a Bottle" and
-// the free space as "Unused", so the ring sums to the whole disk and shows how
-// full the box is. Falls back to app-only proportions if disk totals are absent.
+// Donut of disk usage: per-app usage (data, temp data and container writable
+// layer) as coloured slices, largest first, then the swap file, the rest of the
+// used disk (OS, images, build cache) as "OS + Cloud in a Bottle", and the free
+// space as "Unused", so the ring sums to the whole disk. Falls back to app-only
+// proportions if disk totals are absent.
 function renderStorageDonut(data) {
   var el = document.getElementById('storage-usage-chart');
   if (!el) return;
@@ -160,7 +160,9 @@ function renderStorageDonut(data) {
   var centerText;
   if (total && disk.free_bytes != null) {
     var free = disk.free_bytes;
-    var other = Math.max(0, total - free - appSum);
+    var swap = data.swap_file_bytes || 0;
+    var other = Math.max(0, total - free - appSum - swap);
+    if (swap > 0) segments.push({name: 'Swap file', value: swap, valueText: formatBytes(swap), color: COLOR_SWAP});
     if (other > 0) segments.push({name: 'OS + Cloud in a Bottle', value: other, valueText: formatBytes(other), color: COLOR_OTHER});
     segments.push({name: 'Unused', value: free, valueText: formatBytes(free), color: COLOR_UNUSED});
     centerText = formatBytes(total - free) + ' / ' + formatBytes(total);
@@ -209,6 +211,7 @@ function renderStorageStatus(data) {
   var rows = [
     dom.infoRow('Disk free', freeText, (hasMinFree && isLow) ? 'status-error' : null),
     dom.infoRow('Cloud in a Bottle data', formatBytes(data.openhost_data_used_bytes || 0)),
+    dom.infoRow('Swap file', formatBytes(data.swap_file_bytes || 0)),
     dom.infoRow('App Build Cache', [buildCache, cleanCacheControls]),
   ];
   if (data.build_cache_bytes != null && reclaimable != null) {

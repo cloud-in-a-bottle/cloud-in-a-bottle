@@ -30,6 +30,7 @@ function cssToken(name) {
 // The non-app slices of a usage donut, from the shared tokens.
 var COLOR_UNUSED = cssToken('--color-chart-unused');  // free headroom on the box
 var COLOR_OTHER = cssToken('--color-chart-system');   // used by the host but not attributed to an app
+var COLOR_SWAP = cssToken('--color-chart-swap');      // swap file on the data disk
 
 // Generic donut chart. `segments` is [{name, value, valueText, color}] drawn in
 // order from 12 o'clock; hovering a slice shows its name + valueText in the
