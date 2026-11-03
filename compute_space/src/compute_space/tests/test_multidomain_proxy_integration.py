@@ -291,7 +291,7 @@ async def test_owner_can_access_running_private_app(wrapped_app: Any, proxy_conf
 async def test_owner_reaches_private_app_on_cross_site_navigation(
     wrapped_app: Any, proxy_config: Config, method: str, dest: str, allowed: bool
 ) -> None:
-    """A redirect from another site (eg an OAuth provider's callback) is a top-level navigation and carries the owner."""
+    """Eg an OAuth provider redirecting back to the app."""
     with closing(open_db(proxy_config)) as db:
         db.execute("UPDATE apps SET public_paths = '[]' WHERE name = 'myapp'")
         db.commit()

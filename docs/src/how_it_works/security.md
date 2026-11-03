@@ -26,7 +26,7 @@ Three credentials authenticate as you, all documented in [Overview](./overview.m
 
 Owner sessions are refused on cross-origin requests, so JavaScript running in one app cannot make owner-authenticated calls to the router or to another app on your behalf.
 
-The exception is a full-page GET navigation, such as clicking a link or following a redirect. These carry your session from another app to any app or the router, and from any other website to an app (but not to the router), so that an OAuth provider can redirect you back to an app's callback. Embedding in a frame, image, script, or `fetch` never counts as a navigation. The same rule as `SameSite=Lax` cookies applies: an app's GET routes must not change anything, since any website can link to them.
+The exception is full-page GET navigations (links, redirects; not frames, images, scripts or `fetch`). These carry your session into apps from any site, so OAuth providers can redirect back, and into the router from your own apps only. As with `SameSite=Lax` cookies, an app's GET routes must not change anything.
 
 ### Plain-HTTP domains
 
