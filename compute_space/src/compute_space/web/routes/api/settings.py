@@ -39,6 +39,7 @@ from compute_space.core.domains import primary_domain
 from compute_space.core.identity_store import get_connect_base_url
 from compute_space.core.identity_store import get_instance_identity
 from compute_space.core.identity_store import set_instance_identity
+from compute_space.core.platform_wake.schedule import schedule_changed
 from compute_space.core.system_agent.client import SystemAgentError
 from compute_space.core.system_agent.client import apply_lock
 from compute_space.core.system_agent.client import system_agent_apply
@@ -254,6 +255,7 @@ async def set_auto_update(data: AutoUpdateRequest, db: NamedDependency[sqlite3.C
         raise ValidationException(detail="Time must be HH:MM", extra={"code": "invalid_time"}) from e
     write_auto_update_config(db, AutoUpdateConfig(enabled=data.enabled, time_utc=time_utc))
     reschedule_auto_update()
+    schedule_changed()
     return _auto_update_response(db)
 
 

@@ -18,6 +18,7 @@ from compute_space.core.domains import get_record
 from compute_space.core.domains import primary_domain_or_none
 from compute_space.core.domains import set_record_status
 from compute_space.core.logging import logger
+from compute_space.core.platform_wake.client import hold_awake
 from compute_space.core.tls.provision import acquire_cert_for_domain
 from compute_space.core.tls.provision import provision_cert
 from compute_space.db import get_db
@@ -28,6 +29,8 @@ CHECK_INTERVAL = datetime.timedelta(hours=12)
 RETRY_INTERVAL = datetime.timedelta(hours=1)
 
 INITIAL_RETRY_INTERVAL = datetime.timedelta(seconds=15)
+# Asked of a hosting platform that sleeps idle instances, so it doesn't put this one to sleep mid-renewal.
+RENEWAL_HOLD = datetime.timedelta(minutes=15)
 
 
 class CertStatus(enum.Enum):
@@ -114,6 +117,7 @@ async def renew_cert_if_needed(
             status = get_cert_status(cert_path, key_path)
             if status != CertStatus.OK:
                 logger.info(f"TLS cert for {primary.name} is {status.value}; renewing")
+                await hold_awake(RENEWAL_HOLD)
                 await provision_cert(config, db, dns_provider)
                 _mark_cert_active(primary.name_no_port)
                 renewed = True
@@ -131,6 +135,7 @@ async def renew_cert_if_needed(
                 continue
             try:
                 logger.info(f"TLS cert for {name} is {status.value}; renewing")
+                await hold_awake(RENEWAL_HOLD)
                 cert_path.parent.mkdir(parents=True, exist_ok=True)
                 await acquire_cert_for_domain(config, name, cert_path, key_path, db, dns_provider)
                 _mark_cert_active(name)
