@@ -942,6 +942,8 @@ class TestContainerE2E:
         db_path = config.db_path
         container_name = "openhost-test-app"
 
+        # Recovery is serial, each dead app waiting for readiness (up to 60s) before the next: this window only
+        # holds if test-app is the only dead one, i.e. nothing replaced the default apps' containers meanwhile.
         deadline = time.time() + 15
         container_running = False
         while time.time() < deadline:
