@@ -58,28 +58,8 @@ def check_port_available(
     if row:
         return False, {"app_name": row["app_name"], "label": row["label"], "type": "port_mapping"}
 
-    # During a reload (exclude_app_id set) the app's own old container may
-    # still be listening on the very host ports we are about to re-hand to
-    # the new container. run_container removes the old container before
-    # binding the new one, so a failed live bind on one of the app's own
-    # already-reserved ports is a *self* conflict that will resolve on its
-    # own -- not a real conflict. Without this, every reload of a running
-    # multi-port app (e.g. rustdesk holding 21115-21119) self-conflicts and
-    # lands in `error: Port N ... already in use by host-level service`.
-    # This mirrors the DB-row exclusion above for the live-bind test.
-    #
-    # Scope: this only affects the reload validation of fixed/preserved
-    # [[ports]] mappings (the only callers that pass exclude_app_id are
-    # resolve_port_mappings' fixed-port branch). It is a no-op for:
-    #   - single-port apps (no [[ports]]): _sync_port_mappings resolves an
-    #     empty list, so no live-bind runs on reload;
-    #   - auto-assigned (host_port=0) labels: _find_free_host_port picks a
-    #     port by live-bind, so it naturally skips ports the old container
-    #     holds, and it won't reuse a port already claimed by a fixed
-    #     mapping in the same batch (the `claimed` set) -- no self-conflict,
-    #     and no need for this skip;
-    #   - the install path: it calls resolve_port_mappings without
-    #     exclude_app_id, so this branch is skipped.
+    # On reload the app's own old container still holds its ports until run_container removes it; skip the live bind.
+    # Why and scope: test_ports.py::test_reload_skips_live_bind_for_own_running_port and TestReloadPortRaceScope.
     if exclude_app_id and _port_reserved_by_app(port, db, exclude_app_id):
         return True, None
 
@@ -90,14 +70,7 @@ def check_port_available(
 
 
 def _port_reserved_by_app(port: int, db: sqlite3.Connection, app_id: str) -> bool:
-    """True if ``port`` is one of ``app_id``'s own reserved host ports.
-
-    That is the app's main ``local_port`` or any ``host_port`` in its
-    ``app_port_mappings`` rows. Used to skip the live-bind test during
-    reload: the app's own old container may still be holding these ports,
-    but it is removed before the new container binds them, so a failed bind
-    here is a self-conflict, not a real one.
-    """
+    """True if ``port`` is one of ``app_id``'s own reserved host ports."""
     if db.execute("SELECT 1 FROM apps WHERE app_id = ? AND local_port = ?", (app_id, port)).fetchone():
         return True
     return bool(
