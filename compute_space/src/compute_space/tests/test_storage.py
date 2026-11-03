@@ -241,7 +241,15 @@ def test_storage_status_serves_cached_usage_with_live_disk_free(tmp_path, monkey
 
     def fake_measure(_config):
         measured.append(True)
-        return {"per_app": {"notes": len(measured)}}
+        return storage.UsageSnapshot(
+            usage_measured_at=float(len(measured)),
+            openhost_data_used_bytes=0,
+            app_data_used_bytes=0,
+            swap_file_bytes=0,
+            build_cache_bytes=None,
+            build_cache_reclaimable_bytes=None,
+            per_app={"notes": len(measured)},
+        )
 
     free = [6 * 1024**3]
     monkeypatch.setattr(storage, "_measure_usage", fake_measure)
@@ -258,10 +266,11 @@ def test_storage_status_serves_cached_usage_with_live_disk_free(tmp_path, monkey
     assert second["usage_measured_at"] == first["usage_measured_at"]
     assert second["disk"]["free_bytes"] == 5 * 1024**3
 
-    refreshed = cast(dict[str, Any], storage.storage_status(config, refresh=True))
+    storage.refresh_usage_snapshot(config)
+    refreshed = cast(dict[str, Any], storage.storage_status(config))
     assert len(measured) == 2
     assert refreshed["per_app"] == {"notes": 2}
-    assert storage.storage_status(config)["per_app"] == {"notes": 2}
+    assert refreshed["usage_measured_at"] == 2.0
 
 
 def test_guard_loop_refreshes_snapshot_then_enforces(tmp_path, monkeypatch):

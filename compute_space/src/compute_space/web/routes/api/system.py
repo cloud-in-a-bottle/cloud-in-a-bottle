@@ -40,6 +40,7 @@ from compute_space.core.git_ops import get_head_sha
 from compute_space.core.git_ops import is_dirty
 from compute_space.core.logging import get_log_path
 from compute_space.core.storage import is_guard_paused
+from compute_space.core.storage import refresh_usage_snapshot
 from compute_space.core.storage import set_guard_paused
 from compute_space.core.storage import storage_status
 from compute_space.core.system_agent.client import SystemAgentError
@@ -262,7 +263,9 @@ def listening_ports(db: NamedDependency[sqlite3.Connection]) -> ListeningPortsRe
 # and queries podman, which takes seconds and would stall the event loop.
 @get("/api/storage-status", guards=[require_owner_auth], sync_to_thread=True)
 def api_storage_status(config: NamedDependency[Config], refresh: FromQuery[bool] = False) -> dict[str, object]:
-    return storage_status(config, refresh=refresh)
+    if refresh:
+        refresh_usage_snapshot(config)
+    return storage_status(config)
 
 
 @post("/api/storage-guard", status_code=200, guards=[require_owner_auth], sync_to_thread=False)

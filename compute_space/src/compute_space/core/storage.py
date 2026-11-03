@@ -19,6 +19,8 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 
+import attr
+
 from compute_space.config import Config
 from compute_space.core.containers import app_container_writable_layer_bytes
 from compute_space.core.containers import container_image_storage_bytes
@@ -33,14 +35,26 @@ _MIB = 1024 * 1024
 
 _STORAGE_GUARD_INTERVAL_SECONDS = 300
 
+
+@attr.s(auto_attribs=True, frozen=True)
+class UsageSnapshot:
+    usage_measured_at: float  # epoch seconds
+    openhost_data_used_bytes: int
+    app_data_used_bytes: int
+    swap_file_bytes: int
+    build_cache_bytes: int | None
+    build_cache_reclaimable_bytes: int | None
+    per_app: dict[str, int]
+
+
 _guard_paused: bool = False
 _guard_lock = threading.Lock()
 _guard_db_paths: set[str] = set()
 
 # Walking app data and querying podman take seconds on a busy instance, so the
 # guard loop measures usage in the background and requests read the latest
-# snapshot.  Keyed by data_root_dir: ``(measured_at_epoch, usage)``.
-_usage_snapshots: dict[str, tuple[float, dict[str, object]]] = {}
+# snapshot.  Keyed by data_root_dir.
+_usage_snapshots: dict[str, UsageSnapshot] = {}
 _usage_lock = threading.Lock()
 
 
@@ -233,7 +247,7 @@ def check_before_deploy(config: Config) -> None:
         raise RuntimeError(f"Storage too low ({format_bytes(free)} free, {format_bytes(min_free)} required)")
 
 
-def _measure_usage(config: Config) -> dict[str, object]:
+def _measure_usage(config: Config) -> UsageSnapshot:
     """Walk app data and query podman for the slow part of the storage status."""
     _ensure_storage_roots(config)
     # The podman queries are slow (``ps --size`` walks every container layer),
@@ -243,52 +257,52 @@ def _measure_usage(config: Config) -> dict[str, object]:
         image_future = pool.submit(container_image_storage_bytes)
         per_app = per_app_usage(config)
         _add_sizes(per_app, layers_future.result())
-        image_storage = image_future.result()
+        build_cache, build_cache_reclaimable = image_future.result()
 
-    return {
-        "openhost_data_used_bytes": openhost_data_usage_bytes(config),
-        "app_data_used_bytes": sum(per_app.values())
+    return UsageSnapshot(
+        usage_measured_at=time.time(),
+        openhost_data_used_bytes=openhost_data_usage_bytes(config),
+        app_data_used_bytes=sum(per_app.values())
         + _loose_file_bytes(os.path.join(config.persistent_data_dir, "app_data")),
-        "swap_file_bytes": swap_file_bytes(config),
-        "build_cache_bytes": image_storage[0],
-        "build_cache_reclaimable_bytes": image_storage[1],
-        "per_app": per_app,
-    }
+        swap_file_bytes=swap_file_bytes(config),
+        build_cache_bytes=build_cache,
+        build_cache_reclaimable_bytes=build_cache_reclaimable,
+        per_app=per_app,
+    )
 
 
-def _store_usage_snapshot(config: Config) -> tuple[float, dict[str, object]]:
-    entry = (time.time(), _measure_usage(config))
-    _usage_snapshots[config.data_root_dir] = entry
-    return entry
+def _store_usage_snapshot(config: Config) -> UsageSnapshot:
+    snapshot = _measure_usage(config)
+    _usage_snapshots[config.data_root_dir] = snapshot
+    return snapshot
 
 
-def refresh_usage_snapshot(config: Config) -> tuple[float, dict[str, object]]:
+def refresh_usage_snapshot(config: Config) -> UsageSnapshot:
     """Measure usage now and store it as the latest snapshot."""
     with _usage_lock:
         return _store_usage_snapshot(config)
 
 
-def _usage_snapshot(config: Config) -> tuple[float, dict[str, object]]:
+def _get_usage_snapshot(config: Config) -> UsageSnapshot:
     """Latest snapshot; measured on demand if the background loop hasn't produced one yet."""
-    entry = _usage_snapshots.get(config.data_root_dir)
-    if entry is not None:
-        return entry
+    snapshot = _usage_snapshots.get(config.data_root_dir)
+    if snapshot is not None:
+        return snapshot
     with _usage_lock:
-        entry = _usage_snapshots.get(config.data_root_dir)
-        return entry if entry is not None else _store_usage_snapshot(config)
+        snapshot = _usage_snapshots.get(config.data_root_dir)
+        return snapshot if snapshot is not None else _store_usage_snapshot(config)
 
 
-def storage_status(config: Config, refresh: bool = False) -> dict[str, object]:
+def storage_status(config: Config) -> dict[str, object]:
     """Return disk totals and usage for the System page / API.
 
     Disk free and guard state are read live; the per-app breakdown comes from
-    the latest background snapshot (``usage_measured_at``, epoch seconds)
-    unless *refresh* forces a new measurement.  Both persistent and temporary
-    data live on the same disk (under ``data_root_dir``), so we report a
-    single unified disk metric.
+    the latest usage snapshot.  Both persistent and temporary data live on the
+    same disk (under ``data_root_dir``), so we report a single unified disk
+    metric.
     """
     _ensure_storage_roots(config)
-    measured_at, usage = refresh_usage_snapshot(config) if refresh else _usage_snapshot(config)
+    snapshot = _get_usage_snapshot(config)
     disk = shutil.disk_usage(config.data_root_dir)
     return {
         "disk": {
@@ -296,8 +310,7 @@ def storage_status(config: Config, refresh: bool = False) -> dict[str, object]:
             "used_bytes": disk.used,
             "free_bytes": disk.free,
         },
-        **usage,
-        "usage_measured_at": measured_at,
+        **attr.asdict(snapshot),
         "storage_min_free_bytes": storage_min_free_bytes(config),
         "storage_low": storage_low(config),
         "guard_paused": is_guard_paused(),
