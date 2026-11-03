@@ -423,9 +423,7 @@ _TEMPLATE = """{% from "_components/icon_nav.html" import icon_nav %}{% from "_c
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{{ page_title }} - Cloud in a Bottle Manual</title>
   <link rel="icon" type="image/svg+xml" href="{{ static_url('img/favicon.svg') }}">
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Inter:wght@400;500&display=swap">
+  <link rel="stylesheet" href="{{ static_url('css/fonts.css') }}">
   <link rel="stylesheet" href="{{ static_url('css/tokens.css') }}">
   <link rel="stylesheet" href="{{ static_url('css/components.css') }}">
   <style>
