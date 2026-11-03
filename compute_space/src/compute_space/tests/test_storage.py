@@ -36,6 +36,7 @@ def test_storage_status_includes_disk_totals(tmp_path, monkeypatch):
 
     monkeypatch.setattr(storage.shutil, "disk_usage", fake_disk_usage)
     monkeypatch.setattr(storage, "container_image_storage_bytes", lambda: (7 * 1024**3, 3 * 1024**3))
+    monkeypatch.setattr(storage, "app_container_writable_layer_bytes", lambda: {})
 
     status = cast(dict[str, Any], storage.storage_status(config))
 
@@ -66,6 +67,7 @@ def test_storage_status_with_min_free(tmp_path, monkeypatch):
 
     monkeypatch.setattr(storage.shutil, "disk_usage", fake_disk_usage)
     monkeypatch.setattr(storage, "container_image_storage_bytes", lambda: (None, None))
+    monkeypatch.setattr(storage, "app_container_writable_layer_bytes", lambda: {})
 
     status = cast(dict[str, Any], storage.storage_status(config))
 
@@ -77,22 +79,89 @@ def test_storage_status_with_min_free(tmp_path, monkeypatch):
     assert status["build_cache_reclaimable_bytes"] is None
 
 
+def _write(path: str, size: int) -> None:
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "wb") as f:
+        f.write(b"x" * size)
+
+
 def test_app_data_total_combines_per_app_and_loose_files(tmp_path, monkeypatch):
     """The app_data total is derived from the per-app walk plus loose root
-    files — not a second full walk of the tree."""
+    files, not a second full walk of the tree."""
     config = _make_test_config(tmp_path)
     app_data = os.path.join(config.persistent_data_dir, "app_data")
-    os.makedirs(os.path.join(app_data, "immich"), exist_ok=True)
-    with open(os.path.join(app_data, "immich", "photo.bin"), "wb") as f:
-        f.write(b"x" * (300 * 1024))
-    with open(os.path.join(app_data, "loose.bin"), "wb") as f:
-        f.write(b"x" * (200 * 1024))
+    _write(os.path.join(app_data, "immich", "photo.bin"), 300 * 1024)
+    _write(os.path.join(app_data, "loose.bin"), 200 * 1024)
     monkeypatch.setattr(storage, "container_image_storage_bytes", lambda: (None, None))
+    monkeypatch.setattr(storage, "app_container_writable_layer_bytes", lambda: {})
 
     status = cast(dict[str, Any], storage.storage_status(config))
 
     assert status["per_app"] == {"immich": 300 * 1024}
     assert status["app_data_used_bytes"] == 500 * 1024
+
+
+def test_per_app_includes_temp_data_and_container_layer(tmp_path, monkeypatch):
+    config = _make_test_config(tmp_path)
+    _write(os.path.join(config.persistent_data_dir, "app_data", "notes", "db.bin"), 8192)
+    _write(os.path.join(config.temporary_data_dir, "app_temp_data", "notes", "scratch.bin"), 4096)
+    _write(os.path.join(config.temporary_data_dir, "app_temp_data", "tempy", "scratch.bin"), 4096)
+    monkeypatch.setattr(storage, "container_image_storage_bytes", lambda: (None, None))
+    monkeypatch.setattr(storage, "app_container_writable_layer_bytes", lambda: {"notes": 1000, "layer-only": 2000})
+
+    status = cast(dict[str, Any], storage.storage_status(config))
+
+    assert status["per_app"] == {"notes": 8192 + 4096 + 1000, "tempy": 4096, "layer-only": 2000}
+
+
+def test_openhost_data_includes_db_dir_and_vm_data(tmp_path):
+    config = _make_test_config(tmp_path)
+    before = storage.openhost_data_usage_bytes(config)
+    _write(os.path.join(config.openhost_data_path, "extra.bin"), 8192)
+    _write(os.path.join(config.persistent_data_dir, "vm_data", "keys", "k.pem"), 4096)
+    assert storage.openhost_data_usage_bytes(config) == before + 8192 + 4096
+
+
+def test_dir_size_counts_allocated_blocks_not_apparent_size(tmp_path):
+    with open(tmp_path / "sparse.bin", "wb") as f:
+        f.truncate(64 * 1024**2)
+    assert storage._dir_size_bytes(str(tmp_path)) < 1024**2
+
+
+def test_dir_size_counts_hardlinks_once(tmp_path):
+    _write(str(tmp_path / "a" / "file.bin"), 8192)
+    os.makedirs(tmp_path / "b")
+    os.link(tmp_path / "a" / "file.bin", tmp_path / "b" / "file.bin")
+    assert storage._dir_size_bytes(str(tmp_path)) == 8192
+
+
+def test_swap_file_bytes_counts_files_on_data_disk(tmp_path, monkeypatch):
+    config = _make_test_config(tmp_path)
+    swapfile = tmp_path / "swap file"
+    swapfile.write_bytes(b"")
+    proc_swaps = tmp_path / "proc_swaps"
+    proc_swaps.write_text(
+        "Filename\t\t\t\tType\t\tSize\t\tUsed\t\tPriority\n"
+        f"{str(swapfile).replace(' ', chr(92) + '040')}\tfile\t\t16777212\t\t8598400\t\t-2\n"
+        "/dev/sda2\tpartition\t1000\t\t0\t\t-3\n"
+        "/nonexistent/swapfile\tfile\t\t1000\t\t0\t\t-4\n"
+    )
+    real_open = open
+    monkeypatch.setattr(
+        "builtins.open",
+        lambda path, *a, **k: real_open(proc_swaps if path == "/proc/swaps" else path, *a, **k),
+    )
+    assert storage.swap_file_bytes(config) == 16777212 * 1024
+
+
+def test_swap_file_bytes_zero_without_proc_swaps(tmp_path, monkeypatch):
+    config = _make_test_config(tmp_path)
+
+    def _raise(*a, **k):
+        raise FileNotFoundError("/proc/swaps")
+
+    monkeypatch.setattr("builtins.open", _raise)
+    assert storage.swap_file_bytes(config) == 0
 
 
 def test_disk_free_bytes_uses_data_root_dir(tmp_path, monkeypatch):
@@ -156,13 +225,13 @@ def test_per_app_usage(tmp_path):
     os.makedirs(notes_dir, exist_ok=True)
     os.makedirs(docs_dir, exist_ok=True)
     with open(os.path.join(notes_dir, "data.bin"), "wb") as f:
-        f.write(b"x" * 1024)
+        f.write(b"x" * 4096)
     with open(os.path.join(docs_dir, "data.bin"), "wb") as f:
-        f.write(b"x" * 2048)
+        f.write(b"x" * 8192)
 
     result = storage.per_app_usage(config)
-    assert result["notes"] == 1024
-    assert result["docs"] == 2048
+    assert result["notes"] == 4096
+    assert result["docs"] == 8192
 
 
 def test_format_bytes():

@@ -572,6 +572,36 @@ def container_image_storage_bytes() -> tuple[int | None, int | None]:
         return None, None
 
 
+def app_container_writable_layer_bytes() -> dict[str, int]:
+    """Return ``{app_name: bytes}`` of each app container's writable layer (files written inside the container).
+
+    Empty if podman is unavailable. Slow on large layers: podman walks each one.
+    """
+    prefix = app_container_name("")
+    try:
+        result = subprocess.run(
+            ["podman", "ps", "--all", "--size", "--format", "json"],
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        if result.returncode != 0:
+            logger.warning("podman ps --size failed: {}", result.stderr.strip())
+            return {}
+        sizes: dict[str, int] = {}
+        for row in json.loads(result.stdout):
+            rw = (row.get("Size") or {}).get("rwSize")
+            if not isinstance(rw, int):
+                continue
+            for name in row.get("Names") or []:
+                if name.startswith(prefix):
+                    sizes[name.removeprefix(prefix)] = rw
+        return sizes
+    except Exception as e:
+        logger.warning("Could not query podman container sizes: {}", e)
+        return {}
+
+
 def _podman_container_ids(*extra_args: str) -> set[str]:
     cmd = ["podman", "ps", "--all", "--quiet", "--no-trunc", *extra_args]
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
