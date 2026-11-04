@@ -63,6 +63,7 @@ def _self_signed(cert_path: Path, key_path: Path) -> None:
 def _request(port: int, path: str, extra_headers: str = "") -> tuple[int, dict[str, str], bytes]:
     """GET over TLS against the updater; returns status, headers, body."""
     ctx = ssl.create_default_context()
+    ctx.minimum_version = ssl.TLSVersion.TLSv1_2
     ctx.check_hostname = False
     ctx.verify_mode = ssl.CERT_NONE
     raw = socket.create_connection(("127.0.0.1", port), timeout=5)
@@ -265,6 +266,8 @@ def server_factory(data_dir: Path) -> Iterator[Callable[[str | None, list[dict[s
     key = data_dir / "key.pem"
     _self_signed(cert, key)
     ctx = server._make_ssl_context(cert, key)
+    assert ctx is not None
+    assert ctx.minimum_version >= ssl.TLSVersion.TLSv1_2
     started: list[object] = []
 
     def make(token: str | None, entries: list[dict[str, object]]) -> int:
@@ -339,6 +342,7 @@ def test_server_sends_connection_close(
     # requests that should reach the new compute_space after the handoff.
     port = server_factory("tok", [])
     ctx = ssl.create_default_context()
+    ctx.minimum_version = ssl.TLSVersion.TLSv1_2
     ctx.check_hostname = False
     ctx.verify_mode = ssl.CERT_NONE
     conn = ctx.wrap_socket(socket.create_connection(("127.0.0.1", port), timeout=5), server_hostname="localhost")

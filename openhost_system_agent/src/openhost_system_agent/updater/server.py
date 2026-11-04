@@ -215,6 +215,7 @@ def _make_ssl_context(cert_path: Path | None, key_path: Path | None) -> ssl.SSLC
         return None
     try:
         ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        ctx.minimum_version = ssl.TLSVersion.TLSv1_2
         ctx.load_cert_chain(certfile=str(cert_path), keyfile=str(key_path))
         return ctx
     except (OSError, ssl.SSLError):

@@ -15,7 +15,7 @@
 
   var state = {width: 'Desktop', surface: 'Sky', tab: 'Usage', query: '', view: 'Design'};
   var frameCount = 0;
-  var frames = {};
+  var frames = Object.create(null);
   var said = null;
   var activeId = null;
 
@@ -750,7 +750,7 @@
 
   function open(id) {
     var page = allPages().filter(function (p) { return p.id === id; })[0] || allPages().filter(function (p) { return p.id === 'button'; })[0];
-    frames = {};
+    frames = Object.create(null);
     said = null;
     activeId = page.id;
     var nodes = page.group === 'Foundations' ? renderFoundation(page) : renderComponent(page);
