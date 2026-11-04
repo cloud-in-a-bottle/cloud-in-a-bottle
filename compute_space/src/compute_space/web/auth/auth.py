@@ -1,5 +1,6 @@
-# note: we don't need to handle CORS in the main auth path because cross-origin requests are not allowed.
-# the only allowed cross-origin requests go thru the services interface which handles its own CORS.
+# note: we don't need to handle CORS in the main auth path because the only cross-origin requests we allow are
+# full-page navigations, which don't use CORS. cross-origin fetches go thru the services interface, which
+# handles its own CORS.
 import hmac
 import sqlite3
 from contextlib import closing
