@@ -147,10 +147,8 @@ class OAuthClient {
       }
 
       var popup = this._popup;
-      var completionOrigin = new URL(this._returnTo(), window.location.href).origin;
       var cleanup = function () { window.removeEventListener("message", onMsg); clearInterval(poll); };
       var onMsg = function (e) {
-        if (e.origin !== completionOrigin || e.source !== popup) return;
         if (e.data && e.data.type === "auth_complete") { cleanup(); resolve(); }
       };
       var poll = setInterval(function () {

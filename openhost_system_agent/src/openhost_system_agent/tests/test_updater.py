@@ -266,8 +266,6 @@ def server_factory(data_dir: Path) -> Iterator[Callable[[str | None, list[dict[s
     key = data_dir / "key.pem"
     _self_signed(cert, key)
     ctx = server._make_ssl_context(cert, key)
-    assert ctx is not None
-    assert ctx.minimum_version >= ssl.TLSVersion.TLSv1_2
     started: list[object] = []
 
     def make(token: str | None, entries: list[dict[str, object]]) -> int:

@@ -80,7 +80,7 @@ function approveUpdate() {
         return;
       }
       clearReview();
-      navigateToHttpUrl(config.appDetailUrl);
+      window.location.href = config.appDetailUrl;
     })
     .catch(function() {
       document.getElementById('review-error').textContent = 'Update failed';
@@ -96,7 +96,7 @@ function clearReview() {
 
 function cancelReview() {
   clearReview();
-  navigateToHttpUrl(config.appDetailUrl);
+  window.location.href = config.appDetailUrl;
 }
 
 (function() {

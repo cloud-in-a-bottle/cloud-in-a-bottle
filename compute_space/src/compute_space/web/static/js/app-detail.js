@@ -130,7 +130,7 @@ function appAction(url, data, opts) {
             permissions_required: res.data.permissions_required || [],
           }));
         } catch (e) { /* sessionStorage unavailable; review page shows a fallback */ }
-        navigateToHttpUrl(config.updateReviewUrl);
+        window.location.href = config.updateReviewUrl;
         return;
       }
       if (!res.ok) {
@@ -348,7 +348,7 @@ function clearCacheAndReload() {
             );
         }
         if (appStatus === 'running' && nextUrl) {
-            navigateToHttpUrl(nextUrl);
+            window.location.href = nextUrl;
         }
         if (appStatus === 'error' && data.error_kind === 'build_cache_corrupt') {
             showCacheCorruptToast();
