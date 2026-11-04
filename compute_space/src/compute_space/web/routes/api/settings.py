@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import asyncio
-import hmac
 import re
 import secrets
 import sqlite3
 from datetime import time
 from enum import StrEnum
+from time import monotonic
 from typing import Annotated
 from typing import Any
 
@@ -18,7 +18,6 @@ from litestar import Router
 from litestar import get
 from litestar import post
 from litestar.background_tasks import BackgroundTask
-from litestar.datastructures import Cookie
 from litestar.di import NamedDependency
 from litestar.exceptions import InternalServerException
 from litestar.exceptions import NotFoundException
@@ -38,7 +37,6 @@ from compute_space.core.auto_update.config import read_auto_update_config
 from compute_space.core.auto_update.config import read_last_run
 from compute_space.core.auto_update.config import write_auto_update_config
 from compute_space.core.auto_update.runner import reschedule_auto_update
-from compute_space.core.connect import CONNECT_CALLBACK_PATH
 from compute_space.core.connect import build_connect_url
 from compute_space.core.connect import exchange_code_for_credential
 from compute_space.core.domains import primary_domain
@@ -316,24 +314,10 @@ async def connect_imbue_status(
     )
 
 
-# Holds the `state` for an in-flight connect, so the callback only accepts a code from a flow this browser started.
-_CONNECT_STATE_COOKIE = "openhost_connect_state"
-
-
-def _request_scheme(request: Request[Any, Any, Any]) -> str:
-    return request.headers.get("x-forwarded-proto") or request.url.scheme
-
-
-def _connect_state_cookie(value: str, secure: bool, max_age: int = 600) -> Cookie:
-    return Cookie(
-        key=_CONNECT_STATE_COOKIE,
-        value=value,
-        path=CONNECT_CALLBACK_PATH,
-        max_age=max_age,
-        secure=secure,
-        httponly=True,
-        samesite="lax",
-    )
+# `state` -> monotonic expiry for connects started from Settings, so the callback only accepts a code from a flow
+# this instance started. In memory because the router is a single process; a restart just fails an in-flight connect.
+_pending_connect_states: dict[str, float] = {}
+_CONNECT_STATE_TTL_SECONDS = 600
 
 
 @post(
@@ -346,7 +330,7 @@ async def connect_imbue_start(
     config: NamedDependency[Config],
     db: NamedDependency[sqlite3.Connection],
     request: Request[Any, Any, Any],
-) -> Response[ConnectStartResponse]:
+) -> ConnectStartResponse:
     frontend = get_connect_base_url(db)
     if not frontend:
         raise ServiceUnavailableException(
@@ -354,16 +338,16 @@ async def connect_imbue_start(
         )
     # The one-time code is returned to this instance's own https origin, so derive
     # it from the request (honoring proxy headers).
-    scheme = _request_scheme(request)
+    scheme = request.headers.get("x-forwarded-proto") or request.url.scheme
     zone = primary_domain(db).name
     host = request.headers.get("x-forwarded-host") or request.headers.get("host") or zone
     instance_base = f"{scheme}://{host}"
+    now = monotonic()
+    for expired in [k for k, exp in list(_pending_connect_states.items()) if exp <= now]:
+        _pending_connect_states.pop(expired, None)
     state = secrets.token_urlsafe(32)
-    redirect_url = build_connect_url(frontend, zone, instance_base, state)
-    return Response(
-        ConnectStartResponse(redirect_url=redirect_url),
-        cookies=[_connect_state_cookie(state, secure=scheme == "https")],
-    )
+    _pending_connect_states[state] = now + _CONNECT_STATE_TTL_SECONDS
+    return ConnectStartResponse(redirect_url=build_connect_url(frontend, zone, instance_base, state))
 
 
 @get(
@@ -375,7 +359,6 @@ async def connect_imbue_start(
 def connect_imbue_callback(
     config: NamedDependency[Config],
     db: NamedDependency[sqlite3.Connection],
-    request: Request[Any, Any, Any],
     code: FromQuery[str] = "",
     state_param: Annotated[str, QueryParameter(name="state")] = "",
 ) -> Redirect:
@@ -393,20 +376,15 @@ def connect_imbue_callback(
         raise ServiceUnavailableException(
             detail="Connect to Imbue is not available on this deployment", extra={"code": "connect_unavailable"}
         )
-    expected_state = request.cookies.get(_CONNECT_STATE_COOKIE, "")
-    clear_state = _connect_state_cookie("", secure=_request_scheme(request) == "https", max_age=0)
-    if (
-        not expected_state
-        or not hmac.compare_digest(state_param.encode(), expected_state.encode())
-        or not code.strip()
-    ):
-        return Redirect(path="/settings?connect=error", cookies=[clear_state])
+    expires = _pending_connect_states.pop(state_param, None)
+    if expires is None or expires <= monotonic() or not code.strip():
+        return Redirect(path="/settings?connect=error")
     try:
         credential = exchange_code_for_credential(frontend, code.strip())
         set_instance_identity(db, credential)
     except RuntimeError as e:
         raise BadGatewayException(detail=str(e), extra={"code": "connect_exchange_failed"}) from e
-    return Redirect(path="/settings?connect=ok", cookies=[clear_state])
+    return Redirect(path="/settings?connect=ok")
 
 
 @attr.s(auto_attribs=True, frozen=True)
