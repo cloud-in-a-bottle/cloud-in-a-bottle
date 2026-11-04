@@ -35,68 +35,68 @@ def test_callback_path_constant() -> None:
 
 
 def test_build_connect_url_basic_shape() -> None:
-    url = build_connect_url(_IMBUE, "alice.selfhost.imbue.com", "https://alice.selfhost.imbue.com")
+    url = build_connect_url(_IMBUE, "alice.selfhost.imbue.com", "https://alice.selfhost.imbue.com", "st")
     parsed = urlparse(url)
     assert parsed.scheme == "https"
     assert parsed.netloc == "openhost.imbue.com"
     assert parsed.path == "/connect/imbue"
     qs = parse_qs(parsed.query)
     assert qs["zone"] == ["alice.selfhost.imbue.com"]
-    assert qs["callback"] == ["https://alice.selfhost.imbue.com/api/settings/connect-imbue/callback"]
+    assert qs["callback"] == ["https://alice.selfhost.imbue.com/api/settings/connect-imbue/callback?state=st"]
 
 
 def test_build_connect_url_callback_is_urlencoded_in_raw_string() -> None:
-    url = build_connect_url(_IMBUE, "z.example.com", "https://z.example.com")
+    url = build_connect_url(_IMBUE, "z.example.com", "https://z.example.com", "st")
     # The callback's slashes/colons must be percent-encoded in the raw query.
-    assert "callback=https%3A%2F%2Fz.example.com%2Fapi%2Fsettings%2Fconnect-imbue%2Fcallback" in url
+    assert "callback=https%3A%2F%2Fz.example.com%2Fapi%2Fsettings%2Fconnect-imbue%2Fcallback%3Fstate%3Dst" in url
 
 
 def test_build_connect_url_strips_trailing_slash_on_frontend() -> None:
-    url = build_connect_url(_IMBUE + "/", "z.example.com", "https://z.example.com")
+    url = build_connect_url(_IMBUE + "/", "z.example.com", "https://z.example.com", "st")
     assert url.startswith(f"{_IMBUE}/connect/imbue?")
     assert "openhost.imbue.com//connect" not in url
 
 
 def test_build_connect_url_strips_trailing_slash_on_instance_base() -> None:
-    url = build_connect_url(_IMBUE, "z.example.com", "https://z.example.com/")
+    url = build_connect_url(_IMBUE, "z.example.com", "https://z.example.com/", "st")
     qs = parse_qs(urlparse(url).query)
     # No doubled slash before the callback path.
-    assert qs["callback"] == ["https://z.example.com/api/settings/connect-imbue/callback"]
+    assert qs["callback"] == ["https://z.example.com/api/settings/connect-imbue/callback?state=st"]
 
 
 def test_build_connect_url_strips_both_trailing_slashes() -> None:
-    url = build_connect_url(_IMBUE + "/", "z.example.com", "https://z.example.com/")
+    url = build_connect_url(_IMBUE + "/", "z.example.com", "https://z.example.com/", "st")
     assert url.startswith(f"{_IMBUE}/connect/imbue?")
     qs = parse_qs(urlparse(url).query)
-    assert qs["callback"] == ["https://z.example.com/api/settings/connect-imbue/callback"]
+    assert qs["callback"] == ["https://z.example.com/api/settings/connect-imbue/callback?state=st"]
 
 
 def test_build_connect_url_preserves_frontend_port() -> None:
-    url = build_connect_url("https://imbue.local:8443", "z.example.com", "https://z.example.com")
+    url = build_connect_url("https://imbue.local:8443", "z.example.com", "https://z.example.com", "st")
     parsed = urlparse(url)
     assert parsed.netloc == "imbue.local:8443"
     assert parsed.path == "/connect/imbue"
 
 
 def test_build_connect_url_preserves_instance_port_in_callback() -> None:
-    url = build_connect_url(_IMBUE, "z.example.com", "https://z.example.com:18080")
+    url = build_connect_url(_IMBUE, "z.example.com", "https://z.example.com:18080", "st")
     qs = parse_qs(urlparse(url).query)
-    assert qs["callback"] == ["https://z.example.com:18080/api/settings/connect-imbue/callback"]
+    assert qs["callback"] == ["https://z.example.com:18080/api/settings/connect-imbue/callback?state=st"]
 
 
 def test_build_connect_url_http_instance_base() -> None:
-    url = build_connect_url(_IMBUE, "z.example.com", "http://z.example.com")
+    url = build_connect_url(_IMBUE, "z.example.com", "http://z.example.com", "st")
     qs = parse_qs(urlparse(url).query)
-    assert qs["callback"] == ["http://z.example.com/api/settings/connect-imbue/callback"]
+    assert qs["callback"] == ["http://z.example.com/api/settings/connect-imbue/callback?state=st"]
 
 
 def test_build_connect_url_http_frontend() -> None:
-    url = build_connect_url("http://imbue.local", "z.example.com", "https://z.example.com")
+    url = build_connect_url("http://imbue.local", "z.example.com", "https://z.example.com", "st")
     assert url.startswith("http://imbue.local/connect/imbue?")
 
 
 def test_build_connect_url_subdomain_zone() -> None:
-    url = build_connect_url(_IMBUE, "team.alice.selfhost.imbue.com", "https://team.alice.selfhost.imbue.com")
+    url = build_connect_url(_IMBUE, "team.alice.selfhost.imbue.com", "https://team.alice.selfhost.imbue.com", "st")
     qs = parse_qs(urlparse(url).query)
     assert qs["zone"] == ["team.alice.selfhost.imbue.com"]
 
@@ -104,7 +104,7 @@ def test_build_connect_url_subdomain_zone() -> None:
 def test_build_connect_url_zone_with_special_chars_is_encoded() -> None:
     # A zone value with reserved characters must be percent-encoded, not injected
     # raw into the query string.
-    url = build_connect_url(_IMBUE, "a b&c=d", "https://z.example.com")
+    url = build_connect_url(_IMBUE, "a b&c=d", "https://z.example.com", "st")
     assert "zone=a b&c=d" not in url
     qs = parse_qs(urlparse(url).query)
     assert qs["zone"] == ["a b&c=d"]
@@ -113,14 +113,20 @@ def test_build_connect_url_zone_with_special_chars_is_encoded() -> None:
 def test_build_connect_url_frontend_with_existing_query_appends_start_path() -> None:
     # The builder appends the start path + a fresh query; it does not merge into a
     # pre-existing query on the frontend base. Pin the actual (documented) behavior.
-    url = build_connect_url("https://imbue.local?ref=x", "z.example.com", "https://z.example.com")
+    url = build_connect_url("https://imbue.local?ref=x", "z.example.com", "https://z.example.com", "st")
     assert url.startswith("https://imbue.local?ref=x/connect/imbue?")
 
 
 def test_build_connect_url_callback_uses_the_callback_path_constant() -> None:
-    url = build_connect_url(_IMBUE, "z.example.com", "https://z.example.com")
+    url = build_connect_url(_IMBUE, "z.example.com", "https://z.example.com", "st")
     qs = parse_qs(urlparse(url).query)
-    assert qs["callback"][0].endswith(CONNECT_CALLBACK_PATH)
+    assert urlparse(qs["callback"][0]).path == CONNECT_CALLBACK_PATH
+
+
+def test_build_connect_url_puts_state_in_callback_query() -> None:
+    url = build_connect_url(_IMBUE, "z.example.com", "https://z.example.com", "a b&c")
+    callback = parse_qs(urlparse(url).query)["callback"][0]
+    assert parse_qs(urlparse(callback).query) == {"state": ["a b&c"]}
 
 
 # --- exchange_code_for_credential: mocking helper ----------------------------
