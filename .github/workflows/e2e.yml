@@ -9,6 +9,9 @@ on:
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   e2e:
     # Fork pull requests cannot access the cloud, DNS, or SSH secrets this job requires.
@@ -62,13 +65,13 @@ jobs:
 
       - name: Authenticate to GCP
         if: matrix.provider == 'gcp'
-        uses: google-github-actions/auth@v3
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
         with:
           credentials_json: ${{ secrets.GCP_SA_KEY }}
 
       - name: Set up gcloud CLI
         if: matrix.provider == 'gcp'
-        uses: google-github-actions/setup-gcloud@v3
+        uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3
 
       - name: Install ansible
         run: |
@@ -110,7 +113,7 @@ jobs:
           chmod +x tests/e2e-setup.sh
           tests/e2e-setup.sh
 
-      - uses: prefix-dev/setup-pixi@v0.11.2
+      - uses: prefix-dev/setup-pixi@ad1da6449d9e506fd127fd67ab2d054a769f6a94 # v0.11.2
         with:
           pixi-version: v0.70.2
           environments: dev
