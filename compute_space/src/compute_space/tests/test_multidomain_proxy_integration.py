@@ -276,6 +276,32 @@ async def test_owner_can_access_running_private_app(wrapped_app: Any, proxy_conf
     assert r.text == "backend-ok"
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "method,dest,allowed",
+    [
+        ("GET", "document", True),
+        ("HEAD", "document", True),
+        ("POST", "document", False),
+        ("GET", "iframe", False),
+        ("GET", "image", False),
+        ("GET", "empty", False),
+    ],
+)
+async def test_owner_reaches_private_app_on_cross_site_navigation(
+    wrapped_app: Any, proxy_config: Config, method: str, dest: str, allowed: bool
+) -> None:
+    """Eg an OAuth provider redirecting back to the app."""
+    with closing(open_db(proxy_config)) as db:
+        db.execute("UPDATE apps SET public_paths = '[]' WHERE name = 'myapp'")
+        db.commit()
+    headers = {"Sec-Fetch-Site": "cross-site", "Sec-Fetch-Mode": "navigate", "Sec-Fetch-Dest": dest}
+    async with _client(wrapped_app) as c:
+        c.cookies.update(auth_cookie(proxy_config))
+        r = await c.request(method, f"http://myapp.{PRIMARY.name}/oauth/callback?code=x&state=y", headers=headers)
+    assert r.status_code == (200 if allowed else 404)
+
+
 # Startup interception uses the real DB, owner session verification, and HTTP proxy.
 
 

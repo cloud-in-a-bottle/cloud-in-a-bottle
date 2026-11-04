@@ -24,7 +24,7 @@ Every route requires the owner's session unless the app's manifest lists it in `
 
 Three credentials authenticate as you, all documented in [Overview](./overview.md#access): the browser session cookie, API tokens, and each app's own token for [cross-app calls](../creating_an_app/cross_app_services.md). App tokens identify the calling app to a provider; they are not owner credentials and cannot be used to reach the dashboard.
 
-Owner sessions are refused on cross-origin requests, so JavaScript running in one app cannot make owner-authenticated calls to the router or to another app on your behalf.
+In line with standard practice, owner sessions are accepted on cross-origin full-page GET navigations (links, redirects) and refused on every other cross-origin request, including `fetch`, frames, images and scripts. So JavaScript running in one app cannot make owner-authenticated calls to the router or to another app on your behalf. Apps should make sure GET requests have no side effects, or where they do (eg OAuth callbacks), validate the request before acting on it.
 
 ### Plain-HTTP domains
 

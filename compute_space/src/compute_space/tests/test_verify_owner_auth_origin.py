@@ -62,12 +62,21 @@ def _cookie_for_state(db: sqlite3.Connection, cookie: str, state: str) -> str:
     return cookie if state != "absent" else ""
 
 
-def _is_authorized(cookie: str, headers: dict[str, str], scope_type: str = "http", method: str = "GET") -> bool:
+def _is_authorized(
+    cookie: str,
+    headers: dict[str, str],
+    scope_type: str = "http",
+    method: str = "GET",
+    allow_cross_site_navigation: bool = False,
+) -> bool:
     scope = make_http_scope(
         method, "/feeds/refresh", host=APP_HOST, cookie=cookie, headers=headers, extra_scope={"type": scope_type}
     )
     try:
-        verify_owner_auth(ASGIConnection(scope))  # type: ignore[arg-type]
+        verify_owner_auth(
+            ASGIConnection(scope),  # type: ignore[arg-type]
+            allow_cross_site_navigation=allow_cross_site_navigation,
+        )
         return True
     except NotAuthorizedException:
         return False
@@ -94,6 +103,27 @@ def test_http(session_cookie: str, method: str, site: str | None, dest: str | No
     headers = {"sec-fetch-site": site, "sec-fetch-dest": dest}
     present = {k: v for k, v in headers.items() if v is not None}
     assert _is_authorized(session_cookie, present, method=method) == allowed
+
+
+@pytest.mark.parametrize(
+    "method,site,dest,allowed",
+    [
+        ("GET", "cross-site", "document", True),
+        ("HEAD", "cross-site", "document", True),
+        ("POST", "cross-site", "document", False),
+        *[("GET", "cross-site", d, False) for d in ["iframe", "frame", "image", "script", "empty", "object", "embed"]],
+        # the flag only widens cross-site; everything else behaves as without it.
+        ("GET", "same-site", "document", True),
+        ("POST", "same-site", "document", False),
+        ("GET", None, None, False),
+    ],
+)
+def test_http_allowing_cross_site_navigation(
+    session_cookie: str, method: str, site: str | None, dest: str | None, allowed: bool
+) -> None:
+    headers = {"sec-fetch-site": site, "sec-fetch-dest": dest}
+    present = {k: v for k, v in headers.items() if v is not None}
+    assert _is_authorized(session_cookie, present, method=method, allow_cross_site_navigation=True) == allowed
 
 
 def test_http_ignores_origin(session_cookie: str) -> None:

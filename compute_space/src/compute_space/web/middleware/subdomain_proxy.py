@@ -201,7 +201,8 @@ class SubdomainProxyMiddleware:
             extra_headers.append(("X-Forwarded-For", forwarded_for))
 
         try:
-            verify_owner_auth(connection)
+            # Allow cross-site navigations into apps, eg OAuth callbacks.
+            verify_owner_auth(connection, allow_cross_site_navigation=True)
             extra_headers.append(IS_OWNER_HEADER)
         except NotAuthorizedException as exc:
             # Public paths are served anonymously, even to an owner whose cookie was refused.
