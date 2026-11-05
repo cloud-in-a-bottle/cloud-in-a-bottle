@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import re
+import secrets
 import sqlite3
 from datetime import time
 from enum import StrEnum
+from time import monotonic
+from typing import Annotated
 from typing import Any
 
 import attr
@@ -22,6 +25,7 @@ from litestar.exceptions import PermissionDeniedException
 from litestar.exceptions import ServiceUnavailableException
 from litestar.exceptions import ValidationException
 from litestar.params import FromQuery
+from litestar.params import QueryParameter
 from litestar.response import Redirect
 
 from compute_space.config import Config
@@ -54,6 +58,7 @@ from compute_space.core.system_agent.update_token import persist_update_token
 from compute_space.core.updates import trigger_restart
 from compute_space.core.util import not_blank
 from compute_space.web.auth.auth import require_owner_auth
+from compute_space.web.auth.auth import require_owner_auth_allowing_cross_site_navigation
 from compute_space.web.exceptions import BadGatewayException
 from compute_space.web.exceptions import ConflictException
 from openhost_system_agent.protocol import RemoteInfo
@@ -253,7 +258,7 @@ async def set_auto_update(data: AutoUpdateRequest, db: NamedDependency[sqlite3.C
     except ValueError as e:
         raise ValidationException(detail="Time must be HH:MM", extra={"code": "invalid_time"}) from e
     write_auto_update_config(db, AutoUpdateConfig(enabled=data.enabled, time_utc=time_utc))
-    reschedule_auto_update()
+    reschedule_auto_update(time_utc=time_utc)
     return _auto_update_response(db)
 
 
@@ -310,6 +315,12 @@ async def connect_imbue_status(
     )
 
 
+# `state` -> monotonic expiry for connects started from Settings, so the callback only accepts a code from a flow
+# this instance started. In memory because the router is a single process; a restart just fails an in-flight connect.
+_pending_connect_states: dict[str, float] = {}
+_CONNECT_STATE_TTL_SECONDS = 600
+
+
 @post(
     "/api/settings/connect-imbue/start",
     status_code=200,
@@ -332,13 +343,18 @@ async def connect_imbue_start(
     zone = primary_domain(db).name
     host = request.headers.get("x-forwarded-host") or request.headers.get("host") or zone
     instance_base = f"{scheme}://{host}"
-    redirect_url = build_connect_url(frontend, zone, instance_base)
-    return ConnectStartResponse(redirect_url=redirect_url)
+    now = monotonic()
+    for expired in [k for k, exp in list(_pending_connect_states.items()) if exp <= now]:
+        _pending_connect_states.pop(expired, None)
+    state = secrets.token_urlsafe(32)
+    _pending_connect_states[state] = now + _CONNECT_STATE_TTL_SECONDS
+    return ConnectStartResponse(redirect_url=build_connect_url(frontend, zone, instance_base, state))
 
 
 @get(
     "/api/settings/connect-imbue/callback",
-    guards=[require_owner_auth],
+    # Imbue redirects the owner here from its own site; `state` is what makes accepting that safe.
+    guards=[require_owner_auth_allowing_cross_site_navigation],
     sync_to_thread=True,
     raises=[ServiceUnavailableException, BadGatewayException],
 )
@@ -346,12 +362,16 @@ def connect_imbue_callback(
     config: NamedDependency[Config],
     db: NamedDependency[sqlite3.Connection],
     code: FromQuery[str] = "",
+    # "state" is a reserved handler kwarg in Litestar, so the query parameter needs another name here.
+    connect_state: Annotated[str, QueryParameter(name="state")] = "",
 ) -> Redirect:
     """Exchange the one-time code and store the credential.
 
-    Imbue returns the one-time code here (?code=). We exchange it for the credential
-    and write it into the DB settings table, which is read live by the services
-    that use it — so no restart is needed. Redirects back to Settings.
+    Imbue returns the one-time code here (?code=), along with the ``state`` that
+    ``connect_imbue_start`` put in the callback URL. A missing, unknown or expired
+    ``state`` is refused without exchanging the code. Otherwise we exchange it for
+    the credential and write it into the DB settings table, which is read live by
+    the services that use it — so no restart is needed. Redirects back to Settings.
 
     Sync + sync_to_thread so the blocking exchange (httpx) doesn't stall the event
     loop for other (proxied app) traffic.
@@ -361,7 +381,8 @@ def connect_imbue_callback(
         raise ServiceUnavailableException(
             detail="Connect to Imbue is not available on this deployment", extra={"code": "connect_unavailable"}
         )
-    if not code.strip():
+    expires = _pending_connect_states.pop(connect_state, None)
+    if expires is None or expires <= monotonic() or not code.strip():
         return Redirect(path="/settings?connect=error")
     try:
         credential = exchange_code_for_credential(frontend, code.strip())

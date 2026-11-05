@@ -999,3 +999,31 @@ def test_container_image_storage_bytes_returns_none_values_when_podman_missing(
 
     _patch_subprocess_run(monkeypatch, _raise)
     assert containers.container_image_storage_bytes() == (None, None)
+
+
+# ---------------------------------------------------------------------------
+# app_container_writable_layer_bytes
+# ---------------------------------------------------------------------------
+
+
+def test_app_container_writable_layer_bytes_maps_app_containers(monkeypatch: pytest.MonkeyPatch) -> None:
+    ps_json = json.dumps(
+        [
+            {"Names": ["openhost-notes"], "Size": {"rootFsSize": 999, "rwSize": 1234}},
+            {"Names": ["buildah-working-container"], "Size": {"rootFsSize": 5, "rwSize": 5}},
+            {"Names": ["openhost-nosize"]},
+        ]
+    )
+    _patch_subprocess_run(monkeypatch, lambda *a, **k: _FakeCompleted(stdout=ps_json))
+    assert containers.app_container_writable_layer_bytes() == {"notes": 1234}
+
+
+def test_app_container_writable_layer_bytes_empty_on_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_subprocess_run(monkeypatch, lambda *a, **k: _FakeCompleted(returncode=1))
+    assert containers.app_container_writable_layer_bytes() == {}
+
+    def _raise(*a, **k):
+        raise FileNotFoundError("podman")
+
+    _patch_subprocess_run(monkeypatch, _raise)
+    assert containers.app_container_writable_layer_bytes() == {}

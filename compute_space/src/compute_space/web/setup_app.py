@@ -54,10 +54,14 @@ _static_url = make_static_url(STATIC_DIR)
 
 
 def _inline_setup_styles() -> str:
-    """Bundle the shared styling and decorations for the listener handoff."""
+    """Bundle the shared styling and decorations for the listener handoff.
+
+    fonts.css only declares @font-face rules; the font files themselves still load from /static, and if the listener
+    has already dropped they fail and the page keeps its fallback fonts (font-display: swap) without blocking polling.
+    """
     styles = "\n".join(
         (STATIC_DIR / "css" / name).read_text(encoding="utf-8")
-        for name in ("tokens.css", "base.css", "components.css")
+        for name in ("fonts.css", "tokens.css", "base.css", "components.css")
     )
     for name in ("cloud.svg", "grass.svg"):
         image = b64encode((STATIC_DIR / "img" / "deco" / name).read_bytes()).decode("ascii")

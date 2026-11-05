@@ -58,10 +58,24 @@ def check_port_available(
     if row:
         return False, {"app_name": row["app_name"], "label": row["label"], "type": "port_mapping"}
 
+    # On reload the app's own old container still holds its ports until run_container removes it; skip the live bind.
+    # Why and scope: test_ports.py::test_reload_skips_live_bind_for_own_running_port and TestReloadPortRaceScope.
+    if exclude_app_id and _port_reserved_by_app(port, db, exclude_app_id):
+        return True, None
+
     if not _port_is_bindable(port):
         return False, {"type": "host_service"}
 
     return True, None
+
+
+def _port_reserved_by_app(port: int, db: sqlite3.Connection, app_id: str) -> bool:
+    """True if ``port`` is one of ``app_id``'s own reserved host ports."""
+    if db.execute("SELECT 1 FROM apps WHERE app_id = ? AND local_port = ?", (app_id, port)).fetchone():
+        return True
+    return bool(
+        db.execute("SELECT 1 FROM app_port_mappings WHERE app_id = ? AND host_port = ?", (app_id, port)).fetchone()
+    )
 
 
 def _format_used_by(used_by: dict[str, str] | None) -> str:

@@ -198,12 +198,12 @@ def test_waiting_page_keeps_brand_styling_without_static_assets(
 
 def test_slow_optional_font_does_not_block_readiness(setup_page: Page, health_routes: list[Route]) -> None:
     font_requests = []
-    setup_page.route("https://fonts.googleapis.com/**", lambda route: font_requests.append(route))
+    setup_page.route(f"{ORIGIN}/static/fonts/**", lambda route: font_requests.append(route))
     setup_page.goto(f"{ORIGIN}/setup")
-    with setup_page.expect_request("https://fonts.googleapis.com/**"), setup_page.expect_request(f"{ORIGIN}/health"):
+    with setup_page.expect_request(f"{ORIGIN}/static/fonts/**"), setup_page.expect_request(f"{ORIGIN}/health"):
         setup_page.locator("form").evaluate("form => form.requestSubmit()")
     expect(setup_page.get_by_role("status")).to_have_text(STARTING)
-    assert font_requests  # Keep the stylesheet pending throughout recovery.
+    assert font_requests  # Keep the font files pending throughout recovery.
     health_routes[0].fulfill(json={"status": "ok"})
     expect(setup_page).to_have_url(f"{ORIGIN}/")
 

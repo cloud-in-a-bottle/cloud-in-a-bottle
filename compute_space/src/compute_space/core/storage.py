@@ -1,8 +1,8 @@
 """Storage usage helpers and the storage guard.
 
 Reports disk usage totals and per-app breakdowns for the System page.
-The storage guard runs as a daemon thread that periodically checks disk free
-space and stops apps when free space drops below ``storage_min_free_mb``.  It is
+The storage guard runs as a daemon thread that periodically measures usage for
+the System page and checks disk free space and stops apps when free space drops below ``storage_min_free_mb``.  It is
 enabled by default with a modest threshold so a runaway disk can't silently take
 an instance fully down; operators change the threshold (or disable it by setting
 0) in the router config and reboot.  It can be paused from the System page so a
@@ -17,8 +17,12 @@ import shutil
 import sqlite3
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
+
+import attr
 
 from compute_space.config import Config
+from compute_space.core.containers import app_container_writable_layer_bytes
 from compute_space.core.containers import container_image_storage_bytes
 from compute_space.core.containers import stop_app_process
 from compute_space.core.logging import logger
@@ -29,11 +33,29 @@ _MIB = 1024 * 1024
 # Guard state
 # ---------------------------------------------------------------------------
 
-_STORAGE_GUARD_INTERVAL_SECONDS = 60
+_STORAGE_GUARD_INTERVAL_SECONDS = 300
+
+
+@attr.s(auto_attribs=True, frozen=True)
+class UsageSnapshot:
+    usage_measured_at: float  # epoch seconds
+    openhost_data_used_bytes: int
+    app_data_used_bytes: int
+    swap_file_bytes: int
+    build_cache_bytes: int | None
+    build_cache_reclaimable_bytes: int | None
+    per_app: dict[str, int]
+
 
 _guard_paused: bool = False
 _guard_lock = threading.Lock()
 _guard_db_paths: set[str] = set()
+
+# Walking app data and querying podman take seconds on a busy instance, so the
+# guard loop measures usage in the background and requests read the latest
+# snapshot.  Keyed by data_root_dir.
+_usage_snapshots: dict[str, UsageSnapshot] = {}
+_usage_lock = threading.Lock()
 
 
 def is_guard_paused() -> bool:
@@ -78,14 +100,15 @@ def _ensure_storage_roots(config: Config) -> None:
     os.makedirs(os.path.join(config.persistent_data_dir, "app_data"), exist_ok=True)
 
 
-def _dir_size_bytes(path: str) -> int:
-    """Return total size of all files under *path* in bytes.
+def _dir_size_bytes(path: str, seen_inodes: set[tuple[int, int]] | None = None) -> int:
+    """Return the disk space used by all files under *path*, in bytes.
 
-    There is no stdlib equivalent — ``shutil.disk_usage`` reports whole-disk
-    stats, not per-directory totals.  Uses ``os.scandir`` recursion rather
-    than ``os.walk`` + ``getsize`` so each file is stat'd once, not twice —
-    this endpoint walks entire app data trees.  Symlinks are not followed.
+    Counts allocated blocks (like ``du``) rather than apparent size, so sparse
+    files aren't overcounted.  Hardlinked files are counted once per
+    *seen_inodes* set.  Symlinks are not followed.
     """
+    if seen_inodes is None:
+        seen_inodes = set()
     try:
         entries = os.scandir(path)
     except OSError:
@@ -97,9 +120,15 @@ def _dir_size_bytes(path: str) -> int:
                 if entry.is_symlink():
                     continue
                 if entry.is_dir(follow_symlinks=False):
-                    total += _dir_size_bytes(entry.path)
-                else:
-                    total += entry.stat(follow_symlinks=False).st_size
+                    total += _dir_size_bytes(entry.path, seen_inodes)
+                    continue
+                st = entry.stat(follow_symlinks=False)
+                if st.st_nlink > 1:
+                    key = (st.st_dev, st.st_ino)
+                    if key in seen_inodes:
+                        continue
+                    seen_inodes.add(key)
+                total += st.st_blocks * 512
             except OSError:
                 pass
     return total
@@ -120,29 +149,30 @@ def disk_free_bytes(config: Config) -> int:
 
 
 def openhost_data_usage_bytes(config: Config) -> int:
+    """Disk space of Cloud in a Bottle's own persistent data (router db, certs, identity keys)."""
     _ensure_storage_roots(config)
-    return _dir_size_bytes(os.path.join(config.persistent_data_dir, "vm_data"))
+    seen: set[tuple[int, int]] = set()
+    return sum(
+        _dir_size_bytes(str(path), seen)
+        for path in (config.openhost_data_path, os.path.join(config.persistent_data_dir, "vm_data"))
+    )
 
 
-def per_app_usage(config: Config) -> dict[str, int]:
-    """Return ``{app_name: bytes_used}`` for each subdirectory of app_data."""
-    _ensure_storage_roots(config)
-    app_data_root = os.path.join(config.persistent_data_dir, "app_data")
-    result: dict[str, int] = {}
-    if not os.path.isdir(app_data_root):
-        return result
-    for entry in os.listdir(app_data_root):
-        entry_path = os.path.join(app_data_root, entry)
-        if os.path.isdir(entry_path):
-            result[entry] = _dir_size_bytes(entry_path)
-    return result
+def _subdir_sizes(root: str, seen_inodes: set[tuple[int, int]]) -> dict[str, int]:
+    """Return ``{name: bytes}`` for each subdirectory of *root*."""
+    if not os.path.isdir(root):
+        return {}
+    return {
+        entry: _dir_size_bytes(path, seen_inodes)
+        for entry in os.listdir(root)
+        if os.path.isdir(path := os.path.join(root, entry))
+    }
 
 
-def _app_data_loose_file_bytes(config: Config) -> int:
-    """Size of files sitting directly in app_data (not inside a per-app dir)."""
-    app_data_root = os.path.join(config.persistent_data_dir, "app_data")
+def _loose_file_bytes(root: str) -> int:
+    """Disk space of files sitting directly in *root* (not inside a subdirectory)."""
     try:
-        entries = os.scandir(app_data_root)
+        entries = os.scandir(root)
     except OSError:
         return 0
     total = 0
@@ -150,9 +180,46 @@ def _app_data_loose_file_bytes(config: Config) -> int:
         for entry in entries:
             try:
                 if entry.is_file(follow_symlinks=False):
-                    total += entry.stat(follow_symlinks=False).st_size
+                    total += entry.stat(follow_symlinks=False).st_blocks * 512
             except OSError:
                 pass
+    return total
+
+
+def _add_sizes(into: dict[str, int], sizes: dict[str, int]) -> None:
+    for app, size in sizes.items():
+        into[app] = into.get(app, 0) + size
+
+
+def per_app_usage(config: Config) -> dict[str, int]:
+    """Return ``{app_name: bytes_used}`` across each app's app_data and app_temp_data dirs."""
+    _ensure_storage_roots(config)
+    seen: set[tuple[int, int]] = set()
+    result = _subdir_sizes(os.path.join(config.persistent_data_dir, "app_data"), seen)
+    _add_sizes(result, _subdir_sizes(os.path.join(config.temporary_data_dir, "app_temp_data"), seen))
+    return result
+
+
+def swap_file_bytes(config: Config) -> int:
+    """Total size of swap files living on the data disk (swap partitions are excluded)."""
+    try:
+        with open("/proc/swaps") as f:
+            lines = f.read().splitlines()[1:]
+        data_dev = os.stat(config.data_root_dir).st_dev
+    except OSError:
+        return 0
+    total = 0
+    for line in lines:
+        fields = line.split()
+        if len(fields) < 3 or fields[1] != "file":
+            continue
+        # /proc/swaps escapes spaces in paths as \040
+        path = fields[0].replace("\\040", " ")
+        try:
+            if os.stat(path).st_dev == data_dev:
+                total += int(fields[2]) * 1024
+        except (OSError, ValueError):
+            pass
     return total
 
 
@@ -180,36 +247,71 @@ def check_before_deploy(config: Config) -> None:
         raise RuntimeError(f"Storage too low ({format_bytes(free)} free, {format_bytes(min_free)} required)")
 
 
+def _measure_usage(config: Config) -> UsageSnapshot:
+    """Walk app data and query podman for the slow part of the storage status."""
+    _ensure_storage_roots(config)
+    # The podman queries are slow (``ps --size`` walks every container layer),
+    # so they run alongside the directory walks.
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        layers_future = pool.submit(app_container_writable_layer_bytes)
+        image_future = pool.submit(container_image_storage_bytes)
+        per_app = per_app_usage(config)
+        _add_sizes(per_app, layers_future.result())
+        build_cache, build_cache_reclaimable = image_future.result()
+
+    return UsageSnapshot(
+        usage_measured_at=time.time(),
+        openhost_data_used_bytes=openhost_data_usage_bytes(config),
+        app_data_used_bytes=sum(per_app.values())
+        + _loose_file_bytes(os.path.join(config.persistent_data_dir, "app_data")),
+        swap_file_bytes=swap_file_bytes(config),
+        build_cache_bytes=build_cache,
+        build_cache_reclaimable_bytes=build_cache_reclaimable,
+        per_app=per_app,
+    )
+
+
+def _store_usage_snapshot(config: Config) -> UsageSnapshot:
+    snapshot = _measure_usage(config)
+    _usage_snapshots[config.data_root_dir] = snapshot
+    return snapshot
+
+
+def refresh_usage_snapshot(config: Config) -> UsageSnapshot:
+    """Measure usage now and store it as the latest snapshot."""
+    with _usage_lock:
+        return _store_usage_snapshot(config)
+
+
+def _get_usage_snapshot(config: Config) -> UsageSnapshot:
+    """Latest snapshot; measured on demand if the background loop hasn't produced one yet."""
+    snapshot = _usage_snapshots.get(config.data_root_dir)
+    if snapshot is not None:
+        return snapshot
+    with _usage_lock:
+        snapshot = _usage_snapshots.get(config.data_root_dir)
+        return snapshot if snapshot is not None else _store_usage_snapshot(config)
+
+
 def storage_status(config: Config) -> dict[str, object]:
     """Return disk totals and usage for the System page / API.
 
-    Both persistent and temporary data live on the same disk (under
-    ``data_root_dir``), so we report a single unified disk metric.
+    Disk free and guard state are read live; the per-app breakdown comes from
+    the latest usage snapshot.  Both persistent and temporary data live on the
+    same disk (under ``data_root_dir``), so we report a single unified disk
+    metric.
     """
     _ensure_storage_roots(config)
-
+    snapshot = _get_usage_snapshot(config)
     disk = shutil.disk_usage(config.data_root_dir)
-
-    min_free = storage_min_free_bytes(config)
-
-    # The app_data total is derived from the per-app walk rather than walked
-    # again — these trees are large enough that a second pass is noticeable.
-    per_app = per_app_usage(config)
-
-    image_storage = container_image_storage_bytes()
-
     return {
         "disk": {
             "total_bytes": disk.total,
             "used_bytes": disk.used,
             "free_bytes": disk.free,
         },
-        "openhost_data_used_bytes": openhost_data_usage_bytes(config),
-        "app_data_used_bytes": sum(per_app.values()) + _app_data_loose_file_bytes(config),
-        "build_cache_bytes": image_storage[0],
-        "build_cache_reclaimable_bytes": image_storage[1],
-        "per_app": per_app,
-        "storage_min_free_bytes": min_free,
+        **attr.asdict(snapshot),
+        "storage_min_free_bytes": storage_min_free_bytes(config),
         "storage_low": storage_low(config),
         "guard_paused": is_guard_paused(),
     }
@@ -272,6 +374,10 @@ def enforce_storage_guard(config: Config) -> None:
 def _storage_guard_loop(config: Config) -> None:
     while True:
         try:
+            refresh_usage_snapshot(config)
+        except Exception:
+            logger.exception("Storage usage measurement failed")
+        try:
             enforce_storage_guard(config)
         except Exception:
             logger.exception("Storage guard check failed")
@@ -279,12 +385,11 @@ def _storage_guard_loop(config: Config) -> None:
 
 
 def start_storage_guard(config: Config) -> None:
-    """Start the storage guard daemon thread (once per db_path).
+    """Start the storage daemon thread (once per db_path).
 
-    Only starts if a minimum free space threshold is configured.
+    It refreshes the usage snapshot and, if a minimum free space threshold is
+    configured, enforces it.
     """
-    if storage_min_free_bytes(config) is None:
-        return
     db_key = os.path.abspath(config.db_path)
     if db_key in _guard_db_paths:
         return

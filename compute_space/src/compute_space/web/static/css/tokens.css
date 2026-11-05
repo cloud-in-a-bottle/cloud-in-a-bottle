@@ -46,6 +46,7 @@
      deep blue, so neither competes with the pastel per-app slices. */
   --color-chart-unused: #d9ecfa;
   --color-chart-system: #3f6f9c;
+  --color-chart-swap: #7fa6cc;
 
   /* Type. Names match the Figma text styles: "body md / emphasized" is
      --text-body-md + --leading-body-md + --weight-emphasized. Interface text is
