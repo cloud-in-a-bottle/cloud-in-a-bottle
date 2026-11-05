@@ -317,6 +317,13 @@ def require_owner_auth(connection: AnyConnection, _route_handler: BaseRouteHandl
     verify_owner_auth(connection)
 
 
+def require_owner_auth_allowing_cross_site_navigation(
+    connection: AnyConnection, _route_handler: BaseRouteHandler
+) -> None:
+    """`require_owner_auth`, also accepting the session cookie on full-page GETs from other sites."""
+    verify_owner_auth(connection, allow_cross_site_navigation=True)
+
+
 async def verify_owner_ws(socket: WebSocket[Any, Any, Any]) -> bool:
     """Owner-auth a WebSocket; on success return True and leave accepting to the caller.
 
