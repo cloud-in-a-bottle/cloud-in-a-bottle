@@ -24,14 +24,15 @@ _CONNECT_START_PATH = "/connect/imbue"
 _CONNECT_EXCHANGE_PATH = "/connect/imbue/exchange"
 
 
-def build_connect_url(frontend_base_url: str, zone: str, instance_base_url: str) -> str:
+def build_connect_url(frontend_base_url: str, zone: str, instance_base_url: str, state: str) -> str:
     """Build the Imbue authorization URL the owner's browser is sent to.
 
     ``instance_base_url`` is this instance's own https origin; the one-time code is
     returned to it (at CONNECT_CALLBACK_PATH), so the callback must be on the
-    instance's own zone.
+    instance's own zone. ``state`` rides in the callback's query, which Imbue keeps
+    when it appends ``code``.
     """
-    callback = f"{instance_base_url.rstrip('/')}{CONNECT_CALLBACK_PATH}"
+    callback = f"{instance_base_url.rstrip('/')}{CONNECT_CALLBACK_PATH}?{urlencode({'state': state})}"
     query = urlencode({"zone": zone, "callback": callback})
     return f"{frontend_base_url.rstrip('/')}{_CONNECT_START_PATH}?{query}"
 
