@@ -477,3 +477,37 @@ def test_start_then_callback_round_trip(cfg: Any, client: TestClient[Litestar]) 
             urlparse(callback)._replace(scheme="", netloc="").geturl() + "&code=onetime", follow_redirects=False
         )
     assert resp.headers["location"] == "/settings?connect=ok"
+
+
+@pytest.mark.parametrize(
+    "method,dest,allowed",
+    [("GET", "document", True), ("GET", "empty", False), ("GET", "iframe", False), ("POST", "document", False)],
+)
+def test_callback_accepts_cross_site_navigation(
+    cfg: Any, client: TestClient[Litestar], method: str, dest: str, allowed: bool
+) -> None:
+    # Imbue redirects the owner back here from its own site.
+    _seed_connect_url(cfg)
+    client.cookies.update(_auth_cookie(cfg))
+    _seed_state()
+    headers = {"sec-fetch-site": "cross-site", "sec-fetch-mode": "navigate", "sec-fetch-dest": dest}
+    with mock.patch(
+        "compute_space.web.routes.api.settings.exchange_code_for_credential",
+        return_value=_cred(),
+    ):
+        resp = client.request(
+            method,
+            "/api/settings/connect-imbue/callback?code=onetime&state=st",
+            headers=headers,
+            follow_redirects=False,
+        )
+    if allowed:
+        assert resp.headers["location"] == "/settings?connect=ok"
+    else:
+        assert resp.status_code in (401, 405)
+
+
+def test_other_settings_routes_still_refuse_cross_site_navigation(cfg: Any, client: TestClient[Litestar]) -> None:
+    client.cookies.update(_auth_cookie(cfg))
+    headers = {"sec-fetch-site": "cross-site", "sec-fetch-mode": "navigate", "sec-fetch-dest": "document"}
+    assert client.get("/api/settings/connect-imbue/status", headers=headers).status_code == 401

@@ -58,6 +58,7 @@ from compute_space.core.system_agent.update_token import persist_update_token
 from compute_space.core.updates import trigger_restart
 from compute_space.core.util import not_blank
 from compute_space.web.auth.auth import require_owner_auth
+from compute_space.web.auth.auth import require_owner_auth_allowing_cross_site_navigation
 from compute_space.web.exceptions import BadGatewayException
 from compute_space.web.exceptions import ConflictException
 from openhost_system_agent.protocol import RemoteInfo
@@ -352,7 +353,8 @@ async def connect_imbue_start(
 
 @get(
     "/api/settings/connect-imbue/callback",
-    guards=[require_owner_auth],
+    # Imbue redirects the owner here from its own site; `state` is what makes accepting that safe.
+    guards=[require_owner_auth_allowing_cross_site_navigation],
     sync_to_thread=True,
     raises=[ServiceUnavailableException, BadGatewayException],
 )
