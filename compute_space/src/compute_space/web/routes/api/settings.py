@@ -360,13 +360,16 @@ def connect_imbue_callback(
     config: NamedDependency[Config],
     db: NamedDependency[sqlite3.Connection],
     code: FromQuery[str] = "",
-    state_param: Annotated[str, QueryParameter(name="state")] = "",
+    # "state" is a reserved handler kwarg in Litestar, so the query parameter needs another name here.
+    connect_state: Annotated[str, QueryParameter(name="state")] = "",
 ) -> Redirect:
     """Exchange the one-time code and store the credential.
 
-    Imbue returns the one-time code here (?code=). We exchange it for the credential
-    and write it into the DB settings table, which is read live by the services
-    that use it — so no restart is needed. Redirects back to Settings.
+    Imbue returns the one-time code here (?code=), along with the ``state`` that
+    ``connect_imbue_start`` put in the callback URL. A missing, unknown or expired
+    ``state`` is refused without exchanging the code. Otherwise we exchange it for
+    the credential and write it into the DB settings table, which is read live by
+    the services that use it — so no restart is needed. Redirects back to Settings.
 
     Sync + sync_to_thread so the blocking exchange (httpx) doesn't stall the event
     loop for other (proxied app) traffic.
@@ -376,7 +379,7 @@ def connect_imbue_callback(
         raise ServiceUnavailableException(
             detail="Connect to Imbue is not available on this deployment", extra={"code": "connect_unavailable"}
         )
-    expires = _pending_connect_states.pop(state_param, None)
+    expires = _pending_connect_states.pop(connect_state, None)
     if expires is None or expires <= monotonic() or not code.strip():
         return Redirect(path="/settings?connect=error")
     try:

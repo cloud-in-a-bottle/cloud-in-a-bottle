@@ -112,7 +112,7 @@ def _clear_pending_states() -> Iterator[None]:
     settings_routes._pending_connect_states.clear()
 
 
-def _with_state(state: str = "st", ttl: float = 600) -> None:
+def _seed_state(state: str = "st", ttl: float = 600) -> None:
     settings_routes._pending_connect_states[state] = monotonic() + ttl
 
 
@@ -245,7 +245,7 @@ def test_callback_503_without_connect_url(cfg: Any, client: TestClient[Litestar]
 def test_callback_blank_code_redirects_error(cfg: Any, client: TestClient[Litestar]) -> None:
     _seed_connect_url(cfg)
     client.cookies.update(_auth_cookie(cfg))
-    _with_state()
+    _seed_state()
     resp = client.get(
         "/api/settings/connect-imbue/callback?code=&state=st",
         follow_redirects=False,
@@ -257,7 +257,7 @@ def test_callback_blank_code_redirects_error(cfg: Any, client: TestClient[Litest
 def test_callback_whitespace_code_redirects_error(cfg: Any, client: TestClient[Litestar]) -> None:
     _seed_connect_url(cfg)
     client.cookies.update(_auth_cookie(cfg))
-    _with_state()
+    _seed_state()
     resp = client.get(
         "/api/settings/connect-imbue/callback?code=%20%20&state=st",
         follow_redirects=False,
@@ -270,7 +270,7 @@ def test_callback_missing_code_param_redirects_error(cfg: Any, client: TestClien
     # No ?code= at all defaults to "" -> the blank-code error redirect.
     _seed_connect_url(cfg)
     client.cookies.update(_auth_cookie(cfg))
-    _with_state()
+    _seed_state()
     resp = client.get(
         "/api/settings/connect-imbue/callback",
         follow_redirects=False,
@@ -289,7 +289,7 @@ def test_callback_happy_path_stores_identity_and_redirects_ok(cfg: Any, client: 
         mock.patch("compute_space.web.routes.api.settings.trigger_restart") as restart,
     ):
         client.cookies.update(_auth_cookie(cfg))
-        _with_state()
+        _seed_state()
         resp = client.get(
             "/api/settings/connect-imbue/callback?code=onetime&state=st",
             follow_redirects=False,
@@ -315,7 +315,7 @@ def test_callback_strips_whitespace_around_code_before_exchange(cfg: Any, client
         mock.patch("compute_space.web.routes.api.settings.trigger_restart"),
     ):
         client.cookies.update(_auth_cookie(cfg))
-        _with_state()
+        _seed_state()
         resp = client.get(
             "/api/settings/connect-imbue/callback?code=%20onetime%20&state=st",
             follow_redirects=False,
@@ -334,7 +334,7 @@ def test_callback_connect_error_returns_502(cfg: Any, client: TestClient[Litesta
         mock.patch("compute_space.web.routes.api.settings.trigger_restart") as restart,
     ):
         client.cookies.update(_auth_cookie(cfg))
-        _with_state()
+        _seed_state()
         resp = client.get(
             "/api/settings/connect-imbue/callback?code=bad&state=st",
             follow_redirects=False,
@@ -355,7 +355,7 @@ def test_callback_connect_error_does_not_overwrite_existing_identity(cfg: Any, c
         side_effect=RuntimeError("boom"),
     ):
         client.cookies.update(_auth_cookie(cfg))
-        _with_state()
+        _seed_state()
         resp = client.get(
             "/api/settings/connect-imbue/callback?code=bad&state=st",
             follow_redirects=False,
@@ -378,7 +378,7 @@ def test_callback_overwrites_existing_identity_on_success(cfg: Any, client: Test
         mock.patch("compute_space.web.routes.api.settings.trigger_restart"),
     ):
         client.cookies.update(_auth_cookie(cfg))
-        _with_state()
+        _seed_state()
         resp = client.get(
             "/api/settings/connect-imbue/callback?code=onetime&state=st",
             follow_redirects=False,
@@ -393,7 +393,7 @@ def test_callback_makes_status_report_connected_afterwards(cfg: Any, client: Tes
     # (read live from the settings table, no restart in between).
     _seed_connect_url(cfg)
     client.cookies.update(_auth_cookie(cfg))
-    _with_state()
+    _seed_state()
     before = client.get("/api/settings/connect-imbue/status").json()
     assert before == {"available": True, "connected": False}
     with (
@@ -418,7 +418,7 @@ def test_callback_rejects_unknown_state(
     _seed_connect_url(cfg)
     client.cookies.update(_auth_cookie(cfg))
     if stored_state is not None:
-        _with_state(stored_state)
+        _seed_state(stored_state)
     with mock.patch("compute_space.web.routes.api.settings.exchange_code_for_credential") as exchange:
         resp = client.get(
             f"/api/settings/connect-imbue/callback?code=onetime&state={query_state}",
@@ -433,7 +433,7 @@ def test_callback_rejects_unknown_state(
 def test_callback_rejects_expired_state(cfg: Any, client: TestClient[Litestar]) -> None:
     _seed_connect_url(cfg)
     client.cookies.update(_auth_cookie(cfg))
-    _with_state(ttl=-1)
+    _seed_state(ttl=-1)
     with mock.patch("compute_space.web.routes.api.settings.exchange_code_for_credential") as exchange:
         resp = client.get("/api/settings/connect-imbue/callback?code=onetime&state=st", follow_redirects=False)
     assert resp.headers["location"] == "/settings?connect=error"
@@ -443,7 +443,7 @@ def test_callback_rejects_expired_state(cfg: Any, client: TestClient[Litestar]) 
 def test_callback_state_is_single_use(cfg: Any, client: TestClient[Litestar]) -> None:
     _seed_connect_url(cfg)
     client.cookies.update(_auth_cookie(cfg))
-    _with_state()
+    _seed_state()
     url = "/api/settings/connect-imbue/callback?code=onetime&state=st"
     with mock.patch(
         "compute_space.web.routes.api.settings.exchange_code_for_credential",
@@ -457,7 +457,7 @@ def test_callback_state_is_single_use(cfg: Any, client: TestClient[Litestar]) ->
 def test_start_prunes_expired_states(cfg: Any, client: TestClient[Litestar]) -> None:
     _seed_connect_url(cfg)
     client.cookies.update(_auth_cookie(cfg))
-    _with_state("old", ttl=-1)
+    _seed_state("old", ttl=-1)
     client.post("/api/settings/connect-imbue/start")
     assert "old" not in settings_routes._pending_connect_states
     assert len(settings_routes._pending_connect_states) == 1
