@@ -123,7 +123,13 @@ def _make_test_config(tmp_path: Path, **overrides: Any) -> Config:
 
 
 def _make_config_and_env(tmp_path: Path, **overrides: Any) -> tuple[Config, dict[str, str]]:
-    """Create a test config + env dict for launching a router subprocess."""
+    """Create a test config + env dict for launching a router subprocess.
+
+    No default apps unless a test passes ``default_apps``: a throwaway router that completes /setup would otherwise
+    deploy them under the same ``openhost-<app>`` container names and port range as the shared ``router_process``,
+    replacing its containers (see ``TestContainerE2E.restarted_router``).
+    """
+    overrides.setdefault("default_apps", [])
     config = _make_test_config(tmp_path, **overrides)
     config_path = str(tmp_path / "config.toml")
     config.to_toml(config_path)
