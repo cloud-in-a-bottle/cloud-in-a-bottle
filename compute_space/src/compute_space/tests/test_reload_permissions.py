@@ -427,7 +427,6 @@ def _mocked_reload_side_effects() -> Iterator[dict[str, Any]]:
     re-pin, no container stop, no background reload thread."""
     with (
         patch("compute_space.web.routes.api.apps.git_pull", return_value=(True, None)),
-        patch("compute_space.web.routes.api.apps._pin_refless_to_landed_branch", return_value=None),
         patch("compute_space.web.routes.api.apps.stop_app_process") as stop,
         patch("compute_space.web.routes.api.apps.Thread") as thread,
     ):
@@ -668,7 +667,6 @@ def test_refused_update_rolls_back_working_tree(
 
     with (
         patch("compute_space.web.routes.api.apps.git_pull", side_effect=_fake_pull),
-        patch("compute_space.web.routes.api.apps._pin_refless_to_landed_branch", return_value=None),
         patch("compute_space.web.routes.api.apps.stop_app_process") as stop,
         patch("compute_space.web.routes.api.apps.Thread") as thread,
     ):

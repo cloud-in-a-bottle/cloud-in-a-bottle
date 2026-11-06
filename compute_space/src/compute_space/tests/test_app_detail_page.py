@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import subprocess
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -146,3 +147,25 @@ def test_app_detail_shows_private_default(cfg: Config) -> None:
     assert response.status_code == 200
     assert '<th scope="row">Public paths</th>' in response.text
     assert "None. All paths require Cloud in a Bottle login." in response.text
+
+
+@pytest.mark.parametrize(("ref", "shown"), [("", True), ("@main", False)])
+def test_app_detail_shows_the_tracked_default_branch(cfg: Config, tmp_path: Path, ref: str, shown: bool) -> None:
+    """A refless app tracks its repo's default branch; the page names the branch it's on."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=repo, check=True)
+    set_active_config(cfg)
+    with sqlite3.connect(cfg.db_path) as conn:
+        conn.execute(
+            """INSERT INTO apps (app_id, name, version, repo_path, repo_url, local_port, status)
+               VALUES ('git-app-id', 'git-app', '1.0.0', ?, ?, 19126, 'stopped')""",
+            (str(repo), f"https://github.com/owner/repo{ref}"),
+        )
+
+    with TestClient(app=_build_app(cfg)) as client:
+        client.cookies.update(auth_cookie(cfg))
+        response = client.get("/app_detail/git-app")
+
+    assert response.status_code == 200
+    assert ("tracks the default branch (<code>main</code>)" in response.text) is shown

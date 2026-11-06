@@ -260,10 +260,10 @@ def test_git_pull_returns_to_default_branch_when_ref_cleared(tmp_path: Path) -> 
     assert (clone / "f.txt").read_text() == "main"
 
 
-def test_reload_update_pins_resolved_default_branch(cfg: Any, tmp_path: Path) -> None:
-    """A refless update records the branch it landed on back into repo_url, so
-    the app pins to a concrete branch (visible, deterministic) rather than
-    re-resolving the remote default on every future pull."""
+def test_reload_update_keeps_tracking_the_default_branch(cfg: Any, tmp_path: Path) -> None:
+    """A refless update checks out the remote's default branch and leaves repo_url
+    refless, so the app keeps following the default branch (eg across a rename)
+    instead of being pinned to the branch it landed on."""
     origin = tmp_path / "origin"
     origin.mkdir()
     _git(origin, "init", "-b", "main")
@@ -295,13 +295,16 @@ def test_reload_update_pins_resolved_default_branch(cfg: Any, tmp_path: Path) ->
         stored = db.execute("SELECT repo_url FROM apps WHERE app_id = ?", (app_id,)).fetchone()[0]
     finally:
         db.close()
-    assert stored == f"file://{origin}@main", stored
+    assert stored == f"file://{origin}", stored
+    head = subprocess.run(
+        ["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=clone, capture_output=True, text=True
+    ).stdout.strip()
+    assert head == "main"
 
 
-def test_add_app_pins_default_branch_at_install(cfg: Any, tmp_path: Path) -> None:
-    """Installing a refless upstream records the cloned default branch into
-    repo_url, so the app is pinned and the branch is visible from first deploy
-    — not only after the first Update & Reload."""
+def test_add_app_keeps_a_refless_upstream_refless(cfg: Any, tmp_path: Path) -> None:
+    """Installing a refless upstream stores it as given: the app tracks the
+    repo's default branch rather than being pinned to the one it was cloned at."""
     clone = tmp_path / "clone"
     clone.mkdir()
     _git(clone, "init", "-b", "main")
@@ -336,7 +339,36 @@ def test_add_app_pins_default_branch_at_install(cfg: Any, tmp_path: Path) -> Non
             json={"repo_url": "https://github.com/owner/repo"},
         )
     assert resp.status_code == 200, resp.text
-    assert captured["repo_url"] == "https://github.com/owner/repo@main", captured
+    assert captured["repo_url"] == "https://github.com/owner/repo", captured
+
+
+def test_git_pull_follows_a_renamed_default_branch(tmp_path: Path) -> None:
+    """After the remote renames its default branch (master to main), a refless
+    pull lands on the new default and updates origin/HEAD, even though the clone
+    has never fetched it and its origin/HEAD still says master."""
+    origin = tmp_path / "origin"
+    origin.mkdir()
+    _git(origin, "init", "-b", "master")
+    (origin / "f.txt").write_text("v1")
+    _git(origin, "add", ".")
+    _git(origin, "commit", "-m", "v1")
+    clone = tmp_path / "clone"
+    _git(tmp_path, "clone", f"file://{origin}", str(clone))
+
+    _git(origin, "branch", "-m", "master", "main")
+    (origin / "f.txt").write_text("v2")
+    _git(origin, "commit", "-am", "v2")
+
+    ok, err = git_pull(str(clone), "myapp", repo_url=f"file://{origin}")
+    assert ok, err
+    head = subprocess.run(
+        ["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=clone, capture_output=True, text=True
+    ).stdout.strip()
+    origin_head = subprocess.run(
+        ["git", "symbolic-ref", "--short", "refs/remotes/origin/HEAD"], cwd=clone, capture_output=True, text=True
+    ).stdout.strip()
+    assert (head, origin_head) == ("main", "origin/main")
+    assert (clone / "f.txt").read_text() == "v2"
 
 
 def test_add_app_non_git_clone_does_not_pin_or_error(cfg: Any, tmp_path: Path) -> None:
