@@ -7,6 +7,9 @@ from datetime import datetime
 from datetime import time
 from datetime import timedelta
 
+from compute_space.core.auto_update.app_config import read_app_auto_update_enabled
+from compute_space.core.auto_update.app_config import read_app_last_run
+from compute_space.core.auto_update.apps import run_app_auto_updates
 from compute_space.core.auto_update.config import AutoUpdateLastRun
 from compute_space.core.auto_update.config import AutoUpdateOutcome
 from compute_space.core.auto_update.config import read_auto_update_config
@@ -116,14 +119,22 @@ async def _run_if_due() -> None:
     now = datetime.now(UTC)
     with closing(get_db()) as db:
         config = read_auto_update_config(db)
+        apps_enabled = read_app_auto_update_enabled(db)
         if _update_due is None:
-            last_run = read_last_run(db)
-            _update_due = _first_update_due(config.time_utc, last_run.at if last_run else None, now)
+            run_times = [run.at for run in (read_last_run(db), read_app_last_run(db)) if run is not None]
+            _update_due = _first_update_due(config.time_utc, max(run_times, default=None), now)
 
-    if config.enabled and now > _update_due:
+    if (config.enabled or apps_enabled) and now > _update_due:
         _scheduled_run_in_progress = True
         try:
-            await run_auto_update()
+            # Apps first: the instance update stops this process, so nothing after it would run.
+            if apps_enabled:
+                try:
+                    await run_app_auto_updates()
+                except Exception:
+                    logger.exception("scheduled app updates failed")
+            if config.enabled:
+                await run_auto_update()
         finally:
             _scheduled_run_in_progress = False
             # Even if the run raised, so a failure waits for the next scheduled time. From the time the run ended, not
@@ -140,6 +151,8 @@ def start_auto_update_task() -> asyncio.Task[None]:
     - (for autosuspending VMs, we'll wake the instance daily sometime around (after) the requested time to allow the update to run)
     - If the update fails, it does not retry until the next scheduled time.
     - If the update time is rescheduled, the next run is scheduled for when the new time is next reached.
+    - When app auto-updates are on, the same window updates installed apps first (one at a time, skipping any whose
+      update needs the owner's approval), then the instance.
     """
 
     async def _run() -> None:

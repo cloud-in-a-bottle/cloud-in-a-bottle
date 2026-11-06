@@ -118,6 +118,19 @@
       <p id="auto-update-msg" class="msg" hidden></p>
     </div>
 
+    <div class="field">
+      <label class="field field--check">
+        <input type="checkbox" id="app-auto-update-enabled" aria-describedby="app-auto-update-hint"
+               onchange="saveAppAutoUpdate()" disabled>
+        <span>Also update apps at that time</span>
+      </label>
+      <p class="hint" id="app-auto-update-hint">Updates each installed app to its latest version, one at a time.
+        An update that adds permissions or changes an app's settings waits for you to approve it on the app's page.
+        Stopped apps and apps with local changes are left alone.</p>
+      <div class="notice" id="app-auto-update-last" hidden></div>
+      <p id="app-auto-update-msg" class="msg" hidden></p>
+    </div>
+
     <hr class="rule">
 
     <div class="field">

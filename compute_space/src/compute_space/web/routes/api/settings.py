@@ -32,6 +32,9 @@ from compute_space.config import Config
 from compute_space.core.auth.auth import read_owner_username
 from compute_space.core.auth.auth import update_owner_username
 from compute_space.core.auth.auth import validate_owner_username
+from compute_space.core.auto_update.app_config import read_app_auto_update_enabled
+from compute_space.core.auto_update.app_config import read_app_last_run
+from compute_space.core.auto_update.app_config import write_app_auto_update_enabled
 from compute_space.core.auto_update.config import AutoUpdateConfig
 from compute_space.core.auto_update.config import read_auto_update_config
 from compute_space.core.auto_update.config import read_last_run
@@ -263,6 +266,54 @@ async def set_auto_update(data: AutoUpdateRequest, db: NamedDependency[sqlite3.C
 
 
 @attr.s(auto_attribs=True, frozen=True)
+class AppAutoUpdateRequest:
+    enabled: bool
+
+
+@attr.s(auto_attribs=True, frozen=True)
+class AppAutoUpdateResultResponse:
+    app_name: str
+    # updated, up_to_date, needs_approval, skipped or failed.
+    outcome: str
+    detail: str | None
+
+
+@attr.s(auto_attribs=True, frozen=True)
+class AppAutoUpdateResponse:
+    enabled: bool
+    last_run_at: str | None
+    # Every installed app's outcome in the last scheduled run; empty before the first.
+    last_run_results: list[AppAutoUpdateResultResponse]
+
+
+def _app_auto_update_response(db: sqlite3.Connection) -> AppAutoUpdateResponse:
+    last_run = read_app_last_run(db)
+    return AppAutoUpdateResponse(
+        enabled=read_app_auto_update_enabled(db),
+        last_run_at=last_run.at.isoformat() if last_run else None,
+        last_run_results=[
+            AppAutoUpdateResultResponse(app_name=r.app_name, outcome=r.outcome, detail=r.detail)
+            for r in (last_run.results if last_run else [])
+        ],
+    )
+
+
+@get("/api/settings/app-auto-update", guards=[require_owner_auth])
+async def get_app_auto_update(db: NamedDependency[sqlite3.Connection]) -> AppAutoUpdateResponse:
+    return _app_auto_update_response(db)
+
+
+@post("/api/settings/app-auto-update", status_code=200, guards=[require_owner_auth])
+async def set_app_auto_update(
+    data: AppAutoUpdateRequest, db: NamedDependency[sqlite3.Connection]
+) -> AppAutoUpdateResponse:
+    write_app_auto_update_enabled(db, data.enabled)
+    # So turning this on after the day's time has passed waits for tomorrow, rather than counting as a missed run.
+    reschedule_auto_update(time_utc=read_auto_update_config(db).time_utc)
+    return _app_auto_update_response(db)
+
+
+@attr.s(auto_attribs=True, frozen=True)
 class UpdateProgressResponse:
     entries: list[dict[str, Any]]
     terminal: bool
@@ -483,6 +534,8 @@ api_settings_routes = Router(
         update_progress,
         get_auto_update,
         set_auto_update,
+        get_app_auto_update,
+        set_app_auto_update,
         restart_compute_space,
         connect_imbue_status,
         connect_imbue_start,
