@@ -523,7 +523,8 @@ function renderAutoUpdate() {
   time.value = utcTimeToZone(autoUpdate.time_utc, autoUpdateZone, new Date());
   time.disabled = paused || !autoUpdate.enabled;
   zone.value = autoUpdateZone;
-  zone.disabled = time.disabled;
+  // Only changes what is shown, so it stays usable while automatic updates are off.
+  zone.disabled = paused;
   document.getElementById('auto-update-timezone').textContent =
     autoUpdateTimezoneText(autoUpdate.time_utc, autoUpdateZone);
   document.getElementById('auto-update-paused').hidden = !paused;

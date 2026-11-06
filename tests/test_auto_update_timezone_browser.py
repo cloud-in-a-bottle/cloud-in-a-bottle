@@ -185,11 +185,11 @@ def schedule(stack: LocalStack, owner: requests.Session) -> None:
     )
 
 
-def _fake_system_agent(route: Route) -> None:
+def _fake_system_agent(route: Route, channel: str = "tags") -> None:
     # The local stack has no system agent; answer the update calls the settings page makes on load.
     if route.request.url.endswith("/api/settings/get-remote"):
         route.fulfill(
-            json={"url": "https://github.com/cloud-in-a-bottle/cloud-in-a-bottle", "ref": "v1.0.0", "channel": "tags"}
+            json={"url": "https://github.com/cloud-in-a-bottle/cloud-in-a-bottle", "ref": "v1.0.0", "channel": channel}
         )
     else:
         route.fulfill(json={"state": "UP_TO_DATE"})
@@ -215,6 +215,7 @@ def _open(
     zone: str,
     now: datetime,
     init_script: str | None = None,
+    channel: str = "tags",
 ) -> Page:
     contexts, errors = fixture
     context = browser.new_context(timezone_id=zone, locale="en-US")
@@ -226,12 +227,15 @@ def _open(
         # Before the fake clock, which wraps Intl.DateTimeFormat and would hide later patches to it.
         page.add_init_script(init_script)
     page.clock.set_fixed_time(now)
-    page.route("**/api/settings/get-remote", _fake_system_agent)
+    page.route("**/api/settings/get-remote", lambda route: _fake_system_agent(route, channel))
     page.route("**/api/settings/update", _fake_system_agent)
     response = page.goto(f"{stack.router_url}/settings")
     assert response is not None and response.ok
-    # The checkbox is enabled once both the remote and the schedule have loaded.
-    expect(page.locator("#auto-update-enabled")).to_be_enabled()
+    if channel == "tags":
+        # The checkbox is enabled once both the remote and the schedule have loaded.
+        expect(page.locator("#auto-update-enabled")).to_be_enabled()
+    else:
+        expect(page.locator("#auto-update-time")).not_to_have_value("")
     return page
 
 
@@ -534,7 +538,7 @@ def test_an_unknown_remembered_timezone_falls_back_to_the_browsers(
     assert page.evaluate("localStorage.getItem('autoUpdateTimeZone')") is None
 
 
-def test_dropdown_is_disabled_with_the_time(
+def test_dropdown_works_while_updates_are_off_but_not_while_paused(
     open_settings: tuple[list[BrowserContext], list[str]],
     browser: Browser,
     stack: LocalStack,
@@ -542,11 +546,20 @@ def test_dropdown_is_disabled_with_the_time(
 ) -> None:
     _set_settings(stack, {"auto_update_enabled": "0"})
     page = _open(open_settings, browser, stack, owner, "Asia/Tokyo", WINTER)
-    expect(page.locator("#auto-update-zone")).to_be_disabled()
+    expect(page.locator("#auto-update-time")).to_be_disabled()
+    # It only changes what is shown, so it is usable while the time itself can't be changed.
+    expect(page.locator("#auto-update-zone")).to_be_enabled()
+    _choose_zone(page, "UTC")
+    expect(page.locator("#auto-update-time")).to_have_value("09:00")
     page.locator("#auto-update-enabled").check()
     expect(page.locator("#auto-update-msg")).to_have_text("Saved.")
-    expect(page.locator("#auto-update-zone")).to_be_enabled()
+    assert _get_setting(stack, "auto_update_time_utc") == "09:00"
     expect(page.locator("#auto-update-time")).to_be_enabled()
+
+    # On a branch remote the whole row is paused.
+    paused = _open(open_settings, browser, stack, owner, "Asia/Tokyo", WINTER, channel="branch")
+    expect(paused.locator("#auto-update-paused")).to_be_visible()
+    expect(paused.locator("#auto-update-zone")).to_be_disabled()
 
 
 def test_last_run_is_shown_in_the_chosen_timezone(
