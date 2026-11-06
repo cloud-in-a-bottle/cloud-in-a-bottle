@@ -107,7 +107,8 @@ The retired `access_all_data` and `access_all_archive` fields are deprecated ali
 An app can publish its image from CI so installs pull it instead of building it. It sets `[runtime.container] prebuilt_image` and tags releases `vX.Y.Z`; CI must push `<prebuilt_image>:<full commit sha>` before tagging that commit.
 
 - **Only when tracking the default branch.** An app installed with no ref pinned tracks its repo's default branch; with `prebuilt_image` set it installs and updates to the newest release tag on that branch (release candidates excluded), and runs that commit's image. A newer major version is just a newer release. A pinned ref (`url@ref`: a branch, tag or commit) ignores `prebuilt_image` and tags, and builds as before.
-- **No fallback to building.** If `prebuilt_image` is set but the default branch has no release tag, or the image is missing, the install or update fails. A failed update leaves the running version untouched.
+- **No fallback to building.** If `prebuilt_image` is set but the default branch has no release tag, or the image is missing or fails verification, the install or update fails. A failed update leaves the running version untouched.
+- **Signatures.** Images from `registry.cloudinabottle.org` must carry a cosign keyless signature made by `cloud-in-a-bottle/app-template`'s `app-image.yml` workflow on `main`, for the app's own GitHub repo, at the deployed commit; the verified digest is what gets pulled. Images from other registries are pulled unverified.
 - **Forks.** A fork that changes the app should remove (or comment out) `prebuilt_image`, so it is built from its own Dockerfile.
 - **Tests.** The test harness builds `image` by default, so tests cover the working tree; pass `use_prebuilt_image=True` to `OpenhostStack` to deploy the newest release's image instead.
 
