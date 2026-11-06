@@ -38,10 +38,12 @@ from compute_space.core.app_id import is_valid_app_id
 from compute_space.core.apps import RESERVED_PATHS
 from compute_space.core.apps import app_container_log_path
 from compute_space.core.apps import app_log_path
+from compute_space.core.apps import app_repo_url
 from compute_space.core.apps import clone_with_github_fallback
 from compute_space.core.apps import git_pull
 from compute_space.core.apps import insert_and_deploy
 from compute_space.core.apps import move_clone_to_app_temp_dir
+from compute_space.core.apps import pull_prebuilt_image_if_used
 from compute_space.core.apps import reload_app_background
 from compute_space.core.apps import remove_app_background
 from compute_space.core.apps import start_app_process
@@ -76,6 +78,10 @@ from compute_space.core.manifest import settings_changes_require_review
 from compute_space.core.oauth import OAuthRequired
 from compute_space.core.oauth import get_oauth_token
 from compute_space.core.ports import check_port_available
+from compute_space.core.prebuilt_image import PrebuiltImageError
+from compute_space.core.releases import ReleaseError
+from compute_space.core.releases import checkout_newest_release
+from compute_space.core.releases import follows_releases
 from compute_space.core.updates import wait_for_shutdown
 from compute_space.db.connection import get_db
 from compute_space.web.auth.auth import require_owner_auth
@@ -672,6 +678,19 @@ def _gate_update_review(
     )
 
 
+async def _roll_back_update(repo_path: str, pre_pull_sha: str | None, log_file: str) -> None:
+    """Put the working tree back at the version the app is running, after an update that won't be applied, so the
+    refused code doesn't linger on disk where a later plain reload (which is not gated, on the assumption the on-disk
+    manifest matches the running one) would silently deploy it."""
+    if not pre_pull_sha:
+        return
+    try:
+        await reset_hard(Path(repo_path), pre_pull_sha)
+    except Exception as e:  # noqa: BLE001
+        with open(log_file, "a") as lf:
+            lf.write(f"WARNING: failed to roll back refused update to {pre_pull_sha}: {e}\n")
+
+
 async def _reload_app_impl(
     app_id: str,
     update: bool,
@@ -790,6 +809,27 @@ async def _reload_app_impl(
                     return Redirect(path=f"/app_detail/{app_name}")
                 return Response(content=OkResponse(ok=True), status_code=200, media_type=MediaType.JSON)
 
+            # An app that tracks its default branch (no ref pinned) and sets prebuilt_image deploys the branch's newest
+            # release, not its head.
+            try:
+                manifest_after_pull = parse_manifest(app_row["repo_path"])
+            except ValueError:
+                manifest_after_pull = None  # reported by the reload itself; nothing to check out
+            try:
+                if manifest_after_pull is not None and follows_releases(repo_url, manifest_after_pull):
+                    release = await asyncio.to_thread(checkout_newest_release, app_row["repo_path"], True)
+                    lf.write(f"Checked out release {release}\n")
+            except ReleaseError as e:
+                await _roll_back_update(app_row["repo_path"], pre_pull_sha, log_file)
+                db.execute(
+                    "UPDATE apps SET status = 'error', error_message = ? WHERE app_id = ?",
+                    (f"Update not applied: {e}", app_id),
+                )
+                db.commit()
+                if continue_oauth:
+                    return Redirect(path=f"/app_detail/{app_name}")
+                return Response(content=OkResponse(ok=True), status_code=200, media_type=MediaType.JSON)
+
     # Gate: when an update pulls a manifest that differs from the running one
     # (any changed setting, or newly declared permissions), refuse the reload
     # until the owner approves (the install flow requires the same explicit
@@ -809,21 +849,40 @@ async def _reload_app_impl(
             app_row["manifest_raw"],
         )
         if review_gate is not None:
-            # Roll the working tree back to the version the app is running, so the
-            # pulled-but-refused code does not linger on disk where a later plain
-            # reload — which is not gated, on the assumption the on-disk manifest
-            # matches the running one — would silently deploy it.
-            if pre_pull_sha:
-                try:
-                    await reset_hard(Path(app_row["repo_path"]), pre_pull_sha)
-                except Exception as e:  # noqa: BLE001
-                    with open(log_file, "a") as lf:
-                        lf.write(f"WARNING: failed to roll back refused update to {pre_pull_sha}: {e}\n")
+            await _roll_back_update(app_row["repo_path"], pre_pull_sha, log_file)
             with open(log_file, "a") as lf:
                 lf.write("Update changes app settings requiring owner approval; not reloading.\n")
             if continue_oauth:
                 return Redirect(path=f"/app_detail/{app_name}")
             return Response(content=review_gate, status_code=200, media_type=MediaType.JSON)
+
+        # An app that uses a prebuilt image pulls it now, before the running container is stopped, so a missing image
+        # leaves the running version untouched. The background reload repeats the pull,
+        # which is quick once the image is local.
+        try:
+            manifest_for_pull = parse_manifest(app_row["repo_path"])
+        except ValueError:
+            manifest_for_pull = None  # the background reload reports it
+        try:
+            if manifest_for_pull is not None:
+                await asyncio.to_thread(
+                    pull_prebuilt_image_if_used,
+                    app_name,
+                    app_row["repo_path"],
+                    manifest_for_pull,
+                    app_repo_url(app_id, db),
+                    config,
+                )
+        except (PrebuiltImageError, RuntimeError) as e:
+            await _roll_back_update(app_row["repo_path"], pre_pull_sha, log_file)
+            db.execute(
+                "UPDATE apps SET status = 'error', error_message = ? WHERE app_id = ?",
+                (f"Update not applied: {e}", app_id),
+            )
+            db.commit()
+            if continue_oauth:
+                return Redirect(path=f"/app_detail/{app_name}")
+            return Response(content=OkResponse(ok=True), status_code=200, media_type=MediaType.JSON)
 
     # Atomically claim the reload before touching the running container.
     # ``WHERE status NOT IN (<transient states>)`` makes concurrent reloads

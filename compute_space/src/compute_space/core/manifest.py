@@ -167,6 +167,12 @@ class AppManifest:
 
     # [runtime.container]
     container_image: Annotated[str, SettingLabel("Container", "Image")] = ""
+    # An image reference without tag or digest (eg ``registry.cloudinabottle.org/bottled-vaultwarden``). When set and
+    # the app tracks its repo's default branch (no ref pinned), it is installed and updated to the newest ``vX.Y.Z``
+    # release tag and run from ``<prebuilt_image>:<that commit's sha>``, pulled instead of built from
+    # ``container_image`` (see core/releases.py). A pinned ref ignores it. Not review-gated: which image runs is the app author's call either
+    # way, like the Dockerfile's contents.
+    prebuilt_image: Annotated[str | None, SettingLabel("Container", "Prebuilt image", review_required=False)] = None
     container_port: Annotated[int, SettingLabel("Container", "Container port")] = 0
     container_command: Annotated[str | None, SettingLabel("Container", "Command")] = None
     port_mappings: Annotated[list[PortMapping], SettingLabel("Ports", "Port mappings")] = attr.Factory(list)
@@ -448,6 +454,23 @@ def _parse_services_v2_consumes(data: dict[str, Any]) -> list[ServiceConsumes]:
     return perms
 
 
+def _parse_prebuilt_image(value: object) -> str | None:
+    """Validate ``[runtime.container].prebuilt_image``: an image reference with neither tag nor digest, since the tag
+    is always the commit being deployed."""
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError("[runtime.container].prebuilt_image must be a non-empty string")
+    if value != value.strip() or any(c.isspace() for c in value):
+        raise ValueError(f"[runtime.container].prebuilt_image must not contain whitespace: {value!r}")
+    if "@" in value:
+        raise ValueError(f"[runtime.container].prebuilt_image must not include a digest: {value!r}")
+    # A colon after the last slash is a tag; one before it is a registry port (host:5000/name).
+    if ":" in value.rsplit("/", 1)[-1]:
+        raise ValueError(f"[runtime.container].prebuilt_image must not include a tag: {value!r}")
+    return value
+
+
 def parse_manifest_from_string(raw_text: str) -> AppManifest:
     """Parse an app manifest (``cloudinabottle.toml``) from its string content."""
     data = tomllib.loads(raw_text)
@@ -468,6 +491,8 @@ def parse_manifest_from_string(raw_text: str) -> AppManifest:
         raise ValueError("[runtime.container].image is required")
     if not container.get("port"):
         raise ValueError("[runtime.container].port is required")
+
+    prebuilt_image = _parse_prebuilt_image(container.get("prebuilt_image"))
 
     shm_mb = container.get("shm_mb", 0)
     if not isinstance(shm_mb, int) or shm_mb < 0:
@@ -502,6 +527,7 @@ def parse_manifest_from_string(raw_text: str) -> AppManifest:
         hidden=app_section.get("hidden", False),
         runtime_type=runtime_type,
         container_image=container["image"],
+        prebuilt_image=prebuilt_image,
         container_port=container["port"],
         container_command=container.get("command"),
         port_mappings=_parse_ports(data.get("ports", [])),

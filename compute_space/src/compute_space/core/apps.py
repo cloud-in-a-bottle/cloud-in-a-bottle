@@ -1,3 +1,4 @@
+import asyncio
 import hashlib
 import json
 import os
@@ -55,6 +56,10 @@ from compute_space.core.oauth import OAuthRequired
 from compute_space.core.oauth import get_oauth_token
 from compute_space.core.ports import allocate_port
 from compute_space.core.ports import resolve_port_mappings
+from compute_space.core.prebuilt_image import pull_prebuilt_image
+from compute_space.core.releases import ReleaseError
+from compute_space.core.releases import checkout_newest_release
+from compute_space.core.releases import follows_releases
 from compute_space.core.service_interface.services import register_services_provided_by_app
 from compute_space.db import get_db
 
@@ -218,8 +223,13 @@ async def clone_and_read_manifest(
                 shutil.copytree(plain_dir, clone_dir)
             except OSError as e:
                 raise CloneFailed(f"Copy failed: {e}") from e
-        return parse_manifest(clone_dir), clone_dir, None
-    except (CloneFailed, ValueError) as e:  # ValueError: unparseable manifest
+        manifest = parse_manifest(clone_dir)
+        if follows_releases(repo_url, manifest):
+            # It installs at its newest release, not the default branch's head (and fails if there is none).
+            await asyncio.to_thread(checkout_newest_release, clone_dir, False)
+            manifest = parse_manifest(clone_dir)
+        return manifest, clone_dir, None
+    except (CloneFailed, ValueError, ReleaseError) as e:  # ValueError: unparseable manifest
         error = str(e)
     except subprocess.TimeoutExpired:
         error = "Git clone timed out"
@@ -733,7 +743,12 @@ def _build_then_run_app(
     max_build_attempts: int = 1,
     env_vars: dict[str, str] | None = None,
 ) -> None:
-    """Build an app image, retrying transient failures, then run it."""
+    """Build an app image, retrying transient failures, then run it. An app that uses a prebuilt image pulls it
+    instead, and never builds."""
+    prebuilt_tag = pull_prebuilt_image_if_used(app_name, repo_path, manifest, app_repo_url(app_id, db), config)
+    if prebuilt_tag is not None:
+        run_app_image(app_id, prebuilt_tag, manifest, db, config, env_vars=env_vars)
+        return
     image_tag = ""
     for attempt in range(1, max_build_attempts + 1):
         try:
@@ -757,6 +772,48 @@ def _build_then_run_app(
             )
             time.sleep(attempt * 5)
     run_app_image(app_id, image_tag, manifest, db, config, env_vars=env_vars)
+
+
+def pull_prebuilt_image_if_used(
+    app_name: str, repo_path: str, manifest: AppManifest, repo_url: str | None, config: Config
+) -> str | None:
+    """Pull the app's prebuilt image for the checked-out commit and return its tag, or None if the app builds instead
+    (see releases.follows_releases). Raises PrebuiltImageError rather than falling back to a build."""
+    if not follows_releases(repo_url, manifest):
+        return None
+    assert manifest.prebuilt_image is not None
+    return pull_prebuilt_image(
+        app_name,
+        manifest.prebuilt_image,
+        head_commit(repo_path),
+        repo_url,
+        log=app_log_writer(app_name, config),
+    )
+
+
+def head_commit(repo_path: str) -> str:
+    result = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo_path, capture_output=True, text=True, timeout=10)
+    if result.returncode != 0:
+        raise RuntimeError(f"Could not read the deployed commit in {repo_path}: {result.stderr.strip()}")
+    return result.stdout.strip()
+
+
+def app_repo_url(app_id: str, db: sqlite3.Connection) -> str | None:
+    row = db.execute("SELECT repo_url FROM apps WHERE app_id = ?", (app_id,)).fetchone()
+    return row["repo_url"] if row else None
+
+
+def app_log_writer(app_name: str, config: Config) -> Callable[[str], None]:
+    """Appends lines to the app's build log (shown on its detail page)."""
+    log_file = app_log_path(app_name, config)
+
+    def _log(msg: str) -> None:
+        logger.info("{}: {}", app_name, msg)
+        os.makedirs(os.path.dirname(log_file), exist_ok=True)
+        with open(log_file, "a") as f:
+            f.write(msg + "\n")
+
+    return _log
 
 
 def restart_app_process(app_id: str, db: sqlite3.Connection, config: Config) -> None:
