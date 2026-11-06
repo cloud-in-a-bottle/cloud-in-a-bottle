@@ -330,15 +330,8 @@ async function savePrereleases() {
   }
 }
 
-function pad2(n) { return String(n).padStart(2, '0'); }
-
-// The scheduled time is stored as HH:MM in UTC. It is shown in a timezone the owner picks from a dropdown, the
-// browser's by default. The choice only changes how the time is shown and entered, so it is kept in this browser
-// rather than saved with the schedule. '' means the browser's timezone.
-const AUTO_UPDATE_ZONE_KEY = 'autoUpdateTimeZone';
-let autoUpdateZone = '';
-
-// The IANA name of the browser's timezone (e.g. "America/New_York"), or null if the browser doesn't report one.
+// The schedule is a time on the clock of an IANA timezone, saved as is: the server keeps it at that local time across
+// daylight saving time changes.
 function browserTimeZone() {
   try {
     return Intl.DateTimeFormat().resolvedOptions().timeZone || null;
@@ -347,164 +340,20 @@ function browserTimeZone() {
   }
 }
 
-// How many minutes `zone` is ahead of UTC at `date`. '' is the browser's timezone.
-function zoneOffsetMinutes(zone, date) {
-  if (!zone) return -date.getTimezoneOffset();
-  const parts = {};
-  new Intl.DateTimeFormat('en-US', {
-    timeZone: zone, hourCycle: 'h23',
-    year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: 'numeric', second: 'numeric',
-  }).formatToParts(date).forEach(function(p) { parts[p.type] = Number(p.value); });
-  const wall = Date.UTC(parts.year, parts.month - 1, parts.day, parts.hour, parts.minute, parts.second);
-  return Math.round((wall - Math.floor(date.getTime() / 1000) * 1000) / 60000);
-}
-
-// The UTC instant at which the clock in `zone` reads `hhmm` today (today in that zone). Like `new Date(y, m, d, h,
-// min)` does for the browser's own timezone, a time repeated when the clocks go back is the first one, and a time
-// skipped when they go forward is read with the offset from before the change.
-function zoneTimeToInstant(hhmm, zone, now) {
-  const [h, m] = hhmm.split(':').map(Number);
-  const today = new Date(now.getTime() + zoneOffsetMinutes(zone, now) * 60000);
-  const wall = Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate(), h, m);
-  const day = 24 * 60 * 60000;
-  const before = wall - zoneOffsetMinutes(zone, new Date(wall - day)) * 60000;
-  const after = wall - zoneOffsetMinutes(zone, new Date(wall + day)) * 60000;
-  const reads = function(instant) {
-    return instant + zoneOffsetMinutes(zone, new Date(instant)) * 60000 === wall;
-  };
-  const valid = [before, after].filter(reads);
-  return new Date(valid.length ? Math.min.apply(null, valid) : before);
-}
-
-function utcTimeToZone(hhmm, zone, now) {
-  const [h, m] = hhmm.split(':').map(Number);
-  const instant = new Date(now.getTime());
-  instant.setUTCHours(h, m, 0, 0);
-  const wall = new Date(instant.getTime() + zoneOffsetMinutes(zone, instant) * 60000);
-  return pad2(wall.getUTCHours()) + ':' + pad2(wall.getUTCMinutes());
-}
-
-function zoneTimeToUtc(hhmm, zone, now) {
-  const instant = zoneTimeToInstant(hhmm, zone, now);
-  return pad2(instant.getUTCHours()) + ':' + pad2(instant.getUTCMinutes());
-}
-
-// An offset from UTC as "UTC-05:00", "UTC+05:30", or "UTC" when there is none.
-function utcOffsetLabel(minutes) {
-  if (minutes === 0) return 'UTC';
-  const abs = Math.abs(minutes);
-  return 'UTC' + (minutes < 0 ? '-' : '+') + pad2(Math.floor(abs / 60)) + ':' + pad2(abs % 60);
-}
-
-// True when `zone` has a different UTC offset at some point in the year, i.e. observes daylight saving time.
-function observesDaylightSaving(zone, now) {
-  const year = now.getUTCFullYear();
-  return zoneOffsetMinutes(zone, new Date(Date.UTC(year, 0, 1)))
-    !== zoneOffsetMinutes(zone, new Date(Date.UTC(year, 6, 1)));
-}
-
-// The browser's readable name for `zone` right now (e.g. "Eastern Standard Time"), or null if it only has a
-// "GMT-05:00"-style name, which would just repeat the offset.
-function timeZoneName(zone, now) {
-  try {
-    const options = {timeZoneName: 'long'};
-    if (zone) options.timeZone = zone;
-    const part = new Intl.DateTimeFormat(undefined, options).formatToParts(now)
-      .find(function(p) { return p.type === 'timeZoneName'; });
-    if (!part || /^(GMT|UTC)([+-]|$)/.test(part.value)) return null;
-    return part.value;
-  } catch (e) {
-    return null;
-  }
-}
-
-// "Eastern Standard Time (America/New_York, UTC-05:00)", leaving out whatever the browser can't name. '' is the
-// browser's timezone.
-function timeZoneLabel(zone, now) {
-  const id = zone || browserTimeZone();
-  const offset = utcOffsetLabel(zoneOffsetMinutes(zone, now));
-  const name = timeZoneName(zone, now);
-  // A zone named "UTC" would repeat the offset.
-  const details = id && id !== offset ? [id, offset] : [offset];
-  if (name) return name + ' (' + details.join(', ') + ')';
-  if (details.length > 1) return details[0] + ' (' + details[1] + ')';
-  return details[0];
-}
-
-// Names the timezone the schedule is shown in, and the UTC time it is saved as.
-function autoUpdateTimezoneText(timeUtc, zone) {
-  const now = new Date();
-  let text = (zone ? 'The time is in ' : "The time is in your browser's timezone: ") + timeZoneLabel(zone, now) + '.';
-  const dst = observesDaylightSaving(zone, now);
-  // Always at UTC+0, the saved UTC time would just repeat the time shown.
-  if (zoneOffsetMinutes(zone, now) === 0 && !dst) return text;
-  text += ' It is saved as ' + timeUtc + ' UTC';
-  if (dst) text += ', so the time shown here shifts when daylight saving time starts or ends';
-  return text + '.';
-}
-
-// Every IANA zone the browser knows, plus UTC, which Chromium leaves out of the list. Old browsers without
-// Intl.supportedValuesOf only offer UTC besides their own timezone.
-function selectableTimeZones() {
+// Every zone the browser knows, plus UTC (which Chromium leaves out), the browser's own, and the saved one, which
+// this browser may list under another name (Asia/Kolkata and Asia/Calcutta) or not at all.
+function fillTimeZones(select, saved) {
   let zones = [];
   try {
     zones = Intl.supportedValuesOf('timeZone');
   } catch (e) {
     zones = [];
   }
-  const all = new Set(zones);
-  all.add('UTC');
-  return Array.from(all).sort();
-}
-
-function readSavedZone() {
-  try {
-    return localStorage.getItem(AUTO_UPDATE_ZONE_KEY) || '';
-  } catch (e) {
-    return '';
-  }
-}
-
-function writeSavedZone(zone) {
-  try {
-    if (zone) localStorage.setItem(AUTO_UPDATE_ZONE_KEY, zone);
-    else localStorage.removeItem(AUTO_UPDATE_ZONE_KEY);
-  } catch (e) {
-    // Storage may be blocked; the choice then lasts until the page is reloaded.
-  }
-}
-
-// Fills the dropdown. The browser's timezone comes first and follows the browser; the rest are fixed zones.
-function populateAutoUpdateZones() {
-  const select = document.getElementById('auto-update-zone');
-  const now = new Date();
-  const browserZone = browserTimeZone();
-  // The full name and offset are in the message under the row; the option only has to say which zone it is.
-  const browserLabel = browserZone || utcOffsetLabel(zoneOffsetMinutes('', now));
-  const options = [new Option('Browser (' + browserLabel + ')', '')];
-  selectableTimeZones().forEach(function(zone) {
-    if (zone === browserZone) return;
-    let offset;
-    try {
-      offset = zoneOffsetMinutes(zone, now);
-    } catch (e) {
-      // A browser that can't work out the zone's offset can't show times in it.
-      return;
-    }
-    options.push(new Option(zone + ' (' + utcOffsetLabel(offset) + ')', zone));
-  });
-  select.replaceChildren.apply(select, options);
-  const saved = readSavedZone();
-  autoUpdateZone = options.some(function(o) { return o.value === saved; }) ? saved : '';
-  if (autoUpdateZone !== saved) writeSavedZone(autoUpdateZone);
-  select.value = autoUpdateZone;
-}
-
-// Only the display changes: the saved UTC time stays the same, shown in the newly chosen timezone.
-function changeAutoUpdateZone() {
-  autoUpdateZone = document.getElementById('auto-update-zone').value;
-  writeSavedZone(autoUpdateZone);
-  renderAutoUpdate();
+  const own = browserTimeZone();
+  const all = new Set(zones.concat(['UTC', saved], own ? [own] : []));
+  select.replaceChildren.apply(select, Array.from(all).sort().map(function(zone) {
+    return new Option(zone === own ? zone + ' (this browser)' : zone, zone);
+  }));
 }
 
 function renderAutoUpdate() {
@@ -520,23 +369,26 @@ function renderAutoUpdate() {
   } else {
     enabled.removeAttribute('aria-describedby');
   }
-  time.value = utcTimeToZone(autoUpdate.time_utc, autoUpdateZone, new Date());
+  time.value = autoUpdate.time;
   time.disabled = paused || !autoUpdate.enabled;
-  zone.value = autoUpdateZone;
-  // Disabled and faded with the time it belongs to, so the row reads as one control.
+  if (!Array.from(zone.options).some(function(o) { return o.value === autoUpdate.timezone; })) {
+    fillTimeZones(zone, autoUpdate.timezone);
+  }
+  zone.value = autoUpdate.timezone;
   zone.disabled = time.disabled;
-  document.getElementById('auto-update-timezone').textContent =
-    autoUpdateTimezoneText(autoUpdate.time_utc, autoUpdateZone);
   document.getElementById('auto-update-paused').hidden = !paused;
   document.getElementById('auto-update-row').classList.toggle('field-row--disabled', paused);
 
   const last = document.getElementById('auto-update-last');
   if (autoUpdate.last_run_at) {
-    const options = {timeZoneName: 'short'};
-    if (autoUpdateZone) options.timeZone = autoUpdateZone;
-    last.textContent = 'Last automatic update: '
-      + new Date(autoUpdate.last_run_at).toLocaleString(undefined, options)
-      + '. ' + autoUpdate.last_run_message;
+    const at = new Date(autoUpdate.last_run_at);
+    let when;
+    try {
+      when = at.toLocaleString(undefined, {timeZone: autoUpdate.timezone, timeZoneName: 'short'});
+    } catch (e) {
+      when = at.toLocaleString(undefined, {timeZoneName: 'short'});
+    }
+    last.textContent = 'Last automatic update: ' + when + '. ' + autoUpdate.last_run_message;
     last.hidden = false;
   } else {
     last.hidden = true;
@@ -569,7 +421,8 @@ async function saveAutoUpdate() {
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({
         enabled: document.getElementById('auto-update-enabled').checked,
-        time_utc: zoneTimeToUtc(time.value, autoUpdateZone, new Date()),
+        time: time.value,
+        timezone: document.getElementById('auto-update-zone').value,
       }),
     });
     if (!resp.ok) {
@@ -1133,7 +986,6 @@ async function connectImbue() {
 
 loadOwnerUsername();
 loadRemote();
-populateAutoUpdateZones();
 loadAutoUpdate();
 checkForUpdates();
 updateSshStatus();

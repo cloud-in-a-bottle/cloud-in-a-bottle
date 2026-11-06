@@ -10,6 +10,7 @@ from datetime import datetime
 from datetime import time
 from datetime import timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -18,6 +19,7 @@ import compute_space.core.system_agent.client as client_mod
 from compute_space.core.auto_update.config import AutoUpdateConfig
 from compute_space.core.auto_update.config import AutoUpdateLastRun
 from compute_space.core.auto_update.config import AutoUpdateOutcome
+from compute_space.core.auto_update.config import is_valid_timezone
 from compute_space.core.auto_update.config import read_auto_update_config
 from compute_space.core.auto_update.config import read_last_run
 from compute_space.core.auto_update.config import record_last_run
@@ -33,6 +35,9 @@ from openhost_system_agent.updater import progress as agent_progress
 
 _NOW = datetime(2026, 10, 9, 4, 2, tzinfo=UTC)
 _AT_4 = time(4, 0)
+_UTC = ZoneInfo("UTC")
+_CHICAGO = ZoneInfo("America/Chicago")
+_CONFIG = AutoUpdateConfig(enabled=True, time=_AT_4, timezone="UTC")
 
 
 # ─────────────── schedule ───────────────
@@ -40,30 +45,76 @@ _AT_4 = time(4, 0)
 
 def test_next_run_later_today() -> None:
     now = datetime(2026, 10, 9, 3, 59, tzinfo=UTC)
-    assert runner_mod._next_datetime_at(_AT_4, now) == datetime(2026, 10, 9, 4, 0, tzinfo=UTC)
+    assert runner_mod._next_datetime_at(_AT_4, _UTC, now) == datetime(2026, 10, 9, 4, 0, tzinfo=UTC)
 
 
 def test_next_run_tomorrow_once_today_has_passed() -> None:
-    assert runner_mod._next_datetime_at(_AT_4, _NOW) == datetime(2026, 10, 10, 4, 0, tzinfo=UTC)
+    assert runner_mod._next_datetime_at(_AT_4, _UTC, _NOW) == datetime(2026, 10, 10, 4, 0, tzinfo=UTC)
 
 
 def test_next_run_at_the_scheduled_time_is_tomorrow() -> None:
     now = datetime(2026, 10, 9, 4, 0, tzinfo=UTC)
-    assert runner_mod._next_datetime_at(_AT_4, now) == datetime(2026, 10, 10, 4, 0, tzinfo=UTC)
+    assert runner_mod._next_datetime_at(_AT_4, _UTC, now) == datetime(2026, 10, 10, 4, 0, tzinfo=UTC)
 
 
 def test_first_due_catches_up_a_time_missed_across_a_restart() -> None:
     yesterday = datetime(2026, 10, 8, 4, 1, tzinfo=UTC)
-    assert runner_mod._first_update_due(_AT_4, yesterday, _NOW) == datetime(2026, 10, 9, 4, 0, tzinfo=UTC)
+    assert runner_mod._first_update_due(_AT_4, _UTC, yesterday, _NOW) == datetime(2026, 10, 9, 4, 0, tzinfo=UTC)
 
 
 def test_first_due_waits_when_the_most_recent_time_already_ran() -> None:
     today = datetime(2026, 10, 9, 4, 1, tzinfo=UTC)
-    assert runner_mod._first_update_due(_AT_4, today, _NOW) == datetime(2026, 10, 10, 4, 0, tzinfo=UTC)
+    assert runner_mod._first_update_due(_AT_4, _UTC, today, _NOW) == datetime(2026, 10, 10, 4, 0, tzinfo=UTC)
 
 
 def test_first_due_waits_without_a_recorded_run() -> None:
-    assert runner_mod._first_update_due(_AT_4, None, _NOW) == datetime(2026, 10, 10, 4, 0, tzinfo=UTC)
+    assert runner_mod._first_update_due(_AT_4, _UTC, None, _NOW) == datetime(2026, 10, 10, 4, 0, tzinfo=UTC)
+
+
+_AT_6 = time(6, 0)
+
+
+@pytest.mark.parametrize(
+    ("now", "expected"),
+    [
+        # 06:00 CDT is 11:00 UTC, and 06:00 CST is 12:00 UTC.
+        (datetime(2026, 7, 15, 10, 0, tzinfo=UTC), datetime(2026, 7, 15, 11, 0, tzinfo=UTC)),
+        (datetime(2026, 1, 15, 11, 30, tzinfo=UTC), datetime(2026, 1, 15, 12, 0, tzinfo=UTC)),
+        # The clocks go back at 02:00 on Nov 1: the 6am after the change is an hour later in UTC.
+        (datetime(2026, 10, 31, 12, 0, tzinfo=UTC), datetime(2026, 11, 1, 12, 0, tzinfo=UTC)),
+        # And forward at 02:00 on Mar 8.
+        (datetime(2026, 3, 7, 13, 0, tzinfo=UTC), datetime(2026, 3, 8, 11, 0, tzinfo=UTC)),
+        # Late evening in Chicago is already the next day in UTC.
+        (datetime(2026, 7, 16, 4, 0, tzinfo=UTC), datetime(2026, 7, 16, 11, 0, tzinfo=UTC)),
+    ],
+)
+def test_next_run_keeps_the_local_time_across_daylight_saving(now: datetime, expected: datetime) -> None:
+    assert runner_mod._next_datetime_at(_AT_6, _CHICAGO, now) == expected
+    assert expected.astimezone(_CHICAGO).time() == _AT_6
+
+
+def test_a_time_skipped_by_the_clocks_going_forward_runs_just_after() -> None:
+    # 02:30 doesn't exist in Chicago on Mar 8; it runs at 03:30 CDT, an hour after 01:30 CST.
+    now = datetime(2026, 3, 8, 6, 0, tzinfo=UTC)
+    due = runner_mod._next_datetime_at(time(2, 30), _CHICAGO, now)
+    assert due == datetime(2026, 3, 8, 8, 30, tzinfo=UTC)
+    assert due.astimezone(_CHICAGO).time() == time(3, 30)
+
+
+def test_a_time_repeated_by_the_clocks_going_back_runs_once() -> None:
+    # 01:30 happens twice in Chicago on Nov 1; it runs at the first one, and the next run is the next day.
+    now = datetime(2026, 11, 1, 6, 0, tzinfo=UTC)
+    first = runner_mod._next_datetime_at(time(1, 30), _CHICAGO, now)
+    assert first == datetime(2026, 11, 1, 6, 30, tzinfo=UTC)
+    assert runner_mod._next_datetime_at(time(1, 30), _CHICAGO, first) == datetime(2026, 11, 2, 7, 30, tzinfo=UTC)
+
+
+def test_first_due_catches_up_in_the_schedules_timezone() -> None:
+    # 06:00 in Chicago on Jul 15 was 11:00 UTC; the last run was the day before.
+    now = datetime(2026, 7, 15, 12, 0, tzinfo=UTC)
+    last = datetime(2026, 7, 14, 11, 1, tzinfo=UTC)
+    assert runner_mod._first_update_due(_AT_6, _CHICAGO, last, now) == datetime(2026, 7, 15, 11, 0, tzinfo=UTC)
+    assert runner_mod._first_update_due(_AT_6, _CHICAGO, now, now) == datetime(2026, 7, 16, 11, 0, tzinfo=UTC)
 
 
 # ─────────────── config ───────────────
@@ -81,10 +132,9 @@ def test_fresh_instance_defaults_to_enabled(migrated_db: sqlite3.Connection) -> 
     assert config.enabled is True
 
 
-def test_default_time_is_4am_server_time(migrated_db: sqlite3.Connection) -> None:
+def test_default_time_is_4am_utc(migrated_db: sqlite3.Connection) -> None:
     config = read_auto_update_config(migrated_db)
-    local = datetime.combine(datetime.now(UTC).date(), config.time_utc, tzinfo=UTC).astimezone()
-    assert (local.hour, local.minute) == (4, 0)
+    assert (config.time, config.timezone) == (_AT_4, "UTC")
 
 
 def test_existing_instance_migrated_to_v16_stays_disabled(tmp_path: Path) -> None:
@@ -97,9 +147,31 @@ def test_existing_instance_migrated_to_v16_stays_disabled(tmp_path: Path) -> Non
         assert read_auto_update_config(db).enabled is False
 
 
-def test_config_roundtrip(migrated_db: sqlite3.Connection) -> None:
-    write_auto_update_config(migrated_db, AutoUpdateConfig(enabled=False, time_utc=time(9, 30)))
-    assert read_auto_update_config(migrated_db) == AutoUpdateConfig(enabled=False, time_utc=time(9, 30))
+def test_utc_time_from_before_v17_keeps_its_schedule(tmp_path: Path) -> None:
+    db_path = str(tmp_path / "router.db")
+    with closing(sqlite3.connect(db_path)) as db:
+        db.executescript((Path(__file__).parent / "snapshots" / "auto_update_time_utc" / "v0016.sql").read_text())
+    init_db(db_path)
+    with closing(get_db()) as db:
+        assert read_auto_update_config(db) == AutoUpdateConfig(enabled=False, time=time(14, 30), timezone="UTC")
+
+
+@pytest.mark.parametrize("timezone", ["America/Chicago", "Asia/Kolkata", "Asia/Calcutta", "UTC"])
+def test_config_roundtrip(migrated_db: sqlite3.Connection, timezone: str) -> None:
+    config = AutoUpdateConfig(enabled=False, time=time(9, 30), timezone=timezone)
+    write_auto_update_config(migrated_db, config)
+    assert read_auto_update_config(migrated_db) == config
+
+
+@pytest.mark.parametrize("timezone", ["Mars/Olympus_Mons", "", "../../etc/passwd", "CST"])
+def test_unknown_timezone_is_rejected(timezone: str) -> None:
+    assert not is_valid_timezone(timezone)
+
+
+def test_invalid_timezone_setting_fails_loudly(migrated_db: sqlite3.Connection) -> None:
+    set_setting(migrated_db, "auto_update_timezone", "Mars/Olympus_Mons")
+    with pytest.raises(ValueError):
+        read_auto_update_config(migrated_db)
 
 
 def test_invalid_enabled_value_fails_loudly(migrated_db: sqlite3.Connection) -> None:
@@ -154,7 +226,7 @@ def agent(monkeypatch: pytest.MonkeyPatch, migrated_db: sqlite3.Connection) -> F
     monkeypatch.setattr(runner_mod, "system_agent_fetch", fake.fetch)
     monkeypatch.setattr(runner_mod, "system_agent_status", fake.get_status)
     monkeypatch.setattr(client_mod, "_start_apply", fake.start_apply)
-    write_auto_update_config(migrated_db, AutoUpdateConfig(enabled=True, time_utc=_AT_4))
+    write_auto_update_config(migrated_db, _CONFIG)
     return fake
 
 
@@ -385,7 +457,7 @@ async def test_run_across_the_scheduled_time_does_not_run_again(
 
     monkeypatch.setattr(runner_mod, "datetime", FakeDatetime)
     monkeypatch.setattr(runner_mod, "run_auto_update", slow_run)
-    write_auto_update_config(migrated_db, AutoUpdateConfig(enabled=True, time_utc=_AT_4))
+    write_auto_update_config(migrated_db, _CONFIG)
     # A catch-up for yesterday's run, starting just before today's and ending after it.
     update_due(datetime(2026, 10, 8, 4, 0, tzinfo=UTC))
     await runner_mod._run_if_due()
@@ -396,7 +468,7 @@ async def test_run_across_the_scheduled_time_does_not_run_again(
 async def test_failed_run_waits_for_the_next_scheduled_time(
     migrated_db: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch, update_due: Callable[[datetime | None], None]
 ) -> None:
-    write_auto_update_config(migrated_db, AutoUpdateConfig(enabled=True, time_utc=_AT_4))
+    write_auto_update_config(migrated_db, _CONFIG)
     calls = 0
 
     async def failing_run() -> None:
@@ -418,7 +490,7 @@ async def test_schedule_change_waits_for_the_new_time(
     agent: FakeAgent, migrated_db: sqlite3.Connection, update_due: Callable[[datetime | None], None]
 ) -> None:
     update_due(datetime.now(UTC) - timedelta(minutes=1))
-    runner_mod.reschedule_auto_update(_AT_4)
+    runner_mod.reschedule_auto_update(_CONFIG)
     await runner_mod._run_if_due()
     assert agent.applied == 0
 
@@ -427,7 +499,7 @@ async def test_schedule_change_waits_for_the_new_time(
 async def test_disabled_never_runs(
     agent: FakeAgent, migrated_db: sqlite3.Connection, update_due: Callable[[datetime | None], None]
 ) -> None:
-    write_auto_update_config(migrated_db, AutoUpdateConfig(enabled=False, time_utc=_AT_4))
+    write_auto_update_config(migrated_db, AutoUpdateConfig(enabled=False, time=_AT_4, timezone="UTC"))
     update_due(datetime.now(UTC) - timedelta(minutes=1))
     await runner_mod._run_if_due()
     assert agent.applied == 0

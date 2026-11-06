@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import sqlite3
-from datetime import UTC
 from datetime import datetime
 from datetime import time
 from enum import StrEnum
+from functools import cache
+from zoneinfo import ZoneInfo
+from zoneinfo import available_timezones
 
 import attr
 
@@ -13,19 +15,28 @@ from compute_space.core.settings_store import get_setting
 from compute_space.core.settings_store import set_setting
 
 ENABLED_KEY = "auto_update_enabled"
-TIME_UTC_KEY = "auto_update_time_utc"
+TIME_KEY = "auto_update_time"
+TIMEZONE_KEY = "auto_update_timezone"
 LAST_RUN_AT_KEY = "auto_update_last_run_at"
 LAST_RUN_OUTCOME_KEY = "auto_update_last_run_outcome"
 LAST_RUN_DETAIL_KEY = "auto_update_last_run_detail"
 
-# Until the owner picks a time, updates run at this hour in the server's timezone.
-DEFAULT_LOCAL_TIME = time(4, 0)
+# Until the owner picks a time, updates run at 04:00 UTC.
+DEFAULT_TIME = time(4, 0)
+DEFAULT_TIMEZONE = "UTC"
 
 
 @attr.s(auto_attribs=True, frozen=True)
 class AutoUpdateConfig:
     enabled: bool
-    time_utc: time
+    # The wall-clock time in `timezone` (an IANA name), so the update keeps the same local time across daylight saving
+    # time changes.
+    time: time
+    timezone: str
+
+    @property
+    def zone(self) -> ZoneInfo:
+        return ZoneInfo(self.timezone)
 
 
 class AutoUpdateOutcome(StrEnum):
@@ -60,13 +71,14 @@ class AutoUpdateLastRun:
         return _OUTCOME_MESSAGES[self.outcome]
 
 
-def default_time_utc() -> time:
-    local = (
-        datetime.now(UTC)
-        .astimezone()
-        .replace(hour=DEFAULT_LOCAL_TIME.hour, minute=DEFAULT_LOCAL_TIME.minute, second=0, microsecond=0)
-    )
-    return local.astimezone(UTC).time()
+@cache
+def _timezones() -> frozenset[str]:
+    # Reads the system's timezone database, so only once.
+    return frozenset(available_timezones())
+
+
+def is_valid_timezone(name: str) -> bool:
+    return name in _timezones()
 
 
 def read_auto_update_config(db: sqlite3.Connection) -> AutoUpdateConfig:
@@ -75,16 +87,21 @@ def read_auto_update_config(db: sqlite3.Connection) -> AutoUpdateConfig:
     enabled_raw = get_setting(db, ENABLED_KEY)
     if enabled_raw not in (None, "0", "1"):
         raise ValueError(f"invalid {ENABLED_KEY} setting: {enabled_raw!r}")
-    time_raw = get_setting(db, TIME_UTC_KEY)
+    time_raw = get_setting(db, TIME_KEY)
+    timezone = get_setting(db, TIMEZONE_KEY) or DEFAULT_TIMEZONE
+    if not is_valid_timezone(timezone):
+        raise ValueError(f"invalid {TIMEZONE_KEY} setting: {timezone!r}")
     return AutoUpdateConfig(
         enabled=enabled_raw != "0",
-        time_utc=time.fromisoformat(time_raw) if time_raw else default_time_utc(),
+        time=time.fromisoformat(time_raw) if time_raw else DEFAULT_TIME,
+        timezone=timezone,
     )
 
 
 def write_auto_update_config(db: sqlite3.Connection, config: AutoUpdateConfig) -> None:
     set_setting(db, ENABLED_KEY, "1" if config.enabled else "0")
-    set_setting(db, TIME_UTC_KEY, config.time_utc.strftime("%H:%M"))
+    set_setting(db, TIME_KEY, config.time.strftime("%H:%M"))
+    set_setting(db, TIMEZONE_KEY, config.timezone)
 
 
 def read_last_run(db: sqlite3.Connection) -> AutoUpdateLastRun | None:

@@ -33,6 +33,7 @@ from compute_space.core.auth.auth import read_owner_username
 from compute_space.core.auth.auth import update_owner_username
 from compute_space.core.auth.auth import validate_owner_username
 from compute_space.core.auto_update.config import AutoUpdateConfig
+from compute_space.core.auto_update.config import is_valid_timezone
 from compute_space.core.auto_update.config import read_auto_update_config
 from compute_space.core.auto_update.config import read_last_run
 from compute_space.core.auto_update.config import write_auto_update_config
@@ -221,14 +222,17 @@ async def apply_update() -> Response[ApplyUpdateResponse]:
 @attr.s(auto_attribs=True, frozen=True)
 class AutoUpdateRequest:
     enabled: bool
-    # "HH:MM" in UTC; the browser converts to and from local time.
-    time_utc: str
+    # "HH:MM" on the clock in `timezone`.
+    time: str
+    # An IANA name, e.g. "America/Chicago".
+    timezone: str
 
 
 @attr.s(auto_attribs=True, frozen=True)
 class AutoUpdateResponse:
     enabled: bool
-    time_utc: str
+    time: str
+    timezone: str
     last_run_at: str | None
     last_run_message: str | None
 
@@ -238,7 +242,8 @@ def _auto_update_response(db: sqlite3.Connection) -> AutoUpdateResponse:
     last_run = read_last_run(db)
     return AutoUpdateResponse(
         enabled=config.enabled,
-        time_utc=config.time_utc.strftime("%H:%M"),
+        time=config.time.strftime("%H:%M"),
+        timezone=config.timezone,
         last_run_at=last_run.at.isoformat() if last_run else None,
         last_run_message=last_run.describe() if last_run else None,
     )
@@ -251,14 +256,17 @@ async def get_auto_update(db: NamedDependency[sqlite3.Connection]) -> AutoUpdate
 
 @post("/api/settings/auto-update", status_code=200, guards=[require_owner_auth], raises=[ValidationException])
 async def set_auto_update(data: AutoUpdateRequest, db: NamedDependency[sqlite3.Connection]) -> AutoUpdateResponse:
-    if not re.fullmatch(r"\d{2}:\d{2}", data.time_utc):
+    if not re.fullmatch(r"\d{2}:\d{2}", data.time):
         raise ValidationException(detail="Time must be HH:MM", extra={"code": "invalid_time"})
     try:
-        time_utc = time.fromisoformat(data.time_utc)
+        update_time = time.fromisoformat(data.time)
     except ValueError as e:
         raise ValidationException(detail="Time must be HH:MM", extra={"code": "invalid_time"}) from e
-    write_auto_update_config(db, AutoUpdateConfig(enabled=data.enabled, time_utc=time_utc))
-    reschedule_auto_update(time_utc=time_utc)
+    if not is_valid_timezone(data.timezone):
+        raise ValidationException(detail=f"Unknown timezone: {data.timezone}", extra={"code": "invalid_timezone"})
+    config = AutoUpdateConfig(enabled=data.enabled, time=update_time, timezone=data.timezone)
+    write_auto_update_config(db, config)
+    reschedule_auto_update(config)
     return _auto_update_response(db)
 
 
