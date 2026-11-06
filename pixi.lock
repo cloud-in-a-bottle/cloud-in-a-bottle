@@ -18,6 +18,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/linux-64/cni-plugins-1.3.0-ha8f183a_0.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/conmon-2.2.1-h85664c0_0.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/containers-common-0.64.2-ha770c72_0.conda
+      - conda: https://conda.anaconda.org/conda-forge/linux-64/cosign-3.1.4-ha1ccbab_0.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/crun-1.27-h528521a_0.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/gpgme-1.18.0-h27087fc_0.tar.bz2
       - conda: https://conda.anaconda.org/conda-forge/linux-64/jq-1.8.1-h73b1eb8_0.conda
@@ -148,6 +149,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/linux-aarch64/cni-plugins-1.3.0-h652cbe9_0.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-aarch64/conmon-2.2.1-h9b030f0_0.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-aarch64/containers-common-0.64.2-h8af1aa0_0.conda
+      - conda: https://conda.anaconda.org/conda-forge/linux-aarch64/cosign-3.1.4-h88dec32_0.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-aarch64/crun-1.27-h2ad2256_0.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-aarch64/gpgme-1.18.0-h4de3ea5_0.tar.bz2
       - conda: https://conda.anaconda.org/conda-forge/linux-aarch64/icu-78.3-hcab7f73_0.conda
@@ -303,6 +305,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/tzdata-2025c-hc9c84f9_1.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/bzip2-1.0.8-hd037594_9.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/caddy-2.11.4-hf76c51c_0.conda
+      - conda: https://conda.anaconda.org/conda-forge/osx-arm64/cosign-3.1.3-hc9c3405_0.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/icu-78.3-hef89b57_0.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/libexpat-2.8.1-hf6b4638_1.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/libffi-3.5.2-hcf2aa1b_0.conda
@@ -385,6 +388,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/linux-64/conmon-2.2.1-h85664c0_0.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/containers-common-0.64.2-ha770c72_0.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/coredns-1.8.4-ha8f183a_0.tar.bz2
+      - conda: https://conda.anaconda.org/conda-forge/linux-64/cosign-3.1.4-ha1ccbab_0.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/crun-1.27-h528521a_0.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/gpgme-1.18.0-h27087fc_0.tar.bz2
       - conda: https://conda.anaconda.org/conda-forge/linux-64/jq-1.8.1-h73b1eb8_0.conda
@@ -561,6 +565,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/linux-aarch64/cni-plugins-1.3.0-h652cbe9_0.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-aarch64/conmon-2.2.1-h9b030f0_0.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-aarch64/containers-common-0.64.2-h8af1aa0_0.conda
+      - conda: https://conda.anaconda.org/conda-forge/linux-aarch64/cosign-3.1.4-h88dec32_0.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-aarch64/crun-1.27-h2ad2256_0.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-aarch64/gpgme-1.18.0-h4de3ea5_0.tar.bz2
       - conda: https://conda.anaconda.org/conda-forge/linux-aarch64/icu-78.3-hcab7f73_0.conda
@@ -760,6 +765,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/tzdata-2025c-hc9c84f9_1.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/bzip2-1.0.8-hd037594_9.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/caddy-2.11.4-hf76c51c_0.conda
+      - conda: https://conda.anaconda.org/conda-forge/osx-arm64/cosign-3.1.3-hc9c3405_0.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/icu-78.3-hef89b57_0.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/just-1.58.0-h6fdd925_1.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/libexpat-2.8.1-hf6b4638_1.conda
@@ -956,6 +962,15 @@ packages:
   purls: []
   size: 13820267
   timestamp: 1622206439293
+- conda: https://conda.anaconda.org/conda-forge/linux-64/cosign-3.1.4-ha1ccbab_0.conda
+  sha256: cd673eee2e7274fb1fd14e88b804a7b9a60268c86224f00d22fdf1c90240740d
+  md5: 5bab20c6790a9ba574faa6711f0781a9
+  license: Apache-2.0
+  license_family: APACHE
+  purls: []
+  run_exports: {}
+  size: 27614026
+  timestamp: 1793009750380
 - conda: https://conda.anaconda.org/conda-forge/linux-64/crun-1.27-h528521a_0.conda
   sha256: d0607713c9ad325346115ec404d0b909941ff6f2c484d7820888b0f82e102708
   md5: 1bbfce1e9b34a83e817ce004f10332de
@@ -1569,6 +1584,15 @@ packages:
   run_exports: {}
   size: 26006
   timestamp: 1758616526032
+- conda: https://conda.anaconda.org/conda-forge/linux-aarch64/cosign-3.1.4-h88dec32_0.conda
+  sha256: 65f3b41f49d3f0cc3cf76326c16841e60015d90a74c572cf797af12bb553a25e
+  md5: 0cfa558f173eec479f3bcf7e37653c89
+  license: Apache-2.0
+  license_family: APACHE
+  purls: []
+  run_exports: {}
+  size: 24985084
+  timestamp: 1793009757176
 - conda: https://conda.anaconda.org/conda-forge/linux-aarch64/crun-1.27-h2ad2256_0.conda
   sha256: dcc1e8588d97ac5369f85cb87fb984f2cb1564e7e388aa4f7a1fbe3b7dcc1cbb
   md5: 66f03fdac7d0658820c91ac6038366eb
@@ -2658,6 +2682,15 @@ packages:
   purls: []
   size: 15482584
   timestamp: 1780482796371
+- conda: https://conda.anaconda.org/conda-forge/osx-arm64/cosign-3.1.3-hc9c3405_0.conda
+  sha256: c6d08d493160b61fbb11bcb886e3368ecbada5149d2cbc15d82af121edaea4c4
+  md5: 52f69cfd3be432927333a10a463ca3dd
+  license: Apache-2.0
+  license_family: APACHE
+  purls: []
+  run_exports: {}
+  size: 24517313
+  timestamp: 1789123251196
 - conda: https://conda.anaconda.org/conda-forge/osx-arm64/icu-78.3-hef89b57_0.conda
   sha256: 3a7907a17e9937d3a46dfd41cffaf815abad59a569440d1e25177c15fd0684e5
   md5: f1182c91c0de31a7abd40cedf6a5ebef

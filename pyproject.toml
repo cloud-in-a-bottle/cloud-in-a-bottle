@@ -130,6 +130,9 @@ exclude-newer = "7 days"
 python = "3.12.*"
 caddy = "*"
 litestar = ">=2.23.0,<3"
+# Verifies the signatures of apps' prebuilt images (core/prebuilt_image.py). Our images are signed with cosign 3's
+# bundle format, which cosign 2 can't read.
+cosign = "~=3.1"
 
 # podman and crun aren't published for osx-arm64 on conda-forge.  On mac,
 # install them manually if you need to run the --run-containers tests; the
