@@ -75,7 +75,7 @@ def test_removal_cleans_checkout_and_scratch(tmp_path: Path, delete_data: bool) 
 @pytest.mark.requires_containers
 @pytest.mark.parametrize("all_data", [False, True])
 def test_running_app_loses_checkout_access_after_migration(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, all_data: bool
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, all_data: bool, unused_tcp_port: int
 ) -> None:
     name = f"checkout-test-{uuid.uuid4().hex[:12]}"
     config = DefaultConfig(data_root_dir=str(tmp_path))
@@ -98,7 +98,7 @@ def test_running_app_loses_checkout_access_after_migration(
             name,
             image,
             manifest,
-            local_port=0,
+            local_port=unused_tcp_port,
             env_vars={},
             data_dir=config.persistent_data_dir,
             temp_data_dir=config.temporary_data_dir,

@@ -131,7 +131,8 @@ jobs:
         run: pixi run -e dev playwright install --with-deps chromium
       - name: Run all tests, including containerized tests
         run: |
-          pixi run -e dev pytest --run-containers -v
+          pixi run -e dev pytest --run-containers -x compute_space/src/compute_space/tests/test_app_checkouts.py
+          pixi run -e dev pytest --run-containers --ignore=compute_space/src/compute_space/tests/test_app_checkouts.py -v
       - name: Run local full-stack service e2e tests
         run: |
           pixi run -e dev pytest --run-containers -v tests/test_services_e2e.py
