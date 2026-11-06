@@ -12,36 +12,10 @@
     enabled: yes
   when: not (skip_service_start | default(false) | bool)
 
-- name: Check for the app checkout layout migration
+- name: Restart Cloud in a Bottle service
   become: yes
   become_user: root
-  stat:
-    path: /home/host/openhost/openhost_system_agent/src/openhost_system_agent/migrations/versions/v0015_host_only_app_checkouts.py
-  register: checkout_layout_migration
+  systemd:
+    name: openhost
+    state: restarted
   when: not (skip_service_start | default(false) | bool)
-
-- name: Converge app checkout layout before starting Cloud in a Bottle
-  when: not (skip_service_start | default(false) | bool)
-  become: yes
-  become_user: root
-  block:
-    - name: Stop Cloud in a Bottle for checkout migration
-      systemd:
-        name: openhost
-        state: stopped
-      when: checkout_layout_migration.stat.exists
-
-    - name: Migrate app checkouts
-      command:
-        argv:
-          - /home/host/openhost/.pixi/envs/default/bin/python
-          - -c
-          - "from pathlib import Path; from compute_space.config import load_config; from openhost_system_agent.migrations.versions.v0015_host_only_app_checkouts import migrate; config = load_config(); migrate(Path(config.db_path), Path(config.temporary_data_dir))"
-      environment:
-        OPENHOST_ROUTER_CONFIG: /home/host/.openhost/local_compute_space/config.toml
-      when: checkout_layout_migration.stat.exists
-  always:
-    - name: Restart Cloud in a Bottle service
-      systemd:
-        name: openhost
-        state: restarted

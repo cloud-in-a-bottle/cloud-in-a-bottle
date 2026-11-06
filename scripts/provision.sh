@@ -240,7 +240,8 @@ if [ "$NO_CONFIG_FILES" = "true" ]; then
     su host -c "mkdir -p /home/host/.openhost/local_compute_space"
 else
     echo "--- Starting Cloud in a Bottle ---"
-    systemctl enable --now openhost
+    systemctl enable openhost
+    systemctl restart openhost
 fi
 
 echo ""

@@ -185,3 +185,11 @@ def test_stop_includes_managed_containers_missing_from_db(
     assert stopping.kwargs["check"] is True
     assert "XDG_RUNTIME_DIR=/run/user/4242" in stopping.args[0]
     assert "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/4242/bus" in stopping.args[0]
+
+
+def test_router_startup_stops_containers_as_current_user(monkeypatch: pytest.MonkeyPatch) -> None:
+    run = Mock(side_effect=[subprocess.CompletedProcess([], 0, "unrecorded\n"), subprocess.CompletedProcess([], 0)])
+    monkeypatch.setattr(subprocess, "run", run)
+    migration._stop_containers([], current_user=True)
+    assert run.call_args_list[0].args[0][:2] == ["podman", "ps"]
+    assert run.call_args_list[1].args[0] == ["podman", "stop", "--ignore", "--time", "10", "--", "unrecorded"]
