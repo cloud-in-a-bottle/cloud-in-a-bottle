@@ -479,9 +479,9 @@ function populateAutoUpdateZones() {
   const select = document.getElementById('auto-update-zone');
   const now = new Date();
   const browserZone = browserTimeZone();
-  const browserOffset = utcOffsetLabel(zoneOffsetMinutes('', now));
-  const browserLabel = browserZone && browserZone !== browserOffset ? browserZone + ', ' + browserOffset : browserOffset;
-  const options = [new Option('Browser timezone (' + browserLabel + ')', '')];
+  // The full name and offset are in the message under the row; the option only has to say which zone it is.
+  const browserLabel = browserZone || utcOffsetLabel(zoneOffsetMinutes('', now));
+  const options = [new Option('Browser (' + browserLabel + ')', '')];
   selectableTimeZones().forEach(function(zone) {
     if (zone === browserZone) return;
     let offset;
@@ -529,7 +529,6 @@ function renderAutoUpdate() {
     autoUpdateTimezoneText(autoUpdate.time_utc, autoUpdateZone);
   document.getElementById('auto-update-paused').hidden = !paused;
   document.getElementById('auto-update-row').classList.toggle('field-row--disabled', paused);
-  document.getElementById('auto-update-zone-row').classList.toggle('field-row--disabled', paused);
 
   const last = document.getElementById('auto-update-last');
   if (autoUpdate.last_run_at) {

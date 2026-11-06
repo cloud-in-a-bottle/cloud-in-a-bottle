@@ -1303,13 +1303,22 @@ select {
   padding-bottom: var(--space-1);
 }
 
-/* A label beside its control (not above it) sits on the control's centre line. */
-.field-row--inline-label {
-  align-items: center;
+/* "Update every day at [time] [timezone]" reads as one sentence, so it gets the whole line rather than the
+   usual field width, and the time keeps its natural width instead of stretching. */
+.field > .field-row--schedule {
+  max-width: none;
 }
 
-.field-row--inline-label > label {
-  margin-bottom: 0;
+.field-row--schedule > input[type="time"] {
+  flex: none;
+}
+
+/* A select is as wide as its longest option, and some zone names are long; it takes the rest of the line instead,
+   and drops to a line of its own on a phone. */
+.field-row--schedule > select {
+  flex: 1 1 12rem;
+  width: 0;
+  max-width: none;
 }
 
 .field > input,

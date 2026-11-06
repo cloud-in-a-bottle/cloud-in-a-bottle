@@ -397,8 +397,8 @@ def test_dropdown_starts_on_the_browser_timezone(
     zone = page.locator("#auto-update-zone")
     expect(zone).to_be_enabled()
     expect(zone).to_have_value("")
-    expect(zone.locator("option").first).to_have_text("Browser timezone (America/New_York, UTC-05:00)")
-    expect(zone).to_have_accessible_name("Show the time in")
+    expect(zone.locator("option").first).to_have_text("Browser (America/New_York)")
+    expect(zone).to_have_accessible_name("Timezone")
     expect(zone).to_have_accessible_description(
         PREFIX + "Eastern Standard Time (America/New_York, UTC-05:00). It is saved as 09:00 UTC" + DST_NOTE
     )
@@ -589,9 +589,7 @@ def test_without_a_zone_list_offers_the_browser_timezone_and_utc(
     owner: requests.Session,
 ) -> None:
     page = _open(open_settings, browser, stack, owner, "Asia/Tokyo", WINTER, init_script=NO_ZONE_LIST)
-    expect(page.locator("#auto-update-zone option")).to_have_text(
-        ["Browser timezone (Asia/Tokyo, UTC+09:00)", "UTC (UTC)"]
-    )
+    expect(page.locator("#auto-update-zone option")).to_have_text(["Browser (Asia/Tokyo)", "UTC (UTC)"])
     _choose_zone(page, "UTC")
     expect(page.locator("#auto-update-time")).to_have_value("09:00")
 
@@ -650,6 +648,40 @@ def test_conversions_match_zoneinfo(
         assert mismatches == [], (chosen or "browser", mismatches[:5])
 
 
+def test_time_and_timezone_share_a_line(
+    open_settings: tuple[list[BrowserContext], list[str]],
+    browser: Browser,
+    stack: LocalStack,
+    owner: requests.Session,
+) -> None:
+    page = _open(open_settings, browser, stack, owner, "America/Los_Angeles", WINTER)
+    page.set_viewport_size({"width": 1280, "height": 900})
+    boxes = [
+        page.locator(sel).bounding_box() for sel in ("#auto-update-enabled", "#auto-update-time", "#auto-update-zone")
+    ]
+    assert all(box is not None for box in boxes)
+    centres = [box["y"] + box["height"] / 2 for box in boxes if box is not None]
+    assert max(centres) - min(centres) < 4, (
+        boxes,
+        page.locator("#auto-update-row").bounding_box(),
+        page.locator("#auto-update-enabled").locator("xpath=..").bounding_box(),
+    )
+
+
+def test_schedule_row_fits_a_phone(
+    open_settings: tuple[list[BrowserContext], list[str]],
+    browser: Browser,
+    stack: LocalStack,
+    owner: requests.Session,
+) -> None:
+    page = _open(open_settings, browser, stack, owner, "America/Los_Angeles", WINTER)
+    page.set_viewport_size({"width": 375, "height": 800})
+    row = page.locator("#auto-update-row").bounding_box()
+    zone = page.locator("#auto-update-zone").bounding_box()
+    assert row is not None and zone is not None
+    assert zone["x"] + zone["width"] <= row["x"] + row["width"] + 1, (row, zone)
+
+
 def test_auto_update_section_has_no_wcag_violations(
     open_settings: tuple[list[BrowserContext], list[str]],
     browser: Browser,
@@ -668,7 +700,6 @@ def test_auto_update_section_has_no_wcag_violations(
         context={
             "include": [
                 ["#auto-update-row"],
-                ["#auto-update-zone-row"],
                 ["#auto-update-timezone"],
                 ["#auto-update-last"],
             ]
