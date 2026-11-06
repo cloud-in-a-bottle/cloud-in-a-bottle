@@ -242,7 +242,7 @@ def move_clone_to_app_checkout_dir(clone_dir: str, app_name: str, config: Config
     final_dir = app_checkout_dir(config.temporary_data_dir, app_name)
     if os.path.exists(final_dir):
         rmtree_with_sudo_fallback(final_dir, raise_on_failure=True)
-    os.makedirs(os.path.dirname(final_dir), exist_ok=True)
+    os.makedirs(os.path.dirname(final_dir), mode=0o700, exist_ok=True)
     tmp_parent = os.path.dirname(clone_dir)
     shutil.move(clone_dir, final_dir)
     shutil.rmtree(tmp_parent, ignore_errors=True)

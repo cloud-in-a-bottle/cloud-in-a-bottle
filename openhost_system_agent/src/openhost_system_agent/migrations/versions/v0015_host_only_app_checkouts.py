@@ -28,26 +28,31 @@ def _require_router_stopped() -> None:
 
 
 def _stop_containers(container_ids: list[str]) -> None:
-    if not container_ids:
-        return
     host = pwd.getpwnam("host")
+    command = [
+        "runuser",
+        "-u",
+        "host",
+        "--",
+        "env",
+        f"XDG_RUNTIME_DIR=/run/user/{host.pw_uid}",
+        f"DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/{host.pw_uid}/bus",
+        f"PATH={Path(_PODMAN).parent}:/usr/local/bin:/usr/bin:/bin",
+        _PODMAN,
+    ]
+    # Include containers started before the router could persist their IDs.
+    managed = subprocess.run(
+        [*command, "ps", "--all", "--filter", "name=^openhost-", "--format", "{{.ID}}"],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    ).stdout.split()
+    to_stop = list(dict.fromkeys([*container_ids, *managed]))
+    if not to_stop:
+        return
     subprocess.run(
-        [
-            "runuser",
-            "-u",
-            "host",
-            "--",
-            "env",
-            f"XDG_RUNTIME_DIR=/run/user/{host.pw_uid}",
-            f"PATH={Path(_PODMAN).parent}:/usr/local/bin:/usr/bin:/bin",
-            _PODMAN,
-            "stop",
-            "--ignore",
-            "--time",
-            "10",
-            "--",
-            *container_ids,
-        ],
+        [*command, "stop", "--ignore", "--time", "10", "--", *to_stop],
         check=True,
         timeout=120,
     )

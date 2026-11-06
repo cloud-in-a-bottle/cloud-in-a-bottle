@@ -16,7 +16,6 @@ from compute_space.core.containers import stop_container
 from compute_space.core.data import deprovision_data
 from compute_space.core.data import deprovision_temp_data
 from compute_space.core.manifest import AppManifest
-from compute_space.tests.test_containers import _run_and_capture
 from openhost_system_agent.migrations.versions import v0015_host_only_app_checkouts as migration
 
 
@@ -30,14 +29,25 @@ def test_checkout_is_outside_every_mount(tmp_path: Path, monkeypatch: pytest.Mon
     assert checkout == Path(config.temporary_data_dir) / "app_checkouts/myapp"
     assert (checkout / "source.txt").read_text() == "source"
     assert not clone.parent.exists()
+    assert checkout.parent.stat().st_mode & 0o777 == 0o700
     manifest = AppManifest(name="myapp", version="1", app_temp_data=True, access_all_app_data=all_data)
-    argv = _run_and_capture(monkeypatch, manifest=manifest, tmp_path=tmp_path)
-    # _run_and_capture uses temp/ as its configured temporary root.
-    candidate = Path(app_checkout_dir(str(tmp_path / "temp"), "myapp"))
+    run = Mock(return_value=subprocess.CompletedProcess([], 0, "container-id", ""))
+    monkeypatch.setattr(subprocess, "run", run)
+    run_container(
+        "myapp",
+        "image",
+        manifest,
+        local_port=9001,
+        env_vars={},
+        data_dir=config.persistent_data_dir,
+        temp_data_dir=config.temporary_data_dir,
+        archive_dir=config.app_archive_dir,
+    )
+    argv = next(call.args[0] for call in run.call_args_list if call.args[0][:2] == ["podman", "run"])
     mounts = [Path(value.split(":")[0]) for previous, value in zip(argv, argv[1:], strict=False) if previous == "-v"]
     assert mounts
     for mount in mounts:
-        assert not candidate.is_relative_to(mount)
+        assert not checkout.is_relative_to(mount)
     assert all(
         not value.endswith(":ro,idmap") for previous, value in zip(argv, argv[1:], strict=False) if previous == "-v"
     )

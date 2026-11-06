@@ -1,4 +1,5 @@
 import os
+import pwd
 import sqlite3
 import subprocess
 from pathlib import Path
@@ -151,3 +152,21 @@ def test_live_router_is_rejected_before_stopping_apps(
 
 
 _REAL_REQUIRE_ROUTER_STOPPED = migration._require_router_stopped
+
+
+@pytest.mark.parametrize("recorded_ids", [[], ["recorded"]])
+def test_stop_includes_managed_containers_missing_from_db(
+    monkeypatch: pytest.MonkeyPatch, recorded_ids: list[str]
+) -> None:
+    monkeypatch.setattr(
+        pwd, "getpwnam", Mock(return_value=pwd.struct_passwd(("host", "x", 4242, 4242, "", "/home/host", "/bin/bash")))
+    )
+    run = Mock(side_effect=[subprocess.CompletedProcess([], 0, "unrecorded\n"), subprocess.CompletedProcess([], 0)])
+    monkeypatch.setattr(subprocess, "run", run)
+    migration._stop_containers(recorded_ids)
+    listing, stopping = run.call_args_list
+    assert listing.args[0][-6:] == ["ps", "--all", "--filter", "name=^openhost-", "--format", "{{.ID}}"]
+    assert stopping.args[0][-len(recorded_ids) - 1 :] == [*recorded_ids, "unrecorded"]
+    assert stopping.kwargs["check"] is True
+    assert "XDG_RUNTIME_DIR=/run/user/4242" in stopping.args[0]
+    assert "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/4242/bus" in stopping.args[0]
