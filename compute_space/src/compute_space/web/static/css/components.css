@@ -1303,6 +1303,15 @@ select {
   padding-bottom: var(--space-1);
 }
 
+/* A label beside its control (not above it) sits on the control's centre line. */
+.field-row--inline-label {
+  align-items: center;
+}
+
+.field-row--inline-label > label {
+  margin-bottom: 0;
+}
+
 .field > input,
 .field > select,
 .field > .field-row {
