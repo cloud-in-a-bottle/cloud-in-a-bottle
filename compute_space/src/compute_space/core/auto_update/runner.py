@@ -3,10 +3,13 @@ from __future__ import annotations
 import asyncio
 from contextlib import closing
 from datetime import UTC
+from datetime import date
 from datetime import datetime
 from datetime import time
 from datetime import timedelta
+from zoneinfo import ZoneInfo
 
+from compute_space.core.auto_update.config import AutoUpdateConfig
 from compute_space.core.auto_update.config import AutoUpdateLastRun
 from compute_space.core.auto_update.config import AutoUpdateOutcome
 from compute_space.core.auto_update.config import read_auto_update_config
@@ -86,29 +89,46 @@ async def run_auto_update() -> None:
         _record(AutoUpdateLastRun(at=now, outcome=AutoUpdateOutcome.FAILED, detail="the update could not be started."))
 
 
-def _next_datetime_at(target: time, now: datetime) -> datetime:
-    """Return the next datetime at which the clock reads `target`."""
-    candidate = datetime.combine(now.date(), target, tzinfo=now.tzinfo)
-    if candidate <= now:
-        candidate += timedelta(days=1)
-    return candidate
+def _at_on(target: time, zone: ZoneInfo, day: date) -> datetime:
+    """The UTC instant at which the clock in `zone` reads `target` on `day`. A time skipped when the clocks go forward
+    is read with the offset from before the change, so it lands just after the change; a repeated one is the first."""
+    return datetime.combine(day, target, tzinfo=zone).astimezone(UTC)
 
 
-def _first_update_due(target: time, last_run_at: datetime | None, now: datetime) -> datetime:
+def _next_datetime_at(target: time, zone: ZoneInfo, now: datetime) -> datetime:
+    """Return the next instant after `now` at which the clock in `zone` reads `target`."""
+    today = now.astimezone(zone).date()
+    candidate = _at_on(target, zone, today)
+    return candidate if candidate > now else _at_on(target, zone, today + timedelta(days=1))
+
+
+def _most_recent_datetime_at(target: time, zone: ZoneInfo, now: datetime) -> datetime:
+    """Return the latest instant at or before `now` at which the clock in `zone` reads `target`."""
+    today = now.astimezone(zone).date()
+    candidate = _at_on(target, zone, today)
+    return candidate if candidate <= now else _at_on(target, zone, today - timedelta(days=1))
+
+
+def _first_update_due(target: time, zone: ZoneInfo, last_run_at: datetime | None, now: datetime) -> datetime:
     """When the update is first due after the router starts. The most recent scheduled time is still due if no run has
     happened since, so a restart across it (a cold boot, say) doesn't skip that day. With no run on record, as on a fresh
     install, it waits for the next scheduled time rather than updating on first boot."""
-    most_recent = _next_datetime_at(target, now) - timedelta(days=1)
+    most_recent = _most_recent_datetime_at(target, zone, now)
     if last_run_at is not None and last_run_at < most_recent:
         return most_recent
-    return _next_datetime_at(target, now)
+    return _next_datetime_at(target, zone, now)
 
 
-def reschedule_auto_update(time_utc: time) -> None:
+def next_auto_update_at(config: AutoUpdateConfig) -> datetime:
+    """The next scheduled time, in UTC."""
+    return _next_datetime_at(config.time, config.zone, datetime.now(UTC))
+
+
+def reschedule_auto_update(config: AutoUpdateConfig) -> None:
     """Call after the schedule changes, so a newly chosen time that already passed today waits for tomorrow rather
     than counting as missed."""
     global _update_due
-    _update_due = _next_datetime_at(time_utc, datetime.now(UTC))
+    _update_due = next_auto_update_at(config)
 
 
 async def _run_if_due() -> None:
@@ -118,7 +138,7 @@ async def _run_if_due() -> None:
         config = read_auto_update_config(db)
         if _update_due is None:
             last_run = read_last_run(db)
-            _update_due = _first_update_due(config.time_utc, last_run.at if last_run else None, now)
+            _update_due = _first_update_due(config.time, config.zone, last_run.at if last_run else None, now)
 
     if config.enabled and now > _update_due:
         _scheduled_run_in_progress = True
@@ -128,7 +148,7 @@ async def _run_if_due() -> None:
             _scheduled_run_in_progress = False
             # Even if the run raised, so a failure waits for the next scheduled time. From the time the run ended, not
             # started: a catch-up that runs across today's scheduled time already covers it.
-            _update_due = _next_datetime_at(config.time_utc, datetime.now(UTC))
+            _update_due = _next_datetime_at(config.time, config.zone, datetime.now(UTC))
 
 
 def start_auto_update_task() -> asyncio.Task[None]:

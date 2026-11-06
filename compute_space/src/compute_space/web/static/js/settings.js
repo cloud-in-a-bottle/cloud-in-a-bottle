@@ -330,27 +330,37 @@ async function savePrereleases() {
   }
 }
 
-function pad2(n) { return String(n).padStart(2, '0'); }
-
-// The scheduled time is stored as HH:MM in UTC and shown in the browser's timezone.
-function utcTimeToLocal(hhmm) {
-  const [h, m] = hhmm.split(':').map(Number);
-  const d = new Date();
-  d.setUTCHours(h, m, 0, 0);
-  return pad2(d.getHours()) + ':' + pad2(d.getMinutes());
+// The schedule is a time on the clock of an IANA timezone, saved as is: the server keeps it at that local time across
+// daylight saving time changes.
+function browserTimeZone() {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || null;
+  } catch (e) {
+    return null;
+  }
 }
 
-function localTimeToUtc(hhmm) {
-  const [h, m] = hhmm.split(':').map(Number);
-  const d = new Date();
-  d.setHours(h, m, 0, 0);
-  return pad2(d.getUTCHours()) + ':' + pad2(d.getUTCMinutes());
+// Every zone the browser knows, plus UTC (which Chromium leaves out), the browser's own, and the saved one, which
+// this browser may list under another name (Asia/Kolkata and Asia/Calcutta) or not at all.
+function fillTimeZones(select, saved) {
+  let zones = [];
+  try {
+    zones = Intl.supportedValuesOf('timeZone');
+  } catch (e) {
+    zones = [];
+  }
+  const own = browserTimeZone();
+  const all = new Set(zones.concat(['UTC', saved], own ? [own] : []));
+  select.replaceChildren.apply(select, Array.from(all).sort().map(function(zone) {
+    return new Option(zone === own ? zone + ' (this browser)' : zone, zone);
+  }));
 }
 
 function renderAutoUpdate() {
   if (autoUpdate === null || savedChannel === null) return;
   const enabled = document.getElementById('auto-update-enabled');
   const time = document.getElementById('auto-update-time');
+  const zone = document.getElementById('auto-update-zone');
   const paused = savedChannel !== 'tags';
   enabled.checked = autoUpdate.enabled;
   enabled.disabled = paused;
@@ -359,15 +369,26 @@ function renderAutoUpdate() {
   } else {
     enabled.removeAttribute('aria-describedby');
   }
-  time.value = utcTimeToLocal(autoUpdate.time_utc);
+  time.value = autoUpdate.time;
   time.disabled = paused || !autoUpdate.enabled;
+  if (!Array.from(zone.options).some(function(o) { return o.value === autoUpdate.timezone; })) {
+    fillTimeZones(zone, autoUpdate.timezone);
+  }
+  zone.value = autoUpdate.timezone;
+  zone.disabled = time.disabled;
   document.getElementById('auto-update-paused').hidden = !paused;
   document.getElementById('auto-update-row').classList.toggle('field-row--disabled', paused);
 
   const last = document.getElementById('auto-update-last');
   if (autoUpdate.last_run_at) {
-    last.textContent = 'Last automatic update: ' + new Date(autoUpdate.last_run_at).toLocaleString()
-      + '. ' + autoUpdate.last_run_message;
+    const at = new Date(autoUpdate.last_run_at);
+    let when;
+    try {
+      when = at.toLocaleString(undefined, {timeZone: autoUpdate.timezone, timeZoneName: 'short'});
+    } catch (e) {
+      when = at.toLocaleString(undefined, {timeZoneName: 'short'});
+    }
+    last.textContent = 'Last automatic update: ' + when + '. ' + autoUpdate.last_run_message;
     last.hidden = false;
   } else {
     last.hidden = true;
@@ -400,7 +421,8 @@ async function saveAutoUpdate() {
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({
         enabled: document.getElementById('auto-update-enabled').checked,
-        time_utc: localTimeToUtc(time.value),
+        time: time.value,
+        timezone: document.getElementById('auto-update-zone').value,
       }),
     });
     if (!resp.ok) {
