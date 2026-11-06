@@ -523,8 +523,8 @@ function renderAutoUpdate() {
   time.value = utcTimeToZone(autoUpdate.time_utc, autoUpdateZone, new Date());
   time.disabled = paused || !autoUpdate.enabled;
   zone.value = autoUpdateZone;
-  // Only changes what is shown, so it stays usable while automatic updates are off.
-  zone.disabled = paused;
+  // Disabled and faded with the time it belongs to, so the row reads as one control.
+  zone.disabled = time.disabled;
   document.getElementById('auto-update-timezone').textContent =
     autoUpdateTimezoneText(autoUpdate.time_utc, autoUpdateZone);
   document.getElementById('auto-update-paused').hidden = !paused;

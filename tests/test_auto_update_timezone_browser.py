@@ -538,7 +538,7 @@ def test_an_unknown_remembered_timezone_falls_back_to_the_browsers(
     assert page.evaluate("localStorage.getItem('autoUpdateTimeZone')") is None
 
 
-def test_dropdown_works_while_updates_are_off_but_not_while_paused(
+def test_dropdown_is_disabled_with_the_time(
     open_settings: tuple[list[BrowserContext], list[str]],
     browser: Browser,
     stack: LocalStack,
@@ -547,18 +547,20 @@ def test_dropdown_works_while_updates_are_off_but_not_while_paused(
     _set_settings(stack, {"auto_update_enabled": "0"})
     page = _open(open_settings, browser, stack, owner, "Asia/Tokyo", WINTER)
     expect(page.locator("#auto-update-time")).to_be_disabled()
-    # It only changes what is shown, so it is usable while the time itself can't be changed.
-    expect(page.locator("#auto-update-zone")).to_be_enabled()
-    _choose_zone(page, "UTC")
-    expect(page.locator("#auto-update-time")).to_have_value("09:00")
+    expect(page.locator("#auto-update-zone")).to_be_disabled()
+    script = "el => getComputedStyle(el).opacity"
+    assert page.locator("#auto-update-zone").evaluate(script) == page.locator("#auto-update-time").evaluate(script)
     page.locator("#auto-update-enabled").check()
     expect(page.locator("#auto-update-msg")).to_have_text("Saved.")
-    assert _get_setting(stack, "auto_update_time_utc") == "09:00"
     expect(page.locator("#auto-update-time")).to_be_enabled()
+    expect(page.locator("#auto-update-zone")).to_be_enabled()
+    page.locator("#auto-update-enabled").uncheck()
+    expect(page.locator("#auto-update-zone")).to_be_disabled()
 
     # On a branch remote the whole row is paused.
     paused = _open(open_settings, browser, stack, owner, "Asia/Tokyo", WINTER, channel="branch")
     expect(paused.locator("#auto-update-paused")).to_be_visible()
+    expect(paused.locator("#auto-update-time")).to_be_disabled()
     expect(paused.locator("#auto-update-zone")).to_be_disabled()
 
 
