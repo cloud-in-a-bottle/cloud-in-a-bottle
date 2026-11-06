@@ -324,6 +324,12 @@ def set_remote_url(repo_path: Path, url: str) -> None:
 @async_wrap
 def hard_checkout_ref(repo_path: Path, ref: str) -> None:
     """set local state to match origin/ref, checking out if a branch or detached head if a commit hash."""
+    checkout_ref(repo_path, ref)
+
+
+def checkout_ref(repo_path: Path, ref: str) -> None:
+    """Synchronous :func:`hard_checkout_ref`: a remote branch is checked out as a local branch tracking it; anything
+    else (a tag or commit) as a detached HEAD. Used by the instance updater and by app release checkouts."""
     repo = git.Repo(repo_path)
     remote_ref = f"origin/{ref}"
     try:

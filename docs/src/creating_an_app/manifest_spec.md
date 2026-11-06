@@ -39,6 +39,7 @@ sqlite = ["main"]
 |-------|------|----------|---------|-------------|
 | `image` | string | yes | - | Path to Dockerfile relative to repo root |
 | `port` | integer | yes | - | Port the app responds to HTTP on |
+| `prebuilt_image` | string | no | - | An image reference without tag or digest (e.g. `registry.cloudinabottle.org/my-app`). When set and the app tracks its repo's default branch (no ref pinned), it is installed and updated to the newest `vX.Y.Z` release tag and runs `<prebuilt_image>:<that commit's sha>`, pulled instead of built. See [Prebuilt images and releases](#prebuilt-images-and-releases). |
 | `command` | string | no | - | Override container CMD |
 | `capabilities` | string[] | no | `[]` | **Additional** Linux capabilities to grant inside the container, on top of the Docker-default baseline (CHOWN, DAC_OVERRIDE, FOWNER, FSETID, KILL, NET_BIND_SERVICE, SETFCAP, SETGID, SETPCAP, SETUID, SYS_CHROOT, NET_RAW, MKNOD, AUDIT_WRITE) that every container receives automatically. Restricted to a rootless-safe allowlist (see `compute_space.core.manifest.SAFE_CAPABILITIES`); disallowed entries like `"SYS_ADMIN"` are rejected at parse time. Accepts names with or without the `CAP_` prefix. |
 | `devices` | string[] | no | `[]` | Host devices to pass through (e.g., `"/dev/net/tun"`). Restricted to a rootless-safe allowlist (see `compute_space.core.manifest.SAFE_DEVICE_PATHS`); disallowed paths like `/dev/mem`, `/dev/kvm`, or raw block devices are rejected at parse time. |
@@ -100,6 +101,17 @@ In general it's better to expose these links from within your app; this is mainl
 The configured [bundled backup app](../operation/backups.md) includes permanent and temporary app data, excluding its own permanent-data directory. Its direct migration copies permanent data for selected apps; temporary and archive data are not migrated. Archive data is also excluded from these backups. See [Data](../how_it_works/data.md#the-archive-tier) for archive recovery requirements.
 
 The retired `access_all_data` and `access_all_archive` fields are deprecated aliases for `access_all_app_data`. Manifests using either receive the full permanent, temporary, and archive data permission and emit a deprecation warning.
+
+## Prebuilt images and releases
+
+An app can publish its image from CI so installs pull it instead of building it. It sets `[runtime.container] prebuilt_image` and tags releases `vX.Y.Z`; CI must push `<prebuilt_image>:<full commit sha>` before tagging that commit.
+
+- **Only when tracking the default branch.** An app installed with no ref pinned tracks its repo's default branch; with `prebuilt_image` set it installs and updates to the newest release tag on that branch (release candidates excluded), and runs that commit's image. A newer major version is just a newer release. A pinned ref (`url@ref`: a branch, tag or commit) ignores `prebuilt_image` and tags, and builds as before.
+- **No fallback to building.** If `prebuilt_image` is set but the default branch has no release tag, or the image is missing, the install or update fails. A failed update leaves the running version untouched.
+- **Forks.** A fork that changes the app should remove (or comment out) `prebuilt_image`, so it is built from its own Dockerfile.
+- **Tests.** The test harness builds `image` by default, so tests cover the working tree; pass `use_prebuilt_image=True` to `OpenhostStack` to deploy the newest release's image instead.
+
+`image` stays required: Cloud in a Bottle versions without prebuilt image support ignore `prebuilt_image` and build it.
 
 ## More Examples
 

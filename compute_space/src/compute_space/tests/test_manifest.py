@@ -11,8 +11,10 @@ from compute_space.core.manifest import SAFE_CAPABILITIES
 from compute_space.core.manifest import SAFE_DEVICE_PATHS
 from compute_space.core.manifest import UNPRIVILEGED_PORT_FLOOR
 from compute_space.core.manifest import find_manifest_path
+from compute_space.core.manifest import manifest_settings_changes
 from compute_space.core.manifest import parse_manifest
 from compute_space.core.manifest import parse_manifest_from_string
+from compute_space.core.manifest import settings_changes_require_review
 
 MINIMAL = """\
 [app]
@@ -870,3 +872,41 @@ class TestManifestFileResolution:
         """The not-found error should point users at the canonical name."""
         with pytest.raises(ValueError, match="cloudinabottle.toml"):
             parse_manifest(str(tmp_path))
+
+
+class TestPrebuiltImage:
+    def _with(self, line: str) -> str:
+        return MINIMAL.replace("port = 8080\n", f"port = 8080\n{line}\n")
+
+    def test_unset_by_default(self):
+        assert parse_manifest_from_string(MINIMAL).prebuilt_image is None
+
+    @pytest.mark.parametrize(
+        "image",
+        ["registry.cloudinabottle.org/bottled-vaultwarden", "localhost:5000/team/app", "ghcr.io/org/app"],
+    )
+    def test_accepts_reference_without_tag_or_digest(self, image):
+        manifest = parse_manifest_from_string(self._with(f'prebuilt_image = "{image}"'))
+        assert manifest.prebuilt_image == image
+        assert manifest.container_image == "Dockerfile"
+
+    @pytest.mark.parametrize(
+        ("value", "match"),
+        [
+            ('"registry.cloudinabottle.org/app:latest"', "tag"),
+            ('"localhost:5000/app:v1"', "tag"),
+            ('"registry.cloudinabottle.org/app@sha256:' + "0" * 64 + '"', "digest"),
+            ('""', "non-empty"),
+            ("42", "non-empty"),
+            ('" registry.cloudinabottle.org/app"', "whitespace"),
+        ],
+    )
+    def test_rejects_invalid(self, value, match):
+        with pytest.raises(ValueError, match=match):
+            parse_manifest_from_string(self._with(f"prebuilt_image = {value}"))
+
+    def test_change_is_shown_but_not_review_gated(self):
+        new = parse_manifest_from_string(self._with('prebuilt_image = "registry.cloudinabottle.org/app"'))
+        changes = manifest_settings_changes(new, MINIMAL)
+        assert [(c.label, c.new) for c in changes] == [("Prebuilt image", "registry.cloudinabottle.org/app")]
+        assert not settings_changes_require_review(changes)
