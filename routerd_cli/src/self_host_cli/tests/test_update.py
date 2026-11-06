@@ -52,6 +52,8 @@ class TestUpdateCode:
         monkeypatch.setattr("self_host_cli.update._is_git_repo", lambda: True)
 
         def fake_run(cmd, **kwargs):
+            assert cmd[:3] == ["git", "-c", "core.hooksPath=/dev/null"]
+            cmd = [cmd[0], *cmd[3:]]
             result = MagicMock()
             result.returncode = 0
             # git status --porcelain returns dirty output
@@ -73,13 +75,15 @@ class TestUpdateCode:
         same_hash = "abc1234abc1234abc1234abc1234abc1234abc12"
 
         def fake_run(cmd, **kwargs):
+            assert cmd[:3] == ["git", "-c", "core.hooksPath=/dev/null"]
+            cmd = [cmd[0], *cmd[3:]]
             result = MagicMock()
             result.returncode = 0
             if cmd[:2] == ["git", "status"]:
                 result.stdout = ""  # clean tree
             elif cmd[:2] == ["git", "fetch"]:
                 result.stdout = ""
-            elif cmd[:3] == ["git", "rev-parse"] and "--abbrev-ref" in cmd:
+            elif cmd[:2] == ["git", "rev-parse"] and "--abbrev-ref" in cmd:
                 result.stdout = "main"
             elif cmd[:2] == ["git", "rev-parse"]:
                 # Both HEAD and origin/main return the same hash
@@ -101,6 +105,9 @@ class TestUpdateCode:
         call_count = {"rev_parse_plain": 0}
 
         def fake_run(cmd, **kwargs):
+            if cmd[0] == "git":
+                assert cmd[:3] == ["git", "-c", "core.hooksPath=/dev/null"]
+                cmd = [cmd[0], *cmd[3:]]
             commands_run.append(cmd[:3])
             result = MagicMock()
             result.returncode = 0

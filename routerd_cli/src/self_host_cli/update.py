@@ -9,6 +9,7 @@ import subprocess
 import sys
 
 from compute_space import OPENHOST_PROJECT_DIR
+from openhost_system_agent.git_commands import git_command
 from self_host_cli.down import _ROUTER_PID
 from self_host_cli.down import _is_alive
 from self_host_cli.down import _read_pid
@@ -33,7 +34,7 @@ def _update_code() -> None:
 
     # Check for uncommitted changes
     status = subprocess.run(
-        ["git", "status", "--porcelain"],
+        git_command("status", "--porcelain"),
         capture_output=True,
         text=True,
         cwd=project_dir,
@@ -48,14 +49,14 @@ def _update_code() -> None:
 
     # Fetch latest
     subprocess.run(
-        ["git", "fetch", "origin"],
+        git_command("fetch", "origin"),
         capture_output=True,
         cwd=project_dir,
     )
 
     # Determine current branch
     branch_result = subprocess.run(
-        ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+        git_command("rev-parse", "--abbrev-ref", "HEAD"),
         capture_output=True,
         text=True,
         cwd=project_dir,
@@ -64,13 +65,13 @@ def _update_code() -> None:
 
     # Check if HEAD already matches the remote
     local_rev = subprocess.run(
-        ["git", "rev-parse", "HEAD"],
+        git_command("rev-parse", "HEAD"),
         capture_output=True,
         text=True,
         cwd=project_dir,
     ).stdout.strip()
     remote_rev = subprocess.run(
-        ["git", "rev-parse", f"origin/{branch}"],
+        git_command("rev-parse", f"origin/{branch}"),
         capture_output=True,
         text=True,
         cwd=project_dir,
@@ -83,14 +84,14 @@ def _update_code() -> None:
 
     # Show new commits on origin (if any; may be empty after a force push)
     subprocess.run(
-        ["git", "log", f"HEAD..origin/{branch}", "--oneline"],
+        git_command("log", f"HEAD..origin/{branch}", "--oneline"),
         cwd=project_dir,
     )
 
     # Hard-reset to match origin (handles both fast-forward and force-push)
     print(f"  Resetting to origin/{branch}...")
     reset = subprocess.run(
-        ["git", "reset", "--hard", f"origin/{branch}"],
+        git_command("reset", "--hard", f"origin/{branch}"),
         capture_output=True,
         text=True,
         cwd=project_dir,
@@ -111,7 +112,7 @@ def _update_code() -> None:
         print(f"  Warning: pixi install failed:\n{sync.stderr}", file=sys.stderr)
 
     current = subprocess.run(
-        ["git", "rev-parse", "--short", "HEAD"],
+        git_command("rev-parse", "--short", "HEAD"),
         capture_output=True,
         text=True,
         cwd=project_dir,

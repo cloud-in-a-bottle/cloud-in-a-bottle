@@ -34,6 +34,7 @@ from litestar.response import Redirect
 
 from compute_space.config import Config
 from compute_space.core import archive_backend
+from compute_space.core.app_checkouts import app_checkout_dir
 from compute_space.core.app_id import is_valid_app_id
 from compute_space.core.apps import RESERVED_PATHS
 from compute_space.core.apps import app_container_log_path
@@ -41,7 +42,7 @@ from compute_space.core.apps import app_log_path
 from compute_space.core.apps import clone_with_github_fallback
 from compute_space.core.apps import git_pull
 from compute_space.core.apps import insert_and_deploy
-from compute_space.core.apps import move_clone_to_app_temp_dir
+from compute_space.core.apps import move_clone_to_app_checkout_dir
 from compute_space.core.apps import reload_app_background
 from compute_space.core.apps import remove_app_background
 from compute_space.core.apps import start_app_process
@@ -417,7 +418,7 @@ async def api_add_app(
                 )
             )
 
-    final_dir = move_clone_to_app_temp_dir(clone_dir, app_name, config)
+    final_dir = move_clone_to_app_checkout_dir(clone_dir, app_name, config)
 
     # Pin a refless upstream to the concrete branch the fresh clone landed on
     # (origin's default), so the stored URL and detail page show which branch
@@ -1032,7 +1033,7 @@ async def remove_app(
 
 
 def _rename_app_storage_dirs(config: Config, old_name: str, new_name: str, archive_dir: str) -> str | None:
-    """Rename per-app subdirs across the three storage tiers, with rollback on partial failure.
+    """Rename per-app storage and checkouts, with rollback on partial failure.
 
     ``archive_dir`` is the archive parent for the current backend — always
     the JuiceFS mountpoint now (absent only on a legacy 'disabled' zone) —
@@ -1050,6 +1051,11 @@ def _rename_app_storage_dirs(config: Config, old_name: str, new_name: str, archi
     for parent in rename_parents:
         if not os.path.isdir(parent):
             return f"Storage parent {parent!r} is not a directory; refusing to rename so per-app data isn't orphaned."
+    checkout_parent = os.path.dirname(app_checkout_dir(config.temporary_data_dir, old_name))
+    if os.path.isdir(checkout_parent):
+        if os.path.lexists(app_checkout_dir(config.temporary_data_dir, new_name)):
+            return f"Checkout for {new_name!r} already exists."
+        rename_parents.append(checkout_parent)
     # The archive parent is the JuiceFS mountpoint, present whenever the mount
     # is live (both local and S3 backends).  Skip it cleanly only on a legacy
     # 'disabled' zone where the mountpoint never gets created.
@@ -1179,8 +1185,13 @@ async def rename_app(
     # permissions_v2, etc. — they all point at app_id which is stable.
     # Only the name label and any name-keyed paths need rewriting.
     db.execute(
-        "UPDATE apps SET name = ?, repo_path = REPLACE(repo_path, ?, ?) WHERE app_id = ?",
-        (new_name, f"/{old_name}/", f"/{new_name}/", app_id),
+        "UPDATE apps SET name = ?, repo_path = CASE WHEN repo_path = ? THEN ? ELSE repo_path END WHERE app_id = ?",
+        (
+            new_name,
+            app_checkout_dir(config.temporary_data_dir, old_name),
+            app_checkout_dir(config.temporary_data_dir, new_name),
+            app_id,
+        ),
     )
     db.execute(
         "UPDATE app_databases SET db_path = REPLACE(db_path, ?, ?) WHERE app_id = ?",

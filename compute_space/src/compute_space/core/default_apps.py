@@ -27,7 +27,7 @@ import attr
 from compute_space.config import Config
 from compute_space.core.apps import clone_and_read_manifest
 from compute_space.core.apps import insert_and_deploy
-from compute_space.core.apps import move_clone_to_app_temp_dir
+from compute_space.core.apps import move_clone_to_app_checkout_dir
 from compute_space.core.apps import validate_manifest
 from compute_space.core.logging import logger
 from compute_space.core.manifest import MANIFEST_FILENAMES
@@ -194,7 +194,7 @@ def _finalize_install(
         shutil.rmtree(tmp_parent, ignore_errors=True)
         return "failed", validation_error
 
-    final_dir = move_clone_to_app_temp_dir(clone_dir, manifest.name, config)
+    final_dir = move_clone_to_app_checkout_dir(clone_dir, manifest.name, config)
     try:
         insert_and_deploy(
             manifest,

@@ -149,18 +149,18 @@ fi
 echo "--- Installing ansible and git ---"
 apt-get update -qq
 apt-get install -y -qq ansible-core git > /dev/null 2>&1
-HOME=/root git config --global --replace-all http.version HTTP/1.1
-su host -c "git config --global --replace-all http.version HTTP/1.1"
+HOME=/root git -c core.hooksPath=/dev/null config --global --replace-all http.version HTTP/1.1
+su host -c "git -c core.hooksPath=/dev/null config --global --replace-all http.version HTTP/1.1"
 
 # ---- Clone the repo ----
 echo "--- Cloning Cloud in a Bottle ($BRANCH) ---"
 if [ -d "$OPENHOST_DIR/.git" ]; then
     cd "$OPENHOST_DIR"
-    su host -c "git fetch origin"
-    su host -c "git checkout $BRANCH"
-    su host -c "git reset --hard origin/$BRANCH"
+    su host -c "git -c core.hooksPath=/dev/null fetch origin"
+    su host -c "git -c core.hooksPath=/dev/null checkout $BRANCH"
+    su host -c "git -c core.hooksPath=/dev/null reset --hard origin/$BRANCH"
 else
-    su host -c "git clone --branch $BRANCH $REPO_URL $OPENHOST_DIR"
+    su host -c "git -c core.hooksPath=/dev/null clone --branch $BRANCH $REPO_URL $OPENHOST_DIR"
 fi
 chown -R host:host "$OPENHOST_DIR"
 

@@ -13,7 +13,9 @@ from litestar import Litestar
 from litestar.testing import TestClient
 
 import compute_space.web.routes.api.apps as apps_routes
+from compute_space.core.app_checkouts import app_checkout_dir
 from compute_space.core.app_id import new_app_id
+from compute_space.core.apps import move_clone_to_app_checkout_dir
 from compute_space.db.connection import init_db
 from compute_space.tests._litestar_helpers import auth_cookie
 from compute_space.tests._litestar_helpers import make_test_app
@@ -330,3 +332,48 @@ def test_rename_moves_local_archive_data(cfg_factory: Any) -> None:
 
     assert not (archive_parent / "old-name").exists()
     assert (archive_parent / "new-name" / "sentinel.txt").read_text() == "app_archive"
+
+
+def test_rename_moves_checkout_and_allows_old_name_reuse(cfg_factory: Any, tmp_path: Path) -> None:
+    cfg = cfg_factory(20306)
+    app_id = _seed_app_row(cfg.db_path, "old-name")
+    _make_per_app_dirs(cfg, "old-name", ["app_data", "app_temp_data"])
+    checkout = Path(app_checkout_dir(cfg.temporary_data_dir, "old-name"))
+    checkout.mkdir(parents=True)
+    (checkout / "source.txt").write_text("original")
+    with sqlite3.connect(cfg.db_path) as db:
+        db.execute("UPDATE apps SET repo_path = ? WHERE app_id = ?", (str(checkout), app_id))
+    status, payload = _post_rename(cfg, app_id, "new-name")
+    assert status == 200, payload
+    renamed = Path(app_checkout_dir(cfg.temporary_data_dir, "new-name"))
+    with sqlite3.connect(cfg.db_path) as db:
+        assert db.execute("SELECT repo_path FROM apps WHERE app_id = ?", (app_id,)).fetchone()[0] == str(renamed)
+    assert not checkout.exists()
+    clone = tmp_path / "clone/repo"
+    clone.mkdir(parents=True)
+    (clone / "source.txt").write_text("replacement")
+    move_clone_to_app_checkout_dir(str(clone), "old-name", cfg)
+    assert (renamed / "source.txt").read_text() == "original"
+    assert (checkout / "source.txt").read_text() == "replacement"
+
+
+def test_rename_checkout_failure_rolls_back_data(cfg_factory: Any) -> None:
+    cfg = cfg_factory(20307)
+    app_id = _seed_app_row(cfg.db_path, "old-name")
+    data_dirs = _make_per_app_dirs(cfg, "old-name", ["app_data", "app_temp_data"])
+    checkout = Path(app_checkout_dir(cfg.temporary_data_dir, "old-name"))
+    checkout.mkdir(parents=True)
+    real_rename = os.rename
+
+    def fail_checkout(src: str, dst: str) -> None:
+        if src == str(checkout):
+            raise OSError("checkout busy")
+        real_rename(src, dst)
+
+    with mock.patch("os.rename", side_effect=fail_checkout):
+        status, payload = _post_rename(cfg, app_id, "new-name")
+    assert status == 500, payload
+    assert checkout.is_dir()
+    for directory in data_dirs.values():
+        assert directory.is_dir()
+        assert not directory.with_name("new-name").exists()

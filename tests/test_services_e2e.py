@@ -163,7 +163,7 @@ class TestSecretsServiceE2E:
         deployed_app_name = "test-app-clonedir"
         deploy_app(owner, stack, repo_url, app_name=deployed_app_name, clone_dir=clone_dir)
 
-        repo_dir = os.path.join(stack.config.temporary_data_dir, "app_temp_data", deployed_app_name, "repo")
+        repo_dir = os.path.join(stack.config.temporary_data_dir, "app_checkouts", deployed_app_name)
         assert os.path.isdir(os.path.join(repo_dir, ".git")), (
             ".git directory not found — app may have been copied instead of cloned"
         )
