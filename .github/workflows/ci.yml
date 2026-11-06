@@ -127,11 +127,12 @@ jobs:
           sudo ip link set openhost0 up
           mkdir -p ~/.config/containers
           printf '[containers]\nhost_containers_internal_ip = "10.200.0.1"\n' >> ~/.config/containers/containers.conf
+      - name: Test app checkout isolation
+        run: pixi run -e dev pytest --run-containers -x compute_space/src/compute_space/tests/test_app_checkouts.py
       - name: Install playwright browsers
         run: pixi run -e dev playwright install --with-deps chromium
       - name: Run all tests, including containerized tests
         run: |
-          pixi run -e dev pytest --run-containers -x compute_space/src/compute_space/tests/test_app_checkouts.py
           pixi run -e dev pytest --run-containers --ignore=compute_space/src/compute_space/tests/test_app_checkouts.py -v
       - name: Run local full-stack service e2e tests
         run: |
