@@ -668,6 +668,28 @@ def test_time_and_timezone_share_a_line(
     )
 
 
+def test_time_and_timezone_are_styled_alike(
+    open_settings: tuple[list[BrowserContext], list[str]],
+    browser: Browser,
+    stack: LocalStack,
+    owner: requests.Session,
+) -> None:
+    page = _open(open_settings, browser, stack, owner, "America/Los_Angeles", WINTER)
+    props = [
+        "borderTopColor",
+        "borderTopWidth",
+        "borderTopLeftRadius",
+        "backgroundColor",
+        "fontSize",
+        "fontFamily",
+        "height",
+    ]
+    script = "(el, props) => { const s = getComputedStyle(el); return props.map(p => s[p]); }"
+    time_style = page.locator("#auto-update-time").evaluate(script, props)
+    zone_style = page.locator("#auto-update-zone").evaluate(script, props)
+    assert dict(zip(props, time_style, strict=True)) == dict(zip(props, zone_style, strict=True))
+
+
 def test_schedule_row_fits_a_phone(
     open_settings: tuple[list[BrowserContext], list[str]],
     browser: Browser,

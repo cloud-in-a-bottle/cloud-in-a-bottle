@@ -1311,6 +1311,7 @@ select {
 
 .field-row--schedule > input[type="time"] {
   flex: none;
+  width: auto;
 }
 
 /* A select is as wide as its longest option, and some zone names are long; it takes the rest of the line instead,
