@@ -72,7 +72,12 @@ def _move_checkout(source: Path, destination: Path) -> None:
     # Sync on retries too, when rename completed before a previous interruption.
     if destination.exists():
         for directory in (source.parent, destination.parent):
-            fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
+            except FileNotFoundError:
+                if directory == source.parent:
+                    continue  # Scratch storage may have been removed before a retry.
+                raise
             try:
                 os.fsync(fd)
             finally:
@@ -117,6 +122,13 @@ def migrate(db_path: Path, temp_root: Path) -> None:
             # A missing source with an existing destination is a retry after rename.
             # If both are missing, retain the missing-checkout recovery behavior.
             db.execute("UPDATE apps SET repo_path = ? WHERE name = ?", (str(destination), name))
+            if destination.is_dir():
+                # Startup after an interrupted move may have recorded a missing checkout.
+                db.execute(
+                    "UPDATE apps SET status = 'building', error_message = NULL "
+                    "WHERE name = ? AND status = 'error' AND error_message = ?",
+                    (name, f"Cannot recover: repo path missing ({source})"),
+                )
             db.commit()
 
 

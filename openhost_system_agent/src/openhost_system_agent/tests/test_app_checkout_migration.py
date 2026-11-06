@@ -20,9 +20,13 @@ def checkout_layout(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Pa
     (source.parent / "scratch.txt").write_text("scratch")
     db_path = tmp_path / "router.db"
     with sqlite3.connect(db_path) as db:
-        db.execute("CREATE TABLE apps (name TEXT PRIMARY KEY, repo_path TEXT, container_id TEXT, status TEXT)")
-        db.execute("INSERT INTO apps VALUES (?, ?, ?, ?)", ("notes", str(source), "notes-container", "running"))
-        db.execute("INSERT INTO apps VALUES (?, ?, ?, ?)", ("peer", "/host/builtin", "peer-container", "running"))
+        db.execute(
+            "CREATE TABLE apps (name TEXT PRIMARY KEY, repo_path TEXT, container_id TEXT, status TEXT, error_message TEXT)"
+        )
+        db.execute("INSERT INTO apps VALUES (?, ?, ?, ?, NULL)", ("notes", str(source), "notes-container", "running"))
+        db.execute(
+            "INSERT INTO apps VALUES (?, ?, ?, ?, NULL)", ("peer", "/host/builtin", "peer-container", "running")
+        )
     monkeypatch.setattr(migration, "_stop_containers", Mock())
     monkeypatch.setattr(migration, "_require_router_stopped", Mock())
     return db_path, root, source, root / "app_checkouts/notes"
@@ -70,6 +74,17 @@ def test_missing_checkout_still_gets_current_path(checkout_layout: tuple[Path, P
     migration.migrate(db_path, root)
     assert _stored_path(db_path) == str(destination)
     assert not destination.exists()
+
+
+def test_retry_after_scratch_directory_removed(checkout_layout: tuple[Path, Path, Path, Path]) -> None:
+    db_path, root, source, destination = checkout_layout
+    destination.parent.mkdir()
+    source.rename(destination)
+    (source.parent / "scratch.txt").unlink()
+    source.parent.rmdir()
+    migration.migrate(db_path, root)
+    assert _stored_path(db_path) == str(destination)
+    assert (destination / "source.txt").read_text() == "installed source"
 
 
 def test_collision_preserves_both_trees(checkout_layout: tuple[Path, Path, Path, Path]) -> None:

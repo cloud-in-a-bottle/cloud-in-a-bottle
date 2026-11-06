@@ -85,7 +85,9 @@ def test_running_app_loses_checkout_access_after_migration(
     source.mkdir(parents=True)
     (source / "Dockerfile").write_text('FROM docker.io/library/alpine:3.21\nCMD ["sleep", "infinity"]\n')
     (source / "source.txt").write_text("source")
-    manifest = AppManifest(name=name, version="1", app_temp_data=True, access_all_app_data=all_data)
+    manifest = AppManifest(
+        name=name, version="1", container_port=8080, app_temp_data=True, access_all_app_data=all_data
+    )
     for parent in (Path(config.persistent_data_dir) / "app_data", Path(config.app_archive_dir)):
         (parent / name).mkdir(parents=True, exist_ok=True)
     image = build_image(name, str(source), "Dockerfile")
@@ -108,8 +110,10 @@ def test_running_app_loses_checkout_access_after_migration(
         container_repo = f"/data/app_temp_data/{name}/repo"
         subprocess.run(["podman", "exec", container_id, "test", "-f", f"{container_repo}/source.txt"], check=True)
         with sqlite3.connect(config.db_path) as db:
-            db.execute("CREATE TABLE apps (name TEXT, repo_path TEXT, container_id TEXT, status TEXT)")
-            db.execute("INSERT INTO apps VALUES (?, ?, ?, 'running')", (name, str(source), container_id))
+            db.execute(
+                "CREATE TABLE apps (name TEXT, repo_path TEXT, container_id TEXT, status TEXT, error_message TEXT)"
+            )
+            db.execute("INSERT INTO apps VALUES (?, ?, ?, 'running', NULL)", (name, str(source), container_id))
 
         # CI runs rootless Podman as its own user rather than the production host user.
         stop = Mock(side_effect=lambda ids: subprocess.run(["podman", "stop", "--ignore", *ids], check=True))
