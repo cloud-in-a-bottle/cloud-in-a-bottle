@@ -35,6 +35,7 @@ from litestar.response import Redirect
 from compute_space.config import Config
 from compute_space.core import archive_backend
 from compute_space.core.app_id import is_valid_app_id
+from compute_space.core.app_update_review import pending_update_review
 from compute_space.core.apps import RESERVED_PATHS
 from compute_space.core.apps import app_container_log_path
 from compute_space.core.apps import app_log_path
@@ -42,11 +43,11 @@ from compute_space.core.apps import clone_with_github_fallback
 from compute_space.core.apps import git_pull
 from compute_space.core.apps import insert_and_deploy
 from compute_space.core.apps import move_clone_to_app_temp_dir
+from compute_space.core.apps import pin_refless_to_landed_branch
 from compute_space.core.apps import reload_app_background
 from compute_space.core.apps import remove_app_background
 from compute_space.core.apps import start_app_process
 from compute_space.core.apps import validate_manifest
-from compute_space.core.auth.permissions_v2 import get_all_permissions_v2
 from compute_space.core.auth.permissions_v2 import grant_permission_v2
 from compute_space.core.containers import BUILD_CACHE_CORRUPT_MARKER
 from compute_space.core.containers import archive_old_log
@@ -69,10 +70,7 @@ from compute_space.core.log_stream import stream_app_logs
 from compute_space.core.logging import logger
 from compute_space.core.manifest import PermissionGrant
 from compute_space.core.manifest import all_manifest_permissions_v2
-from compute_space.core.manifest import manifest_newly_declared_permissions_v2
-from compute_space.core.manifest import manifest_settings_changes
 from compute_space.core.manifest import parse_manifest
-from compute_space.core.manifest import settings_changes_require_review
 from compute_space.core.oauth import OAuthRequired
 from compute_space.core.oauth import get_oauth_token
 from compute_space.core.ports import check_port_available
@@ -260,33 +258,6 @@ def _resolve_app(app_id: str, db: sqlite3.Connection) -> sqlite3.Row:
     return row
 
 
-async def _pin_refless_to_landed_branch(repo_url: str | None, repo_path: str) -> str | None:
-    """Return ``repo_url`` with ``@<branch>`` appended for the branch ``repo_path``
-    is on, or ``None`` when there's nothing to pin.
-
-    Pins only when ``repo_url`` has no ``@ref`` yet and ``repo_path`` is a git
-    checkout sitting on a (non-detached) branch. Used at install and after a
-    refless update so the stored upstream names a concrete branch — visible on
-    the detail page and deterministic across future pulls — rather than
-    re-resolving a moving remote default. A ``file://`` URL pointing at a
-    non-git directory is copied verbatim (no ``.git``), so it's skipped here
-    rather than letting get_branch_name raise InvalidGitRepositoryError. Reads
-    local HEAD only, so no network.
-    """
-    if not repo_url:
-        return None
-    try:
-        base_url, ref = parse_repo_url(repo_url)
-    except ValueError:
-        # A stored SSH upstream can't be pinned (and shouldn't exist after the
-        # set_app_remote guard); leave it untouched rather than crashing.
-        return None
-    if ref or not os.path.isdir(os.path.join(repo_path, ".git")):
-        return None
-    landed = await get_branch_name(Path(repo_path))
-    return f"{base_url}@{landed}" if landed else None
-
-
 # ─── routes ────────────────────────────────────────────────────────────────
 
 
@@ -422,7 +393,7 @@ async def api_add_app(
     # Pin a refless upstream to the concrete branch the fresh clone landed on
     # (origin's default), so the stored URL and detail page show which branch
     # the app tracks from the start — matching what a later Update & Reload records.
-    pinned = await _pin_refless_to_landed_branch(repo_url, final_dir)
+    pinned = await pin_refless_to_landed_branch(repo_url, final_dir)
     if pinned:
         repo_url = pinned
 
@@ -666,41 +637,27 @@ def _gate_update_review(
     approve_new_permissions: bool,
     previous_manifest_raw: str | None = None,
 ) -> UpdateReviewRequiredResponse | None:
-    if not repo_path or not os.path.isdir(repo_path):
-        return None
-    try:
-        manifest = parse_manifest(repo_path)
-    except ValueError:
-        return None
-
-    new_perms = manifest_newly_declared_permissions_v2(
-        manifest, get_all_permissions_v2(consumer_app_id=app_id), previous_manifest_raw
-    )
-    settings_changed = manifest_settings_changes(manifest, previous_manifest_raw)
-    # Fields that don't change what the app can do (description, authors, version,
-    # health check, links) are reported in the diff but don't hold the update back on
-    # their own: an app that only rewords its description gains nothing, and gating on
-    # that trains the owner to click through every review.
-    if not new_perms and not settings_changes_require_review(settings_changed):
+    review = pending_update_review(app_id, repo_path, previous_manifest_raw)
+    if review is None:
         return None
 
     if approve_new_permissions:
-        for pg in new_perms:
+        for pg in review.new_permissions:
             grant_permission_v2(consumer_app_id=app_id, service_url=pg.service_url, grant_payload=pg.grant)
         return None
 
-    shortname_by_service = {c.service: c.shortname for c in manifest.consumes_services_v2}
+    shortname_by_service = {c.service: c.shortname for c in review.manifest.consumes_services_v2}
     return UpdateReviewRequiredResponse(
         ok=False,
         review_required=True,
-        settings_changed=[attr.asdict(c) for c in settings_changed],
+        settings_changed=[attr.asdict(c) for c in review.settings_changed],
         permissions_required=[
             {
                 "service_url": pg.service_url,
                 "grant": pg.grant,
                 "shortname": shortname_by_service.get(pg.service_url, ""),
             }
-            for pg in new_perms
+            for pg in review.new_permissions
         ],
         error="This update changes the app's settings; review and approve them before it can be applied.",
     )
@@ -831,7 +788,7 @@ async def _reload_app_impl(
             # the detail page shows which branch it tracks — rather than
             # silently re-resolving (and following) a moving remote default on
             # every future update.
-            pinned = await _pin_refless_to_landed_branch(repo_url, app_row["repo_path"])
+            pinned = await pin_refless_to_landed_branch(repo_url, app_row["repo_path"])
             if pinned:
                 db.execute("UPDATE apps SET repo_url = ? WHERE app_id = ?", (pinned, app_id))
                 db.commit()

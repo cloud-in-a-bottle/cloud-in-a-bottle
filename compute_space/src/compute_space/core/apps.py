@@ -9,6 +9,7 @@ import tempfile
 import threading
 import time
 from collections.abc import Callable
+from pathlib import Path
 from urllib.parse import unquote
 
 import attr
@@ -38,6 +39,7 @@ from compute_space.core.domains import Domain
 from compute_space.core.domains import primary_domain
 from compute_space.core.git_ops import CloneFailed
 from compute_space.core.git_ops import clone_repo
+from compute_space.core.git_ops import get_branch_name
 from compute_space.core.git_ops import github_token_git_config
 from compute_space.core.git_ops import inject_github_token_in_url
 from compute_space.core.git_ops import is_github_repo_url
@@ -971,6 +973,33 @@ def git_pull(
                 capture_output=True,
                 timeout=10,
             )
+
+
+async def pin_refless_to_landed_branch(repo_url: str | None, repo_path: str) -> str | None:
+    """Return ``repo_url`` with ``@<branch>`` appended for the branch ``repo_path``
+    is on, or ``None`` when there's nothing to pin.
+
+    Pins only when ``repo_url`` has no ``@ref`` yet and ``repo_path`` is a git
+    checkout sitting on a (non-detached) branch. Used at install and after a
+    refless update so the stored upstream names a concrete branch (visible on
+    the detail page and deterministic across future pulls) rather than
+    re-resolving a moving remote default. A ``file://`` URL pointing at a
+    non-git directory is copied verbatim (no ``.git``), so it's skipped here
+    rather than letting get_branch_name raise InvalidGitRepositoryError. Reads
+    local HEAD only, so no network.
+    """
+    if not repo_url:
+        return None
+    try:
+        base_url, ref = parse_repo_url(repo_url)
+    except ValueError:
+        # A stored SSH upstream can't be pinned (and shouldn't exist after the
+        # set_app_remote guard); leave it untouched rather than crashing.
+        return None
+    if ref or not os.path.isdir(os.path.join(repo_path, ".git")):
+        return None
+    landed = await get_branch_name(Path(repo_path))
+    return f"{base_url}@{landed}" if landed else None
 
 
 def reload_app_background(app_id: str, repo_path: str, config: Config) -> None:
