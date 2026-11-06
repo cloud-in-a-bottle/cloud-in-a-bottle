@@ -782,34 +782,29 @@ def app_container_log_path(app_name: str, config: Config) -> str:
 
 
 def _remote_default_branch(repo_path: str, log: Callable[[str], None]) -> tuple[str | None, str | None]:
-    """Resolve origin's default branch (e.g. ``main``/``master``).
+    """Resolve origin's current default branch (e.g. ``main``/``master``) by asking the remote.
 
-    Returns ``(branch, error)``. ``git remote set-head --auto`` queries the
-    remote, so on auth/network failure we return an error string for the
-    caller's token-retry path to act on; ``(None, None)`` means the remote was
-    reachable but the default branch couldn't be read (caller falls back to a
-    plain pull on the current branch).
+    Returns ``(branch, error)``. Uses ``git ls-remote --symref origin HEAD`` rather than ``git remote set-head
+    --auto``, which fails when the default branch hasn't been fetched yet (eg right after the remote renamed it). On
+    auth/network failure we return an error string for the caller's token-retry path to act on; ``(None, None)``
+    means the remote was reachable but didn't report a default branch (caller falls back to a plain pull on the
+    current branch).
     """
-    log("$ git remote set-head origin --auto")
-    set_head = subprocess.run(
-        ["git", "remote", "set-head", "origin", "--auto"],
+    log("$ git ls-remote --symref origin HEAD")
+    result = subprocess.run(
+        ["git", "ls-remote", "--symref", "origin", "HEAD"],
         cwd=repo_path,
         capture_output=True,
         text=True,
         timeout=30,
     )
-    if set_head.returncode != 0:
-        return None, set_head.stderr.strip() or set_head.stdout.strip() or "failed to query remote default branch"
-    sym = subprocess.run(
-        ["git", "symbolic-ref", "--short", "refs/remotes/origin/HEAD"],
-        cwd=repo_path,
-        capture_output=True,
-        text=True,
-        timeout=10,
-    )
-    if sym.returncode != 0:
+    if result.returncode != 0:
+        return None, result.stderr.strip() or result.stdout.strip() or "failed to query remote default branch"
+    first_line = result.stdout.splitlines()[0] if result.stdout else ""
+    prefix = "ref: refs/heads/"
+    if not first_line.startswith(prefix):
         return None, None
-    name = sym.stdout.strip().removeprefix("origin/")
+    name = first_line.removeprefix(prefix).split("\t", 1)[0]
     return (name or None), None
 
 
@@ -834,10 +829,10 @@ def git_pull(
 
     # ``ref`` is the branch/tag/commit pinned via the ``url@ref`` suffix of the
     # stored repo_url. When set, we fetch and hard-checkout it so that editing
-    # the upstream branch actually switches branches. When unset (the operator
-    # cleared the ``@ref``), we fall back to origin's default branch so that
-    # clearing it returns to main/master rather than sticking on whatever branch
-    # happened to be checked out.
+    # the upstream branch actually switches branches. When unset, the app tracks
+    # origin's default branch: we resolve it afresh on every pull, so the app
+    # follows the remote when its default branch changes (eg master renamed to
+    # main), rather than sticking on whatever branch happened to be checked out.
     ref: str | None = None
     if repo_url:
         try:
@@ -914,6 +909,7 @@ def git_pull(
             timeout=300,
         )
 
+    tracks_default_branch = not ref
     try:
         if not ref:
             # No pinned ref: resolve origin's default branch and switch to it.
@@ -959,6 +955,11 @@ def git_pull(
             ok, err = _run(["git", "checkout", "-f", "FETCH_HEAD"])
         if not ok:
             return False, err
+        if tracks_default_branch and is_branch:
+            # Keep refs/remotes/origin/HEAD in step with the remote's default, as a fresh clone would have it.
+            ok, err = _run(["git", "remote", "set-head", "origin", ref])
+            if not ok:
+                return False, err
         return _update_submodules()
     except Exception as e:
         _log(f"git update failed: {e}")

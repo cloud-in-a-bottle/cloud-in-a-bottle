@@ -20,6 +20,7 @@ from compute_space.core.apps import deserialize_links
 from compute_space.core.auth.permissions_v2 import get_all_permissions_v2
 from compute_space.core.domains import Domain
 from compute_space.core.domains import host_with_request_port
+from compute_space.core.git_ops import get_branch_name
 from compute_space.core.git_ops import get_head_sha
 from compute_space.core.git_ops import get_remote_url
 from compute_space.core.git_ops import parse_repo_url
@@ -116,6 +117,7 @@ async def app_detail(
     edit_app = await _resolve_edit_app(
         app_row["repo_url"], app_row["repo_path"], db, config, zone_for_request(request), request.url.netloc
     )
+    default_branch = await _tracked_default_branch(app_row["repo_url"], app_row["repo_path"])
 
     return Template(
         template_name="app_detail.html",
@@ -130,8 +132,24 @@ async def app_detail(
             "granted_permissions": granted_perms,
             "ungranted_permissions": ungranted_perms,
             "edit_app": edit_app,
+            "default_branch": default_branch,
         },
     )
+
+
+async def _tracked_default_branch(repo_url: str | None, repo_path: str) -> str | None:
+    """For an app tracking its repo's default branch (no ``@ref``), the branch its checkout is on, to show next to the
+    URL; None otherwise. Reads the local checkout only."""
+    if not repo_url or repo_url.startswith("file://") or not (Path(repo_path) / ".git").exists():
+        return None
+    try:
+        _, ref = parse_repo_url(repo_url)
+        if ref:
+            return None
+        return await get_branch_name(Path(repo_path))
+    except Exception:
+        logger.opt(exception=True).warning("Failed to read the checked-out branch of {}", repo_path)
+        return None
 
 
 async def _resolve_edit_app(
