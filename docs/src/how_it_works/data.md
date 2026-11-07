@@ -40,9 +40,10 @@ Everything sits under the instance's data directory (`data_root_dir` in `config.
 | `persistent_data/openhost/` | Router database, TLS certificates, keys and JuiceFS state |
 | `persistent_data/openhost/juicefs/state/meta.db` | JuiceFS filename-to-object mappings |
 | `temporary_data/app_temp_data/<app>/` | Temporary app data, plus that app's build and container logs |
+| `temporary_data/app_checkouts/<app>/` | Host-only source checkouts used for builds and updates |
 | `app_archive/` | The JuiceFS mount |
 
-The configured [bundled backup app](../operation/backups.md) copies `persistent_data/app_data/` and `temporary_data/app_temp_data/`, excluding its own permanent-data directory. It does not copy `persistent_data/openhost/` or the raw local archive objects: standard app mounts do not expose those directories. Reaching instance state means SSH or the terminal in the dashboard.
+The configured [bundled backup app](../operation/backups.md) copies `persistent_data/app_data/` and `temporary_data/app_temp_data/`, excluding its own permanent-data directory. It does not copy `persistent_data/openhost/`, `temporary_data/app_checkouts/`, or the raw local archive objects: app data mounts do not expose those directories, including with `access_all_app_data`. Reaching instance state means SSH or the terminal in the dashboard.
 
 ## Storage guard
 

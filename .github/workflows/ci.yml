@@ -127,11 +127,15 @@ jobs:
           sudo ip link set openhost0 up
           mkdir -p ~/.config/containers
           printf '[containers]\nhost_containers_internal_ip = "10.200.0.1"\n' >> ~/.config/containers/containers.conf
+      # These Podman-only checks fail fast without waiting for browser downloads.
+      # The main suite below excludes this file so each test runs once.
+      - name: Test app checkout isolation
+        run: pixi run -e dev pytest --run-containers -x compute_space/src/compute_space/tests/test_app_checkouts.py
       - name: Install playwright browsers
         run: pixi run -e dev playwright install --with-deps chromium
       - name: Run all tests, including containerized tests
         run: |
-          pixi run -e dev pytest --run-containers -v
+          pixi run -e dev pytest --run-containers --ignore=compute_space/src/compute_space/tests/test_app_checkouts.py -v
       - name: Run local full-stack service e2e tests
         run: |
           pixi run -e dev pytest --run-containers -v tests/test_services_e2e.py

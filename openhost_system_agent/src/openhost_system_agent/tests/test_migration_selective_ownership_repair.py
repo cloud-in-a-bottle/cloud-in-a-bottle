@@ -43,6 +43,7 @@ def test_v13_host_converges_script_and_unit_before_reload(
     monkeypatch.setattr(v0014_selective_ownership_repair, "get_host_uid", lambda: 4321)
     monkeypatch.setattr(v0014_selective_ownership_repair, "run", reload)
     monkeypatch.setattr("os.geteuid", lambda: 0)
+    monkeypatch.setattr("openhost_system_agent.migrations.runner.require_router_stopped", lambda: None)
     registry = [migration for migration in REGISTRY if migration.version <= 14]
 
     if fail_first_reload:

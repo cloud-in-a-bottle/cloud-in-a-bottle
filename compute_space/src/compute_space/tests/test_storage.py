@@ -233,6 +233,13 @@ def test_per_app_usage(tmp_path):
     assert result["notes"] == 4096
     assert result["docs"] == 8192
 
+    _write(os.path.join(config.temporary_data_dir, "app_checkouts", "notes", "source.bin"), 4096)
+    _write(os.path.join(config.temporary_data_dir, "app_checkouts", "checkout-only", "source.bin"), 4096)
+    result = storage.per_app_usage(config)
+    assert result["notes"] == 8192
+    assert result["docs"] == 8192
+    assert result["checkout-only"] == 4096
+
 
 def test_storage_status_serves_cached_usage_with_live_disk_free(tmp_path, monkeypatch):
     config = _make_test_config(tmp_path)
