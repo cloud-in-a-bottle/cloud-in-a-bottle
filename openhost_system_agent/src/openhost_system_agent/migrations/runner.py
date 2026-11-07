@@ -57,6 +57,7 @@ def apply_system_migrations(
         require_router_stopped()
         source = current
         t0 = time.perf_counter()
+        logger.info(f"Applying system migration v{source} → v{migration.version} ({type(migration).__name__})")
         try:
             migration.up()
         except Exception as e:

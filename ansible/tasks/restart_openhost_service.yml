@@ -23,10 +23,28 @@
 - name: Apply pending system migrations
   become: yes
   become_user: root
-  command: /usr/local/bin/openhost_system_agent update migrate
-  environment:
-    OPENHOST_ROUTER_CONFIG: /home/host/.openhost/local_compute_space/config.toml
   when: not (skip_service_start | default(false) | bool)
+  block:
+    - name: Run system migrations with a bounded execution time
+      shell: |
+        umask 077
+        exec /usr/local/bin/openhost_system_agent update migrate > /var/log/openhost-system-migrations.log 2>&1
+      environment:
+        OPENHOST_ROUTER_CONFIG: /home/host/.openhost/local_compute_space/config.toml
+      async: 600
+      poll: 5
+  rescue:
+    - name: Read system migration output
+      command: tail -n 200 /var/log/openhost-system-migrations.log
+      register: system_migration_log
+      changed_when: false
+      failed_when: false
+
+    - name: Report system migration failure
+      fail:
+        msg: |
+          System migrations failed: {{ ansible_failed_result.msg | default('command failed') }}
+          {{ system_migration_log.stdout | default('Migration log unavailable') }}
 
 - name: Start Cloud in a Bottle service
   become: yes
