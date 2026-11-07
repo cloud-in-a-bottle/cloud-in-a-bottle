@@ -8,7 +8,7 @@
   align-items: center;
   gap: var(--space-4);
   margin: 0 0 var(--space-6);
-  font-size: clamp(var(--text-body-sm), 2.2vw, var(--text-body-lg));
+  font-size: clamp(var(--text-body-md), 2.2vw, var(--text-body-lg));
   font-weight: var(--weight-emphasized);
   line-height: var(--leading-loose);
   /* The owner name arrives lowercase; title case matches the Figma heading. */
@@ -112,7 +112,7 @@ a.banner__text:hover {
   /* Named for the same reason as .nav-back: the docs page links no base.css. */
   color: var(--fg-primary);
   font-family: var(--font-sans);
-  font-size: var(--text-body-sm);
+  font-size: var(--text-body-md);
   text-decoration: none;
   white-space: nowrap;
 }
@@ -168,7 +168,7 @@ a.banner__text:hover {
   align-items: center;
   gap: var(--space-2);
   font-family: var(--font-sans);
-  font-size: var(--text-body-sm);
+  font-size: var(--text-body-md);
   line-height: var(--leading-loose);
   text-decoration: none;
   /* Named rather than inherited: the docs page links only components.css, so
@@ -272,7 +272,7 @@ h2.section-title {
   gap: var(--space-2);
   min-height: 28px;
   padding: 3px var(--space-3);
-  font-size: var(--text-body-sm);
+  font-size: var(--text-body-md);
   line-height: var(--leading-body-sm);
   color: var(--fg-primary);
   background: var(--bg-primary);
@@ -363,7 +363,7 @@ h2.section-title {
 
 .card__desc {
   margin: 0;
-  font-size: var(--text-body-sm);
+  font-size: var(--text-body-md);
   line-height: var(--leading-body-sm);
 }
 
@@ -438,7 +438,7 @@ h2.section-title {
   margin-left: auto;
   padding-left: var(--space-4);
   color: var(--fg-secondary);
-  font-size: var(--text-body-sm);
+  font-size: var(--text-body-md);
   text-decoration: none;
 }
 
@@ -600,7 +600,7 @@ input.search__input:not(:placeholder-shown) {
   grid-template-columns: minmax(8rem, 13rem) 1fr;
   gap: var(--space-2) var(--space-4);
   margin: 0;
-  font-size: var(--text-body-sm);
+  font-size: var(--text-body-md);
 }
 
 .spec-list dt {
@@ -630,7 +630,7 @@ input.search__input:not(:placeholder-shown) {
   background: var(--bg-surface);
   border: var(--border-w) solid var(--fg-border);
   box-shadow: var(--shadow-card);
-  font-size: var(--text-body-sm);
+  font-size: var(--text-body-md);
   text-align: center;
 }
 
@@ -653,7 +653,7 @@ input.search__input:not(:placeholder-shown) {
   border: var(--border-w) solid var(--fg-border);
   border-left: 4px solid var(--fg-status-warning);
   box-shadow: var(--shadow-card);
-  font-size: var(--text-body-sm);
+  font-size: var(--text-body-md);
   z-index: 1000;
 }
 
@@ -768,7 +768,7 @@ table.form-table input[type="password"] {
   font-weight: var(--weight-emphasized);
   display: block;
   margin-bottom: var(--space-1);
-  font-size: var(--text-body-sm);
+  font-size: var(--text-body-md);
 }
 
 /* Carries whatever sits beside the label -- an info tip, a badge. */
@@ -802,11 +802,6 @@ table.form-table input[type="password"] {
 .field > .field-error {
   margin-top: var(--space-1);
   margin-bottom: 0;
-}
-
-.field > .hint {
-  font-size: var(--text-body-sm);
-  line-height: var(--leading-body-sm);
 }
 
 /* An error takes the hint's place rather than stacking under it. */
@@ -908,7 +903,7 @@ table.form-table input[type="password"] {
 
 #app-definition-preview > summary {
   cursor: pointer;
-  font-size: var(--text-body-sm);
+  font-size: var(--text-body-md);
 }
 
 #app-definition-preview > summary:focus-visible {
@@ -966,7 +961,7 @@ table.form-table input[type="password"] {
 .catalog-callout p {
   margin: 0;
   color: var(--fg-secondary);
-  font-size: var(--text-body-sm);
+  font-size: var(--text-body-md);
 }
 
 .catalog-callout .callout-action {
@@ -987,7 +982,7 @@ table.form-table input[type="password"] {
 details.url-help {
   margin-top: var(--space-3);
   color: var(--fg-secondary);
-  font-size: var(--text-body-sm);
+  font-size: var(--text-body-md);
 }
 
 details.url-help summary {
@@ -1077,9 +1072,9 @@ th.sortable:hover {
   border: var(--border-w) solid var(--fg-border);
   box-shadow: var(--shadow-card);
   color: var(--fg-secondary);
-  font-size: var(--text-body-sm);
+  font-size: var(--text-body-md);
   font-weight: var(--weight-regular);
-  line-height: var(--leading-body-sm);
+  line-height: var(--leading-body-md);
   letter-spacing: normal;
   text-align: left;
   text-transform: none;
@@ -1158,7 +1153,7 @@ th.sortable:hover {
   background: var(--bg-status-info);
   border: var(--border-w) solid var(--fg-border);
   border-left-width: 3px;
-  font-size: var(--text-body-sm);
+  font-size: var(--text-body-md);
 }
 
 .notice--ok {
@@ -1323,7 +1318,7 @@ select {
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
-  font-size: var(--text-body-sm);
+  font-size: var(--text-body-md);
 }
 
 .field--check > span {
@@ -1408,7 +1403,7 @@ select {
    hex on style.color for these; they set a variant class now. */
 
 .msg {
-  font-size: var(--text-body-sm);
+  font-size: var(--text-body-md);
 }
 
 .msg--ok { color: var(--fg-status-positive); }
@@ -1515,7 +1510,7 @@ select {
 
 .action-msg {
   margin: var(--space-2) 0 0;
-  font-size: var(--text-body-sm);
+  font-size: var(--text-body-md);
 }
 
 /* Two columns on a phone squeeze the notes into a sliver, so each action
@@ -1565,7 +1560,7 @@ select {
   box-shadow: none;
 }
 
-/* An explainer inside a cell annotates 12px table text; at the prose size it
+/* An explainer inside a cell annotates 14px table text; at the prose size it
    outweighs the value it belongs to. */
 .panel table .hint {
   font-size: var(--text-body-sm);
@@ -1615,7 +1610,7 @@ td.col-actions .icon-btn {
 /* Status words are read, not clicked. A filled chip beside a real button
    reads as a second button, so these carry colour and weight only. */
 .status-text {
-  font-size: var(--text-body-sm);
+  font-size: var(--text-body-md);
   font-weight: var(--weight-emphasized);
   white-space: nowrap;
 }
