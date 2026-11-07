@@ -80,12 +80,13 @@ def run_apt_get(*args: str, check: bool = True) -> None:
     """Run unattended package operations without replacing locally configured files."""
     env = {**os.environ, "DEBIAN_FRONTEND": "noninteractive", "UCF_FORCE_CONFFOLD": "1"}
     env.pop("UCF_FORCE_CONFFNEW", None)
+    # Deployment/update supervisors own the deadline and terminate the whole
+    # migration process tree, including dpkg and package configuration scripts.
     subprocess.run(
         ["apt-get", "-o", "Dpkg::Options::=--force-confdef", "-o", "Dpkg::Options::=--force-confold", *args],
         env=env,
         stdin=subprocess.DEVNULL,
         check=check,
-        timeout=300,
     )
 
 

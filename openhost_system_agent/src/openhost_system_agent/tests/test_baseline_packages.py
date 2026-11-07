@@ -20,6 +20,7 @@ def test_baseline_package_commands_are_unattended(tmp_path: Path, monkeypatch: p
         "assert 'UCF_FORCE_CONFFNEW' not in os.environ\n"
         "assert 'Dpkg::Options::=--force-confdef' in sys.argv\n"
         "assert 'Dpkg::Options::=--force-confold' in sys.argv\n"
+        "assert os.getpgrp() == int(os.environ['APT_PROCESS_GROUP'])\n"
         "assert sys.stdin.read() == ''\n"
         "with open(os.environ['APT_CALLS'], 'a') as log:\n"
         "    log.write(' '.join(sys.argv[1:]) + '\\n')\n"
@@ -28,6 +29,7 @@ def test_baseline_package_commands_are_unattended(tmp_path: Path, monkeypatch: p
     calls = tmp_path / "calls"
     monkeypatch.setenv("PATH", f"{tmp_path}:{os.environ['PATH']}")
     monkeypatch.setenv("APT_CALLS", str(calls))
+    monkeypatch.setenv("APT_PROCESS_GROUP", str(os.getpgrp()))
     monkeypatch.setenv("DEBIAN_FRONTEND", "dialog")
     monkeypatch.setenv("UCF_FORCE_CONFFNEW", "1")
     # Keep the parent's input pipe open, as with a remote deployment command.
@@ -57,15 +59,11 @@ def test_baseline_package_commands_are_unattended(tmp_path: Path, monkeypatch: p
     assert os.environ["DEBIAN_FRONTEND"] == "dialog"
 
 
-@pytest.mark.parametrize(
-    "error", [subprocess.CalledProcessError(100, "apt-get"), subprocess.TimeoutExpired("apt-get", 300)]
-)
-def test_package_failures_are_reported(monkeypatch: pytest.MonkeyPatch, error: Exception) -> None:
-    run = Mock(side_effect=error)
+def test_package_failure_is_reported(monkeypatch: pytest.MonkeyPatch) -> None:
+    run = Mock(side_effect=subprocess.CalledProcessError(100, "apt-get"))
     monkeypatch.setattr(subprocess, "run", run)
-    with pytest.raises(type(error)):
+    with pytest.raises(subprocess.CalledProcessError):
         run_apt_get("install", "-y", "openssh-server")
-    assert run.call_args.kwargs["timeout"] == 300
     assert run.call_args.kwargs["check"] is True
 
 
