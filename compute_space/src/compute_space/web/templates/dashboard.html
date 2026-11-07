@@ -5,6 +5,7 @@
 {% from "_components/card.html" import card %}
 {% from "_components/icon.html" import icon %}
 {% from "_components/section.html" import section_head %}
+{% from "_components/empty.html" import empty %}
 
 {% block title_suffix %} - Dashboard{% endblock %}
 
@@ -42,9 +43,9 @@
   <div class="app-list" id="app-list">
     {% for app in apps %}{{ app_row(app) }}{% endfor %}
   </div>
-  <p class="empty" id="no-matches" hidden>No apps match that filter.</p>
+  {{ empty("No apps match that filter.", id="no-matches", hidden=true) }}
   {% else %}
-  <p class="empty">No apps deployed yet. <a href="/add_app">Deploy one now.</a></p>
+  {% call empty() %}No apps deployed yet. <a href="/add_app">Deploy one now.</a>{% endcall %}
   {% endif %}
 </section>
 
