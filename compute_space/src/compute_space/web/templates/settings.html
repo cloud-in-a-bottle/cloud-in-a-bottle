@@ -125,7 +125,7 @@
 
     <div class="field">
       <span>Status</span>
-      <div id="update-status">{{ msg("Checking for updates…") }}</div>
+      <div id="update-status" aria-live="polite">{{ msg("Checking for updates…", live=false) }}</div>
       <div id="restart-overlay" hidden>
         {% call msg(id="restart-status") %}<strong>Waiting for shutdown&hellip;</strong>{% endcall %}
       </div>
