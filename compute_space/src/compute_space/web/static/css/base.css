@@ -187,7 +187,7 @@ table {
   margin: var(--space-4) 0;
   background: var(--bg-surface);
   border: var(--border-w) solid var(--fg-border);
-  font-size: var(--text-body-sm);
+  font-size: var(--text-body-md);
 }
 
 th,
@@ -245,7 +245,7 @@ textarea {
   background: var(--bg-primary);
   border: var(--border-w) solid var(--fg-border);
   border-radius: var(--radius-none);
-  font-size: var(--text-body-sm);
+  font-size: var(--text-body-md);
 }
 
 input:focus-visible,
@@ -264,14 +264,14 @@ select.invalid {
 }
 
 label {
-  font-size: var(--text-body-sm);
+  font-size: var(--text-body-md);
 }
 
 /* Utilities carried over from the previous stylesheet so existing pages keep
    working while they are migrated. */
 .muted {
   color: var(--fg-secondary);
-  font-size: var(--text-body-sm);
+  font-size: var(--text-body-md);
 }
 
 /* Explanatory prose under a control. One step up the scale from the smallest
@@ -289,7 +289,7 @@ label {
 
 .field-error {
   color: var(--fg-status-negative);
-  font-size: var(--text-body-sm);
+  font-size: var(--text-body-md);
 }
 
 .error-inline {
@@ -297,7 +297,7 @@ label {
   border: var(--border-w) solid var(--fg-border);
   padding: var(--space-2);
   margin-top: var(--space-1);
-  font-size: var(--text-body-sm);
+  font-size: var(--text-body-md);
   white-space: pre-wrap;
   word-break: break-word;
   max-height: 12em;
