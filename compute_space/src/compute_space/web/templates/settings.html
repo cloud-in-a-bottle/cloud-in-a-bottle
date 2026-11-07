@@ -2,16 +2,19 @@
 {% from "_components/button.html" import button %}
 {% from "_components/field.html" import field %}
 {% from "_components/section.html" import section_head %}
+{% from "_components/notice.html" import notice %}
+{% from "_components/msg.html" import msg %}
+{% from "_components/empty.html" import empty %}
 
 {% block title_suffix %} - Settings{% endblock %}
 
 {% block content %}
-<p id="error" class="notice notice--error" hidden></p>
+{{ notice(tone="error", id="error", hidden=true) }}
 
 <section class="section">
   {% call section_head("Account") %}{% endcall %}
   <div class="panel">
-    {% set username_extra %}<p class="msg" id="username-msg" hidden></p>{% endset %}
+    {% set username_extra %}{{ msg(id="username-msg", hidden=true) }}{% endset %}
     {% call field("Owner username", "username-input", hint="Used as your account name inside installed apps.",
                   extra=username_extra) %}
       <div class="field-row">
@@ -35,7 +38,7 @@
         <div class="actions">
           {{ button("Change password", variant="primary", onclick="changePassword()") }}
         </div>
-        <span id="pw-msg" class="msg" hidden></span>
+        {{ msg(id="pw-msg", hidden=true, tag="span") }}
       </div>
     </div>
 
@@ -61,7 +64,7 @@
       </div>
       <p class="hint">Connect this instance to your Imbue account to enable Imbue services. Managed
         instances are connected automatically; use this if yours isn't, or to reconnect.</p>
-      <p id="connect-imbue-msg" class="msg" hidden></p>
+      {{ msg(id="connect-imbue-msg", hidden=true) }}
     </div>
   </div>
 </section>
@@ -74,10 +77,10 @@
       a fixed version. Saving starts the update immediately if it points at different code than what's
       running.{% endset %}
     {% set remote_extra %}
-      <p class="notice" id="remote-channel" hidden></p>
-      <p class="notice notice--warn" id="remote-channel-warning" hidden>Saving this remote will pause
-        automatic updates: they only run when following tagged releases.</p>
-      <p id="remote-msg" class="msg" hidden></p>
+      {{ notice(id="remote-channel", hidden=true) }}
+      {% call notice(tone="warn", id="remote-channel-warning", hidden=true) %}Saving this remote will pause
+        automatic updates: they only run when following tagged releases.{% endcall %}
+      {{ msg(id="remote-msg", hidden=true) }}
     {%- endset %}
     {% call field("Git remote", "remote-url", hint=remote_hint, extra=remote_extra) %}
       <div class="field-row">
@@ -96,7 +99,7 @@
       <p class="hint" id="prereleases-hint">Also update to release candidates (tags like
         <code>v1.2.0-rc.1</code>), which get new versions early but may be broken. Turning this off
         keeps the current version until the next stable release.</p>
-      <p id="prereleases-msg" class="msg" hidden></p>
+      {{ msg(id="prereleases-msg", hidden=true) }}
     </div>
 
     <hr class="rule">
@@ -110,21 +113,21 @@
         </label>
         <input type="time" id="auto-update-time" aria-label="Update time" onchange="saveAutoUpdate()" disabled>
       </div>
-      <p class="notice notice--warn" id="auto-update-paused" hidden>Paused: automatic updates only run when the
-        remote follows tagged releases (a URL with no <code>#branch</code> or <code>@ref</code>).</p>
+      {% call notice(tone="warn", id="auto-update-paused", hidden=true) %}Paused: automatic updates only run when the
+        remote follows tagged releases (a URL with no <code>#branch</code> or <code>@ref</code>).{% endcall %}
       <p class="hint">Installs the latest tagged release at the chosen time (in your
         browser's timezone). Updating briefly makes the dashboard and apps unavailable.</p>
-      <p class="notice" id="auto-update-last" hidden></p>
-      <p id="auto-update-msg" class="msg" hidden></p>
+      {{ notice(id="auto-update-last", hidden=true) }}
+      {{ msg(id="auto-update-msg", hidden=true) }}
     </div>
 
     <hr class="rule">
 
     <div class="field">
       <span>Status</span>
-      <div id="update-status"><p class="msg">Checking for updates&hellip;</p></div>
+      <div id="update-status">{{ msg("Checking for updates…") }}</div>
       <div id="restart-overlay" hidden>
-        <p id="restart-status" class="msg"><strong>Waiting for shutdown&hellip;</strong></p>
+        {% call msg(id="restart-status") %}<strong>Waiting for shutdown&hellip;</strong>{% endcall %}
       </div>
     </div>
   </div>
@@ -153,7 +156,7 @@
       {% endcall %}
       {{ button("Add domain", variant="primary", id="add-domain-btn", onclick="addDomain()", disabled=true) }}
     </div>
-    <p id="domain-msg" class="msg" hidden></p>
+    {{ msg(id="domain-msg", hidden=true) }}
 
     <div class="table-scroll" id="domains-table-wrap" hidden>
       <table>
@@ -164,7 +167,7 @@
         <tbody id="domains-body"></tbody>
       </table>
     </div>
-    <p id="no-domains" class="empty">Loading&hellip;</p>
+    {{ empty("Loading…", id="no-domains") }}
   </div>
 </section>
 
@@ -189,13 +192,13 @@
       {{ button("Create token", variant="primary", onclick="createToken()") }}
     </div>
 
-    <div id="token-created" class="notice notice--ok" hidden>
+    {% call notice(tone="ok", id="token-created", hidden=true, tag="div") %}
       <strong>Token created.</strong> Copy it now — it won't be shown again.
       <div class="copy-field">
         <code id="token-value"></code>
         {{ button("Copy", onclick="navigator.clipboard.writeText(document.getElementById('token-value').textContent)") }}
       </div>
-    </div>
+    {% endcall %}
 
     <div class="table-scroll" id="tokens-table-wrap" hidden>
       <table>
@@ -205,7 +208,7 @@
         <tbody id="tokens-body"></tbody>
       </table>
     </div>
-    <p id="no-tokens" class="empty">No API tokens.</p>
+    {{ empty("No API tokens.", id="no-tokens") }}
   </div>
 </section>
 
@@ -243,7 +246,7 @@
       <span>Restart compute space</span>
       <div class="actions">
         {{ button("Restart compute space", variant="danger", onclick="restartComputeSpace()") }}
-        <span id="restart-msg" class="msg"></span>
+        {{ msg(id="restart-msg", tag="span") }}
       </div>
       <p class="hint">Restarts the router process; running apps are not interrupted.</p>
     </div>
@@ -254,7 +257,7 @@
       <span>Build cache</span>
       <div class="actions">
         {{ button("Drop build cache", variant="danger", id="drop-build-cache-btn", onclick="dropBuildCache()") }}
-        <span id="drop-build-cache-msg" class="msg"></span>
+        {{ msg(id="drop-build-cache-msg", tag="span") }}
       </div>
       <p class="hint">Removes images for stopped apps; they are rebuilt on next deploy.</p>
     </div>
@@ -265,7 +268,7 @@
       <span>SSH</span>
       <div class="actions">
         {{ button("SSH", id="ssh-btn", onclick="toggleSsh()", disabled=true) }}
-        <span id="ssh-status" class="msg"></span>
+        {{ msg(id="ssh-status", tag="span") }}
       </div>
       <p class="hint">Shell access to this instance over SSH. Leave it off unless you are
         debugging.</p>
