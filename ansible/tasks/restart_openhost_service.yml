@@ -12,10 +12,26 @@
     enabled: yes
   when: not (skip_service_start | default(false) | bool)
 
-- name: Restart Cloud in a Bottle service
+- name: Stop Cloud in a Bottle before applying migrations
   become: yes
   become_user: root
   systemd:
     name: openhost
-    state: restarted
+    state: stopped
+  when: not (skip_service_start | default(false) | bool)
+
+- name: Apply pending system migrations
+  become: yes
+  become_user: root
+  command: /usr/local/bin/openhost_system_agent update migrate
+  environment:
+    OPENHOST_ROUTER_CONFIG: /home/host/.openhost/local_compute_space/config.toml
+  when: not (skip_service_start | default(false) | bool)
+
+- name: Start Cloud in a Bottle service
+  become: yes
+  become_user: root
+  systemd:
+    name: openhost
+    state: started
   when: not (skip_service_start | default(false) | bool)

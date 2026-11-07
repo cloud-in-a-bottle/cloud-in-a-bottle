@@ -36,6 +36,8 @@ what happened.
 
 ## Writing a migration
 
+All system migrations run through `apply_system_migrations`, which checks that `openhost.service` is stopped before each pending migration and records successful versions in the migration log. Ansible and local provisioning invoke the same runner through `openhost_system_agent update migrate` after stopping the service and before starting it. Router startup does not apply system migrations.
+
 1. Create `migrations/versions/v{NNNN}_{name}.py`:
 
 ```python

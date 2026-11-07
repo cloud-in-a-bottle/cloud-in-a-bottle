@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import sqlite3
+import subprocess
 from pathlib import Path
 from typing import Any
 from unittest import mock
@@ -377,3 +378,86 @@ def test_rename_checkout_failure_rolls_back_data(cfg_factory: Any) -> None:
     for directory in data_dirs.values():
         assert directory.is_dir()
         assert not directory.with_name("new-name").exists()
+
+
+@pytest.mark.parametrize("stale_kind", ["directory", "file", "symlink", "dangling-symlink"])
+def test_rename_replaces_unowned_checkout(cfg_factory: Any, tmp_path: Path, stale_kind: str) -> None:
+    cfg = cfg_factory(20308)
+    app_id = _seed_app_row(cfg.db_path, "old-name")
+    _make_per_app_dirs(cfg, "old-name", ["app_data", "app_temp_data"])
+    source = Path(app_checkout_dir(cfg.temporary_data_dir, "old-name"))
+    destination = source.with_name("new-name")
+    source.mkdir(parents=True)
+    (source / "source.txt").write_text("installed")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "keep.txt").write_text("keep")
+    if stale_kind == "directory":
+        destination.mkdir()
+        (destination / "stale.txt").write_text("stale")
+    elif stale_kind == "file":
+        destination.write_text("stale")
+    else:
+        destination.symlink_to(outside if stale_kind == "symlink" else outside / "missing", target_is_directory=True)
+    with sqlite3.connect(cfg.db_path) as db:
+        db.execute("UPDATE apps SET repo_path = ? WHERE app_id = ?", (str(source), app_id))
+
+    status, payload = _post_rename(cfg, app_id, "new-name")
+
+    assert status == 200, payload
+    assert not source.exists()
+    assert not destination.is_symlink()
+    assert (destination / "source.txt").read_text() == "installed"
+    assert not (destination / "stale.txt").exists()
+    assert (outside / "keep.txt").read_text() == "keep"
+    with sqlite3.connect(cfg.db_path) as db:
+        assert db.execute("SELECT repo_path FROM apps WHERE app_id = ?", (app_id,)).fetchone()[0] == str(destination)
+
+
+def test_rename_keeps_checkout_owned_by_another_app(cfg_factory: Any) -> None:
+    cfg = cfg_factory(20309)
+    app_id = _seed_app_row(cfg.db_path, "old-name")
+    _seed_app_row(cfg.db_path, "new-name", port=19501)
+    destination = Path(app_checkout_dir(cfg.temporary_data_dir, "new-name"))
+    destination.mkdir(parents=True)
+    (destination / "keep.txt").write_text("installed")
+    status, payload = _post_rename(cfg, app_id, "new-name")
+    assert status == 409, payload
+    assert (destination / "keep.txt").read_text() == "installed"
+
+
+@pytest.mark.parametrize(
+    "error",
+    [OSError("cleanup failed"), subprocess.CalledProcessError(1, "sudo"), subprocess.TimeoutExpired("sudo", 30)],
+)
+def test_rename_cleanup_failure_preserves_source(cfg_factory: Any, error: Exception) -> None:
+    cfg = cfg_factory(20310)
+    app_id = _seed_app_row(cfg.db_path, "old-name")
+    dirs = _make_per_app_dirs(cfg, "old-name", ["app_data", "app_temp_data"])
+    source = Path(app_checkout_dir(cfg.temporary_data_dir, "old-name"))
+    source.mkdir(parents=True)
+    (source / "keep.txt").write_text("installed")
+    source.with_name("new-name").mkdir()
+    with mock.patch.object(apps_routes, "rmtree_with_sudo_fallback", side_effect=error):
+        status, payload = _post_rename(cfg, app_id, "new-name")
+    assert status == 500, payload
+    assert (source / "keep.txt").read_text() == "installed"
+    assert all(directory.exists() for directory in dirs.values())
+    with sqlite3.connect(cfg.db_path) as db:
+        assert db.execute("SELECT name, status FROM apps WHERE app_id = ?", (app_id,)).fetchone() == (
+            "old-name",
+            "stopped",
+        )
+
+
+def test_rename_rejects_symlinked_checkout_parent(cfg_factory: Any, tmp_path: Path) -> None:
+    cfg = cfg_factory(20311)
+    app_id = _seed_app_row(cfg.db_path, "old-name")
+    _make_per_app_dirs(cfg, "old-name", ["app_data", "app_temp_data"])
+    outside = tmp_path / "outside"
+    (outside / "new-name").mkdir(parents=True)
+    (outside / "new-name/keep.txt").write_text("keep")
+    (Path(cfg.temporary_data_dir) / "app_checkouts").symlink_to(outside, target_is_directory=True)
+    status, payload = _post_rename(cfg, app_id, "new-name")
+    assert status == 500, payload
+    assert (outside / "new-name/keep.txt").read_text() == "keep"

@@ -117,8 +117,7 @@ def test_running_app_loses_checkout_access_after_migration(
 
         # CI runs rootless Podman as its own user rather than the production host user.
         stop = Mock(side_effect=lambda ids: subprocess.run(["podman", "stop", "--ignore", *ids], check=True))
-        monkeypatch.setattr(migration, "_stop_containers", stop)
-        monkeypatch.setattr(migration, "_require_router_stopped", lambda: None)
+        monkeypatch.setattr(migration, "stop_app_containers", stop)
         migration.migrate(Path(config.db_path), temp_root)
         stop.assert_called_once_with([container_id])
         checkout = Path(app_checkout_dir(config.temporary_data_dir, name))

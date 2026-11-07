@@ -45,7 +45,12 @@ def get_db() -> sqlite3.Connection:
     """
     if _db_path is None:
         raise RuntimeError("init_db() must be called before get_db()")
-    db = sqlite3.connect(_db_path, check_same_thread=False)
+    return open_db(_db_path)
+
+
+def open_db(db_path: str) -> sqlite3.Connection:
+    """Open a configured connection for an operation with an explicit database path."""
+    db = sqlite3.connect(db_path, check_same_thread=False)
     db.row_factory = sqlite3.Row
     db.execute("PRAGMA journal_mode=WAL")
     db.execute("PRAGMA foreign_keys=ON")

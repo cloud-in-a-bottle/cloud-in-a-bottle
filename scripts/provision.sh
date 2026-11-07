@@ -240,8 +240,11 @@ if [ "$NO_CONFIG_FILES" = "true" ]; then
     su host -c "mkdir -p /home/host/.openhost/local_compute_space"
 else
     echo "--- Starting Cloud in a Bottle ---"
+    systemctl stop openhost
+    OPENHOST_ROUTER_CONFIG=/home/host/.openhost/local_compute_space/config.toml \
+        /usr/local/bin/openhost_system_agent update migrate
     systemctl enable openhost
-    systemctl restart openhost
+    systemctl start openhost
 fi
 
 echo ""

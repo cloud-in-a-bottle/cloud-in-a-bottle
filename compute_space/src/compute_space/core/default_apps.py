@@ -29,6 +29,7 @@ from compute_space.core.apps import clone_and_read_manifest
 from compute_space.core.apps import insert_and_deploy
 from compute_space.core.apps import move_clone_to_app_checkout_dir
 from compute_space.core.apps import validate_manifest
+from compute_space.core.checkout_operations import checkout_operation
 from compute_space.core.logging import logger
 from compute_space.core.manifest import MANIFEST_FILENAMES
 from compute_space.core.manifest import AppManifest
@@ -185,6 +186,13 @@ def _finalize_install(
 ) -> tuple[str, str | None]:
     """Common tail after either a copytree or a remote clone has produced
     a parsed manifest in ``clone_dir``."""
+    with checkout_operation():
+        return _insert_default_app(manifest, clone_dir, tmp_parent, config, db, repo_url=repo_url)
+
+
+def _insert_default_app(
+    manifest: AppManifest, clone_dir: str, tmp_parent: str, config: Config, db: sqlite3.Connection, *, repo_url: str
+) -> tuple[str, str | None]:
     if db.execute("SELECT 1 FROM apps WHERE name = ?", (manifest.name,)).fetchone():
         shutil.rmtree(tmp_parent, ignore_errors=True)
         return "skipped", None
@@ -205,6 +213,7 @@ def _finalize_install(
             repo_url=repo_url,
         )
     except Exception as exc:
+        db.rollback()
         return "failed", f"insert_and_deploy: {exc}"
     return "ok", None
 

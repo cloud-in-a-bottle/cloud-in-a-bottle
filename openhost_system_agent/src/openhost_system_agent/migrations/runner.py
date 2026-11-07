@@ -8,6 +8,8 @@ from collections.abc import Sequence
 from loguru import logger
 
 from openhost_system_agent.migrations.base import SystemMigration
+from openhost_system_agent.migrations.helpers import configure_migration_data_dir
+from openhost_system_agent.migrations.helpers import require_router_stopped
 from openhost_system_agent.migrations.migration_log import MIGRATIONS_PATH
 from openhost_system_agent.migrations.migration_log import MigrationLogEntry
 from openhost_system_agent.migrations.migration_log import append_entry
@@ -45,10 +47,14 @@ def apply_system_migrations(
             f"version {highest}. Upgrade the code before running migrations."
         )
 
+    if current < highest:
+        configure_migration_data_dir()
+
     applied: list[int] = []
     for migration in registry:
         if migration.version <= current:
             continue
+        require_router_stopped()
         source = current
         t0 = time.perf_counter()
         try:

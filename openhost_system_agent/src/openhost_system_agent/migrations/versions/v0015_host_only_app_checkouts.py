@@ -1,64 +1,14 @@
 import os
-import pwd
 import re
 import sqlite3
-import subprocess
 from contextlib import closing
 from pathlib import Path
 
 from openhost_system_agent.migrations.base import SystemMigration
+from openhost_system_agent.migrations.helpers import stop_app_containers
 
 _DEFAULT_DATA_DIR = "/home/host/.openhost/local_compute_space/persistent_data/openhost"
-_PODMAN = "/home/host/openhost/.pixi/envs/default/bin/podman"
 _APP_NAME = re.compile(r"[a-z0-9](?:[a-z0-9-]*[a-z0-9])?")
-
-
-def _require_router_stopped() -> None:
-    state = subprocess.run(
-        ["systemctl", "show", "--property=ActiveState", "--value", "openhost.service"],
-        check=True,
-        capture_output=True,
-        text=True,
-        timeout=15,
-    ).stdout.strip()
-    if state not in ("inactive", "failed"):
-        raise RuntimeError(
-            "Stop openhost.service before migrating app checkouts; update apply does this automatically."
-        )
-
-
-def _stop_containers(container_ids: list[str], *, current_user: bool = False) -> None:
-    if current_user:
-        command = ["podman"]
-    else:
-        host = pwd.getpwnam("host")
-        command = [
-            "runuser",
-            "-u",
-            "host",
-            "--",
-            "env",
-            f"XDG_RUNTIME_DIR=/run/user/{host.pw_uid}",
-            f"DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/{host.pw_uid}/bus",
-            f"PATH={Path(_PODMAN).parent}:/usr/local/bin:/usr/bin:/bin",
-            _PODMAN,
-        ]
-    # Include containers started before the router could persist their IDs.
-    managed = subprocess.run(
-        [*command, "ps", "--all", "--filter", "name=^openhost-", "--format", "{{.ID}}"],
-        check=True,
-        capture_output=True,
-        text=True,
-        timeout=30,
-    ).stdout.split()
-    to_stop = list(dict.fromkeys([*container_ids, *managed]))
-    if not to_stop:
-        return
-    subprocess.run(
-        [*command, "stop", "--ignore", "--time", "10", "--", *to_stop],
-        check=True,
-        timeout=120,
-    )
 
 
 def _move_checkout(source: Path, destination: Path) -> None:
@@ -87,12 +37,8 @@ def _move_checkout(source: Path, destination: Path) -> None:
                 os.close(fd)
 
 
-def migrate(db_path: Path, temp_root: Path, *, before_router_start: bool = False) -> None:
-    """Converge managed checkout paths before the router can start app operations.
-
-    The system agent runs this with the service stopped. Router initialization also
-    calls it as the router user, before serving requests, for non-agent code updates.
-    """
+def migrate(db_path: Path, temp_root: Path) -> None:
+    """Move managed checkouts with the router stopped."""
     if not db_path.exists():
         return
     with closing(sqlite3.connect(db_path, timeout=30)) as db:
@@ -110,16 +56,11 @@ def migrate(db_path: Path, temp_root: Path, *, before_router_start: bool = False
         if not pending:
             return
 
-        if not before_router_start:
-            _require_router_stopped()
         # Stop peers too: cross-app data access can retain open checkout handles.
         # Startup recovery restarts apps whose stored status requires them to run.
         container_ids = [row[0] for row in db.execute("SELECT container_id FROM apps WHERE container_id IS NOT NULL")]
         ids = [container_id for container_id in container_ids if container_id]
-        if before_router_start:
-            _stop_containers(ids, current_user=True)
-        else:
-            _stop_containers(ids)
+        stop_app_containers(ids)
 
         checkout_root = temp_root / "app_checkouts"
         if checkout_root.is_symlink():

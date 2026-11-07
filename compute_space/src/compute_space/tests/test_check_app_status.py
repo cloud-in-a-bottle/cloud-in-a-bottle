@@ -19,7 +19,6 @@ import compute_space.core.startup as startup
 from compute_space.core.app_id import new_app_id
 from compute_space.core.containers import BUILD_CACHE_CORRUPT_MARKER
 from compute_space.db.connection import init_db
-from compute_space.web import start as router_start
 from openhost_system_agent.migrations.versions import v0015_host_only_app_checkouts as checkout_migration
 
 from .conftest import _make_test_config
@@ -157,8 +156,7 @@ def test_checkout_migration_retry_recovers_after_router_restart(tmp_path: Path, 
         repo_path=str(source),
         created_at="2019-12-31 23:59:59",
     )
-    monkeypatch.setattr(checkout_migration, "_require_router_stopped", lambda: None)
-    monkeypatch.setattr(checkout_migration, "_stop_containers", lambda _: None)
+    monkeypatch.setattr(checkout_migration, "stop_app_containers", lambda _: None)
     with monkeypatch.context() as interrupted:
 
         def fail_sync(_fd: int) -> None:
@@ -177,41 +175,6 @@ def test_checkout_migration_retry_recovers_after_router_restart(tmp_path: Path, 
     assert done.wait(5)
     assert app_id in restarted
     assert _error_message(cfg, app_id) is None
-
-
-@pytest.mark.parametrize("collision", [False, True])
-def test_router_bootstrap_converges_checkouts_before_app_operations(
-    tmp_path: Path, monkeypatch: Any, collision: bool
-) -> None:
-    cfg = _make_test_config(tmp_path, port=20230)
-    monkeypatch.setenv("OPENHOST_DATA_DIR", str(cfg.openhost_data_path))
-    init_db(cfg.db_path)
-    root = Path(cfg.temporary_data_dir)
-    source = root / "app_temp_data/notes/repo"
-    destination = root / "app_checkouts/notes"
-    source.mkdir(parents=True)
-    (source / "source.txt").write_text("source")
-    app_id = _seed_app(
-        cfg, name="notes", status="running", port=20231, container_id="container", repo_path=str(source)
-    )
-    stopped = []
-    monkeypatch.setattr(checkout_migration, "_stop_containers", lambda ids, **kwargs: stopped.append((ids, kwargs)))
-    monkeypatch.setattr(router_start, "load_keys", lambda _: None)
-    monkeypatch.setattr(router_start, "setup_file_logging", lambda _: None)
-    if collision:
-        destination.mkdir(parents=True)
-        with pytest.raises(RuntimeError, match="Cannot move"):
-            router_start._bootstrap(cfg)
-        assert source.is_dir()
-    else:
-        router_start._bootstrap(cfg)
-        assert not source.exists()
-        assert (destination / "source.txt").read_text() == "source"
-        with sqlite3.connect(cfg.db_path) as db:
-            assert db.execute("SELECT repo_path FROM apps WHERE app_id = ?", (app_id,)).fetchone()[0] == str(
-                destination
-            )
-    assert stopped == [(["container"], {"current_user": True})]
 
 
 def test_building_app_with_dead_container_is_restarted(tmp_path: Path, monkeypatch: Any) -> None:
