@@ -17,8 +17,11 @@ RUN useradd -m -s /bin/bash -G sudo host && \
 
 # Install an older pixi to mirror a pre-migration host (reads the v6 lockfile,
 # predates v7); the pixi-version migration self-updates it to the pinned prod version.
-COPY scripts/install_pixi.sh scripts/download_verified.sh /tmp/pixi-installer/
-RUN su - host -c "bash /tmp/pixi-installer/install_pixi.sh v0.69.0"
+RUN su - host -c 'for attempt in 1 2 3; do \
+    timeout -k 5s 120s bash -o pipefail -c \
+        "curl -fsSL https://pixi.sh/install.sh | PIXI_VERSION=v0.69.0 PIXI_NO_PATH_UPDATE=1 bash" && exit 0; \
+    if [ "$attempt" -lt 3 ]; then sleep 10; fi; \
+    done; exit 1'
 
 # Copy the repo in
 COPY --chown=host:host . /home/host/openhost
