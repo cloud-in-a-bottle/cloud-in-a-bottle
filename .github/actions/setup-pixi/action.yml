@@ -1,0 +1,37 @@
+name: Set up pinned Pixi
+description: Cache verified Pixi archives and retry transient release downloads.
+inputs:
+  pixi-version:
+    description: Pinned version supported by scripts/install_pixi.sh.
+    default: v0.70.2
+  environments:
+    description: Space-separated Pixi environments to install.
+    default: dev
+runs:
+  using: composite
+  steps:
+    - name: Restore Pixi archive
+      id: archive
+      uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
+      with:
+        path: ~/.cache/openhost/pixi
+        key: pixi-archive-${{ runner.os }}-${{ runner.arch }}-${{ inputs.pixi-version }}-${{ hashFiles('scripts/install_pixi.sh', 'scripts/download_verified.sh') }}
+    - name: Install verified Pixi
+      shell: bash
+      env:
+        PIXI_VERSION: ${{ inputs.pixi-version }}
+      run: |
+        PIXI_BIN_DIR="$HOME/.pixi/bin" PIXI_CACHE_DIR="$HOME/.cache/openhost/pixi" \
+          bash "$GITHUB_ACTION_PATH/../../../scripts/install_pixi.sh" "$PIXI_VERSION"
+        echo "$HOME/.pixi/bin" >> "$GITHUB_PATH"
+    - name: Save verified Pixi archive
+      if: steps.archive.outputs.cache-hit != 'true'
+      uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5
+      with:
+        path: ~/.cache/openhost/pixi
+        key: ${{ steps.archive.outputs.cache-primary-key }}
+    # Omitting pixi-version/pixi-bin-path makes setup-pixi use the verified binary
+    # on PATH rather than downloading it again. Retain its environment caching.
+    - uses: prefix-dev/setup-pixi@ad1da6449d9e506fd127fd67ab2d054a769f6a94 # v0.11.2
+      with:
+        environments: ${{ inputs.environments }}

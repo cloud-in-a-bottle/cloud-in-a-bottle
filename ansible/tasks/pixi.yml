@@ -1,10 +1,28 @@
 ---
 # Install pixi and caddy, and let caddy bind privileged ports.
 
-- name: Install pixi
-  shell: curl -fsSL https://pixi.sh/install.sh | PIXI_VERSION=v0.70.2 bash
+- name: Create Pixi installer directory
+  file:
+    path: /home/host/.cache/openhost
+    state: directory
+    mode: "0755"
+
+- name: Copy Pixi download helpers
+  copy:
+    src: "{{ playbook_dir }}/../scripts/{{ item }}"
+    dest: "/home/host/.cache/openhost/{{ item }}"
+    mode: "0755"
+  loop:
+    - install_pixi.sh
+    - download_verified.sh
+
+- name: Install pinned Pixi
+  command: bash /home/host/.cache/openhost/install_pixi.sh v0.70.2
   args:
     creates: /home/host/.pixi/bin/pixi
+  environment:
+    PIXI_BIN_DIR: /home/host/.pixi/bin
+    PIXI_CACHE_DIR: /home/host/.cache/openhost/pixi
 
 - name: Add pixi to PATH in .bashrc
   lineinfile:
