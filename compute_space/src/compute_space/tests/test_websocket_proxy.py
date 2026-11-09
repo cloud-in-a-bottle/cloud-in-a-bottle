@@ -2,10 +2,13 @@ import asyncio
 from typing import Any
 from typing import cast
 
+import pytest
 from litestar import WebSocket
 from litestar.datastructures import Headers
 from websockets.asyncio.server import ServerConnection
 from websockets.asyncio.server import serve
+from websockets.http11 import Request
+from websockets.http11 import Response
 
 from compute_space.core.updates import initialize_shutdown_event
 from compute_space.web.helpers.proxy import proxy_websocket_request
@@ -118,5 +121,39 @@ def test_client_close_code_reaches_backend() -> None:
             # The proxy can return before the backend handler observes the close.
             await asyncio.wait_for(recorded.wait(), timeout=5)
             assert backend_saw == [4001]
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("status", [300, 301, 302, 303, 307, 308])
+@pytest.mark.parametrize("same_backend", [False, True])
+def test_handshake_redirects_close_without_a_second_request(status: int, same_backend: bool) -> None:
+    async def run() -> None:
+        _init_shutdown_event()
+        requests: list[str] = []
+
+        async def handler(ws: ServerConnection) -> None:
+            await ws.close()
+
+        def target_request(ws: ServerConnection, request: Request) -> None:
+            requests.append("target")
+
+        async with serve(handler, "127.0.0.1", 0, process_request=target_request) as target:
+            target_port = target.sockets[0].getsockname()[1]
+
+            def redirect(ws: ServerConnection, request: Request) -> Response:
+                requests.append(request.path)
+                response = ws.respond(status, "Use another endpoint")
+                response.headers["Location"] = "/other" if same_backend else f"ws://127.0.0.1:{target_port}/other"
+                return response
+
+            async with serve(handler, "127.0.0.1", 0, process_request=redirect) as server:
+                client = FakeClientWebSocket()
+                await proxy_websocket_request(
+                    cast(WebSocket[Any, Any, Any], client), server.sockets[0].getsockname()[1]
+                )
+                assert requests == ["/ws"]
+                assert not client.accepted
+                assert client.closed == (1011, "")
 
     asyncio.run(run())
