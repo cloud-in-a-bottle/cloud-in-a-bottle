@@ -108,6 +108,16 @@ def test_an_app_can_call_a_builtin_over_the_normal_service_path(client: Any) -> 
     assert response.status_code == 200
 
 
+@pytest.mark.parametrize("method, path", [("GET", "whoami"), ("POST", "needs-permission")])
+def test_service_responses_use_api_content_headers(client: Any, method: str, path: str) -> None:
+    response = client.request(method, f"/api/services/v2/call/example/{path}")
+    assert response.status_code in (200, 403)
+    assert response.headers["content-security-policy"] == "sandbox; default-src 'none'"
+    assert response.headers["content-disposition"] == "attachment"
+    assert response.headers["x-content-type-options"] == "nosniff"
+    assert response.json()
+
+
 def test_the_builtin_sees_the_caller_the_same_way_an_app_provider_would(client: Any) -> None:
     headers = client.get("/api/services/v2/call/example/whoami").json()
     assert headers["x-openhost-consumer-id"] == CONSUMER_APP_ID
