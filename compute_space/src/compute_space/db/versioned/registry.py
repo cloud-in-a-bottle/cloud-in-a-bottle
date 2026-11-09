@@ -25,6 +25,7 @@ from compute_space.db.versioned.migrations.v0015_drop_domains_mdns import Migrat
 from compute_space.db.versioned.migrations.v0016_auto_update_off_for_existing import (
     Migration0016AutoUpdateOffForExisting,
 )
+from compute_space.db.versioned.migrations.v0017_auto_update_local_time import Migration0017AutoUpdateLocalTime
 
 # Numbered migrations in apply order. Versions MUST start at 2 and be
 # contiguous. v0 (legacy) and v1 (baseline produced by the existing
@@ -45,4 +46,5 @@ REGISTRY: list[Migration] = [
     Migration0014DropAppsInstalledBy(),
     Migration0015DropDomainsMdns(),
     Migration0016AutoUpdateOffForExisting(),
+    Migration0017AutoUpdateLocalTime(),
 ]

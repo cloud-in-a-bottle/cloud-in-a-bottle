@@ -102,14 +102,21 @@ async def test_reports_a_platform_update_being_started(cfg: Config) -> None:
 def test_reports_the_auto_update_time(client: TestClient[Litestar], cfg: Config) -> None:
     _configure_token(cfg)
     with closing(get_db()) as db:
-        write_auto_update_config(db, AutoUpdateConfig(enabled=True, time_utc=time(9, 30)))
+        write_auto_update_config(db, AutoUpdateConfig(enabled=True, time=time(9, 30), timezone="UTC"))
     assert _get_status(client).json()["auto_update_time_utc"] == "09:30:00"
+
+
+def test_reports_the_auto_update_time_in_utc(client: TestClient[Litestar], cfg: Config) -> None:
+    _configure_token(cfg)
+    with closing(get_db()) as db:
+        write_auto_update_config(db, AutoUpdateConfig(enabled=True, time=time(9, 30), timezone="Asia/Kolkata"))
+    assert _get_status(client).json()["auto_update_time_utc"] == "04:00:00"
 
 
 def test_no_auto_update_time_when_auto_updates_are_off(client: TestClient[Litestar], cfg: Config) -> None:
     _configure_token(cfg)
     with closing(get_db()) as db:
-        write_auto_update_config(db, AutoUpdateConfig(enabled=False, time_utc=time(9, 30)))
+        write_auto_update_config(db, AutoUpdateConfig(enabled=False, time=time(9, 30), timezone="UTC"))
     assert _get_status(client).json()["auto_update_time_utc"] is None
 
 
