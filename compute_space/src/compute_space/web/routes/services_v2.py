@@ -245,6 +245,9 @@ async def service_call(
     if response.status_code == 403:
         response = _inject_grant_url_if_global(response, resolved.service_url, consumer_app_id, db, request)
 
+    response.headers["Content-Security-Policy"] = "sandbox; default-src 'none'"
+    response.headers["Content-Disposition"] = "attachment"
+    response.headers["X-Content-Type-Options"] = "nosniff"
     _add_cors_response_headers(response, request)
     return response
 
