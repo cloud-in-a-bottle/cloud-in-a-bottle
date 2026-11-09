@@ -326,7 +326,7 @@ def test_add_app_pins_default_branch_at_install(cfg: Any, tmp_path: Path) -> Non
     with (
         mock.patch.object(apps_routes, "clone_with_github_fallback", side_effect=fake_clone),
         mock.patch.object(apps_routes, "validate_manifest", return_value=None),
-        mock.patch.object(apps_routes, "move_clone_to_app_temp_dir", return_value=str(clone)),
+        mock.patch.object(apps_routes, "move_clone_to_app_checkout_dir", return_value=str(clone)),
         mock.patch.object(apps_routes, "insert_and_deploy", side_effect=fake_insert_and_deploy),
         TestClient(app=make_test_app(api_apps_routes)) as client,
     ):
@@ -366,7 +366,7 @@ def test_add_app_non_git_clone_does_not_pin_or_error(cfg: Any, tmp_path: Path) -
     with (
         mock.patch.object(apps_routes, "clone_with_github_fallback", side_effect=fake_clone),
         mock.patch.object(apps_routes, "validate_manifest", return_value=None),
-        mock.patch.object(apps_routes, "move_clone_to_app_temp_dir", return_value=str(clone)),
+        mock.patch.object(apps_routes, "move_clone_to_app_checkout_dir", return_value=str(clone)),
         mock.patch.object(apps_routes, "insert_and_deploy", side_effect=fake_insert_and_deploy),
         TestClient(app=make_test_app(api_apps_routes)) as client,
     ):
