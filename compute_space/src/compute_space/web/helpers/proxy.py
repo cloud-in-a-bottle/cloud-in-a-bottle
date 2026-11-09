@@ -14,7 +14,6 @@ from typing import Any
 from typing import cast
 
 import httpx
-import websockets
 from litestar import Request
 from litestar import WebSocket
 from litestar.datastructures import Headers
@@ -24,6 +23,7 @@ from litestar.response.streaming import ASGIStreamingResponse
 from litestar.types import Scope
 from litestar.types.asgi_types import WebSocketDisconnectEvent
 from litestar.types.asgi_types import WebSocketReceiveEvent
+from websockets.asyncio.client import connect
 from websockets.exceptions import ConnectionClosed
 from websockets.exceptions import WebSocketException
 from websockets.typing import Subprotocol
@@ -292,6 +292,11 @@ _WS_REQUEST_EXCLUDED_HEADERS = frozenset(
 )
 
 
+class _BackendWebSocket(connect):
+    def process_redirect(self, exc: Exception) -> Exception:
+        return exc
+
+
 async def proxy_websocket_request(
     connection: WebSocket[Any, Any, Any],
     target_port: int,
@@ -317,7 +322,7 @@ async def proxy_websocket_request(
     )
 
     try:
-        async with websockets.connect(
+        async with _BackendWebSocket(
             target_url,
             additional_headers=new_request_headers,
             # `max_size=None` lifts the default 1 MiB incoming-message cap: the proxy shouldn't impose its own size policy.
