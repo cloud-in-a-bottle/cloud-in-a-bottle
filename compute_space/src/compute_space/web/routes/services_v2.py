@@ -197,8 +197,9 @@ def _service_call_common(
         provider = resolve_provider(service_url, version_spec, db, provider_app_id=provider_app_id)
     except ProviderUnavailable as e:
         raise ServiceUnavailableException(detail=str(e), extra={"code": "service_not_available"}) from e
-    target_path = quote(provider.endpoint.rstrip("/") + "/" + rest.lstrip("/"), safe="/%")
-    if not is_request_path_within(target_path.encode("ascii"), [provider.endpoint]):
+    endpoint = "/" + provider.endpoint.strip("/")
+    target_path = quote(endpoint.rstrip("/") + "/" + rest.lstrip("/"), safe="/%")
+    if not is_request_path_within(target_path.encode("ascii"), [endpoint]):
         raise ValidationException(detail="Invalid service path")
     return ServiceRequest(
         service_url=service_url,

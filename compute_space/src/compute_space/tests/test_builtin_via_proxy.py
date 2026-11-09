@@ -170,9 +170,10 @@ def test_service_calls_require_ordinary_endpoint_paths(client, monkeypatch, rest
         assert client.get(path).status_code == 400
 
 
-def test_service_path_and_query_reach_the_provider(client, monkeypatch) -> None:
+@pytest.mark.parametrize("endpoint", ["service", "/service", "/service/"])
+def test_service_path_and_query_reach_the_provider(client, monkeypatch, endpoint: str) -> None:
     with get_db() as db:
-        _add_provider(db, SERVICE_URL, "provider", "1.0.0", "/service/")
+        _add_provider(db, SERVICE_URL, "provider", "1.0.0", endpoint)
     requests = []
 
     def provider(request: httpx.Request) -> httpx.Response:
