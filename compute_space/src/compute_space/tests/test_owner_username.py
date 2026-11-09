@@ -16,7 +16,9 @@ Covers the load-bearing pieces of the OPENHOST_OWNER_USERNAME feature:
 
 from __future__ import annotations
 
+import asyncio
 import sqlite3
+import threading
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -484,6 +486,43 @@ def test_login_creates_session_resolving_to_persisted_username(cfg: Any, login_c
     resp = login_client.post("/login", data={"password": "loginpass1"}, follow_redirects=False)
     assert resp.status_code in (200, 302), resp.text
     assert _session_username_after(cfg.db_path) == "alice"
+
+
+def test_login_password_check_leaves_the_router_loop_available(cfg, login_client, monkeypatch) -> None:
+    _seed_user(cfg.db_path)
+    started, released = threading.Event(), threading.Event()
+
+    def check_password(*_) -> bool:
+        started.set()
+        assert released.wait(3), "Router event loop could not run during password checking"
+        return False
+
+    async def release_from_router_loop() -> None:
+        while not started.is_set():
+            await asyncio.sleep(0.01)
+        released.set()
+
+    monkeypatch.setattr(bcrypt, "checkpw", check_password)
+    task = login_client.blocking_portal.start_task_soon(release_from_router_loop)
+    response = login_client.post("/login", data={"password": "incorrect"})
+    task.result(timeout=5)
+    assert response.status_code == 200
+    assert "Invalid password" in response.text
+
+
+def test_login_rechecks_password_before_creating_session(cfg, login_client, monkeypatch) -> None:
+    _seed_user(cfg.db_path)
+
+    def change_password_during_check(*_) -> bool:
+        with sqlite3.connect(cfg.db_path) as db:
+            db.execute("UPDATE users SET password_hash = 'new-hash'")
+        return True
+
+    monkeypatch.setattr(bcrypt, "checkpw", change_password_during_check)
+    response = login_client.post("/login", data={"password": "secretpass1"})
+    assert response.status_code == 200
+    assert "Invalid password" in response.text
+    assert _session_count(cfg.db_path) == 0
 
 
 # ---------------------------------------------------------------------------
