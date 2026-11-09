@@ -121,19 +121,25 @@ def test_service_responses_use_api_content_headers(client: Any, method: str, pat
 
 
 @pytest.mark.parametrize("disposition", ["inline", "attachment"])
-def test_service_downloads_keep_their_filename(client, monkeypatch, disposition: str) -> None:
+@pytest.mark.parametrize("copies", [1, 3, 5])
+def test_service_downloads_keep_their_filename(client, monkeypatch, disposition: str, copies: int) -> None:
     response = ASGIResponse(
         body=b"report",
-        headers={
-            "Content-Disposition": f'{disposition}; filename="report.csv"',
-            "Content-Security-Policy": "default-src * 'unsafe-inline'",
-        },
+        headers=[
+            ("Content-Disposition", f'{disposition}; filename="report.csv"'),
+            ("Content-Security-Policy", "default-src * 'unsafe-inline'"),
+            ("X-Content-Type-Options", "nosniff"),
+        ]
+        * copies
+        + [("X-Provider-Result", "ok")],
     )
     monkeypatch.setattr("compute_space.web.routes.services_v2.proxy_http_request", AsyncMock(return_value=response))
     result = client.get("/api/services/v2/call/example/report")
     assert result.content == b"report"
     assert result.headers["content-disposition"] == 'attachment; filename="report.csv"'
     assert result.headers["content-security-policy"] == "sandbox; default-src 'none'"
+    assert result.headers["x-provider-result"] == "ok"
+    assert result.headers.get_list("x-content-type-options") == ["nosniff"]
 
 
 def test_the_builtin_sees_the_caller_the_same_way_an_app_provider_would(client: Any) -> None:
