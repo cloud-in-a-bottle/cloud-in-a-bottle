@@ -23,6 +23,7 @@ import sqlite3
 from collections.abc import Iterable
 from typing import Any
 from urllib.parse import quote
+from urllib.parse import unquote
 
 import attr
 from litestar import HttpMethod
@@ -197,7 +198,10 @@ def _service_call_common(
         provider = resolve_provider(service_url, version_spec, db, provider_app_id=provider_app_id)
     except ProviderUnavailable as e:
         raise ServiceUnavailableException(detail=str(e), extra={"code": "service_not_available"}) from e
-    endpoint = "/" + provider.endpoint.strip("/")
+    try:
+        endpoint = unquote("/" + provider.endpoint.strip("/"), errors="strict")
+    except UnicodeDecodeError as e:
+        raise ValidationException(detail="Invalid service endpoint") from e
     target_path = quote(endpoint.rstrip("/") + "/" + rest.lstrip("/"), safe="/%")
     if not is_request_path_within(target_path.encode("ascii"), [endpoint]):
         raise ValidationException(detail="Invalid service path")
