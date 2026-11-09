@@ -11,6 +11,7 @@ import hashlib
 import sqlite3
 from pathlib import Path
 from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
 from litestar import Litestar
@@ -19,6 +20,7 @@ from litestar import Response
 from litestar import get
 from litestar import post
 from litestar.di import Provide
+from litestar.response.base import ASGIResponse
 from litestar.testing import TestClient
 
 from compute_space.config import provide_config
@@ -116,6 +118,22 @@ def test_service_responses_use_api_content_headers(client: Any, method: str, pat
     assert response.headers["content-disposition"] == "attachment"
     assert response.headers["x-content-type-options"] == "nosniff"
     assert response.json()
+
+
+@pytest.mark.parametrize("disposition", ["inline", "attachment"])
+def test_service_downloads_keep_their_filename(client, monkeypatch, disposition: str) -> None:
+    response = ASGIResponse(
+        body=b"report",
+        headers={
+            "Content-Disposition": f'{disposition}; filename="report.csv"',
+            "Content-Security-Policy": "default-src * 'unsafe-inline'",
+        },
+    )
+    monkeypatch.setattr("compute_space.web.routes.services_v2.proxy_http_request", AsyncMock(return_value=response))
+    result = client.get("/api/services/v2/call/example/report")
+    assert result.content == b"report"
+    assert result.headers["content-disposition"] == 'attachment; filename="report.csv"'
+    assert result.headers["content-security-policy"] == "sandbox; default-src 'none'"
 
 
 def test_the_builtin_sees_the_caller_the_same_way_an_app_provider_would(client: Any) -> None:
