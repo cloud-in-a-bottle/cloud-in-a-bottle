@@ -1,5 +1,6 @@
 import json
 import sqlite3
+from urllib.parse import urlsplit
 
 from litestar import Router
 from litestar import get
@@ -9,7 +10,28 @@ from litestar.exceptions import ValidationException
 from litestar.response import Template
 
 from compute_space.core.auth.permissions_v2 import get_granted_permissions_v2
+from compute_space.core.domains import Domain
 from compute_space.web.auth.auth import require_owner_auth
+
+
+def _approval_return_url(url: str | None, db: sqlite3.Connection) -> str | None:
+    if not url or url.startswith("//") or "\\" in url or any(ord(c) <= 32 or ord(c) == 127 for c in url):
+        return None
+    try:
+        parsed = urlsplit(url)
+        if not parsed.scheme and not parsed.netloc:
+            return url
+        if (
+            parsed.scheme in ("http", "https")
+            and parsed.hostname
+            and not parsed.username
+            and not parsed.password
+            and Domain.match(db, parsed.hostname) is not None
+        ):
+            return url
+    except ValueError:
+        pass
+    return None
 
 
 @get(
@@ -46,7 +68,7 @@ async def approve_permissions_v2(
             "grant": grant_parsed,
             "grant_json": grant,
             "already_granted": already_granted,
-            "redirect_url": return_to,
+            "redirect_url": _approval_return_url(return_to, db),
         },
     )
 
