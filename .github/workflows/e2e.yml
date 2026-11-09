@@ -113,7 +113,7 @@ jobs:
           chmod +x tests/e2e-setup.sh
           tests/e2e-setup.sh
 
-      - uses: prefix-dev/setup-pixi@ad1da6449d9e506fd127fd67ab2d054a769f6a94 # v0.11.2
+      - uses: ./.github/actions/setup-pixi
         with:
           pixi-version: v0.70.2
           environments: dev
