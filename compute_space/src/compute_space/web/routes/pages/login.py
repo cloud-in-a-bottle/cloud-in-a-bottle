@@ -1,5 +1,5 @@
+import asyncio
 import sqlite3
-from typing import Annotated
 from typing import Any
 from urllib.parse import urlparse
 
@@ -9,9 +9,7 @@ from litestar import Router
 from litestar import get
 from litestar import post
 from litestar.di import NamedDependency
-from litestar.enums import RequestEncodingType
 from litestar.exceptions import NotAuthorizedException
-from litestar.params import Body
 from litestar.response import Redirect
 from litestar.response import Template
 
@@ -56,18 +54,18 @@ async def login_get(
         return Template(template_name="login.html", context={"next": next_param})
 
 
-@post("/login", status_code=200, sync_to_thread=True)
-def login_post(
+@post("/login", status_code=200)
+async def login_post(
     request: Request[Any, Any, Any],
     db: NamedDependency[sqlite3.Connection],
-    data: Annotated[dict[str, str], Body(media_type=RequestEncodingType.URL_ENCODED)],
 ) -> Response[Any]:
-    password = data.get("password")
-    next_url = data.get("next", "")
-    if password is None or not (session_token := create_password_session(password, db)):
+    form = await request.form()
+    password = form.get("password")
+    next_url = form.get("next", "")
+    if not isinstance(password, str) or not (
+        session_token := await asyncio.to_thread(create_password_session, password)
+    ):
         return Template(template_name="login.html", context={"error": "Invalid password", "next": next_url})
-
-    db.commit()
 
     dest = _validated_next(next_url, db) or "/"
     response = Redirect(path=dest)

@@ -478,12 +478,16 @@ def test_setup_get_explains_username_format_and_validates_client_side(
 # ---------------------------------------------------------------------------
 
 
-def test_login_creates_session_resolving_to_persisted_username(cfg: Any, login_client: TestClient[Litestar]) -> None:
+@pytest.mark.parametrize("multipart", [False, True])
+def test_login_creates_session_resolving_to_persisted_username(
+    cfg: Any, login_client: TestClient[Litestar], multipart: bool
+) -> None:
     """After login, the session row must resolve to the username that's
     actually in the DB — not a stale literal from the old single-owner code."""
     _seed_user(cfg.db_path, "alice", password="loginpass1")
 
-    resp = login_client.post("/login", data={"password": "loginpass1"}, follow_redirects=False)
+    body = {"files": {"password": (None, "loginpass1")}} if multipart else {"data": {"password": "loginpass1"}}
+    resp = login_client.post("/login", **body, follow_redirects=False)
     assert resp.status_code in (200, 302), resp.text
     assert _session_username_after(cfg.db_path) == "alice"
 
