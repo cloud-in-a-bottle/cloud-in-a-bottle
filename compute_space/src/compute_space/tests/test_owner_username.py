@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import sqlite3
 from collections.abc import Iterator
+from http.cookies import SimpleCookie
 from pathlib import Path
 from typing import Any
 from unittest import mock
@@ -157,6 +158,7 @@ def _make_settings_app() -> Litestar:
     under the real ``require_owner_auth`` guard."""
     return Litestar(
         route_handlers=[api_settings_routes],
+        middleware=[stash_zone_middleware],
         dependencies={
             "config": Provide(provide_config, sync_to_thread=False),
             "db": Provide(provide_db),
@@ -484,6 +486,42 @@ def test_login_creates_session_resolving_to_persisted_username(cfg: Any, login_c
     resp = login_client.post("/login", data={"password": "loginpass1"}, follow_redirects=False)
     assert resp.status_code in (200, 302), resp.text
     assert _session_username_after(cfg.db_path) == "alice"
+
+
+@pytest.mark.parametrize("current_password, status", [("secretpass1", 200), ("incorrect", 403)])
+def test_password_change_renews_sessions(
+    cfg: Any, settings_client: TestClient[Litestar], current_password: str, status: int
+) -> None:
+    user_id = _seed_user(cfg.db_path)
+    old_tokens = [_create_session_for(cfg.db_path, user_id) for _ in range(2)]
+    headers = {"Cookie": f"{SESSION_COOKIE_NAME}={old_tokens[0]}"}
+    response = settings_client.post(
+        "/api/settings/change_password",
+        headers=headers,
+        json={
+            "current_password": current_password,
+            "new_password": "newpassword1",
+            "confirm_password": "newpassword1",
+        },
+    )
+    assert response.status_code == status
+    for token in old_tokens:
+        result = settings_client.get(
+            "/api/settings/owner_username", headers={"Cookie": f"{SESSION_COOKIE_NAME}={token}"}
+        )
+        assert result.status_code == (401 if status == 200 else 200)
+    if status == 200:
+        cookie = SimpleCookie(response.headers["set-cookie"])[SESSION_COOKIE_NAME]
+        assert cookie.value not in old_tokens
+        assert cookie["domain"] == "testzone.local"
+        result = settings_client.get(
+            "/api/settings/owner_username", headers={"Cookie": f"{SESSION_COOKIE_NAME}={cookie.value}"}
+        )
+        assert result.status_code == 200
+        assert _session_count(cfg.db_path) == 1
+    else:
+        assert "set-cookie" not in response.headers
+        assert _session_count(cfg.db_path) == 2
 
 
 # ---------------------------------------------------------------------------
