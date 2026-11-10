@@ -202,7 +202,7 @@ def _service_call_common(
         endpoint = unquote("/" + provider.endpoint.strip("/"), errors="strict")
     except UnicodeDecodeError as e:
         raise ValidationException(detail="Invalid service endpoint") from e
-    target_path = quote(endpoint.rstrip("/") + "/" + rest.lstrip("/"), safe="/%")
+    target_path = quote(endpoint.rstrip("/"), safe="/") + "/" + quote(rest.lstrip("/"), safe="/%")
     if not is_request_path_within(target_path.encode("ascii"), [endpoint]):
         raise ValidationException(detail="Invalid service path")
     return ServiceRequest(

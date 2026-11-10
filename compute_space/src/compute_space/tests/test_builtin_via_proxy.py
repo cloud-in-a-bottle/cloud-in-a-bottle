@@ -170,8 +170,18 @@ def test_service_calls_require_ordinary_endpoint_paths(client, monkeypatch, rest
         assert client.get(path).status_code == 400
 
 
-@pytest.mark.parametrize("endpoint", ["service", "/service", "/service/", "/service//", "/serv%69ce"])
-def test_service_path_and_query_reach_the_provider(client, monkeypatch, endpoint: str) -> None:
+@pytest.mark.parametrize(
+    "endpoint, expected_prefix",
+    [
+        ("service", "/service"),
+        ("/service", "/service"),
+        ("/service/", "/service"),
+        ("/service//", "/service"),
+        ("/serv%69ce", "/service"),
+        ("/100%25", "/100%25"),
+    ],
+)
+def test_service_path_and_query_reach_the_provider(client, monkeypatch, endpoint: str, expected_prefix: str) -> None:
     with get_db() as db:
         _add_provider(db, SERVICE_URL, "provider", "1.0.0", endpoint)
     requests = []
@@ -186,6 +196,6 @@ def test_service_path_and_query_reach_the_provider(client, monkeypatch, endpoint
     )
     response = client.get("/api/services/v2/call/example/items/caf%C3%A9?q=a%2Fb")
     assert response.status_code == 200
-    assert requests[0].url.path == "/service/items/café"
+    assert requests[0].url.raw_path == expected_prefix.encode() + b"/items/caf%C3%A9?q=a%2Fb"
     assert requests[0].url.query == b"q=a%2Fb"
     assert requests[0].headers["x-openhost-consumer-id"] == CONSUMER_APP_ID
