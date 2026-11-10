@@ -19,6 +19,7 @@ def _approval_return_url(url: str | None, db: sqlite3.Connection) -> str | None:
         return None
     try:
         parsed = urlsplit(url)
+        _ = parsed.port  # Access validates the port's syntax and range.
         if not parsed.scheme and not parsed.netloc:
             return url
         if (

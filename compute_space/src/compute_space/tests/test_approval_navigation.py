@@ -23,6 +23,9 @@ from compute_space.web.routes.pages.permissions_v2 import approve_permissions_v2
         "/\\elsewhere.test/",
         "https://example.test@elsewhere.test/",
         "https://[invalid/",
+        "https://app.example.test:bad/done",
+        "https://app.example.test:65536/done",
+        "https://app.example.test:-1/done",
     ],
 )
 async def test_approval_omits_non_navigation_return_urls(db: sqlite3.Connection, monkeypatch, return_to: str) -> None:
