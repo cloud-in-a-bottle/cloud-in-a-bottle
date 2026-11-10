@@ -66,6 +66,8 @@ _ALLOWED_MAGIC_VARS = frozenset(
         "ansible_shell_type",
         "ansible_shell_executable",
         # runtime / play introspection
+        # Block rescue context, independent of gathered fact injection.
+        "ansible_failed_result",
         "ansible_check_mode",
         "ansible_diff_mode",
         "ansible_verbosity",

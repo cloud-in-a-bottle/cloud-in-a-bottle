@@ -192,11 +192,12 @@ def _add_sizes(into: dict[str, int], sizes: dict[str, int]) -> None:
 
 
 def per_app_usage(config: Config) -> dict[str, int]:
-    """Return ``{app_name: bytes_used}`` across each app's app_data and app_temp_data dirs."""
+    """Return ``{app_name: bytes_used}`` across each app's local data and checkout directories."""
     _ensure_storage_roots(config)
     seen: set[tuple[int, int]] = set()
     result = _subdir_sizes(os.path.join(config.persistent_data_dir, "app_data"), seen)
     _add_sizes(result, _subdir_sizes(os.path.join(config.temporary_data_dir, "app_temp_data"), seen))
+    _add_sizes(result, _subdir_sizes(os.path.join(config.temporary_data_dir, "app_checkouts"), seen))
     return result
 
 

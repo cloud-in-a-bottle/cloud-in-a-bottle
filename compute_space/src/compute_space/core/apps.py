@@ -17,6 +17,7 @@ import httpx
 import compute_space.core.storage as storage
 from compute_space.config import Config
 from compute_space.core import archive_backend
+from compute_space.core.app_checkouts import app_checkout_dir
 from compute_space.core.app_id import is_valid_app_name
 from compute_space.core.app_id import new_app_id
 from compute_space.core.auth.auth import DEFAULT_OWNER_USERNAME
@@ -57,6 +58,7 @@ from compute_space.core.ports import allocate_port
 from compute_space.core.ports import resolve_port_mappings
 from compute_space.core.service_interface.services import register_services_provided_by_app
 from compute_space.db import get_db
+from openhost_system_agent.git_commands import git_command
 
 _MAX_PUBLIC_PATH_CHECKS = 8
 # Whitelist of printable ASCII path characters. Control characters are excluded, as is
@@ -229,18 +231,18 @@ async def clone_and_read_manifest(
     return None, None, error
 
 
-def move_clone_to_app_temp_dir(clone_dir: str, app_name: str, config: Config) -> str:
-    """Move a clone tempdir into the persistent <temp>/app_temp_data/<name>/repo
-    location and return the destination path.  Used by both /api/add_app
+def move_clone_to_app_checkout_dir(clone_dir: str, app_name: str, config: Config) -> str:
+    """Move a clone tempdir into the host-only <temp>/app_checkouts/<name>
+    location and return the destination path. Used by both /api/add_app
     and the default-apps deploy hook so the on-disk layout matches.
 
     Also rmtree's the now-empty mkdtemp parent of clone_dir to avoid
     leaking ``openhost-clone-*`` shells.
     """
-    final_dir = os.path.join(config.temporary_data_dir, "app_temp_data", app_name, "repo")
+    final_dir = app_checkout_dir(config.temporary_data_dir, app_name)
     if os.path.exists(final_dir):
         rmtree_with_sudo_fallback(final_dir, raise_on_failure=True)
-    os.makedirs(os.path.dirname(final_dir), exist_ok=True)
+    os.makedirs(os.path.dirname(final_dir), mode=0o700, exist_ok=True)
     tmp_parent = os.path.dirname(clone_dir)
     shutil.move(clone_dir, final_dir)
     shutil.rmtree(tmp_parent, ignore_errors=True)
@@ -792,7 +794,7 @@ def _remote_default_branch(repo_path: str, log: Callable[[str], None]) -> tuple[
     """
     log("$ git ls-remote --symref origin HEAD")
     result = subprocess.run(
-        ["git", "ls-remote", "--symref", "origin", "HEAD"],
+        git_command("ls-remote", "--symref", "origin", "HEAD"),
         cwd=repo_path,
         capture_output=True,
         text=True,
@@ -842,7 +844,7 @@ def git_pull(
             return False, str(e)
         try:
             subprocess.run(
-                ["git", "remote", "set-url", "origin", base_url],
+                git_command("remote", "set-url", "origin", base_url),
                 cwd=repo_path,
                 capture_output=True,
                 timeout=10,
@@ -855,7 +857,7 @@ def git_pull(
     if github_token:
         try:
             result = subprocess.run(
-                ["git", "remote", "get-url", "origin"],
+                git_command("remote", "get-url", "origin"),
                 cwd=repo_path,
                 capture_output=True,
                 text=True,
@@ -865,7 +867,7 @@ def git_pull(
             authed_url = inject_github_token_in_url(original_url, github_token)
             if authed_url != original_url:
                 subprocess.run(
-                    ["git", "remote", "set-url", "origin", authed_url],
+                    git_command("remote", "set-url", "origin", authed_url),
                     cwd=repo_path,
                     capture_output=True,
                     timeout=10,
@@ -888,7 +890,7 @@ def git_pull(
     def _restore_origin() -> None:
         if github_token and original_url:
             subprocess.run(
-                ["git", "remote", "set-url", "origin", original_url],
+                git_command("remote", "set-url", "origin", original_url),
                 cwd=repo_path,
                 capture_output=True,
                 timeout=10,
@@ -901,11 +903,11 @@ def git_pull(
         # .gitmodules paths resolve against it), so the token never lands in a
         # config file; auth rides only in the ephemeral insteadOf config.
         _restore_origin()
-        ok, err = _run(["git", "submodule", "sync", "--recursive"])
+        ok, err = _run(git_command("submodule", "sync", "--recursive"))
         if not ok:
             return False, err
         return _run(
-            ["git", *github_token_git_config(github_token), "submodule", "update", "--init", "--recursive"],
+            git_command(*github_token_git_config(github_token), "submodule", "update", "--init", "--recursive"),
             timeout=300,
         )
 
@@ -919,7 +921,7 @@ def git_pull(
                 return False, default_err
         if not ref:
             # Couldn't determine a default branch; pull the current one.
-            ok, err = _run(["git", "pull"])
+            ok, err = _run(git_command("pull"))
             if not ok:
                 return False, err
             return _update_submodules()
@@ -932,7 +934,7 @@ def git_pull(
         # old ``git pull`` behaviour). Decide whether to converge the two paths
         # and/or add ``git clean -fd`` here so stale untracked files don't leak
         # into the Docker build context.
-        ok, err = _run(["git", "fetch", "origin", ref])
+        ok, err = _run(git_command("fetch", "origin", ref))
         if not ok:
             return False, err
         # A branch ref materialises as the remote-tracking ``origin/<ref>``;
@@ -942,7 +944,7 @@ def git_pull(
         # of the just-fetched FETCH_HEAD.
         is_branch = (
             subprocess.run(
-                ["git", "rev-parse", "--verify", "--quiet", f"refs/remotes/origin/{ref}"],
+                git_command("rev-parse", "--verify", "--quiet", f"refs/remotes/origin/{ref}"),
                 cwd=repo_path,
                 capture_output=True,
                 timeout=10,
@@ -950,9 +952,9 @@ def git_pull(
             == 0
         )
         if is_branch:
-            ok, err = _run(["git", "checkout", "-fB", ref, f"origin/{ref}"])
+            ok, err = _run(git_command("checkout", "-fB", ref, f"origin/{ref}"))
         else:
-            ok, err = _run(["git", "checkout", "-f", "FETCH_HEAD"])
+            ok, err = _run(git_command("checkout", "-f", "FETCH_HEAD"))
         if not ok:
             return False, err
         if tracks_default_branch and is_branch:
@@ -967,7 +969,7 @@ def git_pull(
     finally:
         if github_token and original_url:
             subprocess.run(
-                ["git", "remote", "set-url", "origin", original_url],
+                git_command("remote", "set-url", "origin", original_url),
                 cwd=repo_path,
                 capture_output=True,
                 timeout=10,

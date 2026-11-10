@@ -41,7 +41,6 @@ test-harness = [
 ]
 
 [project.scripts]
-openhost = "self_host_cli.main:main"
 bottle = "compute_space_cli.main:main"
 openhost_system_agent = "openhost_system_agent.cli:main"
 
@@ -55,13 +54,12 @@ build-backend = "hatchling.build"
 exclude-newer = "7 days"
 
 [tool.hatch.build.targets.wheel]
-packages = ["routerd_cli/src/self_host_cli", "compute_space/src/compute_space", "compute_space_cli/src/compute_space_cli", "openhost_system_agent/src/openhost_system_agent", "openhost_app_test_harness/src/openhost_test_harness"]
+packages = ["compute_space/src/compute_space", "compute_space_cli/src/compute_space_cli", "openhost_system_agent/src/openhost_system_agent", "openhost_app_test_harness/src/openhost_test_harness"]
 
 [tool.pytest.ini_options]
 testpaths = [
     "compute_space/src/compute_space/tests",
     "compute_space_cli/src/compute_space_cli/tests",
-    "routerd_cli/src/self_host_cli/tests",
     "apps/oauth/src/oauth/tests",
     "openhost_system_agent/src/openhost_system_agent/tests",
     "openhost_app_test_harness/src/openhost_test_harness/tests",
@@ -108,7 +106,6 @@ known-first-party = [
     "compute_space_cli",
     "openhost_system_agent",
     "openhost_test_harness",
-    "self_host_cli",
     "oauth",
 ]
 
