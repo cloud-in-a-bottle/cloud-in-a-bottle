@@ -959,9 +959,12 @@ def git_pull(
             return False, err
         if tracks_default_branch and is_branch:
             # Keep refs/remotes/origin/HEAD in step with the remote's default, as a fresh clone would have it.
-            ok, err = _run(["git", "remote", "set-head", "origin", ref])
-            if not ok:
-                return False, err
+            try:
+                ok, err = _run(git_command("remote", "set-head", "origin", ref))
+                if not ok:
+                    logger.warning("{}: could not update origin/HEAD: {}", app_name, err)
+            except (OSError, subprocess.TimeoutExpired) as e:
+                logger.warning("{}: could not update origin/HEAD: {}", app_name, e)
         return _update_submodules()
     except Exception as e:
         _log(f"git update failed: {e}")

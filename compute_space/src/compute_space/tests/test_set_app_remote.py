@@ -371,6 +371,45 @@ def test_git_pull_follows_a_renamed_default_branch(tmp_path: Path) -> None:
     assert (clone / "f.txt").read_text() == "v2"
 
 
+@pytest.mark.parametrize("failure", ["exit_code", "timeout"])
+def test_git_pull_succeeds_when_updating_origin_head_fails(tmp_path: Path, failure: str) -> None:
+    origin = tmp_path / "origin"
+    origin.mkdir()
+    _git(origin, "init", "-b", "master")
+    (origin / "f.txt").write_text("v1")
+    _git(origin, "add", ".")
+    _git(origin, "commit", "-m", "v1")
+    clone = tmp_path / "clone"
+    _git(tmp_path, "clone", f"file://{origin}", str(clone))
+    _git(origin, "branch", "-m", "master", "main")
+    (origin / "f.txt").write_text("v2")
+    _git(origin, "commit", "-am", "v2")
+
+    real_run = subprocess.run
+
+    def fail_set_head(cmd: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        if cmd[-4:-1] == ["remote", "set-head", "origin"]:
+            if failure == "timeout":
+                raise subprocess.TimeoutExpired(cmd, 10)
+            return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="ref locked")
+        return real_run(cmd, **kwargs)
+
+    with (
+        mock.patch("compute_space.core.apps.subprocess.run", side_effect=fail_set_head),
+        mock.patch("compute_space.core.apps.logger.warning") as warning,
+    ):
+        ok, err = git_pull(str(clone), "myapp", repo_url=f"file://{origin}")
+
+    assert ok, err
+    assert warning.call_count == 1
+    assert (clone / "f.txt").read_text() == "v2"
+    head = real_run(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=clone, capture_output=True, text=True)
+    origin_head = real_run(
+        ["git", "symbolic-ref", "--short", "refs/remotes/origin/HEAD"], cwd=clone, capture_output=True, text=True
+    )
+    assert (head.stdout.strip(), origin_head.stdout.strip()) == ("main", "origin/master")
+
+
 def test_add_app_non_git_clone_does_not_pin_or_error(cfg: Any, tmp_path: Path) -> None:
     """A ``file://`` URL pointing at a plain directory is copied verbatim, so the
     landed clone has no ``.git``. Install must not try to read a branch from it
