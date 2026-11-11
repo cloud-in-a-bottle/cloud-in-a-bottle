@@ -123,11 +123,9 @@ def test_install_reserves_checkout_until_record_is_committed(tmp_path: Path, mon
     release = threading.Event()
     monkeypatch.setattr(routes, "stop_app_process", Mock())
 
-    async def pause_pin(*_args: object) -> None:
-        entered.set()
-        assert await asyncio.to_thread(release.wait, 5)
-
     def insert(manifest, repo_path, config, db, **kwargs):
+        entered.set()
+        assert release.wait(5)
         installed_id = new_app_id()
         db.execute(
             "INSERT INTO apps (app_id, name, version, repo_path, local_port, status) VALUES (?, 'target', '1', ?, 19501, 'stopped')",
@@ -136,7 +134,6 @@ def test_install_reserves_checkout_until_record_is_committed(tmp_path: Path, mon
         db.commit()
         return installed_id
 
-    monkeypatch.setattr(routes, "_pin_refless_to_landed_branch", pause_pin)
     monkeypatch.setattr(routes, "insert_and_deploy", insert)
 
     async def exercise() -> None:

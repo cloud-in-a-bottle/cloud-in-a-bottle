@@ -22,6 +22,7 @@
 {% macro remote_value() -%}
 <span class="info-value" id="remote-display">
   <code>{{ app.repo_url }}</code>
+  {% if default_branch %}<span class="muted">tracks the default branch (<code>{{ default_branch }}</code>)</span>{% endif %}
   {{ icon_button("pencil", "Edit git URL", onclick="editRemote()") }}
 </span>
 <span class="info-value" id="remote-edit" hidden>
@@ -29,8 +30,8 @@
          placeholder="https://github.com/owner/repo@branch">
   {{ button("Save & update", variant="primary", onclick="saveRemote()", id="save-remote-btn", disabled=true) }}
   {{ button("Cancel", onclick="cancelRemote()") }}
-  <p class="hint">Append <code>@branch</code> (or a tag/commit) to change the ref. Saving
-    re-points the upstream and pulls the latest code.</p>
+  <p class="hint">Without a ref the app tracks the repo's default branch. Append <code>@branch</code> (or a tag/commit)
+    to pin one. Saving re-points the upstream and pulls the latest code.</p>
   <span id="remote-error" class="field-error"></span>
 </span>
 {%- endmacro %}
