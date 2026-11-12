@@ -133,13 +133,9 @@ def side_effects(monkeypatch: pytest.MonkeyPatch) -> Iterator[dict[str, Any]]:
                 )
             db.commit()
 
-    async def no_pin(_url: str | None, _path: str) -> None:
-        return None
-
     monkeypatch.setattr(apps_mod, "git_pull", fake_pull)
     monkeypatch.setattr(apps_mod, "stop_app_process", fake_stop)
     monkeypatch.setattr(apps_mod, "reload_app_background", fake_reload)
-    monkeypatch.setattr(apps_mod, "pin_refless_to_landed_branch", no_pin)
     monkeypatch.setattr(archive_backend, "is_archive_dir_healthy", lambda _c, _db: True)
     yield state
 
@@ -161,6 +157,23 @@ async def test_update_without_review_is_applied(cfg: Config, tmp_path: Path, sid
     assert app.head() == app.v2
     assert side_effects["reloads"] == [app.app_id]
     assert _status(app) == "running"
+
+
+@pytest.mark.asyncio
+async def test_update_keeps_tracking_default_branch(cfg: Config, tmp_path: Path, side_effects: dict[str, Any]) -> None:
+    app = FakeApp(cfg, tmp_path, "refless")
+    repo_url = "https://github.com/x/refless"
+    with closing(get_db()) as db:
+        db.execute("UPDATE apps SET repo_url = ? WHERE app_id = ?", (repo_url, app.app_id))
+        db.commit()
+
+    result = await apps_mod.auto_update_app(app.app_id, cfg)
+
+    assert result.outcome == AppUpdateOutcome.UPDATED
+    with closing(get_db()) as db:
+        assert (
+            db.execute("SELECT repo_url FROM apps WHERE app_id = ?", (app.app_id,)).fetchone()["repo_url"] == repo_url
+        )
 
 
 @pytest.mark.asyncio
@@ -209,6 +222,26 @@ async def test_failed_pull_leaves_app_running(cfg: Config, tmp_path: Path, side_
     assert result.detail is not None and "could not resolve host" in result.detail
     assert app.head() == app.v1
     assert _status(app) == "running"
+
+
+@pytest.mark.asyncio
+async def test_failed_log_write_rolls_back_without_stopping_app(
+    cfg: Config, tmp_path: Path, side_effects: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app = FakeApp(cfg, tmp_path, "unwritable")
+
+    def fail_log(*_args: Any, **_kwargs: Any) -> None:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(apps_mod, "archive_old_log", fail_log)
+    result = await apps_mod.auto_update_app(app.app_id, cfg)
+
+    assert result.outcome == AppUpdateOutcome.FAILED
+    assert result.detail is not None and "disk full" in result.detail
+    assert app.head() == app.v1
+    assert _status(app) == "running"
+    assert side_effects["stops"] == 0
+    assert side_effects["reloads"] == []
 
 
 @pytest.mark.asyncio

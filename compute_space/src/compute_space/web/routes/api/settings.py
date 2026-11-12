@@ -29,6 +29,7 @@ from litestar.params import QueryParameter
 from litestar.response import Redirect
 
 from compute_space.config import Config
+from compute_space.core.auth.auth import create_session
 from compute_space.core.auth.auth import read_owner_username
 from compute_space.core.auth.auth import update_owner_username
 from compute_space.core.auth.auth import validate_owner_username
@@ -62,8 +63,10 @@ from compute_space.core.updates import trigger_restart
 from compute_space.core.util import not_blank
 from compute_space.web.auth.auth import require_owner_auth
 from compute_space.web.auth.auth import require_owner_auth_allowing_cross_site_navigation
+from compute_space.web.auth.cookies import build_session_cookie
 from compute_space.web.exceptions import BadGatewayException
 from compute_space.web.exceptions import ConflictException
+from compute_space.web.helpers.zone import zone_for_request
 from openhost_system_agent.protocol import RemoteInfo
 
 # --- request / response types -----------------------------------------------
@@ -462,8 +465,8 @@ class ChangePasswordResponse:
     raises=[ValidationException, NotFoundException, PermissionDeniedException],
 )
 async def change_password(
-    data: ChangePasswordRequest, db: NamedDependency[sqlite3.Connection]
-) -> ChangePasswordResponse:
+    data: ChangePasswordRequest, db: NamedDependency[sqlite3.Connection], request: Request[Any, Any, Any]
+) -> Response[ChangePasswordResponse]:
     current = data.current_password.strip()
     new_pw = data.new_password.strip()
     confirm = data.confirm_password.strip()
@@ -489,9 +492,13 @@ async def change_password(
         "UPDATE users SET password_hash = ? WHERE user_id = ?",
         (new_hash, row["user_id"]),
     )
+    db.execute("DELETE FROM sessions WHERE user_id = ?", (row["user_id"],))
+    session_token = create_session(row["user_id"], db)
     db.commit()
 
-    return ChangePasswordResponse(ok=True)
+    response = Response(ChangePasswordResponse(ok=True))
+    response.set_cookie(build_session_cookie(session_token, zone_for_request(request)))
+    return response
 
 
 @get("/api/settings/owner_username", guards=[require_owner_auth])

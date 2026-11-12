@@ -4,8 +4,10 @@ import os
 import re
 import shutil
 import sqlite3
+import subprocess
 from datetime import UTC
 from datetime import datetime
+from functools import partial
 from pathlib import Path
 from threading import Thread
 from typing import Annotated
@@ -34,6 +36,7 @@ from litestar.response import Redirect
 
 from compute_space.config import Config
 from compute_space.core import archive_backend
+from compute_space.core.app_checkouts import app_checkout_dir
 from compute_space.core.app_id import is_valid_app_id
 from compute_space.core.app_update_review import pending_update_review
 from compute_space.core.apps import RESERVED_PATHS
@@ -42,19 +45,20 @@ from compute_space.core.apps import app_log_path
 from compute_space.core.apps import clone_with_github_fallback
 from compute_space.core.apps import git_pull
 from compute_space.core.apps import insert_and_deploy
-from compute_space.core.apps import move_clone_to_app_temp_dir
-from compute_space.core.apps import pin_refless_to_landed_branch
+from compute_space.core.apps import move_clone_to_app_checkout_dir
 from compute_space.core.apps import reload_app_background
 from compute_space.core.apps import remove_app_background
 from compute_space.core.apps import start_app_process
 from compute_space.core.apps import validate_manifest
 from compute_space.core.auth.permissions_v2 import grant_permission_v2
+from compute_space.core.checkout_operations import run_checkout_operation
 from compute_space.core.containers import BUILD_CACHE_CORRUPT_MARKER
 from compute_space.core.containers import archive_old_log
 from compute_space.core.containers import get_docker_logs
 from compute_space.core.containers import log_timestamp
 from compute_space.core.containers import stop_app_process
 from compute_space.core.containers import stop_container
+from compute_space.core.data import rmtree_with_sudo_fallback
 from compute_space.core.diagnostics import AppDiagnostics
 from compute_space.core.diagnostics import collect_app_diagnostics
 from compute_space.core.domains import Domain
@@ -68,6 +72,7 @@ from compute_space.core.git_ops import parse_repo_url
 from compute_space.core.git_ops import reset_hard
 from compute_space.core.log_stream import stream_app_logs
 from compute_space.core.logging import logger
+from compute_space.core.manifest import AppManifest
 from compute_space.core.manifest import PermissionGrant
 from compute_space.core.manifest import all_manifest_permissions_v2
 from compute_space.core.manifest import parse_manifest
@@ -331,7 +336,6 @@ async def check_port(
 )
 async def api_add_app(
     data: AddAppRequest,
-    db: NamedDependency[sqlite3.Connection],
     config: NamedDependency[Config],
 ) -> Response[AddAppResponse]:
     """Install an app. Optionally takes a clone_dir from a prior clone_and_get_app_info call."""
@@ -363,6 +367,20 @@ async def api_add_app(
         except ValueError as e:
             raise ValidationException(detail=str(e)) from e
 
+    return await run_checkout_operation(
+        config.db_path, partial(_finish_app_install, data, config, manifest, clone_dir, repo_url, app_name)
+    )
+
+
+def _finish_app_install(
+    data: AddAppRequest,
+    config: Config,
+    manifest: AppManifest,
+    clone_dir: str,
+    repo_url: str,
+    app_name: str | None,
+    db: sqlite3.Connection,
+) -> Response[AddAppResponse]:
     if app_name is None:
         app_name = manifest.name
 
@@ -388,14 +406,7 @@ async def api_add_app(
                 )
             )
 
-    final_dir = move_clone_to_app_temp_dir(clone_dir, app_name, config)
-
-    # Pin a refless upstream to the concrete branch the fresh clone landed on
-    # (origin's default), so the stored URL and detail page show which branch
-    # the app tracks from the start — matching what a later Update & Reload records.
-    pinned = await pin_refless_to_landed_branch(repo_url, final_dir)
-    if pinned:
-        repo_url = pinned
+    final_dir = move_clone_to_app_checkout_dir(clone_dir, app_name, config)
 
     port_overrides: dict[str, int] | None = dict(data.port_overrides) if data.port_overrides else None
 
@@ -781,19 +792,6 @@ async def _reload_app_impl(
                     return Redirect(path=f"/app_detail/{app_name}")
                 return Response(content=OkResponse(ok=True), status_code=200, media_type=MediaType.JSON)
 
-            # The pull succeeded. If the upstream had no pinned ``@ref`` (the
-            # operator cleared it, or it was never set), git_pull resolved and
-            # checked out origin's default branch. Record that concrete branch
-            # back into repo_url so the app stays on it deterministically and
-            # the detail page shows which branch it tracks — rather than
-            # silently re-resolving (and following) a moving remote default on
-            # every future update.
-            pinned = await pin_refless_to_landed_branch(repo_url, app_row["repo_path"])
-            if pinned:
-                db.execute("UPDATE apps SET repo_url = ? WHERE app_id = ?", (pinned, app_id))
-                db.commit()
-                lf.write(f"Pinned upstream to {pinned}\n")
-
     # Gate: when an update pulls a manifest that differs from the running one
     # (any changed setting, or newly declared permissions), refuse the reload
     # until the owner approves (the install flow requires the same explicit
@@ -989,7 +987,7 @@ async def remove_app(
 
 
 def _rename_app_storage_dirs(config: Config, old_name: str, new_name: str, archive_dir: str) -> str | None:
-    """Rename per-app subdirs across the three storage tiers, with rollback on partial failure.
+    """Discard unowned checkout conflicts, then rename app storage with rollback of moved directories.
 
     ``archive_dir`` is the archive parent for the current backend — always
     the JuiceFS mountpoint now (absent only on a legacy 'disabled' zone) —
@@ -1007,6 +1005,11 @@ def _rename_app_storage_dirs(config: Config, old_name: str, new_name: str, archi
     for parent in rename_parents:
         if not os.path.isdir(parent):
             return f"Storage parent {parent!r} is not a directory; refusing to rename so per-app data isn't orphaned."
+    checkout_parent = os.path.dirname(app_checkout_dir(config.temporary_data_dir, old_name))
+    if os.path.islink(checkout_parent):
+        return f"Checkout parent {checkout_parent!r} is a symlink."
+    if os.path.isdir(checkout_parent):
+        rename_parents.append(checkout_parent)
     # The archive parent is the JuiceFS mountpoint, present whenever the mount
     # is live (both local and S3 backends).  Skip it cleanly only on a legacy
     # 'disabled' zone where the mountpoint never gets created.
@@ -1014,13 +1017,20 @@ def _rename_app_storage_dirs(config: Config, old_name: str, new_name: str, archi
         rename_parents.append(archive_dir)
     renamed: list[tuple[str, str]] = []
     try:
+        # The caller has checked that no installed app owns the new name.
+        new_checkout = app_checkout_dir(config.temporary_data_dir, new_name)
+        if os.path.lexists(new_checkout):
+            if os.path.islink(new_checkout) or not os.path.isdir(new_checkout):
+                os.unlink(new_checkout)
+            else:
+                rmtree_with_sudo_fallback(new_checkout, raise_on_failure=True)
         for parent in rename_parents:
             old_dir = os.path.join(parent, old_name)
             new_dir = os.path.join(parent, new_name)
             if os.path.exists(old_dir) and not os.path.exists(new_dir):
                 os.rename(old_dir, new_dir)
                 renamed.append((old_dir, new_dir))
-    except OSError as exc:
+    except (OSError, subprocess.SubprocessError) as exc:
         for old_dir, new_dir in reversed(renamed):
             try:
                 os.rename(new_dir, old_dir)
@@ -1050,10 +1060,15 @@ def _rename_app_storage_dirs(config: Config, old_name: str, new_name: str, archi
 async def rename_app(
     app_id: FromPath[str],
     data: RenameAppRequest,
-    db: NamedDependency[sqlite3.Connection],
     config: NamedDependency[Config],
 ) -> Response[RenameAppResponse]:
     """Rename an app's label and subdomain. The app_id (cross-table identity) stays the same."""
+    return await run_checkout_operation(config.db_path, partial(_rename_app, app_id, data, config))
+
+
+def _rename_app(
+    app_id: str, data: RenameAppRequest, config: Config, db: sqlite3.Connection
+) -> Response[RenameAppResponse]:
     new_name = data.name.strip()
 
     if not new_name:
@@ -1102,13 +1117,8 @@ async def rename_app(
     )
     db.commit()
 
-    # Off-loop because JuiceFS renames can take hundreds of ms.
-    rename_error = await asyncio.to_thread(
-        _rename_app_storage_dirs,
-        config,
-        old_name,
-        new_name,
-        archive_backend.effective_archive_dir(config, db),
+    rename_error = _rename_app_storage_dirs(
+        config, old_name, new_name, archive_backend.effective_archive_dir(config, db)
     )
     if rename_error is not None:
         rollback_db_error: str | None = None
@@ -1136,8 +1146,13 @@ async def rename_app(
     # permissions_v2, etc. — they all point at app_id which is stable.
     # Only the name label and any name-keyed paths need rewriting.
     db.execute(
-        "UPDATE apps SET name = ?, repo_path = REPLACE(repo_path, ?, ?) WHERE app_id = ?",
-        (new_name, f"/{old_name}/", f"/{new_name}/", app_id),
+        "UPDATE apps SET name = ?, repo_path = CASE WHEN repo_path = ? THEN ? ELSE repo_path END WHERE app_id = ?",
+        (
+            new_name,
+            app_checkout_dir(config.temporary_data_dir, old_name),
+            app_checkout_dir(config.temporary_data_dir, new_name),
+            app_id,
+        ),
     )
     db.execute(
         "UPDATE app_databases SET db_path = REPLACE(db_path, ?, ?) WHERE app_id = ?",

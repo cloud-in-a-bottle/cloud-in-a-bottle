@@ -9,6 +9,8 @@ import git
 
 from compute_space import OPENHOST_PROJECT_DIR
 from compute_space.core.util import async_wrap
+from openhost_system_agent.git_commands import HooklessRepo
+from openhost_system_agent.git_commands import git_command
 
 
 class CloneFailed(Exception):
@@ -89,7 +91,7 @@ def inject_github_token_in_url(url: str, token: str) -> str:
 
 async def run_git(args: list[str], timeout: int, cwd: str | None = None) -> subprocess.CompletedProcess[str]:
     return await asyncio.to_thread(
-        subprocess.run, ["git", *args], cwd=cwd, capture_output=True, text=True, timeout=timeout
+        subprocess.run, git_command(*args), cwd=cwd, capture_output=True, text=True, timeout=timeout
     )
 
 
@@ -189,13 +191,13 @@ def validate_repo(repo_path: Path) -> None:
         git.InvalidGitRepositoryError: if the path is not a git repository
         git.NoSuchPathError: if the path does not exist
     """
-    git.Repo(repo_path)
+    HooklessRepo(repo_path)
 
 
 @async_wrap
 def get_current_ref(repo_path: Path) -> str:
     """Return the current branch name, or the short commit hash if in detached HEAD state."""
-    repo = git.Repo(repo_path)
+    repo = HooklessRepo(repo_path)
     try:
         return repo.active_branch.name
     except TypeError:
@@ -205,7 +207,7 @@ def get_current_ref(repo_path: Path) -> str:
 @async_wrap
 def get_head_sha(repo_path: Path) -> str:
     """Return the full HEAD commit SHA."""
-    return git.Repo(repo_path).head.commit.hexsha
+    return HooklessRepo(repo_path).head.commit.hexsha
 
 
 @async_wrap
@@ -216,13 +218,13 @@ def reset_hard(repo_path: Path, sha: str) -> None:
     has not approved new permissions the pulled manifest declares), so the
     on-disk repo keeps matching the version the app is actually running.
     """
-    git.Repo(repo_path).git.reset("--hard", sha)
+    HooklessRepo(repo_path).git.reset("--hard", sha)
 
 
 @async_wrap
 def get_branch_name(repo_path: Path) -> str | None:
     """Return the current branch name, or None if HEAD is detached."""
-    repo = git.Repo(repo_path)
+    repo = HooklessRepo(repo_path)
     try:
         return repo.active_branch.name
     except TypeError:
@@ -249,7 +251,7 @@ def get_remote_url(repo_path: Path) -> str | None:
         git.NoSuchPathError: if the path does not exist
         LookupError: if the repository has no 'origin' remote
     """
-    repo = git.Repo(repo_path)
+    repo = HooklessRepo(repo_path)
     url = _get_remote(repo).url
     return _strip_credentials(url) if url else None
 
@@ -261,7 +263,7 @@ def is_dirty(repo_path: Path) -> bool:
         git.InvalidGitRepositoryError: if the path is not a git repository
         git.NoSuchPathError: if the path does not exist
     """
-    return git.Repo(repo_path).is_dirty(untracked_files=True)
+    return HooklessRepo(repo_path).is_dirty(untracked_files=True)
 
 
 @async_wrap
@@ -272,7 +274,7 @@ def fetch(repo_path: Path) -> None:
         git.NoSuchPathError: if the path does not exist
         LookupError: if the repository has no 'origin' remote
     """
-    repo = git.Repo(repo_path)
+    repo = HooklessRepo(repo_path)
     _get_remote(repo).fetch()
 
 
@@ -285,7 +287,7 @@ def count_commits_vs_remote(repo_path: Path) -> tuple[int, int]:
         git.NoSuchPathError: if the path does not exist
         LookupError: if the repository has no 'origin' remote or no tracking branch is set
     """
-    repo = git.Repo(repo_path)
+    repo = HooklessRepo(repo_path)
     try:
         branch = repo.active_branch
     except TypeError:
@@ -305,15 +307,15 @@ def count_commits_vs_remote(repo_path: Path) -> tuple[int, int]:
 def init_repo_if_nonexistent(repo_path: Path) -> None:
     """Initialise a git repo if one doesn't already exist."""
     try:
-        git.Repo(repo_path)
+        HooklessRepo(repo_path)
     except (git.InvalidGitRepositoryError, git.NoSuchPathError):
-        git.Repo.init(repo_path, initial_branch="main")
+        HooklessRepo.init(repo_path, initial_branch="main")
 
 
 @async_wrap
 def set_remote_url(repo_path: Path, url: str) -> None:
     """Set or create the 'origin' remote to the given URL."""
-    repo = git.Repo(repo_path)
+    repo = HooklessRepo(repo_path)
     try:
         with _get_remote(repo).config_writer as cw:
             cw.set("url", url)
@@ -324,7 +326,7 @@ def set_remote_url(repo_path: Path, url: str) -> None:
 @async_wrap
 def hard_checkout_ref(repo_path: Path, ref: str) -> None:
     """set local state to match origin/ref, checking out if a branch or detached head if a commit hash."""
-    repo = git.Repo(repo_path)
+    repo = HooklessRepo(repo_path)
     remote_ref = f"origin/{ref}"
     try:
         repo.refs[remote_ref]
@@ -375,7 +377,7 @@ def github_web_url_from_local_repo(repo_path: Path) -> str | None:
     all simply yield None instead of an error.
     """
     try:
-        repo = git.Repo(repo_path)
+        repo = HooklessRepo(repo_path)
     except (git.InvalidGitRepositoryError, git.NoSuchPathError):
         return None
     try:

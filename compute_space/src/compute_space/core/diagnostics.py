@@ -359,11 +359,7 @@ def _collect_dependencies() -> dict[str, str]:
 
 
 def _collect_container_runtime() -> ContainerRuntimeInfo:
-    """Probe podman for version + rootless status.
-
-    Mirrors the ``openhost doctor`` probe (parse ``podman info --format json``,
-    assert the rootless flag) so the two agree on what "healthy" looks like.
-    """
+    """Probe podman for version and rootless status."""
     if shutil.which("podman") is None:
         return ContainerRuntimeInfo(available=False, version=None, rootless=None, error="podman not found on PATH")
     try:

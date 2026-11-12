@@ -15,7 +15,6 @@ from compute_space.core.app_update_review import pending_update_review
 from compute_space.core.apps import app_container_log_path
 from compute_space.core.apps import app_log_path
 from compute_space.core.apps import git_pull
-from compute_space.core.apps import pin_refless_to_landed_branch
 from compute_space.core.apps import reload_app_background
 from compute_space.core.auto_update.app_config import AppAutoUpdateLastRun
 from compute_space.core.auto_update.app_config import AppUpdateOutcome
@@ -93,11 +92,6 @@ async def auto_update_app(app_id: str, config: Config) -> AppUpdateResult:
     if pull_error is not None:
         await reset_hard(Path(repo_path), pre_sha)
         return result(AppUpdateOutcome.FAILED, f"git pull failed: {pull_error}")
-    pinned = await pin_refless_to_landed_branch(repo_url, repo_path)
-    if pinned:
-        with closing(get_db()) as db:
-            db.execute("UPDATE apps SET repo_url = ? WHERE app_id = ?", (pinned, app_id))
-            db.commit()
     post_sha = await get_head_sha(Path(repo_path))
     if post_sha == pre_sha:
         return result(AppUpdateOutcome.UP_TO_DATE)
@@ -110,12 +104,16 @@ async def auto_update_app(app_id: str, config: Config) -> AppUpdateResult:
         return result(AppUpdateOutcome.NEEDS_APPROVAL, review.describe())
 
     log_file = app_log_path(name, config)
-    os.makedirs(os.path.dirname(log_file), exist_ok=True)
-    ts = log_timestamp(log_file)
-    archive_old_log(log_file, ts=ts)
-    archive_old_log(app_container_log_path(name, config), ts=ts)
-    with open(log_file, "a") as lf:
-        lf.write(f"automatic update {pre_sha[:8]} -> {post_sha[:8]}\n")
+    try:
+        os.makedirs(os.path.dirname(log_file), exist_ok=True)
+        ts = log_timestamp(log_file)
+        archive_old_log(log_file, ts=ts)
+        archive_old_log(app_container_log_path(name, config), ts=ts)
+        with open(log_file, "a") as lf:
+            lf.write(f"automatic update {pre_sha[:8]} -> {post_sha[:8]}\n")
+    except OSError as e:
+        await reset_hard(Path(repo_path), pre_sha)
+        return result(AppUpdateOutcome.FAILED, f"could not write update log: {e}")
 
     # Claim the reload as the manual path does, so a reload the owner starts meanwhile can't race this one.
     with closing(get_db()) as db:

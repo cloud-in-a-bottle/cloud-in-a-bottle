@@ -2,9 +2,15 @@
 # Install pixi and caddy, and let caddy bind privileged ports.
 
 - name: Install pixi
-  shell: curl -fsSL https://pixi.sh/install.sh | PIXI_VERSION=v0.70.2 bash
+  shell: >-
+    timeout -k 5s 120s bash -o pipefail -c
+    'curl -fsSL https://pixi.sh/install.sh | PIXI_VERSION=v0.70.2 PIXI_NO_PATH_UPDATE=1 bash'
   args:
     creates: /home/host/.pixi/bin/pixi
+  register: pixi_install
+  until: pixi_install is succeeded
+  retries: 2
+  delay: 10
 
 - name: Add pixi to PATH in .bashrc
   lineinfile:

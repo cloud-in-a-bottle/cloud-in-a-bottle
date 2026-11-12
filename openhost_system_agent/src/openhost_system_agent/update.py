@@ -18,6 +18,8 @@ from openhost_system_agent.detach import detach_apply
 from openhost_system_agent.detach import is_detached
 from openhost_system_agent.detach import stop_openhost
 from openhost_system_agent.detach import wait_for_apply
+from openhost_system_agent.git_commands import HooklessGit
+from openhost_system_agent.git_commands import HooklessRepo
 from openhost_system_agent.protocol import DiffCommit
 from openhost_system_agent.protocol import DiffResult
 from openhost_system_agent.protocol import FetchResult
@@ -36,7 +38,7 @@ def _ensure_repo_trusted() -> None:
     # The agent runs as root but the repo is owned by 'host'; tell git to trust
     # it so root operations don't fail with "detected dubious ownership".
     project = str(_PROJECT_DIR)
-    g = git.Git()
+    g = HooklessGit()
     try:
         existing = g.config("--global", "--get-all", "safe.directory").split("\n")
     except git.GitCommandError:
@@ -47,7 +49,7 @@ def _ensure_repo_trusted() -> None:
 
 def _repo() -> git.Repo:
     _ensure_repo_trusted()
-    return git.Repo(_PROJECT_DIR)
+    return HooklessRepo(_PROJECT_DIR)
 
 
 def _get_remote(repo: git.Repo) -> git.Remote:
