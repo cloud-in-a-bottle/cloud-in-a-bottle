@@ -343,6 +343,9 @@ async def proxy_websocket_request(
             # Ignore HTTP(S)_PROXY / ALL_PROXY: websockets doesn't bypass loopback by default, so an
             # environment proxy would otherwise see every app connection and its trusted headers.
             proxy=None,
+            # No proxy-originated pings: clients and apps can send their own heartbeats, and a lost
+            # client will trigger a disconnect message. We don't need to add our own heartbeats.
+            ping_interval=None,
             open_timeout=10,
             close_timeout=5,
             subprotocols=subprotocols,
