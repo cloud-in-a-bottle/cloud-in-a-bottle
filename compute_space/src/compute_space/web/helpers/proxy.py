@@ -292,7 +292,14 @@ _WS_REQUEST_EXCLUDED_HEADERS = frozenset(
 )
 
 
-class _BackendWebSocket(connect):
+class _NoRedirectWebsocketConnect(connect):
+    """``websockets.connect`` that refuses to follow handshake redirects.
+
+    We never need to follow a backend's redirect, and allowing it would let an app point our
+    connection at another app or host, forwarding headers (identity, grants) meant only for the
+    app we selected -- or other cross-origin shenanigans.  A redirect fails the handshake instead.
+    """
+
     def process_redirect(self, exc: Exception) -> Exception:
         return exc
 
@@ -322,7 +329,7 @@ async def proxy_websocket_request(
     )
 
     try:
-        async with _BackendWebSocket(
+        async with _NoRedirectWebsocketConnect(
             target_url,
             additional_headers=new_request_headers,
             # `max_size=None` lifts the default 1 MiB incoming-message cap: the proxy shouldn't impose its own size policy.
