@@ -195,7 +195,7 @@ jobs:
           # --generate-notes, then prepend our blurb to whatever it produced.
           gh release create "$TAG" \
             --repo "$GITHUB_REPOSITORY" \
-            --title "Cloud in a Bottle $TAG" \
+            --title "$TAG" \
             --generate-notes \
             --draft \
             "${prerelease[@]}" \
