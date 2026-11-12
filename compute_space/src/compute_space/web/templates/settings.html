@@ -133,7 +133,7 @@
 <section class="section">
   {% call section_head("Domains") %}{% endcall %}
   <div class="panel">
-    <p class="hint">Hostnames this instance answers on. The primary is used for canonical links and
+    <p class="desc">Hostnames this instance answers on. The primary is used for canonical links and
       app configuration. Add a
       secondary <strong>public</strong> domain (its DNS must be delegated to this instance — it then
       acquires a TLS certificate automatically) or a hostname served locally over plain HTTP, such
@@ -171,7 +171,7 @@
 <section class="section">
   {% call section_head("API tokens") %}{% endcall %}
   <div class="panel">
-    <p class="hint">Bearer tokens for programmatic access (e.g. AI agents). Each token grants
+    <p class="desc">Bearer tokens for programmatic access (e.g. AI agents). Each token grants
       owner-level access until it expires.</p>
 
     <div class="field-row field-row--add">
@@ -212,7 +212,7 @@
 <section class="section">
   {% call section_head("Archive backend") %}{% endcall %}
   <div class="panel">
-    <p class="hint">The archive data tier (<code>app_archive</code>) is used by apps that store large
+    <p class="desc">The archive data tier (<code>app_archive</code>) is used by apps that store large
       amounts of bulk data (e.g. file uploads, media). It is always available: by default it is backed
       by <strong>local disk</strong> on this instance. Configure an <strong>S3</strong> backend for
       durable, elastic object storage &mdash; any existing local archive data is migrated into the
@@ -226,7 +226,7 @@
 <section class="section">
   {% call section_head("Services") %}{% endcall %}
   <div class="panel">
-    <p class="hint">When more than one installed app provides the same service, choose which one is
+    <p class="desc">When more than one installed app provides the same service, choose which one is
       used by default. Consumer apps that don't pin a specific provider get the default; with no
       default set, Cloud in a Bottle's own implementation serves the service if it has one, and
       otherwise the app that has provided it the longest.</p>

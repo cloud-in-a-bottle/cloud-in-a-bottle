@@ -718,7 +718,7 @@ function renderArchiveBackend(state) {
 
   var experimentalNote = '';
   if (state.backend === 's3') {
-    experimentalNote = '<p class="hint"><strong class="error">Experimental:</strong> the S3 archive backend is best-effort durable. '
+    experimentalNote = '<p class="desc"><strong class="error">Experimental:</strong> the S3 archive backend is best-effort durable. '
       + 'Filename-to-S3-chunk mappings live in a SQLite metadata DB on this zone’s local disk; '
       + 'recovery after the local disk is wiped requires the latest meta dump in S3 plus a manual <code>juicefs load</code>.</p>';
   }
@@ -765,7 +765,7 @@ function showConfigureForm(state) {
   formEl.innerHTML = '<p><strong>Configure S3 archive storage.</strong> JuiceFS will format the bucket and mount it locally; this is a one-time operation.</p>'
     + migrateNote
     + '<p class="notice notice--warn"><strong>Experimental.</strong> Filename-to-S3-chunk mappings live in a SQLite metadata DB on this zone’s local disk, not in the bucket. If the local disk is wiped, the bucket bytes can be recovered only from JuiceFS\'s periodic meta dumps in S3 (replayed via <code>juicefs load</code>).</p>'
-    + '<p class="hint">By default, JuiceFS attempts an hourly metadata backup to <code>&lt;bucket&gt;/&lt;volume&gt;/meta/dump-*.json.gz</code>. Check Latest meta dump above to confirm one is available. Recovering the archive on a new instance also requires loading that metadata.</p>'
+    + '<p class="desc">By default, JuiceFS attempts an hourly metadata backup to <code>&lt;bucket&gt;/&lt;volume&gt;/meta/dump-*.json.gz</code>. Check Latest meta dump above to confirm one is available. Recovering the archive on a new instance also requires loading that metadata.</p>'
     + '<table class="form-table"><tbody>'
     + '<tr><th><label for="ab-bucket">S3 bucket</label></th><td><input id="ab-bucket" type="text" placeholder="my-openhost-archive"></td></tr>'
     + '<tr><th><label for="ab-region">Region</label></th><td><input id="ab-region" type="text" value="us-east-1"></td></tr>'
