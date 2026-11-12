@@ -1166,6 +1166,11 @@ def is_public_request_path(app: App, raw_path: bytes) -> bool:
     if "/" in app.public_paths:
         return True
 
+    return is_request_path_within(raw_path, app.public_paths)
+
+
+def is_request_path_within(raw_path: bytes, prefixes: list[str]) -> bool:
+    """Require every decoded form to stay within the given path prefixes."""
     # These shouldn't exist in a raw path:
     # # is only used client-side and shouldn't be sent unencoded.
     # the query arguments (?=..) should already be split off by the server so ? should be impossible here.
@@ -1182,7 +1187,8 @@ def is_public_request_path(app: App, raw_path: bytes) -> bool:
     # form to remain public and unambiguous, without rewriting the original URL (which may be signed).
     # Bound repeated decoding so deeply nested encodings cannot make authorization quadratic.
     for _ in range(_MAX_PUBLIC_PATH_CHECKS):
-        if not (_is_unambiguous_path(request_path) and is_public_path(app, request_path)):
+        matches = any(request_path == p or request_path.startswith(p.rstrip("/") + "/") for p in prefixes)
+        if not (_is_unambiguous_path(request_path) and matches):
             return False
         try:
             decoded = unquote(request_path, errors="strict")

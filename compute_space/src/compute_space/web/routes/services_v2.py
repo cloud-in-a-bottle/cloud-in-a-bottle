@@ -22,6 +22,8 @@ import re
 import sqlite3
 from collections.abc import Iterable
 from typing import Any
+from urllib.parse import quote
+from urllib.parse import unquote
 
 import attr
 from litestar import HttpMethod
@@ -38,11 +40,13 @@ from litestar.exceptions import NotAuthorizedException
 from litestar.exceptions import NotFoundException
 from litestar.exceptions import PermissionDeniedException
 from litestar.exceptions import ServiceUnavailableException
+from litestar.exceptions import ValidationException
 from litestar.openapi import ResponseSpec
 from litestar.params import FromPath
 from litestar.response import Response
 from litestar.response.base import ASGIResponse
 
+from compute_space.core.apps import is_request_path_within
 from compute_space.core.domains import Domain
 from compute_space.core.proxy_target import InProcess
 from compute_space.core.proxy_target import ProxyTarget
@@ -194,11 +198,18 @@ def _service_call_common(
         provider = resolve_provider(service_url, version_spec, db, provider_app_id=provider_app_id)
     except ProviderUnavailable as e:
         raise ServiceUnavailableException(detail=str(e), extra={"code": "service_not_available"}) from e
+    try:
+        endpoint = unquote("/" + provider.endpoint.strip("/"), errors="strict")
+    except UnicodeDecodeError as e:
+        raise ValidationException(detail="Invalid service endpoint") from e
+    target_path = quote(endpoint.rstrip("/"), safe="/") + "/" + quote(rest.lstrip("/"), safe="/%")
+    if not is_request_path_within(target_path.encode("ascii"), [endpoint]):
+        raise ValidationException(detail="Invalid service path")
     return ServiceRequest(
         service_url=service_url,
         target=provider.target,
         # `rest` is captured as "/sub/path" (leading slash); fold into the provider's endpoint.
-        target_path=provider.endpoint.rstrip("/") + "/" + rest.lstrip("/"),
+        target_path=target_path,
         extra_headers=app_consumer_headers(consumer_app_id, service_url, provider.app_id, db),
     )
 
@@ -213,6 +224,7 @@ def _service_call_common(
         ClientException,
         NotAuthorizedException,
         PermissionDeniedException,
+        ValidationException,
     ],
     responses={
         502: ResponseSpec(
@@ -269,6 +281,10 @@ async def service_call_ws(
 
     try:
         resolved = _service_call_common(consumer_app_id, shortname, rest, db, provider_app_id=provider_override)
+    except ValidationException as e:
+        await socket.accept()
+        await socket.close(code=4400, reason=e.detail)
+        return
     except NotFoundException as e:
         await socket.accept()
         await socket.close(code=4404, reason=e.detail)
