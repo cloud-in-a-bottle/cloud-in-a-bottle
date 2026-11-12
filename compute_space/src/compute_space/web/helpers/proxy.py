@@ -332,8 +332,17 @@ async def proxy_websocket_request(
         async with _NoRedirectWebsocketConnect(
             target_url,
             additional_headers=new_request_headers,
-            # `max_size=None` lifts the default 1 MiB incoming-message cap: the proxy shouldn't impose its own size policy.
-            max_size=None,
+            # These settings apply only to the router<->app loopback hop; the browser<->router leg is
+            # negotiated separately by hypercorn and can still use compression.
+            # Raise the default 1 MiB backend->client message cap well above any realistic app message,
+            # but keep a bound so an app can't make the router buffer unlimited data.
+            max_size=100 * 2**20,
+            # No permessage-deflate: it buys nothing over loopback, and lets a few KB from an app
+            # inflate to `max_size` in router memory (a decompression bomb).
+            compression=None,
+            # Ignore HTTP(S)_PROXY / ALL_PROXY: websockets doesn't bypass loopback by default, so an
+            # environment proxy would otherwise see every app connection and its trusted headers.
+            proxy=None,
             open_timeout=10,
             close_timeout=5,
             subprotocols=subprotocols,
