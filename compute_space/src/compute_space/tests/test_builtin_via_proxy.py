@@ -11,6 +11,7 @@ import hashlib
 import sqlite3
 from pathlib import Path
 from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
 from litestar import Litestar
@@ -19,6 +20,7 @@ from litestar import Response
 from litestar import get
 from litestar import post
 from litestar.di import Provide
+from litestar.response.base import ASGIResponse
 from litestar.testing import TestClient
 
 from compute_space.config import provide_config
@@ -106,6 +108,38 @@ def test_an_app_can_call_a_builtin_over_the_normal_service_path(client: Any) -> 
     # unreachable for apps no matter that it was registered.
     response = client.get("/api/services/v2/call/example/whoami")
     assert response.status_code == 200
+
+
+@pytest.mark.parametrize("method, path", [("GET", "whoami"), ("POST", "needs-permission")])
+def test_service_responses_use_api_content_headers(client: Any, method: str, path: str) -> None:
+    response = client.request(method, f"/api/services/v2/call/example/{path}")
+    assert response.status_code in (200, 403)
+    assert response.headers["content-security-policy"] == "sandbox; default-src 'none'"
+    assert response.headers["content-disposition"] == "attachment"
+    assert response.headers["x-content-type-options"] == "nosniff"
+    assert response.json()
+
+
+@pytest.mark.parametrize("disposition", ["inline", "attachment"])
+@pytest.mark.parametrize("copies", [1, 3, 5])
+def test_service_downloads_keep_their_filename(client, monkeypatch, disposition: str, copies: int) -> None:
+    response = ASGIResponse(
+        body=b"report",
+        headers=[
+            ("Content-Disposition", f'{disposition}; filename="report.csv"'),
+            ("Content-Security-Policy", "default-src * 'unsafe-inline'"),
+            ("X-Content-Type-Options", "nosniff"),
+        ]
+        * copies
+        + [("X-Provider-Result", "ok")],
+    )
+    monkeypatch.setattr("compute_space.web.routes.services_v2.proxy_http_request", AsyncMock(return_value=response))
+    result = client.get("/api/services/v2/call/example/report")
+    assert result.content == b"report"
+    assert result.headers["content-disposition"] == 'attachment; filename="report.csv"'
+    assert result.headers["content-security-policy"] == "sandbox; default-src 'none'"
+    assert result.headers["x-provider-result"] == "ok"
+    assert result.headers.get_list("x-content-type-options") == ["nosniff"]
 
 
 def test_the_builtin_sees_the_caller_the_same_way_an_app_provider_would(client: Any) -> None:
