@@ -264,8 +264,13 @@ async def set_auto_update(data: AutoUpdateRequest, db: NamedDependency[sqlite3.C
         time_utc = time.fromisoformat(data.time_utc)
     except ValueError as e:
         raise ValidationException(detail="Time must be HH:MM", extra={"code": "invalid_time"}) from e
+    previous = read_auto_update_config(db)
     write_auto_update_config(db, AutoUpdateConfig(enabled=data.enabled, time_utc=time_utc))
     reschedule_auto_update(time_utc=time_utc)
+    # App updates share the time, so a new one moves them too. Turning instance updates on or off shouldn't postpone
+    # a pending catch-up of missed app updates.
+    if time_utc != previous.time_utc:
+        reschedule_app_auto_update(time_utc=time_utc)
     return _auto_update_response(db)
 
 

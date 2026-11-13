@@ -111,15 +111,15 @@ def _first_update_due(target: time, last_run_at: datetime | None, now: datetime)
 
 
 def reschedule_auto_update(time_utc: time) -> None:
-    """Call after the schedule changes, so a newly chosen time that already passed today waits for tomorrow rather
-    than counting as missed."""
-    global _update_due, _app_update_due
-    _update_due = _app_update_due = _next_datetime_at(time_utc, datetime.now(UTC))
+    """Call after the instance update's schedule changes, so a newly chosen time that already passed today waits for
+    tomorrow rather than counting as missed. Leaves the app updates' due time alone; reschedule that separately."""
+    global _update_due
+    _update_due = _next_datetime_at(time_utc, datetime.now(UTC))
 
 
 def reschedule_app_auto_update(time_utc: time) -> None:
-    """Call when app updates are turned on, so a time that already passed today waits for tomorrow. Leaves the instance
-    update's due time alone, so a pending catch-up of a missed instance update still runs."""
+    """Call when app updates are turned on or the time changes, so a time that already passed today waits for tomorrow.
+    Leaves the instance update's due time alone, so a pending catch-up of a missed instance update still runs."""
     global _app_update_due
     _app_update_due = _next_datetime_at(time_utc, datetime.now(UTC))
 

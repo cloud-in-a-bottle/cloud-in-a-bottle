@@ -512,3 +512,23 @@ def test_only_turning_app_updates_on_reschedules(
     assert (runner_mod._app_update_due > datetime.now(UTC)) is reschedules
     if not reschedules:
         assert runner_mod._app_update_due == missed
+
+
+@pytest.mark.parametrize(("new_time", "reschedules"), [("04:00", False), ("05:30", True)])
+def test_only_a_new_time_reschedules_app_updates(
+    cfg: Config, monkeypatch: pytest.MonkeyPatch, new_time: str, reschedules: bool
+) -> None:
+    # App updates missed a window; saving the instance setting without changing the time shouldn't postpone them.
+    missed = datetime.now(UTC) - timedelta(hours=1)
+    monkeypatch.setattr(runner_mod, "_update_due", missed)
+    monkeypatch.setattr(runner_mod, "_app_update_due", missed)
+    with closing(get_db()) as db:
+        write_auto_update_config(db, AutoUpdateConfig(enabled=False, time_utc=time(4, 0)))
+        write_app_auto_update_enabled(db, True)
+    with TestClient(app=make_test_app(api_settings_routes)) as client:
+        client.cookies.update(auth_cookie(cfg))
+        body = {"enabled": True, "time_utc": new_time}
+        assert client.post("/api/settings/auto-update", json=body).status_code == 200
+    assert runner_mod._update_due is not None and runner_mod._update_due > datetime.now(UTC)
+    assert runner_mod._app_update_due is not None
+    assert (runner_mod._app_update_due > datetime.now(UTC)) is reschedules
