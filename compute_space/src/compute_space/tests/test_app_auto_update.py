@@ -253,6 +253,32 @@ async def test_stopped_app_is_skipped(cfg: Config, tmp_path: Path, side_effects:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("status", ["stopped", "building"])
+async def test_app_leaving_running_during_the_update_is_skipped(
+    cfg: Config, tmp_path: Path, side_effects: dict[str, Any], monkeypatch: pytest.MonkeyPatch, status: str
+) -> None:
+    app = FakeApp(cfg, tmp_path, "midway")
+    pull = apps_mod.git_pull
+
+    def pull_then_owner_acts(repo_path: str, app_name: str, **kwargs: Any) -> tuple[bool, str | None]:
+        # The owner stops (or reloads) the app while its update is pulling.
+        with closing(get_db()) as db:
+            db.execute("UPDATE apps SET status = ? WHERE app_id = ?", (status, app.app_id))
+            db.commit()
+        return pull(repo_path, app_name, **kwargs)
+
+    monkeypatch.setattr(apps_mod, "git_pull", pull_then_owner_acts)
+    result = await apps_mod.auto_update_app(app.app_id, cfg)
+
+    assert result.outcome == AppUpdateOutcome.SKIPPED
+    assert result.detail == f"not running ({status})"
+    assert app.head() == app.v1
+    assert _status(app) == status
+    assert side_effects["stops"] == 0
+    assert side_effects["reloads"] == []
+
+
+@pytest.mark.asyncio
 async def test_local_changes_are_skipped(cfg: Config, tmp_path: Path, side_effects: dict[str, Any]) -> None:
     app = FakeApp(cfg, tmp_path, "edited")
     (app.repo / "local.txt").write_text("mine")

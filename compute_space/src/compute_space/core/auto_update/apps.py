@@ -115,17 +115,22 @@ async def auto_update_app(app_id: str, config: Config) -> AppUpdateResult:
         await reset_hard(Path(repo_path), pre_sha)
         return result(AppUpdateOutcome.FAILED, f"could not write update log: {e}")
 
-    # Claim the reload as the manual path does, so a reload the owner starts meanwhile can't race this one.
+    # Claim the reload as the manual path does, so a reload the owner starts meanwhile can't race this one. Only while
+    # the app is still running: the owner may have stopped it, or started a reload, since the check above.
     with closing(get_db()) as db:
-        cursor = db.execute(
-            "UPDATE apps SET status = 'building', container_id = NULL, error_message = NULL "
-            "WHERE app_id = ? AND status NOT IN ('building', 'starting', 'removing')",
-            (app_id,),
+        claimed = (
+            db.execute(
+                "UPDATE apps SET status = 'building', container_id = NULL, error_message = NULL "
+                "WHERE app_id = ? AND status = 'running'",
+                (app_id,),
+            ).rowcount
+            == 1
         )
         db.commit()
-    if cursor.rowcount == 0:
+        current = None if claimed else db.execute("SELECT status FROM apps WHERE app_id = ?", (app_id,)).fetchone()
+    if not claimed:
         await reset_hard(Path(repo_path), pre_sha)
-        return result(AppUpdateOutcome.SKIPPED, "already reloading")
+        return result(AppUpdateOutcome.SKIPPED, f"not running ({current['status'] if current else 'removed'})")
 
     await asyncio.to_thread(stop_app_process, row)
     # Run in this task rather than a thread of its own, so apps update one at a time.
