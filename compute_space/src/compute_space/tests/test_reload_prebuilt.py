@@ -274,3 +274,19 @@ def test_pinned_ref_ignores_prebuilt_image_and_builds_its_head(
     assert m["events"] == ["stop"]
     m["thread"].assert_called_once()
     assert _prepared_image(m["thread"]) is None
+
+
+def test_a_failed_rollback_is_logged_for_operators(cfg: Any, client: TestClient[Litestar], tmp_path: Path) -> None:
+    app_id, origin, repo, _ = _seed(cfg, tmp_path)
+    _commit(origin, "1.1.0", "v1.1.0")
+    with (
+        _mocked(pull_side_effect=ImageVerificationError("signature mismatch")),
+        patch("compute_space.web.routes.api.apps.reset_hard", side_effect=OSError("disk full")),
+        patch("compute_space.web.routes.api.apps.logger") as logger,
+    ):
+        resp = client.post(f"/reload_app/{app_id}", json={"update": True})
+    assert resp.json() == {"ok": True}
+    logger.warning.assert_called_once()
+    assert "disk full" in str(logger.warning.call_args)
+    log = (Path(cfg.temporary_data_dir) / "app_temp_data" / "rel-app" / "docker.log").read_text()
+    assert "failed to roll back refused update" in log
