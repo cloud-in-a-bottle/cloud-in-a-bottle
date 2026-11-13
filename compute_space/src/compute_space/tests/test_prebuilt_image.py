@@ -164,8 +164,8 @@ def test_requires_a_full_commit_sha() -> None:
         pull_prebuilt_image("vaultwarden", _IMAGE, "main", _REPO_URL, log=lambda _: None)
 
 
-def _manifest() -> mock.Mock:
-    return mock.Mock(prebuilt_image=_IMAGE, container_image="Dockerfile", effective_build_memory_mb=512)
+def _manifest(image: str = _IMAGE) -> mock.Mock:
+    return mock.Mock(prebuilt_image=image, container_image="Dockerfile", effective_build_memory_mb=512)
 
 
 def _prepare(tmp_path: Path, repo_url: str, log: Callable[[str], None] = lambda _: None) -> PreparedImage:
@@ -397,9 +397,10 @@ def test_other_registries_are_not_verified() -> None:
     assert signature_policy("ghcr.io/org/app", _REPO_URL, _SHA) is None
 
 
-def test_our_registry_with_a_non_github_repo_fails_verification() -> None:
+@pytest.mark.parametrize("repo_url", ["https://gitlab.com/someone/app", None])
+def test_our_registry_with_a_non_github_repo_fails_verification(repo_url: str | None) -> None:
     with pytest.raises(ImageVerificationError, match="isn't a GitHub repo"):
-        signature_policy(_SIGNED_IMAGE, "https://gitlab.com/someone/app", _SHA)
+        signature_policy(_SIGNED_IMAGE, repo_url, _SHA)
 
 
 def test_cosign_command_checks_every_part_of_the_policy() -> None:
@@ -559,7 +560,7 @@ def test_an_unexplained_cosign_failure_with_the_registry_still_up_is_a_verificat
 
 
 def test_a_non_github_repo_on_our_registry_fails_without_building(tmp_path: Path) -> None:
-    manifest = mock.Mock(prebuilt_image=_SIGNED_IMAGE, container_image="Dockerfile", effective_build_memory_mb=512)
+    manifest = _manifest(_SIGNED_IMAGE)
     fake = _signed([_RESOLVED])
     with (
         mock.patch.object(apps_mod, "head_commit", return_value=_SHA),
@@ -575,7 +576,7 @@ def test_a_non_github_repo_on_our_registry_fails_without_building(tmp_path: Path
 
 
 def _prepare_signed(tmp_path: Path, fake: _FakeRun) -> tuple[PreparedImage | None, Exception | None, mock.Mock]:
-    manifest = mock.Mock(prebuilt_image=_SIGNED_IMAGE, container_image="Dockerfile", effective_build_memory_mb=512)
+    manifest = _manifest(_SIGNED_IMAGE)
     with (
         mock.patch.object(apps_mod, "head_commit", return_value=_SHA),
         mock.patch("compute_space.core.prebuilt_image.subprocess.run", fake),
