@@ -1,4 +1,5 @@
 import asyncio
+import enum
 import hashlib
 import json
 import os
@@ -57,6 +58,7 @@ from compute_space.core.oauth import OAuthRequired
 from compute_space.core.oauth import get_oauth_token
 from compute_space.core.ports import allocate_port
 from compute_space.core.ports import resolve_port_mappings
+from compute_space.core.prebuilt_image import ImageUnavailableError
 from compute_space.core.prebuilt_image import pull_prebuilt_image
 from compute_space.core.releases import ReleaseError
 from compute_space.core.releases import checkout_newest_release
@@ -722,8 +724,28 @@ def restart_apps_by_id(app_ids: list[str], db: sqlite3.Connection, config: Confi
             logger.exception("failed to restart app {} after archive migration remount", app_id)
 
 
-def start_app_process(app_id: str, db: sqlite3.Connection, config: Config) -> None:
-    """Build the current checkout and launch it for an app."""
+class ImageSource(enum.Enum):
+    # Built from the checkout's Dockerfile: the app doesn't use a prebuilt image (see releases.follows_releases).
+    BUILT = "built"
+    # The release's prebuilt image, pulled.
+    PULLED = "pulled"
+    # The release's prebuilt image couldn't be fetched, so the release's Dockerfile was built instead.
+    FALLBACK_BUILT = "fallback_built"
+
+
+@attr.s(auto_attribs=True, frozen=True)
+class PreparedImage:
+    """The app's image, ready to run, and where it came from."""
+
+    tag: str
+    source: ImageSource
+
+
+def start_app_process(
+    app_id: str, db: sqlite3.Connection, config: Config, prepared_image: PreparedImage | None = None
+) -> None:
+    """Build the current checkout (or pull its prebuilt image) and launch it for an app. ``prepared_image`` is an
+    image already produced for this checkout (see prepare_app_image), run as is."""
     app_row = db.execute("SELECT * FROM apps WHERE app_id = ?", (app_id,)).fetchone()
     storage.check_before_deploy(config)
     app_name = app_row["name"]
@@ -731,7 +753,7 @@ def start_app_process(app_id: str, db: sqlite3.Connection, config: Config) -> No
     manifest = parse_manifest(app_row["repo_path"])
     _mark_app_starting(db, app_id)
 
-    _build_then_run_app(app_id, app_name, app_row["repo_path"], manifest, db, config)
+    _build_then_run_app(app_id, app_name, app_row["repo_path"], manifest, db, config, prepared_image=prepared_image)
 
 
 def _build_then_run_app(
@@ -744,24 +766,44 @@ def _build_then_run_app(
     *,
     max_build_attempts: int = 1,
     env_vars: dict[str, str] | None = None,
+    prepared_image: PreparedImage | None = None,
 ) -> None:
-    """Build an app image, retrying transient failures, then run it. An app that uses a prebuilt image pulls it
-    instead, and never builds."""
-    prebuilt_tag = pull_prebuilt_image_if_used(app_name, repo_path, manifest, app_repo_url(app_id, db), config)
-    if prebuilt_tag is not None:
-        run_app_image(app_id, prebuilt_tag, manifest, db, config, env_vars=env_vars)
-        return
-    image_tag = ""
+    """Produce the app's image (see prepare_app_image), unless ``prepared_image`` already is it, then run it."""
+    if prepared_image is None:
+        prepared_image = prepare_app_image(
+            app_name,
+            repo_path,
+            manifest,
+            app_repo_url(app_id, db),
+            config.temporary_data_dir,
+            log=app_log_writer(app_name, config),
+            max_build_attempts=max_build_attempts,
+        )
+    run_app_image(app_id, prepared_image.tag, manifest, db, config, env_vars=env_vars)
+
+
+def head_commit(repo_path: str) -> str:
+    result = subprocess.run(
+        git_command("rev-parse", "HEAD"), cwd=repo_path, capture_output=True, text=True, timeout=10
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"Could not read the deployed commit in {repo_path}: {result.stderr.strip()}")
+    return result.stdout.strip()
+
+
+def _build_with_retries(
+    app_name: str, repo_path: str, manifest: AppManifest, temp_data_dir: str, max_build_attempts: int
+) -> str:
+    """Build the checkout's Dockerfile, retrying transient failures. Returns the image tag."""
     for attempt in range(1, max_build_attempts + 1):
         try:
-            image_tag = build_image(
+            return build_image(
                 app_name,
                 repo_path,
                 manifest.container_image,
-                temp_data_dir=config.temporary_data_dir,
+                temp_data_dir=temp_data_dir,
                 memory_mb=manifest.effective_build_memory_mb,
             )
-            break
         except RuntimeError as e:
             if BUILD_CACHE_CORRUPT_MARKER in str(e) or attempt == max_build_attempts:
                 raise
@@ -773,31 +815,62 @@ def _build_then_run_app(
                 attempt * 5,
             )
             time.sleep(attempt * 5)
-    run_app_image(app_id, image_tag, manifest, db, config, env_vars=env_vars)
+    raise ValueError(f"max_build_attempts must be at least 1, got {max_build_attempts}")
 
 
-def pull_prebuilt_image_if_used(
-    app_name: str, repo_path: str, manifest: AppManifest, repo_url: str | None, config: Config
-) -> str | None:
-    """Pull the app's prebuilt image for the checked-out commit and return its tag, or None if the app builds instead
-    (see releases.follows_releases). Raises PrebuiltImageError rather than falling back to a build."""
+def prepare_app_image(
+    app_name: str,
+    repo_path: str,
+    manifest: AppManifest,
+    repo_url: str | None,
+    temp_data_dir: str,
+    log: Callable[[str], None],
+    max_build_attempts: int = 1,
+) -> PreparedImage:
+    """Produce the image to run the checked-out commit as ``openhost-<app>:latest``. An app that follows releases pulls
+    the release's prebuilt image; if that can't be fetched (:class:`ImageUnavailableError`, after the pull's retries)
+    it builds the release's Dockerfile instead. Any other :class:`PrebuiltImageError` (a verification failure, say) is
+    raised without building. Building only moves the tag once it succeeds, so a failure here leaves whatever is
+    running, and the image it runs, alone."""
     if not follows_releases(repo_url, manifest):
-        return None
+        return PreparedImage(
+            tag=_build_with_retries(app_name, repo_path, manifest, temp_data_dir, max_build_attempts),
+            source=ImageSource.BUILT,
+        )
     assert manifest.prebuilt_image is not None
-    return pull_prebuilt_image(
-        app_name,
-        manifest.prebuilt_image,
-        head_commit(repo_path),
-        repo_url,
-        log=app_log_writer(app_name, config),
+    commit = head_commit(repo_path)
+    try:
+        pulled = pull_prebuilt_image(app_name, manifest.prebuilt_image, commit, repo_url, log=log)
+    except ImageUnavailableError as e:
+        return _build_in_place_of_prebuilt(
+            app_name, repo_path, manifest, commit, e, temp_data_dir, log, max_build_attempts
+        )
+    return PreparedImage(tag=pulled.tag, source=ImageSource.PULLED)
+
+
+def _build_in_place_of_prebuilt(
+    app_name: str,
+    repo_path: str,
+    manifest: AppManifest,
+    commit: str,
+    unavailable: ImageUnavailableError,
+    temp_data_dir: str,
+    log: Callable[[str], None],
+    max_build_attempts: int,
+) -> PreparedImage:
+    log(
+        f"WARNING: the prebuilt image for {commit} is unavailable ({unavailable}); "
+        "falling back to building it locally from the release's Dockerfile"
     )
-
-
-def head_commit(repo_path: str) -> str:
-    result = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo_path, capture_output=True, text=True, timeout=10)
-    if result.returncode != 0:
-        raise RuntimeError(f"Could not read the deployed commit in {repo_path}: {result.stderr.strip()}")
-    return result.stdout.strip()
+    logger.warning("{}: prebuilt image unavailable, building {} locally: {}", app_name, commit, unavailable)
+    try:
+        tag = _build_with_retries(app_name, repo_path, manifest, temp_data_dir, max_build_attempts)
+    except (RuntimeError, subprocess.TimeoutExpired) as e:
+        raise RuntimeError(
+            f"The prebuilt image is unavailable ({unavailable}), and building it locally failed: {e}"
+        ) from e
+    log(f"Built {commit} locally in place of its prebuilt image")
+    return PreparedImage(tag=tag, source=ImageSource.FALLBACK_BUILT)
 
 
 def app_repo_url(app_id: str, db: sqlite3.Connection) -> str | None:
@@ -1036,8 +1109,11 @@ def git_pull(
             )
 
 
-def reload_app_background(app_id: str, repo_path: str, config: Config) -> None:
-    """Reload an app in a background thread: re-read manifest, rebuild, start."""
+def reload_app_background(
+    app_id: str, repo_path: str, config: Config, prepared_image: PreparedImage | None = None
+) -> None:
+    """Reload an app in a background thread: re-read manifest, rebuild (unless ``prepared_image`` is the checkout's
+    image already, as when an update produced it before stopping the app), start."""
     db = sqlite3.connect(config.db_path, check_same_thread=False)
     db.row_factory = sqlite3.Row
     db.execute("PRAGMA journal_mode=WAL")
@@ -1104,7 +1180,7 @@ def reload_app_background(app_id: str, repo_path: str, config: Config) -> None:
             # explicitly approved them (mirroring the install-time approval),
             # so by the time we get here the required grants already exist.
 
-        start_app_process(app_id, db, config)
+        start_app_process(app_id, db, config, prepared_image=prepared_image)
     except Exception as e:
         logger.exception("Failed to reload {}", app_id)
         db.execute(

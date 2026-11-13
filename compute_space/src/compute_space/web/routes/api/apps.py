@@ -39,14 +39,16 @@ from compute_space.core import archive_backend
 from compute_space.core.app_checkouts import app_checkout_dir
 from compute_space.core.app_id import is_valid_app_id
 from compute_space.core.apps import RESERVED_PATHS
+from compute_space.core.apps import PreparedImage
 from compute_space.core.apps import app_container_log_path
 from compute_space.core.apps import app_log_path
+from compute_space.core.apps import app_log_writer
 from compute_space.core.apps import app_repo_url
 from compute_space.core.apps import clone_with_github_fallback
 from compute_space.core.apps import git_pull
 from compute_space.core.apps import insert_and_deploy
 from compute_space.core.apps import move_clone_to_app_checkout_dir
-from compute_space.core.apps import pull_prebuilt_image_if_used
+from compute_space.core.apps import prepare_app_image
 from compute_space.core.apps import reload_app_background
 from compute_space.core.apps import remove_app_background
 from compute_space.core.apps import start_app_process
@@ -84,7 +86,6 @@ from compute_space.core.manifest import settings_changes_require_review
 from compute_space.core.oauth import OAuthRequired
 from compute_space.core.oauth import get_oauth_token
 from compute_space.core.ports import check_port_available
-from compute_space.core.prebuilt_image import PrebuiltImageError
 from compute_space.core.releases import ReleaseError
 from compute_space.core.releases import checkout_newest_release
 from compute_space.core.releases import follows_releases
@@ -756,6 +757,8 @@ async def _reload_app_impl(
         # refused update can roll the working tree back to it (keeping the
         # on-disk repo in sync with the running version — see the gate below).
         pre_pull_sha: str | None = None
+        # The image an update produced for the new version before stopping the old one (see below).
+        prepared_image: PreparedImage | None = None
 
         if update or continue_oauth:
             if not app_row["repo_path"] or not os.path.isdir(os.path.join(app_row["repo_path"], ".git")):
@@ -875,24 +878,27 @@ async def _reload_app_impl(
                 return Redirect(path=f"/app_detail/{app_name}")
             return Response(content=review_gate, status_code=200, media_type=MediaType.JSON)
 
-        # An app that uses a prebuilt image pulls it now, before the running container is stopped, so a missing image
-        # leaves the running version untouched. The background reload repeats the pull,
-        # which is quick once the image is local.
+        # An app that uses a prebuilt image produces its image now, before the running container is stopped: it pulls
+        # the release's image or, when that can't be fetched, builds the release locally. Either only moves the
+        # app's image tag once it succeeds, so a failure leaves the running version untouched. The background reload
+        # runs the image prepared here rather than producing it again after the app has stopped.
         try:
             manifest_for_pull = parse_manifest(app_row["repo_path"])
         except ValueError:
             manifest_for_pull = None  # the background reload reports it
         try:
-            if manifest_for_pull is not None:
-                await asyncio.to_thread(
-                    pull_prebuilt_image_if_used,
+            current_repo_url = app_repo_url(app_id, db)
+            if manifest_for_pull is not None and follows_releases(current_repo_url, manifest_for_pull):
+                prepared_image = await asyncio.to_thread(
+                    prepare_app_image,
                     app_name,
                     app_row["repo_path"],
                     manifest_for_pull,
-                    app_repo_url(app_id, db),
-                    config,
+                    current_repo_url,
+                    config.temporary_data_dir,
+                    app_log_writer(app_name, config),
                 )
-        except (PrebuiltImageError, RuntimeError) as e:
+        except (RuntimeError, subprocess.TimeoutExpired) as e:
             await _roll_back_update(app_row["repo_path"], pre_pull_sha, log_file)
             db.execute(
                 "UPDATE apps SET status = 'error', error_message = ? WHERE app_id = ?",
@@ -927,6 +933,7 @@ async def _reload_app_impl(
     Thread(
         target=reload_app_background,
         args=(app_id, app_row["repo_path"], config),
+        kwargs={"prepared_image": prepared_image},
         daemon=True,
     ).start()
 
