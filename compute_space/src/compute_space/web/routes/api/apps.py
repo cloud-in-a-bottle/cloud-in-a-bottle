@@ -877,20 +877,21 @@ async def _reload_app_impl(
     # currently running — so it can't introduce changes, and gating it would
     # wrongly re-prompt for a version the owner already chose to keep running.
     if update or continue_oauth:
+        # Read once, so the review and the image step below agree on whether the update pulls an image.
+        current_repo_url = app_repo_url(app_id, db)
         review_gate = await asyncio.to_thread(
             _gate_update_review,
             app_id,
             app_row["repo_path"],
             approve_new_permissions,
             app_row["manifest_raw"],
-            # The URL the image step below reads, which decides whether the update pulls an image.
-            repo_url=app_repo_url(app_id, db),
+            repo_url=current_repo_url,
             prebuilt_image_verified=bool(app_row["prebuilt_image_verified"]),
         )
         if review_gate is not None:
             await _roll_back_update(app_row["repo_path"], pre_pull_sha, log_file)
             with open(log_file, "a") as lf:
-                lf.write("Update changes app settings requiring owner approval; not reloading.\n")
+                lf.write(f"Update needs owner approval; not reloading. {review_gate.error}\n")
             if continue_oauth:
                 return Redirect(path=f"/app_detail/{app_name}")
             return Response(content=review_gate, status_code=200, media_type=MediaType.JSON)
@@ -904,7 +905,6 @@ async def _reload_app_impl(
         except ValueError:
             manifest_for_pull = None  # the background reload reports it
         try:
-            current_repo_url = app_repo_url(app_id, db)
             if manifest_for_pull is not None and follows_releases(current_repo_url, manifest_for_pull):
                 prepared_image = await asyncio.to_thread(
                     prepare_app_image,
