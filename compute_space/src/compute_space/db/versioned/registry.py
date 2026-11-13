@@ -26,6 +26,9 @@ from compute_space.db.versioned.migrations.v0016_auto_update_off_for_existing im
     Migration0016AutoUpdateOffForExisting,
 )
 from compute_space.db.versioned.migrations.v0017_unpin_default_branch import Migration0017UnpinDefaultBranch
+from compute_space.db.versioned.migrations.v0018_apps_prebuilt_image_verified import (
+    Migration0018AppsPrebuiltImageVerified,
+)
 
 # Numbered migrations in apply order. Versions MUST start at 2 and be
 # contiguous. v0 (legacy) and v1 (baseline produced by the existing
@@ -47,4 +50,5 @@ REGISTRY: list[Migration] = [
     Migration0015DropDomainsMdns(),
     Migration0016AutoUpdateOffForExisting(),
     Migration0017UnpinDefaultBranch(),
+    Migration0018AppsPrebuiltImageVerified(),
 ]

@@ -782,7 +782,28 @@ def _build_then_run_app(
             log=app_log_writer(app_name, config),
             max_build_attempts=max_build_attempts,
         )
+    record_image_source(db, app_id, prepared_image.source)
     run_app_image(app_id, prepared_image.tag, manifest, db, config, env_vars=env_vars)
+
+
+def record_image_source(db: sqlite3.Connection, app_id: str, source: ImageSource) -> None:
+    """Keep ``apps.prebuilt_image_verified`` describing the last prebuilt image the app was deployed on (see
+    image_verification.verification_lost, which asks before an update takes a verified app to an unverified image).
+    Recorded once the image is the app's tagged image, which this deploy and any later restart run.
+
+    A build leaves the flag as it was, whether the app doesn't use a prebuilt image (``BUILT``) or its image couldn't
+    be fetched (``FALLBACK_BUILT``): building the release's own Dockerfile is how apps have always run, and says
+    nothing about the registry, so it neither earns the flag nor clears it. Clearing it would let a registry outage
+    (or a stretch on a pinned ref) erase the record, and the next pull from a registry we don't verify would then go
+    unnoticed."""
+    if source is ImageSource.PULLED_VERIFIED:
+        verified = True
+    elif source is ImageSource.PULLED_UNVERIFIED:
+        verified = False
+    else:
+        return
+    db.execute("UPDATE apps SET prebuilt_image_verified = ? WHERE app_id = ?", (int(verified), app_id))
+    db.commit()
 
 
 def head_commit(repo_path: str) -> str:
