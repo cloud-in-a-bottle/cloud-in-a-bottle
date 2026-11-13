@@ -161,3 +161,22 @@ def test_update_fetches_a_tag_created_after_its_commit_was_pulled(tmp_path: Path
 def test_a_plain_directory_has_no_releases(tmp_path: Path) -> None:
     with pytest.raises(ReleaseError, match="isn't a git checkout"):
         checkout_newest_release(str(tmp_path), fetch_tags=False)
+
+
+def test_the_release_checkout_runs_no_hooks_from_the_app_repo(tmp_path: Path) -> None:
+    origin = _Origin(tmp_path / "origin")
+    origin.commit("1.0.0", tag="v1.0.0")
+    clone = _clone(f"file://{origin.path}")
+    later = origin.commit("2.0.0")
+    _git(clone, "fetch", "origin", "main")
+    _git(clone, "checkout", "-fB", "main", "origin/main")
+    _git(origin.path, "tag", "v2.0.0", later)
+    marker = tmp_path / "hook-ran"
+    # The tag fetch runs reference-transaction and the checkout post-checkout, if hooks are enabled.
+    for name in ("reference-transaction", "post-checkout"):
+        hook = clone / ".git" / "hooks" / name
+        hook.write_text(f"#!/bin/sh\necho {name} >> {marker}\n")
+        hook.chmod(0o755)
+    assert checkout_newest_release(str(clone), fetch_tags=True) == "v2.0.0"
+    assert _git(clone, "rev-parse", "HEAD") == later
+    assert not marker.exists()

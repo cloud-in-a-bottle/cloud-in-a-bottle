@@ -15,6 +15,7 @@ import git
 from compute_space.core.git_ops import checkout_ref
 from compute_space.core.git_ops import parse_repo_url
 from compute_space.core.manifest import AppManifest
+from openhost_system_agent.git_commands import git_command
 from openhost_system_agent.release_tags import newest_release
 
 
@@ -39,7 +40,7 @@ def follows_releases(repo_url: str | None, manifest: AppManifest) -> bool:
 
 
 def _git(repo_path: str, args: list[str], timeout: int = 60) -> str:
-    result = subprocess.run(["git", *args], cwd=repo_path, capture_output=True, text=True, timeout=timeout)
+    result = subprocess.run(git_command(*args), cwd=repo_path, capture_output=True, text=True, timeout=timeout)
     if result.returncode != 0:
         raise ReleaseError(f"git {' '.join(args)} failed: {result.stderr.strip() or result.stdout.strip()}")
     return result.stdout
@@ -48,8 +49,8 @@ def _git(repo_path: str, args: list[str], timeout: int = 60) -> str:
 def checkout_newest_release(repo_path: str, fetch_tags: bool) -> str:
     """Check out the newest release tag reachable from HEAD (the default branch's head, freshly cloned or pulled) and
     return it. ``fetch_tags`` fetches origin's tags first: a pull only follows tags on newly fetched commits, and CI
-    tags a commit after it lands. Raises :class:`ReleaseError` when there is no release, since an app that sets
-    ``prebuilt_image`` must never fall back to building."""
+    tags a commit after it lands. Raises :class:`ReleaseError` when there is no release: an app that sets
+    ``prebuilt_image`` only ever deploys releases."""
     if not os.path.isdir(os.path.join(repo_path, ".git")):
         raise ReleaseError("prebuilt_image is set, but the app isn't a git checkout, so it has no release tags")
     if fetch_tags:
