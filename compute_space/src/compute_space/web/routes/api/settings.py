@@ -310,9 +310,12 @@ async def get_app_auto_update(db: NamedDependency[sqlite3.Connection]) -> AppAut
 async def set_app_auto_update(
     data: AppAutoUpdateRequest, db: NamedDependency[sqlite3.Connection]
 ) -> AppAutoUpdateResponse:
+    was_enabled = read_app_auto_update_enabled(db)
     write_app_auto_update_enabled(db, data.enabled)
-    # So turning this on after the day's time has passed waits for tomorrow, rather than counting as a missed run.
-    reschedule_auto_update(time_utc=read_auto_update_config(db).time_utc)
+    # So turning this on after the day's time has passed waits for tomorrow, rather than counting as a missed run. Only
+    # then: rescheduling also moves the instance update, which may be about to catch up on a missed window.
+    if data.enabled and not was_enabled:
+        reschedule_auto_update(time_utc=read_auto_update_config(db).time_utc)
     return _app_auto_update_response(db)
 
 

@@ -439,3 +439,24 @@ def test_settings_api_toggles_and_reports_last_run(cfg: Config) -> None:
         body = client.post("/api/settings/app-auto-update", json={"enabled": True}).json()
     assert body["enabled"] is True
     assert body["last_run_results"] == [{"app_name": "perms", "outcome": "needs_approval", "detail": "approve x"}]
+
+
+@pytest.mark.parametrize(
+    ("was_on", "turn_on", "reschedules"),
+    [(False, True, True), (True, False, False), (True, True, False), (False, False, False)],
+)
+def test_only_turning_app_updates_on_reschedules(
+    cfg: Config, monkeypatch: pytest.MonkeyPatch, was_on: bool, turn_on: bool, reschedules: bool
+) -> None:
+    # A catch-up for a missed window is pending; only turning app updates on should move it.
+    missed = datetime.now(UTC) - timedelta(hours=1)
+    monkeypatch.setattr(runner_mod, "_update_due", missed)
+    with closing(get_db()) as db:
+        write_app_auto_update_enabled(db, was_on)
+    with TestClient(app=make_test_app(api_settings_routes)) as client:
+        client.cookies.update(auth_cookie(cfg))
+        assert client.post("/api/settings/app-auto-update", json={"enabled": turn_on}).status_code == 200
+    assert runner_mod._update_due is not None
+    assert (runner_mod._update_due > datetime.now(UTC)) is reschedules
+    if not reschedules:
+        assert runner_mod._update_due == missed
