@@ -33,10 +33,14 @@ from compute_space.core.auth.auth import create_session
 from compute_space.core.auth.auth import read_owner_username
 from compute_space.core.auth.auth import update_owner_username
 from compute_space.core.auth.auth import validate_owner_username
+from compute_space.core.auto_update.app_config import read_app_auto_update_enabled
+from compute_space.core.auto_update.app_config import read_app_last_run
+from compute_space.core.auto_update.app_config import write_app_auto_update_enabled
 from compute_space.core.auto_update.config import AutoUpdateConfig
 from compute_space.core.auto_update.config import read_auto_update_config
 from compute_space.core.auto_update.config import read_last_run
 from compute_space.core.auto_update.config import write_auto_update_config
+from compute_space.core.auto_update.runner import reschedule_app_auto_update
 from compute_space.core.auto_update.runner import reschedule_auto_update
 from compute_space.core.connect import build_connect_url
 from compute_space.core.connect import exchange_code_for_credential
@@ -260,9 +264,65 @@ async def set_auto_update(data: AutoUpdateRequest, db: NamedDependency[sqlite3.C
         time_utc = time.fromisoformat(data.time_utc)
     except ValueError as e:
         raise ValidationException(detail="Time must be HH:MM", extra={"code": "invalid_time"}) from e
+    previous = read_auto_update_config(db)
     write_auto_update_config(db, AutoUpdateConfig(enabled=data.enabled, time_utc=time_utc))
     reschedule_auto_update(time_utc=time_utc)
+    # App updates share the time, so a new one moves them too. Turning instance updates on or off shouldn't postpone
+    # a pending catch-up of missed app updates.
+    if time_utc != previous.time_utc:
+        reschedule_app_auto_update(time_utc=time_utc)
     return _auto_update_response(db)
+
+
+@attr.s(auto_attribs=True, frozen=True)
+class AppAutoUpdateRequest:
+    enabled: bool
+
+
+@attr.s(auto_attribs=True, frozen=True)
+class AppAutoUpdateResultResponse:
+    app_name: str
+    # updated, up_to_date, needs_approval, skipped or failed.
+    outcome: str
+    detail: str | None
+
+
+@attr.s(auto_attribs=True, frozen=True)
+class AppAutoUpdateResponse:
+    enabled: bool
+    last_run_at: str | None
+    # Every installed app's outcome in the last scheduled run; empty before the first.
+    last_run_results: list[AppAutoUpdateResultResponse]
+
+
+def _app_auto_update_response(db: sqlite3.Connection) -> AppAutoUpdateResponse:
+    last_run = read_app_last_run(db)
+    return AppAutoUpdateResponse(
+        enabled=read_app_auto_update_enabled(db),
+        last_run_at=last_run.at.isoformat() if last_run else None,
+        last_run_results=[
+            AppAutoUpdateResultResponse(app_name=r.app_name, outcome=r.outcome, detail=r.detail)
+            for r in (last_run.results if last_run else [])
+        ],
+    )
+
+
+@get("/api/settings/app-auto-update", guards=[require_owner_auth])
+async def get_app_auto_update(db: NamedDependency[sqlite3.Connection]) -> AppAutoUpdateResponse:
+    return _app_auto_update_response(db)
+
+
+@post("/api/settings/app-auto-update", status_code=200, guards=[require_owner_auth])
+async def set_app_auto_update(
+    data: AppAutoUpdateRequest, db: NamedDependency[sqlite3.Connection]
+) -> AppAutoUpdateResponse:
+    was_enabled = read_app_auto_update_enabled(db)
+    write_app_auto_update_enabled(db, data.enabled)
+    # So turning this on after the day's time has passed waits for tomorrow, rather than counting as a missed run. Only
+    # then: saving it again shouldn't postpone a pending catch-up of missed app updates.
+    if data.enabled and not was_enabled:
+        reschedule_app_auto_update(time_utc=read_auto_update_config(db).time_utc)
+    return _app_auto_update_response(db)
 
 
 @attr.s(auto_attribs=True, frozen=True)
@@ -490,6 +550,8 @@ api_settings_routes = Router(
         update_progress,
         get_auto_update,
         set_auto_update,
+        get_app_auto_update,
+        set_app_auto_update,
         restart_compute_space,
         connect_imbue_status,
         connect_imbue_start,
