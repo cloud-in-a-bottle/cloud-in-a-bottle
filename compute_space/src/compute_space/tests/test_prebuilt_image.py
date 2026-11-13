@@ -3,6 +3,7 @@ verification failure fails without retrying or building."""
 
 from __future__ import annotations
 
+import contextlib
 import sqlite3
 import subprocess
 from collections.abc import Callable
@@ -18,6 +19,7 @@ from compute_space.core.apps import ImageSource
 from compute_space.core.apps import PreparedImage
 from compute_space.core.apps import deploy_app_background
 from compute_space.core.apps import prepare_app_image
+from compute_space.core.apps import start_app_process
 from compute_space.core.prebuilt_image import ImageToPull
 from compute_space.core.prebuilt_image import ImageUnavailableError
 from compute_space.core.prebuilt_image import ImageVerificationError
@@ -248,19 +250,28 @@ prebuilt_image = "{_IMAGE}"
 """
 
 
-def test_install_falls_back_to_building_when_the_registry_is_unreachable(tmp_path: Path, sleep: mock.Mock) -> None:
-    """Through the install's background deploy, with podman faked: three failed pulls, then a local build that runs."""
+@pytest.fixture
+def installed(tmp_path: Path) -> tuple[Any, Path]:
+    """An installed app that follows releases. Returns (config, its checkout)."""
     cfg: Any = _make_test_config(tmp_path, port=20850)
     init_db(cfg.db_path)
-    manifest = apps_mod.parse_manifest_from_string(_INSTALL_MANIFEST)
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "cloudinabottle.toml").write_text(_INSTALL_MANIFEST)
     db = sqlite3.connect(cfg.db_path)
     db.execute(
         "INSERT INTO apps (app_id, name, version, repo_path, repo_url, local_port, status) "
         "VALUES ('vw-id', 'vaultwarden', '1.0.0', ?, ?, 20851, 'building')",
-        (str(tmp_path), _REPO_URL),
+        (str(repo), _REPO_URL),
     )
     db.commit()
     db.close()
+    return cfg, repo
+
+
+@contextlib.contextmanager
+def _unreachable_registry() -> Iterator[dict[str, Any]]:
+    """podman can't reach the registry; the build and the run are mocked."""
     fake = _FakeRun({("podman", "pull"): [_UNREACHABLE]})
     with (
         mock.patch.object(apps_mod, "head_commit", return_value=_SHA),
@@ -268,15 +279,44 @@ def test_install_falls_back_to_building_when_the_registry_is_unreachable(tmp_pat
         mock.patch.object(apps_mod, "build_image", return_value="openhost-vaultwarden:latest") as build,
         mock.patch.object(apps_mod, "run_app_image") as run,
     ):
-        deploy_app_background(manifest, str(tmp_path), cfg, "vw-id", "vaultwarden")
-    assert fake.calls == [_PULL, _PULL, _PULL]
-    build.assert_called_once()
-    run.assert_called_once()
-    assert run.call_args.args[:2] == ("vw-id", "openhost-vaultwarden:latest")
+        yield {"podman": fake, "build": build, "run": run}
+
+
+def _assert_fell_back(m: dict[str, Any], cfg: Any) -> None:
+    assert m["podman"].calls == [_PULL, _PULL, _PULL]
+    m["build"].assert_called_once()
+    m["run"].assert_called_once()
+    assert m["run"].call_args.args[:2] == ("vw-id", "openhost-vaultwarden:latest")
+    log = Path(apps_mod.app_log_path("vaultwarden", cfg)).read_text()
+    assert "falling back to building it locally" in log
+
+
+def test_install_falls_back_to_building_when_the_registry_is_unreachable(
+    installed: tuple[Any, Path], sleep: mock.Mock
+) -> None:
+    """Through the install's background deploy: three failed pulls, then a local build that runs."""
+    cfg, repo = installed
+    manifest = apps_mod.parse_manifest_from_string(_INSTALL_MANIFEST)
+    with _unreachable_registry() as m:
+        deploy_app_background(manifest, str(repo), cfg, "vw-id", "vaultwarden")
+    _assert_fell_back(m, cfg)
     db = sqlite3.connect(cfg.db_path)
     try:
         assert db.execute("SELECT status FROM apps WHERE app_id = 'vw-id'").fetchone()[0] == "building"
     finally:
         db.close()
-    log = Path(apps_mod.app_log_path("vaultwarden", cfg)).read_text()
-    assert "falling back to building it locally" in log
+
+
+def test_plain_reload_falls_back_to_building_when_the_registry_is_unreachable(
+    installed: tuple[Any, Path], sleep: mock.Mock
+) -> None:
+    """A plain reload (and any rebuild) starts the app through start_app_process, after the app has stopped."""
+    cfg, _ = installed
+    db = sqlite3.connect(cfg.db_path)
+    db.row_factory = sqlite3.Row
+    try:
+        with _unreachable_registry() as m:
+            start_app_process("vw-id", db, cfg)
+    finally:
+        db.close()
+    _assert_fell_back(m, cfg)

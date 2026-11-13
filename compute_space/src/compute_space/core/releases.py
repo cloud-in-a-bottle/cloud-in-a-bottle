@@ -2,7 +2,8 @@
 
 An app that tracks its repo's default branch (no ``@ref`` pinned) and sets ``prebuilt_image`` is installed and updated
 to the newest release tag on that branch, and runs that commit's prebuilt image. CI only tags a commit once its image is
-published, so a release always has an image to pull. A pinned ref (a branch, tag or commit) ignores all of this and
+published, so a release normally has an image to pull; when it can't be fetched, the release is built locally instead
+(see apps.prepare_app_image). A pinned ref (a branch, tag or commit) ignores all of this and
 builds, as before.
 """
 

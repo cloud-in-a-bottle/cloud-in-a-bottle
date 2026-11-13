@@ -744,8 +744,8 @@ class PreparedImage:
 def start_app_process(
     app_id: str, db: sqlite3.Connection, config: Config, prepared_image: PreparedImage | None = None
 ) -> None:
-    """Build the current checkout (or pull its prebuilt image) and launch it for an app. ``prepared_image`` is an
-    image already produced for this checkout (see prepare_app_image), run as is."""
+    """Launch the current checkout of an app: run ``prepared_image`` if given (an image already produced for this
+    checkout, see prepare_app_image), otherwise produce one first by building or pulling."""
     app_row = db.execute("SELECT * FROM apps WHERE app_id = ?", (app_id,)).fetchone()
     storage.check_before_deploy(config)
     app_name = app_row["name"]
@@ -795,6 +795,8 @@ def _build_with_retries(
     app_name: str, repo_path: str, manifest: AppManifest, temp_data_dir: str, max_build_attempts: int
 ) -> str:
     """Build the checkout's Dockerfile, retrying transient failures. Returns the image tag."""
+    if max_build_attempts < 1:
+        raise ValueError(f"max_build_attempts must be at least 1, got {max_build_attempts}")
     for attempt in range(1, max_build_attempts + 1):
         try:
             return build_image(
@@ -815,7 +817,7 @@ def _build_with_retries(
                 attempt * 5,
             )
             time.sleep(attempt * 5)
-    raise ValueError(f"max_build_attempts must be at least 1, got {max_build_attempts}")
+    raise AssertionError("the last attempt returns or raises")
 
 
 def prepare_app_image(
