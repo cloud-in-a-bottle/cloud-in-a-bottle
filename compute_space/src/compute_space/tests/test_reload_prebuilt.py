@@ -176,7 +176,9 @@ def test_update_moves_to_the_newest_release_and_pulls_it_before_stopping(
     assert _git(repo, "rev-parse", "HEAD") == target
     assert m["events"] == ["pull", "stop"]
     m["thread"].assert_called_once()
-    assert _prepared_image(m["thread"]) == PreparedImage(tag="openhost-rel-app:latest", source=ImageSource.PULLED)
+    assert _prepared_image(m["thread"]) == PreparedImage(
+        tag="openhost-rel-app:latest", source=ImageSource.PULLED_UNVERIFIED
+    )
     # Still tracking the default branch: nothing pinned.
     assert _row(cfg, app_id)[2] == "https://github.com/x/rel-app"
 

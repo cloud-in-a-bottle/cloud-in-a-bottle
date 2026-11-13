@@ -727,15 +727,18 @@ def restart_apps_by_id(app_ids: list[str], db: sqlite3.Connection, config: Confi
 class ImageSource(enum.Enum):
     # Built from the checkout's Dockerfile: the app doesn't use a prebuilt image (see releases.follows_releases).
     BUILT = "built"
-    # The release's prebuilt image, pulled.
-    PULLED = "pulled"
+    # The release's prebuilt image, pulled after its signature was verified (images from our registry).
+    PULLED_VERIFIED = "pulled_verified"
+    # The release's prebuilt image, pulled unverified (images from any other registry).
+    PULLED_UNVERIFIED = "pulled_unverified"
     # The release's prebuilt image couldn't be fetched, so the release's Dockerfile was built instead.
     FALLBACK_BUILT = "fallback_built"
 
 
 @attr.s(auto_attribs=True, frozen=True)
 class PreparedImage:
-    """The app's image, ready to run, and where it came from."""
+    """The app's image, ready to run, and where it came from: ``source`` tells a deploy whose image was verified from
+    one pulled unverified or built locally in its place."""
 
     tag: str
     source: ImageSource
@@ -847,7 +850,9 @@ def prepare_app_image(
         return _build_in_place_of_prebuilt(
             app_name, repo_path, manifest, commit, e, temp_data_dir, log, max_build_attempts
         )
-    return PreparedImage(tag=pulled.tag, source=ImageSource.PULLED)
+    return PreparedImage(
+        tag=pulled.tag, source=ImageSource.PULLED_VERIFIED if pulled.verified else ImageSource.PULLED_UNVERIFIED
+    )
 
 
 def _build_in_place_of_prebuilt(
