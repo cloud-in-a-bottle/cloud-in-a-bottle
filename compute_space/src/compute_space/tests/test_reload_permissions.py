@@ -11,6 +11,7 @@ the owner approves, and the app keeps running its current version meanwhile.
 from __future__ import annotations
 
 import contextlib
+import functools
 import sqlite3
 import subprocess
 from collections.abc import Iterator
@@ -35,6 +36,7 @@ from compute_space.core.manifest import settings_changes_require_review
 from compute_space.db.connection import init_db
 from compute_space.tests._litestar_helpers import auth_cookie
 from compute_space.tests._litestar_helpers import make_test_app
+from compute_space.web.routes.api.apps import ImageVerificationLostInfo
 from compute_space.web.routes.api.apps import _gate_update_review
 from compute_space.web.routes.api.apps import api_apps_routes
 
@@ -295,6 +297,41 @@ def test_gate_grants_and_proceeds_when_approved(cfg: Any, tmp_path: Path) -> Non
     assert len(granted) == 1
     assert granted[0].service_url == "github.com/x/secrets"
     assert granted[0].grant == {"key": "API_KEY"}
+
+
+@pytest.mark.parametrize("with_permission", [False, True])
+def test_gate_reports_an_image_losing_verification(cfg: Any, tmp_path: Path, with_permission: bool) -> None:
+    """A verified app whose update moves its prebuilt image off our registry: the gate refuses with the loss described
+    (on its own, or alongside a new permission), and the owner's approval applies both."""
+    repo = tmp_path / "repo"
+    consumes = _consume_block("github.com/x/secrets", "secrets", '{ key = "API_KEY" }') if with_permission else ""
+    _manifest_with_consumes(repo, 'prebuilt_image = "ghcr.io/x/perm-app"\n' + consumes)
+    app_id = _seed_perm_app(cfg, str(repo))
+    gate = functools.partial(
+        _gate_update_review,
+        app_id,
+        str(repo),
+        previous_manifest_raw=_CONSUMES.format(consumes='prebuilt_image = "registry.cloudinabottle.org/perm-app"'),
+        repo_url="https://github.com/x/perm-app",
+        prebuilt_image_verified=True,
+    )
+
+    result = gate(approve_new_permissions=False)
+    assert result is not None
+    assert result.image_verification_lost == ImageVerificationLostInfo(
+        previous_image="registry.cloudinabottle.org/perm-app",
+        previous_registry="registry.cloudinabottle.org",
+        new_image="ghcr.io/x/perm-app",
+        new_registry="ghcr.io",
+    )
+    assert len(result.permissions_required) == int(with_permission)
+    if with_permission:
+        assert result.error.startswith("This update changes the app's settings")
+    else:
+        assert result.error.startswith("This update's image is no longer signature-verified")
+
+    assert gate(approve_new_permissions=True) is None
+    assert len(get_all_permissions_v2(consumer_app_id=app_id)) == int(with_permission)
 
 
 def test_gate_ignores_already_granted_permission(cfg: Any, tmp_path: Path) -> None:
