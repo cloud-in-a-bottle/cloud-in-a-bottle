@@ -28,7 +28,10 @@ from openhost_system_agent.protocol import UpdateChannel
 
 POLL_INTERVAL = timedelta(minutes=1)
 
+# When the instance update and the app updates are next due. Each catches up its own missed window: they share a time,
+# but one can run when the other didn't (the instance update stops this process, say, or one was turned on later).
 _update_due: datetime | None = None
+_app_update_due: datetime | None = None
 # True from the start of a scheduled run, including the check for a new release before apply_lock is taken.
 _scheduled_run_in_progress = False
 
@@ -110,36 +113,53 @@ def _first_update_due(target: time, last_run_at: datetime | None, now: datetime)
 def reschedule_auto_update(time_utc: time) -> None:
     """Call after the schedule changes, so a newly chosen time that already passed today waits for tomorrow rather
     than counting as missed."""
-    global _update_due
-    _update_due = _next_datetime_at(time_utc, datetime.now(UTC))
+    global _update_due, _app_update_due
+    _update_due = _app_update_due = _next_datetime_at(time_utc, datetime.now(UTC))
+
+
+def reschedule_app_auto_update(time_utc: time) -> None:
+    """Call when app updates are turned on, so a time that already passed today waits for tomorrow. Leaves the instance
+    update's due time alone, so a pending catch-up of a missed instance update still runs."""
+    global _app_update_due
+    _app_update_due = _next_datetime_at(time_utc, datetime.now(UTC))
 
 
 async def _run_if_due() -> None:
-    global _update_due, _scheduled_run_in_progress
+    global _update_due, _app_update_due, _scheduled_run_in_progress
     now = datetime.now(UTC)
     with closing(get_db()) as db:
         config = read_auto_update_config(db)
         apps_enabled = read_app_auto_update_enabled(db)
         if _update_due is None:
-            run_times = [run.at for run in (read_last_run(db), read_app_last_run(db)) if run is not None]
-            _update_due = _first_update_due(config.time_utc, max(run_times, default=None), now)
+            last_run = read_last_run(db)
+            _update_due = _first_update_due(config.time_utc, last_run.at if last_run else None, now)
+        if _app_update_due is None:
+            app_last_run = read_app_last_run(db)
+            _app_update_due = _first_update_due(config.time_utc, app_last_run.at if app_last_run else None, now)
 
-    if (config.enabled or apps_enabled) and now > _update_due:
+    run_apps = apps_enabled and now > _app_update_due
+    run_instance = config.enabled and now > _update_due
+    if run_apps or run_instance:
         _scheduled_run_in_progress = True
         try:
             # Apps first: the instance update stops this process, so nothing after it would run.
-            if apps_enabled:
+            if run_apps:
                 try:
                     await run_app_auto_updates()
                 except Exception:
                     logger.exception("scheduled app updates failed")
-            if config.enabled:
+            if run_instance:
                 await run_auto_update()
         finally:
             _scheduled_run_in_progress = False
             # Even if the run raised, so a failure waits for the next scheduled time. From the time the run ended, not
-            # started: a catch-up that runs across today's scheduled time already covers it.
-            _update_due = _next_datetime_at(config.time_utc, datetime.now(UTC))
+            # started: a catch-up that runs across today's scheduled time already covers it. Only for what ran, so an
+            # updater that wasn't due keeps its own due time.
+            next_due = _next_datetime_at(config.time_utc, datetime.now(UTC))
+            if run_apps:
+                _app_update_due = next_due
+            if run_instance:
+                _update_due = next_due
 
 
 def start_auto_update_task() -> asyncio.Task[None]:
@@ -152,7 +172,8 @@ def start_auto_update_task() -> asyncio.Task[None]:
     - If the update fails, it does not retry until the next scheduled time.
     - If the update time is rescheduled, the next run is scheduled for when the new time is next reached.
     - When app auto-updates are on, the same window updates installed apps first (one at a time, skipping any whose
-      update needs the owner's approval), then the instance.
+      update needs the owner's approval), then the instance. Each catches up its own missed window: a catch-up runs
+      only the one(s) that missed it.
     """
 
     async def _run() -> None:

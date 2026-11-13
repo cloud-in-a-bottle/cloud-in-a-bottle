@@ -40,6 +40,7 @@ from compute_space.core.auto_update.config import AutoUpdateConfig
 from compute_space.core.auto_update.config import read_auto_update_config
 from compute_space.core.auto_update.config import read_last_run
 from compute_space.core.auto_update.config import write_auto_update_config
+from compute_space.core.auto_update.runner import reschedule_app_auto_update
 from compute_space.core.auto_update.runner import reschedule_auto_update
 from compute_space.core.connect import build_connect_url
 from compute_space.core.connect import exchange_code_for_credential
@@ -313,9 +314,9 @@ async def set_app_auto_update(
     was_enabled = read_app_auto_update_enabled(db)
     write_app_auto_update_enabled(db, data.enabled)
     # So turning this on after the day's time has passed waits for tomorrow, rather than counting as a missed run. Only
-    # then: rescheduling also moves the instance update, which may be about to catch up on a missed window.
+    # then: saving it again shouldn't postpone a pending catch-up of missed app updates.
     if data.enabled and not was_enabled:
-        reschedule_auto_update(time_utc=read_auto_update_config(db).time_utc)
+        reschedule_app_auto_update(time_utc=read_auto_update_config(db).time_utc)
     return _app_auto_update_response(db)
 
 

@@ -27,6 +27,9 @@ from compute_space.core.auto_update.app_config import read_app_last_run
 from compute_space.core.auto_update.app_config import record_app_last_run
 from compute_space.core.auto_update.app_config import write_app_auto_update_enabled
 from compute_space.core.auto_update.config import AutoUpdateConfig
+from compute_space.core.auto_update.config import AutoUpdateLastRun
+from compute_space.core.auto_update.config import AutoUpdateOutcome
+from compute_space.core.auto_update.config import record_last_run
 from compute_space.core.auto_update.config import write_auto_update_config
 from compute_space.core.settings_store import set_setting
 from compute_space.db import get_db
@@ -386,6 +389,7 @@ def window(cfg: Config, monkeypatch: pytest.MonkeyPatch) -> list[str]:
     monkeypatch.setattr(runner_mod, "run_app_auto_updates", apps)
     monkeypatch.setattr(runner_mod, "run_auto_update", instance)
     monkeypatch.setattr(runner_mod, "_update_due", datetime.now(UTC) - timedelta(minutes=1))
+    monkeypatch.setattr(runner_mod, "_app_update_due", datetime.now(UTC) - timedelta(minutes=1))
     return ran
 
 
@@ -413,6 +417,51 @@ async def test_failed_app_run_still_updates_the_instance(window: list[str], monk
     with closing(get_db()) as db:
         write_auto_update_config(db, AutoUpdateConfig(enabled=True, time_utc=time(4, 0)))
         write_app_auto_update_enabled(db, True)
+    await runner_mod._run_if_due()
+    assert window == ["instance"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("instance_missed", "apps_missed", "expected"),
+    [(True, False, ["instance"]), (False, True, ["apps"]), (True, True, ["apps", "instance"]), (False, False, [])],
+)
+async def test_restart_catches_up_only_what_missed_the_window(
+    window: list[str], monkeypatch: pytest.MonkeyPatch, instance_missed: bool, apps_missed: bool, expected: list[str]
+) -> None:
+    # Just restarted: the due times come from each updater's own last run.
+    monkeypatch.setattr(runner_mod, "_update_due", None)
+    monkeypatch.setattr(runner_mod, "_app_update_due", None)
+    now = datetime.now(UTC)
+    with closing(get_db()) as db:
+        write_auto_update_config(db, AutoUpdateConfig(enabled=True, time_utc=time(4, 0)))
+        write_app_auto_update_enabled(db, True)
+        record_last_run(
+            db,
+            AutoUpdateLastRun(
+                at=now - timedelta(days=2) if instance_missed else now, outcome=AutoUpdateOutcome.UP_TO_DATE
+            ),
+        )
+        record_app_last_run(db, AppAutoUpdateLastRun(at=now - timedelta(days=2) if apps_missed else now, results=[]))
+    await runner_mod._run_if_due()
+    await runner_mod._run_if_due()
+    assert window == expected
+    assert runner_mod._update_due is not None and runner_mod._update_due > now
+    assert runner_mod._app_update_due is not None and runner_mod._app_update_due > now
+
+
+@pytest.mark.asyncio
+async def test_disabled_updater_does_not_hold_back_the_other(
+    window: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # App updates are off and were never run; the instance's missed window still catches up.
+    monkeypatch.setattr(runner_mod, "_update_due", None)
+    monkeypatch.setattr(runner_mod, "_app_update_due", None)
+    with closing(get_db()) as db:
+        write_auto_update_config(db, AutoUpdateConfig(enabled=True, time_utc=time(4, 0)))
+        record_last_run(
+            db, AutoUpdateLastRun(at=datetime.now(UTC) - timedelta(days=2), outcome=AutoUpdateOutcome.UP_TO_DATE)
+        )
     await runner_mod._run_if_due()
     assert window == ["instance"]
 
@@ -448,15 +497,18 @@ def test_settings_api_toggles_and_reports_last_run(cfg: Config) -> None:
 def test_only_turning_app_updates_on_reschedules(
     cfg: Config, monkeypatch: pytest.MonkeyPatch, was_on: bool, turn_on: bool, reschedules: bool
 ) -> None:
-    # A catch-up for a missed window is pending; only turning app updates on should move it.
+    # Catch-ups for missed windows are pending; only turning app updates on should move the apps' one, and nothing
+    # here should move the instance's.
     missed = datetime.now(UTC) - timedelta(hours=1)
     monkeypatch.setattr(runner_mod, "_update_due", missed)
+    monkeypatch.setattr(runner_mod, "_app_update_due", missed)
     with closing(get_db()) as db:
         write_app_auto_update_enabled(db, was_on)
     with TestClient(app=make_test_app(api_settings_routes)) as client:
         client.cookies.update(auth_cookie(cfg))
         assert client.post("/api/settings/app-auto-update", json={"enabled": turn_on}).status_code == 200
-    assert runner_mod._update_due is not None
-    assert (runner_mod._update_due > datetime.now(UTC)) is reschedules
+    assert runner_mod._update_due == missed
+    assert runner_mod._app_update_due is not None
+    assert (runner_mod._app_update_due > datetime.now(UTC)) is reschedules
     if not reschedules:
-        assert runner_mod._update_due == missed
+        assert runner_mod._app_update_due == missed
