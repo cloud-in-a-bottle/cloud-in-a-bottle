@@ -11,6 +11,7 @@ from unittest import mock
 import pytest
 
 import compute_space.core.apps as apps_mod
+from compute_space.core.apps import App
 from compute_space.core.apps import ImageSource
 from compute_space.core.apps import PreparedImage
 from compute_space.core.apps import start_app_process
@@ -116,3 +117,15 @@ def test_the_flag_is_recorded_even_if_the_container_then_fails_to_start(app: tup
     with pytest.raises(RuntimeError, match="no room"):
         _deploy(cfg, ImageSource.PULLED_UNVERIFIED, prepared=True, run_error=RuntimeError("no room"))
     assert _flag(cfg) == 0
+
+
+def test_the_app_row_mirror_carries_the_flag(app: tuple[Any, Path]) -> None:
+    cfg, _ = app
+    _set_flag(cfg, 1)
+    db = sqlite3.connect(cfg.db_path)
+    db.row_factory = sqlite3.Row
+    try:
+        row = db.execute("SELECT * FROM apps WHERE app_id = 'vw-id'").fetchone()
+    finally:
+        db.close()
+    assert App.from_row(row).prebuilt_image_verified is True

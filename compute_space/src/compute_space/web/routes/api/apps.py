@@ -215,8 +215,8 @@ class UpdateReviewRequiredResponse:
     re-submits with ``approve_new_permissions``. ``settings_changed`` is the
     grouped old→new diff (non-gating fields included, for context, even though they
     never trigger a review by themselves); ``permissions_required`` the newly
-    declared grants; ``image_verification_lost`` is set when the update's image would no longer be
-    signature-verified."""
+    declared grants; ``image_verification_lost`` is set when the app's last prebuilt image was
+    signature-verified and the update's would not be."""
 
     ok: bool
     review_required: bool

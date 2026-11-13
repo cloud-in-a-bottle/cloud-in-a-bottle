@@ -176,6 +176,8 @@ class App:
     public_paths: list[str]
     links: list[AppLink]
     manifest_raw: str | None
+    # Whether the last prebuilt image the app was deployed on was signature-verified (see record_image_source).
+    prebuilt_image_verified: bool
     created_at: str
     updated_at: str
 
@@ -184,6 +186,7 @@ class App:
         fields = {f.name: row[f.name] for f in attr.fields(cls)}
         fields["public_paths"] = json.loads(fields["public_paths"] or "[]")
         fields["links"] = deserialize_links(fields["links"])
+        fields["prebuilt_image_verified"] = bool(fields["prebuilt_image_verified"])
         return cls(**fields)
 
 

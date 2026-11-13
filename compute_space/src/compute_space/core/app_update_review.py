@@ -18,7 +18,8 @@ from compute_space.core.manifest import settings_changes_require_review
 class UpdateReview:
     """An update the owner must approve before it's applied. ``settings_changed`` is the full diff, including fields
     that never hold an update back on their own (shown for context); ``new_permissions`` are the newly declared grants;
-    ``verification_loss`` is set when the update's image would no longer be signature-verified."""
+    ``verification_loss`` is set when the app's last prebuilt image was signature-verified and the update's would not
+    be."""
 
     manifest: AppManifest
     settings_changed: list[SettingChange]
