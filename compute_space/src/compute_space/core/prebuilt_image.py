@@ -292,8 +292,9 @@ def pull_prebuilt_image(
     log: Callable[[str], None],
 ) -> PulledImage:
     """Pull the image built from ``commit`` (verifying its signature when it's from our registry) and tag it as the
-    app's image (what ``build_image`` would otherwise produce). An :class:`ImageUnavailableError` is retried up to :data:`PULL_ATTEMPTS` times in all and then raised,
-    for the caller to fall back to a build; any other :class:`PrebuiltImageError` is raised at once."""
+    app's image (what ``build_image`` would otherwise produce). An :class:`ImageUnavailableError` is retried up to
+    :data:`PULL_ATTEMPTS` times in all and then raised, for the caller to fall back to a build; any other
+    :class:`PrebuiltImageError` is raised at once."""
     if not _SHA_RE.match(commit):
         raise PrebuiltImageError(f"Expected a full commit sha to pick the prebuilt image, got {commit!r}")
     for attempt, delay in enumerate(PULL_RETRY_DELAYS_SECONDS, start=1):
