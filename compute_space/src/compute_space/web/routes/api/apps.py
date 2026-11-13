@@ -707,6 +707,9 @@ async def _roll_back_update(repo_path: str, pre_pull_sha: str | None, log_file: 
     try:
         await reset_hard(Path(repo_path), pre_pull_sha)
     except Exception as e:  # noqa: BLE001
+        # The refused version is left on disk, where a plain reload would deploy it, so make it visible to operators
+        # as well as in the app's build log.
+        logger.warning("failed to roll back refused update in {} to {}: {}", repo_path, pre_pull_sha, e)
         with open(log_file, "a") as lf:
             lf.write(f"WARNING: failed to roll back refused update to {pre_pull_sha}: {e}\n")
 
