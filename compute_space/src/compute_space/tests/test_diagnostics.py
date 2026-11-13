@@ -281,7 +281,7 @@ def test_resource_usage_returns_only_chart_data(
         patch("compute_space.core.diagnostics._collect_container_stats_batch", return_value=batch),
         patch("compute_space.core.diagnostics._collect_resource_pressure", return_value=pressure),
         patch("compute_space.core.diagnostics._collect_reachability") as reachability,
-        patch("compute_space.core.diagnostics.storage_status") as storage,
+        patch("compute_space.core.diagnostics.get_usage_snapshot") as storage,
         patch("compute_space.core.diagnostics._collect_git_info") as git_info,
         patch("compute_space.core.diagnostics._collect_app_health") as app_health,
     ):
@@ -519,14 +519,14 @@ def test_platform_diagnostics_survives_storage_failure(
     cfg: Any, system_client: TestClient[Litestar], cookies: dict[str, str]
 ) -> None:
     with patch(
-        "compute_space.core.diagnostics.storage_status",
+        "compute_space.core.diagnostics.get_usage_snapshot",
         side_effect=OSError("disk gone"),
     ):
         system_client.cookies.update(cookies)
         resp = system_client.get("/api/diagnostics")
     assert resp.status_code == 200
-    # Storage degrades to an empty dict rather than sinking the whole bundle.
-    assert resp.json()["storage"] == {}
+    # Storage degrades to null rather than sinking the whole bundle.
+    assert resp.json()["storage"] is None
 
 
 def test_platform_diagnostics_propagates_db_failure(cfg: Any) -> None:
@@ -537,7 +537,7 @@ def test_platform_diagnostics_propagates_db_failure(cfg: Any) -> None:
     broken.execute.side_effect = sqlite3.OperationalError("no such table")
     real_config = Config(**{f.name: getattr(cfg, f.name) for f in attr.fields(Config)})
     with (
-        patch("compute_space.core.diagnostics.storage_status", return_value={}),
+        patch("compute_space.core.diagnostics.get_usage_snapshot", return_value=None),
         pytest.raises(sqlite3.OperationalError),
     ):
         asyncio.run(diagnostics.collect_platform_diagnostics(broken, real_config))

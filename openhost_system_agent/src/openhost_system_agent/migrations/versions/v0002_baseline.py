@@ -13,6 +13,7 @@ from openhost_system_agent.migrations.base import SystemMigration
 from openhost_system_agent.migrations.helpers import ensure_line
 from openhost_system_agent.migrations.helpers import get_host_uid
 from openhost_system_agent.migrations.helpers import run
+from openhost_system_agent.migrations.helpers import run_apt_get
 from openhost_system_agent.migrations.helpers import set_sshd_option
 from openhost_system_agent.migrations.helpers import write_file
 
@@ -117,9 +118,8 @@ class Migration0002Baseline(SystemMigration):
         self._systemd_service()
 
     def _apt_packages(self) -> None:
-        run("apt-get", "update", "-qq")
-        run(
-            "apt-get",
+        run_apt_get("update", "-qq")
+        run_apt_get(
             "install",
             "-y",
             "-qq",
@@ -134,7 +134,7 @@ class Migration0002Baseline(SystemMigration):
             "passt",
             "golang-github-containers-common",
         )
-        subprocess.run(["apt-get", "remove", "-y", "-qq", "podman", "crun"], check=False)
+        run_apt_get("remove", "-y", "-qq", "podman", "crun", check=False)
 
     def _fuse_config(self) -> None:
         ensure_line("/etc/fuse.conf", "user_allow_other")
@@ -196,7 +196,8 @@ class Migration0002Baseline(SystemMigration):
         set_sshd_option("PasswordAuthentication", "no")
         set_sshd_option("KbdInteractiveAuthentication", "no")
         set_sshd_option("PermitRootLogin", "prohibit-password")
-        run("systemctl", "reload", "ssh")
+        # Package upgrades can leave the socket-activated SSH service inactive.
+        run("systemctl", "reload-or-restart", "ssh")
 
     def _systemd_service(self) -> None:
         write_file(RECLAIM_SCRIPT_PATH, RECLAIM_SCRIPT, mode=0o755)

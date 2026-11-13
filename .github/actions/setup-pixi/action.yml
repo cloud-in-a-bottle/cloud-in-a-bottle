@@ -1,0 +1,32 @@
+name: Set up pinned Pixi
+description: Retry Pixi setup once after a transient dependency-download failure.
+inputs:
+  pixi-version:
+    description: Pixi version to install.
+    default: v0.70.2
+  environments:
+    description: Space-separated Pixi environments to install.
+    default: dev
+runs:
+  using: composite
+  steps:
+    - name: Set up Pixi
+      id: setup
+      continue-on-error: true
+      uses: prefix-dev/setup-pixi@ad1da6449d9e506fd127fd67ab2d054a769f6a94 # v0.11.2
+      with:
+        pixi-version: ${{ inputs.pixi-version }}
+        environments: ${{ inputs.environments }}
+    - name: Wait before retrying
+      if: steps.setup.outcome == 'failure'
+      shell: bash
+      run: |
+        # Discard any binary left by the failed setup before retrying.
+        rm -f "$HOME/.pixi/bin/pixi"
+        sleep 30
+    - name: Retry Pixi setup
+      if: steps.setup.outcome == 'failure'
+      uses: prefix-dev/setup-pixi@ad1da6449d9e506fd127fd67ab2d054a769f6a94 # v0.11.2
+      with:
+        pixi-version: ${{ inputs.pixi-version }}
+        environments: ${{ inputs.environments }}

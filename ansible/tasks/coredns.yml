@@ -22,6 +22,11 @@
     dest: /tmp/coredns-pinned.tgz
     checksum: "sha256:{{ coredns_sha256[coredns_arch] }}"
     mode: "0644"
+    timeout: 60
+  register: coredns_download
+  until: coredns_download is succeeded
+  retries: 5
+  delay: 10
 
 - name: Install CoreDNS to /usr/local/bin
   become: yes

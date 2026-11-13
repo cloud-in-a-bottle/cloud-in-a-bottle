@@ -38,6 +38,7 @@ def test_existing_host_rewrites_unit_before_reload_and_skips_reapplication(
     monkeypatch.setattr(v0013_pixi_run_as_is, "get_host_uid", lambda: 1234)
     monkeypatch.setattr(v0013_pixi_run_as_is, "run", run)
     monkeypatch.setattr("os.geteuid", lambda: 0)
+    monkeypatch.setattr("openhost_system_agent.migrations.runner.require_router_stopped", lambda: None)
     registry = [migration for migration in REGISTRY if migration.version <= 13]
 
     if fail_first_reload:

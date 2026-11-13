@@ -78,7 +78,7 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
-      - uses: prefix-dev/setup-pixi@ad1da6449d9e506fd127fd67ab2d054a769f6a94 # v0.11.2
+      - uses: ./.github/actions/setup-pixi
         with:
           pixi-version: v0.70.2
           environments: dev
@@ -195,7 +195,7 @@ jobs:
           # --generate-notes, then prepend our blurb to whatever it produced.
           gh release create "$TAG" \
             --repo "$GITHUB_REPOSITORY" \
-            --title "Cloud in a Bottle $TAG" \
+            --title "$TAG" \
             --generate-notes \
             --draft \
             "${prerelease[@]}" \

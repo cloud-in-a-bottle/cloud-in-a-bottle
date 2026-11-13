@@ -37,14 +37,25 @@ _STORAGE_GUARD_INTERVAL_SECONDS = 300
 
 
 @attr.s(auto_attribs=True, frozen=True)
+class DiskUsage:
+    total_bytes: int
+    used_bytes: int
+    free_bytes: int
+
+
+@attr.s(auto_attribs=True, frozen=True)
 class UsageSnapshot:
     usage_measured_at: float  # epoch seconds
+    disk: DiskUsage
     openhost_data_used_bytes: int
     app_data_used_bytes: int
     swap_file_bytes: int
     build_cache_bytes: int | None
     build_cache_reclaimable_bytes: int | None
     per_app: dict[str, int]
+    storage_min_free_bytes: int | None
+    storage_low: bool
+    guard_paused: bool
 
 
 _guard_paused: bool = False
@@ -52,8 +63,8 @@ _guard_lock = threading.Lock()
 _guard_db_paths: set[str] = set()
 
 # Walking app data and querying podman take seconds on a busy instance, so the
-# guard loop measures usage in the background and requests read the latest
-# snapshot.  Keyed by data_root_dir.
+# guard loop measures storage status in the background and requests read the
+# latest snapshot.  Keyed by data_root_dir.
 _usage_snapshots: dict[str, UsageSnapshot] = {}
 _usage_lock = threading.Lock()
 
@@ -67,6 +78,9 @@ def set_guard_paused(paused: bool) -> None:
     with _guard_lock:
         global _guard_paused
         _guard_paused = paused
+    with _usage_lock:
+        for key, snapshot in _usage_snapshots.items():
+            _usage_snapshots[key] = attr.evolve(snapshot, guard_paused=paused)
     state = "paused" if paused else "resumed"
     logger.info("Storage guard {}", state)
 
@@ -192,11 +206,12 @@ def _add_sizes(into: dict[str, int], sizes: dict[str, int]) -> None:
 
 
 def per_app_usage(config: Config) -> dict[str, int]:
-    """Return ``{app_name: bytes_used}`` across each app's app_data and app_temp_data dirs."""
+    """Return ``{app_name: bytes_used}`` across each app's local data and checkout directories."""
     _ensure_storage_roots(config)
     seen: set[tuple[int, int]] = set()
     result = _subdir_sizes(os.path.join(config.persistent_data_dir, "app_data"), seen)
     _add_sizes(result, _subdir_sizes(os.path.join(config.temporary_data_dir, "app_temp_data"), seen))
+    _add_sizes(result, _subdir_sizes(os.path.join(config.temporary_data_dir, "app_checkouts"), seen))
     return result
 
 
@@ -248,7 +263,7 @@ def check_before_deploy(config: Config) -> None:
 
 
 def _measure_usage(config: Config) -> UsageSnapshot:
-    """Walk app data and query podman for the slow part of the storage status."""
+    """Measure the full storage status: disk totals, per-app usage, images and guard state."""
     _ensure_storage_roots(config)
     # The podman queries are slow (``ps --size`` walks every container layer),
     # so they run alongside the directory walks.
@@ -259,8 +274,10 @@ def _measure_usage(config: Config) -> UsageSnapshot:
         _add_sizes(per_app, layers_future.result())
         build_cache, build_cache_reclaimable = image_future.result()
 
+    disk = shutil.disk_usage(config.data_root_dir)
     return UsageSnapshot(
         usage_measured_at=time.time(),
+        disk=DiskUsage(total_bytes=disk.total, used_bytes=disk.used, free_bytes=disk.free),
         openhost_data_used_bytes=openhost_data_usage_bytes(config),
         app_data_used_bytes=sum(per_app.values())
         + _loose_file_bytes(os.path.join(config.persistent_data_dir, "app_data")),
@@ -268,6 +285,9 @@ def _measure_usage(config: Config) -> UsageSnapshot:
         build_cache_bytes=build_cache,
         build_cache_reclaimable_bytes=build_cache_reclaimable,
         per_app=per_app,
+        storage_min_free_bytes=storage_min_free_bytes(config),
+        storage_low=storage_low(config),
+        guard_paused=is_guard_paused(),
     )
 
 
@@ -283,38 +303,18 @@ def refresh_usage_snapshot(config: Config) -> UsageSnapshot:
         return _store_usage_snapshot(config)
 
 
-def _get_usage_snapshot(config: Config) -> UsageSnapshot:
-    """Latest snapshot; measured on demand if the background loop hasn't produced one yet."""
+def get_usage_snapshot(config: Config) -> UsageSnapshot:
+    """Latest storage status snapshot; measured on demand if the background loop hasn't produced one yet.
+
+    Both persistent and temporary data live on the same disk (under
+    ``data_root_dir``), so we report a single unified disk metric.
+    """
     snapshot = _usage_snapshots.get(config.data_root_dir)
     if snapshot is not None:
         return snapshot
     with _usage_lock:
         snapshot = _usage_snapshots.get(config.data_root_dir)
         return snapshot if snapshot is not None else _store_usage_snapshot(config)
-
-
-def storage_status(config: Config) -> dict[str, object]:
-    """Return disk totals and usage for the System page / API.
-
-    Disk free and guard state are read live; the per-app breakdown comes from
-    the latest usage snapshot.  Both persistent and temporary data live on the
-    same disk (under ``data_root_dir``), so we report a single unified disk
-    metric.
-    """
-    _ensure_storage_roots(config)
-    snapshot = _get_usage_snapshot(config)
-    disk = shutil.disk_usage(config.data_root_dir)
-    return {
-        "disk": {
-            "total_bytes": disk.total,
-            "used_bytes": disk.used,
-            "free_bytes": disk.free,
-        },
-        **attr.asdict(snapshot),
-        "storage_min_free_bytes": storage_min_free_bytes(config),
-        "storage_low": storage_low(config),
-        "guard_paused": is_guard_paused(),
-    }
 
 
 # ---------------------------------------------------------------------------

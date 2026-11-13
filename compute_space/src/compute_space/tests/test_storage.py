@@ -4,7 +4,6 @@ import os
 import sqlite3
 from collections import namedtuple
 from typing import Any
-from typing import cast
 
 import pytest
 
@@ -14,7 +13,7 @@ from compute_space.core.app_id import new_app_id
 from compute_space.tests.conftest import _make_test_config
 
 
-def test_storage_status_includes_disk_totals(tmp_path, monkeypatch):
+def test_usage_snapshot_includes_disk_totals(tmp_path, monkeypatch):
     # Guard off here so storage_min_free_bytes is None (this test asserts that).
     config = _make_test_config(tmp_path, storage_min_free_mb=0)
     usage = namedtuple("usage", ["total", "used", "free"])
@@ -38,24 +37,20 @@ def test_storage_status_includes_disk_totals(tmp_path, monkeypatch):
     monkeypatch.setattr(storage, "container_image_storage_bytes", lambda: (7 * 1024**3, 3 * 1024**3))
     monkeypatch.setattr(storage, "app_container_writable_layer_bytes", lambda: {})
 
-    status = cast(dict[str, Any], storage.storage_status(config))
+    status = storage.get_usage_snapshot(config)
 
-    assert config.data_root_dir in calls, "storage_status should query data_root_dir"
-    assert status["disk"]["total_bytes"] == 10 * 1024**3
-    assert status["disk"]["used_bytes"] == 4 * 1024**3
-    assert status["disk"]["free_bytes"] == 6 * 1024**3
-    assert "persistent" not in status
-    assert "temporary" not in status
-    assert status["openhost_data_used_bytes"] > 0
-    assert status["app_data_used_bytes"] > 0
-    assert status["build_cache_bytes"] == 7 * 1024**3
-    assert status["build_cache_reclaimable_bytes"] == 3 * 1024**3
-    assert status["storage_min_free_bytes"] is None
-    assert status["storage_low"] is False
-    assert status["guard_paused"] is False
+    assert config.data_root_dir in calls, "get_usage_snapshot should query data_root_dir"
+    assert status.disk == storage.DiskUsage(total_bytes=10 * 1024**3, used_bytes=4 * 1024**3, free_bytes=6 * 1024**3)
+    assert status.openhost_data_used_bytes > 0
+    assert status.app_data_used_bytes > 0
+    assert status.build_cache_bytes == 7 * 1024**3
+    assert status.build_cache_reclaimable_bytes == 3 * 1024**3
+    assert status.storage_min_free_bytes is None
+    assert status.storage_low is False
+    assert status.guard_paused is False
 
 
-def test_storage_status_with_min_free(tmp_path, monkeypatch):
+def test_usage_snapshot_with_min_free(tmp_path, monkeypatch):
     config = _make_test_config(tmp_path, storage_min_free_mb=1000)
     usage = namedtuple("usage", ["total", "used", "free"])
 
@@ -69,14 +64,14 @@ def test_storage_status_with_min_free(tmp_path, monkeypatch):
     monkeypatch.setattr(storage, "container_image_storage_bytes", lambda: (None, None))
     monkeypatch.setattr(storage, "app_container_writable_layer_bytes", lambda: {})
 
-    status = cast(dict[str, Any], storage.storage_status(config))
+    status = storage.get_usage_snapshot(config)
 
-    assert config.data_root_dir in calls, "storage_status should query data_root_dir"
-    assert status["storage_min_free_bytes"] == 1000 * 1024 * 1024
-    assert status["storage_low"] is False  # 6 GiB free > 1000 MiB required
+    assert config.data_root_dir in calls, "get_usage_snapshot should query data_root_dir"
+    assert status.storage_min_free_bytes == 1000 * 1024 * 1024
+    assert status.storage_low is False  # 6 GiB free > 1000 MiB required
     # Podman unavailable → the category degrades to None rather than failing the endpoint.
-    assert status["build_cache_bytes"] is None
-    assert status["build_cache_reclaimable_bytes"] is None
+    assert status.build_cache_bytes is None
+    assert status.build_cache_reclaimable_bytes is None
 
 
 def _write(path: str, size: int) -> None:
@@ -95,10 +90,10 @@ def test_app_data_total_combines_per_app_and_loose_files(tmp_path, monkeypatch):
     monkeypatch.setattr(storage, "container_image_storage_bytes", lambda: (None, None))
     monkeypatch.setattr(storage, "app_container_writable_layer_bytes", lambda: {})
 
-    status = cast(dict[str, Any], storage.storage_status(config))
+    status = storage.get_usage_snapshot(config)
 
-    assert status["per_app"] == {"immich": 300 * 1024}
-    assert status["app_data_used_bytes"] == 500 * 1024
+    assert status.per_app == {"immich": 300 * 1024}
+    assert status.app_data_used_bytes == 500 * 1024
 
 
 def test_per_app_includes_temp_data_and_container_layer(tmp_path, monkeypatch):
@@ -109,9 +104,9 @@ def test_per_app_includes_temp_data_and_container_layer(tmp_path, monkeypatch):
     monkeypatch.setattr(storage, "container_image_storage_bytes", lambda: (None, None))
     monkeypatch.setattr(storage, "app_container_writable_layer_bytes", lambda: {"notes": 1000, "layer-only": 2000})
 
-    status = cast(dict[str, Any], storage.storage_status(config))
+    status = storage.get_usage_snapshot(config)
 
-    assert status["per_app"] == {"notes": 8192 + 4096 + 1000, "tempy": 4096, "layer-only": 2000}
+    assert status.per_app == {"notes": 8192 + 4096 + 1000, "tempy": 4096, "layer-only": 2000}
 
 
 def test_openhost_data_includes_db_dir_and_vm_data(tmp_path):
@@ -233,44 +228,61 @@ def test_per_app_usage(tmp_path):
     assert result["notes"] == 4096
     assert result["docs"] == 8192
 
+    _write(os.path.join(config.temporary_data_dir, "app_checkouts", "notes", "source.bin"), 4096)
+    _write(os.path.join(config.temporary_data_dir, "app_checkouts", "checkout-only", "source.bin"), 4096)
+    result = storage.per_app_usage(config)
+    assert result["notes"] == 8192
+    assert result["docs"] == 8192
+    assert result["checkout-only"] == 4096
 
-def test_storage_status_serves_cached_usage_with_live_disk_free(tmp_path, monkeypatch):
+
+def test_usage_snapshot_is_cached_until_refreshed(tmp_path, monkeypatch):
     config = _make_test_config(tmp_path)
-    usage = namedtuple("usage", ["total", "used", "free"])
     measured = []
 
     def fake_measure(_config):
         measured.append(True)
         return storage.UsageSnapshot(
             usage_measured_at=float(len(measured)),
+            disk=storage.DiskUsage(total_bytes=10, used_bytes=4, free_bytes=6),
             openhost_data_used_bytes=0,
             app_data_used_bytes=0,
             swap_file_bytes=0,
             build_cache_bytes=None,
             build_cache_reclaimable_bytes=None,
             per_app={"notes": len(measured)},
+            storage_min_free_bytes=None,
+            storage_low=False,
+            guard_paused=False,
         )
 
-    free = [6 * 1024**3]
     monkeypatch.setattr(storage, "_measure_usage", fake_measure)
-    monkeypatch.setattr(
-        storage.shutil, "disk_usage", lambda _p: usage(total=10 * 1024**3, used=4 * 1024**3, free=free[0])
-    )
 
-    first = cast(dict[str, Any], storage.storage_status(config))
-    free[0] = 5 * 1024**3
-    second = cast(dict[str, Any], storage.storage_status(config))
-
+    first = storage.get_usage_snapshot(config)
+    second = storage.get_usage_snapshot(config)
     assert len(measured) == 1
-    assert second["per_app"] == {"notes": 1}
-    assert second["usage_measured_at"] == first["usage_measured_at"]
-    assert second["disk"]["free_bytes"] == 5 * 1024**3
+    assert second is first
 
-    storage.refresh_usage_snapshot(config)
-    refreshed = cast(dict[str, Any], storage.storage_status(config))
+    refreshed = storage.refresh_usage_snapshot(config)
     assert len(measured) == 2
-    assert refreshed["per_app"] == {"notes": 2}
-    assert refreshed["usage_measured_at"] == 2.0
+    assert refreshed.per_app == {"notes": 2}
+    assert storage.get_usage_snapshot(config) is refreshed
+
+
+def test_set_guard_paused_updates_cached_snapshot(tmp_path, monkeypatch):
+    config = _make_test_config(tmp_path)
+    monkeypatch.setattr(storage, "container_image_storage_bytes", lambda: (None, None))
+    monkeypatch.setattr(storage, "app_container_writable_layer_bytes", lambda: {})
+    measured_at = storage.get_usage_snapshot(config).usage_measured_at
+
+    storage.set_guard_paused(True)
+    try:
+        snapshot = storage.get_usage_snapshot(config)
+        assert snapshot.guard_paused is True
+        assert snapshot.usage_measured_at == measured_at
+    finally:
+        storage.set_guard_paused(False)
+    assert storage.get_usage_snapshot(config).guard_paused is False
 
 
 def test_guard_loop_refreshes_snapshot_then_enforces(tmp_path, monkeypatch):
