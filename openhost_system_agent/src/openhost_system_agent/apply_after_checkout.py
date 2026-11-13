@@ -37,6 +37,7 @@ import sys
 from pathlib import Path
 
 from openhost_system_agent.detach import start_openhost
+from openhost_system_agent.git_commands import git_command
 from openhost_system_agent.migrations.runner import apply_system_migrations
 from openhost_system_agent.reclaim import reclaim_host_ownership
 from openhost_system_agent.release_tags import RC_TAG as _RC_TAG
@@ -58,7 +59,7 @@ _PRERELEASES_CONFIG = "openhost.prereleases"
 
 
 def _git(project: str, *args: str) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(["git", *args], cwd=project, capture_output=True, text=True, timeout=60)
+    return subprocess.run(git_command(*args), cwd=project, capture_output=True, text=True, timeout=60)
 
 
 def _ensure_repo_trusted(project: str) -> None:
@@ -214,8 +215,10 @@ def _apply(project: str) -> None:
     if nxt:
         # Check out the resolved commit (a branch tip becomes detached HEAD).
         progress.record("checkout", f"Checking out {nxt}\u2026", ref=nxt)
-        subprocess.run(["git", "checkout", _resolve_ref_sha(project, nxt) or nxt], cwd=project, check=True, timeout=60)
-        subprocess.run(["git", "clean", "-fd"], cwd=project, check=True, timeout=60)
+        subprocess.run(
+            git_command("checkout", _resolve_ref_sha(project, nxt) or nxt), cwd=project, check=True, timeout=60
+        )
+        subprocess.run(git_command("clean", "-fd"), cwd=project, check=True, timeout=60)
         # Tail-call into the next ref's code, replacing this process so the
         # walk stays a single process regardless of how many steps we're behind.
         os.execv(sys.executable, [sys.executable, str(Path(__file__).resolve())])

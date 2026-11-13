@@ -1,6 +1,6 @@
 """Updating an app that sets prebuilt_image, through the /reload_app route: tracking its default branch it moves to the
-newest release and pulls that image before stopping anything; a failure leaves the running version untouched; a
-pinned ref builds as before."""
+newest release and pulls that image (or, when it can't be fetched, builds the release) before stopping anything; a
+failure leaves the running version untouched; a pinned ref builds as before."""
 
 from __future__ import annotations
 
@@ -18,7 +18,11 @@ from litestar import Litestar
 from litestar.testing import TestClient
 
 from compute_space.core.app_id import new_app_id
-from compute_space.core.prebuilt_image import PrebuiltImageError
+from compute_space.core.apps import ImageSource
+from compute_space.core.apps import PreparedImage
+from compute_space.core.prebuilt_image import ImageUnavailableError
+from compute_space.core.prebuilt_image import ImageVerificationError
+from compute_space.core.prebuilt_image import PulledImage
 from compute_space.db.connection import init_db
 from compute_space.tests._litestar_helpers import auth_cookie
 from compute_space.tests._litestar_helpers import make_test_app
@@ -112,18 +116,40 @@ def _real_pull(repo_path: str, *_: Any, repo_url: str = "", **__: Any) -> tuple[
 
 
 @contextlib.contextmanager
-def _mocked(pull_side_effect: Any = None) -> Iterator[dict[str, Any]]:
+def _mocked(pull_side_effect: Any = None, build_side_effect: Any = None) -> Iterator[dict[str, Any]]:
+    """Mocks git_pull (with a real fetch and checkout), the image pull and build, and everything after the claim.
+    ``events`` records the pull, build and stop in order."""
+    events: list[str] = []
+
+    def record(name: str, side_effect: Any, result: Any) -> Any:
+        def call(*_: Any, **__: Any) -> Any:
+            events.append(name)
+            if isinstance(side_effect, BaseException):
+                raise side_effect
+            return result
+
+        return call
+
     with (
         patch("compute_space.web.routes.api.apps.git_pull", side_effect=_real_pull),
         patch(
             "compute_space.core.apps.pull_prebuilt_image",
-            side_effect=pull_side_effect,
-            return_value="openhost-rel-app:latest",
+            side_effect=record("pull", pull_side_effect, PulledImage(tag="openhost-rel-app:latest", verified=False)),
         ) as pull,
-        patch("compute_space.web.routes.api.apps.stop_app_process") as stop,
+        patch(
+            "compute_space.core.apps.build_image",
+            side_effect=record("build", build_side_effect, "openhost-rel-app:latest"),
+        ) as build,
+        patch("compute_space.web.routes.api.apps.stop_app_process", side_effect=record("stop", None, None)) as stop,
         patch("compute_space.web.routes.api.apps.Thread") as thread,
     ):
-        yield {"pull": pull, "stop": stop, "thread": thread}
+        yield {"pull": pull, "build": build, "stop": stop, "thread": thread, "events": events}
+
+
+def _prepared_image(thread: Any) -> PreparedImage | None:
+    """The image the update handed to the background reload."""
+    prepared: PreparedImage | None = thread.call_args.kwargs["kwargs"]["prepared_image"]
+    return prepared
 
 
 def _row(cfg: Any, app_id: str) -> tuple[str, str | None, str]:
@@ -148,27 +174,68 @@ def test_update_moves_to_the_newest_release_and_pulls_it_before_stopping(
         resp = client.post(f"/reload_app/{app_id}", json={"update": True})
     assert resp.json() == {"ok": True}
     assert _git(repo, "rev-parse", "HEAD") == target
-    m["pull"].assert_called_once()
-    m["stop"].assert_called_once()
+    assert m["events"] == ["pull", "stop"]
     m["thread"].assert_called_once()
+    assert _prepared_image(m["thread"]) == PreparedImage(tag="openhost-rel-app:latest", source=ImageSource.PULLED)
     # Still tracking the default branch: nothing pinned.
     assert _row(cfg, app_id)[2] == "https://github.com/x/rel-app"
 
 
-def test_failed_pull_leaves_the_running_version_untouched(
+def test_unavailable_image_is_built_before_stopping_the_running_version(
+    cfg: Any, client: TestClient[Litestar], tmp_path: Path
+) -> None:
+    app_id, origin, repo, _ = _seed(cfg, tmp_path)
+    target = _commit(origin, "1.1.0", "v1.1.0")
+    with _mocked(pull_side_effect=ImageUnavailableError("registry unreachable")) as m:
+        resp = client.post(f"/reload_app/{app_id}", json={"update": True})
+    assert resp.json() == {"ok": True}
+    assert _git(repo, "rev-parse", "HEAD") == target
+    assert m["events"] == ["pull", "build", "stop"]
+    assert m["build"].call_args.args[:2] == ("rel-app", str(repo))
+    m["thread"].assert_called_once()
+    # The background reload runs what was built here, rather than pulling and building again after the stop.
+    assert _prepared_image(m["thread"]) == PreparedImage(
+        tag="openhost-rel-app:latest", source=ImageSource.FALLBACK_BUILT
+    )
+    log = (Path(cfg.temporary_data_dir) / "app_temp_data" / "rel-app" / "docker.log").read_text()
+    assert "falling back to building it locally" in log
+
+
+def test_failed_fallback_build_leaves_the_running_version_untouched(
     cfg: Any, client: TestClient[Litestar], tmp_path: Path
 ) -> None:
     app_id, origin, repo, running = _seed(cfg, tmp_path)
     _commit(origin, "1.1.0", "v1.1.0")
-    with _mocked(pull_side_effect=PrebuiltImageError("manifest unknown")) as m:
+    with _mocked(
+        pull_side_effect=ImageUnavailableError("registry unreachable"),
+        build_side_effect=RuntimeError("Container build failed: out of memory"),
+    ) as m:
         resp = client.post(f"/reload_app/{app_id}", json={"update": True})
     assert resp.json() == {"ok": True}
-    m["stop"].assert_not_called()
+    assert m["events"] == ["pull", "build"]
     m["thread"].assert_not_called()
     assert _git(repo, "rev-parse", "HEAD") == running  # rolled back to what's running
     status, error, _ = _row(cfg, app_id)
     assert status == "error"
-    assert error is not None and "manifest unknown" in error
+    assert error is not None
+    assert error.startswith("Update not applied: ")
+    assert "registry unreachable" in error and "out of memory" in error
+
+
+def test_failed_verification_leaves_the_running_version_untouched_without_building(
+    cfg: Any, client: TestClient[Litestar], tmp_path: Path
+) -> None:
+    app_id, origin, repo, running = _seed(cfg, tmp_path)
+    _commit(origin, "1.1.0", "v1.1.0")
+    with _mocked(pull_side_effect=ImageVerificationError("signature mismatch")) as m:
+        resp = client.post(f"/reload_app/{app_id}", json={"update": True})
+    assert resp.json() == {"ok": True}
+    assert m["events"] == ["pull"]
+    m["thread"].assert_not_called()
+    assert _git(repo, "rev-parse", "HEAD") == running  # rolled back to what's running
+    status, error, _ = _row(cfg, app_id)
+    assert status == "error"
+    assert error is not None and "signature mismatch" in error
 
 
 def test_no_release_tag_fails_the_update_and_leaves_the_app_running(
@@ -201,6 +268,7 @@ def test_pinned_ref_ignores_prebuilt_image_and_builds_its_head(
         resp = client.post(f"/reload_app/{app_id}", json={"update": True})
     assert resp.json() == {"ok": True}
     assert _git(repo, "rev-parse", "HEAD") == head
-    m["stop"].assert_called_once()
+    # Built after the stop, by the background reload, as for any app that doesn't use a prebuilt image.
+    assert m["events"] == ["stop"]
     m["thread"].assert_called_once()
-    m["pull"].assert_not_called()
+    assert _prepared_image(m["thread"]) is None
