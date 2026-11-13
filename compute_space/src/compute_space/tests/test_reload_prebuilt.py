@@ -38,8 +38,10 @@ version = "{version}"
 [runtime.container]
 image = "Dockerfile"
 port = 5000
-prebuilt_image = "registry.cloudinabottle.org/rel-app"
+prebuilt_image = "{image}"
 """
+_SIGNED = "registry.cloudinabottle.org/rel-app"
+_UNSIGNED = "ghcr.io/x/rel-app"
 
 
 def _git(cwd: Path, *args: str) -> str:
@@ -59,8 +61,8 @@ def _git(cwd: Path, *args: str) -> str:
     ).stdout.strip()
 
 
-def _commit(origin: Path, version: str, tag: str | None) -> str:
-    (origin / "cloudinabottle.toml").write_text(_MANIFEST.format(version=version))
+def _commit(origin: Path, version: str, tag: str | None, image: str = _SIGNED) -> str:
+    (origin / "cloudinabottle.toml").write_text(_MANIFEST.format(version=version, image=image))
     _git(origin, "add", ".")
     _git(origin, "commit", "-m", version)
     if tag:
@@ -83,10 +85,14 @@ def client(cfg: Any) -> Iterator[TestClient[Litestar]]:
 
 
 def _seed(
-    cfg: Any, tmp_path: Path, repo_url: str = "https://github.com/x/rel-app", tag: str | None = "v1.0.0"
+    cfg: Any,
+    tmp_path: Path,
+    repo_url: str = "https://github.com/x/rel-app",
+    tag: str | None = "v1.0.0",
+    verified: bool = False,
 ) -> tuple[str, Path, Path, str]:
-    """An origin with one commit (tagged ``tag``), and an installed app running it from a clone. Returns (app_id,
-    origin, repo, sha)."""
+    """An origin with one commit (tagged ``tag``), and an installed app running it from a clone, its last prebuilt
+    image ``verified`` or not. Returns (app_id, origin, repo, sha)."""
     origin = tmp_path / "origin"
     origin.mkdir()
     _git(origin, "init", "-b", "main")
@@ -97,9 +103,9 @@ def _seed(
     db = sqlite3.connect(cfg.db_path)
     try:
         db.execute(
-            "INSERT INTO apps (app_id, name, version, repo_path, repo_url, local_port, status, manifest_raw) "
-            "VALUES (?, 'rel-app', '1.0.0', ?, ?, 20902, 'running', ?)",
-            (app_id, str(repo), repo_url, _MANIFEST.format(version="1.0.0")),
+            "INSERT INTO apps (app_id, name, version, repo_path, repo_url, local_port, status, manifest_raw, "
+            "prebuilt_image_verified) VALUES (?, 'rel-app', '1.0.0', ?, ?, 20902, 'running', ?, ?)",
+            (app_id, str(repo), repo_url, _MANIFEST.format(version="1.0.0", image=_SIGNED), int(verified)),
         )
         db.commit()
     finally:
@@ -116,9 +122,11 @@ def _real_pull(repo_path: str, *_: Any, repo_url: str = "", **__: Any) -> tuple[
 
 
 @contextlib.contextmanager
-def _mocked(pull_side_effect: Any = None, build_side_effect: Any = None) -> Iterator[dict[str, Any]]:
-    """Mocks git_pull (with a real fetch and checkout), the image pull and build, and everything after the claim.
-    ``events`` records the pull, build and stop in order."""
+def _mocked(
+    pull_side_effect: Any = None, build_side_effect: Any = None, pulled_verified: bool = False
+) -> Iterator[dict[str, Any]]:
+    """Mocks git_pull (with a real fetch and checkout), the image pull (its result ``pulled_verified`` or not) and
+    build, and everything after the claim. ``events`` records the pull, build and stop in order."""
     events: list[str] = []
 
     def record(name: str, side_effect: Any, result: Any) -> Any:
@@ -134,7 +142,9 @@ def _mocked(pull_side_effect: Any = None, build_side_effect: Any = None) -> Iter
         patch("compute_space.web.routes.api.apps.git_pull", side_effect=_real_pull),
         patch(
             "compute_space.core.apps.pull_prebuilt_image",
-            side_effect=record("pull", pull_side_effect, PulledImage(tag="openhost-rel-app:latest", verified=False)),
+            side_effect=record(
+                "pull", pull_side_effect, PulledImage(tag="openhost-rel-app:latest", verified=pulled_verified)
+            ),
         ) as pull,
         patch(
             "compute_space.core.apps.build_image",
@@ -274,3 +284,147 @@ def test_pinned_ref_ignores_prebuilt_image_and_builds_its_head(
     assert m["events"] == ["stop"]
     m["thread"].assert_called_once()
     assert _prepared_image(m["thread"]) is None
+
+
+# --- an image that stops being signature-verified ---
+
+
+def _verified_flag(cfg: Any, app_id: str) -> bool:
+    db = sqlite3.connect(cfg.db_path)
+    try:
+        return bool(db.execute("SELECT prebuilt_image_verified FROM apps WHERE app_id = ?", (app_id,)).fetchone()[0])
+    finally:
+        db.close()
+
+
+def _run_background_reload(thread: Any) -> None:
+    """Run the reload the route handed to its thread, with the container launch mocked to succeed: the deploy that
+    records which image the app now runs."""
+
+    def launched(app_id: str, _tag: str, _manifest: Any, db: sqlite3.Connection, _config: Any, **__: Any) -> None:
+        db.execute("UPDATE apps SET status = 'running' WHERE app_id = ?", (app_id,))
+        db.commit()
+
+    call = thread.call_args
+    with patch("compute_space.core.apps.run_app_image", side_effect=launched):
+        call.kwargs["target"](*call.kwargs["args"], **call.kwargs["kwargs"])
+
+
+def test_update_moving_a_verified_app_off_our_registry_asks_before_pulling_or_stopping(
+    cfg: Any, client: TestClient[Litestar], tmp_path: Path
+) -> None:
+    app_id, origin, repo, running = _seed(cfg, tmp_path, verified=True)
+    _commit(origin, "1.1.0", "v1.1.0", image=_UNSIGNED)
+    with _mocked() as m:
+        resp = client.post(f"/reload_app/{app_id}", json={"update": True})
+    body = resp.json()
+    assert body["review_required"] is True
+    assert body["image_verification_lost"] == {
+        "previous_image": _SIGNED,
+        "previous_registry": "registry.cloudinabottle.org",
+        "new_image": _UNSIGNED,
+        "new_registry": "ghcr.io",
+    }
+    assert "no longer signature-verified" in body["error"]
+    assert body["permissions_required"] == []
+    assert [c["label"] for c in body["settings_changed"] if c["label"] == "Prebuilt image"] == ["Prebuilt image"]
+    assert m["events"] == []
+    m["thread"].assert_not_called()
+    assert _git(repo, "rev-parse", "HEAD") == running  # rolled back to what's running
+    assert _row(cfg, app_id)[0] == "running"
+    assert _verified_flag(cfg, app_id)
+
+
+def test_an_approved_move_off_our_registry_is_applied_and_clears_the_flag(
+    cfg: Any, client: TestClient[Litestar], tmp_path: Path
+) -> None:
+    app_id, origin, repo, _ = _seed(cfg, tmp_path, verified=True)
+    target = _commit(origin, "1.1.0", "v1.1.0", image=_UNSIGNED)
+    with _mocked() as m:
+        resp = client.post(f"/reload_app/{app_id}", json={"update": True, "approve_new_permissions": True})
+        assert resp.json() == {"ok": True}
+        assert m["events"] == ["pull", "stop"]
+        assert _git(repo, "rev-parse", "HEAD") == target
+        assert _prepared_image(m["thread"]) == PreparedImage(
+            tag="openhost-rel-app:latest", source=ImageSource.PULLED_UNVERIFIED
+        )
+        _run_background_reload(m["thread"])
+    assert not _verified_flag(cfg, app_id)
+
+    # Now that the app runs an unverified image, a further update on that registry doesn't ask.
+    _commit(origin, "1.2.0", "v1.2.0", image=_UNSIGNED)
+    with _mocked() as m:
+        resp = client.post(f"/reload_app/{app_id}", json={"update": True})
+    assert resp.json() == {"ok": True}
+    assert m["events"] == ["pull", "stop"]
+
+
+def test_an_app_that_never_ran_a_verified_image_moves_registries_without_asking(
+    cfg: Any, client: TestClient[Litestar], tmp_path: Path
+) -> None:
+    app_id, origin, _, _ = _seed(cfg, tmp_path, verified=False)
+    _commit(origin, "1.1.0", "v1.1.0", image=_UNSIGNED)
+    with _mocked() as m:
+        resp = client.post(f"/reload_app/{app_id}", json={"update": True})
+    assert resp.json() == {"ok": True}
+    assert m["events"] == ["pull", "stop"]
+
+
+def test_a_verified_app_staying_on_our_registry_updates_without_asking(
+    cfg: Any, client: TestClient[Litestar], tmp_path: Path
+) -> None:
+    app_id, origin, _, _ = _seed(cfg, tmp_path, verified=True)
+    _commit(origin, "1.1.0", "v1.1.0")
+    with _mocked(pulled_verified=True) as m:
+        resp = client.post(f"/reload_app/{app_id}", json={"update": True})
+        assert resp.json() == {"ok": True}
+        assert m["events"] == ["pull", "stop"]
+        _run_background_reload(m["thread"])
+    assert _verified_flag(cfg, app_id)
+
+
+def test_a_pinned_verified_app_whose_branch_moves_registries_builds_without_asking(
+    cfg: Any, client: TestClient[Litestar], tmp_path: Path
+) -> None:
+    """A pinned ref ignores prebuilt_image and builds, so nothing would run unverified."""
+    app_id, origin, repo, _ = _seed(cfg, tmp_path, repo_url="https://github.com/x/rel-app@main", verified=True)
+    head = _commit(origin, "1.1.0", "v1.1.0", image=_UNSIGNED)
+    with _mocked() as m:
+        resp = client.post(f"/reload_app/{app_id}", json={"update": True})
+        assert resp.json() == {"ok": True}
+        assert _git(repo, "rev-parse", "HEAD") == head
+        assert m["events"] == ["stop"]
+        _run_background_reload(m["thread"])
+    assert m["events"] == ["stop", "build"]
+    # The build leaves the flag alone.
+    assert _verified_flag(cfg, app_id)
+
+
+def test_an_approved_move_that_falls_back_to_building_asks_again_next_time(
+    cfg: Any, client: TestClient[Litestar], tmp_path: Path
+) -> None:
+    """The owner approved an unverified image, but the registry couldn't be reached and the release was built
+    instead. The app never ran the unverified image, so its flag stays set and the next update asks again."""
+    app_id, origin, repo, _ = _seed(cfg, tmp_path, verified=True)
+    _commit(origin, "1.1.0", "v1.1.0", image=_UNSIGNED)
+    with _mocked(pull_side_effect=ImageUnavailableError("registry unreachable")) as m:
+        resp = client.post(f"/reload_app/{app_id}", json={"update": True, "approve_new_permissions": True})
+        assert resp.json() == {"ok": True}
+        assert m["events"] == ["pull", "build", "stop"]
+        assert _prepared_image(m["thread"]) == PreparedImage(
+            tag="openhost-rel-app:latest", source=ImageSource.FALLBACK_BUILT
+        )
+        _run_background_reload(m["thread"])
+    assert _verified_flag(cfg, app_id)
+
+    built = _git(repo, "rev-parse", "HEAD")
+    _commit(origin, "1.2.0", "v1.2.0", image=_UNSIGNED)
+    with _mocked() as m:
+        resp = client.post(f"/reload_app/{app_id}", json={"update": True})
+    body = resp.json()
+    assert body["review_required"] is True
+    # The running manifest names the unverified image, so the warning names our registry as the verified one.
+    assert body["image_verification_lost"]["previous_image"] is None
+    assert body["image_verification_lost"]["previous_registry"] == "registry.cloudinabottle.org"
+    assert m["events"] == []
+    assert _git(repo, "rev-parse", "HEAD") == built  # rolled back to what's running

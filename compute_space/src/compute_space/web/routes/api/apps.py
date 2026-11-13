@@ -196,6 +196,18 @@ class ReloadAppRequest:
 
 
 @attr.s(auto_attribs=True, frozen=True)
+class ImageVerificationLostInfo:
+    """The app's last prebuilt image was signature-verified, and the update's isn't (see
+    image_verification.verification_lost)."""
+
+    # The running version's image, or None when it is built and the verified image came from an earlier version.
+    previous_image: str | None
+    previous_registry: str
+    new_image: str
+    new_registry: str
+
+
+@attr.s(auto_attribs=True, frozen=True)
 class UpdateReviewRequiredResponse:
     """Returned by ``/reload_app`` when an update's pulled manifest differs from
     the running one and the caller hasn't approved it. The reload is NOT
@@ -203,13 +215,15 @@ class UpdateReviewRequiredResponse:
     re-submits with ``approve_new_permissions``. ``settings_changed`` is the
     grouped old→new diff (non-gating fields included, for context, even though they
     never trigger a review by themselves); ``permissions_required`` the newly
-    declared grants."""
+    declared grants; ``image_verification_lost`` is set when the update's image would no longer be
+    signature-verified."""
 
     ok: bool
     review_required: bool
     settings_changed: list[dict[str, object]]
     permissions_required: list[dict[str, object]]
     error: str
+    image_verification_lost: ImageVerificationLostInfo | None = None
 
 
 @attr.s(auto_attribs=True, frozen=True)
@@ -654,8 +668,11 @@ def _gate_update_review(
     repo_path: str,
     approve_new_permissions: bool,
     previous_manifest_raw: str | None = None,
+    *,
+    repo_url: str | None,
+    prebuilt_image_verified: bool,
 ) -> UpdateReviewRequiredResponse | None:
-    review = pending_update_review(app_id, repo_path, previous_manifest_raw)
+    review = pending_update_review(app_id, repo_path, previous_manifest_raw, repo_url, prebuilt_image_verified)
     if review is None:
         return None
 
@@ -665,6 +682,7 @@ def _gate_update_review(
         return None
 
     shortname_by_service = {c.service: c.shortname for c in review.manifest.consumes_services_v2}
+    loss = review.verification_loss
     return UpdateReviewRequiredResponse(
         ok=False,
         review_required=True,
@@ -677,7 +695,20 @@ def _gate_update_review(
             }
             for pg in review.new_permissions
         ],
-        error="This update changes the app's settings; review and approve them before it can be applied.",
+        error=(
+            "This update's image is no longer signature-verified; review and approve the update before it can be "
+            "applied."
+            if loss is not None and not review.gates_on_settings
+            else "This update changes the app's settings; review and approve them before it can be applied."
+        ),
+        image_verification_lost=None
+        if loss is None
+        else ImageVerificationLostInfo(
+            previous_image=loss.previous_image,
+            previous_registry=loss.previous_registry,
+            new_image=loss.new_image,
+            new_registry=loss.new_registry,
+        ),
     )
 
 
@@ -852,6 +883,9 @@ async def _reload_app_impl(
             app_row["repo_path"],
             approve_new_permissions,
             app_row["manifest_raw"],
+            # The URL the image step below reads, which decides whether the update pulls an image.
+            repo_url=app_repo_url(app_id, db),
+            prebuilt_image_verified=bool(app_row["prebuilt_image_verified"]),
         )
         if review_gate is not None:
             await _roll_back_update(app_row["repo_path"], pre_pull_sha, log_file)

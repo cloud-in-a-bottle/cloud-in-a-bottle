@@ -194,6 +194,62 @@ async def test_update_needing_approval_is_left_and_rolled_back(
     assert _status(app) == "running"
 
 
+def _set_verified_refless(app: FakeApp, verified: bool, repo_url: str | None = None) -> None:
+    """Have the app track its default branch (so it pulls its prebuilt image) and record whether its last prebuilt
+    image was signature-verified."""
+    app.repo_url = repo_url or app.repo_url.rsplit("@", 1)[0]
+    with closing(get_db()) as db:
+        db.execute(
+            "UPDATE apps SET repo_url = ?, prebuilt_image_verified = ? WHERE app_id = ?",
+            (app.repo_url, int(verified), app.app_id),
+        )
+        db.commit()
+
+
+_UNSIGNED_IMAGE = 'prebuilt_image = "ghcr.io/x/{name}"'
+_SIGNED_IMAGE = 'prebuilt_image = "registry.cloudinabottle.org/{name}"'
+
+
+@pytest.mark.asyncio
+async def test_update_whose_image_stops_being_verified_needs_approval(
+    cfg: Config, tmp_path: Path, side_effects: dict[str, Any]
+) -> None:
+    app = FakeApp(cfg, tmp_path, "unsigned", v2_extra=_UNSIGNED_IMAGE.format(name="unsigned"))
+    _set_verified_refless(app, True)
+    result = await apps_mod.auto_update_app(app.app_id, cfg)
+    assert result.outcome == AppUpdateOutcome.NEEDS_APPROVAL
+    assert result.detail == (
+        "approve changes to: image no longer signature-verified "
+        "(moves from registry.cloudinabottle.org to ghcr.io, which isn't verified)"
+    )
+    assert app.head() == app.v1
+    assert side_effects["reloads"] == []
+    assert side_effects["stops"] == 0
+    assert _status(app) == "running"
+    with closing(get_db()) as db:
+        row = db.execute("SELECT prebuilt_image_verified FROM apps WHERE app_id = ?", (app.app_id,)).fetchone()
+    assert row["prebuilt_image_verified"] == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("verified", "image", "pin"),
+    [
+        (True, _SIGNED_IMAGE, False),  # still verified
+        (False, _UNSIGNED_IMAGE, False),  # never verified
+        (True, _UNSIGNED_IMAGE, True),  # pinned: builds, ignoring prebuilt_image
+    ],
+)
+async def test_update_whose_image_isnt_losing_verification_is_applied(
+    cfg: Config, tmp_path: Path, side_effects: dict[str, Any], verified: bool, image: str, pin: bool
+) -> None:
+    app = FakeApp(cfg, tmp_path, "img", v2_extra=image.format(name="img"))
+    _set_verified_refless(app, verified, repo_url=app.repo_url if pin else None)
+    result = await apps_mod.auto_update_app(app.app_id, cfg)
+    assert result.outcome == AppUpdateOutcome.UPDATED
+    assert side_effects["reloads"] == [app.app_id]
+
+
 @pytest.mark.asyncio
 async def test_already_up_to_date(cfg: Config, tmp_path: Path, side_effects: dict[str, Any]) -> None:
     app = FakeApp(cfg, tmp_path, "current")
@@ -315,6 +371,8 @@ async def test_run_updates_every_app_and_records_outcomes(
     perms = FakeApp(cfg, tmp_path, "b-perms", v2_extra=_NEW_PERMISSION)
     crashing = FakeApp(cfg, tmp_path, "c-crashing")
     later = FakeApp(cfg, tmp_path, "d-later")
+    unsigned = FakeApp(cfg, tmp_path, "e-unsigned", v2_extra=_UNSIGNED_IMAGE.format(name="e-unsigned"))
+    _set_verified_refless(unsigned, True)
 
     real = apps_mod.auto_update_app
 
@@ -335,7 +393,11 @@ async def test_run_updates_every_app_and_records_outcomes(
     assert outcomes["c-crashing"] == (AppUpdateOutcome.FAILED, "boom")
     # One app's failure didn't stop the next.
     assert outcomes["d-later"][0] == AppUpdateOutcome.UPDATED
+    unsigned_outcome, unsigned_detail = outcomes["e-unsigned"]
+    assert unsigned_outcome == AppUpdateOutcome.NEEDS_APPROVAL
+    assert unsigned_detail is not None and "no longer signature-verified" in unsigned_detail
     assert plain.head() == plain.v2 and perms.head() == perms.v1 and later.head() == later.v2
+    assert unsigned.head() == unsigned.v1
 
 
 # ─────────────── settings ───────────────

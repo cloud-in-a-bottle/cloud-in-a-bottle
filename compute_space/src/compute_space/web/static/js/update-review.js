@@ -58,6 +58,19 @@ function renderPermissions(perms) {
   show('permissions-section');
 }
 
+function renderImageVerificationLost(loss) {
+  if (!loss) return;
+  var previous = loss.previous_image
+    ? '<code>' + esc(loss.previous_image) + '</code>'
+    : 'from <code>' + esc(loss.previous_registry) + '</code>';
+  document.getElementById('image-verification-text').innerHTML =
+    'This app\'s last prebuilt image (' + previous + ') was signature-verified before it ran. '
+    + 'After this update it runs <code>' + esc(loss.new_image) + '</code> from <code>' + esc(loss.new_registry)
+    + '</code>, a registry whose images are not verified: the app would run whatever that registry serves. '
+    + 'Approve only if you expected the app to move to this registry.';
+  show('image-verification-section');
+}
+
 function approveUpdate() {
   var btn = document.getElementById('approve-btn');
   var msg = document.getElementById('review-msg');
@@ -104,5 +117,6 @@ function cancelReview() {
   if (!review) return;
   renderSettings(review.settings_changed || []);
   renderPermissions(review.permissions_required || []);
+  renderImageVerificationLost(review.image_verification_lost || null);
   show('review-body');
 })();

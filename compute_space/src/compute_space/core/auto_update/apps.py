@@ -96,7 +96,14 @@ async def auto_update_app(app_id: str, config: Config) -> AppUpdateResult:
     if post_sha == pre_sha:
         return result(AppUpdateOutcome.UP_TO_DATE)
 
-    review = await asyncio.to_thread(pending_update_review, app_id, repo_path, row["manifest_raw"])
+    review = await asyncio.to_thread(
+        pending_update_review,
+        app_id,
+        repo_path,
+        row["manifest_raw"],
+        repo_url,
+        bool(row["prebuilt_image_verified"]),
+    )
     if review is not None:
         # As for a refused manual update: keep the checkout matching the running version, so a later plain reload
         # doesn't deploy the unapproved code.
