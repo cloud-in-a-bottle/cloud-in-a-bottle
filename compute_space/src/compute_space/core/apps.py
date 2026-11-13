@@ -737,8 +737,8 @@ class ImageSource(enum.Enum):
 
 @attr.s(auto_attribs=True, frozen=True)
 class PreparedImage:
-    """The app's image, ready to run, and where it came from: ``source`` tells a deploy whose image was verified from
-    one pulled unverified or built locally in its place."""
+    """The app's image, ready to run, and where it came from. ``source`` says whether a deploy runs a verified image,
+    an unverified one, or one built locally (as the app always is, or in place of its prebuilt image)."""
 
     tag: str
     source: ImageSource

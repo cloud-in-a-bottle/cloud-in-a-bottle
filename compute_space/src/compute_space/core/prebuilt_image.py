@@ -62,8 +62,9 @@ class ImageUnavailableError(PrebuiltImageError):
 
 
 class ImageVerificationError(PrebuiltImageError):
-    """The image is there but isn't trusted (e.g. a missing or wrong signature). Never retried and never falls back
-    to a build: an image that fails verification is a sign the registry is serving something it shouldn't."""
+    """The image isn't trusted: its signature is missing or doesn't match, or nothing could verify it. Never retried
+    and never falls back to a build: an image that fails verification is a sign the registry is serving something it
+    shouldn't."""
 
 
 @attr.s(auto_attribs=True, frozen=True)
@@ -167,7 +168,7 @@ def cosign_verify_command(image_ref: str, policy: SignaturePolicy) -> list[str]:
     ]
 
 
-def cosign_resolve_command(tagged: str) -> list[str]:
+def cosign_triangulate_command(tagged: str) -> list[str]:
     # Prints ``<repo>@<digest>``, asking the registry with the same client and credentials ``cosign verify`` uses.
     # triangulate is deprecated for removal in cosign 4; pyproject pins cosign ~=3.1, and
     # test_cosign_still_has_triangulate catches an upgrade that drops it.
@@ -194,15 +195,15 @@ def verified_digest(cosign_stdout: str) -> str:
 
 def resolve_digest(tagged: str, log: Callable[[str], None]) -> str:
     """The digest the registry serves for ``tagged``. Raises :class:`ImageUnavailableError` when the registry can't
-    say: it's unreachable or erroring, or the tag isn't there (yet)."""
-    result = _run(cosign_resolve_command(tagged), log, timeout=120, timeout_error=ImageUnavailableError)
+    say: it's unreachable or erroring, the tag isn't there (yet), or the answer is unreadable."""
+    result = _run(cosign_triangulate_command(tagged), log, timeout=120, timeout_error=ImageUnavailableError)
     if result.returncode != 0:
         # Leave out the deprecation notice triangulate prints first.
         error = "\n".join(line for line in result.stderr.strip().splitlines() if "is deprecated" not in line)
         raise ImageUnavailableError(f"Looking up {tagged} on its registry failed: {error or 'cosign exited non-zero'}")
     _, _, digest = result.stdout.strip().rpartition("@")
     if not _DIGEST_RE.match(digest):
-        raise PrebuiltImageError(f"cosign resolved {tagged} to an unexpected reference: {result.stdout.strip()!r}")
+        raise ImageUnavailableError(f"cosign resolved {tagged} to an unexpected reference: {result.stdout.strip()!r}")
     return digest
 
 

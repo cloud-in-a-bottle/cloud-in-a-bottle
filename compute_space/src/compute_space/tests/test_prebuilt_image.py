@@ -31,7 +31,7 @@ from compute_space.core.prebuilt_image import ImageVerificationError
 from compute_space.core.prebuilt_image import PrebuiltImageError
 from compute_space.core.prebuilt_image import PulledImage
 from compute_space.core.prebuilt_image import SignaturePolicy
-from compute_space.core.prebuilt_image import cosign_resolve_command
+from compute_space.core.prebuilt_image import cosign_triangulate_command
 from compute_space.core.prebuilt_image import cosign_verify_command
 from compute_space.core.prebuilt_image import github_repository
 from compute_space.core.prebuilt_image import image_registry
@@ -422,7 +422,9 @@ def test_cosign_still_has_triangulate() -> None:
     would make every image look unavailable, so every install would quietly build instead."""
     cosign = shutil.which("cosign")
     assert cosign is not None, "cosign is a dependency (pyproject) and must be on PATH"
-    result = subprocess.run([cosign, *cosign_resolve_command(_TAGGED)[1:-1], "--help"], capture_output=True, text=True)
+    result = subprocess.run(
+        [cosign, *cosign_triangulate_command(_TAGGED)[1:-1], "--help"], capture_output=True, text=True
+    )
     assert result.returncode == 0, result.stderr
     assert "--type" in result.stdout
 
@@ -544,6 +546,18 @@ def test_an_unexplained_cosign_failure_with_the_registry_gone_is_unavailable(sle
     assert not any(c[:2] == ["podman", "pull"] for c in fake.calls)
 
 
+def test_an_unexplained_cosign_failure_with_the_registry_still_up_is_a_verification_failure(
+    sleep: mock.Mock,
+) -> None:
+    """cosign's error doesn't say why, but the registry still answers: treat it as a failed check, not an outage."""
+    fake = _signed([_RESOLVED, _RESOLVED], [_done(1, "Error: something went wrong")])
+    with pytest.raises(ImageVerificationError):
+        _pull_signed(fake)
+    assert [c[1] for c in fake.calls] == ["triangulate", "verify", "triangulate"]
+    sleep.assert_not_called()
+    assert not any(c[:2] == ["podman", "pull"] for c in fake.calls)
+
+
 def test_a_non_github_repo_on_our_registry_fails_without_building(tmp_path: Path) -> None:
     manifest = mock.Mock(prebuilt_image=_SIGNED_IMAGE, container_image="Dockerfile", effective_build_memory_mb=512)
     fake = _signed([_RESOLVED])
@@ -605,3 +619,35 @@ def test_cosigns_verification_exit_codes_are_believed_whatever_the_registry_does
     with pytest.raises(ImageVerificationError):
         _pull_signed(fake)
     sleep.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "resolve",
+    [
+        subprocess.TimeoutExpired(cmd="cosign", timeout=120),
+        _done(stdout="registry.cloudinabottle.org/bottled-vaultwarden:not-a-digest\n"),
+    ],
+)
+def test_a_lookup_that_times_out_or_cant_be_read_is_retried(
+    sleep: mock.Mock, resolve: subprocess.CompletedProcess[str] | Exception
+) -> None:
+    fake = _signed([resolve])
+    with pytest.raises(ImageUnavailableError):
+        _pull_signed(fake)
+    assert fake.calls == [_RESOLVE_CMD, _RESOLVE_CMD, _RESOLVE_CMD]
+
+
+def test_an_unreadable_recheck_after_a_failed_verify_is_unavailable(sleep: mock.Mock) -> None:
+    fake = _signed([_RESOLVED, _done(stdout="garbage\n")], [_done(1, "Error: something went wrong")])
+    with pytest.raises(ImageUnavailableError):
+        _pull_signed(fake)
+    assert sleep.call_count == 2
+
+
+def test_a_failed_lookup_leaves_out_triangulates_deprecation_notice(sleep: mock.Mock) -> None:
+    notice = 'Command "triangulate" is deprecated, triangulate will be removed in v4.0.0'
+    fake = _signed([_done(1, f"{notice}\nError: GET ...: MANIFEST_UNKNOWN: manifest unknown")])
+    with pytest.raises(ImageUnavailableError) as e:
+        _pull_signed(fake)
+    assert "MANIFEST_UNKNOWN" in str(e.value)
+    assert "deprecated" not in str(e.value)
