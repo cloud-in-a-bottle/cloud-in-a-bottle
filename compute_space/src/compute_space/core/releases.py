@@ -10,6 +10,7 @@ all of this and builds its head, as before.
 import os
 import subprocess
 from pathlib import Path
+from typing import assert_never
 
 import git
 
@@ -61,6 +62,8 @@ def checkout_newest_release(repo_path: str, tag_format: ReleaseTagFormat, fetch_
     match tag_format:
         case ReleaseTagFormat.SEMVER:
             tag = newest_release(_git(repo_path, ["tag", "--list", "v*", "--merged", "HEAD"]).split())
+        case _:
+            assert_never(tag_format)
     if tag is None:
         raise ReleaseError(
             f'release_tag_format is "{tag_format}", but the repo has no vX.Y.Z release tag on its default branch to '

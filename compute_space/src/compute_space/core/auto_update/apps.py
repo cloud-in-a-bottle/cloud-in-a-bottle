@@ -60,10 +60,10 @@ async def _pull(repo_path: str, app_name: str, repo_url: str) -> str | None:
 
 async def auto_update_app(app_id: str, config: Config) -> AppUpdateResult:
     """Update one app to its upstream's latest version, unless the update needs the owner's approval. Mirrors a manual
-    update from the app's page (see core/app_update.py): an app that follows releases moves to its newest release and has
-    its image prepared before the running version is stopped; an update that is refused, or can't be prepared, rolls the
-    checkout back and leaves the app running; a failed rebuild leaves the app in error just as a failed manual update
-    does."""
+    update from the app's page (see core/app_update.py): an app that follows releases moves to its newest release and
+    has its image prepared before the running version is stopped; an update that is refused, or can't be prepared,
+    rolls the checkout back and leaves the app running; a failed rebuild leaves the app in error just as a failed
+    manual update does."""
     with closing(get_db()) as db:
         row = db.execute("SELECT * FROM apps WHERE app_id = ?", (app_id,)).fetchone()
     name = row["name"]

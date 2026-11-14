@@ -288,8 +288,8 @@ def pull_prebuilt_image(
     """Pull the image built from ``commit`` (verifying its signature when it's from our registry) and tag it as the
     app's image (what ``build_image`` would otherwise produce). An :class:`ImageUnavailableError` is retried once after
     each of ``retry_delays`` (in seconds) and then raised, for the caller to fall back to a build; any other
-    :class:`PrebuiltImageError` is raised at once. podman's own retries are turned off (``--retry=0``), so these are the
-    only ones."""
+    :class:`PrebuiltImageError` is raised at once. podman's own retries are turned off (``--retry=0``), so these are
+    the only ones."""
     if not _SHA_RE.match(commit):
         raise PrebuiltImageError(f"Expected a full commit sha to pick the prebuilt image, got {commit!r}")
     attempts = len(retry_delays) + 1

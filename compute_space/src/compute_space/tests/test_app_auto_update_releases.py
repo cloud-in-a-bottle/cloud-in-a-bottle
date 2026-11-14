@@ -107,8 +107,8 @@ class ReleaseApp:
 @pytest.fixture
 def stubs(monkeypatch: pytest.MonkeyPatch) -> Iterator[dict[str, Any]]:
     """A real pull of the default branch from the local origin, with the image pull, the build, the stop and the
-    background reload stubbed. ``events`` records the image pull, build and stop in order; a test sets ``pull_error`` or
-    ``build_error`` to make that step fail."""
+    background reload stubbed. ``events`` records the image pull, build and stop in order; a test sets ``pull_error``
+    or ``build_error`` to make that step fail."""
     state: dict[str, Any] = {"events": [], "reloaded": [], "pull_error": None, "build_error": None}
 
     def real_pull(repo_path: str, _app_name: str, **_: Any) -> tuple[bool, None]:
