@@ -34,6 +34,7 @@ _MANIFEST = """\
 [app]
 name = "rel-app"
 version = "{version}"
+release_tag_format = "semver"
 
 [runtime.container]
 image = "Dockerfile"

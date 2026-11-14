@@ -20,6 +20,7 @@ from compute_space.core.apps import PreparedImage
 from compute_space.core.apps import deploy_app_background
 from compute_space.core.apps import prepare_app_image
 from compute_space.core.apps import start_app_process
+from compute_space.core.manifest import ReleaseTagFormat
 from compute_space.core.prebuilt_image import ImageToPull
 from compute_space.core.prebuilt_image import ImageUnavailableError
 from compute_space.core.prebuilt_image import ImageVerificationError
@@ -150,13 +151,23 @@ def test_requires_a_full_commit_sha() -> None:
         pull_prebuilt_image("vaultwarden", _IMAGE, "main", _REPO_URL, log=lambda _: None)
 
 
-def _manifest() -> mock.Mock:
-    return mock.Mock(prebuilt_image=_IMAGE, container_image="Dockerfile", effective_build_memory_mb=512)
+def _manifest(prebuilt_image: str | None = _IMAGE) -> mock.Mock:
+    return mock.Mock(
+        release_tag_format=ReleaseTagFormat.SEMVER,
+        prebuilt_image=prebuilt_image,
+        container_image="Dockerfile",
+        effective_build_memory_mb=512,
+    )
 
 
-def _prepare(tmp_path: Path, repo_url: str, log: Callable[[str], None] = lambda _: None) -> PreparedImage:
+def _prepare(
+    tmp_path: Path,
+    repo_url: str,
+    log: Callable[[str], None] = lambda _: None,
+    prebuilt_image: str | None = _IMAGE,
+) -> PreparedImage:
     with mock.patch.object(apps_mod, "head_commit", return_value=_SHA):
-        return prepare_app_image("app", str(tmp_path), _manifest(), repo_url, str(tmp_path), log=log)
+        return prepare_app_image("app", str(tmp_path), _manifest(prebuilt_image), repo_url, str(tmp_path), log=log)
 
 
 def test_an_unavailable_image_is_built_locally_instead(tmp_path: Path) -> None:
@@ -215,10 +226,21 @@ def test_app_with_a_pinned_ref_builds_despite_prebuilt_image(tmp_path: Path) -> 
     build.assert_called_once()
 
 
+def test_a_release_without_prebuilt_image_is_built(tmp_path: Path) -> None:
+    with (
+        mock.patch.object(apps_mod, "pull_prebuilt_image") as pull,
+        mock.patch.object(apps_mod, "build_image", return_value="openhost-app:latest") as build,
+    ):
+        assert _prepare(tmp_path, _REPO_URL, prebuilt_image=None).source is ImageSource.BUILT
+    pull.assert_not_called()
+    build.assert_called_once()
+
+
 _INSTALL_MANIFEST = f"""\
 [app]
 name = "vaultwarden"
 version = "1.0.0"
+release_tag_format = "semver"
 
 [runtime.container]
 image = "Dockerfile"

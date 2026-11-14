@@ -34,8 +34,9 @@ async def check_out_update_release(repo_path: str, repo_url: str | None) -> str 
     manifest = _parsed_manifest(repo_path)
     if manifest is None or not follows_releases(repo_url, manifest):
         return None
+    assert manifest.release_tag_format is not None
     try:
-        return await asyncio.to_thread(checkout_newest_release, repo_path, True)
+        return await asyncio.to_thread(checkout_newest_release, repo_path, manifest.release_tag_format, True)
     except ReleaseError as e:
         raise UpdateNotApplied(str(e)) from e
 
@@ -44,7 +45,8 @@ async def prepare_update_image(
     app_name: str, repo_path: str, repo_url: str | None, config: Config
 ) -> PreparedImage | None:
     """Produce the image an app that follows releases will run, before its running version is stopped: the release's
-    prebuilt image, or a local build of the release (see apps.prepare_app_image). Either only moves the app's image tag
+    prebuilt image if it sets one, otherwise (or when that can't be fetched) a local build of the release (see
+    apps.prepare_app_image). Either only moves the app's image tag
     once it succeeds, so a failure leaves the running version untouched. Returns None for an app that doesn't follow
     releases, which the reload builds after the stop as it always has. Raises :class:`UpdateNotApplied`."""
     manifest = _parsed_manifest(repo_path)

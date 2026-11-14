@@ -230,7 +230,8 @@ async def clone_and_read_manifest(
         manifest = parse_manifest(clone_dir)
         if follows_releases(repo_url, manifest):
             # It installs at its newest release, not the default branch's head (and fails if there is none).
-            await asyncio.to_thread(checkout_newest_release, clone_dir, False)
+            assert manifest.release_tag_format is not None
+            await asyncio.to_thread(checkout_newest_release, clone_dir, manifest.release_tag_format, False)
             manifest = parse_manifest(clone_dir)
         return manifest, clone_dir, None
     except (CloneFailed, ValueError, ReleaseError) as e:  # ValueError: unparseable manifest
@@ -725,7 +726,8 @@ def restart_apps_by_id(app_ids: list[str], db: sqlite3.Connection, config: Confi
 
 
 class ImageSource(enum.Enum):
-    # Built from the checkout's Dockerfile: the app doesn't use a prebuilt image (see releases.follows_releases).
+    # Built from the checkout's Dockerfile: the app doesn't set prebuilt_image, or doesn't follow releases (see
+    # releases.follows_releases), so doesn't pull one.
     BUILT = "built"
     # The release's prebuilt image, pulled.
     PULLED = "pulled"
@@ -844,17 +846,17 @@ def prepare_app_image(
     log: Callable[[str], None],
     max_build_attempts: int = 1,
 ) -> PreparedImage:
-    """Produce the image to run the checked-out commit as ``openhost-<app>:latest``. An app that follows releases pulls
-    the release's prebuilt image; if that can't be fetched (:class:`ImageUnavailableError`, after the pull's retries)
-    it builds the release's Dockerfile instead. Any other :class:`PrebuiltImageError` (a verification failure, say) is
-    raised without building. Building only moves the tag once it succeeds, so a failure here leaves whatever is
-    running, and the image it runs, alone."""
-    if not follows_releases(repo_url, manifest):
+    """Produce the image to run the checked-out commit as ``openhost-<app>:latest``. An app that follows releases and
+    sets ``prebuilt_image`` pulls the release's prebuilt image; if that can't be fetched
+    (:class:`ImageUnavailableError`, after the pull's retries) it builds the release's Dockerfile instead. Any other
+    :class:`PrebuiltImageError` (a verification failure, say) is raised without building. Every other app builds its
+    checkout. Building only moves the tag once it succeeds, so a failure here leaves whatever is running, and the image
+    it runs, alone."""
+    if manifest.prebuilt_image is None or not follows_releases(repo_url, manifest):
         return PreparedImage(
             tag=_build_with_retries(app_name, repo_path, manifest, temp_data_dir, max_build_attempts),
             source=ImageSource.BUILT,
         )
-    assert manifest.prebuilt_image is not None
     commit = head_commit(repo_path)
     try:
         pulled = pull_prebuilt_image(app_name, manifest.prebuilt_image, commit, repo_url, log=log)

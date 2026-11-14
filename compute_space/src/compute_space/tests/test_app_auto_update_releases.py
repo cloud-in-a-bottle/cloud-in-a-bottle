@@ -1,6 +1,7 @@
 """The scheduled update of an app that follows releases (see releases.follows_releases), as test_reload_prebuilt.py
 covers for the update from the app's page: it lands on the newest release rather than the default branch's head, its
-image is prepared before the running version is stopped, and an update that can't be prepared leaves it running."""
+image (pulled, or built) is prepared before the running version is stopped, and an update that can't be prepared leaves
+it running."""
 
 from __future__ import annotations
 
@@ -31,12 +32,16 @@ _MANIFEST = """\
 [app]
 name = "rel-app"
 version = "{version}"
+release_tag_format = "semver"
 
 [runtime.container]
 image = "Dockerfile"
 port = 5000
 prebuilt_image = "registry.cloudinabottle.org/rel-app"
 """
+
+# Follows releases too, building them.
+_BUILT_MANIFEST = _MANIFEST.replace('prebuilt_image = "registry.cloudinabottle.org/rel-app"\n', "")
 
 _TAG = "openhost-rel-app:latest"
 
@@ -59,8 +64,8 @@ def _git(cwd: Path, *args: str) -> str:
     return subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True, text=True, env=env).stdout.strip()
 
 
-def _commit(origin: Path, version: str, tag: str | None) -> str:
-    (origin / "cloudinabottle.toml").write_text(_MANIFEST.format(version=version))
+def _commit(origin: Path, version: str, tag: str | None, manifest: str = _MANIFEST) -> str:
+    (origin / "cloudinabottle.toml").write_text(manifest.format(version=version))
     _git(origin, "add", ".")
     _git(origin, "commit", "-q", "-m", version)
     if tag:
@@ -72,11 +77,11 @@ class ReleaseApp:
     """An origin whose default branch has one commit (tagged ``tag``), and a running app installed from a clone of it,
     tracking the default branch."""
 
-    def __init__(self, tmp_path: Path, tag: str | None = "v1.0.0") -> None:
+    def __init__(self, tmp_path: Path, tag: str | None = "v1.0.0", manifest: str = _MANIFEST) -> None:
         self.origin = tmp_path / "origin"
         self.origin.mkdir()
         _git(self.origin, "init", "-q", "-b", "main")
-        self.running = _commit(self.origin, "1.0.0", tag)
+        self.running = _commit(self.origin, "1.0.0", tag, manifest)
         self.repo = tmp_path / "repo"
         _git(tmp_path, "clone", "-q", str(self.origin), str(self.repo))
         if tag:
@@ -86,7 +91,7 @@ class ReleaseApp:
             db.execute(
                 "INSERT INTO apps (app_id, name, version, repo_path, repo_url, local_port, status, manifest_raw) "
                 "VALUES (?, 'rel-app', '1.0.0', ?, 'https://github.com/x/rel-app', 20961, 'running', ?)",
-                (self.app_id, str(self.repo), _MANIFEST.format(version="1.0.0")),
+                (self.app_id, str(self.repo), manifest.format(version="1.0.0")),
             )
             db.commit()
 
@@ -159,6 +164,22 @@ async def test_lands_on_the_newest_release_not_the_branch_head(
     assert stubs["events"] == ["pull", "stop"]
     assert stubs["reloaded"] == [PreparedImage(tag=_TAG, source=ImageSource.PULLED)]
     assert app.status() == "running"
+
+
+@pytest.mark.asyncio
+async def test_release_without_prebuilt_image_is_built_before_stopping(
+    cfg: Config, tmp_path: Path, stubs: dict[str, Any]
+) -> None:
+    app = ReleaseApp(tmp_path, manifest=_BUILT_MANIFEST)
+    target = _commit(app.origin, "1.1.0", "v1.1.0", _BUILT_MANIFEST)
+    _commit(app.origin, "1.1.1", None, _BUILT_MANIFEST)
+
+    result = await apps_mod.auto_update_app(app.app_id, cfg)
+
+    assert result.outcome == AppUpdateOutcome.UPDATED
+    assert app.head() == target
+    assert stubs["events"] == ["build", "stop"]
+    assert stubs["reloaded"] == [PreparedImage(tag=_TAG, source=ImageSource.BUILT)]
 
 
 @pytest.mark.asyncio
