@@ -154,9 +154,9 @@ _RELEASE_SETTING_LINE_RE = re.compile(r"^[ \t]*(?:release_tag_format|prebuilt_im
 
 
 def _stop_following_releases(deploy_src: Path) -> None:
-    """Remove ``release_tag_format`` and ``prebuilt_image`` from the deployed copy's manifest, so the router deploys the
-    working tree as it is, built from the app's Dockerfile, rather than the newest release (which a plain directory
-    has no tags for)."""
+    """Remove ``release_tag_format`` and ``prebuilt_image`` from the deployed copy's manifest, so the router deploys
+    the working tree as it is, built from the app's Dockerfile, rather than the newest release (which a plain
+    directory has no tags for)."""
     manifest_path = find_manifest_path(str(deploy_src))
     assert manifest_path is not None, f"no manifest in {deploy_src}"
     path = Path(manifest_path)

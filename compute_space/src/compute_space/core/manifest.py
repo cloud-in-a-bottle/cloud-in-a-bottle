@@ -477,7 +477,8 @@ def _parse_release_tag_format(value: object) -> ReleaseTagFormat | None:
         return ReleaseTagFormat(value)
     known = ", ".join(f'"{f.value}"' for f in ReleaseTagFormat)
     raise ValueError(
-        f"[app].release_tag_format {value!r} is not supported by this version of Cloud in a Bottle (supported: {known})"
+        f"[app].release_tag_format {value!r} is not supported by this version of Cloud in a Bottle "
+        f"(supported: {known})"
     )
 
 

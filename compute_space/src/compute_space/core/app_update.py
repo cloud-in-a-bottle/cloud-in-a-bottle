@@ -46,9 +46,9 @@ async def prepare_update_image(
 ) -> PreparedImage | None:
     """Produce the image an app that follows releases will run, before its running version is stopped: the release's
     prebuilt image if it sets one, otherwise (or when that can't be fetched) a local build of the release (see
-    apps.prepare_app_image). Either only moves the app's image tag
-    once it succeeds, so a failure leaves the running version untouched. Returns None for an app that doesn't follow
-    releases, which the reload builds after the stop as it always has. Raises :class:`UpdateNotApplied`."""
+    apps.prepare_app_image). The app's image tag only moves once the pull or build succeeds, so a failure leaves the
+    running version untouched. Returns None for an app that doesn't follow releases, which the reload builds after the
+    stop as it always has. Raises :class:`UpdateNotApplied`."""
     manifest = _parsed_manifest(repo_path)
     if manifest is None or not follows_releases(repo_url, manifest):
         return None
