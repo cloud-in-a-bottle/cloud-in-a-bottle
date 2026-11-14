@@ -43,6 +43,7 @@ _MANIFEST = """\
 [app]
 name = "{name}"
 version = "{version}"
+{app_extra}
 
 [runtime.container]
 image = "Dockerfile"
@@ -74,23 +75,38 @@ def _git(repo: Path, *args: str) -> str:
     return subprocess.run(["git", *args], cwd=repo, capture_output=True, text=True, check=True).stdout.strip()
 
 
-def _commit_manifest(repo: Path, name: str, version: str, extra: str = "") -> str:
-    (repo / "cloudinabottle.toml").write_text(_MANIFEST.format(name=name, version=version, extra=extra))
+def _commit_manifest(repo: Path, name: str, version: str, extra: str = "", app_extra: str = "") -> str:
+    (repo / "cloudinabottle.toml").write_text(
+        _MANIFEST.format(name=name, version=version, extra=extra, app_extra=app_extra)
+    )
     _git(repo, "add", "-A")
     _git(repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", version)
     return _git(repo, "rev-parse", "HEAD")
 
 
 class FakeApp:
-    """A running app whose checkout is at v1, with v2 committed but not yet pulled. The fake pull moves to v2."""
+    """A running app whose checkout is at v1, with v2 committed but not yet pulled. The fake pull moves to v2. Both are
+    tagged as releases, and the repo is its own origin, so a v2 that sets release_tag_format updates to release v1.1.0
+    (v2 itself) when the app tracks its default branch."""
 
-    def __init__(self, cfg: Config, tmp_path: Path, name: str, v2_extra: str = "", status: str = "running") -> None:
+    def __init__(
+        self,
+        cfg: Config,
+        tmp_path: Path,
+        name: str,
+        v2_extra: str = "",
+        status: str = "running",
+        v2_app_extra: str = "",
+    ) -> None:
         self.repo = tmp_path / name
         self.repo.mkdir()
         _git(self.repo, "init", "-q", "-b", "main")
+        _git(self.repo, "remote", "add", "origin", str(self.repo))
         self.v1 = _commit_manifest(self.repo, name, "1.0.0")
         self.v1_raw = (self.repo / "cloudinabottle.toml").read_text()
-        self.v2 = _commit_manifest(self.repo, name, "1.1.0", v2_extra)
+        self.v2 = _commit_manifest(self.repo, name, "1.1.0", v2_extra, v2_app_extra)
+        _git(self.repo, "tag", "v1.0.0", self.v1)
+        _git(self.repo, "tag", "v1.1.0", self.v2)
         # Stands in for the remote's newest commit, which the fake pull checks out.
         _git(self.repo, "tag", "upstream", self.v2)
         _git(self.repo, "reset", "-q", "--hard", self.v1)
@@ -108,10 +124,15 @@ class FakeApp:
         return _git(self.repo, "rev-parse", "HEAD")
 
 
+async def _no_prepared_image() -> None:
+    return None
+
+
 @pytest.fixture
 def side_effects(monkeypatch: pytest.MonkeyPatch) -> Iterator[dict[str, Any]]:
-    """Stub the network and container parts of an update: the pull checks out the newest commit, and the rebuild
-    succeeds unless a test sets ``rebuild_error``."""
+    """Stub the network and container parts of an update: the pull checks out the newest commit, preparing a release's
+    image before the stop is skipped (test_app_auto_update_releases.py covers it), and the rebuild succeeds unless a
+    test sets ``rebuild_error``."""
     state: dict[str, Any] = {"pulls": 0, "reloads": [], "stops": 0, "rebuild_error": None, "pull_error": None}
 
     def fake_pull(repo_path: str, app_name: str, **_: Any) -> tuple[bool, str | None]:
@@ -124,7 +145,7 @@ def side_effects(monkeypatch: pytest.MonkeyPatch) -> Iterator[dict[str, Any]]:
     def fake_stop(_row: Any) -> None:
         state["stops"] += 1
 
-    def fake_reload(app_id: str, _repo_path: str, _config: Config) -> None:
+    def fake_reload(app_id: str, _repo_path: str, _config: Config, **_: Any) -> None:
         state["reloads"].append(app_id)
         with closing(get_db()) as db:
             if state["rebuild_error"] is None:
@@ -139,6 +160,7 @@ def side_effects(monkeypatch: pytest.MonkeyPatch) -> Iterator[dict[str, Any]]:
     monkeypatch.setattr(apps_mod, "git_pull", fake_pull)
     monkeypatch.setattr(apps_mod, "stop_app_process", fake_stop)
     monkeypatch.setattr(apps_mod, "reload_app_background", fake_reload)
+    monkeypatch.setattr(apps_mod, "prepare_update_image", lambda *_: _no_prepared_image())
     monkeypatch.setattr(archive_backend, "is_archive_dir_healthy", lambda _c, _db: True)
     yield state
 
@@ -208,13 +230,16 @@ def _set_verified_refless(app: FakeApp, verified: bool, repo_url: str | None = N
 
 _UNSIGNED_IMAGE = 'prebuilt_image = "ghcr.io/x/{name}"'
 _SIGNED_IMAGE = 'prebuilt_image = "registry.cloudinabottle.org/{name}"'
+_FOLLOWS_RELEASES = 'release_tag_format = "semver"'
 
 
 @pytest.mark.asyncio
 async def test_update_whose_image_stops_being_verified_needs_approval(
     cfg: Config, tmp_path: Path, side_effects: dict[str, Any]
 ) -> None:
-    app = FakeApp(cfg, tmp_path, "unsigned", v2_extra=_UNSIGNED_IMAGE.format(name="unsigned"))
+    app = FakeApp(
+        cfg, tmp_path, "unsigned", v2_extra=_UNSIGNED_IMAGE.format(name="unsigned"), v2_app_extra=_FOLLOWS_RELEASES
+    )
     _set_verified_refless(app, True)
     result = await apps_mod.auto_update_app(app.app_id, cfg)
     assert result.outcome == AppUpdateOutcome.NEEDS_APPROVAL
@@ -243,7 +268,7 @@ async def test_update_whose_image_stops_being_verified_needs_approval(
 async def test_update_whose_image_isnt_losing_verification_is_applied(
     cfg: Config, tmp_path: Path, side_effects: dict[str, Any], verified: bool, image: str, pin: bool
 ) -> None:
-    app = FakeApp(cfg, tmp_path, "img", v2_extra=image.format(name="img"))
+    app = FakeApp(cfg, tmp_path, "img", v2_extra=image.format(name="img"), v2_app_extra=_FOLLOWS_RELEASES)
     _set_verified_refless(app, verified, repo_url=app.repo_url if pin else None)
     result = await apps_mod.auto_update_app(app.app_id, cfg)
     assert result.outcome == AppUpdateOutcome.UPDATED
@@ -371,7 +396,13 @@ async def test_run_updates_every_app_and_records_outcomes(
     perms = FakeApp(cfg, tmp_path, "b-perms", v2_extra=_NEW_PERMISSION)
     crashing = FakeApp(cfg, tmp_path, "c-crashing")
     later = FakeApp(cfg, tmp_path, "d-later")
-    unsigned = FakeApp(cfg, tmp_path, "e-unsigned", v2_extra=_UNSIGNED_IMAGE.format(name="e-unsigned"))
+    unsigned = FakeApp(
+        cfg,
+        tmp_path,
+        "e-unsigned",
+        v2_extra=_UNSIGNED_IMAGE.format(name="e-unsigned"),
+        v2_app_extra=_FOLLOWS_RELEASES,
+    )
     _set_verified_refless(unsigned, True)
 
     real = apps_mod.auto_update_app

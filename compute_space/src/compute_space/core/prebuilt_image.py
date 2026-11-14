@@ -3,6 +3,7 @@ import re
 import subprocess
 import time
 from collections.abc import Callable
+from collections.abc import Sequence
 
 import attr
 
@@ -42,11 +43,9 @@ _UNREACHABLE_ERRORS = (
     "TOOMANYREQUESTS",
 )
 
-# A pull that can't fetch the image is tried PULL_ATTEMPTS times, waiting these delays in between, before the caller
-# falls back to building the release's Dockerfile. podman's own retries are turned off (``--retry=0``) so this is the
-# only retry policy.
-PULL_RETRY_DELAYS_SECONDS = (5, 15)
-PULL_ATTEMPTS = len(PULL_RETRY_DELAYS_SECONDS) + 1
+# How long an install or update waits before each retry of a pull that can't fetch the image (so it tries 3 times in
+# all) before falling back to building the release's Dockerfile.
+PULL_RETRY_DELAYS_SECONDS = (5.0, 15.0)
 # containers/image's error when the instance's signature policy (policy.json) refuses an image.
 _POLICY_REJECTED = "Source image rejected"
 
@@ -290,17 +289,20 @@ def pull_prebuilt_image(
     commit: str,
     repo_url: str | None,
     log: Callable[[str], None],
+    retry_delays: Sequence[float],
 ) -> PulledImage:
     """Pull the image built from ``commit`` (verifying its signature when it's from our registry) and tag it as the
-    app's image (what ``build_image`` would otherwise produce). An :class:`ImageUnavailableError` is retried up to
-    :data:`PULL_ATTEMPTS` times in all and then raised, for the caller to fall back to a build; any other
-    :class:`PrebuiltImageError` is raised at once."""
+    app's image (what ``build_image`` would otherwise produce). An :class:`ImageUnavailableError` is retried once after
+    each of ``retry_delays`` (in seconds) and then raised, for the caller to fall back to a build; any other
+    :class:`PrebuiltImageError` is raised at once. podman's own retries are turned off (``--retry=0``), so these are the
+    only ones."""
     if not _SHA_RE.match(commit):
         raise PrebuiltImageError(f"Expected a full commit sha to pick the prebuilt image, got {commit!r}")
-    for attempt, delay in enumerate(PULL_RETRY_DELAYS_SECONDS, start=1):
+    attempts = len(retry_delays) + 1
+    for attempt, delay in enumerate(retry_delays, start=1):
         try:
             return _pull_once(app_name, prebuilt_image, commit, repo_url, log)
         except ImageUnavailableError as e:
-            log(f"Prebuilt image attempt {attempt}/{PULL_ATTEMPTS} failed ({e}); retrying in {delay}s")
+            log(f"Prebuilt image attempt {attempt}/{attempts} failed ({e}); retrying in {delay:g}s")
             time.sleep(delay)
     return _pull_once(app_name, prebuilt_image, commit, repo_url, log)

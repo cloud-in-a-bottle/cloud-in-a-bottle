@@ -42,13 +42,13 @@ def verification_lost(
     and the repo URL, so it needs no network and runs before anything is pulled or stopped.
 
     Nothing is lost when the app never ran a verified image, when the new image is verified too, or when the update
-    builds instead of pulling (no ``prebuilt_image``, or a pinned ref, which ignores it): building the release's own
-    Dockerfile is how apps have always run. The update may still end up building in place of its image, if the
-    registry can't be reached at the time; it's asked about all the same, since whether it pulls can't be known
-    before it tries, and the flag then stays set for the next update to ask again."""
-    if not was_verified or not follows_releases(repo_url, manifest):
+    builds instead of pulling (no ``prebuilt_image``, or the app doesn't follow releases: no ``release_tag_format``, or
+    a pinned ref): building the release's own Dockerfile is how apps have always run. The update may still end up
+    building in place of its image, if the registry can't be reached at the time; it's asked about all the same,
+    since whether it pulls can't be known before it tries, and the flag then stays set for the next update to ask
+    again."""
+    if not was_verified or manifest.prebuilt_image is None or not follows_releases(repo_url, manifest):
         return None
-    assert manifest.prebuilt_image is not None
     if is_verified_registry(manifest.prebuilt_image):
         return None
     return VerificationLoss(

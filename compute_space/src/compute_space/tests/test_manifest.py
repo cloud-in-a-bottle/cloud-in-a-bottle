@@ -10,6 +10,7 @@ from compute_space.core.manifest import MANIFEST_FILENAMES
 from compute_space.core.manifest import SAFE_CAPABILITIES
 from compute_space.core.manifest import SAFE_DEVICE_PATHS
 from compute_space.core.manifest import UNPRIVILEGED_PORT_FLOOR
+from compute_space.core.manifest import ReleaseTagFormat
 from compute_space.core.manifest import find_manifest_path
 from compute_space.core.manifest import manifest_settings_changes
 from compute_space.core.manifest import parse_manifest
@@ -874,9 +875,31 @@ class TestManifestFileResolution:
             parse_manifest(str(tmp_path))
 
 
+_RELEASES = MINIMAL.replace('version = "0.1.0"\n', 'version = "0.1.0"\nrelease_tag_format = "semver"\n')
+
+
+class TestReleaseTagFormat:
+    def test_unset_by_default(self):
+        assert parse_manifest_from_string(MINIMAL).release_tag_format is None
+
+    def test_accepts_semver(self):
+        assert parse_manifest_from_string(_RELEASES).release_tag_format is ReleaseTagFormat.SEMVER
+
+    @pytest.mark.parametrize("value", ['"calver"', '"SemVer"', '""', "1", "true"])
+    def test_rejects_formats_this_version_does_not_know(self, value):
+        raw = MINIMAL.replace('version = "0.1.0"\n', f'version = "0.1.0"\nrelease_tag_format = {value}\n')
+        with pytest.raises(ValueError, match=r'release_tag_format .* is not supported .*supported: "semver"'):
+            parse_manifest_from_string(raw)
+
+    def test_change_is_shown_but_not_review_gated(self):
+        changes = manifest_settings_changes(parse_manifest_from_string(_RELEASES), MINIMAL)
+        assert [(c.label, c.old, c.new) for c in changes] == [("Release tag format", "None", "semver")]
+        assert not settings_changes_require_review(changes)
+
+
 class TestPrebuiltImage:
     def _with(self, line: str) -> str:
-        return MINIMAL.replace("port = 8080\n", f"port = 8080\n{line}\n")
+        return _RELEASES.replace("port = 8080\n", f"port = 8080\n{line}\n")
 
     def test_unset_by_default(self):
         assert parse_manifest_from_string(MINIMAL).prebuilt_image is None
@@ -905,8 +928,13 @@ class TestPrebuiltImage:
         with pytest.raises(ValueError, match=match):
             parse_manifest_from_string(self._with(f"prebuilt_image = {value}"))
 
+    def test_requires_release_tag_format(self):
+        raw = MINIMAL.replace("port = 8080\n", 'port = 8080\nprebuilt_image = "registry.cloudinabottle.org/app"\n')
+        with pytest.raises(ValueError, match=r"prebuilt_image requires \[app\].release_tag_format"):
+            parse_manifest_from_string(raw)
+
     def test_change_is_shown_but_not_review_gated(self):
         new = parse_manifest_from_string(self._with('prebuilt_image = "registry.cloudinabottle.org/app"'))
-        changes = manifest_settings_changes(new, MINIMAL)
+        changes = manifest_settings_changes(new, _RELEASES)
         assert [(c.label, c.new) for c in changes] == [("Prebuilt image", "registry.cloudinabottle.org/app")]
         assert not settings_changes_require_review(changes)

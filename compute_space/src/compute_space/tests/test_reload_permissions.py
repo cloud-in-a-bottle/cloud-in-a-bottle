@@ -61,6 +61,10 @@ def _manifest_with_consumes(repo: Path, consumes: str) -> Any:
     return parse_manifest(str(repo))
 
 
+def _with_release_tag_format(raw: str) -> str:
+    return raw.replace('version = "1.0.0"\n', 'version = "1.0.0"\nrelease_tag_format = "semver"\n', 1)
+
+
 def _consume_block(service: str, shortname: str, grants: str) -> str:
     return (
         "[[services.v2.consumes]]\n"
@@ -305,13 +309,18 @@ def test_gate_reports_an_image_losing_verification(cfg: Any, tmp_path: Path, wit
     (on its own, or alongside a new permission), and the owner's approval applies both."""
     repo = tmp_path / "repo"
     consumes = _consume_block("github.com/x/secrets", "secrets", '{ key = "API_KEY" }') if with_permission else ""
-    _manifest_with_consumes(repo, 'prebuilt_image = "ghcr.io/x/perm-app"\n' + consumes)
+    repo.mkdir()
+    (repo / "cloudinabottle.toml").write_text(
+        _with_release_tag_format(_CONSUMES.format(consumes='prebuilt_image = "ghcr.io/x/perm-app"\n' + consumes))
+    )
     app_id = _seed_perm_app(cfg, str(repo))
     gate = functools.partial(
         _gate_update_review,
         app_id,
         str(repo),
-        previous_manifest_raw=_CONSUMES.format(consumes='prebuilt_image = "registry.cloudinabottle.org/perm-app"'),
+        previous_manifest_raw=_with_release_tag_format(
+            _CONSUMES.format(consumes='prebuilt_image = "registry.cloudinabottle.org/perm-app"')
+        ),
         repo_url="https://github.com/x/perm-app",
         prebuilt_image_verified=True,
     )

@@ -52,7 +52,7 @@ Updates get the same treatment: when an app's manifest changes, the update page 
 
 ### Updating apps
 
-There's a button in the app details page to manually fetch + install any updates. Apps can also update themselves: with "Also update apps" turned on in Settings, the daily update window first updates each running app to its latest version, one at a time. An update that adds permissions, changes an app's settings, or would take its image off signature verification is left for the owner to approve on the app's page, and Settings lists those apps, and any whose update failed, after each run. Stopped apps, apps with local changes, and apps pinned to a commit are skipped.
+There's a button in the app details page to manually fetch + install any updates. Apps can also update themselves: with "Also update apps" turned on in Settings, the daily update window first updates each running app to its latest version (its newest release, for an app that follows releases), one at a time, exactly as the button does. An update that adds permissions, changes an app's settings, or would take its image off signature verification is left for the owner to approve on the app's page, and Settings lists those apps, and any whose update failed, after each run. Stopped apps, apps with local changes, and apps pinned to a commit are skipped.
 
 ## Who can use your apps
 

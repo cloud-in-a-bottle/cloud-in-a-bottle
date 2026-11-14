@@ -21,12 +21,18 @@ _UNSIGNED = "ghcr.io/cloud-in-a-bottle/bottled-vaultwarden"
 _REPO_URL = "https://github.com/cloud-in-a-bottle/bottled-vaultwarden"
 
 
-def _raw(image: str | None, extra: str = "") -> str:
+def _raw(image: str | None, extra: str = "", follows_releases: bool | None = None) -> str:
+    """A manifest pulling ``image``. It follows releases if it sets an image (as it must, to set one), unless
+    ``follows_releases`` says otherwise."""
+    if follows_releases is None:
+        follows_releases = image is not None
     prebuilt = f'prebuilt_image = "{image}"\n' if image else ""
+    releases = 'release_tag_format = "semver"' if follows_releases else ""
     return f"""\
 [app]
 name = "vaultwarden"
 version = "1.0.0"
+{releases}
 
 [runtime.container]
 image = "Dockerfile"
@@ -72,8 +78,11 @@ def test_staying_on_our_registry_is_not_a_loss() -> None:
     assert _lost(_SIGNED) is None
 
 
-def test_an_update_that_drops_prebuilt_image_builds_and_is_not_a_loss() -> None:
-    assert _lost(None) is None
+@pytest.mark.parametrize("follows_releases", [False, True])
+def test_an_update_that_drops_prebuilt_image_builds_and_is_not_a_loss(follows_releases: bool) -> None:
+    """Whether or not it still follows releases, it builds them."""
+    manifest = parse_manifest_from_string(_raw(None, follows_releases=follows_releases))
+    assert verification_lost(manifest, _REPO_URL, True, _raw(_SIGNED)) is None
 
 
 @pytest.mark.parametrize("pin", ["main", "feature", "v1.0.0", "d961ca45c2995c6e80fb4f539b1fb7b163e07bdd"])

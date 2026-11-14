@@ -58,6 +58,7 @@ from compute_space.core.oauth import OAuthRequired
 from compute_space.core.oauth import get_oauth_token
 from compute_space.core.ports import allocate_port
 from compute_space.core.ports import resolve_port_mappings
+from compute_space.core.prebuilt_image import PULL_RETRY_DELAYS_SECONDS
 from compute_space.core.prebuilt_image import ImageUnavailableError
 from compute_space.core.prebuilt_image import pull_prebuilt_image
 from compute_space.core.releases import ReleaseError
@@ -233,7 +234,8 @@ async def clone_and_read_manifest(
         manifest = parse_manifest(clone_dir)
         if follows_releases(repo_url, manifest):
             # It installs at its newest release, not the default branch's head (and fails if there is none).
-            await asyncio.to_thread(checkout_newest_release, clone_dir, False)
+            assert manifest.release_tag_format is not None
+            await asyncio.to_thread(checkout_newest_release, clone_dir, manifest.release_tag_format, False)
             manifest = parse_manifest(clone_dir)
         return manifest, clone_dir, None
     except (CloneFailed, ValueError, ReleaseError) as e:  # ValueError: unparseable manifest
@@ -728,7 +730,8 @@ def restart_apps_by_id(app_ids: list[str], db: sqlite3.Connection, config: Confi
 
 
 class ImageSource(enum.Enum):
-    # Built from the checkout's Dockerfile: the app doesn't use a prebuilt image (see releases.follows_releases).
+    # Built from the checkout's Dockerfile: the app doesn't set prebuilt_image, or doesn't follow releases (see
+    # releases.follows_releases), so doesn't pull one.
     BUILT = "built"
     # The release's prebuilt image, pulled after its signature was verified (images from our registry).
     PULLED_VERIFIED = "pulled_verified"
@@ -759,7 +762,10 @@ def start_app_process(
     manifest = parse_manifest(app_row["repo_path"])
     _mark_app_starting(db, app_id)
 
-    _build_then_run_app(app_id, app_name, app_row["repo_path"], manifest, db, config, prepared_image=prepared_image)
+    if prepared_image is None:
+        _build_then_run_app(app_id, app_name, app_row["repo_path"], manifest, db, config)
+    else:
+        _run_prepared_image(app_id, prepared_image, manifest, db, config)
 
 
 def _build_then_run_app(
@@ -772,19 +778,31 @@ def _build_then_run_app(
     *,
     max_build_attempts: int = 1,
     env_vars: dict[str, str] | None = None,
-    prepared_image: PreparedImage | None = None,
 ) -> None:
-    """Produce the app's image (see prepare_app_image), unless ``prepared_image`` already is it, then run it."""
-    if prepared_image is None:
-        prepared_image = prepare_app_image(
-            app_name,
-            repo_path,
-            manifest,
-            app_repo_url(app_id, db),
-            config.temporary_data_dir,
-            log=app_log_writer(app_name, config),
-            max_build_attempts=max_build_attempts,
-        )
+    """Produce the app's image (see prepare_app_image), then run it."""
+    prepared_image = prepare_app_image(
+        app_name,
+        repo_path,
+        manifest,
+        app_repo_url(app_id, db),
+        config.temporary_data_dir,
+        log=app_log_writer(app_name, config),
+        max_build_attempts=max_build_attempts,
+    )
+    _run_prepared_image(app_id, prepared_image, manifest, db, config, env_vars=env_vars)
+
+
+def _run_prepared_image(
+    app_id: str,
+    prepared_image: PreparedImage,
+    manifest: AppManifest,
+    db: sqlite3.Connection,
+    config: Config,
+    env_vars: dict[str, str] | None = None,
+) -> None:
+    """Run an image prepare_app_image just produced for the app's checkout. Every deploy of a new image goes through
+    here, whether it was produced right before (_build_then_run_app) or by an update before it stopped the running
+    version; a restart reruns the existing tag with run_app_image directly."""
     record_image_source(db, app_id, prepared_image.source)
     run_app_image(app_id, prepared_image.tag, manifest, db, config, env_vars=env_vars)
 
@@ -856,20 +874,22 @@ def prepare_app_image(
     log: Callable[[str], None],
     max_build_attempts: int = 1,
 ) -> PreparedImage:
-    """Produce the image to run the checked-out commit as ``openhost-<app>:latest``. An app that follows releases pulls
-    the release's prebuilt image; if that can't be fetched (:class:`ImageUnavailableError`, after the pull's retries)
-    it builds the release's Dockerfile instead. Any other :class:`PrebuiltImageError` (a verification failure, say) is
-    raised without building. Building only moves the tag once it succeeds, so a failure here leaves whatever is
-    running, and the image it runs, alone."""
-    if not follows_releases(repo_url, manifest):
+    """Produce the image to run the checked-out commit as ``openhost-<app>:latest``. An app that follows releases and
+    sets ``prebuilt_image`` pulls the release's prebuilt image; if that can't be fetched
+    (:class:`ImageUnavailableError`, after the pull's retries) it builds the release's Dockerfile instead. Any other
+    :class:`PrebuiltImageError` (a verification failure, say) is raised without building. Every other app builds its
+    checkout. Building only moves the tag once it succeeds, so a failure here leaves whatever is running, and the image
+    it runs, alone."""
+    if manifest.prebuilt_image is None or not follows_releases(repo_url, manifest):
         return PreparedImage(
             tag=_build_with_retries(app_name, repo_path, manifest, temp_data_dir, max_build_attempts),
             source=ImageSource.BUILT,
         )
-    assert manifest.prebuilt_image is not None
     commit = head_commit(repo_path)
     try:
-        pulled = pull_prebuilt_image(app_name, manifest.prebuilt_image, commit, repo_url, log=log)
+        pulled = pull_prebuilt_image(
+            app_name, manifest.prebuilt_image, commit, repo_url, log=log, retry_delays=PULL_RETRY_DELAYS_SECONDS
+        )
     except ImageUnavailableError as e:
         return _build_in_place_of_prebuilt(
             app_name, repo_path, manifest, commit, e, temp_data_dir, log, max_build_attempts

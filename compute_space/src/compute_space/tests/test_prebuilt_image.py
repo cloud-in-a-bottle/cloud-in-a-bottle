@@ -23,6 +23,7 @@ from compute_space.core.apps import PreparedImage
 from compute_space.core.apps import deploy_app_background
 from compute_space.core.apps import prepare_app_image
 from compute_space.core.apps import start_app_process
+from compute_space.core.manifest import ReleaseTagFormat
 from compute_space.core.prebuilt_image import SIGNING_IDENTITY
 from compute_space.core.prebuilt_image import SIGNING_OIDC_ISSUER
 from compute_space.core.prebuilt_image import ImageToPull
@@ -80,16 +81,17 @@ def sleep() -> Iterator[mock.Mock]:
         yield s
 
 
-def _pull(fake: _FakeRun, image: str = _IMAGE, repo_url: str = _REPO_URL) -> PulledImage:
+def _pull(
+    fake: _FakeRun, image: str = _IMAGE, repo_url: str = _REPO_URL, retry_delays: tuple[float, ...] = (0, 0)
+) -> PulledImage:
     with mock.patch("compute_space.core.prebuilt_image.subprocess.run", fake):
-        return pull_prebuilt_image("vaultwarden", image, _SHA, repo_url, log=lambda _: None)
+        return pull_prebuilt_image("vaultwarden", image, _SHA, repo_url, log=lambda _: None, retry_delays=retry_delays)
 
 
-def test_pulls_the_commits_image_and_tags_it_as_the_app_image(sleep: mock.Mock) -> None:
+def test_pulls_the_commits_image_and_tags_it_as_the_app_image() -> None:
     fake = _FakeRun({("podman", "pull"): [_done()], ("podman", "tag"): [_done()]})
     assert _pull(fake) == PulledImage(tag="openhost-vaultwarden:latest", verified=False)
     assert fake.calls == [_PULL, _TAG]
-    sleep.assert_not_called()
 
 
 @pytest.mark.parametrize(
@@ -101,32 +103,42 @@ def test_pulls_the_commits_image_and_tags_it_as_the_app_image(sleep: mock.Mock) 
         subprocess.TimeoutExpired(cmd="podman", timeout=1800),
     ],
 )
-def test_an_image_that_cant_be_fetched_is_tried_three_times(
-    sleep: mock.Mock, failure: subprocess.CompletedProcess[str] | Exception
+def test_an_image_that_cant_be_fetched_is_retried_once_per_delay(
+    failure: subprocess.CompletedProcess[str] | Exception,
 ) -> None:
     fake = _FakeRun({("podman", "pull"): [failure]})
     with pytest.raises(ImageUnavailableError):
         _pull(fake)
     assert fake.calls == [_PULL, _PULL, _PULL]
+
+
+def test_retries_wait_the_given_delays(sleep: mock.Mock) -> None:
+    with pytest.raises(ImageUnavailableError):
+        _pull(_FakeRun({("podman", "pull"): [_UNREACHABLE]}), retry_delays=(5, 15))
     assert sleep.call_args_list == [mock.call(5), mock.call(15)]
 
 
-def test_a_pull_that_succeeds_on_the_second_attempt_is_used(sleep: mock.Mock) -> None:
+def test_no_retry_delays_means_one_attempt() -> None:
+    fake = _FakeRun({("podman", "pull"): [_UNREACHABLE]})
+    with pytest.raises(ImageUnavailableError):
+        _pull(fake, retry_delays=())
+    assert fake.calls == [_PULL]
+
+
+def test_a_pull_that_succeeds_on_the_second_attempt_is_used() -> None:
     fake = _FakeRun({("podman", "pull"): [_UNREACHABLE, _done()], ("podman", "tag"): [_done()]})
     assert _pull(fake).tag == "openhost-vaultwarden:latest"
     assert fake.calls == [_PULL, _PULL, _TAG]
-    assert sleep.call_args_list == [mock.call(5)]
 
 
-def test_the_instances_signature_policy_rejecting_the_image_is_a_verification_failure(sleep: mock.Mock) -> None:
+def test_the_instances_signature_policy_rejecting_the_image_is_a_verification_failure() -> None:
     fake = _FakeRun({("podman", "pull"): [_done(125, "Source image rejected: A signature was required")]})
     with pytest.raises(ImageVerificationError, match="Source image rejected"):
         _pull(fake)
     assert fake.calls == [_PULL]
-    sleep.assert_not_called()
 
 
-def test_a_verification_failure_in_the_hook_is_not_retried(sleep: mock.Mock) -> None:
+def test_a_verification_failure_in_the_hook_is_not_retried() -> None:
     fake = _FakeRun({("podman", "pull"): [_done()]})
     with (
         mock.patch(
@@ -137,10 +149,9 @@ def test_a_verification_failure_in_the_hook_is_not_retried(sleep: mock.Mock) -> 
         _pull(fake)
     hook.assert_called_once()
     assert fake.calls == []
-    sleep.assert_not_called()
 
 
-def test_the_hook_choosing_what_to_pull_is_retried_with_the_pull(sleep: mock.Mock) -> None:
+def test_the_hook_choosing_what_to_pull_is_retried_with_the_pull() -> None:
     fake = _FakeRun({("podman", "pull"): [_done()], ("podman", "tag"): [_done()]})
     to_pull = ImageToPull(ref=f"{_IMAGE}:{_SHA}", verified=True)
     with mock.patch(
@@ -151,7 +162,7 @@ def test_the_hook_choosing_what_to_pull_is_retried_with_the_pull(sleep: mock.Moc
     assert hook.call_count == 2
 
 
-def test_a_failed_retag_fails_without_retrying(sleep: mock.Mock) -> None:
+def test_a_failed_retag_fails_without_retrying() -> None:
     fake = _FakeRun({("podman", "pull"): [_done()], ("podman", "tag"): [_done(125, "no space left on device")]})
     with pytest.raises(PrebuiltImageError, match="no space left") as e:
         _pull(fake)
@@ -161,16 +172,26 @@ def test_a_failed_retag_fails_without_retrying(sleep: mock.Mock) -> None:
 
 def test_requires_a_full_commit_sha() -> None:
     with pytest.raises(PrebuiltImageError, match="full commit sha"):
-        pull_prebuilt_image("vaultwarden", _IMAGE, "main", _REPO_URL, log=lambda _: None)
+        pull_prebuilt_image("vaultwarden", _IMAGE, "main", _REPO_URL, log=lambda _: None, retry_delays=())
 
 
-def _manifest(image: str = _IMAGE) -> mock.Mock:
-    return mock.Mock(prebuilt_image=image, container_image="Dockerfile", effective_build_memory_mb=512)
+def _manifest(prebuilt_image: str | None = _IMAGE) -> mock.Mock:
+    return mock.Mock(
+        release_tag_format=ReleaseTagFormat.SEMVER,
+        prebuilt_image=prebuilt_image,
+        container_image="Dockerfile",
+        effective_build_memory_mb=512,
+    )
 
 
-def _prepare(tmp_path: Path, repo_url: str, log: Callable[[str], None] = lambda _: None) -> PreparedImage:
+def _prepare(
+    tmp_path: Path,
+    repo_url: str,
+    log: Callable[[str], None] = lambda _: None,
+    prebuilt_image: str | None = _IMAGE,
+) -> PreparedImage:
     with mock.patch.object(apps_mod, "head_commit", return_value=_SHA):
-        return prepare_app_image("app", str(tmp_path), _manifest(), repo_url, str(tmp_path), log=log)
+        return prepare_app_image("app", str(tmp_path), _manifest(prebuilt_image), repo_url, str(tmp_path), log=log)
 
 
 def test_an_unavailable_image_is_built_locally_instead(tmp_path: Path) -> None:
@@ -234,33 +255,21 @@ def test_app_with_a_pinned_ref_builds_despite_prebuilt_image(tmp_path: Path) -> 
     build.assert_called_once()
 
 
-def test_a_prepared_image_is_run_without_pulling_or_building(tmp_path: Path) -> None:
-    db = mock.Mock()
-    db.execute.return_value.fetchone.return_value = {"repo_url": _REPO_URL}
-    prepared = PreparedImage(tag="openhost-app:latest", source=ImageSource.FALLBACK_BUILT)
+def test_a_release_without_prebuilt_image_is_built(tmp_path: Path) -> None:
     with (
         mock.patch.object(apps_mod, "pull_prebuilt_image") as pull,
-        mock.patch.object(apps_mod, "build_image") as build,
-        mock.patch.object(apps_mod, "run_app_image") as run,
+        mock.patch.object(apps_mod, "build_image", return_value="openhost-app:latest") as build,
     ):
-        apps_mod._build_then_run_app(
-            "app-id",
-            "app",
-            str(tmp_path),
-            _manifest(),
-            db,
-            mock.Mock(temporary_data_dir=str(tmp_path)),
-            prepared_image=prepared,
-        )
+        assert _prepare(tmp_path, _REPO_URL, prebuilt_image=None).source is ImageSource.BUILT
     pull.assert_not_called()
-    build.assert_not_called()
-    assert run.call_args.args[:2] == ("app-id", "openhost-app:latest")
+    build.assert_called_once()
 
 
 _INSTALL_MANIFEST = f"""\
 [app]
 name = "vaultwarden"
 version = "1.0.0"
+release_tag_format = "semver"
 
 [runtime.container]
 image = "Dockerfile"
@@ -509,7 +518,7 @@ def test_an_unreachable_registry_is_retried_without_verifying(sleep: mock.Mock) 
     with pytest.raises(ImageUnavailableError, match="Looking up"):
         _pull_signed(fake)
     assert fake.calls == [_RESOLVE_CMD, _RESOLVE_CMD, _RESOLVE_CMD]
-    assert sleep.call_args_list == [mock.call(5), mock.call(15)]
+    assert sleep.call_count == 2
 
 
 @pytest.mark.parametrize(
@@ -652,3 +661,23 @@ def test_a_failed_lookup_leaves_out_triangulates_deprecation_notice(sleep: mock.
         _pull_signed(fake)
     assert "MANIFEST_UNKNOWN" in str(e.value)
     assert "deprecated" not in str(e.value)
+
+
+def test_a_prepared_image_is_run_without_pulling_or_building(installed: tuple[Any, Path]) -> None:
+    """An update hands the reload the image it produced before stopping the app, which is run as is."""
+    cfg, _ = installed
+    prepared = PreparedImage(tag="openhost-vaultwarden:latest", source=ImageSource.FALLBACK_BUILT)
+    db = sqlite3.connect(cfg.db_path)
+    db.row_factory = sqlite3.Row
+    try:
+        with (
+            mock.patch.object(apps_mod, "pull_prebuilt_image") as pull,
+            mock.patch.object(apps_mod, "build_image") as build,
+            mock.patch.object(apps_mod, "run_app_image") as run,
+        ):
+            start_app_process("vw-id", db, cfg, prepared_image=prepared)
+    finally:
+        db.close()
+    pull.assert_not_called()
+    build.assert_not_called()
+    assert run.call_args.args[:2] == ("vw-id", "openhost-vaultwarden:latest")

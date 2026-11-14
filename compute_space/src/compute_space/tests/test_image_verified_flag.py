@@ -21,6 +21,7 @@ _MANIFEST = """\
 [app]
 name = "vaultwarden"
 version = "1.0.0"
+release_tag_format = "semver"
 
 [runtime.container]
 image = "Dockerfile"
