@@ -57,7 +57,9 @@ def test_a_verified_app_moving_to_a_registry_we_dont_verify_loses_verification()
     assert loss == VerificationLoss(previous_image=_SIGNED, new_image=_UNSIGNED)
     assert loss.previous_registry == "registry.cloudinabottle.org"
     assert loss.new_registry == "ghcr.io"
-    assert "registry.cloudinabottle.org" in loss.describe() and "ghcr.io" in loss.describe()
+    assert loss.describe() == (
+        "image no longer signature-verified (moves from registry.cloudinabottle.org to ghcr.io, which isn't verified)"
+    )
 
 
 @pytest.mark.parametrize(
