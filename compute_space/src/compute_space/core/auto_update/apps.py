@@ -11,6 +11,9 @@ from pathlib import Path
 from compute_space.config import Config
 from compute_space.config import get_config
 from compute_space.core import archive_backend
+from compute_space.core.app_update import UpdateNotApplied
+from compute_space.core.app_update import check_out_update_release
+from compute_space.core.app_update import prepare_update_image
 from compute_space.core.app_update_review import pending_update_review
 from compute_space.core.apps import app_container_log_path
 from compute_space.core.apps import app_log_path
@@ -57,8 +60,10 @@ async def _pull(repo_path: str, app_name: str, repo_url: str) -> str | None:
 
 async def auto_update_app(app_id: str, config: Config) -> AppUpdateResult:
     """Update one app to its upstream's latest version, unless the update needs the owner's approval. Mirrors a manual
-    update from the app's page: a refused update rolls the checkout back, and a failed rebuild leaves the app in error
-    just as a failed manual update does."""
+    update from the app's page (see core/app_update.py): an app that follows releases moves to its newest release and has
+    its image prepared before the running version is stopped; an update that is refused, or can't be prepared, rolls the
+    checkout back and leaves the app running; a failed rebuild leaves the app in error just as a failed manual update
+    does."""
     with closing(get_db()) as db:
         row = db.execute("SELECT * FROM apps WHERE app_id = ?", (app_id,)).fetchone()
     name = row["name"]
@@ -92,7 +97,14 @@ async def auto_update_app(app_id: str, config: Config) -> AppUpdateResult:
     if pull_error is not None:
         await reset_hard(Path(repo_path), pre_sha)
         return result(AppUpdateOutcome.FAILED, f"git pull failed: {pull_error}")
+    # An app that follows releases deploys the newest release, not the head just pulled.
+    try:
+        release = await check_out_update_release(repo_path, repo_url)
+    except UpdateNotApplied as e:
+        await reset_hard(Path(repo_path), pre_sha)
+        return result(AppUpdateOutcome.FAILED, f"update not applied: {e}")
     post_sha = await get_head_sha(Path(repo_path))
+    version = f"{pre_sha[:8]} -> {post_sha[:8]}" + (f" (release {release})" if release is not None else "")
     if post_sha == pre_sha:
         return result(AppUpdateOutcome.UP_TO_DATE)
 
@@ -110,10 +122,17 @@ async def auto_update_app(app_id: str, config: Config) -> AppUpdateResult:
         archive_old_log(log_file, ts=ts)
         archive_old_log(app_container_log_path(name, config), ts=ts)
         with open(log_file, "a") as lf:
-            lf.write(f"automatic update {pre_sha[:8]} -> {post_sha[:8]}\n")
+            lf.write(f"automatic update {version}\n")
     except OSError as e:
         await reset_hard(Path(repo_path), pre_sha)
         return result(AppUpdateOutcome.FAILED, f"could not write update log: {e}")
+
+    # Produce a release's image before the running version is stopped, so a failure leaves it running.
+    try:
+        prepared_image = await prepare_update_image(name, repo_path, repo_url, config)
+    except UpdateNotApplied as e:
+        await reset_hard(Path(repo_path), pre_sha)
+        return result(AppUpdateOutcome.FAILED, f"update not applied: {e}")
 
     # Claim the reload as the manual path does, so a reload the owner starts meanwhile can't race this one. Only while
     # the app is still running: the owner may have stopped it, or started a reload, since the check above.
@@ -134,12 +153,12 @@ async def auto_update_app(app_id: str, config: Config) -> AppUpdateResult:
 
     await asyncio.to_thread(stop_app_process, row)
     # Run in this task rather than a thread of its own, so apps update one at a time.
-    await asyncio.to_thread(reload_app_background, app_id, repo_path, config)
+    await asyncio.to_thread(reload_app_background, app_id, repo_path, config, prepared_image=prepared_image)
     with closing(get_db()) as db:
         after = db.execute("SELECT status, error_message FROM apps WHERE app_id = ?", (app_id,)).fetchone()
     if after["status"] != "running":
         return result(AppUpdateOutcome.FAILED, after["error_message"] or f"{after['status']} after the update")
-    return result(AppUpdateOutcome.UPDATED, f"{pre_sha[:8]} -> {post_sha[:8]}")
+    return result(AppUpdateOutcome.UPDATED, version)
 
 
 async def run_app_auto_updates() -> None:

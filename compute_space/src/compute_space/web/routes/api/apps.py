@@ -38,18 +38,19 @@ from compute_space.config import Config
 from compute_space.core import archive_backend
 from compute_space.core.app_checkouts import app_checkout_dir
 from compute_space.core.app_id import is_valid_app_id
+from compute_space.core.app_update import UpdateNotApplied
+from compute_space.core.app_update import check_out_update_release
+from compute_space.core.app_update import prepare_update_image
 from compute_space.core.app_update_review import pending_update_review
 from compute_space.core.apps import RESERVED_PATHS
 from compute_space.core.apps import PreparedImage
 from compute_space.core.apps import app_container_log_path
 from compute_space.core.apps import app_log_path
-from compute_space.core.apps import app_log_writer
 from compute_space.core.apps import app_repo_url
 from compute_space.core.apps import clone_with_github_fallback
 from compute_space.core.apps import git_pull
 from compute_space.core.apps import insert_and_deploy
 from compute_space.core.apps import move_clone_to_app_checkout_dir
-from compute_space.core.apps import prepare_app_image
 from compute_space.core.apps import reload_app_background
 from compute_space.core.apps import remove_app_background
 from compute_space.core.apps import start_app_process
@@ -83,9 +84,6 @@ from compute_space.core.manifest import parse_manifest
 from compute_space.core.oauth import OAuthRequired
 from compute_space.core.oauth import get_oauth_token
 from compute_space.core.ports import check_port_available
-from compute_space.core.releases import ReleaseError
-from compute_space.core.releases import checkout_newest_release
-from compute_space.core.releases import follows_releases
 from compute_space.core.updates import wait_for_shutdown
 from compute_space.db.connection import get_db
 from compute_space.web.auth.auth import require_owner_auth
@@ -817,17 +815,10 @@ async def _reload_app_impl(
                     return Redirect(path=f"/app_detail/{app_name}")
                 return Response(content=OkResponse(ok=True), status_code=200, media_type=MediaType.JSON)
 
-            # An app that tracks its default branch (no ref pinned) and sets prebuilt_image deploys the branch's newest
-            # release, not its head.
+            # An app that follows releases deploys the newest release, not the head just pulled.
             try:
-                manifest_after_pull = parse_manifest(app_row["repo_path"])
-            except ValueError:
-                manifest_after_pull = None  # reported by the reload itself; nothing to check out
-            try:
-                if manifest_after_pull is not None and follows_releases(repo_url, manifest_after_pull):
-                    release = await asyncio.to_thread(checkout_newest_release, app_row["repo_path"], True)
-                    lf.write(f"Checked out release {release}\n")
-            except ReleaseError as e:
+                release = await check_out_update_release(app_row["repo_path"], repo_url)
+            except UpdateNotApplied as e:
                 await _roll_back_update(app_row["repo_path"], pre_pull_sha, log_file)
                 db.execute(
                     "UPDATE apps SET status = 'error', error_message = ? WHERE app_id = ?",
@@ -837,6 +828,8 @@ async def _reload_app_impl(
                 if continue_oauth:
                     return Redirect(path=f"/app_detail/{app_name}")
                 return Response(content=OkResponse(ok=True), status_code=200, media_type=MediaType.JSON)
+            if release is not None:
+                lf.write(f"Checked out release {release}\n")
 
     # Gate: when an update pulls a manifest that differs from the running one
     # (any changed setting, or newly declared permissions), refuse the reload
@@ -864,27 +857,14 @@ async def _reload_app_impl(
                 return Redirect(path=f"/app_detail/{app_name}")
             return Response(content=review_gate, status_code=200, media_type=MediaType.JSON)
 
-        # An app that uses a prebuilt image produces its image now, before the running container is stopped: it pulls
-        # the release's image or, when that can't be fetched, builds the release locally. Either only moves the
-        # app's image tag once it succeeds, so a failure leaves the running version untouched. The background reload
-        # runs the image prepared here rather than producing it again after the app has stopped.
+        # An app that follows releases produces its image now, before the running container is stopped, so a failure
+        # leaves the running version untouched. The background reload runs the image prepared here rather than
+        # producing it again after the app has stopped.
         try:
-            manifest_for_pull = parse_manifest(app_row["repo_path"])
-        except ValueError:
-            manifest_for_pull = None  # the background reload reports it
-        try:
-            current_repo_url = app_repo_url(app_id, db)
-            if manifest_for_pull is not None and follows_releases(current_repo_url, manifest_for_pull):
-                prepared_image = await asyncio.to_thread(
-                    prepare_app_image,
-                    app_name,
-                    app_row["repo_path"],
-                    manifest_for_pull,
-                    current_repo_url,
-                    config.temporary_data_dir,
-                    app_log_writer(app_name, config),
-                )
-        except (RuntimeError, subprocess.TimeoutExpired) as e:
+            prepared_image = await prepare_update_image(
+                app_name, app_row["repo_path"], app_repo_url(app_id, db), config
+            )
+        except UpdateNotApplied as e:
             await _roll_back_update(app_row["repo_path"], pre_pull_sha, log_file)
             db.execute(
                 "UPDATE apps SET status = 'error', error_message = ? WHERE app_id = ?",

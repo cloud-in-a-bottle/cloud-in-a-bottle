@@ -124,7 +124,7 @@ def side_effects(monkeypatch: pytest.MonkeyPatch) -> Iterator[dict[str, Any]]:
     def fake_stop(_row: Any) -> None:
         state["stops"] += 1
 
-    def fake_reload(app_id: str, _repo_path: str, _config: Config) -> None:
+    def fake_reload(app_id: str, _repo_path: str, _config: Config, **_: Any) -> None:
         state["reloads"].append(app_id)
         with closing(get_db()) as db:
             if state["rebuild_error"] is None:
