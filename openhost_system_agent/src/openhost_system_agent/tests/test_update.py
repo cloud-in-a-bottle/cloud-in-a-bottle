@@ -18,6 +18,7 @@ import pytest
 
 import openhost_system_agent.update as update_mod
 from openhost_system_agent.protocol import UpdateChannel
+from openhost_system_agent.release_tags import version_key
 from openhost_system_agent.updater import paths as updater_paths
 from openhost_system_agent.updater import progress as updater_progress
 
@@ -99,13 +100,13 @@ def downtime(monkeypatch: pytest.MonkeyPatch) -> list[str]:
 
 
 def test_version_key_orders_release_tags() -> None:
-    vk = update_mod._version_key
+    vk = version_key
     assert vk("v1") < vk("v1.0") < vk("v1.0.0") < vk("v2") < vk("v10")
     assert vk("v1.2.0") < vk("v1.10.0")  # numeric, not lexicographic
 
 
 def test_version_key_orders_candidates_before_release() -> None:
-    vk = update_mod._version_key
+    vk = version_key
     assert vk("v1.0.0") < vk("v1.1.0-rc.1") < vk("v1.1.0-rc.2") < vk("v1.1.0-rc.10") < vk("v1.1.0") < vk("v1.1.1-rc.1")
 
 

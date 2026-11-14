@@ -32,6 +32,7 @@ sqlite = ["main"]
 | `version` | string | yes | Version string. Conventionally semver, but only checked for non-emptiness (not validated as semver). |
 | `description` | string | no | Short description |
 | `authors` | string[] | no | List of author names |
+| `release_tag_format` | string | no | How the repo tags its releases. Only `"semver"` (tags like `v1.2.3`) is supported; any other value fails validation, so a format a newer version adds is never misread. When set and the app tracks its repo's default branch (no ref pinned), it is installed and updated to the newest release on that branch rather than its head. See [Releases and prebuilt images](#releases-and-prebuilt-images). |
 
 ### `[runtime.container]` (required)
 
@@ -39,6 +40,7 @@ sqlite = ["main"]
 |-------|------|----------|---------|-------------|
 | `image` | string | yes | - | Path to Dockerfile relative to repo root |
 | `port` | integer | yes | - | Port the app responds to HTTP on |
+| `prebuilt_image` | string | no | - | An image reference without tag or digest (e.g. `registry.cloudinabottle.org/my-app`). Requires `[app].release_tag_format`. When the app follows releases, each release runs `<prebuilt_image>:<that commit's sha>`, pulled instead of built (or built locally if it can't be pulled). See [Releases and prebuilt images](#releases-and-prebuilt-images). |
 | `command` | string | no | - | Override container CMD |
 | `capabilities` | string[] | no | `[]` | **Additional** Linux capabilities to grant inside the container, on top of the Docker-default baseline (CHOWN, DAC_OVERRIDE, FOWNER, FSETID, KILL, NET_BIND_SERVICE, SETFCAP, SETGID, SETPCAP, SETUID, SYS_CHROOT, NET_RAW, MKNOD, AUDIT_WRITE) that every container receives automatically. Restricted to a rootless-safe allowlist (see `compute_space.core.manifest.SAFE_CAPABILITIES`); disallowed entries like `"SYS_ADMIN"` are rejected at parse time. Accepts names with or without the `CAP_` prefix. |
 | `devices` | string[] | no | `[]` | Host devices to pass through (e.g., `"/dev/net/tun"`). Restricted to a rootless-safe allowlist (see `compute_space.core.manifest.SAFE_DEVICE_PATHS`); disallowed paths like `/dev/mem`, `/dev/kvm`, or raw block devices are rejected at parse time. |
@@ -100,6 +102,32 @@ In general it's better to expose these links from within your app; this is mainl
 The configured [bundled backup app](../operation/backups.md) includes permanent and temporary app data, excluding its own permanent-data directory. Its direct migration copies permanent data for selected apps; temporary and archive data are not migrated. Archive data is also excluded from these backups. See [Data](../how_it_works/data.md#the-archive-tier) for archive recovery requirements.
 
 The retired `access_all_data` and `access_all_archive` fields are deprecated aliases for `access_all_app_data`. Manifests using either receive the full permanent, temporary, and archive data permission and emit a deprecation warning.
+
+## Releases and prebuilt images
+
+An app that tags its releases can be installed and updated to them rather than to the head of its default branch, and can publish each release's image from CI so installs pull it instead of building it.
+
+```toml
+[app]
+name = "my-app"
+version = "1.2.3"
+release_tag_format = "semver"
+
+[runtime.container]
+image = "Dockerfile"
+port = 8080
+prebuilt_image = "registry.cloudinabottle.org/my-app"
+```
+
+- **Following releases.** An app follows releases when it sets `[app] release_tag_format` and is installed with no ref pinned (so it tracks its repo's default branch). It then installs and updates to the newest release tag on that branch (`vX.Y.Z`; release candidates excluded), whether or not it sets `prebuilt_image`. A newer major version is just a newer release. A pinned ref (`url@ref`: a branch, tag or commit) ignores both fields and tags, and builds its head as before.
+- **No release, no install.** If the app follows releases but the default branch has no release tag, the install or update fails.
+- **Prebuilt images.** `[runtime.container] prebuilt_image` makes each release pull `<prebuilt_image>:<full commit sha>` instead of building `image`; CI must push that tag before tagging the commit. It requires `release_tag_format`, since the image is only pulled for releases. Without `prebuilt_image`, each release is built from `image`.
+- **Falling back to building.** If the image can't be fetched (the registry is unreachable or erroring, the pull times out, or the tag isn't there), the pull is tried 3 times in all, a few seconds apart, and then the release's `image` Dockerfile is built locally instead; the app's build log says so. An image that is fetched but fails verification never falls back: the install or update fails.
+- **Updates prepare the new image first.** An update of an app that follows releases (from the app's page, or the scheduled one) pulls the release's image, or builds it, before the running container is stopped. If that fails, the working tree is rolled back, the app is marked with the error (a scheduled update records it as failed instead), and the running version keeps running untouched.
+- **Forks.** A fork that changes the app should remove (or comment out) `prebuilt_image`, so it is built from its own Dockerfile, and `release_tag_format` too unless it tags its own releases.
+- **Tests.** The test harness deploys the working tree, built from `image`, by default, so tests cover it; pass `deploy_newest_release=True` to `OpenhostStack` to deploy the newest release (with its prebuilt image, if the manifest sets one) instead.
+
+`image` stays required: Cloud in a Bottle versions without release support ignore both fields and build the default branch's head.
 
 ## More Examples
 

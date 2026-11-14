@@ -38,10 +38,15 @@ from compute_space.config import Config
 from compute_space.core import archive_backend
 from compute_space.core.app_checkouts import app_checkout_dir
 from compute_space.core.app_id import is_valid_app_id
+from compute_space.core.app_update import UpdateNotApplied
+from compute_space.core.app_update import check_out_update_release
+from compute_space.core.app_update import prepare_update_image
 from compute_space.core.app_update_review import pending_update_review
 from compute_space.core.apps import RESERVED_PATHS
+from compute_space.core.apps import PreparedImage
 from compute_space.core.apps import app_container_log_path
 from compute_space.core.apps import app_log_path
+from compute_space.core.apps import app_repo_url
 from compute_space.core.apps import clone_with_github_fallback
 from compute_space.core.apps import git_pull
 from compute_space.core.apps import insert_and_deploy
@@ -674,6 +679,22 @@ def _gate_update_review(
     )
 
 
+async def _roll_back_update(repo_path: str, pre_pull_sha: str | None, log_file: str) -> None:
+    """Put the working tree back at the version the app is running, after an update that won't be applied, so the
+    refused code doesn't linger on disk where a later plain reload (which is not gated, on the assumption the on-disk
+    manifest matches the running one) would silently deploy it."""
+    if not pre_pull_sha:
+        return
+    try:
+        await reset_hard(Path(repo_path), pre_pull_sha)
+    except Exception as e:  # noqa: BLE001
+        # The refused version is left on disk, where a plain reload would deploy it, so make it visible to operators
+        # as well as in the app's build log.
+        logger.warning("failed to roll back refused update in {} to {}: {}", repo_path, pre_pull_sha, e)
+        with open(log_file, "a") as lf:
+            lf.write(f"WARNING: failed to roll back refused update to {pre_pull_sha}: {e}\n")
+
+
 async def _reload_app_impl(
     app_id: str,
     update: bool,
@@ -720,6 +741,8 @@ async def _reload_app_impl(
         # refused update can roll the working tree back to it (keeping the
         # on-disk repo in sync with the running version — see the gate below).
         pre_pull_sha: str | None = None
+        # The image an update produced for the new version before stopping the old one (see below).
+        prepared_image: PreparedImage | None = None
 
         if update or continue_oauth:
             if not app_row["repo_path"] or not os.path.isdir(os.path.join(app_row["repo_path"], ".git")):
@@ -792,6 +815,22 @@ async def _reload_app_impl(
                     return Redirect(path=f"/app_detail/{app_name}")
                 return Response(content=OkResponse(ok=True), status_code=200, media_type=MediaType.JSON)
 
+            # An app that follows releases deploys the newest release, not the head just pulled.
+            try:
+                release = await check_out_update_release(app_row["repo_path"], repo_url)
+            except UpdateNotApplied as e:
+                await _roll_back_update(app_row["repo_path"], pre_pull_sha, log_file)
+                db.execute(
+                    "UPDATE apps SET status = 'error', error_message = ? WHERE app_id = ?",
+                    (f"Update not applied: {e}", app_id),
+                )
+                db.commit()
+                if continue_oauth:
+                    return Redirect(path=f"/app_detail/{app_name}")
+                return Response(content=OkResponse(ok=True), status_code=200, media_type=MediaType.JSON)
+            if release is not None:
+                lf.write(f"Checked out release {release}\n")
+
     # Gate: when an update pulls a manifest that differs from the running one
     # (any changed setting, or newly declared permissions), refuse the reload
     # until the owner approves (the install flow requires the same explicit
@@ -811,21 +850,30 @@ async def _reload_app_impl(
             app_row["manifest_raw"],
         )
         if review_gate is not None:
-            # Roll the working tree back to the version the app is running, so the
-            # pulled-but-refused code does not linger on disk where a later plain
-            # reload — which is not gated, on the assumption the on-disk manifest
-            # matches the running one — would silently deploy it.
-            if pre_pull_sha:
-                try:
-                    await reset_hard(Path(app_row["repo_path"]), pre_pull_sha)
-                except Exception as e:  # noqa: BLE001
-                    with open(log_file, "a") as lf:
-                        lf.write(f"WARNING: failed to roll back refused update to {pre_pull_sha}: {e}\n")
+            await _roll_back_update(app_row["repo_path"], pre_pull_sha, log_file)
             with open(log_file, "a") as lf:
                 lf.write("Update changes app settings requiring owner approval; not reloading.\n")
             if continue_oauth:
                 return Redirect(path=f"/app_detail/{app_name}")
             return Response(content=review_gate, status_code=200, media_type=MediaType.JSON)
+
+        # An app that follows releases produces its image now, before the running container is stopped, so a failure
+        # leaves the running version untouched. The background reload runs the image prepared here rather than
+        # producing it again after the app has stopped.
+        try:
+            prepared_image = await prepare_update_image(
+                app_name, app_row["repo_path"], app_repo_url(app_id, db), config
+            )
+        except UpdateNotApplied as e:
+            await _roll_back_update(app_row["repo_path"], pre_pull_sha, log_file)
+            db.execute(
+                "UPDATE apps SET status = 'error', error_message = ? WHERE app_id = ?",
+                (f"Update not applied: {e}", app_id),
+            )
+            db.commit()
+            if continue_oauth:
+                return Redirect(path=f"/app_detail/{app_name}")
+            return Response(content=OkResponse(ok=True), status_code=200, media_type=MediaType.JSON)
 
     # Atomically claim the reload before touching the running container.
     # ``WHERE status NOT IN (<transient states>)`` makes concurrent reloads
@@ -851,6 +899,7 @@ async def _reload_app_impl(
     Thread(
         target=reload_app_background,
         args=(app_id, app_row["repo_path"], config),
+        kwargs={"prepared_image": prepared_image},
         daemon=True,
     ).start()
 

@@ -323,9 +323,9 @@ def set_remote_url(repo_path: Path, url: str) -> None:
         repo.create_remote("origin", url)
 
 
-@async_wrap
-def hard_checkout_ref(repo_path: Path, ref: str) -> None:
-    """set local state to match origin/ref, checking out if a branch or detached head if a commit hash."""
+def checkout_ref(repo_path: Path, ref: str) -> None:
+    """Set local state to match origin/ref: a remote branch is checked out as a local branch tracking it; anything else
+    (a tag or commit) as a detached HEAD. Sync, for app release checkouts; async callers use hard_checkout_ref."""
     repo = HooklessRepo(repo_path)
     remote_ref = f"origin/{ref}"
     try:
@@ -339,6 +339,9 @@ def hard_checkout_ref(repo_path: Path, ref: str) -> None:
     # checkout -f resets tracked files but leaves untracked files behind, which can
     # shadow modules removed/renamed between revisions. Match origin/ref fully.
     repo.git.clean("-fd")
+
+
+hard_checkout_ref = async_wrap(checkout_ref)
 
 
 def github_web_url_from_remote_url(remote_url: str, branch: str | None) -> str | None:
