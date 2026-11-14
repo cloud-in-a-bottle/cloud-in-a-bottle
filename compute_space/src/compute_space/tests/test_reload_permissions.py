@@ -423,8 +423,8 @@ def _seed_git_app_with_consumes(cfg: Any, repo: Path, consumes: str) -> str:
 @contextlib.contextmanager
 def _mocked_reload_side_effects() -> Iterator[dict[str, Any]]:
     """Stub out the heavy/side-effecting bits of an update reload so route tests
-    exercise the permission gate hermetically: a successful git pull, no ref
-    re-pin, no container stop, no background reload thread."""
+    exercise the permission gate hermetically: a successful git pull, no
+    container stop, no background reload thread."""
     with (
         patch("compute_space.web.routes.api.apps.git_pull", return_value=(True, None)),
         patch("compute_space.web.routes.api.apps.stop_app_process") as stop,

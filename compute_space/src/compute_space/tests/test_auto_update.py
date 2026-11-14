@@ -334,6 +334,7 @@ def update_due(monkeypatch: pytest.MonkeyPatch) -> Callable[[datetime | None], N
         monkeypatch.setattr(runner_mod, "_update_due", at)
 
     set_update_due(None)
+    monkeypatch.setattr(runner_mod, "_app_update_due", None)
     return set_update_due
 
 
