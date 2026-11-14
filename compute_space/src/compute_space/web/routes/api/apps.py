@@ -38,6 +38,7 @@ from compute_space.config import Config
 from compute_space.core import archive_backend
 from compute_space.core.app_checkouts import app_checkout_dir
 from compute_space.core.app_id import is_valid_app_id
+from compute_space.core.app_update_review import pending_update_review
 from compute_space.core.apps import RESERVED_PATHS
 from compute_space.core.apps import PreparedImage
 from compute_space.core.apps import app_container_log_path
@@ -53,7 +54,6 @@ from compute_space.core.apps import reload_app_background
 from compute_space.core.apps import remove_app_background
 from compute_space.core.apps import start_app_process
 from compute_space.core.apps import validate_manifest
-from compute_space.core.auth.permissions_v2 import get_all_permissions_v2
 from compute_space.core.auth.permissions_v2 import grant_permission_v2
 from compute_space.core.checkout_operations import run_checkout_operation
 from compute_space.core.containers import BUILD_CACHE_CORRUPT_MARKER
@@ -79,10 +79,7 @@ from compute_space.core.logging import logger
 from compute_space.core.manifest import AppManifest
 from compute_space.core.manifest import PermissionGrant
 from compute_space.core.manifest import all_manifest_permissions_v2
-from compute_space.core.manifest import manifest_newly_declared_permissions_v2
-from compute_space.core.manifest import manifest_settings_changes
 from compute_space.core.manifest import parse_manifest
-from compute_space.core.manifest import settings_changes_require_review
 from compute_space.core.oauth import OAuthRequired
 from compute_space.core.oauth import get_oauth_token
 from compute_space.core.ports import check_port_available
@@ -658,41 +655,27 @@ def _gate_update_review(
     approve_new_permissions: bool,
     previous_manifest_raw: str | None = None,
 ) -> UpdateReviewRequiredResponse | None:
-    if not repo_path or not os.path.isdir(repo_path):
-        return None
-    try:
-        manifest = parse_manifest(repo_path)
-    except ValueError:
-        return None
-
-    new_perms = manifest_newly_declared_permissions_v2(
-        manifest, get_all_permissions_v2(consumer_app_id=app_id), previous_manifest_raw
-    )
-    settings_changed = manifest_settings_changes(manifest, previous_manifest_raw)
-    # Fields that don't change what the app can do (description, authors, version,
-    # health check, links) are reported in the diff but don't hold the update back on
-    # their own: an app that only rewords its description gains nothing, and gating on
-    # that trains the owner to click through every review.
-    if not new_perms and not settings_changes_require_review(settings_changed):
+    review = pending_update_review(app_id, repo_path, previous_manifest_raw)
+    if review is None:
         return None
 
     if approve_new_permissions:
-        for pg in new_perms:
+        for pg in review.new_permissions:
             grant_permission_v2(consumer_app_id=app_id, service_url=pg.service_url, grant_payload=pg.grant)
         return None
 
-    shortname_by_service = {c.service: c.shortname for c in manifest.consumes_services_v2}
+    shortname_by_service = {c.service: c.shortname for c in review.manifest.consumes_services_v2}
     return UpdateReviewRequiredResponse(
         ok=False,
         review_required=True,
-        settings_changed=[attr.asdict(c) for c in settings_changed],
+        settings_changed=[attr.asdict(c) for c in review.settings_changed],
         permissions_required=[
             {
                 "service_url": pg.service_url,
                 "grant": pg.grant,
                 "shortname": shortname_by_service.get(pg.service_url, ""),
             }
-            for pg in new_perms
+            for pg in review.new_permissions
         ],
         error="This update changes the app's settings; review and approve them before it can be applied.",
     )
