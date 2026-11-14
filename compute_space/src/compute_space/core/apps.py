@@ -753,7 +753,10 @@ def start_app_process(
     manifest = parse_manifest(app_row["repo_path"])
     _mark_app_starting(db, app_id)
 
-    _build_then_run_app(app_id, app_name, app_row["repo_path"], manifest, db, config, prepared_image=prepared_image)
+    if prepared_image is None:
+        _build_then_run_app(app_id, app_name, app_row["repo_path"], manifest, db, config)
+    else:
+        _run_prepared_image(app_id, prepared_image, manifest, db, config)
 
 
 def _build_then_run_app(
@@ -766,19 +769,31 @@ def _build_then_run_app(
     *,
     max_build_attempts: int = 1,
     env_vars: dict[str, str] | None = None,
-    prepared_image: PreparedImage | None = None,
 ) -> None:
-    """Produce the app's image (see prepare_app_image), unless ``prepared_image`` already is it, then run it."""
-    if prepared_image is None:
-        prepared_image = prepare_app_image(
-            app_name,
-            repo_path,
-            manifest,
-            app_repo_url(app_id, db),
-            config.temporary_data_dir,
-            log=app_log_writer(app_name, config),
-            max_build_attempts=max_build_attempts,
-        )
+    """Produce the app's image (see prepare_app_image), then run it."""
+    prepared_image = prepare_app_image(
+        app_name,
+        repo_path,
+        manifest,
+        app_repo_url(app_id, db),
+        config.temporary_data_dir,
+        log=app_log_writer(app_name, config),
+        max_build_attempts=max_build_attempts,
+    )
+    _run_prepared_image(app_id, prepared_image, manifest, db, config, env_vars=env_vars)
+
+
+def _run_prepared_image(
+    app_id: str,
+    prepared_image: PreparedImage,
+    manifest: AppManifest,
+    db: sqlite3.Connection,
+    config: Config,
+    env_vars: dict[str, str] | None = None,
+) -> None:
+    """Run an image prepare_app_image just produced for the app's checkout. Every deploy of a new image goes through
+    here, whether it was produced right before (_build_then_run_app) or by an update before it stopped the running
+    version; a restart reruns the existing tag with run_app_image directly."""
     run_app_image(app_id, prepared_image.tag, manifest, db, config, env_vars=env_vars)
 
 

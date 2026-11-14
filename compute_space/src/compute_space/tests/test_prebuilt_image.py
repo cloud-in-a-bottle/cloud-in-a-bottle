@@ -215,29 +215,6 @@ def test_app_with_a_pinned_ref_builds_despite_prebuilt_image(tmp_path: Path) -> 
     build.assert_called_once()
 
 
-def test_a_prepared_image_is_run_without_pulling_or_building(tmp_path: Path) -> None:
-    db = mock.Mock()
-    db.execute.return_value.fetchone.return_value = {"repo_url": _REPO_URL}
-    prepared = PreparedImage(tag="openhost-app:latest", source=ImageSource.FALLBACK_BUILT)
-    with (
-        mock.patch.object(apps_mod, "pull_prebuilt_image") as pull,
-        mock.patch.object(apps_mod, "build_image") as build,
-        mock.patch.object(apps_mod, "run_app_image") as run,
-    ):
-        apps_mod._build_then_run_app(
-            "app-id",
-            "app",
-            str(tmp_path),
-            _manifest(),
-            db,
-            mock.Mock(temporary_data_dir=str(tmp_path)),
-            prepared_image=prepared,
-        )
-    pull.assert_not_called()
-    build.assert_not_called()
-    assert run.call_args.args[:2] == ("app-id", "openhost-app:latest")
-
-
 _INSTALL_MANIFEST = f"""\
 [app]
 name = "vaultwarden"
@@ -320,3 +297,23 @@ def test_plain_reload_falls_back_to_building_when_the_registry_is_unreachable(
     finally:
         db.close()
     _assert_fell_back(m, cfg)
+
+
+def test_a_prepared_image_is_run_without_pulling_or_building(installed: tuple[Any, Path]) -> None:
+    """An update hands the reload the image it produced before stopping the app, which is run as is."""
+    cfg, _ = installed
+    prepared = PreparedImage(tag="openhost-vaultwarden:latest", source=ImageSource.FALLBACK_BUILT)
+    db = sqlite3.connect(cfg.db_path)
+    db.row_factory = sqlite3.Row
+    try:
+        with (
+            mock.patch.object(apps_mod, "pull_prebuilt_image") as pull,
+            mock.patch.object(apps_mod, "build_image") as build,
+            mock.patch.object(apps_mod, "run_app_image") as run,
+        ):
+            start_app_process("vw-id", db, cfg, prepared_image=prepared)
+    finally:
+        db.close()
+    pull.assert_not_called()
+    build.assert_not_called()
+    assert run.call_args.args[:2] == ("vw-id", "openhost-vaultwarden:latest")
