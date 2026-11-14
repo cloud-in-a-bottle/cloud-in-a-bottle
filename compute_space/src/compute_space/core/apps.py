@@ -58,6 +58,7 @@ from compute_space.core.oauth import OAuthRequired
 from compute_space.core.oauth import get_oauth_token
 from compute_space.core.ports import allocate_port
 from compute_space.core.ports import resolve_port_mappings
+from compute_space.core.prebuilt_image import PULL_RETRY_DELAYS_SECONDS
 from compute_space.core.prebuilt_image import ImageUnavailableError
 from compute_space.core.prebuilt_image import pull_prebuilt_image
 from compute_space.core.releases import ReleaseError
@@ -859,7 +860,9 @@ def prepare_app_image(
         )
     commit = head_commit(repo_path)
     try:
-        pulled = pull_prebuilt_image(app_name, manifest.prebuilt_image, commit, repo_url, log=log)
+        pulled = pull_prebuilt_image(
+            app_name, manifest.prebuilt_image, commit, repo_url, log=log, retry_delays=PULL_RETRY_DELAYS_SECONDS
+        )
     except ImageUnavailableError as e:
         return _build_in_place_of_prebuilt(
             app_name, repo_path, manifest, commit, e, temp_data_dir, log, max_build_attempts

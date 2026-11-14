@@ -67,16 +67,17 @@ def sleep() -> Iterator[mock.Mock]:
         yield s
 
 
-def _pull(fake: _FakeRun) -> PulledImage:
+def _pull(fake: _FakeRun, retry_delays: tuple[float, ...] = (0, 0)) -> PulledImage:
     with mock.patch("compute_space.core.prebuilt_image.subprocess.run", fake):
-        return pull_prebuilt_image("vaultwarden", _IMAGE, _SHA, _REPO_URL, log=lambda _: None)
+        return pull_prebuilt_image(
+            "vaultwarden", _IMAGE, _SHA, _REPO_URL, log=lambda _: None, retry_delays=retry_delays
+        )
 
 
-def test_pulls_the_commits_image_and_tags_it_as_the_app_image(sleep: mock.Mock) -> None:
+def test_pulls_the_commits_image_and_tags_it_as_the_app_image() -> None:
     fake = _FakeRun({("podman", "pull"): [_done()], ("podman", "tag"): [_done()]})
     assert _pull(fake) == PulledImage(tag="openhost-vaultwarden:latest", verified=False)
     assert fake.calls == [_PULL, _TAG]
-    sleep.assert_not_called()
 
 
 @pytest.mark.parametrize(
@@ -88,32 +89,42 @@ def test_pulls_the_commits_image_and_tags_it_as_the_app_image(sleep: mock.Mock) 
         subprocess.TimeoutExpired(cmd="podman", timeout=1800),
     ],
 )
-def test_an_image_that_cant_be_fetched_is_tried_three_times(
-    sleep: mock.Mock, failure: subprocess.CompletedProcess[str] | Exception
+def test_an_image_that_cant_be_fetched_is_retried_once_per_delay(
+    failure: subprocess.CompletedProcess[str] | Exception,
 ) -> None:
     fake = _FakeRun({("podman", "pull"): [failure]})
     with pytest.raises(ImageUnavailableError):
         _pull(fake)
     assert fake.calls == [_PULL, _PULL, _PULL]
+
+
+def test_retries_wait_the_given_delays(sleep: mock.Mock) -> None:
+    with pytest.raises(ImageUnavailableError):
+        _pull(_FakeRun({("podman", "pull"): [_UNREACHABLE]}), retry_delays=(5, 15))
     assert sleep.call_args_list == [mock.call(5), mock.call(15)]
 
 
-def test_a_pull_that_succeeds_on_the_second_attempt_is_used(sleep: mock.Mock) -> None:
+def test_no_retry_delays_means_one_attempt() -> None:
+    fake = _FakeRun({("podman", "pull"): [_UNREACHABLE]})
+    with pytest.raises(ImageUnavailableError):
+        _pull(fake, retry_delays=())
+    assert fake.calls == [_PULL]
+
+
+def test_a_pull_that_succeeds_on_the_second_attempt_is_used() -> None:
     fake = _FakeRun({("podman", "pull"): [_UNREACHABLE, _done()], ("podman", "tag"): [_done()]})
     assert _pull(fake).tag == "openhost-vaultwarden:latest"
     assert fake.calls == [_PULL, _PULL, _TAG]
-    assert sleep.call_args_list == [mock.call(5)]
 
 
-def test_the_instances_signature_policy_rejecting_the_image_is_a_verification_failure(sleep: mock.Mock) -> None:
+def test_the_instances_signature_policy_rejecting_the_image_is_a_verification_failure() -> None:
     fake = _FakeRun({("podman", "pull"): [_done(125, "Source image rejected: A signature was required")]})
     with pytest.raises(ImageVerificationError, match="Source image rejected"):
         _pull(fake)
     assert fake.calls == [_PULL]
-    sleep.assert_not_called()
 
 
-def test_a_verification_failure_in_the_hook_is_not_retried(sleep: mock.Mock) -> None:
+def test_a_verification_failure_in_the_hook_is_not_retried() -> None:
     fake = _FakeRun({("podman", "pull"): [_done()]})
     with (
         mock.patch(
@@ -124,10 +135,9 @@ def test_a_verification_failure_in_the_hook_is_not_retried(sleep: mock.Mock) -> 
         _pull(fake)
     hook.assert_called_once()
     assert fake.calls == []
-    sleep.assert_not_called()
 
 
-def test_the_hook_choosing_what_to_pull_is_retried_with_the_pull(sleep: mock.Mock) -> None:
+def test_the_hook_choosing_what_to_pull_is_retried_with_the_pull() -> None:
     fake = _FakeRun({("podman", "pull"): [_done()], ("podman", "tag"): [_done()]})
     to_pull = ImageToPull(ref=f"{_IMAGE}:{_SHA}", verified=True)
     with mock.patch(
@@ -138,7 +148,7 @@ def test_the_hook_choosing_what_to_pull_is_retried_with_the_pull(sleep: mock.Moc
     assert hook.call_count == 2
 
 
-def test_a_failed_retag_fails_without_retrying(sleep: mock.Mock) -> None:
+def test_a_failed_retag_fails_without_retrying() -> None:
     fake = _FakeRun({("podman", "pull"): [_done()], ("podman", "tag"): [_done(125, "no space left on device")]})
     with pytest.raises(PrebuiltImageError, match="no space left") as e:
         _pull(fake)
@@ -148,7 +158,7 @@ def test_a_failed_retag_fails_without_retrying(sleep: mock.Mock) -> None:
 
 def test_requires_a_full_commit_sha() -> None:
     with pytest.raises(PrebuiltImageError, match="full commit sha"):
-        pull_prebuilt_image("vaultwarden", _IMAGE, "main", _REPO_URL, log=lambda _: None)
+        pull_prebuilt_image("vaultwarden", _IMAGE, "main", _REPO_URL, log=lambda _: None, retry_delays=())
 
 
 def _manifest(prebuilt_image: str | None = _IMAGE) -> mock.Mock:
