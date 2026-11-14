@@ -52,7 +52,7 @@ Updates get the same treatment: when an app's manifest changes, the update page 
 
 ### Updating apps
 
-Apps do not currently auto-update themselves. There's a button in the app details page to manually fetch + install any updates.
+There's a button in the app details page to manually fetch + install any updates. Apps can also update themselves: with "Also update apps" turned on in Settings, the daily update window first updates each running app to its latest version (its newest release, for an app that follows releases), one at a time, exactly as the button does. An update that adds permissions or changes an app's settings is left for the owner to approve on the app's page, and Settings lists those apps, and any whose update failed, after each run. Stopped apps, apps with local changes, and apps pinned to a commit are skipped.
 
 ## Who can use your apps
 
@@ -68,7 +68,7 @@ There is no way yet to give a named person their own login to your instance or t
 - **Archive storage.** Point the bulk-content tier at an S3 bucket instead of local disk. See [Data](../how_it_works/data.md#the-archive-tier).
 - **API tokens.** Create and revoke the tokens the [CLI](./cli.md) and any scripts use. They are owner-equivalent, so give them expiries.
 - **Owner account.** Change the username apps see, and your password.
-- **Updates.** Check for and apply new Cloud in a Bottle versions. It pulls the code, runs any host migrations, and restarts, streaming progress while it goes. The remote decides what you update to: a plain URL follows tagged releases, `url#branch` follows a branch, and `url@tag-or-commit` pins a fixed version. When tracking a plain URL (and thus getting tagged releases), the instance can auto-update every day at a time you pick. On that channel you can also opt in to release candidates (tags like `v1.2.0-rc.1`), which arrive before the stable release but may be broken. An update briefly makes the dashboard and apps unavailable.
+- **Updates.** Check for and apply new Cloud in a Bottle versions. It pulls the code, runs any host migrations, and restarts, streaming progress while it goes. The remote decides what you update to: a plain URL follows tagged releases, `url#branch` follows a branch, and `url@tag-or-commit` pins a fixed version. When tracking a plain URL (and thus getting tagged releases), the instance can auto-update every day at a time you pick. Apps can update at the same time (see above). On that channel you can also opt in to release candidates (tags like `v1.2.0-rc.1`), which arrive before the stable release but may be broken. An update briefly makes the dashboard and apps unavailable.
 
 ### Trying release candidates
 

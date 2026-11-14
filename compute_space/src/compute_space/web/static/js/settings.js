@@ -126,6 +126,8 @@ let savedPrereleases = null;
 let savedPrereleasesError = null;
 // The saved auto-update settings, null until loaded.
 let autoUpdate = null;
+// The saved app auto-update setting and last run, null until loaded.
+let appAutoUpdate = null;
 
 const REMOTE_SCHEMES = ['http:', 'https:', 'ssh:', 'git:', 'file:'];
 
@@ -360,9 +362,11 @@ function renderAutoUpdate() {
     enabled.removeAttribute('aria-describedby');
   }
   time.value = utcTimeToLocal(autoUpdate.time_utc);
-  time.disabled = paused || !autoUpdate.enabled;
+  // App updates run at the same time, so the time stays editable while they're on.
+  const appsOn = appAutoUpdate !== null && appAutoUpdate.enabled;
+  time.disabled = !appsOn && (paused || !autoUpdate.enabled);
   document.getElementById('auto-update-paused').hidden = !paused;
-  document.getElementById('auto-update-row').classList.toggle('field-row--disabled', paused);
+  document.getElementById('auto-update-row').classList.toggle('field-row--disabled', paused && !appsOn);
 
   const last = document.getElementById('auto-update-last');
   if (autoUpdate.last_run_at) {
@@ -387,6 +391,74 @@ async function loadAutoUpdate() {
     msg.className = 'msg msg--error';
     msg.hidden = false;
   }
+}
+
+function renderAppAutoUpdate() {
+  if (appAutoUpdate === null) return;
+  const enabled = document.getElementById('app-auto-update-enabled');
+  enabled.checked = appAutoUpdate.enabled;
+  enabled.disabled = false;
+  const last = document.getElementById('app-auto-update-last');
+  if (!appAutoUpdate.last_run_at) {
+    last.hidden = true;
+    return;
+  }
+  const results = appAutoUpdate.last_run_results;
+  const count = (outcome) => results.filter((r) => r.outcome === outcome).length;
+  let html = '<p>Last automatic app update: ' + esc(new Date(appAutoUpdate.last_run_at).toLocaleString())
+    + '. ' + count('updated') + ' updated, ' + count('up_to_date') + ' up to date, '
+    + count('skipped') + ' skipped.</p>';
+  const listOf = (outcome, heading) => {
+    const items = results.filter((r) => r.outcome === outcome);
+    if (items.length === 0) return '';
+    return '<p>' + heading + '</p><ul>' + items.map((r) => '<li><a href="/app_detail/'
+      + encodeURIComponent(r.app_name) + '">' + esc(r.app_name) + '</a>'
+      + (r.detail ? ': ' + esc(r.detail) : '') + '</li>').join('') + '</ul>';
+  };
+  html += listOf('needs_approval', 'Needs your approval (open the app and update it):');
+  html += listOf('failed', 'Failed:');
+  last.innerHTML = html;
+  last.hidden = false;
+}
+
+async function loadAppAutoUpdate() {
+  try {
+    const resp = await fetch('/api/settings/app-auto-update');
+    if (!resp.ok) throw new Error('failed to load');
+    appAutoUpdate = await resp.json();
+    renderAppAutoUpdate();
+    renderAutoUpdate();
+  } catch (e) {
+    const msg = document.getElementById('app-auto-update-msg');
+    msg.textContent = 'Failed to load automatic app update settings. Reload the page to retry.';
+    msg.className = 'msg msg--error';
+    msg.hidden = false;
+  }
+}
+
+async function saveAppAutoUpdate() {
+  const msg = document.getElementById('app-auto-update-msg');
+  msg.hidden = true;
+  try {
+    const resp = await fetch('/api/settings/app-auto-update', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({enabled: document.getElementById('app-auto-update-enabled').checked}),
+    });
+    if (!resp.ok) {
+      const err = await resp.json();
+      throw new Error(responseErrorMessage(err, 'failed to save'));
+    }
+    appAutoUpdate = await resp.json();
+    msg.textContent = 'Saved.';
+    msg.className = 'msg msg--ok';
+  } catch (e) {
+    msg.textContent = 'Failed to save automatic app update settings: ' + e.message;
+    msg.className = 'msg msg--error';
+  }
+  msg.hidden = false;
+  renderAppAutoUpdate();
+  renderAutoUpdate();
 }
 
 async function saveAutoUpdate() {
@@ -965,6 +1037,7 @@ async function connectImbue() {
 loadOwnerUsername();
 loadRemote();
 loadAutoUpdate();
+loadAppAutoUpdate();
 checkForUpdates();
 updateSshStatus();
 setInterval(updateSshStatus, 5000);

@@ -38,22 +38,23 @@ from compute_space.config import Config
 from compute_space.core import archive_backend
 from compute_space.core.app_checkouts import app_checkout_dir
 from compute_space.core.app_id import is_valid_app_id
+from compute_space.core.app_update import UpdateNotApplied
+from compute_space.core.app_update import check_out_update_release
+from compute_space.core.app_update import prepare_update_image
+from compute_space.core.app_update_review import pending_update_review
 from compute_space.core.apps import RESERVED_PATHS
 from compute_space.core.apps import PreparedImage
 from compute_space.core.apps import app_container_log_path
 from compute_space.core.apps import app_log_path
-from compute_space.core.apps import app_log_writer
 from compute_space.core.apps import app_repo_url
 from compute_space.core.apps import clone_with_github_fallback
 from compute_space.core.apps import git_pull
 from compute_space.core.apps import insert_and_deploy
 from compute_space.core.apps import move_clone_to_app_checkout_dir
-from compute_space.core.apps import prepare_app_image
 from compute_space.core.apps import reload_app_background
 from compute_space.core.apps import remove_app_background
 from compute_space.core.apps import start_app_process
 from compute_space.core.apps import validate_manifest
-from compute_space.core.auth.permissions_v2 import get_all_permissions_v2
 from compute_space.core.auth.permissions_v2 import grant_permission_v2
 from compute_space.core.checkout_operations import run_checkout_operation
 from compute_space.core.containers import BUILD_CACHE_CORRUPT_MARKER
@@ -79,16 +80,10 @@ from compute_space.core.logging import logger
 from compute_space.core.manifest import AppManifest
 from compute_space.core.manifest import PermissionGrant
 from compute_space.core.manifest import all_manifest_permissions_v2
-from compute_space.core.manifest import manifest_newly_declared_permissions_v2
-from compute_space.core.manifest import manifest_settings_changes
 from compute_space.core.manifest import parse_manifest
-from compute_space.core.manifest import settings_changes_require_review
 from compute_space.core.oauth import OAuthRequired
 from compute_space.core.oauth import get_oauth_token
 from compute_space.core.ports import check_port_available
-from compute_space.core.releases import ReleaseError
-from compute_space.core.releases import checkout_newest_release
-from compute_space.core.releases import follows_releases
 from compute_space.core.updates import wait_for_shutdown
 from compute_space.db.connection import get_db
 from compute_space.web.auth.auth import require_owner_auth
@@ -658,41 +653,27 @@ def _gate_update_review(
     approve_new_permissions: bool,
     previous_manifest_raw: str | None = None,
 ) -> UpdateReviewRequiredResponse | None:
-    if not repo_path or not os.path.isdir(repo_path):
-        return None
-    try:
-        manifest = parse_manifest(repo_path)
-    except ValueError:
-        return None
-
-    new_perms = manifest_newly_declared_permissions_v2(
-        manifest, get_all_permissions_v2(consumer_app_id=app_id), previous_manifest_raw
-    )
-    settings_changed = manifest_settings_changes(manifest, previous_manifest_raw)
-    # Fields that don't change what the app can do (description, authors, version,
-    # health check, links) are reported in the diff but don't hold the update back on
-    # their own: an app that only rewords its description gains nothing, and gating on
-    # that trains the owner to click through every review.
-    if not new_perms and not settings_changes_require_review(settings_changed):
+    review = pending_update_review(app_id, repo_path, previous_manifest_raw)
+    if review is None:
         return None
 
     if approve_new_permissions:
-        for pg in new_perms:
+        for pg in review.new_permissions:
             grant_permission_v2(consumer_app_id=app_id, service_url=pg.service_url, grant_payload=pg.grant)
         return None
 
-    shortname_by_service = {c.service: c.shortname for c in manifest.consumes_services_v2}
+    shortname_by_service = {c.service: c.shortname for c in review.manifest.consumes_services_v2}
     return UpdateReviewRequiredResponse(
         ok=False,
         review_required=True,
-        settings_changed=[attr.asdict(c) for c in settings_changed],
+        settings_changed=[attr.asdict(c) for c in review.settings_changed],
         permissions_required=[
             {
                 "service_url": pg.service_url,
                 "grant": pg.grant,
                 "shortname": shortname_by_service.get(pg.service_url, ""),
             }
-            for pg in new_perms
+            for pg in review.new_permissions
         ],
         error="This update changes the app's settings; review and approve them before it can be applied.",
     )
@@ -834,17 +815,10 @@ async def _reload_app_impl(
                     return Redirect(path=f"/app_detail/{app_name}")
                 return Response(content=OkResponse(ok=True), status_code=200, media_type=MediaType.JSON)
 
-            # An app that tracks its default branch (no ref pinned) and sets prebuilt_image deploys the branch's newest
-            # release, not its head.
+            # An app that follows releases deploys the newest release, not the head just pulled.
             try:
-                manifest_after_pull = parse_manifest(app_row["repo_path"])
-            except ValueError:
-                manifest_after_pull = None  # reported by the reload itself; nothing to check out
-            try:
-                if manifest_after_pull is not None and follows_releases(repo_url, manifest_after_pull):
-                    release = await asyncio.to_thread(checkout_newest_release, app_row["repo_path"], True)
-                    lf.write(f"Checked out release {release}\n")
-            except ReleaseError as e:
+                release = await check_out_update_release(app_row["repo_path"], repo_url)
+            except UpdateNotApplied as e:
                 await _roll_back_update(app_row["repo_path"], pre_pull_sha, log_file)
                 db.execute(
                     "UPDATE apps SET status = 'error', error_message = ? WHERE app_id = ?",
@@ -854,6 +828,8 @@ async def _reload_app_impl(
                 if continue_oauth:
                     return Redirect(path=f"/app_detail/{app_name}")
                 return Response(content=OkResponse(ok=True), status_code=200, media_type=MediaType.JSON)
+            if release is not None:
+                lf.write(f"Checked out release {release}\n")
 
     # Gate: when an update pulls a manifest that differs from the running one
     # (any changed setting, or newly declared permissions), refuse the reload
@@ -881,27 +857,14 @@ async def _reload_app_impl(
                 return Redirect(path=f"/app_detail/{app_name}")
             return Response(content=review_gate, status_code=200, media_type=MediaType.JSON)
 
-        # An app that uses a prebuilt image produces its image now, before the running container is stopped: it pulls
-        # the release's image or, when that can't be fetched, builds the release locally. Either only moves the
-        # app's image tag once it succeeds, so a failure leaves the running version untouched. The background reload
-        # runs the image prepared here rather than producing it again after the app has stopped.
+        # An app that follows releases produces its image now, before the running container is stopped, so a failure
+        # leaves the running version untouched. The background reload runs the image prepared here rather than
+        # producing it again after the app has stopped.
         try:
-            manifest_for_pull = parse_manifest(app_row["repo_path"])
-        except ValueError:
-            manifest_for_pull = None  # the background reload reports it
-        try:
-            current_repo_url = app_repo_url(app_id, db)
-            if manifest_for_pull is not None and follows_releases(current_repo_url, manifest_for_pull):
-                prepared_image = await asyncio.to_thread(
-                    prepare_app_image,
-                    app_name,
-                    app_row["repo_path"],
-                    manifest_for_pull,
-                    current_repo_url,
-                    config.temporary_data_dir,
-                    app_log_writer(app_name, config),
-                )
-        except (RuntimeError, subprocess.TimeoutExpired) as e:
+            prepared_image = await prepare_update_image(
+                app_name, app_row["repo_path"], app_repo_url(app_id, db), config
+            )
+        except UpdateNotApplied as e:
             await _roll_back_update(app_row["repo_path"], pre_pull_sha, log_file)
             db.execute(
                 "UPDATE apps SET status = 'error', error_message = ? WHERE app_id = ?",
