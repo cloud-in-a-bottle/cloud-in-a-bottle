@@ -129,11 +129,17 @@ def github_repository(repo_url: str) -> str | None:
     return f"{match.group(1)}/{match.group(2)}" if match else None
 
 
+def is_verified_registry(image: str) -> bool:
+    """Whether images from ``image``'s registry are signature-verified before they run (see signature_policy). Reads
+    only the reference, so it needs no network."""
+    return image_registry(image) == CIAB_REGISTRY
+
+
 def signature_policy(image: str, repo_url: str | None, commit: str) -> SignaturePolicy | None:
     """The signature an image must carry before it runs, or None for registries we don't sign for. Raises
     :class:`ImageVerificationError` if the image is from our registry but the app's repo isn't a GitHub repo, since
     then nothing could verify it."""
-    if image_registry(image) != CIAB_REGISTRY:
+    if not is_verified_registry(image):
         return None
     repository = github_repository(repo_url) if repo_url else None
     if repository is None:

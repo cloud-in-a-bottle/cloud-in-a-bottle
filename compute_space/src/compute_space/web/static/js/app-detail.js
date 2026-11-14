@@ -128,6 +128,7 @@ function appAction(url, data, opts) {
           sessionStorage.setItem('openhost.updateReview.' + config.appId, JSON.stringify({
             settings_changed: res.data.settings_changed || [],
             permissions_required: res.data.permissions_required || [],
+            image_verification_lost: res.data.image_verification_lost || null,
           }));
         } catch (e) { /* sessionStorage unavailable; review page shows a fallback */ }
         window.location.href = config.updateReviewUrl;

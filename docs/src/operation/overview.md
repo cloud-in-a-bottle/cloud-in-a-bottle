@@ -48,11 +48,11 @@ Definition files do not contain app data, databases or local source trees. The S
 
 The install page shows what the app asked for in its manifest: how much memory, which data it wants, whether it wants other apps' data, extra Linux capabilities, host devices, host networking, and which cross-app services it consumes. You should review this carefully. By default, apps have minimal permissions to do unsafe things in your space. But if given elevated access, the potential harm can become much greater. [Security](../how_it_works/security.md) explains what each request actually grants.
 
-Updates get the same treatment: when an app's manifest changes, the update page shows the changed settings and any new service permissions, and nothing is granted until you approve.
+Updates get the same treatment: when an app's manifest changes, the update page shows the changed settings and any new service permissions, and nothing is granted until you approve. It also asks when an app that ran a signature-verified prebuilt image would, after the update, run an image that isn't verified (see [Prebuilt images and releases](../creating_an_app/manifest_spec.md#prebuilt-images-and-releases)).
 
 ### Updating apps
 
-There's a button in the app details page to manually fetch + install any updates. Apps can also update themselves: with "Also update apps" turned on in Settings, the daily update window first updates each running app to its latest version (its newest release, for an app that follows releases), one at a time, exactly as the button does. An update that adds permissions or changes an app's settings is left for the owner to approve on the app's page, and Settings lists those apps, and any whose update failed, after each run. Stopped apps, apps with local changes, and apps pinned to a commit are skipped.
+There's a button in the app details page to manually fetch + install any updates. Apps can also update themselves: with "Also update apps" turned on in Settings, the daily update window first updates each running app to its latest version (its newest release, for an app that follows releases), one at a time, exactly as the button does. An update that adds permissions, changes an app's settings, or would take its image off signature verification is left for the owner to approve on the app's page, and Settings lists those apps, and any whose update failed, after each run. Stopped apps, apps with local changes, and apps pinned to a commit are skipped.
 
 ## Who can use your apps
 

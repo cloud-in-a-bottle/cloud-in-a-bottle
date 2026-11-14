@@ -11,6 +11,7 @@ the owner approves, and the app keeps running its current version meanwhile.
 from __future__ import annotations
 
 import contextlib
+import functools
 import sqlite3
 import subprocess
 from collections.abc import Iterator
@@ -35,6 +36,7 @@ from compute_space.core.manifest import settings_changes_require_review
 from compute_space.db.connection import init_db
 from compute_space.tests._litestar_helpers import auth_cookie
 from compute_space.tests._litestar_helpers import make_test_app
+from compute_space.web.routes.api.apps import ImageVerificationLostInfo
 from compute_space.web.routes.api.apps import _gate_update_review
 from compute_space.web.routes.api.apps import api_apps_routes
 
@@ -57,6 +59,10 @@ def _manifest_with_consumes(repo: Path, consumes: str) -> Any:
     repo.mkdir(parents=True, exist_ok=True)
     (repo / "cloudinabottle.toml").write_text(_CONSUMES.format(consumes=consumes))
     return parse_manifest(str(repo))
+
+
+def _with_release_tag_format(raw: str) -> str:
+    return raw.replace('version = "1.0.0"\n', 'version = "1.0.0"\nrelease_tag_format = "semver"\n', 1)
 
 
 def _consume_block(service: str, shortname: str, grants: str) -> str:
@@ -257,7 +263,12 @@ def test_gate_returns_none_when_no_new_permissions(cfg: Any, tmp_path: Path) -> 
     _manifest_with_consumes(repo, "")  # no consumes
     app_id = _seed_perm_app(cfg, str(repo))
 
-    assert _gate_update_review(app_id, str(repo), approve_new_permissions=False) is None
+    assert (
+        _gate_update_review(
+            app_id, str(repo), repo_url=None, prebuilt_image_verified=False, approve_new_permissions=False
+        )
+        is None
+    )
 
 
 def test_gate_refuses_new_permission_without_approval(cfg: Any, tmp_path: Path) -> None:
@@ -265,7 +276,9 @@ def test_gate_refuses_new_permission_without_approval(cfg: Any, tmp_path: Path) 
     _manifest_with_consumes(repo, _consume_block("github.com/x/secrets", "secrets", '{ key = "API_KEY" }'))
     app_id = _seed_perm_app(cfg, str(repo))
 
-    result = _gate_update_review(app_id, str(repo), approve_new_permissions=False)
+    result = _gate_update_review(
+        app_id, str(repo), repo_url=None, prebuilt_image_verified=False, approve_new_permissions=False
+    )
     assert result is not None
     assert result.ok is False
     assert len(result.permissions_required) == 1
@@ -280,12 +293,54 @@ def test_gate_grants_and_proceeds_when_approved(cfg: Any, tmp_path: Path) -> Non
     _manifest_with_consumes(repo, _consume_block("github.com/x/secrets", "secrets", '{ key = "API_KEY" }'))
     app_id = _seed_perm_app(cfg, str(repo))
 
-    result = _gate_update_review(app_id, str(repo), approve_new_permissions=True)
+    result = _gate_update_review(
+        app_id, str(repo), repo_url=None, prebuilt_image_verified=False, approve_new_permissions=True
+    )
     assert result is None
     granted = get_all_permissions_v2(consumer_app_id=app_id)
     assert len(granted) == 1
     assert granted[0].service_url == "github.com/x/secrets"
     assert granted[0].grant == {"key": "API_KEY"}
+
+
+@pytest.mark.parametrize("with_permission", [False, True])
+def test_gate_reports_an_image_losing_verification(cfg: Any, tmp_path: Path, with_permission: bool) -> None:
+    """A verified app whose update moves its prebuilt image off our registry: the gate refuses with the loss described
+    (on its own, or alongside a new permission), and the owner's approval applies both."""
+    repo = tmp_path / "repo"
+    consumes = _consume_block("github.com/x/secrets", "secrets", '{ key = "API_KEY" }') if with_permission else ""
+    repo.mkdir()
+    (repo / "cloudinabottle.toml").write_text(
+        _with_release_tag_format(_CONSUMES.format(consumes='prebuilt_image = "ghcr.io/x/perm-app"\n' + consumes))
+    )
+    app_id = _seed_perm_app(cfg, str(repo))
+    gate = functools.partial(
+        _gate_update_review,
+        app_id,
+        str(repo),
+        previous_manifest_raw=_with_release_tag_format(
+            _CONSUMES.format(consumes='prebuilt_image = "registry.cloudinabottle.org/perm-app"')
+        ),
+        repo_url="https://github.com/x/perm-app",
+        prebuilt_image_verified=True,
+    )
+
+    result = gate(approve_new_permissions=False)
+    assert result is not None
+    assert result.image_verification_lost == ImageVerificationLostInfo(
+        previous_image="registry.cloudinabottle.org/perm-app",
+        previous_registry="registry.cloudinabottle.org",
+        new_image="ghcr.io/x/perm-app",
+        new_registry="ghcr.io",
+    )
+    assert len(result.permissions_required) == int(with_permission)
+    if with_permission:
+        assert result.error.startswith("This update changes the app's settings")
+    else:
+        assert result.error.startswith("This update's image is no longer signature-verified")
+
+    assert gate(approve_new_permissions=True) is None
+    assert len(get_all_permissions_v2(consumer_app_id=app_id)) == int(with_permission)
 
 
 def test_gate_ignores_already_granted_permission(cfg: Any, tmp_path: Path) -> None:
@@ -295,7 +350,12 @@ def test_gate_ignores_already_granted_permission(cfg: Any, tmp_path: Path) -> No
     grant_permission_v2(consumer_app_id=app_id, service_url="github.com/x/secrets", grant_payload={"key": "API_KEY"})
 
     # Already held -> not "new" -> gate passes without prompting.
-    assert _gate_update_review(app_id, str(repo), approve_new_permissions=False) is None
+    assert (
+        _gate_update_review(
+            app_id, str(repo), repo_url=None, prebuilt_image_verified=False, approve_new_permissions=False
+        )
+        is None
+    )
 
 
 def test_gate_returns_none_for_unparseable_manifest(cfg: Any, tmp_path: Path) -> None:
@@ -305,7 +365,12 @@ def test_gate_returns_none_for_unparseable_manifest(cfg: Any, tmp_path: Path) ->
     app_id = _seed_perm_app(cfg, str(repo))
 
     # A broken manifest isn't the gate's problem; the reload path surfaces it.
-    assert _gate_update_review(app_id, str(repo), approve_new_permissions=False) is None
+    assert (
+        _gate_update_review(
+            app_id, str(repo), repo_url=None, prebuilt_image_verified=False, approve_new_permissions=False
+        )
+        is None
+    )
 
 
 # ─── the update delta: gate only author-added permissions ─────────────────────
@@ -368,7 +433,15 @@ def test_gate_does_not_reprompt_revoked_permission_on_update(cfg: Any, tmp_path:
     prev_raw = _CONSUMES.format(consumes=consumes)
     # No permissions_v2 row for it (owner revoked, or never granted).
     assert (
-        _gate_update_review(app_id, str(repo), approve_new_permissions=False, previous_manifest_raw=prev_raw) is None
+        _gate_update_review(
+            app_id,
+            str(repo),
+            repo_url=None,
+            prebuilt_image_verified=False,
+            approve_new_permissions=False,
+            previous_manifest_raw=prev_raw,
+        )
+        is None
     )
 
 
@@ -381,7 +454,14 @@ def test_gate_prompts_for_author_added_permission_on_update(cfg: Any, tmp_path: 
     _manifest_with_consumes(repo, new_consumes)
     app_id = _seed_perm_app(cfg, str(repo))
     prev_raw = _CONSUMES.format(consumes=prev_consumes)
-    result = _gate_update_review(app_id, str(repo), approve_new_permissions=False, previous_manifest_raw=prev_raw)
+    result = _gate_update_review(
+        app_id,
+        str(repo),
+        repo_url=None,
+        prebuilt_image_verified=False,
+        approve_new_permissions=False,
+        previous_manifest_raw=prev_raw,
+    )
     assert result is not None
     assert result.ok is False
     assert [p["service_url"] for p in result.permissions_required] == ["github.com/x/b"]
@@ -800,7 +880,14 @@ def test_gate_allows_non_functional_change(cfg: Any, tmp_path: Path) -> None:
     app_id = _seed_perm_app(cfg, str(repo))
 
     assert (
-        _gate_update_review(app_id, str(repo), approve_new_permissions=False, previous_manifest_raw=_described())
+        _gate_update_review(
+            app_id,
+            str(repo),
+            repo_url=None,
+            prebuilt_image_verified=False,
+            approve_new_permissions=False,
+            previous_manifest_raw=_described(),
+        )
         is None
     )
 
@@ -811,7 +898,14 @@ def test_gate_reports_non_functional_change_alongside_the_one_that_gates(cfg: An
     (repo / "openhost.toml").write_text(_described(description="A better thing", memory=256))
     app_id = _seed_perm_app(cfg, str(repo))
 
-    result = _gate_update_review(app_id, str(repo), approve_new_permissions=False, previous_manifest_raw=_described())
+    result = _gate_update_review(
+        app_id,
+        str(repo),
+        repo_url=None,
+        prebuilt_image_verified=False,
+        approve_new_permissions=False,
+        previous_manifest_raw=_described(),
+    )
     assert result is not None
     assert result.review_required is True
     # The description rides along for context even though it never gates on its own.
@@ -826,7 +920,14 @@ def test_gate_refuses_settings_change_without_approval(cfg: Any, tmp_path: Path)
     app_id = _seed_perm_app(cfg, str(repo))
     prev_raw = _BASE.format(version="1.0.0", memory=128)
 
-    result = _gate_update_review(app_id, str(repo), approve_new_permissions=False, previous_manifest_raw=prev_raw)
+    result = _gate_update_review(
+        app_id,
+        str(repo),
+        repo_url=None,
+        prebuilt_image_verified=False,
+        approve_new_permissions=False,
+        previous_manifest_raw=prev_raw,
+    )
     assert result is not None
     assert result.ok is False
     assert result.review_required is True
@@ -843,7 +944,17 @@ def test_gate_proceeds_on_settings_change_when_approved(cfg: Any, tmp_path: Path
     prev_raw = _BASE.format(version="1.0.0", memory=128)
 
     # No permissions involved, so approval simply lets the update proceed.
-    assert _gate_update_review(app_id, str(repo), approve_new_permissions=True, previous_manifest_raw=prev_raw) is None
+    assert (
+        _gate_update_review(
+            app_id,
+            str(repo),
+            repo_url=None,
+            prebuilt_image_verified=False,
+            approve_new_permissions=True,
+            previous_manifest_raw=prev_raw,
+        )
+        is None
+    )
 
 
 def test_gate_passes_when_manifest_unchanged(cfg: Any, tmp_path: Path) -> None:
@@ -853,7 +964,17 @@ def test_gate_passes_when_manifest_unchanged(cfg: Any, tmp_path: Path) -> None:
     (repo / "openhost.toml").write_text(raw)
     app_id = _seed_perm_app(cfg, str(repo))
 
-    assert _gate_update_review(app_id, str(repo), approve_new_permissions=False, previous_manifest_raw=raw) is None
+    assert (
+        _gate_update_review(
+            app_id,
+            str(repo),
+            repo_url=None,
+            prebuilt_image_verified=False,
+            approve_new_permissions=False,
+            previous_manifest_raw=raw,
+        )
+        is None
+    )
 
 
 def _seed_git_app_with_manifest_raw(cfg: Any, repo: Path, on_disk_toml: str, manifest_raw: str) -> str:

@@ -22,6 +22,9 @@ CREATE TABLE IF NOT EXISTS apps (
     public_paths TEXT NOT NULL DEFAULT '[]',
     links TEXT NOT NULL DEFAULT '[]',
     manifest_raw TEXT,
+    -- 1 when the last prebuilt image the app was deployed on was signature-verified; builds leave it as it was.
+    -- See core/image_verification.py.
+    prebuilt_image_verified INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
