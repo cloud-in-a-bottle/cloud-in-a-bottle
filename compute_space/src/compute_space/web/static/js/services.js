@@ -62,7 +62,7 @@ function renderServices(providers) {
       + '" data-service="' + escServiceHtml(svc) + '">' + options + '</select></td>'
       + '<td style="white-space:nowrap;">'
       + '<button class="btn btn--primary" onclick="saveDefaultProvider(this)">Save</button> '
-      + '<span class="muted default-msg"></span>'
+      + '<span class="msg default-msg" role="status" hidden></span>'
       + '</td>'
       + '</tr>';
   });
@@ -79,7 +79,7 @@ function saveDefaultProvider(btn) {
   var serviceUrl = select.getAttribute('data-service');
   var appId = select.value;
   btn.disabled = true;
-  msg.textContent = 'Saving…';
+  dom.setMuted(msg, 'Saving\u2026');
 
   var request = appId
     ? fetch('/api/services/v2/defaults', {
@@ -98,10 +98,10 @@ function saveDefaultProvider(btn) {
   request
     .then(function(r) {
       if (!r.ok) return r.text().then(function(t) { throw new Error(t || ('HTTP ' + r.status)); });
-      msg.textContent = 'Saved.';
-      setTimeout(function() { msg.textContent = ''; }, 2000);
+      dom.setMessage(msg, 'Saved.', 'ok');
+      setTimeout(function() { dom.hideMessage(msg); }, 2000);
     })
-    .catch(function(e) { msg.textContent = 'Failed: ' + e.message; })
+    .catch(function(e) { dom.setMessage(msg, 'Failed: ' + e.message, 'error'); })
     .finally(function() { btn.disabled = false; });
 }
 
@@ -114,7 +114,7 @@ function loadServices() {
     })
     .then(renderServices)
     .catch(function(err) {
-      if (el) el.innerHTML = '<p class="error"><strong>Services unavailable.</strong> ' + escServiceHtml(err) + '</p>';
+      if (el) dom.replace(el, dom.notice([dom.el('strong', {text: 'Services unavailable.'}), ' ', String(err)], 'error'));
     });
 }
 

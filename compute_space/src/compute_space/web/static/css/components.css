@@ -1417,9 +1417,10 @@ select {
   color: var(--fg-secondary);
 }
 
-/* ── Inline status messages ─────────────────────────────────────────────
-   The one-line feedback beside a control. Page scripts used to set a raw
-   hex on style.color for these; they set a variant class now. */
+/* ── Inline message ─────────────────────────────────────────────────────
+   Coloured text in a tone: feedback beside a control after an action, or a
+   state label in a table. The message() macro, filled in from page scripts
+   with dom.setMessage(). A notice is the panel-scale version. */
 
 .msg {
   font-size: var(--text-body-md);
@@ -1527,11 +1528,6 @@ select {
   color: var(--fg-status-negative);
 }
 
-.action-msg {
-  margin: var(--space-2) 0 0;
-  font-size: var(--text-body-md);
-}
-
 /* Two columns on a phone squeeze the notes into a sliver, so each action
    stacks instead: label, note, then the button on its own line. */
 @media (max-width: 640px) {
@@ -1628,17 +1624,6 @@ td.col-actions .icon-btn {
 
 /* Status words are read, not clicked. A filled chip beside a real button
    reads as a second button, so these carry colour and weight only. */
-.status-text {
-  font-size: var(--text-body-md);
-  font-weight: var(--weight-emphasized);
-  white-space: nowrap;
-}
-
-.status-text--ok { color: var(--fg-status-positive); }
-.status-text--warn { color: var(--fg-status-warning); }
-.status-text--error { color: var(--fg-status-negative); }
-.status-text--muted { color: var(--fg-secondary); }
-
 @media (max-width: 640px) {
   /* The gutter is doing most of the framing on a phone; a 24px inset on top of
      it leaves the tables almost no width. */

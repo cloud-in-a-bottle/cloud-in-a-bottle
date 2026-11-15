@@ -86,9 +86,18 @@ function renderListeningPorts(data) {
 
 // Message state lives outside the DOM because renderStorageStatus rebuilds the
 // table (and thus the message span) whenever storage data is re-fetched.
-var cleanCacheMsg = {cls: 'muted', text: ''};
+var cleanCacheMsg = {tone: null, text: ''};
 var cleanCacheInFlight = false;
 var cleanCacheReclaimableBytes = null;
+
+function cleanCacheMessage() {
+  // No tone yet means nothing has finished: grey text, empty until a clean starts.
+  var msg = cleanCacheMsg.tone
+    ? dom.message(cleanCacheMsg.text, cleanCacheMsg.tone, 'span')
+    : dom.muted(cleanCacheMsg.text, 'span');
+  msg.id = 'clean-cache-msg';
+  return msg;
+}
 
 function cleanBuildCache() {
   var freed = (cleanCacheReclaimableBytes == null) ? '' : '\nThis will free about ' + formatBytes(cleanCacheReclaimableBytes) + '.';
@@ -98,17 +107,17 @@ function cleanBuildCache() {
   )) return;
 
   cleanCacheInFlight = true;
-  cleanCacheMsg = {cls: 'muted', text: 'Cleaning cache...'};
+  cleanCacheMsg = {tone: null, text: 'Cleaning cache\u2026'};
   var btn = document.getElementById('clean-cache-btn');
   var msg = document.getElementById('clean-cache-msg');
   if (btn) btn.disabled = true;
-  if (msg) { msg.className = cleanCacheMsg.cls; msg.textContent = cleanCacheMsg.text; }
+  if (msg) dom.setMuted(msg, cleanCacheMsg.text);
 
   fetch(config.dropBuildCacheUrl, {method: 'POST', credentials: 'same-origin'})
     .then(readJsonResponse)
     .then(function(res) {
       if (!res.ok) {
-        cleanCacheMsg = {cls: 'error', text: 'Clean failed: ' + responseErrorMessage(res.data, 'unknown error')};
+        cleanCacheMsg = {tone: 'error', text: 'Clean failed: ' + responseErrorMessage(res.data, 'unknown error')};
         return;
       }
       var reclaimed = '';
@@ -116,10 +125,10 @@ function cleanBuildCache() {
         var match = res.data.output.match(/Total reclaimed space:\s*(.+)/i);
         if (match && match[1]) reclaimed = ' Freed ' + match[1] + '.';
       }
-      cleanCacheMsg = {cls: 'status-running', text: 'Build cache cleaned.' + reclaimed};
+      cleanCacheMsg = {tone: 'ok', text: 'Build cache cleaned.' + reclaimed};
     })
     .catch(function() {
-      cleanCacheMsg = {cls: 'error', text: 'Clean failed: request error'};
+      cleanCacheMsg = {tone: 'error', text: 'Clean failed: request error'};
     })
     .then(function() {
       cleanCacheInFlight = false;
@@ -226,7 +235,7 @@ function renderStorageStatus(data) {
     text: 'Clean Cache',
   });
   var cleanCacheControls = dom.el('span', {style: 'float: right'}, [
-    dom.el('span', {id: 'clean-cache-msg', class: cleanCacheMsg.cls, text: cleanCacheMsg.text}),
+    cleanCacheMessage(),
     ' ',
     cleanCacheButton,
   ]);

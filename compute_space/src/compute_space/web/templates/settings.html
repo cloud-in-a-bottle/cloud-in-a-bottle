@@ -139,7 +139,7 @@
 
     <div class="field">
       <span>Status</span>
-      <div id="update-status" aria-live="polite">{{ msg("Checking for updates…", live=false) }}</div>
+      <div id="update-status" aria-live="polite"><p class="muted">Checking for updates…</p></div>
       <div id="restart-overlay" hidden>
         {% call msg(id="restart-status") %}<strong>Waiting for shutdown&hellip;</strong>{% endcall %}
       </div>
@@ -170,7 +170,7 @@
       {% endcall %}
       {{ button("Add domain", variant="primary", id="add-domain-btn", onclick="addDomain()", disabled=true) }}
     </div>
-    {{ msg(id="domain-msg", hidden=true) }}
+    {{ notice(id="domain-msg", hidden=true) }}
 
     <div class="table-scroll" id="domains-table-wrap" hidden>
       <table>
@@ -207,7 +207,7 @@
     </div>
 
     {% call notice(tone="ok", id="token-created", hidden=true, tag="div") %}
-      <strong>Token created.</strong> Copy it now — it won't be shown again.
+      <strong>Token created.</strong> Copy it now. It won't be shown again.
       <div class="copy-field">
         <code id="token-value"></code>
         {{ button("Copy", onclick="navigator.clipboard.writeText(document.getElementById('token-value').textContent)") }}
@@ -260,7 +260,7 @@
       <span>Restart compute space</span>
       <div class="actions">
         {{ button("Restart compute space", variant="danger", onclick="restartComputeSpace()") }}
-        {{ msg(id="restart-msg", tag="span") }}
+        {{ msg(id="restart-msg", hidden=true, tag="span") }}
       </div>
       <p class="hint">Restarts the router process; running apps are not interrupted.</p>
     </div>
@@ -271,7 +271,7 @@
       <span>Build cache</span>
       <div class="actions">
         {{ button("Drop build cache", variant="danger", id="drop-build-cache-btn", onclick="dropBuildCache()") }}
-        {{ msg(id="drop-build-cache-msg", tag="span") }}
+        {{ msg(id="drop-build-cache-msg", hidden=true, tag="span") }}
       </div>
       <p class="hint">Removes images for stopped apps; they are rebuilt on next deploy.</p>
     </div>
@@ -282,7 +282,7 @@
       <span>SSH</span>
       <div class="actions">
         {{ button("SSH", id="ssh-btn", onclick="toggleSsh()", disabled=true) }}
-        {{ msg(id="ssh-status", tag="span") }}
+        {{ msg(id="ssh-status", hidden=true, tag="span") }}
       </div>
       <p class="hint">Shell access to this instance over SSH. Leave it off unless you are
         debugging.</p>
@@ -290,7 +290,6 @@
   </div>
 </section>
 
-<script src="{{ static_url('js/dom.js') }}"></script>
 <script src="{{ static_url('js/http-errors.js') }}"></script>
 <script src="{{ static_url('js/username-validation.js') }}"></script>
 <script src="{{ static_url('js/tokens.js') }}"></script>

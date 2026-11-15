@@ -7,62 +7,64 @@ function showError(msg) {
   // once the page is gone, and pageHidden covers the bfcache edge.
   setTimeout(() => {
     if (pageHidden) return;
-    const el = document.getElementById('error');
-    el.textContent = msg;
-    el.hidden = false;
+    dom.setMessage(document.getElementById('error'), msg, 'error');
   }, 100);
 }
-function clearError() { document.getElementById('error').hidden = true; }
-function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+function clearError() { dom.hideMessage(document.getElementById('error')); }
+
+function updateButton(label, onclick, variant) {
+  return dom.el('button', {class: 'btn' + (variant ? ' btn--' + variant : ''), type: 'button', onclick: onclick, text: label});
+}
+
+// Paint the update status: a message (grey when it has no tone), optional error output under it, and a row of
+// buttons.
+function renderUpdateStatus(text, tone, detail, buttons) {
+  dom.replace(document.getElementById('update-status'), [
+    tone ? dom.message(text, tone) : dom.muted(text),
+    detail ? dom.notice(detail, 'error') : null,
+    buttons && buttons.length ? dom.el('div', {class: 'actions'}, buttons) : null,
+  ]);
+}
 
 // Returns the fetched update state ({state, error}) so callers like setRemote
 // can react to it, or null when the check itself failed.
 async function checkForUpdates() {
   clearError();
-  const el = document.getElementById('update-status');
-  el.innerHTML = '<p class="msg">Checking for updates&hellip;</p>';
+  renderUpdateStatus('Checking for updates\u2026');
 
   try {
     const resp = await fetch('/api/settings/update');
     if (!resp.ok) {
       const err = await resp.json();
       const detail = responseErrorMessage(err, '');
-      el.innerHTML = '<p class="msg msg--error">Repo is in an invalid state for updating (no .git perhaps?)</p>'
-        + (detail ? '<div class="error-inline">' + esc(detail) + '</div>' : '')
-        + '<div class="actions"><button onclick="checkForUpdates()" class="btn">Retry</button></div>';
+      renderUpdateStatus('Repo is in an invalid state for updating (no .git perhaps?)', 'error', detail,
+        [updateButton('Retry', checkForUpdates)]);
       return null;
     }
     const data = await resp.json();
 
-    const checkAgainBtn = '<button onclick="checkForUpdates()" class="btn">Check again</button>';
+    const checkAgain = () => updateButton('Check again', checkForUpdates);
 
     if (data.state === 'UP_TO_DATE') {
-      el.innerHTML = '<p class="msg msg--ok">Up to date.</p>'
-        + '<div class="actions">' + checkAgainBtn + '</div>';
+      renderUpdateStatus('Up to date.', 'ok', null, [checkAgain()]);
     } else if (data.state === 'UPDATE_AVAILABLE') {
-      const notice = data.error ? '<div class="error-inline">' + esc(data.error) + '</div>' : '';
-      el.innerHTML = '<p class="msg">Updates available.</p>'
-        + notice
-        + '<div class="actions">'
-        + '<button onclick="applyUpdate()" class="btn btn--primary">Update &amp; restart</button>'
-        + checkAgainBtn + '</div>';
+      renderUpdateStatus('Updates available.', null, data.error,
+        [updateButton('Update & restart', applyUpdate, 'primary'), checkAgain()]);
     } else if (data.state === 'ERROR') {
-      el.innerHTML = '<p class="msg msg--error">Update check failed.</p>'
-        + '<div class="error-inline">' + esc(data.error || 'Unknown error') + '</div>'
-        + '<div class="actions">' + checkAgainBtn + '</div>';
+      renderUpdateStatus('Update check failed.', 'error', data.error || 'Unknown error', [checkAgain()]);
     }
     return data;
   } catch (e) {
     showError('Failed to check for updates: ' + e.message);
-    el.innerHTML = '<div class="actions"><button onclick="checkForUpdates()" class="btn">Retry</button></div>';
+    dom.replace(document.getElementById('update-status'),
+      dom.el('div', {class: 'actions'}, updateButton('Retry', checkForUpdates)));
     return null;
   }
 }
 
 async function applyUpdate() {
   clearError();
-  const el = document.getElementById('update-status');
-  el.innerHTML = '<p class="msg">Starting update&hellip;</p>';
+  renderUpdateStatus('Starting update\u2026');
 
   let token;
   try {
@@ -72,15 +74,13 @@ async function applyUpdate() {
     const resp = await fetch('/api/settings/update', {method: 'POST'});
     if (!resp.ok) {
       const err = await resp.json();
-      el.innerHTML = '<p class="msg msg--error">' + esc(responseErrorMessage(err, '')) + '</p>'
-        + '<div class="actions"><button onclick="checkForUpdates()" class="btn">Retry</button></div>';
+      renderUpdateStatus(responseErrorMessage(err, ''), 'error', null, [updateButton('Retry', checkForUpdates)]);
       return;
     }
     const data = await resp.json();
     token = data.token;
   } catch (e) {
-    el.innerHTML = '<p class="msg msg--error">Update failed: ' + esc(e.message) + '</p>'
-      + '<div class="actions"><button onclick="checkForUpdates()" class="btn">Retry</button></div>';
+    renderUpdateStatus('Update failed: ' + e.message, 'error', null, [updateButton('Retry', checkForUpdates)]);
     return;
   }
 
@@ -186,19 +186,14 @@ function renderRemoteChannel() {
   }
   const parsed = parseRemote(value);
   if (parsed.error) {
-    channel.textContent = parsed.error;
-    channel.className = 'notice notice--error';
+    dom.setMessage(channel, parsed.error, 'error');
   } else if (parsed.channel === 'tags') {
-    channel.textContent = 'Updating will fetch the latest tagged release.';
-    channel.className = 'notice';
+    dom.setMessage(channel, 'Updating will fetch the latest tagged release.');
   } else if (parsed.channel === 'branch') {
-    channel.textContent = 'Updating will fetch the latest commit on the ' + parsed.ref + ' branch.';
-    channel.className = 'notice';
+    dom.setMessage(channel, 'Updating will fetch the latest commit on the ' + parsed.ref + ' branch.');
   } else {
-    channel.textContent = 'Pinned to ' + parsed.ref + '; will not update.';
-    channel.className = 'notice';
+    dom.setMessage(channel, 'Pinned to ' + parsed.ref + '; will not update.');
   }
-  channel.hidden = false;
   warning.hidden = !pausesAutoUpdate(parsed);
   btn.disabled = Boolean(parsed.error) || value === savedRemote;
 }
@@ -223,9 +218,7 @@ async function loadRemote() {
   } catch (e) {
     input.placeholder = '';
     const msg = document.getElementById('remote-msg');
-    msg.textContent = 'Failed to load current remote. Reload the page to retry.';
-    msg.className = 'msg msg--error';
-    msg.hidden = false;
+    dom.setMessage(msg, 'Failed to load current remote. Reload the page to retry.', 'error');
   }
 }
 
@@ -244,7 +237,7 @@ async function setRemote() {
   }
 
   btn.disabled = true;
-  msg.hidden = true;
+  dom.hideMessage(msg);
 
   try {
     const resp = await fetch('/api/settings/set-remote', {
@@ -267,9 +260,7 @@ async function setRemote() {
     renderRemoteChannel();
     renderPrereleases();
     renderAutoUpdate();
-    msg.textContent = 'Remote saved.';
-    msg.className = 'msg';
-    msg.hidden = false;
+    dom.setMessage(msg, 'Remote saved.', 'ok');
     // set-remote only records the pin; moving to it is the update walk's job
     // (checkout+migrate+install+restart, in order). Kick the walk off now when
     // the pin resolves to different code than HEAD — but not on a dirty tree
@@ -279,9 +270,7 @@ async function setRemote() {
       await applyUpdate();
     }
   } catch (e) {
-    msg.textContent = e.message;
-    msg.className = 'msg msg--error';
-    msg.hidden = false;
+    dom.setMessage(msg, e.message, 'error');
     btn.disabled = false;
   }
 }
@@ -293,10 +282,10 @@ function renderPrereleases() {
   document.getElementById('prereleases-enabled').checked = savedPrereleases;
   document.getElementById('prereleases-enabled').indeterminate = Boolean(savedPrereleasesError);
   const msg = document.getElementById('prereleases-msg');
-  msg.hidden = !savedPrereleasesError;
   if (savedPrereleasesError) {
-    msg.textContent = savedPrereleasesError + ' Choose whether to receive candidates to repair this setting.';
-    msg.className = 'msg msg--error';
+    dom.setMessage(msg, savedPrereleasesError + ' Choose whether to receive candidates to repair this setting.', 'error');
+  } else {
+    dom.hideMessage(msg);
   }
 }
 
@@ -304,7 +293,7 @@ async function savePrereleases() {
   const box = document.getElementById('prereleases-enabled');
   const msg = document.getElementById('prereleases-msg');
   box.disabled = true;
-  msg.hidden = true;
+  dom.hideMessage(msg);
   try {
     const resp = await fetch('/api/settings/set-prereleases', {
       method: 'POST',
@@ -324,9 +313,7 @@ async function savePrereleases() {
   } catch (e) {
     box.checked = savedPrereleases;
     box.indeterminate = Boolean(savedPrereleasesError);
-    msg.textContent = e.message;
-    msg.className = 'msg msg--error';
-    msg.hidden = false;
+    dom.setMessage(msg, e.message, 'error');
   } finally {
     box.disabled = false;
   }
@@ -408,9 +395,7 @@ async function loadAutoUpdate() {
     renderRemoteChannel();
   } catch (e) {
     const msg = document.getElementById('auto-update-msg');
-    msg.textContent = 'Failed to load automatic update settings. Reload the page to retry.';
-    msg.className = 'msg msg--error';
-    msg.hidden = false;
+    dom.setMessage(msg, 'Failed to load automatic update settings. Reload the page to retry.', 'error');
   }
 }
 
@@ -426,20 +411,21 @@ function renderAppAutoUpdate() {
   }
   const results = appAutoUpdate.last_run_results;
   const count = (outcome) => results.filter((r) => r.outcome === outcome).length;
-  let html = '<p>Last automatic app update: ' + esc(new Date(appAutoUpdate.last_run_at).toLocaleString())
-    + '. ' + count('updated') + ' updated, ' + count('up_to_date') + ' up to date, '
-    + count('skipped') + ' skipped.</p>';
   const listOf = (outcome, heading) => {
     const items = results.filter((r) => r.outcome === outcome);
-    if (items.length === 0) return '';
-    return '<p>' + heading + '</p><ul>' + items.map((r) => '<li><a href="/app_detail/'
-      + encodeURIComponent(r.app_name) + '">' + esc(r.app_name) + '</a>'
-      + (r.detail ? ': ' + esc(r.detail) : '') + '</li>').join('') + '</ul>';
+    if (items.length === 0) return null;
+    return [dom.el('p', {text: heading}), dom.el('ul', null, items.map((r) => dom.el('li', null, [
+      dom.el('a', {href: '/app_detail/' + encodeURIComponent(r.app_name), text: r.app_name}),
+      r.detail ? ': ' + r.detail : null,
+    ])))];
   };
-  html += listOf('needs_approval', 'Needs your approval (open the app and update it):');
-  html += listOf('failed', 'Failed:');
-  last.innerHTML = html;
-  last.hidden = false;
+  dom.setMessage(last, [
+    dom.el('p', {text: 'Last automatic app update: ' + new Date(appAutoUpdate.last_run_at).toLocaleString()
+      + '. ' + count('updated') + ' updated, ' + count('up_to_date') + ' up to date, '
+      + count('skipped') + ' skipped.'}),
+    listOf('needs_approval', 'Needs your approval (open the app and update it):'),
+    listOf('failed', 'Failed:'),
+  ]);
 }
 
 async function loadAppAutoUpdate() {
@@ -451,15 +437,13 @@ async function loadAppAutoUpdate() {
     renderAutoUpdate();
   } catch (e) {
     const msg = document.getElementById('app-auto-update-msg');
-    msg.textContent = 'Failed to load automatic app update settings. Reload the page to retry.';
-    msg.className = 'msg msg--error';
-    msg.hidden = false;
+    dom.setMessage(msg, 'Failed to load automatic app update settings. Reload the page to retry.', 'error');
   }
 }
 
 async function saveAppAutoUpdate() {
   const msg = document.getElementById('app-auto-update-msg');
-  msg.hidden = true;
+  dom.hideMessage(msg);
   try {
     const resp = await fetch('/api/settings/app-auto-update', {
       method: 'POST',
@@ -471,13 +455,10 @@ async function saveAppAutoUpdate() {
       throw new Error(responseErrorMessage(err, 'failed to save'));
     }
     appAutoUpdate = await resp.json();
-    msg.textContent = 'Saved.';
-    msg.className = 'msg msg--ok';
+    dom.setMessage(msg, 'Saved.', 'ok');
   } catch (e) {
-    msg.textContent = 'Failed to save automatic app update settings: ' + e.message;
-    msg.className = 'msg msg--error';
+    dom.setMessage(msg, 'Failed to save automatic app update settings: ' + e.message, 'error');
   }
-  msg.hidden = false;
   renderAppAutoUpdate();
   renderAutoUpdate();
 }
@@ -486,7 +467,7 @@ async function saveAutoUpdate() {
   const msg = document.getElementById('auto-update-msg');
   const time = document.getElementById('auto-update-time');
   if (!time.value) return;
-  msg.hidden = true;
+  dom.hideMessage(msg);
   try {
     const resp = await fetch('/api/settings/auto-update', {
       method: 'POST',
@@ -502,13 +483,10 @@ async function saveAutoUpdate() {
       throw new Error(responseErrorMessage(err, 'failed to save'));
     }
     autoUpdate = await resp.json();
-    msg.textContent = 'Saved.';
-    msg.className = 'msg msg--ok';
+    dom.setMessage(msg, 'Saved.', 'ok');
   } catch (e) {
-    msg.textContent = 'Failed to save automatic update settings: ' + e.message;
-    msg.className = 'msg msg--error';
+    dom.setMessage(msg, 'Failed to save automatic update settings: ' + e.message, 'error');
   }
-  msg.hidden = false;
   renderAutoUpdate();
 }
 
@@ -524,8 +502,7 @@ async function restartComputeSpace() {
   if (!resp.ok) {
     const data = await resp.json().catch(function() { return {}; });
     const msg = document.getElementById('restart-msg');
-    msg.textContent = responseErrorMessage(data, 'Failed to prepare the restart.');
-    msg.className = 'msg msg--error';
+    dom.setMessage(msg, responseErrorMessage(data, 'Failed to prepare the restart.'), 'error');
     return;
   }
   showRestartOverlay();
@@ -549,17 +526,12 @@ async function changePassword() {
       const err = await resp.json();
       throw new Error(responseErrorMessage(err, 'failed to change password'));
     }
-    msg.textContent = 'Password changed successfully';
-    msg.className = 'msg';
-    msg.hidden = false;
-    msg.className = 'msg msg--ok';
+    dom.setMessage(msg, 'Password changed successfully', 'ok');
     document.getElementById('current-pw').value = '';
     document.getElementById('new-pw').value = '';
     document.getElementById('confirm-pw').value = '';
   } catch (e) {
-    msg.textContent = e.message;
-    msg.className = 'msg msg--error';
-    msg.hidden = false;
+    dom.setMessage(msg, e.message, 'error');
   }
 }
 
@@ -593,11 +565,9 @@ async function loadOwnerUsername() {
       const v = input.value.trim();
       const err = usernameError(v);
       if (err) {
-        msg.textContent = err;
-        msg.className = 'msg msg--error';
-        msg.hidden = false;
+        dom.setMessage(msg, err, 'error');
       } else {
-        msg.hidden = true;
+        dom.hideMessage(msg);
       }
       // Save stays disabled when the value matches what's stored,
       // is empty, OR fails client-side validation.  Server-side
@@ -611,9 +581,7 @@ async function loadOwnerUsername() {
     // section-local message catch this so the user sees a problem
     // even if they've scrolled past the top of the page.
     showError('Failed to load owner username: ' + e.message);
-    msg.textContent = 'Failed to load. Reload the page to retry.';
-    msg.className = 'msg msg--error';
-    msg.hidden = false;
+    dom.setMessage(msg, 'Failed to load. Reload the page to retry.', 'error');
     input.placeholder = 'Failed to load — reload to retry';
   }
 }
@@ -628,14 +596,12 @@ async function setOwnerUsername() {
 
   const clientErr = usernameError(username);
   if (clientErr) {
-    msg.textContent = clientErr;
-    msg.className = 'msg msg--error';
-    msg.hidden = false;
+    dom.setMessage(msg, clientErr, 'error');
     return;
   }
 
   btn.disabled = true;
-  msg.hidden = true;
+  dom.hideMessage(msg);
 
   try {
     const resp = await fetch('/api/settings/owner_username', {
@@ -649,14 +615,10 @@ async function setOwnerUsername() {
     }
     const data = await resp.json();
     savedUsername = data.username;
-    msg.textContent = 'Saved.';
-    msg.className = 'msg msg--ok';
-    msg.hidden = false;
-    setTimeout(() => { msg.hidden = true; }, 4000);
+    dom.setMessage(msg, 'Saved.', 'ok');
+    setTimeout(() => { dom.hideMessage(msg); }, 4000);
   } catch (e) {
-    msg.textContent = e.message;
-    msg.className = 'msg msg--error';
-    msg.hidden = false;
+    dom.setMessage(msg, e.message, 'error');
     btn.disabled = false;
   }
 }
@@ -686,15 +648,13 @@ function dropBuildCache() {
   var btn = document.getElementById('drop-build-cache-btn');
   var msg = document.getElementById('drop-build-cache-msg');
   btn.disabled = true;
-  msg.className = 'msg';
-  msg.textContent = 'Dropping cache…';
+  dom.setMuted(msg, 'Dropping cache…');
 
   fetch('/api/drop-docker-cache', {method: 'POST', credentials: 'same-origin'})
     .then(readJsonResponse)
     .then(function(res) {
       if (!res.ok) {
-        msg.className = 'msg msg--error';
-        msg.textContent = 'Drop failed: ' + responseErrorMessage(res.data, 'unknown error');
+        dom.setMessage(msg, 'Drop failed: ' + responseErrorMessage(res.data, 'unknown error'), 'error');
         return;
       }
       var data = res.data;
@@ -705,12 +665,10 @@ function dropBuildCache() {
           reclaimed = ' Freed ' + match[1] + '.';
         }
       }
-      msg.className = 'msg msg--ok';
-      msg.textContent = 'Build cache dropped.' + reclaimed;
+      dom.setMessage(msg, 'Build cache dropped.' + reclaimed, 'ok');
     })
     .catch(function() {
-      msg.className = 'msg msg--error';
-      msg.textContent = 'Drop failed: request error';
+      dom.setMessage(msg, 'Drop failed: request error', 'error');
     })
     .then(function() {
       btn.disabled = false;
@@ -729,13 +687,11 @@ function updateSshStatus() {
       if (data.ssh_enabled) {
         btn.textContent = 'Disable SSH';
         btn.className = 'btn btn--danger';
-        status.textContent = 'SSH active';
-        status.className = 'status-text status-text--error';
+        dom.setMessage(status, 'SSH active', 'error');
       } else {
         btn.textContent = 'Enable SSH';
         btn.className = 'btn';
-        status.textContent = 'SSH disabled';
-        status.className = 'status-text status-text--muted';
+        dom.setMuted(status, 'SSH disabled');
       }
     });
 }
@@ -758,8 +714,8 @@ function renderArchiveBackend(state) {
   var rows = '';
   if (state.backend === 's3') {
     rows += '<tr><th>Backend</th>'
-      + '<td><span class="status-text status-text--ok">S3 (JuiceFS)</span>'
-      + (state.state_message ? ' <span class="error">' + escSettingsHtml(state.state_message) + '</span>' : '')
+      + '<td><span class="msg msg--ok">S3 (JuiceFS)</span>'
+      + (state.state_message ? ' <span class="msg msg--error">' + escSettingsHtml(state.state_message) + '</span>' : '')
       + '</td></tr>';
     var bucketLine = escSettingsHtml(state.s3_bucket || '?')
       + (state.s3_prefix ? '/' + escSettingsHtml(state.s3_prefix) : '')
@@ -773,14 +729,14 @@ function renderArchiveBackend(state) {
     }
     if (state.meta_db_path) {
       rows += '<tr><th>Metadata DB</th><td><code>' + escSettingsHtml(state.meta_db_path) + '</code>'
-        + ' <span class="error">(must back up to survive disk loss)</span></td></tr>';
+        + ' <span class="msg msg--error">(must back up to survive disk loss)</span></td></tr>';
     }
     var dumps = state.meta_dumps;
     var dumpLine;
     if (dumps && dumps.count > 0) {
       dumpLine = '<code>' + escSettingsHtml(dumps.latest_at || '?') + '</code> <span class="hint">(' + dumps.count + ' listed, hourly default interval)</span>';
     } else if (dumps && dumps.count === 0) {
-      dumpLine = '<span class="error">No metadata dumps in bucket yet.</span> <span class="hint">JuiceFS attempts metadata backups on an hourly interval by default.</span>';
+      dumpLine = '<span class="msg msg--error">No metadata dumps in bucket yet.</span> <span class="hint">JuiceFS attempts metadata backups on an hourly interval by default.</span>';
     } else {
       dumpLine = '<span class="hint">unavailable; could not list <code>'
         + escSettingsHtml((state.juicefs_volume_name ? state.juicefs_volume_name + '/' : '') + 'meta/')
@@ -789,13 +745,13 @@ function renderArchiveBackend(state) {
     rows += '<tr><th>Latest meta dump</th><td>' + dumpLine + '</td></tr>';
   } else if (state.backend === 'local') {
     rows += '<tr><th>Backend</th>'
-      + '<td><span class="status-text">Local disk (JuiceFS)</span>'
-      + (state.state_message ? ' <span class="error">' + escSettingsHtml(state.state_message) + '</span>' : '')
+      + '<td>Local disk (JuiceFS)'
+      + (state.state_message ? ' <span class="msg msg--error">' + escSettingsHtml(state.state_message) + '</span>' : '')
       + '</td></tr>';
     if (state.archive_dir) {
       rows += '<tr><th>Host path</th><td><code>' + escSettingsHtml(state.archive_dir) + '</code></td></tr>';
     }
-    rows += '<tr><th>Durability</th><td><span class="status-text status-text--warn">Local disk only</span> '
+    rows += '<tr><th>Durability</th><td><span class="msg msg--warn">Local disk only</span> '
       + 'The archive is a JuiceFS volume whose objects live only on this instance\u2019s local disk. '
       + 'The bundled backup app excludes this data. Configure S3 below to store archive objects off the instance; recovery also requires JuiceFS metadata.</td></tr>';
     var apps = state.local_archive_apps || [];
@@ -807,12 +763,12 @@ function renderArchiveBackend(state) {
   } else {
     // Legacy pre-v12 'disabled' state (no archive tier).
     rows += '<tr><th>Backend</th>'
-      + '<td><span class="status-text status-text--muted">Not configured</span></td></tr>';
+      + '<td><span class="muted">Not configured</span></td></tr>';
   }
 
   var experimentalNote = '';
   if (state.backend === 's3') {
-    experimentalNote = '<p class="desc"><strong class="error">Experimental:</strong> the S3 archive backend is best-effort durable. '
+    experimentalNote = '<p class="desc"><strong class="msg msg--error">Experimental:</strong> the S3 archive backend is best-effort durable. '
       + 'Filename-to-S3-chunk mappings live in a SQLite metadata DB on this zone’s local disk; '
       + 'recovery after the local disk is wiped requires the latest meta dump in S3 plus a manual <code>juicefs load</code>.</p>';
   }
@@ -884,7 +840,7 @@ function showConfigureForm(state) {
     + '<button class="btn" id="ab-test-btn">Test connection</button>'
     + '<button class="btn btn--primary" id="ab-submit-btn">Configure</button>'
     + '<button class="btn" id="ab-cancel-btn">Cancel</button>'
-    + '<span id="ab-msg" class="hint"></span>'
+    + '<span id="ab-msg" class="msg" role="status" hidden></span>'
     + '</div>';
   formEl.hidden = false;
   document.getElementById('ab-cancel-btn').onclick = function() {
@@ -916,8 +872,7 @@ function _archiveBackendBody() {
 
 function testArchiveConnection() {
   var msg = document.getElementById('ab-msg');
-  msg.textContent = 'Testing…';
-  msg.className = 'hint';
+  dom.setMuted(msg, 'Testing…');
   fetch('/api/storage/archive_backend/test_connection', {
     method: 'POST',
     credentials: 'same-origin',
@@ -926,25 +881,21 @@ function testArchiveConnection() {
   })
     .then(readJsonResponse)
     .then(function(res) {
-      msg.className = res.ok ? 'msg msg--ok' : 'msg msg--error';
-      if (res.ok) { msg.textContent = 'Bucket reachable'; return; }
-      msg.textContent = 'Failed: ' + responseErrorMessage(res.data, '');
+      if (res.ok) dom.setMessage(msg, 'Bucket reachable', 'ok');
+      else dom.setMessage(msg, 'Failed: ' + responseErrorMessage(res.data, ''), 'error');
     })
     .catch(function(err) {
-      msg.className = 'msg msg--error';
-      msg.textContent = 'Network error: ' + err;
+      dom.setMessage(msg, 'Network error: ' + err, 'error');
     });
 }
 
 function submitConfigure() {
   var msg = document.getElementById('ab-msg');
   if (!document.getElementById('ab-confirm').checked) {
-    msg.className = 'msg msg--error';
-    msg.textContent = 'Tick the confirmation checkbox first.';
+    dom.setMessage(msg, 'Tick the confirmation checkbox first.', 'error');
     return;
   }
-  msg.className = 'hint';
-  msg.textContent = 'Configuring (may take 10-30s)…';
+  dom.setMuted(msg, 'Configuring (may take 10-30s)…');
   document.getElementById('ab-submit-btn').disabled = true;
   fetch('/api/storage/archive_backend/configure', {
     method: 'POST',
@@ -957,14 +908,12 @@ function submitConfigure() {
       if (res.ok) {
         loadArchiveBackend();
       } else {
-        msg.className = 'msg msg--error';
-        msg.textContent = 'Failed: ' + responseErrorMessage(res.data, '');
+        dom.setMessage(msg, 'Failed: ' + responseErrorMessage(res.data, ''), 'error');
         document.getElementById('ab-submit-btn').disabled = false;
       }
     })
     .catch(function(err) {
-      msg.className = 'msg msg--error';
-      msg.textContent = 'Network error: ' + err;
+      dom.setMessage(msg, 'Network error: ' + err, 'error');
       document.getElementById('ab-submit-btn').disabled = false;
     });
 }
@@ -984,9 +933,9 @@ function loadArchiveBackend() {
     .catch(function(err) {
       var el = document.getElementById('archive-backend-status');
       if (el) {
-        dom.replace(el, dom.el('p', {class: 'notice notice--error'}, [
+        dom.replace(el, dom.notice([
           dom.el('strong', {text: 'Archive backend status unavailable.'}), ' ', String(err),
-        ]));
+        ], 'error'));
       }
     });
 }
@@ -1033,9 +982,7 @@ async function connectImbue() {
     window.location.href = data.redirect_url;
   } catch (e) {
     btn.disabled = false;
-    msg.textContent = 'Could not start connect: ' + e.message;
-    msg.className = 'msg msg--error';
-    msg.hidden = false;
+    dom.setMessage(msg, 'Could not start connect: ' + e.message, 'error');
   }
 }
 
@@ -1047,13 +994,10 @@ async function connectImbue() {
   const msg = document.getElementById('connect-imbue-msg');
   if (!msg) return;
   if (result === 'ok') {
-    msg.textContent = 'Connected to Imbue.';
-    msg.className = 'msg msg--ok';
+    dom.setMessage(msg, 'Connected to Imbue.', 'ok');
   } else {
-    msg.textContent = 'Connecting to Imbue failed. Please try again.';
-    msg.className = 'msg msg--error';
+    dom.setMessage(msg, 'Connecting to Imbue failed. Please try again.', 'error');
   }
-  msg.hidden = false;
 })();
 
 loadOwnerUsername();
