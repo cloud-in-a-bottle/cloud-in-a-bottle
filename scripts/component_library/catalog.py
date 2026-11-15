@@ -288,7 +288,7 @@ COMPONENTS = (
         ),
         classes=("notice",),
         notes=(
-            "Call it with a body for markup: {% call notice(tone=\"ok\") %}...{% endcall %}.",
+            'Call it with a body for markup: {% call notice(tone="ok") %}...{% endcall %}.',
             "Page scripts fill one in with dom.setMessage() and build new ones with dom.notice(), in "
             "static/js/dom.js. Change them together.",
         ),
@@ -297,7 +297,7 @@ COMPONENTS = (
         id="msg",
         name="Inline message",
         group="Status",
-        summary="Coloured text in a tone: feedback after an action (\"Saved.\"), or a state label (\"Expired\"). It wraps.",
+        summary='Coloured text in a tone: feedback after an action ("Saved."), or a state label ("Expired"). It wraps.',
         macro="msg",
         controls=(
             Choice("tone", ("ok", "warn", "error")),
@@ -307,7 +307,7 @@ COMPONENTS = (
         classes=("msg",),
         notes=(
             'Use tag="span" to sit it inline after a button.',
-            "There is no neutral tone. Text with no tone, such as \"Saving…\" or \"Never\", is grey .muted text "
+            'There is no neutral tone. Text with no tone, such as "Saving…" or "Never", is grey .muted text '
             "from dom.setMuted() or dom.muted().",
             "Render it empty and hidden when a script fills it in. Page scripts use dom.setMessage(), "
             "dom.hideMessage() and dom.message(), in static/js/dom.js. Change them together.",
