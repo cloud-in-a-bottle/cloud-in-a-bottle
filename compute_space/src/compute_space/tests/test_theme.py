@@ -103,6 +103,15 @@ def test_pages_render_the_theme_on_html(cfg: Config) -> None:
     assert '<option value="grid" selected>Grid</option>' in settings_html
 
 
+def test_bad_stored_theme_still_renders_pages_with_the_default(cfg: Config) -> None:
+    # Settings must stay reachable so the owner can pick a valid theme again.
+    cookie = auth_cookie(cfg)
+    with closing(get_db()) as db:
+        set_setting(db, THEME_KEY, '{"style": "neon"}')
+    for path in ("/dashboard", "/settings"):
+        assert '<html lang="en" data-style="cloudy" data-app-list="list">' in _get(cfg, cookie, path)
+
+
 def test_api_saves_theme(cfg: Config) -> None:
     with TestClient(app=make_test_app(api_theme_routes)) as client:
         client.cookies.update(auth_cookie(cfg))

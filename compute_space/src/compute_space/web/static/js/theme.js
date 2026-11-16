@@ -12,11 +12,11 @@ async function saveTheme() {
         app_list: document.getElementById('theme-app-list').value,
       }),
     });
-    var body = await resp.json();
-    if (!resp.ok) throw new Error(responseErrorMessage(body, 'failed to save'));
+    var result = await readJsonResponse(resp);
+    if (!result.ok) throw new Error(responseErrorMessage(result.data, 'failed to save'));
     // The same attributes layout.html renders, so the page restyles without a reload.
-    document.documentElement.dataset.style = body.style;
-    document.documentElement.dataset.appList = body.app_list;
+    document.documentElement.dataset.style = result.data.style;
+    document.documentElement.dataset.appList = result.data.app_list;
     msg.textContent = 'Saved.';
     msg.className = 'msg msg--ok';
   } catch (e) {

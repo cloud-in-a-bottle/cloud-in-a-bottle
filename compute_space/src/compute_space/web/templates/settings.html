@@ -52,8 +52,8 @@
 
 <section class="section">
   {% call section_head("Appearance") %}{% endcall %}
+  {%- set current_theme = theme() %}
   <div class="panel">
-    {%- set appearance_extra %}<p class="msg" id="theme-msg" role="status" hidden></p>{% endset %}
     {% call field("Style", "theme-style") %}
       <select id="theme-style" onchange="saveTheme()">
         {%- for value in styles %}
@@ -61,13 +61,14 @@
         {%- endfor %}
       </select>
     {% endcall %}
-    {% call field("App list", "theme-app-list", extra=appearance_extra) %}
+    {% call field("App list", "theme-app-list") %}
       <select id="theme-app-list" onchange="saveTheme()">
         {%- for value in app_list_layouts %}
         <option value="{{ value }}"{% if current_theme.app_list == value %} selected{% endif %}>{{ value | capitalize }}</option>
         {%- endfor %}
       </select>
     {% endcall %}
+    <p class="msg" id="theme-msg" role="status" hidden></p>
   </div>
 </section>
 
