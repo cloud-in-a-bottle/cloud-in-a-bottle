@@ -59,9 +59,9 @@ CREATE TABLE "apps" (
                 manifest_raw TEXT,
                 created_at TEXT NOT NULL DEFAULT (datetime('now')),
                 updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-            , links TEXT NOT NULL DEFAULT '[]', cpu_cores REAL NOT NULL DEFAULT 0.1);
-INSERT INTO "apps" VALUES(1,'111111111112','orders','orders','1.0.0','Order service','serverfull','/repo/orders',NULL,NULL,19100,NULL,NULL,'stopped',NULL,256,0,'[]',NULL,'2024-01-01T00:00:00','2024-01-01T00:00:00','[]',0.5);
-INSERT INTO "apps" VALUES(2,'111111111113','billing','billing','2.1.0','Billing service','serverfull','/repo/billing','https://git.example/billing',NULL,19101,NULL,NULL,'running',NULL,512,0,'["/invoices"]',NULL,'2024-02-15T10:00:00','2024-02-15T10:00:00','[]',1.0);
+            , links TEXT NOT NULL DEFAULT '[]', cpu_cores REAL NOT NULL DEFAULT 0.1, prebuilt_image_verified INTEGER NOT NULL DEFAULT 0);
+INSERT INTO "apps" VALUES(1,'111111111112','orders','orders','1.0.0','Order service','serverfull','/repo/orders',NULL,NULL,19100,NULL,NULL,'stopped',NULL,256,0,'[]',NULL,'2024-01-01T00:00:00','2024-01-01T00:00:00','[]',0.5,0);
+INSERT INTO "apps" VALUES(2,'111111111113','billing','billing','2.1.0','Billing service','serverfull','/repo/billing','https://git.example/billing',NULL,19101,NULL,NULL,'running',NULL,512,0,'["/invoices"]',NULL,'2024-02-15T10:00:00','2024-02-15T10:00:00','[]',1.0,0);
 CREATE TABLE "archive_backend" (
     id INTEGER PRIMARY KEY CHECK (id = 1),
     backend TEXT NOT NULL DEFAULT 'local' CHECK(backend IN ('disabled', 'local', 's3')),
@@ -97,7 +97,7 @@ CREATE TABLE schema_version (
     id INTEGER PRIMARY KEY CHECK (id = 1),
     version INTEGER NOT NULL
 );
-INSERT INTO "schema_version" VALUES(1,17);
+INSERT INTO "schema_version" VALUES(1,18);
 CREATE TABLE "service_defaults" (
                 service_url TEXT PRIMARY KEY,
                 app_id TEXT NOT NULL,
