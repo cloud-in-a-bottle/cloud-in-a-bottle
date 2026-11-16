@@ -69,6 +69,11 @@
   filter: brightness(0.35);
 }
 
+/* Icons are black artwork in <img> tags, which CSS colours can't reach. */
+[data-style="dark"] .icon {
+  filter: invert(0.9);
+}
+
 /* ── App list: grid ─────────────────────────────────────────────────── */
 
 /* Apps as tiles, sized like the dashboard cards above them. */
