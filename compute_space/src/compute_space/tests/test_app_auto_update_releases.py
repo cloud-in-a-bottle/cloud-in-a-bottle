@@ -162,7 +162,7 @@ async def test_lands_on_the_newest_release_not_the_branch_head(
     assert app.head() == target
     # The release's image was pulled before the running version was stopped, and the reload runs it.
     assert stubs["events"] == ["pull", "stop"]
-    assert stubs["reloaded"] == [PreparedImage(tag=_TAG, source=ImageSource.PULLED)]
+    assert stubs["reloaded"] == [PreparedImage(tag=_TAG, source=ImageSource.PULLED_UNVERIFIED)]
     assert app.status() == "running"
 
 
