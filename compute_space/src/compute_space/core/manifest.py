@@ -1,3 +1,4 @@
+import enum
 import functools
 import json
 import os
@@ -137,6 +138,14 @@ class ServiceConsumes:
     grants: list[Grant] = attr.Factory(list)
 
 
+class ReleaseTagFormat(enum.StrEnum):
+    """How an app's repo tags its releases (``[app].release_tag_format``). A manifest naming a format this version
+    doesn't know fails to parse, rather than having its tags misread."""
+
+    # ``vX.Y.Z`` (release candidates such as ``v1.2.0-rc.1`` are not releases); see release_tags.newest_release.
+    SEMVER = "semver"
+
+
 @attr.s(auto_attribs=True, frozen=True)
 class SettingLabel:
     """Marks an :class:`AppManifest` field as shown in the update review diff,
@@ -161,12 +170,25 @@ class AppManifest:
     version: Annotated[str, SettingLabel("App", "Version", review_required=False)]
     description: Annotated[str, SettingLabel("App", "Description", review_required=False)] = ""
     authors: Annotated[list[str], SettingLabel("App", "Authors", review_required=False)] = attr.Factory(list)
+    # Set when the repo tags its releases in this format. An app that tracks its repo's default branch (no ref pinned)
+    # then installs and updates to the newest release on that branch rather than its head (see
+    # releases.follows_releases); a pinned ref ignores it. Not review-gated: like pushing to the branch, which commit
+    # is a release is the app author's call, and it changes nothing about what the app may do.
+    release_tag_format: Annotated[
+        ReleaseTagFormat | None, SettingLabel("App", "Release tag format", review_required=False)
+    ] = None
 
     # [runtime]
     runtime_type: Annotated[str, SettingLabel("App", "Runtime type")] = "serverfull"
 
     # [runtime.container]
     container_image: Annotated[str, SettingLabel("Container", "Image")] = ""
+    # An image reference without tag or digest (eg ``registry.cloudinabottle.org/bottled-vaultwarden``). Requires
+    # release_tag_format: when the app follows releases, each release runs ``<prebuilt_image>:<its commit's sha>``,
+    # pulled instead of built from ``container_image`` (which is still built if the image can't be fetched; see
+    # apps.prepare_app_image). Not review-gated: which image runs is the app author's call either way, like the
+    # Dockerfile's contents.
+    prebuilt_image: Annotated[str | None, SettingLabel("Container", "Prebuilt image", review_required=False)] = None
     container_port: Annotated[int, SettingLabel("Container", "Container port")] = 0
     container_command: Annotated[str | None, SettingLabel("Container", "Command")] = None
     port_mappings: Annotated[list[PortMapping], SettingLabel("Ports", "Port mappings")] = attr.Factory(list)
@@ -448,6 +470,35 @@ def _parse_services_v2_consumes(data: dict[str, Any]) -> list[ServiceConsumes]:
     return perms
 
 
+def _parse_release_tag_format(value: object) -> ReleaseTagFormat | None:
+    if value is None:
+        return None
+    if isinstance(value, str) and value in ReleaseTagFormat:
+        return ReleaseTagFormat(value)
+    known = ", ".join(f'"{f.value}"' for f in ReleaseTagFormat)
+    raise ValueError(
+        f"[app].release_tag_format {value!r} is not supported by this version of Cloud in a Bottle "
+        f"(supported: {known})"
+    )
+
+
+def _parse_prebuilt_image(value: object) -> str | None:
+    """Validate ``[runtime.container].prebuilt_image``: an image reference with neither tag nor digest, since the tag
+    is always the commit being deployed."""
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError("[runtime.container].prebuilt_image must be a non-empty string")
+    if value != value.strip() or any(c.isspace() for c in value):
+        raise ValueError(f"[runtime.container].prebuilt_image must not contain whitespace: {value!r}")
+    if "@" in value:
+        raise ValueError(f"[runtime.container].prebuilt_image must not include a digest: {value!r}")
+    # A colon after the last slash is a tag; one before it is a registry port (host:5000/name).
+    if ":" in value.rsplit("/", 1)[-1]:
+        raise ValueError(f"[runtime.container].prebuilt_image must not include a tag: {value!r}")
+    return value
+
+
 def parse_manifest_from_string(raw_text: str) -> AppManifest:
     """Parse an app manifest (``cloudinabottle.toml``) from its string content."""
     data = tomllib.loads(raw_text)
@@ -468,6 +519,15 @@ def parse_manifest_from_string(raw_text: str) -> AppManifest:
         raise ValueError("[runtime.container].image is required")
     if not container.get("port"):
         raise ValueError("[runtime.container].port is required")
+
+    release_tag_format = _parse_release_tag_format(app_section.get("release_tag_format"))
+    prebuilt_image = _parse_prebuilt_image(container.get("prebuilt_image"))
+    if prebuilt_image is not None and release_tag_format is None:
+        # Without it the app would never follow releases, and so would build every head despite publishing images.
+        raise ValueError(
+            '[runtime.container].prebuilt_image requires [app].release_tag_format (e.g. release_tag_format = "semver"): '
+            "the image is only pulled for releases"
+        )
 
     shm_mb = container.get("shm_mb", 0)
     if not isinstance(shm_mb, int) or shm_mb < 0:
@@ -499,9 +559,11 @@ def parse_manifest_from_string(raw_text: str) -> AppManifest:
         version=app_section["version"],
         description=app_section.get("description", ""),
         authors=app_section.get("authors", []),
+        release_tag_format=release_tag_format,
         hidden=app_section.get("hidden", False),
         runtime_type=runtime_type,
         container_image=container["image"],
+        prebuilt_image=prebuilt_image,
         container_port=container["port"],
         container_command=container.get("command"),
         port_mappings=_parse_ports(data.get("ports", [])),

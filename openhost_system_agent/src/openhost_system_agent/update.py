@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-import re
 import sys
 import urllib.parse
 from pathlib import Path
@@ -26,6 +25,10 @@ from openhost_system_agent.protocol import FetchResult
 from openhost_system_agent.protocol import RemoteInfo
 from openhost_system_agent.protocol import UpdateChannel
 from openhost_system_agent.reclaim import reclaim_host_ownership
+from openhost_system_agent.release_tags import RC_TAG as _RC_TAG
+from openhost_system_agent.release_tags import RELEASE_TAG as _RELEASE_TAG
+from openhost_system_agent.release_tags import is_version_tag as _is_version_tag
+from openhost_system_agent.release_tags import version_key as _version_key
 from openhost_system_agent.updater import progress
 from openhost_system_agent.updater.launcher import launch_updater
 from openhost_system_agent.updater.launcher import stop_updater
@@ -83,23 +86,7 @@ def _strip_credentials(url: str) -> str:
 
 # ── Tag helpers ──────────────────────────────────────────────────────
 
-
-# A release tag is "v" followed by dot-separated integers (v1, v1.2, v1.2.3).
-# A release candidate adds "-rc.N" (v1.2.0-rc.1); it is never a stepping stone,
-# only the optional last hop (see _next_step). Any other v-prefixed tag is
-# ignored so version parsing can't crash on it.
-_RELEASE_TAG = re.compile(r"v\d+(?:\.\d+)*")
-_RC_TAG = re.compile(r"v\d+(?:\.\d+)*-rc\.\d+")
-
-
-def _version_key(tag_name: str) -> tuple[tuple[int, ...], int, int]:
-    version, _, rc = tag_name.lstrip("v").partition("-rc.")
-    # A release sorts after its own candidates: v1.2.0-rc.1 < v1.2.0-rc.2 < v1.2.0.
-    return tuple(int(x) for x in version.split(".")), 0 if rc else 1, int(rc or 0)
-
-
-def _is_version_tag(name: str) -> bool:
-    return bool(_RELEASE_TAG.fullmatch(name) or _RC_TAG.fullmatch(name))
+# Tag parsing and ordering live in release_tags.py, shared with apply_after_checkout.py and app releases.
 
 
 def _get_sorted_tags(repo: git.Repo) -> list[str]:
