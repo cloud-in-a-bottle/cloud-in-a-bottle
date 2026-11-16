@@ -1,0 +1,94 @@
+/* Theme variants, keyed off the data-* attributes layout.html puts on <html>
+   (one per option in core/theme.py). The defaults (data-style="cloudy",
+   data-app-list="list") have no rules here: they are the look tokens.css,
+   base.css and components.css already describe. */
+
+/* ── Style: simple ──────────────────────────────────────────────────── */
+
+/* The same palette on a flat page, without the sky, clouds or grass. */
+[data-style="simple"] body {
+  background: var(--bg-secondary);
+}
+
+[data-style="simple"] .deco-clouds,
+[data-style="simple"] .deco-grass {
+  display: none;
+}
+
+/* ── Style: dark ────────────────────────────────────────────────────── */
+
+/* The cloudy scene at night: a deep blue sky over a dark meadow rather than a
+   neutral black, with the sky blue and meadow green kept as the interactive
+   colours. Text, borders and overlays are a pale sky tint at an opacity, the
+   inverse of the light palette. */
+[data-style="dark"] {
+  color-scheme: dark;
+
+  --bg-surface: #182433;
+  --bg-primary: #1d2b3c;
+  --bg-secondary: #223246;
+  --bg-sky: #0f1a26;
+  --bg-meadow: #13231c;
+  --bg-disabled: #3a4757;
+
+  --bg-status-negative: #3a1f22;
+  --bg-status-positive: #1e3320;
+  --bg-status-warning: #36301a;
+  --bg-status-info: #1a2c40;
+
+  --fg-primary: #e6eef6;
+  --fg-secondary: rgb(230 238 246 / 0.65);
+  --fg-border: rgb(230 238 246 / 0.18);
+  --fg-disabled: rgb(230 238 246 / 0.45);
+  --fg-inverted: #0f1a26;
+  --fg-inverted-secondary: rgb(15 26 38 / 0.65);
+
+  --fg-status-negative: #ff9e97;
+  --fg-status-positive: #a8dc8e;
+  --fg-status-warning: #e9c37a;
+  --fg-status-info: #9cc8da;
+
+  --interactive-primary: #2b5a80;
+  --interactive-accent: #35602a;
+  --interactive-hover: rgb(230 238 246 / 0.06);
+  --interactive-active: rgb(230 238 246 / 0.12);
+
+  --color-chart-unused: #233a52;
+  --color-chart-system: #7fb0dc;
+  --color-chart-swap: #4f7aa3;
+
+  --shadow-card: 2px 2px 0 rgba(0, 0, 0, 0.35);
+}
+
+/* The sprites are drawn for daylight (white clouds, pale grass): dim them. */
+[data-style="dark"] .deco-clouds {
+  opacity: 0.15;
+}
+
+[data-style="dark"] .deco-grass {
+  filter: brightness(0.35);
+}
+
+/* ── App list: grid ─────────────────────────────────────────────────── */
+
+/* Apps as tiles, sized like the dashboard cards above them. */
+[data-app-list="grid"] .app-list {
+  display: grid;
+  gap: var(--space-3);
+  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+  box-shadow: none;
+}
+
+[data-app-list="grid"] .app-row {
+  flex-direction: column;
+  align-items: stretch;
+  min-height: 64px;
+  padding: var(--space-3);
+  margin-bottom: 0;
+  box-shadow: var(--shadow-card);
+}
+
+[data-app-list="grid"] .app-row__details {
+  margin: auto 0 0;
+  padding-left: 0;
+}

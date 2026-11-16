@@ -7,8 +7,9 @@
 {# with context: nav_menu (imported below icon_nav) calls app_url(), which reads `request` — the whole chain must carry context #}
 {% from "_components/icon_nav.html" import icon_nav with context %}
 {% from "_components/nav_back.html" import nav_back %}
+{%- set page_theme = theme() %}
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-style="{{ page_theme.style }}" data-app-list="{{ page_theme.app_list }}">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -17,6 +18,7 @@
   <link rel="icon" type="image/svg+xml" href="{{ static_url('img/favicon.svg') }}">
   <link rel="stylesheet" href="{{ static_url('css/fonts.css') }}">
   <link rel="stylesheet" href="{{ static_url('css/tokens.css') }}">
+  <link rel="stylesheet" href="{{ static_url('css/themes.css') }}">
   <link rel="stylesheet" href="{{ static_url('css/base.css') }}">
   <link rel="stylesheet" href="{{ static_url('css/components.css') }}">
   <script src="{{ static_url('js/info-tip.js') }}" defer></script>

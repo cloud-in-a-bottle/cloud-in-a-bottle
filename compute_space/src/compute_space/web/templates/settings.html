@@ -50,6 +50,27 @@
   </div>
 </section>
 
+<section class="section">
+  {% call section_head("Appearance") %}{% endcall %}
+  <div class="panel">
+    {%- set appearance_extra %}<p class="msg" id="theme-msg" role="status" hidden></p>{% endset %}
+    {% call field("Style", "theme-style") %}
+      <select id="theme-style" onchange="saveTheme()">
+        {%- for value in styles %}
+        <option value="{{ value }}"{% if current_theme.style == value %} selected{% endif %}>{{ value | capitalize }}</option>
+        {%- endfor %}
+      </select>
+    {% endcall %}
+    {% call field("App list", "theme-app-list", extra=appearance_extra) %}
+      <select id="theme-app-list" onchange="saveTheme()">
+        {%- for value in app_list_layouts %}
+        <option value="{{ value }}"{% if current_theme.app_list == value %} selected{% endif %}>{{ value | capitalize }}</option>
+        {%- endfor %}
+      </select>
+    {% endcall %}
+  </div>
+</section>
+
 <section class="section" id="connect-imbue-section" hidden>
   {% call section_head("Imbue account") %}{% endcall %}
   <div class="panel">
@@ -292,6 +313,7 @@
 <script src="{{ static_url('js/tokens.js') }}"></script>
 <script src="{{ static_url('js/domains.js') }}"></script>
 <script src="{{ static_url('js/settings.js') }}"></script>
+<script src="{{ static_url('js/theme.js') }}"></script>
 <script src="{{ static_url('js/services.js') }}"></script>
 <script src="{{ static_url('js/services.js') }}"></script>
 {% endblock %}
