@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from collections.abc import Iterator
 from contextlib import closing
 from pathlib import Path
@@ -61,11 +62,15 @@ def _pages_app(cfg: Config) -> Litestar:
     )
 
 
-def _html_attrs(theme: Theme) -> str:
-    return (
-        f'<html lang="en" data-style="{theme.style}" data-app-list="{theme.app_list}"\n'
-        f'      data-app-columns="{theme.app_columns}">'
-    )
+def _html_theme(page: str) -> dict[str, str]:
+    """The data-* attributes on the page's <html> tag."""
+    match = re.search(r"<html\b[^>]*>", page)
+    assert match is not None
+    return dict(re.findall(r'data-([a-z-]+)="([^"]*)"', match.group(0)))
+
+
+def _expected(theme: Theme) -> dict[str, str]:
+    return {"style": theme.style, "app-list": theme.app_list, "app-columns": theme.app_columns}
 
 
 def _get(cfg: Config, cookie: dict[str, str], path: str) -> str:
@@ -104,12 +109,12 @@ def test_pages_render_the_theme_on_html(cfg: Config) -> None:
     chosen = Theme(style=Style.DARK, app_list=AppListLayout.COMPACT, app_columns=AppColumns.FOUR)
     with TestClient(app=_pages_app(cfg)) as client:
         client.cookies.update(auth_cookie(cfg))
-        assert _html_attrs(Theme()) in client.get("/dashboard").text
+        assert _html_theme(client.get("/dashboard").text) == _expected(Theme())
         # Read live: the same running app picks up a change on the next page load.
         with closing(get_db()) as db:
             write_theme(db, chosen)
         settings_html = client.get("/settings").text
-    assert _html_attrs(chosen) in settings_html
+    assert _html_theme(settings_html) == _expected(chosen)
     assert '<option value="dark" selected>Dark</option>' in settings_html
     assert '<option value="compact" selected>Compact</option>' in settings_html
     assert '<option value="4" selected>4</option>' in settings_html
@@ -121,7 +126,7 @@ def test_bad_stored_theme_still_renders_pages_with_the_default(cfg: Config) -> N
     with closing(get_db()) as db:
         set_setting(db, THEME_KEY, '{"style": "neon"}')
     for path in ("/dashboard", "/settings"):
-        assert _html_attrs(Theme()) in _get(cfg, cookie, path)
+        assert _html_theme(_get(cfg, cookie, path)) == _expected(Theme())
 
 
 def test_api_saves_theme(cfg: Config) -> None:
