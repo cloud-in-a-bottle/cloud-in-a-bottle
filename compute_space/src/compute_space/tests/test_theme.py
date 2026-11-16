@@ -93,11 +93,13 @@ def test_unknown_stored_value_fails_loudly(cfg: Config) -> None:
 
 
 def test_pages_render_the_theme_on_html(cfg: Config) -> None:
-    cookie = auth_cookie(cfg)
-    assert '<html lang="en" data-style="cloudy" data-app-list="list">' in _get(cfg, cookie, "/dashboard")
-    with closing(get_db()) as db:
-        write_theme(db, Theme(style=Style.DARK, app_list=AppListLayout.GRID))
-    settings_html = _get(cfg, cookie, "/settings")
+    with TestClient(app=_pages_app(cfg)) as client:
+        client.cookies.update(auth_cookie(cfg))
+        assert '<html lang="en" data-style="cloudy" data-app-list="list">' in client.get("/dashboard").text
+        # Read live: the same running app picks up a change on the next page load.
+        with closing(get_db()) as db:
+            write_theme(db, Theme(style=Style.DARK, app_list=AppListLayout.GRID))
+        settings_html = client.get("/settings").text
     assert '<html lang="en" data-style="dark" data-app-list="grid">' in settings_html
     assert '<option value="dark" selected>Dark</option>' in settings_html
     assert '<option value="grid" selected>Grid</option>' in settings_html
@@ -128,5 +130,13 @@ def test_api_rejects_unknown_values(cfg: Config, body: dict[str, Any]) -> None:
         client.cookies.update(auth_cookie(cfg))
         resp = client.post("/api/settings/theme", json=body)
     assert resp.status_code == 400
+    with closing(get_db()) as db:
+        assert read_theme(db) == Theme()
+
+
+def test_api_requires_owner(cfg: Config) -> None:
+    with TestClient(app=make_test_app(api_theme_routes)) as client:
+        resp = client.post("/api/settings/theme", json={"style": "dark", "app_list": "grid"})
+    assert resp.status_code == 401
     with closing(get_db()) as db:
         assert read_theme(db) == Theme()
