@@ -52,19 +52,18 @@
 
 <section class="section">
   {% call section_head("Appearance") %}{% endcall %}
-  {%- set current_theme = theme() %}
   <div class="panel">
     {% call field("Style", "theme-style") %}
       <select id="theme-style" onchange="saveTheme()">
         {%- for value in styles %}
-        <option value="{{ value }}"{% if current_theme.style == value %} selected{% endif %}>{{ value | capitalize }}</option>
+        <option value="{{ value }}"{% if page_theme.style == value %} selected{% endif %}>{{ value | capitalize }}</option>
         {%- endfor %}
       </select>
     {% endcall %}
     {% call field("App list", "theme-app-list") %}
       <select id="theme-app-list" onchange="saveTheme()">
         {%- for value in app_list_layouts %}
-        <option value="{{ value }}"{% if current_theme.app_list == value %} selected{% endif %}>{{ value | capitalize }}</option>
+        <option value="{{ value }}"{% if page_theme.app_list == value %} selected{% endif %}>{{ value | capitalize }}</option>
         {%- endfor %}
       </select>
     {% endcall %}
