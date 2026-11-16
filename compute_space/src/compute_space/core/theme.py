@@ -21,6 +21,20 @@ class Style(StrEnum):
 class AppListLayout(StrEnum):
     LIST = "list"
     GRID = "grid"
+    COMPACT = "compact"
+    TABLE = "table"
+    CHIPS = "chips"
+
+
+class AppColumns(StrEnum):
+    """How many apps sit side by side in the layouts that put them in columns (grid, compact)."""
+
+    AUTO = "auto"
+    TWO = "2"
+    THREE = "3"
+    FOUR = "4"
+    FIVE = "5"
+    SIX = "6"
 
 
 @attr.s(auto_attribs=True, frozen=True)
@@ -33,6 +47,7 @@ class Theme:
 
     style: Style = Style.CLOUDY
     app_list: AppListLayout = AppListLayout.LIST
+    app_columns: AppColumns = AppColumns.AUTO
 
 
 def read_theme(db: sqlite3.Connection) -> Theme:
@@ -45,6 +60,7 @@ def read_theme(db: sqlite3.Connection) -> Theme:
     return Theme(
         style=Style(stored.get("style", default.style)),
         app_list=AppListLayout(stored.get("app_list", default.app_list)),
+        app_columns=AppColumns(stored.get("app_columns", default.app_columns)),
     )
 
 
