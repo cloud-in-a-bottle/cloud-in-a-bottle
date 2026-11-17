@@ -928,9 +928,23 @@ class TestPrebuiltImage:
         with pytest.raises(ValueError, match=match):
             parse_manifest_from_string(self._with(f"prebuilt_image = {value}"))
 
-    def test_requires_release_tag_format(self):
+    def test_without_release_tag_format_is_ignored_not_refused(self):
+        """App releases set prebuilt_image before release_tag_format existed, and instances still hold those manifests
+        (checkouts, apps.manifest_raw): restarts and reloads must keep parsing them. The image is ignored, so the app is
+        built like a pinned one; a new install refuses it (test_releases)."""
         raw = MINIMAL.replace("port = 8080\n", 'port = 8080\nprebuilt_image = "registry.cloudinabottle.org/app"\n')
-        with pytest.raises(ValueError, match=r"prebuilt_image requires \[app\].release_tag_format"):
+        manifest = parse_manifest_from_string(raw)
+        assert manifest.prebuilt_image is None
+        assert manifest.ignored_prebuilt_image == "registry.cloudinabottle.org/app"
+
+    def test_with_release_tag_format_nothing_is_ignored(self):
+        manifest = parse_manifest_from_string(self._with('prebuilt_image = "registry.cloudinabottle.org/app"'))
+        assert manifest.prebuilt_image == "registry.cloudinabottle.org/app"
+        assert manifest.ignored_prebuilt_image is None
+
+    def test_an_invalid_one_is_still_refused_without_release_tag_format(self):
+        raw = MINIMAL.replace("port = 8080\n", 'port = 8080\nprebuilt_image = "registry.cloudinabottle.org/app:v1"\n')
+        with pytest.raises(ValueError, match="tag"):
             parse_manifest_from_string(raw)
 
     def test_change_is_shown_but_not_review_gated(self):
