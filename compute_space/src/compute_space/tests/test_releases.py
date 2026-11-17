@@ -250,4 +250,5 @@ def test_a_pinned_install_of_prebuilt_image_without_release_tag_format_builds(tm
     manifest, clone_dir, error = asyncio.run(clone_and_read_manifest(f"file://{origin.path}@{ref}"))
     assert error is None, error
     assert manifest is not None and manifest.prebuilt_image is None
+    assert manifest.ignored_prebuilt_image == "registry.cloudinabottle.org/myapp"
     assert _git(Path(str(clone_dir)), "rev-parse", "HEAD") == (tagged if ref == "v1.0.0" else head)

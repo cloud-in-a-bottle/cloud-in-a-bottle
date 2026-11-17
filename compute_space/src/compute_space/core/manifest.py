@@ -530,7 +530,7 @@ def parse_manifest_from_string(raw_text: str) -> AppManifest:
         # The image is only pulled for releases, and without release_tag_format the app doesn't follow them, so it is
         # built like a pinned app. Ignored rather than refused: app releases set prebuilt_image before they set
         # release_tag_format, and instances still hold those manifests (in checkouts and in apps.manifest_raw), which
-        # restarts and reloads must keep accepting. A new install refuses it (see clone_and_read_manifest).
+        # restarts and reloads must keep accepting. A new install without a ref refuses it (see apps._clone_and_read_manifest).
         logger.warning(
             "App '{}' sets [runtime.container].prebuilt_image without [app].release_tag_format; ignoring the prebuilt "
             "image and building it",

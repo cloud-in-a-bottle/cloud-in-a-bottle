@@ -222,8 +222,9 @@ async def clone_and_read_manifest(
 async def _clone_and_read_manifest(
     repo_url: str, github_token: str | None
 ) -> tuple[AppManifest | None, str | None, str | None, bool]:
-    """:func:`clone_and_read_manifest`, also saying whether an error was the clone itself failing (which a GitHub
-    token might fix) rather than what it cloned (a bad manifest, no release), which a token can't."""
+    """The implementation of :func:`clone_and_read_manifest`, which also returns whether an error was the clone itself
+    failing (which a GitHub token might fix) rather than what it cloned (a bad manifest, no release), which a token
+    can't."""
     try:
         base_url, ref = parse_repo_url(repo_url)
     except ValueError as e:

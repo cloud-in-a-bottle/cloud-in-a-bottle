@@ -319,6 +319,7 @@ async def clone_and_get_app_info(
     validation_error = validate_manifest(manifest, db)
     info = attr.asdict(manifest)
     info.pop("raw_toml", None)
+    info.pop("ignored_prebuilt_image", None)
     assert clone_dir is not None
     storage = archive_backend.storage_summary(manifest.raw_toml, db)
     return Response(
