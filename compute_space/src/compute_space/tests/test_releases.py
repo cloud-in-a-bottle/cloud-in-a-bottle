@@ -227,3 +227,28 @@ def test_the_release_checkout_runs_no_hooks_from_the_app_repo(tmp_path: Path) ->
     assert checkout_newest_release(str(clone), ReleaseTagFormat.SEMVER, fetch_tags=True) == "v2.0.0"
     assert _git(clone, "rev-parse", "HEAD") == later
     assert not marker.exists()
+
+
+# --- prebuilt_image without release_tag_format (manifests from before the field existed) ---
+
+
+def test_install_refuses_prebuilt_image_without_release_tag_format(tmp_path: Path) -> None:
+    """It would build the branch head despite the published images, so a new install says what's missing."""
+    origin = _Origin(tmp_path / "origin", releases=False)
+    origin.commit("1.0.0", tag="v1.0.0")
+    manifest, clone_dir, error = asyncio.run(clone_and_read_manifest(f"file://{origin.path}"))
+    assert manifest is None and clone_dir is None
+    assert error is not None and "requires [app].release_tag_format" in error and "url@ref" in error
+
+
+@pytest.mark.parametrize("ref", ["v1.0.0", "main"])
+def test_a_pinned_install_of_prebuilt_image_without_release_tag_format_builds(tmp_path: Path, ref: str) -> None:
+    """A pin ignores prebuilt_image anyway, so old app releases (which predate release_tag_format) stay installable."""
+    origin = _Origin(tmp_path / "origin", releases=False)
+    tagged = origin.commit("1.0.0", tag="v1.0.0")
+    head = origin.commit("1.0.1")
+    manifest, clone_dir, error = asyncio.run(clone_and_read_manifest(f"file://{origin.path}@{ref}"))
+    assert error is None, error
+    assert manifest is not None and manifest.prebuilt_image is None
+    assert manifest.ignored_prebuilt_image == "registry.cloudinabottle.org/myapp"
+    assert _git(Path(str(clone_dir)), "rev-parse", "HEAD") == (tagged if ref == "v1.0.0" else head)

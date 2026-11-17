@@ -215,10 +215,20 @@ async def clone_and_read_manifest(
 
     Returns (manifest, clone_dir, error). On success error is None.
     """
+    manifest, clone_dir, error, _ = await _clone_and_read_manifest(repo_url, github_token)
+    return manifest, clone_dir, error
+
+
+async def _clone_and_read_manifest(
+    repo_url: str, github_token: str | None
+) -> tuple[AppManifest | None, str | None, str | None, bool]:
+    """The implementation of :func:`clone_and_read_manifest`, which also returns whether an error was the clone itself
+    failing (which a GitHub token might fix) rather than what it cloned (a bad manifest, no release), which a token
+    can't."""
     try:
         base_url, ref = parse_repo_url(repo_url)
     except ValueError as e:
-        return None, None, str(e)
+        return None, None, str(e), False
 
     tmp_parent = tempfile.mkdtemp(prefix="openhost-clone-")
     clone_dir = os.path.join(tmp_parent, "repo")
@@ -232,20 +242,31 @@ async def clone_and_read_manifest(
             except OSError as e:
                 raise CloneFailed(f"Copy failed: {e}") from e
         manifest = parse_manifest(clone_dir)
+        if manifest.ignored_prebuilt_image is not None and ref is None:
+            # Restarts and reloads accept this so older manifests keep running (see parse_manifest_from_string), but
+            # installing it would build the default branch's head despite the published images. A pinned ref builds
+            # either way.
+            raise ValueError(
+                "[runtime.container].prebuilt_image requires [app].release_tag_format (e.g. release_tag_format = "
+                '"semver"): the image is only pulled for releases. To build this app from source instead, install it '
+                "with a ref pinned (url@ref)."
+            )
         if follows_releases(repo_url, manifest):
             # It installs at its newest release, not the default branch's head (and fails if there is none).
             assert manifest.release_tag_format is not None
             await asyncio.to_thread(checkout_newest_release, clone_dir, manifest.release_tag_format, False)
             manifest = parse_manifest(clone_dir)
-        return manifest, clone_dir, None
-    except (CloneFailed, ValueError, ReleaseError) as e:  # ValueError: unparseable manifest
-        error = str(e)
+        return manifest, clone_dir, None, False
+    except CloneFailed as e:
+        error, clone_failed = str(e), True
+    except (ValueError, ReleaseError) as e:  # ValueError: unparseable manifest
+        error, clone_failed = str(e), False
     except subprocess.TimeoutExpired:
-        error = "Git clone timed out"
+        error, clone_failed = "Git clone timed out", True
     except Exception as e:
-        error = f"Clone failed: {e}"
+        error, clone_failed = f"Clone failed: {e}", True
     rmtree_with_sudo_fallback(tmp_parent, raise_on_failure=False)
-    return None, None, error
+    return None, None, error, clone_failed
 
 
 def move_clone_to_app_checkout_dir(clone_dir: str, app_name: str, config: Config) -> str:
@@ -273,12 +294,14 @@ async def clone_with_github_fallback(
 
     Returns (manifest, clone_dir, error, authorize_url).
     """
-    manifest, tmp_dir, error = await clone_and_read_manifest(repo_url)
+    manifest, tmp_dir, error, clone_failed = await _clone_and_read_manifest(repo_url, None)
 
     # An SSH URL never clones over HTTPS-authenticated OAuth, so don't bounce
     # the owner through the GitHub authorize flow only to fail again — the
-    # error from clone_and_read_manifest already explains to use HTTPS.
-    if error and is_github_repo_url(repo_url) and not is_ssh_url(repo_url):
+    # error from clone_and_read_manifest already explains to use HTTPS. Nor when
+    # the clone worked and what it cloned is the problem: a token can't fix that,
+    # and asking for one would hide the real error.
+    if error and clone_failed and is_github_repo_url(repo_url) and not is_ssh_url(repo_url):
         clone_error = error
         try:
             token = await get_oauth_token("github", ["repo"], return_to=return_to)

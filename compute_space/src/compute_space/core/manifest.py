@@ -246,6 +246,9 @@ class AppManifest:
     hidden: Annotated[bool, SettingLabel("App", "Hidden")] = False
 
     raw_toml: str = ""
+    # A prebuilt_image set without release_tag_format, which is ignored (see parse_manifest_from_string). Kept so a new
+    # install can refuse it.
+    ignored_prebuilt_image: str | None = None
 
     @property
     def effective_build_memory_mb(self) -> int:
@@ -522,12 +525,18 @@ def parse_manifest_from_string(raw_text: str) -> AppManifest:
 
     release_tag_format = _parse_release_tag_format(app_section.get("release_tag_format"))
     prebuilt_image = _parse_prebuilt_image(container.get("prebuilt_image"))
+    ignored_prebuilt_image: str | None = None
     if prebuilt_image is not None and release_tag_format is None:
-        # Without it the app would never follow releases, and so would build every head despite publishing images.
-        raise ValueError(
-            '[runtime.container].prebuilt_image requires [app].release_tag_format (e.g. release_tag_format = "semver"): '
-            "the image is only pulled for releases"
+        # The image is only pulled for releases, and without release_tag_format the app doesn't follow them, so it is
+        # built like a pinned app. Ignored rather than refused: app releases set prebuilt_image before they set
+        # release_tag_format, and instances still hold those manifests (in checkouts and in apps.manifest_raw), which
+        # restarts and reloads must keep accepting. A new install without a ref refuses it (see apps._clone_and_read_manifest).
+        logger.warning(
+            "App '{}' sets [runtime.container].prebuilt_image without [app].release_tag_format; ignoring the prebuilt "
+            "image and building it",
+            app_section["name"],
         )
+        ignored_prebuilt_image, prebuilt_image = prebuilt_image, None
 
     shm_mb = container.get("shm_mb", 0)
     if not isinstance(shm_mb, int) or shm_mb < 0:
@@ -564,6 +573,7 @@ def parse_manifest_from_string(raw_text: str) -> AppManifest:
         runtime_type=runtime_type,
         container_image=container["image"],
         prebuilt_image=prebuilt_image,
+        ignored_prebuilt_image=ignored_prebuilt_image,
         container_port=container["port"],
         container_command=container.get("command"),
         port_mappings=_parse_ports(data.get("ports", [])),
