@@ -16,6 +16,7 @@ class Style(StrEnum):
     CLOUDY = "cloudy"
     SIMPLE = "simple"
     DARK = "dark"
+    SIMPLE_DARK = "simple-dark"
 
 
 class AppListLayout(StrEnum):

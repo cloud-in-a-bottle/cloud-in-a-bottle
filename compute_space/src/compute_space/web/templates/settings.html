@@ -56,7 +56,7 @@
     {% call field("Style", "theme-style") %}
       <select id="theme-style" onchange="saveTheme()">
         {%- for value in styles %}
-        <option value="{{ value }}"{% if page_theme.style == value %} selected{% endif %}>{{ value | capitalize }}</option>
+        <option value="{{ value }}"{% if page_theme.style == value %} selected{% endif %}>{{ value | replace("-", " ") | capitalize }}</option>
         {%- endfor %}
       </select>
     {% endcall %}

@@ -116,6 +116,7 @@ def test_pages_render_the_theme_on_html(cfg: Config) -> None:
         settings_html = client.get("/settings").text
     assert _html_theme(settings_html) == _expected(chosen)
     assert '<option value="dark" selected>Dark</option>' in settings_html
+    assert '<option value="simple-dark">Simple dark</option>' in settings_html
     assert '<option value="compact" selected>Compact</option>' in settings_html
     assert '<option value="4" selected>4</option>' in settings_html
 

@@ -11,7 +11,9 @@
 }
 
 [data-style="simple"] .deco-clouds,
-[data-style="simple"] .deco-grass {
+[data-style="simple"] .deco-grass,
+[data-style="simple-dark"] .deco-clouds,
+[data-style="simple-dark"] .deco-grass {
   display: none;
 }
 
@@ -21,7 +23,8 @@
    neutral black, with the sky blue and meadow green kept as the interactive
    colours. Text, borders and overlays are a pale sky tint at an opacity, the
    inverse of the light palette. */
-[data-style="dark"] {
+[data-style="dark"],
+[data-style="simple-dark"] {
   color-scheme: dark;
 
   --bg-surface: #182433;
@@ -70,8 +73,18 @@
 }
 
 /* Icons are black artwork in <img> tags, which CSS colours can't reach. */
-[data-style="dark"] .icon {
+[data-style="dark"] .icon,
+[data-style="simple-dark"] .icon {
   filter: invert(0.9);
+}
+
+/* ── Style: simple dark ─────────────────────────────────────────────── */
+
+/* The dark palette on a flat page, like simple is to cloudy. The page takes the
+   darkest tone so cards still sit lighter than it, as they do in the light
+   styles. Decorations are hidden with simple's, above. */
+[data-style="simple-dark"] body {
+  background: var(--bg-sky);
 }
 
 /* ── App list: column count ─────────────────────────────────────────── */
