@@ -4,11 +4,90 @@ import os
 import pwd
 import re
 import subprocess
+import tomllib
 from pathlib import Path
+
+_PODMAN = "/home/host/openhost/.pixi/envs/default/bin/podman"
+
+
+def configure_migration_data_dir() -> None:
+    """Use the router's data root for deployments that do not inherit its environment."""
+    if "OPENHOST_DATA_DIR" in os.environ:
+        return
+    if data_root := os.environ.get("OPENHOST_DATA_ROOT_DIR"):
+        os.environ["OPENHOST_DATA_DIR"] = str(Path(data_root) / "persistent_data" / "openhost")
+        return
+    selected_config = os.environ.get("OPENHOST_ROUTER_CONFIG") or os.environ.get("OPENHOST_CONFIG")
+    config_path = Path(selected_config or "/home/host/.openhost/local_compute_space/config.toml")
+    if not selected_config and not config_path.exists():
+        return
+    with config_path.open("rb") as config_file:
+        config = tomllib.load(config_file)
+    data_root = config.get("openhost", config).get("data_root_dir", "/opt/openhost")
+    os.environ["OPENHOST_DATA_DIR"] = str(Path(data_root) / "persistent_data" / "openhost")
+
+
+def require_router_stopped() -> None:
+    state = subprocess.run(
+        ["systemctl", "show", "--property=ActiveState", "--value", "openhost.service"],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=15,
+    ).stdout.strip()
+    if state not in ("inactive", "failed"):
+        raise RuntimeError(
+            "Stop openhost.service before applying system migrations; update apply does this automatically."
+        )
+
+
+def stop_app_containers(container_ids: list[str]) -> None:
+    """Stop recorded and unrecorded managed containers in the host user's Podman storage."""
+    host_uid = get_host_uid()
+    command = [
+        "runuser",
+        "-u",
+        "host",
+        "--",
+        "env",
+        f"XDG_RUNTIME_DIR=/run/user/{host_uid}",
+        f"DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/{host_uid}/bus",
+        f"PATH={Path(_PODMAN).parent}:/usr/local/bin:/usr/bin:/bin",
+        _PODMAN,
+    ]
+    # Include containers started before the router could persist their IDs.
+    managed = subprocess.run(
+        [*command, "ps", "--all", "--filter", "name=^openhost-", "--format", "{{.ID}}"],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    ).stdout.split()
+    to_stop = list(dict.fromkeys([*container_ids, *managed]))
+    if to_stop:
+        subprocess.run(
+            [*command, "stop", "--ignore", "--time", "10", "--", *to_stop],
+            check=True,
+            timeout=120,
+        )
 
 
 def run(*cmd: str) -> None:
     subprocess.run(cmd, check=True)
+
+
+def run_apt_get(*args: str, check: bool = True) -> None:
+    """Run unattended package operations without replacing locally configured files."""
+    env = {**os.environ, "DEBIAN_FRONTEND": "noninteractive", "UCF_FORCE_CONFFOLD": "1"}
+    env.pop("UCF_FORCE_CONFFNEW", None)
+    # Deployment/update supervisors own the deadline and terminate the whole
+    # migration process tree, including dpkg and package configuration scripts.
+    subprocess.run(
+        ["apt-get", "-o", "Dpkg::Options::=--force-confdef", "-o", "Dpkg::Options::=--force-confold", *args],
+        env=env,
+        stdin=subprocess.DEVNULL,
+        check=check,
+    )
 
 
 def write_file(path: str, content: str, *, mode: int = 0o600) -> None:

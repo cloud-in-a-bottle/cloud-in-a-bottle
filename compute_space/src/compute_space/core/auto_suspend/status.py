@@ -5,6 +5,7 @@ from enum import StrEnum
 import attr
 
 from compute_space.core.auto_update.config import read_auto_update_config
+from compute_space.core.auto_update.runner import next_auto_update_at
 from compute_space.core.auto_update.runner import scheduled_run_in_progress
 from compute_space.core.system_agent.client import apply_lock
 from compute_space.core.tls.provision import cert_issuance_in_progress
@@ -21,8 +22,9 @@ class BusyReason(StrEnum):
 class AutoSuspendStatus:
     # Work that suspending the instance now would stall. Empty when it can be suspended.
     busy_reasons: tuple[BusyReason, ...]
-    # When the owner has openhost update itself each day, or None with auto-updates off. A hint for when to schedule
-    # the daily wake: the update runs on the first wake after this time.
+    # The UTC time of day of the next automatic update, or None with auto-updates off. A hint for when to schedule the
+    # daily wake: the update runs on the first wake after this time. The schedule is a local time, so this moves by an
+    # hour when its timezone's daylight saving time starts or ends.
     auto_update_time_utc: time | None
 
 
@@ -35,5 +37,5 @@ def get_auto_suspend_status(db: sqlite3.Connection) -> AutoSuspendStatus:
     auto_update = read_auto_update_config(db)
     return AutoSuspendStatus(
         busy_reasons=tuple(reasons),
-        auto_update_time_utc=auto_update.time_utc if auto_update.enabled else None,
+        auto_update_time_utc=next_auto_update_at(auto_update).time() if auto_update.enabled else None,
     )

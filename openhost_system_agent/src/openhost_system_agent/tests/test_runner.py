@@ -3,10 +3,12 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+from unittest.mock import Mock
 from unittest.mock import patch
 
 import pytest
 
+from openhost_system_agent.migrations import runner
 from openhost_system_agent.migrations.base import SystemMigration
 from openhost_system_agent.migrations.migration_log import MigrationLogEntry
 from openhost_system_agent.migrations.migration_log import current_host_version
@@ -123,6 +125,12 @@ class TestCurrentVersion:
 
 
 class TestApplySystemMigrations:
+    @pytest.fixture(autouse=True)
+    def stopped_router(self, monkeypatch: pytest.MonkeyPatch) -> Mock:
+        guard = Mock()
+        monkeypatch.setattr(runner, "require_router_stopped", guard)
+        return guard
+
     def test_refuses_without_root(self, tmp_path: Path) -> None:
         if os.geteuid() == 0:
             pytest.skip("test must not run as root")
@@ -143,12 +151,39 @@ class TestApplySystemMigrations:
             with pytest.raises(RuntimeError, match="only knows up to"):
                 apply_system_migrations(migrations_path=str(path), registry=[])
 
-    def test_noop_when_current(self, tmp_path: Path) -> None:
+    def test_noop_when_current(self, tmp_path: Path, stopped_router: Mock) -> None:
         path = tmp_path / "migrations.jsonl"
         _write_jsonl(path, [{"version": 1, "success": True}])
         with patch("os.geteuid", return_value=0):
             applied = apply_system_migrations(migrations_path=str(path), registry=[])
         assert applied == []
+        stopped_router.assert_not_called()
+
+    def test_rejects_live_router_without_applying_or_recording_migration(
+        self, tmp_path: Path, stopped_router: Mock
+    ) -> None:
+        path = tmp_path / "migrations.jsonl"
+        _write_jsonl(path, [{"version": 1, "success": True}])
+        original = path.read_text()
+        stopped_router.side_effect = RuntimeError("Stop openhost.service")
+        with patch("os.geteuid", return_value=0), patch.object(MigrationV2, "up") as up:
+            with pytest.raises(RuntimeError, match="Stop openhost.service"):
+                apply_system_migrations(str(path), [MigrationV2()])
+        up.assert_not_called()
+        assert path.read_text() == original
+
+    def test_rechecks_before_each_pending_migration(self, tmp_path: Path, stopped_router: Mock) -> None:
+        path = tmp_path / "migrations.jsonl"
+        _write_jsonl(path, [{"version": 1, "success": True}])
+        stopped_router.side_effect = [None, RuntimeError("Stop openhost.service")]
+        with patch("os.geteuid", return_value=0), patch.object(MigrationV3, "up") as up:
+            with pytest.raises(RuntimeError, match="Stop openhost.service"):
+                apply_system_migrations(str(path), [MigrationV2(), MigrationV3()])
+            up.assert_not_called()
+            assert current_host_version(read_log(str(path))) == 2
+            stopped_router.side_effect = None
+            assert apply_system_migrations(str(path), [MigrationV2(), MigrationV3()]) == [3]
+            up.assert_called_once()
 
     def test_applies_pending(self, tmp_path: Path) -> None:
         path = tmp_path / "migrations.jsonl"

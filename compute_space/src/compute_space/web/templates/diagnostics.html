@@ -5,7 +5,7 @@
 {% from "_components/button.html" import button %}
 {% block content %}
 {% call section_head("Diagnostics") %}{% endcall %}
-<p class="hint">A snapshot of this instance for debugging: Cloud in a Bottle version, host system
+<p class="desc">A snapshot of this instance for debugging: Cloud in a Bottle version, host system
 info, installed dependency versions, container runtime, disk usage, and every
 installed app. Copy or download it and include it in a bug report.</p>
 
@@ -23,7 +23,7 @@ installed app. Copy or download it and include it in a bug report.</p>
 {% endcall %}
 
 {% call section_head("Installed Apps") %}{% endcall %}
-<p class="hint">Click a column header to sort.</p>
+<p class="desc">Click a column header to sort.</p>
 <div class="table-scroll">
 <table id="apps-table">
   <thead><tr>

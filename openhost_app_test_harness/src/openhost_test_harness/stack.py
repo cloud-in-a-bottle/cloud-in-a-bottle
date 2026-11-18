@@ -26,6 +26,7 @@ without it, service calls from apps hang.
 import contextlib
 import logging
 import os
+import re
 import shutil
 import socket
 import sqlite3
@@ -149,6 +150,23 @@ def _snapshot_working_tree(app_dir: Path, dest: Path) -> None:
             _copy_git_listed_files(app_dir / sub_rel, dest / sub_rel)
 
 
+_RELEASE_SETTING_LINE_RE = re.compile(r"^[ \t]*(?:release_tag_format|prebuilt_image)[ \t]*=.*$\n?", re.MULTILINE)
+
+
+def _stop_following_releases(deploy_src: Path) -> None:
+    """Remove ``release_tag_format`` and ``prebuilt_image`` from the deployed copy's manifest, so the router deploys
+    the working tree as it is, built from the app's Dockerfile, rather than the newest release (which a plain
+    directory has no tags for)."""
+    manifest_path = find_manifest_path(str(deploy_src))
+    assert manifest_path is not None, f"no manifest in {deploy_src}"
+    path = Path(manifest_path)
+    path.write_text(_RELEASE_SETTING_LINE_RE.sub("", path.read_text()))
+    manifest = parse_manifest(str(deploy_src))
+    assert manifest.release_tag_format is None and manifest.prebuilt_image is None, (
+        f"could not drop release_tag_format and prebuilt_image from {path}"
+    )
+
+
 def _warn_if_linux_gateway_missing() -> None:
     """On Linux, service calls from apps need the host_containers_internal_ip setup."""
     if sys.platform != "linux":
@@ -245,6 +263,11 @@ class OpenhostStack:
     installing the app.  ``stack.url``/``stack.app_id`` are not available yet inside the hook."""
     zone_name: str = "harness"
     deploy_timeout: float = 300.0
+    deploy_newest_release: bool = False
+    """By default the working tree of the app under test is deployed, built from its manifest's ``image`` Dockerfile,
+    even if the manifest sets ``release_tag_format`` (and ``prebuilt_image``), so tests cover the working tree. True
+    deploys the repo the way a Cloud in a Bottle install would: its newest release tag, running that commit's prebuilt
+    image (pulled and verified) if the manifest sets one, or building the release otherwise."""
 
     _data_dir: Path = attr.field(init=False, default=None)
     _exit_stack: contextlib.ExitStack | None = attr.field(init=False, default=None)
@@ -271,9 +294,16 @@ class OpenhostStack:
             if self.pre_deploy is not None:
                 self.pre_deploy(self)
             deploy_src = self.app_dir
-            if (self.app_dir / ".git").exists():
+            if self.deploy_newest_release:
+                pass  # the router clones the repo, so it sees its tags
+            elif (self.app_dir / ".git").exists():
                 deploy_src = self._data_dir / "app-under-test"
                 _snapshot_working_tree(self.app_dir, deploy_src)
+                _stop_following_releases(deploy_src)
+            elif parse_manifest(str(self.app_dir)).release_tag_format is not None:
+                deploy_src = self._data_dir / "app-under-test"
+                shutil.copytree(self.app_dir, deploy_src)
+                _stop_following_releases(deploy_src)
             self._app_id = self.deploy_app(
                 f"file://{deploy_src}",
                 app_name=self.app_name,

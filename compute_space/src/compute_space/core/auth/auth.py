@@ -2,12 +2,15 @@ import hashlib
 import re
 import secrets
 import sqlite3
+from contextlib import closing
 from datetime import UTC
 from datetime import datetime
 from datetime import timedelta
 
 import attr
 import bcrypt
+
+from compute_space.db import get_db
 
 SESSION_TTL_SECONDS = 28 * 24 * 60 * 60  # four weeks
 SESSION_COOKIE_NAME = "session_token"
@@ -81,11 +84,17 @@ def _hash(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
 
 
-def validate_password(password: str, db: sqlite3.Connection) -> int | None:
-    # currently only have 1 user
-    row = db.execute("SELECT user_id, password_hash FROM users LIMIT 1").fetchone()
-    if bcrypt.checkpw(password.encode(), row["password_hash"].encode()):
-        return int(row["user_id"])
+def create_password_session(password: str) -> str | None:
+    """Check the password and commit a session using a worker-owned connection."""
+    with closing(get_db()) as db, db:
+        row = db.execute("SELECT user_id, password_hash FROM users LIMIT 1").fetchone()
+        if row is None or not bcrypt.checkpw(password.encode(), row["password_hash"].encode()):
+            return None
+        # Hashing runs before taking the write lock. Recheck the password version under it.
+        db.execute("BEGIN IMMEDIATE")
+        current = db.execute("SELECT password_hash FROM users WHERE user_id = ?", (row["user_id"],)).fetchone()
+        if current is not None and current["password_hash"] == row["password_hash"]:
+            return create_session(int(row["user_id"]), db)
     return None
 
 

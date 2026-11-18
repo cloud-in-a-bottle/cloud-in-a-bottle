@@ -9,7 +9,6 @@
 openhost/
 ├── compute_space/
 │   └── compute_space/    # litestar/hypercorn app: routes requests to apps, manages containers
-├── routerd_cli/          # `openhost` CLI: up, down, doctor, update
 ├── compute_space_cli/    # compute space management CLI
 ├── ansible/              # server deployment (any VPS or bare metal)
 ├── apps/
@@ -54,4 +53,3 @@ on mac, the `coredns` and `podman` conda packages are linux-only and
 won't install via pixi.  the default test suite skips both via pytest
 markers, so this is only relevant if you want to run `--run-tls` or
 `--run-containers` locally on mac (install them by hand if so).
-

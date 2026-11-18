@@ -4,8 +4,10 @@ import os
 import re
 import shutil
 import sqlite3
+import subprocess
 from datetime import UTC
 from datetime import datetime
+from functools import partial
 from pathlib import Path
 from threading import Thread
 from typing import Annotated
@@ -34,26 +36,34 @@ from litestar.response import Redirect
 
 from compute_space.config import Config
 from compute_space.core import archive_backend
+from compute_space.core.app_checkouts import app_checkout_dir
 from compute_space.core.app_id import is_valid_app_id
+from compute_space.core.app_update import UpdateNotApplied
+from compute_space.core.app_update import check_out_update_release
+from compute_space.core.app_update import prepare_update_image
+from compute_space.core.app_update_review import pending_update_review
 from compute_space.core.apps import RESERVED_PATHS
+from compute_space.core.apps import PreparedImage
 from compute_space.core.apps import app_container_log_path
 from compute_space.core.apps import app_log_path
+from compute_space.core.apps import app_repo_url
 from compute_space.core.apps import clone_with_github_fallback
 from compute_space.core.apps import git_pull
 from compute_space.core.apps import insert_and_deploy
-from compute_space.core.apps import move_clone_to_app_temp_dir
+from compute_space.core.apps import move_clone_to_app_checkout_dir
 from compute_space.core.apps import reload_app_background
 from compute_space.core.apps import remove_app_background
 from compute_space.core.apps import start_app_process
 from compute_space.core.apps import validate_manifest
-from compute_space.core.auth.permissions_v2 import get_all_permissions_v2
 from compute_space.core.auth.permissions_v2 import grant_permission_v2
+from compute_space.core.checkout_operations import run_checkout_operation
 from compute_space.core.containers import BUILD_CACHE_CORRUPT_MARKER
 from compute_space.core.containers import archive_old_log
 from compute_space.core.containers import get_docker_logs
 from compute_space.core.containers import log_timestamp
 from compute_space.core.containers import stop_app_process
 from compute_space.core.containers import stop_container
+from compute_space.core.data import rmtree_with_sudo_fallback
 from compute_space.core.diagnostics import AppDiagnostics
 from compute_space.core.diagnostics import collect_app_diagnostics
 from compute_space.core.domains import Domain
@@ -67,12 +77,10 @@ from compute_space.core.git_ops import parse_repo_url
 from compute_space.core.git_ops import reset_hard
 from compute_space.core.log_stream import stream_app_logs
 from compute_space.core.logging import logger
+from compute_space.core.manifest import AppManifest
 from compute_space.core.manifest import PermissionGrant
 from compute_space.core.manifest import all_manifest_permissions_v2
-from compute_space.core.manifest import manifest_newly_declared_permissions_v2
-from compute_space.core.manifest import manifest_settings_changes
 from compute_space.core.manifest import parse_manifest
-from compute_space.core.manifest import settings_changes_require_review
 from compute_space.core.oauth import OAuthRequired
 from compute_space.core.oauth import get_oauth_token
 from compute_space.core.ports import check_port_available
@@ -186,6 +194,18 @@ class ReloadAppRequest:
 
 
 @attr.s(auto_attribs=True, frozen=True)
+class ImageVerificationLostInfo:
+    """The app's last prebuilt image was signature-verified, and the update's isn't (see
+    image_verification.verification_lost)."""
+
+    # The running version's image, or None when it is built and the verified image came from an earlier version.
+    previous_image: str | None
+    previous_registry: str
+    new_image: str
+    new_registry: str
+
+
+@attr.s(auto_attribs=True, frozen=True)
 class UpdateReviewRequiredResponse:
     """Returned by ``/reload_app`` when an update's pulled manifest differs from
     the running one and the caller hasn't approved it. The reload is NOT
@@ -193,13 +213,15 @@ class UpdateReviewRequiredResponse:
     re-submits with ``approve_new_permissions``. ``settings_changed`` is the
     grouped old→new diff (non-gating fields included, for context, even though they
     never trigger a review by themselves); ``permissions_required`` the newly
-    declared grants."""
+    declared grants; ``image_verification_lost`` is set when the app's last prebuilt image was
+    signature-verified and the update's would not be."""
 
     ok: bool
     review_required: bool
     settings_changed: list[dict[str, object]]
     permissions_required: list[dict[str, object]]
     error: str
+    image_verification_lost: ImageVerificationLostInfo | None = None
 
 
 @attr.s(auto_attribs=True, frozen=True)
@@ -260,33 +282,6 @@ def _resolve_app(app_id: str, db: sqlite3.Connection) -> sqlite3.Row:
     return row
 
 
-async def _pin_refless_to_landed_branch(repo_url: str | None, repo_path: str) -> str | None:
-    """Return ``repo_url`` with ``@<branch>`` appended for the branch ``repo_path``
-    is on, or ``None`` when there's nothing to pin.
-
-    Pins only when ``repo_url`` has no ``@ref`` yet and ``repo_path`` is a git
-    checkout sitting on a (non-detached) branch. Used at install and after a
-    refless update so the stored upstream names a concrete branch — visible on
-    the detail page and deterministic across future pulls — rather than
-    re-resolving a moving remote default. A ``file://`` URL pointing at a
-    non-git directory is copied verbatim (no ``.git``), so it's skipped here
-    rather than letting get_branch_name raise InvalidGitRepositoryError. Reads
-    local HEAD only, so no network.
-    """
-    if not repo_url:
-        return None
-    try:
-        base_url, ref = parse_repo_url(repo_url)
-    except ValueError:
-        # A stored SSH upstream can't be pinned (and shouldn't exist after the
-        # set_app_remote guard); leave it untouched rather than crashing.
-        return None
-    if ref or not os.path.isdir(os.path.join(repo_path, ".git")):
-        return None
-    landed = await get_branch_name(Path(repo_path))
-    return f"{base_url}@{landed}" if landed else None
-
-
 # ─── routes ────────────────────────────────────────────────────────────────
 
 
@@ -324,6 +319,7 @@ async def clone_and_get_app_info(
     validation_error = validate_manifest(manifest, db)
     info = attr.asdict(manifest)
     info.pop("raw_toml", None)
+    info.pop("ignored_prebuilt_image", None)
     assert clone_dir is not None
     storage = archive_backend.storage_summary(manifest.raw_toml, db)
     return Response(
@@ -360,7 +356,6 @@ async def check_port(
 )
 async def api_add_app(
     data: AddAppRequest,
-    db: NamedDependency[sqlite3.Connection],
     config: NamedDependency[Config],
 ) -> Response[AddAppResponse]:
     """Install an app. Optionally takes a clone_dir from a prior clone_and_get_app_info call."""
@@ -392,6 +387,20 @@ async def api_add_app(
         except ValueError as e:
             raise ValidationException(detail=str(e)) from e
 
+    return await run_checkout_operation(
+        config.db_path, partial(_finish_app_install, data, config, manifest, clone_dir, repo_url, app_name)
+    )
+
+
+def _finish_app_install(
+    data: AddAppRequest,
+    config: Config,
+    manifest: AppManifest,
+    clone_dir: str,
+    repo_url: str,
+    app_name: str | None,
+    db: sqlite3.Connection,
+) -> Response[AddAppResponse]:
     if app_name is None:
         app_name = manifest.name
 
@@ -417,14 +426,7 @@ async def api_add_app(
                 )
             )
 
-    final_dir = move_clone_to_app_temp_dir(clone_dir, app_name, config)
-
-    # Pin a refless upstream to the concrete branch the fresh clone landed on
-    # (origin's default), so the stored URL and detail page show which branch
-    # the app tracks from the start — matching what a later Update & Reload records.
-    pinned = await _pin_refless_to_landed_branch(repo_url, final_dir)
-    if pinned:
-        repo_url = pinned
+    final_dir = move_clone_to_app_checkout_dir(clone_dir, app_name, config)
 
     port_overrides: dict[str, int] | None = dict(data.port_overrides) if data.port_overrides else None
 
@@ -665,45 +667,64 @@ def _gate_update_review(
     repo_path: str,
     approve_new_permissions: bool,
     previous_manifest_raw: str | None = None,
+    *,
+    repo_url: str | None,
+    prebuilt_image_verified: bool,
 ) -> UpdateReviewRequiredResponse | None:
-    if not repo_path or not os.path.isdir(repo_path):
-        return None
-    try:
-        manifest = parse_manifest(repo_path)
-    except ValueError:
-        return None
-
-    new_perms = manifest_newly_declared_permissions_v2(
-        manifest, get_all_permissions_v2(consumer_app_id=app_id), previous_manifest_raw
-    )
-    settings_changed = manifest_settings_changes(manifest, previous_manifest_raw)
-    # Fields that don't change what the app can do (description, authors, version,
-    # health check, links) are reported in the diff but don't hold the update back on
-    # their own: an app that only rewords its description gains nothing, and gating on
-    # that trains the owner to click through every review.
-    if not new_perms and not settings_changes_require_review(settings_changed):
+    review = pending_update_review(app_id, repo_path, previous_manifest_raw, repo_url, prebuilt_image_verified)
+    if review is None:
         return None
 
     if approve_new_permissions:
-        for pg in new_perms:
+        for pg in review.new_permissions:
             grant_permission_v2(consumer_app_id=app_id, service_url=pg.service_url, grant_payload=pg.grant)
         return None
 
-    shortname_by_service = {c.service: c.shortname for c in manifest.consumes_services_v2}
+    shortname_by_service = {c.service: c.shortname for c in review.manifest.consumes_services_v2}
+    loss = review.verification_loss
     return UpdateReviewRequiredResponse(
         ok=False,
         review_required=True,
-        settings_changed=[attr.asdict(c) for c in settings_changed],
+        settings_changed=[attr.asdict(c) for c in review.settings_changed],
         permissions_required=[
             {
                 "service_url": pg.service_url,
                 "grant": pg.grant,
                 "shortname": shortname_by_service.get(pg.service_url, ""),
             }
-            for pg in new_perms
+            for pg in review.new_permissions
         ],
-        error="This update changes the app's settings; review and approve them before it can be applied.",
+        error=(
+            "This update's image is no longer signature-verified; review and approve the update before it can be "
+            "applied."
+            if loss is not None and not review.gates_on_settings
+            else "This update changes the app's settings; review and approve them before it can be applied."
+        ),
+        image_verification_lost=None
+        if loss is None
+        else ImageVerificationLostInfo(
+            previous_image=loss.previous_image,
+            previous_registry=loss.previous_registry,
+            new_image=loss.new_image,
+            new_registry=loss.new_registry,
+        ),
     )
+
+
+async def _roll_back_update(repo_path: str, pre_pull_sha: str | None, log_file: str) -> None:
+    """Put the working tree back at the version the app is running, after an update that won't be applied, so the
+    refused code doesn't linger on disk where a later plain reload (which is not gated, on the assumption the on-disk
+    manifest matches the running one) would silently deploy it."""
+    if not pre_pull_sha:
+        return
+    try:
+        await reset_hard(Path(repo_path), pre_pull_sha)
+    except Exception as e:  # noqa: BLE001
+        # The refused version is left on disk, where a plain reload would deploy it, so make it visible to operators
+        # as well as in the app's build log.
+        logger.warning("failed to roll back refused update in {} to {}: {}", repo_path, pre_pull_sha, e)
+        with open(log_file, "a") as lf:
+            lf.write(f"WARNING: failed to roll back refused update to {pre_pull_sha}: {e}\n")
 
 
 async def _reload_app_impl(
@@ -752,6 +773,8 @@ async def _reload_app_impl(
         # refused update can roll the working tree back to it (keeping the
         # on-disk repo in sync with the running version — see the gate below).
         pre_pull_sha: str | None = None
+        # The image an update produced for the new version before stopping the old one (see below).
+        prepared_image: PreparedImage | None = None
 
         if update or continue_oauth:
             if not app_row["repo_path"] or not os.path.isdir(os.path.join(app_row["repo_path"], ".git")):
@@ -824,18 +847,21 @@ async def _reload_app_impl(
                     return Redirect(path=f"/app_detail/{app_name}")
                 return Response(content=OkResponse(ok=True), status_code=200, media_type=MediaType.JSON)
 
-            # The pull succeeded. If the upstream had no pinned ``@ref`` (the
-            # operator cleared it, or it was never set), git_pull resolved and
-            # checked out origin's default branch. Record that concrete branch
-            # back into repo_url so the app stays on it deterministically and
-            # the detail page shows which branch it tracks — rather than
-            # silently re-resolving (and following) a moving remote default on
-            # every future update.
-            pinned = await _pin_refless_to_landed_branch(repo_url, app_row["repo_path"])
-            if pinned:
-                db.execute("UPDATE apps SET repo_url = ? WHERE app_id = ?", (pinned, app_id))
+            # An app that follows releases deploys the newest release, not the head just pulled.
+            try:
+                release = await check_out_update_release(app_row["repo_path"], repo_url)
+            except UpdateNotApplied as e:
+                await _roll_back_update(app_row["repo_path"], pre_pull_sha, log_file)
+                db.execute(
+                    "UPDATE apps SET status = 'error', error_message = ? WHERE app_id = ?",
+                    (f"Update not applied: {e}", app_id),
+                )
                 db.commit()
-                lf.write(f"Pinned upstream to {pinned}\n")
+                if continue_oauth:
+                    return Redirect(path=f"/app_detail/{app_name}")
+                return Response(content=OkResponse(ok=True), status_code=200, media_type=MediaType.JSON)
+            if release is not None:
+                lf.write(f"Checked out release {release}\n")
 
     # Gate: when an update pulls a manifest that differs from the running one
     # (any changed setting, or newly declared permissions), refuse the reload
@@ -848,29 +874,40 @@ async def _reload_app_impl(
     # currently running — so it can't introduce changes, and gating it would
     # wrongly re-prompt for a version the owner already chose to keep running.
     if update or continue_oauth:
+        # Read once, so the review and the image step below agree on whether the update pulls an image.
+        current_repo_url = app_repo_url(app_id, db)
         review_gate = await asyncio.to_thread(
             _gate_update_review,
             app_id,
             app_row["repo_path"],
             approve_new_permissions,
             app_row["manifest_raw"],
+            repo_url=current_repo_url,
+            prebuilt_image_verified=bool(app_row["prebuilt_image_verified"]),
         )
         if review_gate is not None:
-            # Roll the working tree back to the version the app is running, so the
-            # pulled-but-refused code does not linger on disk where a later plain
-            # reload — which is not gated, on the assumption the on-disk manifest
-            # matches the running one — would silently deploy it.
-            if pre_pull_sha:
-                try:
-                    await reset_hard(Path(app_row["repo_path"]), pre_pull_sha)
-                except Exception as e:  # noqa: BLE001
-                    with open(log_file, "a") as lf:
-                        lf.write(f"WARNING: failed to roll back refused update to {pre_pull_sha}: {e}\n")
+            await _roll_back_update(app_row["repo_path"], pre_pull_sha, log_file)
             with open(log_file, "a") as lf:
-                lf.write("Update changes app settings requiring owner approval; not reloading.\n")
+                lf.write(f"Update needs owner approval; not reloading. {review_gate.error}\n")
             if continue_oauth:
                 return Redirect(path=f"/app_detail/{app_name}")
             return Response(content=review_gate, status_code=200, media_type=MediaType.JSON)
+
+        # An app that follows releases produces its image now, before the running container is stopped, so a failure
+        # leaves the running version untouched. The background reload runs the image prepared here rather than
+        # producing it again after the app has stopped.
+        try:
+            prepared_image = await prepare_update_image(app_name, app_row["repo_path"], current_repo_url, config)
+        except UpdateNotApplied as e:
+            await _roll_back_update(app_row["repo_path"], pre_pull_sha, log_file)
+            db.execute(
+                "UPDATE apps SET status = 'error', error_message = ? WHERE app_id = ?",
+                (f"Update not applied: {e}", app_id),
+            )
+            db.commit()
+            if continue_oauth:
+                return Redirect(path=f"/app_detail/{app_name}")
+            return Response(content=OkResponse(ok=True), status_code=200, media_type=MediaType.JSON)
 
     # Atomically claim the reload before touching the running container.
     # ``WHERE status NOT IN (<transient states>)`` makes concurrent reloads
@@ -896,6 +933,7 @@ async def _reload_app_impl(
     Thread(
         target=reload_app_background,
         args=(app_id, app_row["repo_path"], config),
+        kwargs={"prepared_image": prepared_image},
         daemon=True,
     ).start()
 
@@ -1032,7 +1070,7 @@ async def remove_app(
 
 
 def _rename_app_storage_dirs(config: Config, old_name: str, new_name: str, archive_dir: str) -> str | None:
-    """Rename per-app subdirs across the three storage tiers, with rollback on partial failure.
+    """Discard unowned checkout conflicts, then rename app storage with rollback of moved directories.
 
     ``archive_dir`` is the archive parent for the current backend — always
     the JuiceFS mountpoint now (absent only on a legacy 'disabled' zone) —
@@ -1050,6 +1088,11 @@ def _rename_app_storage_dirs(config: Config, old_name: str, new_name: str, archi
     for parent in rename_parents:
         if not os.path.isdir(parent):
             return f"Storage parent {parent!r} is not a directory; refusing to rename so per-app data isn't orphaned."
+    checkout_parent = os.path.dirname(app_checkout_dir(config.temporary_data_dir, old_name))
+    if os.path.islink(checkout_parent):
+        return f"Checkout parent {checkout_parent!r} is a symlink."
+    if os.path.isdir(checkout_parent):
+        rename_parents.append(checkout_parent)
     # The archive parent is the JuiceFS mountpoint, present whenever the mount
     # is live (both local and S3 backends).  Skip it cleanly only on a legacy
     # 'disabled' zone where the mountpoint never gets created.
@@ -1057,13 +1100,20 @@ def _rename_app_storage_dirs(config: Config, old_name: str, new_name: str, archi
         rename_parents.append(archive_dir)
     renamed: list[tuple[str, str]] = []
     try:
+        # The caller has checked that no installed app owns the new name.
+        new_checkout = app_checkout_dir(config.temporary_data_dir, new_name)
+        if os.path.lexists(new_checkout):
+            if os.path.islink(new_checkout) or not os.path.isdir(new_checkout):
+                os.unlink(new_checkout)
+            else:
+                rmtree_with_sudo_fallback(new_checkout, raise_on_failure=True)
         for parent in rename_parents:
             old_dir = os.path.join(parent, old_name)
             new_dir = os.path.join(parent, new_name)
             if os.path.exists(old_dir) and not os.path.exists(new_dir):
                 os.rename(old_dir, new_dir)
                 renamed.append((old_dir, new_dir))
-    except OSError as exc:
+    except (OSError, subprocess.SubprocessError) as exc:
         for old_dir, new_dir in reversed(renamed):
             try:
                 os.rename(new_dir, old_dir)
@@ -1093,10 +1143,15 @@ def _rename_app_storage_dirs(config: Config, old_name: str, new_name: str, archi
 async def rename_app(
     app_id: FromPath[str],
     data: RenameAppRequest,
-    db: NamedDependency[sqlite3.Connection],
     config: NamedDependency[Config],
 ) -> Response[RenameAppResponse]:
     """Rename an app's label and subdomain. The app_id (cross-table identity) stays the same."""
+    return await run_checkout_operation(config.db_path, partial(_rename_app, app_id, data, config))
+
+
+def _rename_app(
+    app_id: str, data: RenameAppRequest, config: Config, db: sqlite3.Connection
+) -> Response[RenameAppResponse]:
     new_name = data.name.strip()
 
     if not new_name:
@@ -1145,13 +1200,8 @@ async def rename_app(
     )
     db.commit()
 
-    # Off-loop because JuiceFS renames can take hundreds of ms.
-    rename_error = await asyncio.to_thread(
-        _rename_app_storage_dirs,
-        config,
-        old_name,
-        new_name,
-        archive_backend.effective_archive_dir(config, db),
+    rename_error = _rename_app_storage_dirs(
+        config, old_name, new_name, archive_backend.effective_archive_dir(config, db)
     )
     if rename_error is not None:
         rollback_db_error: str | None = None
@@ -1179,8 +1229,13 @@ async def rename_app(
     # permissions_v2, etc. — they all point at app_id which is stable.
     # Only the name label and any name-keyed paths need rewriting.
     db.execute(
-        "UPDATE apps SET name = ?, repo_path = REPLACE(repo_path, ?, ?) WHERE app_id = ?",
-        (new_name, f"/{old_name}/", f"/{new_name}/", app_id),
+        "UPDATE apps SET name = ?, repo_path = CASE WHEN repo_path = ? THEN ? ELSE repo_path END WHERE app_id = ?",
+        (
+            new_name,
+            app_checkout_dir(config.temporary_data_dir, old_name),
+            app_checkout_dir(config.temporary_data_dir, new_name),
+            app_id,
+        ),
     )
     db.execute(
         "UPDATE app_databases SET db_path = REPLACE(db_path, ?, ?) WHERE app_id = ?",

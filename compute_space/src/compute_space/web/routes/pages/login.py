@@ -1,3 +1,4 @@
+import asyncio
 import sqlite3
 from typing import Any
 from urllib.parse import urlparse
@@ -13,9 +14,8 @@ from litestar.response import Redirect
 from litestar.response import Template
 
 from compute_space.core.auth.auth import SESSION_COOKIE_NAME
-from compute_space.core.auth.auth import create_session
+from compute_space.core.auth.auth import create_password_session
 from compute_space.core.auth.auth import revoke_session
-from compute_space.core.auth.auth import validate_password
 from compute_space.core.domains import Domain
 from compute_space.web.auth.auth import require_owner_auth
 from compute_space.web.auth.auth import verify_owner_auth
@@ -62,11 +62,10 @@ async def login_post(
     form = await request.form()
     password = form.get("password")
     next_url = form.get("next", "")
-    if password is None or not (user_id := validate_password(password, db)):
+    if not isinstance(password, str) or not (
+        session_token := await asyncio.to_thread(create_password_session, password)
+    ):
         return Template(template_name="login.html", context={"error": "Invalid password", "next": next_url})
-
-    session_token = create_session(user_id, db)
-    db.commit()
 
     dest = _validated_next(next_url, db) or "/"
     response = Redirect(path=dest)
