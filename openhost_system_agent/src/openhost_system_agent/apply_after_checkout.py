@@ -32,25 +32,21 @@ a new tag is cut, the contract resets to that tag's update.py.
 from __future__ import annotations
 
 import os
-import re
 import subprocess
 import sys
 from pathlib import Path
 
 from openhost_system_agent.detach import start_openhost
+from openhost_system_agent.git_commands import git_command
 from openhost_system_agent.migrations.runner import apply_system_migrations
 from openhost_system_agent.reclaim import reclaim_host_ownership
+from openhost_system_agent.release_tags import RC_TAG as _RC_TAG
+from openhost_system_agent.release_tags import RELEASE_TAG as _RELEASE_TAG
+from openhost_system_agent.release_tags import is_version_tag as _is_version_tag
+from openhost_system_agent.release_tags import version_key as _version_key
 from openhost_system_agent.updater import progress
 
 PIXI_BIN = "/home/host/.pixi/bin/pixi"
-
-# A release tag is "v" followed by dot-separated integers (v1, v1.2, v1.2.3).
-# A release candidate adds "-rc.N" (v1.2.0-rc.1); it is never a stepping stone,
-# only the optional last hop. Any other v-prefixed tag is ignored so version
-# parsing can't crash on it.
-_RELEASE_TAG = re.compile(r"v\d+(?:\.\d+)*")
-_RC_TAG = re.compile(r"v\d+(?:\.\d+)*-rc\.\d+")
-
 
 # When set, updates end on this ref (a branch tip or commit) instead of the
 # latest tag — kept in sync with update.py's _TARGET_REF_CONFIG.
@@ -63,7 +59,7 @@ _PRERELEASES_CONFIG = "openhost.prereleases"
 
 
 def _git(project: str, *args: str) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(["git", *args], cwd=project, capture_output=True, text=True, timeout=60)
+    return subprocess.run(git_command(*args), cwd=project, capture_output=True, text=True, timeout=60)
 
 
 def _ensure_repo_trusted(project: str) -> None:
@@ -72,16 +68,6 @@ def _ensure_repo_trusted(project: str) -> None:
     existing = _git(project, "config", "--global", "--get-all", "safe.directory").stdout.split("\n")
     if project not in existing:
         _git(project, "config", "--global", "--add", "safe.directory", project)
-
-
-def _version_key(tag_name: str) -> tuple[tuple[int, ...], int, int]:
-    version, _, rc = tag_name.lstrip("v").partition("-rc.")
-    # A release sorts after its own candidates: v1.2.0-rc.1 < v1.2.0-rc.2 < v1.2.0.
-    return tuple(int(x) for x in version.split(".")), 0 if rc else 1, int(rc or 0)
-
-
-def _is_version_tag(name: str) -> bool:
-    return bool(_RELEASE_TAG.fullmatch(name) or _RC_TAG.fullmatch(name))
 
 
 def _tag_list(project: str, *args: str) -> list[str]:
@@ -229,8 +215,10 @@ def _apply(project: str) -> None:
     if nxt:
         # Check out the resolved commit (a branch tip becomes detached HEAD).
         progress.record("checkout", f"Checking out {nxt}\u2026", ref=nxt)
-        subprocess.run(["git", "checkout", _resolve_ref_sha(project, nxt) or nxt], cwd=project, check=True, timeout=60)
-        subprocess.run(["git", "clean", "-fd"], cwd=project, check=True, timeout=60)
+        subprocess.run(
+            git_command("checkout", _resolve_ref_sha(project, nxt) or nxt), cwd=project, check=True, timeout=60
+        )
+        subprocess.run(git_command("clean", "-fd"), cwd=project, check=True, timeout=60)
         # Tail-call into the next ref's code, replacing this process so the
         # walk stays a single process regardless of how many steps we're behind.
         os.execv(sys.executable, [sys.executable, str(Path(__file__).resolve())])

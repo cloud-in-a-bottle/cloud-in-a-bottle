@@ -22,6 +22,7 @@ from openhost_system_agent.migrations.versions.v0013_pixi_run_as_is import Migra
 from openhost_system_agent.migrations.versions.v0014_selective_ownership_repair import (
     Migration0014SelectiveOwnershipRepair,
 )
+from openhost_system_agent.migrations.versions.v0015_host_only_app_checkouts import Migration0015HostOnlyAppCheckouts
 
 # Numbered migrations in apply order. Versions MUST start at 2 and be
 # contiguous. v1 is the baseline produced by ansible setup.yml.
@@ -39,6 +40,7 @@ REGISTRY: list[SystemMigration] = [
     Migration0012UniformCertificatePaths(),
     Migration0013PixiRunAsIs(),
     Migration0014SelectiveOwnershipRepair(),
+    Migration0015HostOnlyAppCheckouts(),
 ]
 
 

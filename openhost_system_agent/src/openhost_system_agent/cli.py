@@ -76,8 +76,8 @@ class UpdateCmd:
         name="migrate", help="Apply pending system migrations for the current checkout (no fetch/checkout/restart)."
     )
     def migrate(self) -> None:
-        # Decoupled from the apply walk so migrations can run at boot (openhost.service ExecStartPre)
-        # or when the code is already at the target (dev branch, dirty tree) — the walk bails first.
+        # Deployments with code already at the target use the same migration runner
+        # as the apply walk. The caller must stop the router before invoking it.
         try:
             print(json.dumps({"ok": True, "applied": apply_system_migrations()}))
         except Exception as e:

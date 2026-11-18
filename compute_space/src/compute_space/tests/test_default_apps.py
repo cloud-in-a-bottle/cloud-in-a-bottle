@@ -249,7 +249,7 @@ def test_remote_url_entry_dispatches_to_clone_path(cfg_with_apps, monkeypatch):
     test hermetic."""
     _patch_insert_and_deploy(monkeypatch)
 
-    # Make a fake "cloned" tree at a fresh tempdir so move_clone_to_app_temp_dir
+    # Make a fake "cloned" tree at a fresh tempdir so move_clone_to_app_checkout_dir
     # has something to operate on.
     src_app_dir = Path(cfg_with_apps.apps_dir) / "secrets_v2"
     fake_clone_parent = tempfile.mkdtemp(prefix="openhost-clone-")

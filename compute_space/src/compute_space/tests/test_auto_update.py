@@ -147,7 +147,7 @@ def test_existing_instance_migrated_to_v16_stays_disabled(tmp_path: Path) -> Non
         assert read_auto_update_config(db).enabled is False
 
 
-def test_utc_time_from_before_v17_keeps_its_schedule(tmp_path: Path) -> None:
+def test_utc_time_from_before_v19_keeps_its_schedule(tmp_path: Path) -> None:
     db_path = str(tmp_path / "router.db")
     with closing(sqlite3.connect(db_path)) as db:
         db.executescript((Path(__file__).parent / "snapshots" / "auto_update_time_utc" / "v0016.sql").read_text())
@@ -406,6 +406,7 @@ def update_due(monkeypatch: pytest.MonkeyPatch) -> Callable[[datetime | None], N
         monkeypatch.setattr(runner_mod, "_update_due", at)
 
     set_update_due(None)
+    monkeypatch.setattr(runner_mod, "_app_update_due", None)
     return set_update_due
 
 

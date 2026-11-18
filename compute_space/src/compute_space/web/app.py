@@ -156,7 +156,7 @@ def _full_app_bootstrap(config: Config) -> None:
 
 @get("/setup", sync_to_thread=False)
 def setup_already_done_get() -> Response[None]:
-    """The claim link (``/setup?claim=...``) printed by ``openhost up`` should keep working after setup,
+    """The provisioning claim link (``/setup?claim=...``) should keep working after setup,
     so redirect instead of 403 — the dashboard guard bounces to /login unless the owner is signed in."""
     return Redirect(path="/")
 

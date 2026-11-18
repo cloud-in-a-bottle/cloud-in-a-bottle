@@ -50,7 +50,7 @@ CREATE TABLE "apps" (
                 manifest_raw TEXT,
                 created_at TEXT NOT NULL DEFAULT (datetime('now')),
                 updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-            , links TEXT NOT NULL DEFAULT '[]', cpu_cores REAL NOT NULL DEFAULT 0.1);
+            , links TEXT NOT NULL DEFAULT '[]', cpu_cores REAL NOT NULL DEFAULT 0.1, prebuilt_image_verified INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE "archive_backend" (
     id INTEGER PRIMARY KEY CHECK (id = 1),
     backend TEXT NOT NULL DEFAULT 'local' CHECK(backend IN ('disabled', 'local', 's3')),
@@ -86,7 +86,7 @@ CREATE TABLE schema_version (
     id INTEGER PRIMARY KEY CHECK (id = 1),
     version INTEGER NOT NULL
 );
-INSERT INTO "schema_version" VALUES(1,17);
+INSERT INTO "schema_version" VALUES(1,19);
 CREATE TABLE "service_defaults" (
                 service_url TEXT PRIMARY KEY,
                 app_id TEXT NOT NULL,
@@ -110,6 +110,8 @@ CREATE TABLE settings (
     value TEXT
 );
 INSERT INTO "settings" VALUES('auto_update_enabled','0');
+INSERT INTO "settings" VALUES('auto_update_time','14:30');
+INSERT INTO "settings" VALUES('auto_update_timezone','UTC');
 CREATE TABLE users (
     user_id INTEGER PRIMARY KEY AUTOINCREMENT,
     username TEXT NOT NULL UNIQUE,

@@ -49,7 +49,8 @@ from compute_space.core.git_ops import get_remote_url
 from compute_space.core.git_ops import is_dirty
 from compute_space.core.logging import logger
 from compute_space.core.manifest import parse_manifest_from_string
-from compute_space.core.storage import storage_status
+from compute_space.core.storage import UsageSnapshot
+from compute_space.core.storage import get_usage_snapshot
 
 # The schema version of the diagnostics payload.  Bump when the shape changes
 # so consumers (support tooling, the CLI, the dashboard) can detect an
@@ -240,7 +241,7 @@ class PlatformDiagnostics:
     system: SystemInfo
     container_runtime: ContainerRuntimeInfo
     dependencies: dict[str, str]
-    storage: dict[str, object]
+    storage: UsageSnapshot | None
     resource_pressure: HostResourcePressure
     reachability: list[ReachabilityResult]
     apps: list[AppDiagnosticsSummary]
@@ -359,11 +360,7 @@ def _collect_dependencies() -> dict[str, str]:
 
 
 def _collect_container_runtime() -> ContainerRuntimeInfo:
-    """Probe podman for version + rootless status.
-
-    Mirrors the ``openhost doctor`` probe (parse ``podman info --format json``,
-    assert the rootless flag) so the two agree on what "healthy" looks like.
-    """
+    """Probe podman for version and rootless status."""
     if shutil.which("podman") is None:
         return ContainerRuntimeInfo(available=False, version=None, rootless=None, error="podman not found on PATH")
     try:
@@ -929,14 +926,14 @@ def _collect_host_facts() -> tuple[SystemInfo, ContainerRuntimeInfo, dict[str, s
     )
 
 
-async def _collect_storage(config: Config) -> dict[str, object]:
-    """Disk/storage slice. Runs off the event loop; degrades to ``{}`` on error
+async def _collect_storage(config: Config) -> UsageSnapshot | None:
+    """Disk/storage slice. Runs off the event loop; degrades to ``None`` on error
     rather than sinking the whole bundle."""
     try:
-        return await asyncio.to_thread(storage_status, config)
+        return await asyncio.to_thread(get_usage_snapshot, config)
     except Exception:
         logger.opt(exception=True).warning("Failed to collect storage status for diagnostics")
-        return {}
+        return None
 
 
 async def _collect_apps(db: sqlite3.Connection) -> list[AppDiagnosticsSummary]:

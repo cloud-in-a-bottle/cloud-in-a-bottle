@@ -104,7 +104,7 @@ For local development without DNS or TLS:
 
 ```bash
 cd openhost
-openhost up --dev
+pixi run -e dev just local-stack --port 8080
 ```
 
 Serves HTTP on `:8080`. No CoreDNS or Caddy.
