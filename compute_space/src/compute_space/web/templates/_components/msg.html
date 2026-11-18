@@ -1,14 +1,19 @@
-{#- One line of feedback beside a control, such as "Saved". ``tone`` is ok,
-    warn or error, or none for plain secondary text. Most are empty and
-    hidden until a script fills them, so give those an ``id``. Use
-    tag="span" when it sits inline in a row of controls.
+{#- Coloured text in a tone: ok, warn or error. Feedback beside a control after
+    an action ("Saved."), or a state label in a table ("Expired"). It wraps
+    when it runs long. There is no neutral tone: text with no tone ("Saving…",
+    "Never") is grey .muted text, set with dom.setMuted(). Use tag="span" to
+    sit it inline in a row of controls.
+
+    When a page script fills it in, render it empty and hidden with no tone
+    and call dom.setMessage(); scripts build new ones with dom.message(). Both
+    live in static/js/dom.js: change them together with this.
 
     It is a polite live region (role="status"), so screen readers read out
     whatever a script puts in it. Pass live=false when a parent is already
     a live region, so it isn't read twice.
 
     {{ msg(id="pw-msg", hidden=true, tag="span") }}
-    {{ msg("Saved", tone="ok") }} -#}
+    {{ msg("Saved.", tone="ok") }} -#}
 {% macro msg(text=none, tone=none, id=none, hidden=false, tag="p", live=true) -%}
 <{{ tag }}{% if id %} id="{{ id }}"{% endif %} class="msg{% if tone %} msg--{{ tone }}{% endif %}"
   {%- if live %} role="status"{% endif %}

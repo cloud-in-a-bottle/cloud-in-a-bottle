@@ -22,9 +22,9 @@ function loadTokens() {
           dom.el('td', {text: t.created_at}),
           dom.el('td', null, t.expires_at
             ? (t.expired
-                ? dom.el('span', {class: 'status-text status-text--error', text: 'Expired', title: t.expires_at})
+                ? dom.el('span', {class: 'msg msg--error', text: 'Expired', title: t.expires_at})
                 : t.expires_at)
-            : dom.el('span', {class: 'status-text status-text--muted', text: 'Never'})),
+            : dom.el('span', {class: 'muted', text: 'Never'})),
           dom.el('td', {class: 'col-actions'}, deleteTokenButton(t)),
         ]);
       }));

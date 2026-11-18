@@ -290,25 +290,9 @@ label {
   line-height: var(--leading-body-md);
 }
 
-.error {
-  color: var(--fg-status-negative);
-}
-
 .field-error {
   color: var(--fg-status-negative);
   font-size: var(--text-body-md);
-}
-
-.error-inline {
-  background: var(--bg-status-negative);
-  border: var(--border-w) solid var(--fg-border);
-  padding: var(--space-2);
-  margin-top: var(--space-1);
-  font-size: var(--text-body-md);
-  white-space: pre-wrap;
-  word-break: break-word;
-  max-height: 12em;
-  overflow-y: auto;
 }
 
 .log-output {

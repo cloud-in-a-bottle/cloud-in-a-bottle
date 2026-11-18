@@ -2,12 +2,13 @@
 {% from "_components/info_tip.html" import info_tip %}
 {% from "_components/button.html" import button %}
 {% from "_components/field.html" import field %}
+{% from "_components/msg.html" import msg %}
 {% block title_suffix %} - Setup{% endblock %}
 
 {% block content %}
 <h2>Set up this compute space</h2>
 <p class="desc">Choose a password for this Cloud in a Bottle instance.</p>
-{% if error %}<p class="error">{{ error }}</p>{% endif %}
+{% if error %}{{ msg(error, tone="error") }}{% endif %}
 
 <form method="post" id="setup-form">
   {% if claim %}<input type="hidden" name="claim" value="{{ claim }}">{% endif %}

@@ -7,6 +7,9 @@
     or changes it: an error interrupts (role="alert"), other tones wait their
     turn (role="status"). Pass live=false when a parent is already one.
 
+    Page scripts fill one in with dom.setMessage() and build new ones with
+    dom.notice(), in static/js/dom.js: change them together with this.
+
     {{ notice("Backups run every night at 03:00.") }}
 
     {% call notice(tone="ok", id="token-created", hidden=true, tag="div") %}
