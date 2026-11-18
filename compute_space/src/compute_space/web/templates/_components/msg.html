@@ -3,9 +3,14 @@
     hidden until a script fills them, so give those an ``id``. Use
     tag="span" when it sits inline in a row of controls.
 
+    It is a polite live region (role="status"), so screen readers read out
+    whatever a script puts in it. Pass live=false when a parent is already
+    a live region, so it isn't read twice.
+
     {{ msg(id="pw-msg", hidden=true, tag="span") }}
     {{ msg("Saved", tone="ok") }} -#}
-{% macro msg(text=none, tone=none, id=none, hidden=false, tag="p") -%}
+{% macro msg(text=none, tone=none, id=none, hidden=false, tag="p", live=true) -%}
 <{{ tag }}{% if id %} id="{{ id }}"{% endif %} class="msg{% if tone %} msg--{{ tone }}{% endif %}"
+  {%- if live %} role="status"{% endif %}
   {%- if hidden %} hidden{% endif %}>{% if caller is defined %}{{ caller() }}{% else %}{{ text or "" }}{% endif %}</{{ tag }}>
 {%- endmacro %}

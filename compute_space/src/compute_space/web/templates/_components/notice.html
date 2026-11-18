@@ -3,12 +3,17 @@
     call block for richer content. Give it an ``id`` and ``hidden`` when a
     script fills it in or shows it later.
 
+    It is a live region, so screen readers read it out when a script shows
+    or changes it: an error interrupts (role="alert"), other tones wait their
+    turn (role="status"). Pass live=false when a parent is already one.
+
     {{ notice("Backups run every night at 03:00.") }}
 
     {% call notice(tone="ok", id="token-created", hidden=true, tag="div") %}
       <strong>Token created.</strong> ...
     {% endcall %} -#}
-{% macro notice(text=none, tone="info", id=none, hidden=false, tag="p") -%}
+{% macro notice(text=none, tone="info", id=none, hidden=false, tag="p", live=true) -%}
 <{{ tag }}{% if id %} id="{{ id }}"{% endif %} class="notice{% if tone != "info" %} notice--{{ tone }}{% endif %}"
+  {%- if live %} role="{{ "alert" if tone == "error" else "status" }}"{% endif %}
   {%- if hidden %} hidden{% endif %}>{% if caller is defined %}{{ caller() }}{% else %}{{ text or "" }}{% endif %}</{{ tag }}>
 {%- endmacro %}
