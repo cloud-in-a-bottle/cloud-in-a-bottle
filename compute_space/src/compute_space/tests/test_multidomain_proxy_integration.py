@@ -95,7 +95,9 @@ class _RecordingBackend(ThreadingHTTPServer):
 @pytest.fixture
 def backend() -> Iterator[_RecordingBackend]:
     srv = _RecordingBackend()
-    thread = threading.Thread(target=srv.serve_forever, daemon=True)
+    # serve_forever's default 0.5s poll makes every shutdown() in teardown wait up to
+    # half a second; poll fast so the 250+ tests here don't each pay that.
+    thread = threading.Thread(target=srv.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
     thread.start()
     try:
         yield srv
