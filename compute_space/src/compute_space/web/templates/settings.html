@@ -103,17 +103,18 @@
 
     <div class="field">
       <span>Automatic updates</span>
-      <div class="field-row" id="auto-update-row">
+      <div class="field-row field-row--schedule" id="auto-update-row">
         <label class="field field--check">
           <input type="checkbox" id="auto-update-enabled" onchange="saveAutoUpdate()" disabled>
-          <span>Update automatically every day at</span>
+          <span>Update every day at</span>
         </label>
         <input type="time" id="auto-update-time" aria-label="Update time" onchange="saveAutoUpdate()" disabled>
+        <select id="auto-update-zone" aria-label="Timezone" onchange="saveAutoUpdate()" disabled></select>
       </div>
       <p class="notice notice--warn" id="auto-update-paused" hidden>Paused: automatic updates only run when the
         remote follows tagged releases (a URL with no <code>#branch</code> or <code>@ref</code>).</p>
-      <p class="hint">Installs the latest tagged release at the chosen time (in your
-        browser's timezone). Updating briefly makes the dashboard and apps unavailable.</p>
+      <p class="hint">Installs the latest tagged release at the chosen time. Updating briefly makes the dashboard
+        and apps unavailable.</p>
       <p class="notice" id="auto-update-last" hidden></p>
       <p id="auto-update-msg" class="msg" hidden></p>
     </div>

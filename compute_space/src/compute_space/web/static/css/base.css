@@ -238,6 +238,7 @@ input[type="number"],
 input[type="search"],
 input[type="url"],
 input[type="email"],
+input[type="time"],
 select,
 textarea {
   width: 100%;

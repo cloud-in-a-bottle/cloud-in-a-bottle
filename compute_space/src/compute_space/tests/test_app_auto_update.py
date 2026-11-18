@@ -495,7 +495,7 @@ async def test_window_runs_apps_before_the_instance(
     window: list[str], instance_on: bool, apps_on: bool, expected: list[str]
 ) -> None:
     with closing(get_db()) as db:
-        write_auto_update_config(db, AutoUpdateConfig(enabled=instance_on, time_utc=time(4, 0)))
+        write_auto_update_config(db, AutoUpdateConfig(enabled=instance_on, time=time(4, 0), timezone="UTC"))
         write_app_auto_update_enabled(db, apps_on)
     await runner_mod._run_if_due()
     assert window == expected
@@ -508,7 +508,7 @@ async def test_failed_app_run_still_updates_the_instance(window: list[str], monk
 
     monkeypatch.setattr(runner_mod, "run_app_auto_updates", failing_apps)
     with closing(get_db()) as db:
-        write_auto_update_config(db, AutoUpdateConfig(enabled=True, time_utc=time(4, 0)))
+        write_auto_update_config(db, AutoUpdateConfig(enabled=True, time=time(4, 0), timezone="UTC"))
         write_app_auto_update_enabled(db, True)
     await runner_mod._run_if_due()
     assert window == ["instance"]
@@ -527,7 +527,7 @@ async def test_restart_catches_up_only_what_missed_the_window(
     monkeypatch.setattr(runner_mod, "_app_update_due", None)
     now = datetime.now(UTC)
     with closing(get_db()) as db:
-        write_auto_update_config(db, AutoUpdateConfig(enabled=True, time_utc=time(4, 0)))
+        write_auto_update_config(db, AutoUpdateConfig(enabled=True, time=time(4, 0), timezone="UTC"))
         write_app_auto_update_enabled(db, True)
         record_last_run(
             db,
@@ -551,7 +551,7 @@ async def test_disabled_updater_does_not_hold_back_the_other(
     monkeypatch.setattr(runner_mod, "_update_due", None)
     monkeypatch.setattr(runner_mod, "_app_update_due", None)
     with closing(get_db()) as db:
-        write_auto_update_config(db, AutoUpdateConfig(enabled=True, time_utc=time(4, 0)))
+        write_auto_update_config(db, AutoUpdateConfig(enabled=True, time=time(4, 0), timezone="UTC"))
         record_last_run(
             db, AutoUpdateLastRun(at=datetime.now(UTC) - timedelta(days=2), outcome=AutoUpdateOutcome.UP_TO_DATE)
         )
@@ -607,20 +607,23 @@ def test_only_turning_app_updates_on_reschedules(
         assert runner_mod._app_update_due == missed
 
 
-@pytest.mark.parametrize(("new_time", "reschedules"), [("04:00", False), ("05:30", True)])
-def test_only_a_new_time_reschedules_app_updates(
-    cfg: Config, monkeypatch: pytest.MonkeyPatch, new_time: str, reschedules: bool
+@pytest.mark.parametrize(
+    ("new_time", "timezone", "reschedules"),
+    [("04:00", "UTC", False), ("05:30", "UTC", True), ("04:00", "America/Chicago", True)],
+)
+def test_only_a_new_schedule_reschedules_app_updates(
+    cfg: Config, monkeypatch: pytest.MonkeyPatch, new_time: str, timezone: str, reschedules: bool
 ) -> None:
     # App updates missed a window; saving the instance setting without changing the time shouldn't postpone them.
     missed = datetime.now(UTC) - timedelta(hours=1)
     monkeypatch.setattr(runner_mod, "_update_due", missed)
     monkeypatch.setattr(runner_mod, "_app_update_due", missed)
     with closing(get_db()) as db:
-        write_auto_update_config(db, AutoUpdateConfig(enabled=False, time_utc=time(4, 0)))
+        write_auto_update_config(db, AutoUpdateConfig(enabled=False, time=time(4, 0), timezone="UTC"))
         write_app_auto_update_enabled(db, True)
     with TestClient(app=make_test_app(api_settings_routes)) as client:
         client.cookies.update(auth_cookie(cfg))
-        body = {"enabled": True, "time_utc": new_time}
+        body = {"enabled": True, "time": new_time, "timezone": timezone}
         assert client.post("/api/settings/auto-update", json=body).status_code == 200
     assert runner_mod._update_due is not None and runner_mod._update_due > datetime.now(UTC)
     assert runner_mod._app_update_due is not None
