@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import subprocess
 
+from compute_space.core.containers import app_image_tag
+
 
 def container_cleanup(container_name: str, app_name: str) -> None:
     """Force-remove a test container and the image built for ``app_name``.
@@ -25,7 +27,7 @@ def container_cleanup(container_name: str, app_name: str) -> None:
     # graceful shutdown.
     for cmd in (
         ["podman", "rm", "-f", "-t", "0", container_name],
-        ["podman", "rmi", "-f", f"openhost-{app_name}:latest"],
+        ["podman", "rmi", "-f", app_image_tag(app_name)],
     ):
         try:
             subprocess.run(cmd, capture_output=True, timeout=30)

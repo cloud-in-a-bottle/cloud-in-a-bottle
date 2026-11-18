@@ -215,7 +215,7 @@ def build_image(
     ``memory_mb`` caps the memory available to the build via podman's
     ``--memory`` flag; None leaves the build unconstrained.
     """
-    image_tag = f"openhost-{app_name}:latest"
+    image_tag = app_image_tag(app_name)
     dockerfile_path = os.path.join(repo_path, dockerfile_rel_path)
     cmd = [
         "podman",
@@ -286,9 +286,25 @@ def app_temp_data_dir(temp_data_dir: str, app_name: str) -> str:
     return os.path.join(temp_data_dir, "app_temp_data", app_name)
 
 
+def container_name_prefix() -> str:
+    """Prefix of every app container and image name.
+
+    Production always uses the default.  Tests that run several routers on one host
+    at once (pytest-xdist) set ``OPENHOST_CONTAINER_PREFIX`` per worker, since
+    podman names are host-global and each router would otherwise replace or delete
+    another's same-named app (e.g. two routers both deploying default ``secrets``).
+    """
+    return os.environ.get("OPENHOST_CONTAINER_PREFIX", "openhost-")
+
+
 def app_container_name(app_name: str) -> str:
     """Name of the podman container an app runs in."""
-    return f"openhost-{app_name}"
+    return f"{container_name_prefix()}{app_name}"
+
+
+def app_image_tag(app_name: str) -> str:
+    """Tag of the image built for an app."""
+    return f"{container_name_prefix()}{app_name}:latest"
 
 
 def run_container(
@@ -527,7 +543,7 @@ def stop_app_process(app_row: sqlite3.Row) -> None:
 
 def remove_image(app_name: str) -> None:
     """Remove the image built for an app.  Idempotent."""
-    image_tag = f"openhost-{app_name}:latest"
+    image_tag = app_image_tag(app_name)
     subprocess.run(["podman", "rmi", image_tag], capture_output=True, timeout=30)
 
 
@@ -675,7 +691,8 @@ def prune_dangling_images() -> str:
 # out the app name.  App names are DNS-label-like (see core.app_id), so the
 # capture group is deliberately permissive and validated by the caller against
 # the apps DB rather than by a strict name regex here.
-_OPENHOST_IMAGE_TAG_RE = re.compile(r"^(?:localhost/)?openhost-(?P<app_name>.+):latest$")
+def _image_tag_re() -> re.Pattern[str]:
+    return re.compile(rf"^(?:localhost/)?{re.escape(container_name_prefix())}(?P<app_name>.+):latest$")
 
 
 def parse_openhost_image_app_name(tag: str) -> str | None:
@@ -684,7 +701,7 @@ def parse_openhost_image_app_name(tag: str) -> str | None:
     Only Cloud in a Bottle app images are matched; any other repo tag (base images an
     app FROMs, unrelated tags) returns None so it is never a prune candidate.
     """
-    match = _OPENHOST_IMAGE_TAG_RE.match(tag)
+    match = _image_tag_re().match(tag)
     return match.group("app_name") if match else None
 
 

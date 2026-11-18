@@ -7,6 +7,7 @@ from collections.abc import Sequence
 
 import attr
 
+from compute_space.core.containers import app_image_tag
 from compute_space.core.git_ops import parse_repo_url
 from compute_space.core.logging import logger
 
@@ -275,7 +276,7 @@ def _pull_once(
     if result.returncode != 0:
         raise _pull_failure(to_pull.ref, result.stderr.strip())
 
-    image_tag = f"openhost-{app_name}:latest"
+    image_tag = app_image_tag(app_name)
     result = _run(["podman", "tag", to_pull.ref, image_tag], log, timeout=60)
     if result.returncode != 0:
         raise PrebuiltImageError(f"Tagging {to_pull.ref} as {image_tag} failed: {result.stderr.strip()}")

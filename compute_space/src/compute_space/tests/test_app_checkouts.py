@@ -10,6 +10,7 @@ import pytest
 from compute_space.config import DefaultConfig
 from compute_space.core.app_checkouts import app_checkout_dir
 from compute_space.core.apps import move_clone_to_app_checkout_dir
+from compute_space.core.containers import app_container_name
 from compute_space.core.containers import build_image
 from compute_space.core.containers import run_container
 from compute_space.core.containers import stop_container
@@ -94,7 +95,7 @@ def test_running_app_loses_checkout_access_after_migration(
     for parent in (Path(config.persistent_data_dir) / "app_data", Path(config.app_archive_dir)):
         (parent / name).mkdir(parents=True, exist_ok=True)
     image = build_image(name, str(source), "Dockerfile")
-    container_name = f"openhost-{name}"
+    container_name = app_container_name(name)
 
     def start() -> str:
         return run_container(
