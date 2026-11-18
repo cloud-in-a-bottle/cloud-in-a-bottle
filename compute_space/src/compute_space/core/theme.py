@@ -22,33 +22,14 @@ class Style(StrEnum):
 class AppListLayout(StrEnum):
     LIST = "list"
     GRID = "grid"
-    COMPACT = "compact"
-    TABLE = "table"
-    CHIPS = "chips"
-
-
-class AppColumns(StrEnum):
-    """How many apps sit side by side in the layouts that put them in columns (grid, compact)."""
-
-    AUTO = "auto"
-    TWO = "2"
-    THREE = "3"
-    FOUR = "4"
-    FIVE = "5"
-    SIX = "6"
 
 
 @attr.s(auto_attribs=True, frozen=True)
 class Theme:
-    """The dashboard's look: one named choice per option, each independent of the others.
-
-    Each field is rendered as a ``data-*`` attribute on ``<html>`` by layout.html, and themes.css keys off those.
-    Adding an option means a field here, its attribute in layout.html, a select in settings.html and CSS for its
-    non-default values. The defaults are the original look."""
+    """Appearance choices rendered as ``data-*`` attributes on ``<html>``. Defaults preserve the original look."""
 
     style: Style = Style.CLOUDY
     app_list: AppListLayout = AppListLayout.LIST
-    app_columns: AppColumns = AppColumns.AUTO
 
 
 def read_theme(db: sqlite3.Connection) -> Theme:
@@ -61,7 +42,6 @@ def read_theme(db: sqlite3.Connection) -> Theme:
     return Theme(
         style=Style(stored.get("style", default.style)),
         app_list=AppListLayout(stored.get("app_list", default.app_list)),
-        app_columns=AppColumns(stored.get("app_columns", default.app_columns)),
     )
 
 

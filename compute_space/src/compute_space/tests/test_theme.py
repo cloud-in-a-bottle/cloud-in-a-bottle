@@ -18,7 +18,6 @@ from compute_space.config import provide_config
 from compute_space.config import set_active_config
 from compute_space.core.settings_store import set_setting
 from compute_space.core.theme import THEME_KEY
-from compute_space.core.theme import AppColumns
 from compute_space.core.theme import AppListLayout
 from compute_space.core.theme import Style
 from compute_space.core.theme import Theme
@@ -70,7 +69,7 @@ def _html_theme(page: str) -> dict[str, str]:
 
 
 def _expected(theme: Theme) -> dict[str, str]:
-    return {"style": theme.style, "app-list": theme.app_list, "app-columns": theme.app_columns}
+    return {"style": theme.style, "app-list": theme.app_list}
 
 
 def _get(cfg: Config, cookie: dict[str, str], path: str) -> str:
@@ -83,13 +82,13 @@ def _get(cfg: Config, cookie: dict[str, str], path: str) -> str:
 
 def test_default_theme_is_the_original_look(cfg: Config) -> None:
     with closing(get_db()) as db:
-        assert read_theme(db) == Theme(style=Style.CLOUDY, app_list=AppListLayout.LIST, app_columns=AppColumns.AUTO)
+        assert read_theme(db) == Theme(style=Style.CLOUDY, app_list=AppListLayout.LIST)
 
 
 def test_theme_roundtrip(cfg: Config) -> None:
     with closing(get_db()) as db:
-        write_theme(db, Theme(style=Style.DARK, app_list=AppListLayout.GRID, app_columns=AppColumns.THREE))
-        assert read_theme(db) == Theme(style=Style.DARK, app_list=AppListLayout.GRID, app_columns=AppColumns.THREE)
+        write_theme(db, Theme(style=Style.DARK, app_list=AppListLayout.GRID))
+        assert read_theme(db) == Theme(style=Style.DARK, app_list=AppListLayout.GRID)
 
 
 def test_option_missing_from_stored_theme_keeps_its_default(cfg: Config) -> None:
@@ -106,7 +105,7 @@ def test_unknown_stored_value_fails_loudly(cfg: Config) -> None:
 
 
 def test_pages_render_the_theme_on_html(cfg: Config) -> None:
-    chosen = Theme(style=Style.DARK, app_list=AppListLayout.COMPACT, app_columns=AppColumns.FOUR)
+    chosen = Theme(style=Style.DARK, app_list=AppListLayout.GRID)
     with TestClient(app=_pages_app(cfg)) as client:
         client.cookies.update(auth_cookie(cfg))
         assert _html_theme(client.get("/dashboard").text) == _expected(Theme())
@@ -117,8 +116,7 @@ def test_pages_render_the_theme_on_html(cfg: Config) -> None:
     assert _html_theme(settings_html) == _expected(chosen)
     assert '<option value="dark" selected>Dark</option>' in settings_html
     assert '<option value="simple-dark">Simple dark</option>' in settings_html
-    assert '<option value="compact" selected>Compact</option>' in settings_html
-    assert '<option value="4" selected>4</option>' in settings_html
+    assert '<option value="grid" selected>Grid</option>' in settings_html
 
 
 def test_bad_stored_theme_still_renders_pages_with_the_default(cfg: Config) -> None:
@@ -133,19 +131,18 @@ def test_bad_stored_theme_still_renders_pages_with_the_default(cfg: Config) -> N
 def test_api_saves_theme(cfg: Config) -> None:
     with TestClient(app=make_test_app(api_theme_routes)) as client:
         client.cookies.update(auth_cookie(cfg))
-        resp = client.post("/api/settings/theme", json={"style": "dark", "app_list": "grid", "app_columns": "3"})
+        resp = client.post("/api/settings/theme", json={"style": "dark", "app_list": "grid"})
     assert resp.status_code == 200
-    assert resp.json() == {"style": "dark", "app_list": "grid", "app_columns": "3"}
+    assert resp.json() == {"style": "dark", "app_list": "grid"}
     with closing(get_db()) as db:
-        assert read_theme(db) == Theme(style=Style.DARK, app_list=AppListLayout.GRID, app_columns=AppColumns.THREE)
+        assert read_theme(db) == Theme(style=Style.DARK, app_list=AppListLayout.GRID)
 
 
 @pytest.mark.parametrize(
     "body",
     [
-        {"style": "neon", "app_list": "list", "app_columns": "auto"},
-        {"style": "dark", "app_list": "carousel", "app_columns": "auto"},
-        {"style": "dark", "app_list": "grid", "app_columns": "7"},
+        {"style": "neon", "app_list": "list"},
+        {"style": "dark", "app_list": "carousel"},
     ],
 )
 def test_api_rejects_unknown_values(cfg: Config, body: dict[str, Any]) -> None:

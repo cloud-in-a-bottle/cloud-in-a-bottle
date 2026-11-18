@@ -10,7 +10,6 @@ async function saveTheme() {
       body: JSON.stringify({
         style: document.getElementById('theme-style').value,
         app_list: document.getElementById('theme-app-list').value,
-        app_columns: document.getElementById('theme-app-columns').value,
       }),
     });
     var result = await readJsonResponse(resp);
@@ -18,7 +17,6 @@ async function saveTheme() {
     // The same attributes layout.html renders, so the page restyles without a reload.
     document.documentElement.dataset.style = result.data.style;
     document.documentElement.dataset.appList = result.data.app_list;
-    document.documentElement.dataset.appColumns = result.data.app_columns;
     msg.textContent = 'Saved.';
     msg.className = 'msg msg--ok';
   } catch (e) {

@@ -67,13 +67,6 @@
         {%- endfor %}
       </select>
     {% endcall %}
-    {% call field("Columns", "theme-app-columns", hint="For the grid and compact app lists. Phones show at most 2.") %}
-      <select id="theme-app-columns" aria-describedby="theme-app-columns-hint" onchange="saveTheme()">
-        {%- for value in app_columns %}
-        <option value="{{ value }}"{% if page_theme.app_columns == value %} selected{% endif %}>{{ value | capitalize }}</option>
-        {%- endfor %}
-      </select>
-    {% endcall %}
     <p class="msg" id="theme-msg" role="status" hidden></p>
   </div>
 </section>

@@ -10,8 +10,7 @@
 {#- Child templates can use page_theme too: settings.html preselects the current choices from it. -#}
 {%- set page_theme = theme() %}
 <!DOCTYPE html>
-<html lang="en" data-style="{{ page_theme.style }}" data-app-list="{{ page_theme.app_list }}"
-      data-app-columns="{{ page_theme.app_columns }}">
+<html lang="en" data-style="{{ page_theme.style }}" data-app-list="{{ page_theme.app_list }}">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">

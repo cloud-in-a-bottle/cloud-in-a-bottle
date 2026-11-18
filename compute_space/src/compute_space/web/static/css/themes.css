@@ -1,11 +1,7 @@
-/* Theme variants, keyed off the data-* attributes layout.html puts on <html>
-   (one per option in core/theme.py). The defaults (data-style="cloudy",
-   data-app-list="list") have no rules here: they are the look tokens.css,
-   base.css and components.css already describe. */
+/* Variants keyed off <html> data attributes. Cloudy + list uses the base styles. */
 
 /* ── Style: simple ──────────────────────────────────────────────────── */
 
-/* The same palette on a flat page, without the sky, clouds or grass. */
 [data-style="simple"] body {
   background: var(--bg-secondary);
 }
@@ -19,10 +15,6 @@
 
 /* ── Style: dark ────────────────────────────────────────────────────── */
 
-/* The cloudy scene at night: a deep blue sky over a dark meadow rather than a
-   neutral black, with the sky blue and meadow green kept as the interactive
-   colours. Text, borders and overlays are a pale sky tint at an opacity, the
-   inverse of the light palette. */
 [data-style="dark"],
 [data-style="simple-dark"] {
   color-scheme: dark;
@@ -80,31 +72,14 @@
 
 /* ── Style: simple dark ─────────────────────────────────────────────── */
 
-/* The dark palette on a flat page, like simple is to cloudy. The page takes the
-   darkest tone so cards still sit lighter than it, as they do in the light
-   styles. Decorations are hidden with simple's, above. */
 [data-style="simple-dark"] body {
   background: var(--bg-sky);
 }
 
-/* ── App list: column count ─────────────────────────────────────────── */
+/* ── App list: grid ─────────────────────────────────────────────────── */
 
-/* Used by the layouts that put apps side by side (grid, compact). Auto fits as
-   many as the width allows; a fixed count shares the width evenly. Phones only
-   honour 2, since 3 or more would leave each name a few letters wide. */
-[data-app-columns="2"] .app-list { --app-columns: 2; --app-column-min: 0px; }
-
-@media (min-width: 641px) {
-  [data-app-columns="3"] .app-list { --app-columns: 3; --app-column-min: 0px; }
-  [data-app-columns="4"] .app-list { --app-columns: 4; --app-column-min: 0px; }
-  [data-app-columns="5"] .app-list { --app-columns: 5; --app-column-min: 0px; }
-  [data-app-columns="6"] .app-list { --app-columns: 6; --app-column-min: 0px; }
-}
-
-/* Status as words (the row's visually hidden status, which dashboard.js keeps
-   current), for the layouts with room to say it. */
-[data-app-list="grid"] .app-row__status,
-[data-app-list="table"] .app-row__status {
+/* Reveal the visually hidden status that dashboard.js keeps current. */
+[data-app-list="grid"] .app-row__status {
   position: static;
   width: auto;
   height: auto;
@@ -115,14 +90,10 @@
   font-size: var(--text-body-sm);
 }
 
-/* ── App list: grid ─────────────────────────────────────────────────── */
-
-/* Apps as tiles, sized like the dashboard cards above them: the name on top,
-   its status underneath, and Details at the foot. */
 [data-app-list="grid"] .app-list {
   display: grid;
   gap: var(--space-3);
-  grid-template-columns: repeat(var(--app-columns, auto-fill), minmax(var(--app-column-min, 170px), 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
   box-shadow: none;
 }
 
@@ -149,85 +120,4 @@
 [data-app-list="grid"] .app-row__details {
   margin: auto 0 0;
   padding-left: 0;
-}
-
-/* ── App list: compact ──────────────────────────────────────────────── */
-
-/* A dense directory listing: short rows in columns, for spaces with many
-   apps. Rows draw only their right and bottom borders and the list the top and
-   left, so neighbours share a single line. */
-[data-app-list="compact"] .app-list {
-  display: grid;
-  grid-template-columns: repeat(var(--app-columns, auto-fill), minmax(var(--app-column-min, 220px), 1fr));
-  border-top: var(--border-w) solid var(--fg-border);
-  border-left: var(--border-w) solid var(--fg-border);
-  box-shadow: none;
-}
-
-[data-app-list="compact"] .app-row {
-  min-height: 30px;
-  padding: var(--space-1) var(--space-2);
-  margin: 0;
-  border-width: 0 var(--border-w) var(--border-w) 0;
-}
-
-[data-app-list="compact"] .app-row__name {
-  font-size: var(--text-body-sm);
-}
-
-/* ── App list: table ────────────────────────────────────────────────── */
-
-/* The list with its columns spelled out: status in words, lined up on the
-   right, and Details always shown rather than on hover. */
-[data-app-list="table"] .status-dot {
-  margin-left: auto;
-}
-
-[data-app-list="table"] .app-row__status {
-  width: 64px;
-}
-
-[data-app-list="table"] .app-row__details {
-  opacity: 1;
-  pointer-events: auto;
-}
-
-/* ── App list: chips ────────────────────────────────────────────────── */
-
-/* Each app a tag sized to its name, wrapping like words in a sentence. */
-[data-app-list="chips"] .app-list {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-2);
-  box-shadow: none;
-}
-
-[data-app-list="chips"] .app-row {
-  flex: none;
-  max-width: 100%;
-  min-height: 32px;
-  padding: var(--space-1) var(--space-3);
-  margin-bottom: 0;
-  box-shadow: var(--shadow-card);
-}
-
-/* On a pointer device Details is a hover reveal (components.css); here it
-   opens as a small tab under the chip instead, so a resting chip hugs its name
-   rather than keeping an invisible link's width. Touch keeps it inline. */
-@media (hover: hover) and (pointer: fine) {
-  [data-app-list="chips"] .app-row {
-    position: relative;
-  }
-
-  [data-app-list="chips"] .app-row__details {
-    position: absolute;
-    z-index: 1;
-    top: 100%;
-    left: calc(-1 * var(--border-w));
-    margin: 0;
-    padding: var(--space-1) var(--space-2);
-    background: var(--bg-surface);
-    border: var(--border-w) solid var(--fg-border);
-    box-shadow: var(--shadow-card);
-  }
 }
