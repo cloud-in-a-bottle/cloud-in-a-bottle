@@ -1340,6 +1340,12 @@ select {
   font-size: var(--text-body-md);
 }
 
+/* A checkbox that is the whole field sits directly in a .field, where
+   `.field > label` would make it a block and drop the text below the box. */
+.field > .field--check {
+  display: flex;
+}
+
 .field--check > span {
   margin: 0;
   letter-spacing: normal;
