@@ -530,6 +530,7 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/a6/a5/c0b6468d3824fe3fde30dbb5e1f687b291608f9473681bbf7dabbf5a87d7/text_unidecode-1.3-py2.py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/a9/3c/f3ad17eecc1a57b0ba236dc01f90e783c51f4a2f35f64777cc4f47a184b2/cryptography-49.0.0-cp311-abi3-manylinux_2_34_x86_64.whl
       - pypi: https://files.pythonhosted.org/packages/a9/4e/0463faa15aa5c618691f8c959bb0c40b215f5883175e3daa0f15f3b3e5a9/diskimage_builder-3.42.0-py3-none-any.whl
+      - pypi: https://files.pythonhosted.org/packages/ab/84/02fc1827e8cdded4aa65baef11296a9bbe595c474f0d6d758af082d849fd/execnet-2.1.2-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/ab/a1/7e35f2e16774b88df66427990ff6438e660115e6ebb6fc2374dd4cc87ca3/jsonschema_rs-0.46.5-cp310-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
       - pypi: https://files.pythonhosted.org/packages/b0/24/bbf7175ffc47cb3d3e1eb523ddb23272968359dfcf2e1294707a2bf12fc4/flake8-6.1.0-py2.py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/b0/da/5d1876984b3746c85dbd219dbfcb73c85f54ee263fd32e5b2a632ec14571/librt-0.11.0-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl
@@ -542,6 +543,7 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/c0/db/61efa0d08a99f897ef98256b03e563092d36cc38dc4ebe4a85020fe40b31/pbr-7.0.3-py2.py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/c1/d4/59e74daffcb57a07668852eeeb6035af9f32cbfd7a1d2511f17d2fe6a738/smmap-5.0.3-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/c7/18/c86eb8e0202e32dd3df50d43d7ff9854f8e0603945ff398974c1d91ac1ef/tomli_w-1.2.0-py3-none-any.whl
+      - pypi: https://files.pythonhosted.org/packages/ca/31/d4e37e9e550c2b92a9cbc2e4d0b7420a27224968580b5a447f420847c975/pytest_xdist-3.8.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/cb/b1/3846dd7f199d53cb17f49cba7e651e9ce294d8497c8c150530ed11865bb8/iniconfig-2.3.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/d2/1e/da5fdcb8438008d3c53a0c6de6a40cb10bdb7e02a6e034aef79bc2b66800/botocore-1.43.31-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/d3/01/a10fe54b653061585e655f5286c2662ebddb68831ed3eaebfb0eb08c0a16/ruff-0.15.5-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
@@ -707,6 +709,7 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/a5/69/6da5581c6a7fede7dc261bf4e67d6adca4196f176b43288b55b3db395b6e/mdit_py_plugins-0.6.1-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/a6/a5/c0b6468d3824fe3fde30dbb5e1f687b291608f9473681bbf7dabbf5a87d7/text_unidecode-1.3-py2.py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/a9/4e/0463faa15aa5c618691f8c959bb0c40b215f5883175e3daa0f15f3b3e5a9/diskimage_builder-3.42.0-py3-none-any.whl
+      - pypi: https://files.pythonhosted.org/packages/ab/84/02fc1827e8cdded4aa65baef11296a9bbe595c474f0d6d758af082d849fd/execnet-2.1.2-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/ac/31/79f11865f8078e192847d2cb526e3fa27c200933c982c5b2869720fa5fce/bcrypt-5.0.0-cp39-abi3-manylinux_2_34_aarch64.whl
       - pypi: https://files.pythonhosted.org/packages/b0/24/bbf7175ffc47cb3d3e1eb523ddb23272968359dfcf2e1294707a2bf12fc4/flake8-6.1.0-py2.py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/b1/90/a998c550d0ddd07e38605bb5c455d00fcc177a800ff9cc3dafdcb3dd7b56/pycodestyle-2.11.1-py2.py3-none-any.whl
@@ -720,6 +723,7 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/c1/93/44365f3d75053e53893ec6d733e4a5e3147502663554b4d864587c7828a7/argon2_cffi_bindings-25.1.0-cp39-abi3-manylinux_2_26_aarch64.manylinux_2_28_aarch64.whl
       - pypi: https://files.pythonhosted.org/packages/c1/d4/59e74daffcb57a07668852eeeb6035af9f32cbfd7a1d2511f17d2fe6a738/smmap-5.0.3-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/c7/18/c86eb8e0202e32dd3df50d43d7ff9854f8e0603945ff398974c1d91ac1ef/tomli_w-1.2.0-py3-none-any.whl
+      - pypi: https://files.pythonhosted.org/packages/ca/31/d4e37e9e550c2b92a9cbc2e4d0b7420a27224968580b5a447f420847c975/pytest_xdist-3.8.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/cb/b1/3846dd7f199d53cb17f49cba7e651e9ce294d8497c8c150530ed11865bb8/iniconfig-2.3.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/d5/72/12b5f8d3865bf0f87cf1404d8c374e7487dcf097a1c91c436e72e6badd83/cffi-2.0.0-cp312-cp312-manylinux2014_aarch64.manylinux_2_17_aarch64.whl
       - pypi: https://files.pythonhosted.org/packages/db/3c/33bac158f8ab7f89b2e59426d5fe2e4f63f7ed25df84c036890172b412b5/cfgv-3.5.0-py2.py3-none-any.whl
@@ -854,6 +858,7 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/a5/69/6da5581c6a7fede7dc261bf4e67d6adca4196f176b43288b55b3db395b6e/mdit_py_plugins-0.6.1-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/a6/a5/c0b6468d3824fe3fde30dbb5e1f687b291608f9473681bbf7dabbf5a87d7/text_unidecode-1.3-py2.py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/a9/4e/0463faa15aa5c618691f8c959bb0c40b215f5883175e3daa0f15f3b3e5a9/diskimage_builder-3.42.0-py3-none-any.whl
+      - pypi: https://files.pythonhosted.org/packages/ab/84/02fc1827e8cdded4aa65baef11296a9bbe595c474f0d6d758af082d849fd/execnet-2.1.2-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/b0/24/bbf7175ffc47cb3d3e1eb523ddb23272968359dfcf2e1294707a2bf12fc4/flake8-6.1.0-py2.py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/b1/90/a998c550d0ddd07e38605bb5c455d00fcc177a800ff9cc3dafdcb3dd7b56/pycodestyle-2.11.1-py2.py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/b3/c5/30de077e06f7ffc3fe21d45ce26b8088816227b678a7157f6b9e080ff2db/type_lens-0.2.6-py3-none-any.whl
@@ -866,6 +871,7 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/c4/37/4549f149c9797c21b32c2683c33522af22522099de128b2406672526d005/greenlet-3.5.1-cp312-cp312-macosx_11_0_universal2.whl
       - pypi: https://files.pythonhosted.org/packages/c4/8f/533075f00aaf19b07c5cd6aa6e5d89424b06b3b3f4583bfa9c640a079059/ruff-0.15.5-py3-none-macosx_11_0_arm64.whl
       - pypi: https://files.pythonhosted.org/packages/c7/18/c86eb8e0202e32dd3df50d43d7ff9854f8e0603945ff398974c1d91ac1ef/tomli_w-1.2.0-py3-none-any.whl
+      - pypi: https://files.pythonhosted.org/packages/ca/31/d4e37e9e550c2b92a9cbc2e4d0b7420a27224968580b5a447f420847c975/pytest_xdist-3.8.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/cb/b1/3846dd7f199d53cb17f49cba7e651e9ce294d8497c8c150530ed11865bb8/iniconfig-2.3.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/d2/1e/da5fdcb8438008d3c53a0c6de6a40cb10bdb7e02a6e034aef79bc2b66800/botocore-1.43.31-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/d7/c1/eb8f9debc45d3b7918a32ab756658a0904732f75e555402972246b0b8e71/tenacity-9.1.4-py3-none-any.whl
@@ -4118,6 +4124,16 @@ packages:
   - flake8>=3.6.0,<7.0.0
   - jsonschema>=3.0.2
   requires_python: '>=3.8'
+- pypi: https://files.pythonhosted.org/packages/ab/84/02fc1827e8cdded4aa65baef11296a9bbe595c474f0d6d758af082d849fd/execnet-2.1.2-py3-none-any.whl
+  name: execnet
+  version: 2.1.2
+  sha256: 67fba928dd5a544b783f6056f449e5e3931a5c378b128bc18501f7ea79e296ec
+  requires_dist:
+  - hatch ; extra == 'testing'
+  - pre-commit ; extra == 'testing'
+  - pytest ; extra == 'testing'
+  - tox ; extra == 'testing'
+  requires_python: '>=3.8'
 - pypi: https://files.pythonhosted.org/packages/ab/a1/7e35f2e16774b88df66427990ff6438e660115e6ebb6fc2374dd4cc87ca3/jsonschema_rs-0.46.5-cp310-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
   name: jsonschema-rs
   version: 0.46.5
@@ -4276,6 +4292,17 @@ packages:
   name: tomli-w
   version: 1.2.0
   sha256: 188306098d013b691fcadc011abd66727d3c414c571bb01b1a174ba8c983cf90
+  requires_python: '>=3.9'
+- pypi: https://files.pythonhosted.org/packages/ca/31/d4e37e9e550c2b92a9cbc2e4d0b7420a27224968580b5a447f420847c975/pytest_xdist-3.8.0-py3-none-any.whl
+  name: pytest-xdist
+  version: 3.8.0
+  sha256: 202ca578cfeb7370784a8c33d6d05bc6e13b4f25b5053c30a152269fd10f0b88
+  requires_dist:
+  - execnet>=2.1
+  - pytest>=7.0.0
+  - filelock ; extra == 'testing'
+  - psutil>=3.0 ; extra == 'psutil'
+  - setproctitle ; extra == 'setproctitle'
   requires_python: '>=3.9'
 - pypi: https://files.pythonhosted.org/packages/cb/b1/3846dd7f199d53cb17f49cba7e651e9ce294d8497c8c150530ed11865bb8/iniconfig-2.3.0-py3-none-any.whl
   name: iniconfig

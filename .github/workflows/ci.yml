@@ -38,16 +38,35 @@ jobs:
         if: ${{ !cancelled() && steps.codeql.outcome == 'success' }}
         uses: github/codeql-action/analyze@v4
 
+  # Unit suite plus the Chromium browser/accessibility tests, both spread over the
+  # runner's cores with xdist.  --dist loadfile keeps each file on one worker so
+  # module-scoped fixtures (a local router per browser file) start once.
   test:
     if: github.event_name != 'schedule'
+    # Pinned: Playwright 1.60 can't install browsers on ubuntu-26.04 (now ubuntu-latest).
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/setup-pixi
         with:
           pixi-version: v0.70.2
           environments: dev
-      - run: pixi run -e dev pytest -v
+      - name: Run unit tests
+        run: pixi run -e dev pytest -n auto --dist loadfile
+      # No --with-deps: the runner image already ships every library Chromium
+      # needs, and --with-deps only adds ~32 MB of extra fonts from the runner's
+      # Ubuntu mirror, which regularly stalls at ~60 kB/s for 5 to 9 minutes.
+      - name: Install Chromium
+        run: pixi run -e dev playwright install chromium
+      - name: Run browser and automated WCAG 2.2 AA tests
+        run: >-
+          pixi run -e dev pytest -n auto --dist loadfile
+          tests/test_accessibility.py
+          tests/test_app_definition_export_browser.py
+          tests/test_app_definition_load_browser.py
+          tests/test_setup_readiness.py
+          tests/test_auto_update_schedule_browser.py
 
   # Advisory only: reports when a pin in tests/external_pins.toml has fallen
   # behind what it tracks.  Deliberately does not gate anything: a stale pin is
@@ -76,27 +95,8 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
-  accessibility:
-    if: github.event_name != 'schedule'
-    # Pinned: Playwright 1.60 can't install browsers on ubuntu-26.04 (now ubuntu-latest).
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v7
-      - uses: ./.github/actions/setup-pixi
-        with:
-          pixi-version: v0.70.2
-          environments: dev
-      - name: Install Chromium
-        run: pixi run -e dev playwright install --with-deps chromium
-      - name: Run automated WCAG 2.2 AA checks
-        run: pixi run -e dev pytest tests/test_accessibility.py tests/test_app_definition_export_browser.py tests/test_app_definition_load_browser.py -v
-      - name: Test setup dashboard readiness in Chromium
-        run: pixi run -e dev pytest tests/test_setup_readiness.py -v
-      - name: Test the automatic update schedule in Chromium
-        run: pixi run -e dev pytest tests/test_auto_update_schedule_browser.py -v
-
-  # Runs full unit test suite, including containerized tests.
+  # Runs only the tests that need rootless podman; everything else runs in the
+  # test job above, so repeating it here would just double the wall time.
   test-containers:
     if: github.event_name != 'schedule'
     # Pinned: Playwright 1.60 can't install browsers on ubuntu-26.04 (now ubuntu-latest).
@@ -133,11 +133,12 @@ jobs:
       # The main suite below excludes this file so each test runs once.
       - name: Test app checkout isolation
         run: pixi run -e dev pytest --run-containers -x compute_space/src/compute_space/tests/test_app_checkouts.py
+      # No --with-deps; see the test job.  One harness test drives a browser.
       - name: Install playwright browsers
-        run: pixi run -e dev playwright install --with-deps chromium
-      - name: Run all tests, including containerized tests
+        run: pixi run -e dev playwright install chromium
+      - name: Run containerized tests
         run: |
-          pixi run -e dev pytest --run-containers --ignore=compute_space/src/compute_space/tests/test_app_checkouts.py -v
+          pixi run -e dev pytest --run-containers -m requires_containers --ignore=compute_space/src/compute_space/tests/test_app_checkouts.py -v
       - name: Run local full-stack service e2e tests
         run: |
           pixi run -e dev pytest --run-containers -v tests/test_services_e2e.py

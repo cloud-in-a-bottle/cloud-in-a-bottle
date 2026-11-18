@@ -119,7 +119,8 @@ jobs:
           environments: dev
 
       - name: Install playwright browsers
-        run: pixi run -e dev playwright install --with-deps chromium
+        # No --with-deps; see the test job in ci.yml.
+        run: pixi run -e dev playwright install chromium
 
       - name: Run E2E tests
         run: |
