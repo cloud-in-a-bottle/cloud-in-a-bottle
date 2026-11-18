@@ -12,6 +12,8 @@ Routes:
 import json
 import os
 import re
+import signal
+import sys
 import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler
@@ -84,5 +86,8 @@ class Handler(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
+    # As a container's PID 1, Python gets no default SIGTERM action, so `podman stop`
+    # would wait out its full grace period before SIGKILL. Exit promptly instead.
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
     print("Harness consumer listening on :5000", flush=True)
     HTTPServer(("0.0.0.0", 5000), Handler).serve_forever()

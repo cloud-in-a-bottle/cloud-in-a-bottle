@@ -151,7 +151,8 @@ def _ensure_migration_image() -> None:
     global _migration_image_built
     if _migration_image_built:
         return
-    if _podman("image", "exists", _IMAGE_NAME, check=False).returncode != 0:
+    built_here = _podman("image", "exists", _IMAGE_NAME, check=False).returncode != 0
+    if built_here:
         _podman(
             "build",
             "-t",
@@ -164,7 +165,11 @@ def _ensure_migration_image() -> None:
             timeout=600,
         )
     _migration_image_built = True
-    atexit.register(lambda: _podman("rmi", "-f", _IMAGE_NAME, check=False, timeout=30))
+    if built_here:
+        # Not -f: under pytest-xdist another worker may still have a container on
+        # this image, and `rmi -f` would remove that container mid-test.  A plain
+        # rmi just fails while the image is in use, leaving it for that worker.
+        atexit.register(lambda: _podman("rmi", _IMAGE_NAME, check=False, timeout=30))
 
 
 @requires_containers

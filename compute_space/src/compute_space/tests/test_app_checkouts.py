@@ -83,7 +83,10 @@ def test_running_app_loses_checkout_access_after_migration(
     temp_root = Path(config.temporary_data_dir)
     source = temp_root / "app_temp_data" / name / "repo"
     source.mkdir(parents=True)
-    (source / "Dockerfile").write_text('FROM docker.io/library/alpine:3.21\nCMD ["sleep", "infinity"]\n')
+    # PID 1 `sleep` ignores SIGTERM; without STOPSIGNAL every stop waits the full 10s grace period.
+    (source / "Dockerfile").write_text(
+        'FROM docker.io/library/alpine:3.21\nSTOPSIGNAL SIGKILL\nCMD ["sleep", "infinity"]\n'
+    )
     (source / "source.txt").write_text("source")
     manifest = AppManifest(
         name=name, version="1", container_port=8080, app_temp_data=True, access_all_app_data=all_data

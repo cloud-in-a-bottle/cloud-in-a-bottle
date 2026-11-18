@@ -36,6 +36,9 @@ ROUTER_PORT = 28180
 SECRETS_REPO_URL = external_pins.git_url("secrets")
 SECRETS_SERVICE_URL = "github.com/imbue-openhost/openhost/services/secrets"
 TEST_APP_REPO_URL = f"file://{OPENHOST_PROJECT_DIR / 'apps' / 'test_app'}"
+# Not the manifest's "test-app": container and image names derive from the app name,
+# and test_integration.py deploys a "test-app" that may run concurrently under xdist.
+TEST_APP_NAME = "svc-test-app"
 
 SECRET_KEY = "TEST_SECRET"
 SECRET_VALUE = "s3cret-value-123"
@@ -73,12 +76,12 @@ def secrets_app(stack, owner):
 @pytest.fixture(scope="module")
 def test_app(stack, owner):
     """Deploy the local test_app (service consumer)."""
-    return deploy_app(owner, stack, TEST_APP_REPO_URL)
+    return deploy_app(owner, stack, TEST_APP_REPO_URL, app_name=TEST_APP_NAME)
 
 
 def call_service_via_test_app(owner, stack, payload):
     """Ask test-app to make a v2 service call and return the proxied result."""
-    r = owner.post(f"{stack.app_url('test-app')}/call-service", json=payload, timeout=30)
+    r = owner.post(f"{stack.app_url(TEST_APP_NAME)}/call-service", json=payload, timeout=30)
     assert r.status_code == 200, f"test-app /call-service failed: {r.status_code}: {r.text[:300]}"
     return r.json()
 
