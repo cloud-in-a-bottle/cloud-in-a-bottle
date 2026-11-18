@@ -5,7 +5,7 @@ import requests
 from compute_space.tests.utils import poll
 
 
-def poll_endpoint(session, url, timeout=30, interval=2, fail_msg="Endpoint not responding"):
+def poll_endpoint(session, url, timeout=30, interval=1, fail_msg="Endpoint not responding"):
     """Poll *url* until it returns HTTP 200, then return the response."""
 
     def _check():

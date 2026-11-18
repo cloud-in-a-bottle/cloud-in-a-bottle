@@ -36,6 +36,10 @@ wait_for_ssh() {
 #   $1 - Domain (e.g., run123.e2e.imbue.com)
 #   $2 - Public IP of the instance
 #   $3 - Route53 hosted zone ID
+#
+# Returns without waiting for propagation and sets ROUTE53_CHANGE_ID, so the
+# caller can overlap the ~60s INSYNC wait with other work and then call
+# wait_route53_dns.
 create_route53_dns() {
     local domain="$1" public_ip="$2" hosted_zone_id="$3"
 
@@ -78,8 +82,14 @@ EOF
         --query 'ChangeInfo.Id' \
         --output text)
     echo "  Route53 change: $change_id"
+    ROUTE53_CHANGE_ID="$change_id"
+}
+
+# ── wait_route53_dns ─────────────────────────────────────────────────────
+# Block until the change submitted by create_route53_dns is INSYNC.
+wait_route53_dns() {
     echo "Waiting for DNS propagation..."
-    aws route53 wait resource-record-sets-changed --id "$change_id"
+    aws route53 wait resource-record-sets-changed --id "${ROUTE53_CHANGE_ID:?create_route53_dns first}"
     echo "  DNS records active"
 }
 
