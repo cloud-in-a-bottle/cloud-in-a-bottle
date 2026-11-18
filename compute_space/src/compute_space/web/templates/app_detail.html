@@ -45,7 +45,7 @@
 {% for path in public_paths %}
 <code>{{ path }}</code>{% if not loop.last %}, {% endif %}
 {% endfor %}
-<p class="hint">
+<p class="desc">
   {% if "/" in public_paths %}
   All paths are accessible without Cloud in a Bottle login.
   {% else %}
@@ -185,7 +185,7 @@ None. All paths require Cloud in a Bottle login.
 </div>
 {% endif %}
 {% if ungranted_permissions %}
-<p class="hint">The following permissions are declared in the app manifest but not yet granted:</p>
+<p class="desc">The following permissions are declared in the app manifest but not yet granted:</p>
 <script id="ungranted-perms-data" type="application/json">{{ ungranted_permissions | tojson }}</script>
 <div class="table-scroll">
   <table>

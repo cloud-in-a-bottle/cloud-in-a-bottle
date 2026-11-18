@@ -27,7 +27,7 @@
   </div>
 
   {% call section_head("Deploy from Git URL", level=3) %}{% endcall %}
-  <p class="hint">Clone a git repository containing a <code>cloudinabottle.toml</code> manifest file.
+  <p class="desc">Clone a git repository containing a <code>cloudinabottle.toml</code> manifest file.
   Private GitHub repos are supported automatically &mdash; you'll be prompted to connect your
   GitHub account if needed.</p>
   <div class="repo-url-row">
@@ -61,7 +61,7 @@
 
   <div id="port-mappings-section" class="port-mappings" hidden>
     {% call section_head("Port Mappings", level=3) %}{% endcall %}
-    <p class="hint">This app declares extra port mappings. You can set specific host ports or leave them as 0 for auto-assignment.</p>
+    <p class="desc">This app declares extra port mappings. You can set specific host ports or leave them as 0 for auto-assignment.</p>
     <table>
       <thead>
         <tr><th>Label</th><th>Container Port</th><th>Host Port</th><th>Status</th></tr>
