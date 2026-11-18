@@ -5,14 +5,14 @@
 
 {% block content %}
 <h2>Identity login request</h2>
-<p class="hint">An app is asking you to prove your Cloud in a Bottle identity.</p>
+<p class="desc">An app is asking you to prove your Cloud in a Bottle identity.</p>
 
 {% call spec_list() %}
   {{ spec_row("App", app_name) }}
   {{ spec_row("Hosted on", requesting_domain) }}
 {% endcall %}
 
-<p class="hint">If you approve, a signed token proving your identity will be sent back to
+<p class="desc">If you approve, a signed token proving your identity will be sent back to
 the app. This token expires in 5 minutes.</p>
 
 <div class="actions">

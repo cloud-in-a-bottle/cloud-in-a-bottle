@@ -7,15 +7,19 @@ restart sweep must still be recovered. Earlier the sweep only looked at
 
 from __future__ import annotations
 
+import os
 import sqlite3
 import threading
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 import compute_space.core.startup as startup
 from compute_space.core.app_id import new_app_id
 from compute_space.core.containers import BUILD_CACHE_CORRUPT_MARKER
 from compute_space.db.connection import init_db
+from openhost_system_agent.migrations.versions import v0015_host_only_app_checkouts as checkout_migration
 
 from .conftest import _make_test_config
 
@@ -134,6 +138,43 @@ def test_starting_app_with_dead_container_is_restarted(tmp_path: Path, monkeypat
 
     assert done.wait(5), "restart sweep was never scheduled for the stranded 'starting' app"
     assert app_id in restarted
+
+
+def test_checkout_migration_retry_recovers_after_router_restart(tmp_path: Path, monkeypatch: Any) -> None:
+    cfg = _make_test_config(tmp_path, port=20220)
+    init_db(cfg.db_path)
+    temp_root = Path(cfg.temporary_data_dir)
+    source = temp_root / "app_temp_data/notes/repo"
+    source.mkdir(parents=True)
+    (source / "source.txt").write_text("source")
+    app_id = _seed_app(
+        cfg,
+        name="notes",
+        status="building",
+        port=20221,
+        container_id="stopped-container",
+        repo_path=str(source),
+        created_at="2019-12-31 23:59:59",
+    )
+    monkeypatch.setattr(checkout_migration, "stop_app_containers", lambda _: None)
+    with monkeypatch.context() as interrupted:
+
+        def fail_sync(_fd: int) -> None:
+            raise OSError("interrupted")
+
+        interrupted.setattr(os, "fsync", fail_sync)
+        with pytest.raises(OSError, match="interrupted"):
+            checkout_migration.migrate(Path(cfg.db_path), temp_root)
+    monkeypatch.setattr(startup, "is_container_running", lambda _: False)
+    restarted, done = _capture_restart_sweep(monkeypatch)
+    startup.check_app_status(cfg)
+    assert _status(cfg, app_id) == "error"
+    assert not restarted
+    checkout_migration.migrate(Path(cfg.db_path), temp_root)
+    startup.check_app_status(cfg)
+    assert done.wait(5)
+    assert app_id in restarted
+    assert _error_message(cfg, app_id) is None
 
 
 def test_building_app_with_dead_container_is_restarted(tmp_path: Path, monkeypatch: Any) -> None:

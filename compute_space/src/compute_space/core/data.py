@@ -6,6 +6,7 @@ import shutil
 import stat
 import subprocess
 
+from compute_space.core.app_checkouts import app_checkout_dir
 from compute_space.core.containers import ROUTER_GATEWAY_HOST
 from compute_space.core.containers import ROUTER_LOOPBACK_HOST
 from compute_space.core.containers import app_data_dir
@@ -150,7 +151,7 @@ def make_data_dirs_and_env_vars(
         os.makedirs(app_archive_dir, exist_ok=True)
         env_vars["OPENHOST_APP_ARCHIVE_DIR"] = app_archive_dir
 
-    # Always create temp dir for internal use (repo clone, logs) even if
+    # Always create temp dir for logs even if
     # the app doesn't get access to it
     os.makedirs(app_temp_dir, exist_ok=True)
 
@@ -184,10 +185,11 @@ def make_data_dirs_and_env_vars(
 
 
 def deprovision_temp_data(app_name: str, temp_data_dir: str) -> None:
-    """Remove the app's temp dir (repo clone, build artefacts, logs,
+    """Remove the app's checkout and temp dir (build artefacts, logs,
     OPENHOST_APP_TEMP_DIR contents).  Persistent data is not touched.
     """
     rmtree_with_sudo_fallback(os.path.join(temp_data_dir, "app_temp_data", app_name))
+    rmtree_with_sudo_fallback(app_checkout_dir(temp_data_dir, app_name))
 
 
 def deprovision_data(

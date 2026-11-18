@@ -1,3 +1,5 @@
+import asyncio
+import enum
 import hashlib
 import json
 import os
@@ -17,6 +19,7 @@ import httpx
 import compute_space.core.storage as storage
 from compute_space.config import Config
 from compute_space.core import archive_backend
+from compute_space.core.app_checkouts import app_checkout_dir
 from compute_space.core.app_id import is_valid_app_name
 from compute_space.core.app_id import new_app_id
 from compute_space.core.auth.auth import DEFAULT_OWNER_USERNAME
@@ -55,8 +58,15 @@ from compute_space.core.oauth import OAuthRequired
 from compute_space.core.oauth import get_oauth_token
 from compute_space.core.ports import allocate_port
 from compute_space.core.ports import resolve_port_mappings
+from compute_space.core.prebuilt_image import PULL_RETRY_DELAYS_SECONDS
+from compute_space.core.prebuilt_image import ImageUnavailableError
+from compute_space.core.prebuilt_image import pull_prebuilt_image
+from compute_space.core.releases import ReleaseError
+from compute_space.core.releases import checkout_newest_release
+from compute_space.core.releases import follows_releases
 from compute_space.core.service_interface.services import register_services_provided_by_app
 from compute_space.db import get_db
+from openhost_system_agent.git_commands import git_command
 
 _MAX_PUBLIC_PATH_CHECKS = 8
 # Whitelist of printable ASCII path characters. Control characters are excluded, as is
@@ -167,6 +177,8 @@ class App:
     public_paths: list[str]
     links: list[AppLink]
     manifest_raw: str | None
+    # Whether the last prebuilt image the app was deployed on was signature-verified (see record_image_source).
+    prebuilt_image_verified: bool
     created_at: str
     updated_at: str
 
@@ -175,6 +187,7 @@ class App:
         fields = {f.name: row[f.name] for f in attr.fields(cls)}
         fields["public_paths"] = json.loads(fields["public_paths"] or "[]")
         fields["links"] = deserialize_links(fields["links"])
+        fields["prebuilt_image_verified"] = bool(fields["prebuilt_image_verified"])
         return cls(**fields)
 
 
@@ -202,10 +215,20 @@ async def clone_and_read_manifest(
 
     Returns (manifest, clone_dir, error). On success error is None.
     """
+    manifest, clone_dir, error, _ = await _clone_and_read_manifest(repo_url, github_token)
+    return manifest, clone_dir, error
+
+
+async def _clone_and_read_manifest(
+    repo_url: str, github_token: str | None
+) -> tuple[AppManifest | None, str | None, str | None, bool]:
+    """The implementation of :func:`clone_and_read_manifest`, which also returns whether an error was the clone itself
+    failing (which a GitHub token might fix) rather than what it cloned (a bad manifest, no release), which a token
+    can't."""
     try:
         base_url, ref = parse_repo_url(repo_url)
     except ValueError as e:
-        return None, None, str(e)
+        return None, None, str(e), False
 
     tmp_parent = tempfile.mkdtemp(prefix="openhost-clone-")
     clone_dir = os.path.join(tmp_parent, "repo")
@@ -218,29 +241,46 @@ async def clone_and_read_manifest(
                 shutil.copytree(plain_dir, clone_dir)
             except OSError as e:
                 raise CloneFailed(f"Copy failed: {e}") from e
-        return parse_manifest(clone_dir), clone_dir, None
-    except (CloneFailed, ValueError) as e:  # ValueError: unparseable manifest
-        error = str(e)
+        manifest = parse_manifest(clone_dir)
+        if manifest.ignored_prebuilt_image is not None and ref is None:
+            # Restarts and reloads accept this so older manifests keep running (see parse_manifest_from_string), but
+            # installing it would build the default branch's head despite the published images. A pinned ref builds
+            # either way.
+            raise ValueError(
+                "[runtime.container].prebuilt_image requires [app].release_tag_format (e.g. release_tag_format = "
+                '"semver"): the image is only pulled for releases. To build this app from source instead, install it '
+                "with a ref pinned (url@ref)."
+            )
+        if follows_releases(repo_url, manifest):
+            # It installs at its newest release, not the default branch's head (and fails if there is none).
+            assert manifest.release_tag_format is not None
+            await asyncio.to_thread(checkout_newest_release, clone_dir, manifest.release_tag_format, False)
+            manifest = parse_manifest(clone_dir)
+        return manifest, clone_dir, None, False
+    except CloneFailed as e:
+        error, clone_failed = str(e), True
+    except (ValueError, ReleaseError) as e:  # ValueError: unparseable manifest
+        error, clone_failed = str(e), False
     except subprocess.TimeoutExpired:
-        error = "Git clone timed out"
+        error, clone_failed = "Git clone timed out", True
     except Exception as e:
-        error = f"Clone failed: {e}"
+        error, clone_failed = f"Clone failed: {e}", True
     rmtree_with_sudo_fallback(tmp_parent, raise_on_failure=False)
-    return None, None, error
+    return None, None, error, clone_failed
 
 
-def move_clone_to_app_temp_dir(clone_dir: str, app_name: str, config: Config) -> str:
-    """Move a clone tempdir into the persistent <temp>/app_temp_data/<name>/repo
-    location and return the destination path.  Used by both /api/add_app
+def move_clone_to_app_checkout_dir(clone_dir: str, app_name: str, config: Config) -> str:
+    """Move a clone tempdir into the host-only <temp>/app_checkouts/<name>
+    location and return the destination path. Used by both /api/add_app
     and the default-apps deploy hook so the on-disk layout matches.
 
     Also rmtree's the now-empty mkdtemp parent of clone_dir to avoid
     leaking ``openhost-clone-*`` shells.
     """
-    final_dir = os.path.join(config.temporary_data_dir, "app_temp_data", app_name, "repo")
+    final_dir = app_checkout_dir(config.temporary_data_dir, app_name)
     if os.path.exists(final_dir):
         rmtree_with_sudo_fallback(final_dir, raise_on_failure=True)
-    os.makedirs(os.path.dirname(final_dir), exist_ok=True)
+    os.makedirs(os.path.dirname(final_dir), mode=0o700, exist_ok=True)
     tmp_parent = os.path.dirname(clone_dir)
     shutil.move(clone_dir, final_dir)
     shutil.rmtree(tmp_parent, ignore_errors=True)
@@ -254,12 +294,14 @@ async def clone_with_github_fallback(
 
     Returns (manifest, clone_dir, error, authorize_url).
     """
-    manifest, tmp_dir, error = await clone_and_read_manifest(repo_url)
+    manifest, tmp_dir, error, clone_failed = await _clone_and_read_manifest(repo_url, None)
 
     # An SSH URL never clones over HTTPS-authenticated OAuth, so don't bounce
     # the owner through the GitHub authorize flow only to fail again — the
-    # error from clone_and_read_manifest already explains to use HTTPS.
-    if error and is_github_repo_url(repo_url) and not is_ssh_url(repo_url):
+    # error from clone_and_read_manifest already explains to use HTTPS. Nor when
+    # the clone worked and what it cloned is the problem: a token can't fix that,
+    # and asking for one would hide the real error.
+    if error and clone_failed and is_github_repo_url(repo_url) and not is_ssh_url(repo_url):
         clone_error = error
         try:
             token = await get_oauth_token("github", ["repo"], return_to=return_to)
@@ -710,8 +752,32 @@ def restart_apps_by_id(app_ids: list[str], db: sqlite3.Connection, config: Confi
             logger.exception("failed to restart app {} after archive migration remount", app_id)
 
 
-def start_app_process(app_id: str, db: sqlite3.Connection, config: Config) -> None:
-    """Build the current checkout and launch it for an app."""
+class ImageSource(enum.Enum):
+    # Built from the checkout's Dockerfile: the app doesn't set prebuilt_image, or doesn't follow releases (see
+    # releases.follows_releases), so doesn't pull one.
+    BUILT = "built"
+    # The release's prebuilt image, pulled after its signature was verified (images from our registry).
+    PULLED_VERIFIED = "pulled_verified"
+    # The release's prebuilt image, pulled unverified (images from any other registry).
+    PULLED_UNVERIFIED = "pulled_unverified"
+    # The release's prebuilt image couldn't be fetched, so the release's Dockerfile was built instead.
+    FALLBACK_BUILT = "fallback_built"
+
+
+@attr.s(auto_attribs=True, frozen=True)
+class PreparedImage:
+    """The app's image, ready to run, and where it came from. ``source`` says whether a deploy runs a verified image,
+    an unverified one, or one built locally (as the app always is, or in place of its prebuilt image)."""
+
+    tag: str
+    source: ImageSource
+
+
+def start_app_process(
+    app_id: str, db: sqlite3.Connection, config: Config, prepared_image: PreparedImage | None = None
+) -> None:
+    """Launch the current checkout of an app: run ``prepared_image`` if given (an image already produced for this
+    checkout, see prepare_app_image), otherwise produce one first by building or pulling."""
     app_row = db.execute("SELECT * FROM apps WHERE app_id = ?", (app_id,)).fetchone()
     storage.check_before_deploy(config)
     app_name = app_row["name"]
@@ -719,7 +785,10 @@ def start_app_process(app_id: str, db: sqlite3.Connection, config: Config) -> No
     manifest = parse_manifest(app_row["repo_path"])
     _mark_app_starting(db, app_id)
 
-    _build_then_run_app(app_id, app_name, app_row["repo_path"], manifest, db, config)
+    if prepared_image is None:
+        _build_then_run_app(app_id, app_name, app_row["repo_path"], manifest, db, config)
+    else:
+        _run_prepared_image(app_id, prepared_image, manifest, db, config)
 
 
 def _build_then_run_app(
@@ -733,18 +802,78 @@ def _build_then_run_app(
     max_build_attempts: int = 1,
     env_vars: dict[str, str] | None = None,
 ) -> None:
-    """Build an app image, retrying transient failures, then run it."""
-    image_tag = ""
+    """Produce the app's image (see prepare_app_image), then run it."""
+    prepared_image = prepare_app_image(
+        app_name,
+        repo_path,
+        manifest,
+        app_repo_url(app_id, db),
+        config.temporary_data_dir,
+        log=app_log_writer(app_name, config),
+        max_build_attempts=max_build_attempts,
+    )
+    _run_prepared_image(app_id, prepared_image, manifest, db, config, env_vars=env_vars)
+
+
+def _run_prepared_image(
+    app_id: str,
+    prepared_image: PreparedImage,
+    manifest: AppManifest,
+    db: sqlite3.Connection,
+    config: Config,
+    env_vars: dict[str, str] | None = None,
+) -> None:
+    """Run an image prepare_app_image just produced for the app's checkout. Every deploy of a new image goes through
+    here, whether it was produced right before (_build_then_run_app) or by an update before it stopped the running
+    version; a restart reruns the existing tag with run_app_image directly."""
+    record_image_source(db, app_id, prepared_image.source)
+    run_app_image(app_id, prepared_image.tag, manifest, db, config, env_vars=env_vars)
+
+
+def record_image_source(db: sqlite3.Connection, app_id: str, source: ImageSource) -> None:
+    """Keep ``apps.prebuilt_image_verified`` describing the last prebuilt image the app was deployed on (see
+    image_verification.verification_lost, which asks before an update takes a verified app to an unverified image).
+    Recorded once the image is the app's tagged image, which this deploy and any later restart run.
+
+    A build leaves the flag as it was, whether the app doesn't use a prebuilt image (``BUILT``) or its image couldn't
+    be fetched (``FALLBACK_BUILT``): building the release's own Dockerfile is how apps have always run, and says
+    nothing about the registry, so it neither earns the flag nor clears it. Clearing it would let a registry outage
+    (or a stretch on a pinned ref) erase the record, and the next pull from a registry we don't verify would then go
+    unnoticed."""
+    if source is ImageSource.PULLED_VERIFIED:
+        verified = True
+    elif source is ImageSource.PULLED_UNVERIFIED:
+        verified = False
+    else:
+        return
+    db.execute("UPDATE apps SET prebuilt_image_verified = ? WHERE app_id = ?", (int(verified), app_id))
+    db.commit()
+
+
+def head_commit(repo_path: str) -> str:
+    result = subprocess.run(
+        git_command("rev-parse", "HEAD"), cwd=repo_path, capture_output=True, text=True, timeout=10
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"Could not read the deployed commit in {repo_path}: {result.stderr.strip()}")
+    return result.stdout.strip()
+
+
+def _build_with_retries(
+    app_name: str, repo_path: str, manifest: AppManifest, temp_data_dir: str, max_build_attempts: int
+) -> str:
+    """Build the checkout's Dockerfile, retrying transient failures. Returns the image tag."""
+    if max_build_attempts < 1:
+        raise ValueError(f"max_build_attempts must be at least 1, got {max_build_attempts}")
     for attempt in range(1, max_build_attempts + 1):
         try:
-            image_tag = build_image(
+            return build_image(
                 app_name,
                 repo_path,
                 manifest.container_image,
-                temp_data_dir=config.temporary_data_dir,
+                temp_data_dir=temp_data_dir,
                 memory_mb=manifest.effective_build_memory_mb,
             )
-            break
         except RuntimeError as e:
             if BUILD_CACHE_CORRUPT_MARKER in str(e) or attempt == max_build_attempts:
                 raise
@@ -756,7 +885,84 @@ def _build_then_run_app(
                 attempt * 5,
             )
             time.sleep(attempt * 5)
-    run_app_image(app_id, image_tag, manifest, db, config, env_vars=env_vars)
+    raise AssertionError("the last attempt returns or raises")
+
+
+def prepare_app_image(
+    app_name: str,
+    repo_path: str,
+    manifest: AppManifest,
+    repo_url: str | None,
+    temp_data_dir: str,
+    log: Callable[[str], None],
+    max_build_attempts: int = 1,
+) -> PreparedImage:
+    """Produce the image to run the checked-out commit as ``openhost-<app>:latest``. An app that follows releases and
+    sets ``prebuilt_image`` pulls the release's prebuilt image; if that can't be fetched
+    (:class:`ImageUnavailableError`, after the pull's retries) it builds the release's Dockerfile instead. Any other
+    :class:`PrebuiltImageError` (a verification failure, say) is raised without building. Every other app builds its
+    checkout. Building only moves the tag once it succeeds, so a failure here leaves whatever is running, and the image
+    it runs, alone."""
+    if manifest.prebuilt_image is None or not follows_releases(repo_url, manifest):
+        return PreparedImage(
+            tag=_build_with_retries(app_name, repo_path, manifest, temp_data_dir, max_build_attempts),
+            source=ImageSource.BUILT,
+        )
+    commit = head_commit(repo_path)
+    try:
+        pulled = pull_prebuilt_image(
+            app_name, manifest.prebuilt_image, commit, repo_url, log=log, retry_delays=PULL_RETRY_DELAYS_SECONDS
+        )
+    except ImageUnavailableError as e:
+        return _build_in_place_of_prebuilt(
+            app_name, repo_path, manifest, commit, e, temp_data_dir, log, max_build_attempts
+        )
+    return PreparedImage(
+        tag=pulled.tag, source=ImageSource.PULLED_VERIFIED if pulled.verified else ImageSource.PULLED_UNVERIFIED
+    )
+
+
+def _build_in_place_of_prebuilt(
+    app_name: str,
+    repo_path: str,
+    manifest: AppManifest,
+    commit: str,
+    unavailable: ImageUnavailableError,
+    temp_data_dir: str,
+    log: Callable[[str], None],
+    max_build_attempts: int,
+) -> PreparedImage:
+    log(
+        f"WARNING: the prebuilt image for {commit} is unavailable ({unavailable}); "
+        "falling back to building it locally from the release's Dockerfile"
+    )
+    logger.warning("{}: prebuilt image unavailable, building {} locally: {}", app_name, commit, unavailable)
+    try:
+        tag = _build_with_retries(app_name, repo_path, manifest, temp_data_dir, max_build_attempts)
+    except (RuntimeError, subprocess.TimeoutExpired) as e:
+        raise RuntimeError(
+            f"The prebuilt image is unavailable ({unavailable}), and building it locally failed: {e}"
+        ) from e
+    log(f"Built {commit} locally in place of its prebuilt image")
+    return PreparedImage(tag=tag, source=ImageSource.FALLBACK_BUILT)
+
+
+def app_repo_url(app_id: str, db: sqlite3.Connection) -> str | None:
+    row = db.execute("SELECT repo_url FROM apps WHERE app_id = ?", (app_id,)).fetchone()
+    return row["repo_url"] if row else None
+
+
+def app_log_writer(app_name: str, config: Config) -> Callable[[str], None]:
+    """Appends lines to the app's build log (shown on its detail page)."""
+    log_file = app_log_path(app_name, config)
+
+    def _log(msg: str) -> None:
+        logger.info("{}: {}", app_name, msg)
+        os.makedirs(os.path.dirname(log_file), exist_ok=True)
+        with open(log_file, "a") as f:
+            f.write(msg + "\n")
+
+    return _log
 
 
 def restart_app_process(app_id: str, db: sqlite3.Connection, config: Config) -> None:
@@ -782,34 +988,29 @@ def app_container_log_path(app_name: str, config: Config) -> str:
 
 
 def _remote_default_branch(repo_path: str, log: Callable[[str], None]) -> tuple[str | None, str | None]:
-    """Resolve origin's default branch (e.g. ``main``/``master``).
+    """Resolve origin's current default branch (e.g. ``main``/``master``) by asking the remote.
 
-    Returns ``(branch, error)``. ``git remote set-head --auto`` queries the
-    remote, so on auth/network failure we return an error string for the
-    caller's token-retry path to act on; ``(None, None)`` means the remote was
-    reachable but the default branch couldn't be read (caller falls back to a
-    plain pull on the current branch).
+    Returns ``(branch, error)``. Uses ``git ls-remote --symref origin HEAD`` rather than ``git remote set-head
+    --auto``, which fails when the default branch hasn't been fetched yet (eg right after the remote renamed it). On
+    auth/network failure we return an error string for the caller's token-retry path to act on; ``(None, None)``
+    means the remote was reachable but didn't report a default branch (caller falls back to a plain pull on the
+    current branch).
     """
-    log("$ git remote set-head origin --auto")
-    set_head = subprocess.run(
-        ["git", "remote", "set-head", "origin", "--auto"],
+    log("$ git ls-remote --symref origin HEAD")
+    result = subprocess.run(
+        git_command("ls-remote", "--symref", "origin", "HEAD"),
         cwd=repo_path,
         capture_output=True,
         text=True,
         timeout=30,
     )
-    if set_head.returncode != 0:
-        return None, set_head.stderr.strip() or set_head.stdout.strip() or "failed to query remote default branch"
-    sym = subprocess.run(
-        ["git", "symbolic-ref", "--short", "refs/remotes/origin/HEAD"],
-        cwd=repo_path,
-        capture_output=True,
-        text=True,
-        timeout=10,
-    )
-    if sym.returncode != 0:
+    if result.returncode != 0:
+        return None, result.stderr.strip() or result.stdout.strip() or "failed to query remote default branch"
+    first_line = result.stdout.splitlines()[0] if result.stdout else ""
+    prefix = "ref: refs/heads/"
+    if not first_line.startswith(prefix):
         return None, None
-    name = sym.stdout.strip().removeprefix("origin/")
+    name = first_line.removeprefix(prefix).split("\t", 1)[0]
     return (name or None), None
 
 
@@ -834,10 +1035,10 @@ def git_pull(
 
     # ``ref`` is the branch/tag/commit pinned via the ``url@ref`` suffix of the
     # stored repo_url. When set, we fetch and hard-checkout it so that editing
-    # the upstream branch actually switches branches. When unset (the operator
-    # cleared the ``@ref``), we fall back to origin's default branch so that
-    # clearing it returns to main/master rather than sticking on whatever branch
-    # happened to be checked out.
+    # the upstream branch actually switches branches. When unset, the app tracks
+    # origin's default branch: we resolve it afresh on every pull, so the app
+    # follows the remote when its default branch changes (eg master renamed to
+    # main), rather than sticking on whatever branch happened to be checked out.
     ref: str | None = None
     if repo_url:
         try:
@@ -847,7 +1048,7 @@ def git_pull(
             return False, str(e)
         try:
             subprocess.run(
-                ["git", "remote", "set-url", "origin", base_url],
+                git_command("remote", "set-url", "origin", base_url),
                 cwd=repo_path,
                 capture_output=True,
                 timeout=10,
@@ -860,7 +1061,7 @@ def git_pull(
     if github_token:
         try:
             result = subprocess.run(
-                ["git", "remote", "get-url", "origin"],
+                git_command("remote", "get-url", "origin"),
                 cwd=repo_path,
                 capture_output=True,
                 text=True,
@@ -870,7 +1071,7 @@ def git_pull(
             authed_url = inject_github_token_in_url(original_url, github_token)
             if authed_url != original_url:
                 subprocess.run(
-                    ["git", "remote", "set-url", "origin", authed_url],
+                    git_command("remote", "set-url", "origin", authed_url),
                     cwd=repo_path,
                     capture_output=True,
                     timeout=10,
@@ -893,7 +1094,7 @@ def git_pull(
     def _restore_origin() -> None:
         if github_token and original_url:
             subprocess.run(
-                ["git", "remote", "set-url", "origin", original_url],
+                git_command("remote", "set-url", "origin", original_url),
                 cwd=repo_path,
                 capture_output=True,
                 timeout=10,
@@ -906,14 +1107,15 @@ def git_pull(
         # .gitmodules paths resolve against it), so the token never lands in a
         # config file; auth rides only in the ephemeral insteadOf config.
         _restore_origin()
-        ok, err = _run(["git", "submodule", "sync", "--recursive"])
+        ok, err = _run(git_command("submodule", "sync", "--recursive"))
         if not ok:
             return False, err
         return _run(
-            ["git", *github_token_git_config(github_token), "submodule", "update", "--init", "--recursive"],
+            git_command(*github_token_git_config(github_token), "submodule", "update", "--init", "--recursive"),
             timeout=300,
         )
 
+    tracks_default_branch = not ref
     try:
         if not ref:
             # No pinned ref: resolve origin's default branch and switch to it.
@@ -923,7 +1125,7 @@ def git_pull(
                 return False, default_err
         if not ref:
             # Couldn't determine a default branch; pull the current one.
-            ok, err = _run(["git", "pull"])
+            ok, err = _run(git_command("pull"))
             if not ok:
                 return False, err
             return _update_submodules()
@@ -936,7 +1138,7 @@ def git_pull(
         # old ``git pull`` behaviour). Decide whether to converge the two paths
         # and/or add ``git clean -fd`` here so stale untracked files don't leak
         # into the Docker build context.
-        ok, err = _run(["git", "fetch", "origin", ref])
+        ok, err = _run(git_command("fetch", "origin", ref))
         if not ok:
             return False, err
         # A branch ref materialises as the remote-tracking ``origin/<ref>``;
@@ -946,7 +1148,7 @@ def git_pull(
         # of the just-fetched FETCH_HEAD.
         is_branch = (
             subprocess.run(
-                ["git", "rev-parse", "--verify", "--quiet", f"refs/remotes/origin/{ref}"],
+                git_command("rev-parse", "--verify", "--quiet", f"refs/remotes/origin/{ref}"),
                 cwd=repo_path,
                 capture_output=True,
                 timeout=10,
@@ -954,11 +1156,19 @@ def git_pull(
             == 0
         )
         if is_branch:
-            ok, err = _run(["git", "checkout", "-fB", ref, f"origin/{ref}"])
+            ok, err = _run(git_command("checkout", "-fB", ref, f"origin/{ref}"))
         else:
-            ok, err = _run(["git", "checkout", "-f", "FETCH_HEAD"])
+            ok, err = _run(git_command("checkout", "-f", "FETCH_HEAD"))
         if not ok:
             return False, err
+        if tracks_default_branch and is_branch:
+            # Keep refs/remotes/origin/HEAD in step with the remote's default, as a fresh clone would have it.
+            try:
+                ok, err = _run(git_command("remote", "set-head", "origin", ref))
+                if not ok:
+                    logger.warning("{}: could not update origin/HEAD: {}", app_name, err)
+            except (OSError, subprocess.TimeoutExpired) as e:
+                logger.warning("{}: could not update origin/HEAD: {}", app_name, e)
         return _update_submodules()
     except Exception as e:
         _log(f"git update failed: {e}")
@@ -966,15 +1176,18 @@ def git_pull(
     finally:
         if github_token and original_url:
             subprocess.run(
-                ["git", "remote", "set-url", "origin", original_url],
+                git_command("remote", "set-url", "origin", original_url),
                 cwd=repo_path,
                 capture_output=True,
                 timeout=10,
             )
 
 
-def reload_app_background(app_id: str, repo_path: str, config: Config) -> None:
-    """Reload an app in a background thread: re-read manifest, rebuild, start."""
+def reload_app_background(
+    app_id: str, repo_path: str, config: Config, prepared_image: PreparedImage | None = None
+) -> None:
+    """Reload an app in a background thread: re-read manifest, rebuild (unless ``prepared_image`` is the checkout's
+    image already, as when an update produced it before stopping the app), start."""
     db = sqlite3.connect(config.db_path, check_same_thread=False)
     db.row_factory = sqlite3.Row
     db.execute("PRAGMA journal_mode=WAL")
@@ -1041,7 +1254,7 @@ def reload_app_background(app_id: str, repo_path: str, config: Config) -> None:
             # explicitly approved them (mirroring the install-time approval),
             # so by the time we get here the required grants already exist.
 
-        start_app_process(app_id, db, config)
+        start_app_process(app_id, db, config, prepared_image=prepared_image)
     except Exception as e:
         logger.exception("Failed to reload {}", app_id)
         db.execute(
@@ -1160,6 +1373,11 @@ def is_public_request_path(app: App, raw_path: bytes) -> bool:
     if "/" in app.public_paths:
         return True
 
+    return is_request_path_within(raw_path, app.public_paths)
+
+
+def is_request_path_within(raw_path: bytes, prefixes: list[str]) -> bool:
+    """Require every decoded form to stay within the given path prefixes."""
     # These shouldn't exist in a raw path:
     # # is only used client-side and shouldn't be sent unencoded.
     # the query arguments (?=..) should already be split off by the server so ? should be impossible here.
@@ -1176,7 +1394,8 @@ def is_public_request_path(app: App, raw_path: bytes) -> bool:
     # form to remain public and unambiguous, without rewriting the original URL (which may be signed).
     # Bound repeated decoding so deeply nested encodings cannot make authorization quadratic.
     for _ in range(_MAX_PUBLIC_PATH_CHECKS):
-        if not (_is_unambiguous_path(request_path) and is_public_path(app, request_path)):
+        matches = any(request_path == p or request_path.startswith(p.rstrip("/") + "/") for p in prefixes)
+        if not (_is_unambiguous_path(request_path) and matches):
             return False
         try:
             decoded = unquote(request_path, errors="strict")

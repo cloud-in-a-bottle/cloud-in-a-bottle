@@ -79,6 +79,8 @@ def test_review_page_renders_for_known_app(cfg: Any) -> None:
     assert "/reload_app/someappid00" in resp.text
     assert "/app_detail/myapp" in resp.text
     assert "js/update-review.js" in resp.text
+    # Filled in by update-review.js when the update's image would no longer be signature-verified.
+    assert 'id="image-verification-section"' in resp.text
 
 
 def test_review_page_404_for_unknown_app(cfg: Any) -> None:
