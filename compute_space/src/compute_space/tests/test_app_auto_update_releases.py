@@ -257,3 +257,26 @@ async def test_unreleased_commits_alone_are_up_to_date(cfg: Config, tmp_path: Pa
     assert result.outcome == AppUpdateOutcome.UP_TO_DATE
     assert app.head() == app.running
     assert stubs["events"] == []
+
+
+@pytest.mark.asyncio
+async def test_registry_move_is_built_without_needing_owner_approval(
+    cfg: Config,
+    tmp_path: Path,
+    stubs: dict[str, Any],
+) -> None:
+    app = ReleaseApp(tmp_path)
+    with closing(get_db()) as db:
+        db.execute(
+            "UPDATE apps SET repo_url = ? WHERE app_id = ?",
+            ("https://github.com/cloud-in-a-bottle/rel-app", app.app_id),
+        )
+        db.commit()
+    manifest = _MANIFEST.replace("registry.cloudinabottle.org/rel-app", "ghcr.io/cloud-in-a-bottle/rel-app")
+    target = _commit(app.origin, "1.1.0", "v1.1.0", manifest)
+    stubs["pull_error"] = ImageVerificationError("new registry has no signature")
+    result = await apps_mod.auto_update_app(app.app_id, cfg)
+    assert result.outcome is AppUpdateOutcome.UPDATED
+    assert stubs["events"] == ["pull", "build", "stop"]
+    assert app.head() == target
+    assert app.status() == "running"

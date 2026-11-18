@@ -904,15 +904,15 @@ def _build_in_place_of_prebuilt(
     repo_path: str,
     manifest: AppManifest,
     commit: str,
-    unavailable: ImageUnavailableError | ImageVerificationError,
+    prebuilt_error: ImageUnavailableError | ImageVerificationError,
     temp_data_dir: str,
     log: Callable[[str], None],
     max_build_attempts: int,
 ) -> PreparedImage:
-    reason = "could not be verified" if isinstance(unavailable, ImageVerificationError) else "is unavailable"
-    level = "ERROR" if isinstance(unavailable, ImageVerificationError) else "WARNING"
+    reason = "could not be verified" if isinstance(prebuilt_error, ImageVerificationError) else "is unavailable"
+    level = "ERROR" if isinstance(prebuilt_error, ImageVerificationError) else "WARNING"
     log(
-        f"{level}: the prebuilt image {manifest.prebuilt_image}:{commit} {reason} ({unavailable}); "
+        f"{level}: the prebuilt image {manifest.prebuilt_image}:{commit} {reason} ({prebuilt_error}); "
         "falling back to building it locally from the release's Dockerfile"
     )
     logger.log(
@@ -922,12 +922,14 @@ def _build_in_place_of_prebuilt(
         manifest.prebuilt_image,
         commit,
         reason,
-        unavailable,
+        prebuilt_error,
     )
     try:
         tag = _build_with_retries(app_name, repo_path, manifest, temp_data_dir, max_build_attempts)
     except (RuntimeError, subprocess.TimeoutExpired) as e:
-        raise RuntimeError(f"The prebuilt image {reason} ({unavailable}), and building it locally failed: {e}") from e
+        raise RuntimeError(
+            f"The prebuilt image {reason} ({prebuilt_error}), and building it locally failed: {e}"
+        ) from e
     log(f"Built {commit} locally in place of its prebuilt image")
     return PreparedImage(tag=tag, source=ImageSource.FALLBACK_BUILT)
 

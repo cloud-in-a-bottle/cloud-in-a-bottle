@@ -46,7 +46,6 @@ from compute_space.core.apps import RESERVED_PATHS
 from compute_space.core.apps import PreparedImage
 from compute_space.core.apps import app_container_log_path
 from compute_space.core.apps import app_log_path
-from compute_space.core.apps import app_repo_url
 from compute_space.core.apps import clone_with_github_fallback
 from compute_space.core.apps import git_pull
 from compute_space.core.apps import insert_and_deploy
@@ -853,7 +852,7 @@ async def _reload_app_impl(
         if review_gate is not None:
             await _roll_back_update(app_row["repo_path"], pre_pull_sha, log_file)
             with open(log_file, "a") as lf:
-                lf.write("Update changes app settings requiring owner approval; not reloading.\n")
+                lf.write(f"Update needs owner approval; not reloading. {review_gate.error}\n")
             if continue_oauth:
                 return Redirect(path=f"/app_detail/{app_name}")
             return Response(content=review_gate, status_code=200, media_type=MediaType.JSON)
@@ -862,9 +861,9 @@ async def _reload_app_impl(
         # leaves the running version untouched. The background reload runs the image prepared here rather than
         # producing it again after the app has stopped.
         try:
-            prepared_image = await prepare_update_image(
-                app_name, app_row["repo_path"], app_repo_url(app_id, db), config
-            )
+            # Use the URL that selected this checkout, even if the owner edits the remote during the pull.
+            # Re-reading it here could turn off verification for code pulled from one of our repos.
+            prepared_image = await prepare_update_image(app_name, app_row["repo_path"], repo_url, config)
         except UpdateNotApplied as e:
             await _roll_back_update(app_row["repo_path"], pre_pull_sha, log_file)
             db.execute(

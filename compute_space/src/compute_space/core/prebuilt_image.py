@@ -53,7 +53,7 @@ class ImageToPull:
 @attr.s(auto_attribs=True, frozen=True)
 class PulledImage:
     tag: str
-    # Whether its signature was verified (see _image_to_pull): for our app repos it always is.
+    # True when the source repo is in our GitHub org and the required signature was verified.
     verified: bool
 
 

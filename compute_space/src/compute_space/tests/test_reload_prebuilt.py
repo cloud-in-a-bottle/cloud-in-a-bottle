@@ -303,3 +303,46 @@ def test_a_failed_rollback_is_logged_for_operators(cfg: Any, client: TestClient[
     assert "disk full" in str(logger.warning.call_args)
     log = (Path(cfg.temporary_data_dir) / "app_temp_data" / "rel-app" / "docker.log").read_text()
     assert "failed to roll back refused update" in log
+
+
+def test_remote_edit_during_pull_cannot_disable_signature_verification(
+    cfg: Any,
+    client: TestClient[Litestar],
+    tmp_path: Path,
+) -> None:
+    source = "https://github.com/cloud-in-a-bottle/rel-app"
+    app_id, origin, _, _ = _seed(cfg, tmp_path, repo_url=source)
+    _commit(origin, "1.1.0", "v1.1.0")
+
+    def pull_and_change_remote(*args: Any, **kwargs: Any) -> tuple[bool, None]:
+        result = _real_pull(*args, **kwargs)
+        with sqlite3.connect(cfg.db_path) as db:
+            db.execute("UPDATE apps SET repo_url = ? WHERE app_id = ?", ("https://github.com/third-party/app", app_id))
+        return result
+
+    with _mocked() as m, patch("compute_space.web.routes.api.apps.git_pull", side_effect=pull_and_change_remote):
+        resp = client.post(f"/reload_app/{app_id}", json={"update": True})
+    assert resp.json() == {"ok": True}
+    # This is the URL passed to signature_policy, not the concurrently edited DB value.
+    assert m["pull"].call_args.args[3] == source
+
+
+def test_registry_move_builds_without_an_extra_approval_gate(
+    cfg: Any,
+    client: TestClient[Litestar],
+    tmp_path: Path,
+) -> None:
+    app_id, origin, repo, _ = _seed(cfg, tmp_path, repo_url="https://github.com/cloud-in-a-bottle/rel-app")
+    manifest = _MANIFEST.format(version="1.1.0").replace(
+        "registry.cloudinabottle.org/rel-app", "ghcr.io/cloud-in-a-bottle/rel-app"
+    )
+    (origin / "cloudinabottle.toml").write_text(manifest)
+    _git(origin, "commit", "-am", "move registry")
+    _git(origin, "tag", "v1.1.0")
+    with _mocked(pull_side_effect=ImageVerificationError("new registry has no signature")) as m:
+        resp = client.post(f"/reload_app/{app_id}", json={"update": True})
+    assert resp.json() == {"ok": True}
+    assert m["events"] == ["pull", "build", "stop"]
+    assert _git(repo, "rev-parse", "HEAD") == _git(origin, "rev-parse", "HEAD")
+    prepared = _prepared_image(m["thread"])
+    assert prepared is not None and prepared.source is ImageSource.FALLBACK_BUILT
