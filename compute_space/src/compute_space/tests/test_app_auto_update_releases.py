@@ -23,6 +23,7 @@ from compute_space.core.apps import ImageSource
 from compute_space.core.apps import PreparedImage
 from compute_space.core.auto_update.app_config import AppUpdateOutcome
 from compute_space.core.prebuilt_image import ImageUnavailableError
+from compute_space.core.prebuilt_image import ImageVerificationError
 from compute_space.core.prebuilt_image import PulledImage
 from compute_space.db import get_db
 
@@ -183,10 +184,18 @@ async def test_release_without_prebuilt_image_is_built_before_stopping(
 
 
 @pytest.mark.asyncio
-async def test_unavailable_image_is_built_before_stopping(cfg: Config, tmp_path: Path, stubs: dict[str, Any]) -> None:
+@pytest.mark.parametrize(
+    "failure", [ImageUnavailableError("registry unreachable"), ImageVerificationError("signature mismatch")]
+)
+async def test_rejected_or_unavailable_image_is_built_before_stopping(
+    cfg: Config,
+    tmp_path: Path,
+    stubs: dict[str, Any],
+    failure: Exception,
+) -> None:
     app = ReleaseApp(tmp_path)
     target = _commit(app.origin, "1.1.0", "v1.1.0")
-    stubs["pull_error"] = ImageUnavailableError("registry unreachable")
+    stubs["pull_error"] = failure
 
     result = await apps_mod.auto_update_app(app.app_id, cfg)
 
@@ -197,18 +206,24 @@ async def test_unavailable_image_is_built_before_stopping(cfg: Config, tmp_path:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "failure", [ImageUnavailableError("registry unreachable"), ImageVerificationError("signature mismatch")]
+)
 async def test_failed_prepare_rolls_back_and_leaves_the_app_running(
-    cfg: Config, tmp_path: Path, stubs: dict[str, Any]
+    cfg: Config,
+    tmp_path: Path,
+    stubs: dict[str, Any],
+    failure: Exception,
 ) -> None:
     app = ReleaseApp(tmp_path)
     _commit(app.origin, "1.1.0", "v1.1.0")
-    stubs["pull_error"] = ImageUnavailableError("registry unreachable")
+    stubs["pull_error"] = failure
     stubs["build_error"] = RuntimeError("Container build failed: out of memory")
 
     result = await apps_mod.auto_update_app(app.app_id, cfg)
 
     assert result.outcome == AppUpdateOutcome.FAILED
-    assert result.detail is not None and "registry unreachable" in result.detail and "out of memory" in result.detail
+    assert result.detail is not None and str(failure) in result.detail and "out of memory" in result.detail
     assert app.head() == app.running
     assert stubs["events"] == ["pull", "build"]
     assert stubs["reloaded"] == []

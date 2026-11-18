@@ -60,6 +60,7 @@ from compute_space.core.ports import allocate_port
 from compute_space.core.ports import resolve_port_mappings
 from compute_space.core.prebuilt_image import PULL_RETRY_DELAYS_SECONDS
 from compute_space.core.prebuilt_image import ImageUnavailableError
+from compute_space.core.prebuilt_image import ImageVerificationError
 from compute_space.core.prebuilt_image import pull_prebuilt_image
 from compute_space.core.releases import ReleaseError
 from compute_space.core.releases import checkout_newest_release
@@ -177,8 +178,6 @@ class App:
     public_paths: list[str]
     links: list[AppLink]
     manifest_raw: str | None
-    # Whether the last prebuilt image the app was deployed on was signature-verified (see record_image_source).
-    prebuilt_image_verified: bool
     created_at: str
     updated_at: str
 
@@ -187,7 +186,6 @@ class App:
         fields = {f.name: row[f.name] for f in attr.fields(cls)}
         fields["public_paths"] = json.loads(fields["public_paths"] or "[]")
         fields["links"] = deserialize_links(fields["links"])
-        fields["prebuilt_image_verified"] = bool(fields["prebuilt_image_verified"])
         return cls(**fields)
 
 
@@ -756,11 +754,11 @@ class ImageSource(enum.Enum):
     # Built from the checkout's Dockerfile: the app doesn't set prebuilt_image, or doesn't follow releases (see
     # releases.follows_releases), so doesn't pull one.
     BUILT = "built"
-    # The release's prebuilt image, pulled after its signature was verified (images from our registry).
+    # The release's prebuilt image, verified against its source repo and commit (our app repos).
     PULLED_VERIFIED = "pulled_verified"
-    # The release's prebuilt image, pulled unverified (images from any other registry).
+    # The release's prebuilt image, pulled unverified (third-party app repos).
     PULLED_UNVERIFIED = "pulled_unverified"
-    # The release's prebuilt image couldn't be fetched, so the release's Dockerfile was built instead.
+    # The release's prebuilt image couldn't be fetched or verified, so its Dockerfile was built instead.
     FALLBACK_BUILT = "fallback_built"
 
 
@@ -826,28 +824,7 @@ def _run_prepared_image(
     """Run an image prepare_app_image just produced for the app's checkout. Every deploy of a new image goes through
     here, whether it was produced right before (_build_then_run_app) or by an update before it stopped the running
     version; a restart reruns the existing tag with run_app_image directly."""
-    record_image_source(db, app_id, prepared_image.source)
     run_app_image(app_id, prepared_image.tag, manifest, db, config, env_vars=env_vars)
-
-
-def record_image_source(db: sqlite3.Connection, app_id: str, source: ImageSource) -> None:
-    """Keep ``apps.prebuilt_image_verified`` describing the last prebuilt image the app was deployed on (see
-    image_verification.verification_lost, which asks before an update takes a verified app to an unverified image).
-    Recorded once the image is the app's tagged image, which this deploy and any later restart run.
-
-    A build leaves the flag as it was, whether the app doesn't use a prebuilt image (``BUILT``) or its image couldn't
-    be fetched (``FALLBACK_BUILT``): building the release's own Dockerfile is how apps have always run, and says
-    nothing about the registry, so it neither earns the flag nor clears it. Clearing it would let a registry outage
-    (or a stretch on a pinned ref) erase the record, and the next pull from a registry we don't verify would then go
-    unnoticed."""
-    if source is ImageSource.PULLED_VERIFIED:
-        verified = True
-    elif source is ImageSource.PULLED_UNVERIFIED:
-        verified = False
-    else:
-        return
-    db.execute("UPDATE apps SET prebuilt_image_verified = ? WHERE app_id = ?", (int(verified), app_id))
-    db.commit()
 
 
 def head_commit(repo_path: str) -> str:
@@ -898,9 +875,9 @@ def prepare_app_image(
     max_build_attempts: int = 1,
 ) -> PreparedImage:
     """Produce the image to run the checked-out commit as ``openhost-<app>:latest``. An app that follows releases and
-    sets ``prebuilt_image`` pulls the release's prebuilt image; if that can't be fetched
-    (:class:`ImageUnavailableError`, after the pull's retries) it builds the release's Dockerfile instead. Any other
-    :class:`PrebuiltImageError` (a verification failure, say) is raised without building. Every other app builds its
+    sets ``prebuilt_image`` pulls the release's prebuilt image. An unavailable image falls back after retries; a
+    verification failure falls back immediately, without running the rejected image. Other local errors still fail.
+    Every other app builds its
     checkout. Building only moves the tag once it succeeds, so a failure here leaves whatever is running, and the image
     it runs, alone."""
     if manifest.prebuilt_image is None or not follows_releases(repo_url, manifest):
@@ -913,7 +890,7 @@ def prepare_app_image(
         pulled = pull_prebuilt_image(
             app_name, manifest.prebuilt_image, commit, repo_url, log=log, retry_delays=PULL_RETRY_DELAYS_SECONDS
         )
-    except ImageUnavailableError as e:
+    except (ImageUnavailableError, ImageVerificationError) as e:
         return _build_in_place_of_prebuilt(
             app_name, repo_path, manifest, commit, e, temp_data_dir, log, max_build_attempts
         )
@@ -927,22 +904,30 @@ def _build_in_place_of_prebuilt(
     repo_path: str,
     manifest: AppManifest,
     commit: str,
-    unavailable: ImageUnavailableError,
+    unavailable: ImageUnavailableError | ImageVerificationError,
     temp_data_dir: str,
     log: Callable[[str], None],
     max_build_attempts: int,
 ) -> PreparedImage:
+    reason = "could not be verified" if isinstance(unavailable, ImageVerificationError) else "is unavailable"
+    level = "ERROR" if isinstance(unavailable, ImageVerificationError) else "WARNING"
     log(
-        f"WARNING: the prebuilt image for {commit} is unavailable ({unavailable}); "
+        f"{level}: the prebuilt image {manifest.prebuilt_image}:{commit} {reason} ({unavailable}); "
         "falling back to building it locally from the release's Dockerfile"
     )
-    logger.warning("{}: prebuilt image unavailable, building {} locally: {}", app_name, commit, unavailable)
+    logger.log(
+        level,
+        "{}: prebuilt image {}:{} {}; building locally: {}",
+        app_name,
+        manifest.prebuilt_image,
+        commit,
+        reason,
+        unavailable,
+    )
     try:
         tag = _build_with_retries(app_name, repo_path, manifest, temp_data_dir, max_build_attempts)
     except (RuntimeError, subprocess.TimeoutExpired) as e:
-        raise RuntimeError(
-            f"The prebuilt image is unavailable ({unavailable}), and building it locally failed: {e}"
-        ) from e
+        raise RuntimeError(f"The prebuilt image {reason} ({unavailable}), and building it locally failed: {e}") from e
     log(f"Built {commit} locally in place of its prebuilt image")
     return PreparedImage(tag=tag, source=ImageSource.FALLBACK_BUILT)
 
