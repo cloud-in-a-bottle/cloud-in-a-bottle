@@ -102,14 +102,14 @@ def _at_on(target: time, zone: ZoneInfo, day: date) -> datetime:
 
 
 def _next_datetime_at(target: time, zone: ZoneInfo, now: datetime) -> datetime:
-    """Return the next instant after `now` at which the clock in `zone` reads `target`."""
+    """Return the next scheduled instant after `now`, using `_at_on`'s gap and repeated-time rules."""
     today = now.astimezone(zone).date()
     candidate = _at_on(target, zone, today)
     return candidate if candidate > now else _at_on(target, zone, today + timedelta(days=1))
 
 
 def _most_recent_datetime_at(target: time, zone: ZoneInfo, now: datetime) -> datetime:
-    """Return the latest instant at or before `now` at which the clock in `zone` reads `target`."""
+    """Return the latest scheduled instant at or before `now`, using `_at_on`'s gap and repeated-time rules."""
     today = now.astimezone(zone).date()
     candidate = _at_on(target, zone, today)
     return candidate if candidate <= now else _at_on(target, zone, today - timedelta(days=1))
@@ -188,11 +188,11 @@ def start_auto_update_task() -> asyncio.Task[None]:
     """Run the update automatically on a schedule.
 
     The intended logic is:
-    - Updates are scheduled to run daily at a specific time of day, set by the user.
+    - Updates run daily at a wall-clock time in the user's chosen IANA timezone, including across daylight saving changes.
     - If that window is missed (VM paused for example), the update runs the next time it is up, including after a router restart.
     - (for autosuspending VMs, we'll wake the instance daily sometime around (after) the requested time to allow the update to run)
     - If the update fails, it does not retry until the next scheduled time.
-    - If the update time is rescheduled, the next run is scheduled for when the new time is next reached.
+    - Changing the time or timezone reschedules the next run for the next occurrence of the new schedule.
     - When app auto-updates are on, the same window updates installed apps first (one at a time, skipping any whose
       update needs the owner's approval), then the instance. Each catches up its own missed window: a catch-up runs
       only the one(s) that missed it.
