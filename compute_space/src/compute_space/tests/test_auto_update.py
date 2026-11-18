@@ -93,7 +93,7 @@ def test_next_run_keeps_the_local_time_across_daylight_saving(now: datetime, exp
     assert expected.astimezone(_CHICAGO).time() == _AT_6
 
 
-def test_a_time_skipped_by_the_clocks_going_forward_runs_just_after() -> None:
+def test_a_time_skipped_by_the_clocks_going_forward_shifts_by_the_gap() -> None:
     # 02:30 doesn't exist in Chicago on Mar 8; it runs at 03:30 CDT, an hour after 01:30 CST.
     now = datetime(2026, 3, 8, 6, 0, tzinfo=UTC)
     due = runner_mod._next_datetime_at(time(2, 30), _CHICAGO, now)
@@ -115,6 +115,27 @@ def test_first_due_catches_up_in_the_schedules_timezone() -> None:
     last = datetime(2026, 7, 14, 11, 1, tzinfo=UTC)
     assert runner_mod._first_update_due(_AT_6, _CHICAGO, last, now) == datetime(2026, 7, 15, 11, 0, tzinfo=UTC)
     assert runner_mod._first_update_due(_AT_6, _CHICAGO, now, now) == datetime(2026, 7, 16, 11, 0, tzinfo=UTC)
+
+
+@pytest.mark.parametrize(
+    ("target", "now", "expected"),
+    [
+        # Before the shifted spring-forward run, yesterday's window is the most recent one.
+        (time(2, 30), datetime(2026, 3, 8, 8, 15, tzinfo=UTC), datetime(2026, 3, 7, 8, 30, tzinfo=UTC)),
+        # Once the shifted run is due, a restart catches it up, including exactly at the boundary.
+        (time(2, 30), datetime(2026, 3, 8, 8, 30, tzinfo=UTC), datetime(2026, 3, 8, 8, 30, tzinfo=UTC)),
+        (time(2, 30), datetime(2026, 3, 8, 8, 45, tzinfo=UTC), datetime(2026, 3, 8, 8, 30, tzinfo=UTC)),
+        # During either occurrence of the repeated hour, only the first scheduled instant counts.
+        (time(1, 30), datetime(2026, 11, 1, 6, 45, tzinfo=UTC), datetime(2026, 11, 1, 6, 30, tzinfo=UTC)),
+        (time(1, 30), datetime(2026, 11, 1, 7, 15, tzinfo=UTC), datetime(2026, 11, 1, 6, 30, tzinfo=UTC)),
+        (time(1, 30), datetime(2026, 11, 1, 7, 45, tzinfo=UTC), datetime(2026, 11, 1, 6, 30, tzinfo=UTC)),
+    ],
+)
+def test_restart_catches_up_dst_windows_once(target: time, now: datetime, expected: datetime) -> None:
+    last = expected - timedelta(days=1)
+    assert runner_mod._first_update_due(target, _CHICAGO, last, now) == expected
+    # A recorded run at that instant must not be repeated after a restart.
+    assert runner_mod._first_update_due(target, _CHICAGO, expected, now) > now
 
 
 # ─────────────── config ───────────────

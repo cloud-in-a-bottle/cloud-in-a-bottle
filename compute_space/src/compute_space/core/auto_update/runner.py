@@ -97,7 +97,7 @@ async def run_auto_update() -> None:
 
 def _at_on(target: time, zone: ZoneInfo, day: date) -> datetime:
     """The UTC instant at which the clock in `zone` reads `target` on `day`. A time skipped when the clocks go forward
-    is read with the offset from before the change, so it lands just after the change; a repeated one is the first."""
+    is read with the offset from before the change, shifting it forward by the gap; a repeated one is the first."""
     return datetime.combine(day, target, tzinfo=zone).astimezone(UTC)
 
 
@@ -138,7 +138,7 @@ def reschedule_auto_update(config: AutoUpdateConfig) -> None:
 
 
 def reschedule_app_auto_update(config: AutoUpdateConfig) -> None:
-    """Call when app updates are turned on or the time changes, so a time that already passed today waits for tomorrow.
+    """Call when app updates are turned on or the schedule changes, so a time already passed today waits for tomorrow.
     Leaves the instance update's due time alone, so a pending catch-up of a missed instance update still runs."""
     global _app_update_due
     _app_update_due = next_auto_update_at(config)
