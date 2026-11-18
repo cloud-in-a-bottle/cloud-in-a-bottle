@@ -675,7 +675,7 @@ def _gate_update_review(
             }
             for pg in review.new_permissions
         ],
-        error="This update changes the app's settings; review and approve them before it can be applied.",
+        error="This update needs your approval; review its settings and permissions before applying it.",
     )
 
 
