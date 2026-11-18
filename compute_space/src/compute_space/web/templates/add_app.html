@@ -58,17 +58,19 @@
 <div id="confirm-section" hidden>
   <div id="confirm-header"></div>
 
-  <table id="manifest-table"></table>
+  <div class="table-scroll"><table id="manifest-table"></table></div>
 
   <div id="port-mappings-section" class="port-mappings" hidden>
     {% call section_head("Port Mappings", level=3) %}{% endcall %}
     <p class="desc">This app declares extra port mappings. You can set specific host ports or leave them as 0 for auto-assignment.</p>
-    <table>
-      <thead>
-        <tr><th>Label</th><th>Container Port</th><th>Host Port</th><th>Status</th></tr>
-      </thead>
-      <tbody id="port-mappings-body"></tbody>
-    </table>
+    <div class="table-scroll">
+      <table>
+        <thead>
+          <tr><th>Label</th><th>Container Port</th><th>Host Port</th><th>Status</th></tr>
+        </thead>
+        <tbody id="port-mappings-body"></tbody>
+      </table>
+    </div>
   </div>
 
   <br>
