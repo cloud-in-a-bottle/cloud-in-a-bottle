@@ -76,7 +76,7 @@ The build does not get a TLS certificate issued - That can only happen once it's
 
 ### Building an image without config files
 
-A hosting platform runs one image for many instances, so nothing instance-specific can be baked in. Pass `--no-config-files` to build an image without `config.toml` or `first_boot.toml`, so with no domain, claim token, or ACME account key. openhost stays disabled until whatever boots the image writes both files and starts it, for example cloud-init user-data:
+A hosting platform runs one image for many instances, so nothing instance-specific can be baked in. Pass `--no-config-files` to build an image without `config.toml` or `first_boot.toml`, so with no domain, claim token, or ACME account key. openhost stays disabled until whatever boots the image writes both files, applies pending system migrations, and starts it, for example cloud-init user-data:
 
 ```yaml
 #cloud-config
@@ -94,7 +94,7 @@ write_files:
     content: |
       # rendered from ansible/templates/first_boot.toml.j2: domain, claim token, Imbue credential
 runcmd:
-  - [systemctl, enable, --now, openhost]
+  - [sh, -ec, "/usr/local/bin/openhost_system_agent update migrate && systemctl enable --now openhost"]
 ```
 
 Render both files from the same templates the Ansible playbooks use, so the two paths can't drift. Whoever writes `config.toml` decides how claiming is gated (keep `claim_token_required = true` on anything reachable) and how TLS certs are obtained: the image has no ACME account key, so use `cert_provider = "cert_api"` or supply a key.

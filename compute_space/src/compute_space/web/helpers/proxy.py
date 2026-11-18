@@ -14,7 +14,6 @@ from typing import Any
 from typing import cast
 
 import httpx
-import websockets
 from litestar import Request
 from litestar import WebSocket
 from litestar.datastructures import Headers
@@ -24,6 +23,7 @@ from litestar.response.streaming import ASGIStreamingResponse
 from litestar.types import Scope
 from litestar.types.asgi_types import WebSocketDisconnectEvent
 from litestar.types.asgi_types import WebSocketReceiveEvent
+from websockets.asyncio.client import connect
 from websockets.exceptions import ConnectionClosed
 from websockets.exceptions import WebSocketException
 from websockets.typing import Subprotocol
@@ -292,6 +292,18 @@ _WS_REQUEST_EXCLUDED_HEADERS = frozenset(
 )
 
 
+class _NoRedirectWebsocketConnect(connect):
+    """``websockets.connect`` that refuses to follow handshake redirects.
+
+    We never need to follow a backend's redirect, and allowing it would let an app point our
+    connection at another app or host, forwarding headers (identity, grants) meant only for the
+    app we selected -- or other cross-origin shenanigans.  A redirect fails the handshake instead.
+    """
+
+    def process_redirect(self, exc: Exception) -> Exception:
+        return exc
+
+
 async def proxy_websocket_request(
     connection: WebSocket[Any, Any, Any],
     target_port: int,
@@ -317,11 +329,23 @@ async def proxy_websocket_request(
     )
 
     try:
-        async with websockets.connect(
+        async with _NoRedirectWebsocketConnect(
             target_url,
             additional_headers=new_request_headers,
-            # `max_size=None` lifts the default 1 MiB incoming-message cap: the proxy shouldn't impose its own size policy.
-            max_size=None,
+            # These settings apply only to the router<->app loopback hop; the browser<->router leg is
+            # negotiated separately by hypercorn and can still use compression.
+            # Raise the default 1 MiB backend->client message cap well above any realistic app message,
+            # but keep a bound so an app can't make the router buffer unlimited data.
+            max_size=100 * 2**20,
+            # No permessage-deflate: it buys nothing over loopback, and lets a few KB from an app
+            # inflate to `max_size` in router memory (a decompression bomb).
+            compression=None,
+            # Ignore HTTP(S)_PROXY / ALL_PROXY: websockets doesn't bypass loopback by default, so an
+            # environment proxy would otherwise see every app connection and its trusted headers.
+            proxy=None,
+            # No proxy-originated pings: clients and apps can send their own heartbeats, and a lost
+            # client will trigger a disconnect message. We don't need to add our own heartbeats.
+            ping_interval=None,
             open_timeout=10,
             close_timeout=5,
             subprotocols=subprotocols,

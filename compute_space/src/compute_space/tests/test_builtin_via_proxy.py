@@ -12,6 +12,7 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
+import httpx
 import pytest
 from litestar import Litestar
 from litestar import Request
@@ -19,15 +20,18 @@ from litestar import Response
 from litestar import get
 from litestar import post
 from litestar.di import Provide
+from litestar.exceptions import WebSocketDisconnect
 from litestar.testing import TestClient
 
 from compute_space.config import provide_config
 from compute_space.core.app_id import ROUTER_APP_ID
 from compute_space.core.service_interface import builtin_services
 from compute_space.core.service_interface.builtin_services import BuiltinService
+from compute_space.db import get_db
 from compute_space.db import provide_db
 from compute_space.db.connection import init_db
 from compute_space.tests.conftest import _make_test_config
+from compute_space.tests.test_services_v2 import _add_provider
 from compute_space.web.routes.services_v2 import services_v2_routes
 
 SERVICE_URL = "github.com/imbue-openhost/openhost/services/example"
@@ -144,3 +148,54 @@ def test_an_app_default_takes_the_service_away_from_the_builtin(client: Any, tmp
 def test_the_provider_header_can_demand_the_builtin(client: Any) -> None:
     response = client.get("/api/services/v2/call/example/whoami", headers={"X-OpenHost-Provider": ROUTER_APP_ID})
     assert response.status_code == 200
+
+
+@pytest.mark.parametrize("rest", ["%2e%2e/admin", "%252e%252e/admin", "..;x/admin", "%5c..%5cadmin", "%00/admin"])
+@pytest.mark.parametrize("websocket", [False, True])
+def test_service_calls_require_ordinary_endpoint_paths(client, monkeypatch, rest: str, websocket: bool) -> None:
+    with get_db() as db:
+        _add_provider(db, SERVICE_URL, "provider", "1.0.0", "/service/")
+
+    def unexpected(*args, **kwargs):
+        pytest.fail("An invalid path must not contact the provider")
+
+    monkeypatch.setattr("compute_space.web.routes.services_v2.proxy_http_request", unexpected)
+    monkeypatch.setattr("compute_space.web.routes.services_v2.proxy_websocket_request", unexpected)
+    path = f"/api/services/v2/call/example/{rest}"
+    if websocket:
+        with pytest.raises(WebSocketDisconnect) as exc, client.websocket_connect(path) as socket:
+            socket.receive_text()
+        assert exc.value.code == 4400
+    else:
+        assert client.get(path).status_code == 400
+
+
+@pytest.mark.parametrize(
+    "endpoint, expected_prefix",
+    [
+        ("service", "/service"),
+        ("/service", "/service"),
+        ("/service/", "/service"),
+        ("/service//", "/service"),
+        ("/serv%69ce", "/service"),
+        ("/100%25", "/100%25"),
+    ],
+)
+def test_service_path_and_query_reach_the_provider(client, monkeypatch, endpoint: str, expected_prefix: str) -> None:
+    with get_db() as db:
+        _add_provider(db, SERVICE_URL, "provider", "1.0.0", endpoint)
+    requests = []
+
+    def provider(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json={"ok": True})
+
+    monkeypatch.setattr(
+        "compute_space.web.helpers.proxy.client_for",
+        lambda *_: (httpx.AsyncClient(transport=httpx.MockTransport(provider)), "http://provider.test"),
+    )
+    response = client.get("/api/services/v2/call/example/items/caf%C3%A9?q=a%2Fb")
+    assert response.status_code == 200
+    assert requests[0].url.raw_path == expected_prefix.encode() + b"/items/caf%C3%A9?q=a%2Fb"
+    assert requests[0].url.query == b"q=a%2Fb"
+    assert requests[0].headers["x-openhost-consumer-id"] == CONSUMER_APP_ID

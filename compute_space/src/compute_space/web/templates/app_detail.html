@@ -22,6 +22,7 @@
 {% macro remote_value() -%}
 <span class="info-value" id="remote-display">
   <code>{{ app.repo_url }}</code>
+  {% if default_branch %}<span class="muted">tracks the default branch (<code>{{ default_branch }}</code>)</span>{% endif %}
   {{ icon_button("pencil", "Edit git URL", onclick="editRemote()") }}
 </span>
 <span class="info-value" id="remote-edit" hidden>
@@ -29,8 +30,8 @@
          placeholder="https://github.com/owner/repo@branch">
   {{ button("Save & update", variant="primary", onclick="saveRemote()", id="save-remote-btn", disabled=true) }}
   {{ button("Cancel", onclick="cancelRemote()") }}
-  <p class="hint">Append <code>@branch</code> (or a tag/commit) to change the ref. Saving
-    re-points the upstream and pulls the latest code.</p>
+  <p class="hint">Without a ref the app tracks the repo's default branch. Append <code>@branch</code> (or a tag/commit)
+    to pin one. Saving re-points the upstream and pulls the latest code.</p>
   <span id="remote-error" class="field-error"></span>
 </span>
 {%- endmacro %}
@@ -44,7 +45,7 @@
 {% for path in public_paths %}
 <code>{{ path }}</code>{% if not loop.last %}, {% endif %}
 {% endfor %}
-<p class="hint">
+<p class="desc">
   {% if "/" in public_paths %}
   All paths are accessible without Cloud in a Bottle login.
   {% else %}
@@ -184,7 +185,7 @@ None. All paths require Cloud in a Bottle login.
 </div>
 {% endif %}
 {% if ungranted_permissions %}
-<p class="hint">The following permissions are declared in the app manifest but not yet granted:</p>
+<p class="desc">The following permissions are declared in the app manifest but not yet granted:</p>
 <script id="ungranted-perms-data" type="application/json">{{ ungranted_permissions | tojson }}</script>
 <div class="table-scroll">
   <table>

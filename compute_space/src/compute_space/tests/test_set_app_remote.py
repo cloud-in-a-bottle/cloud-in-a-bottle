@@ -260,10 +260,10 @@ def test_git_pull_returns_to_default_branch_when_ref_cleared(tmp_path: Path) -> 
     assert (clone / "f.txt").read_text() == "main"
 
 
-def test_reload_update_pins_resolved_default_branch(cfg: Any, tmp_path: Path) -> None:
-    """A refless update records the branch it landed on back into repo_url, so
-    the app pins to a concrete branch (visible, deterministic) rather than
-    re-resolving the remote default on every future pull."""
+def test_reload_update_keeps_tracking_the_default_branch(cfg: Any, tmp_path: Path) -> None:
+    """A refless update checks out the remote's default branch and leaves repo_url
+    refless, so the app keeps following the default branch (eg across a rename)
+    instead of being pinned to the branch it landed on."""
     origin = tmp_path / "origin"
     origin.mkdir()
     _git(origin, "init", "-b", "main")
@@ -295,13 +295,16 @@ def test_reload_update_pins_resolved_default_branch(cfg: Any, tmp_path: Path) ->
         stored = db.execute("SELECT repo_url FROM apps WHERE app_id = ?", (app_id,)).fetchone()[0]
     finally:
         db.close()
-    assert stored == f"file://{origin}@main", stored
+    assert stored == f"file://{origin}", stored
+    head = subprocess.run(
+        ["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=clone, capture_output=True, text=True
+    ).stdout.strip()
+    assert head == "main"
 
 
-def test_add_app_pins_default_branch_at_install(cfg: Any, tmp_path: Path) -> None:
-    """Installing a refless upstream records the cloned default branch into
-    repo_url, so the app is pinned and the branch is visible from first deploy
-    — not only after the first Update & Reload."""
+def test_add_app_keeps_a_refless_upstream_refless(cfg: Any, tmp_path: Path) -> None:
+    """Installing a refless upstream stores it as given: the app tracks the
+    repo's default branch rather than being pinned to the one it was cloned at."""
     clone = tmp_path / "clone"
     clone.mkdir()
     _git(clone, "init", "-b", "main")
@@ -326,7 +329,7 @@ def test_add_app_pins_default_branch_at_install(cfg: Any, tmp_path: Path) -> Non
     with (
         mock.patch.object(apps_routes, "clone_with_github_fallback", side_effect=fake_clone),
         mock.patch.object(apps_routes, "validate_manifest", return_value=None),
-        mock.patch.object(apps_routes, "move_clone_to_app_temp_dir", return_value=str(clone)),
+        mock.patch.object(apps_routes, "move_clone_to_app_checkout_dir", return_value=str(clone)),
         mock.patch.object(apps_routes, "insert_and_deploy", side_effect=fake_insert_and_deploy),
         TestClient(app=make_test_app(api_apps_routes)) as client,
     ):
@@ -336,7 +339,75 @@ def test_add_app_pins_default_branch_at_install(cfg: Any, tmp_path: Path) -> Non
             json={"repo_url": "https://github.com/owner/repo"},
         )
     assert resp.status_code == 200, resp.text
-    assert captured["repo_url"] == "https://github.com/owner/repo@main", captured
+    assert captured["repo_url"] == "https://github.com/owner/repo", captured
+
+
+def test_git_pull_follows_a_renamed_default_branch(tmp_path: Path) -> None:
+    """After the remote renames its default branch (master to main), a refless
+    pull lands on the new default and updates origin/HEAD, even though the clone
+    has never fetched it and its origin/HEAD still says master."""
+    origin = tmp_path / "origin"
+    origin.mkdir()
+    _git(origin, "init", "-b", "master")
+    (origin / "f.txt").write_text("v1")
+    _git(origin, "add", ".")
+    _git(origin, "commit", "-m", "v1")
+    clone = tmp_path / "clone"
+    _git(tmp_path, "clone", f"file://{origin}", str(clone))
+
+    _git(origin, "branch", "-m", "master", "main")
+    (origin / "f.txt").write_text("v2")
+    _git(origin, "commit", "-am", "v2")
+
+    ok, err = git_pull(str(clone), "myapp", repo_url=f"file://{origin}")
+    assert ok, err
+    head = subprocess.run(
+        ["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=clone, capture_output=True, text=True
+    ).stdout.strip()
+    origin_head = subprocess.run(
+        ["git", "symbolic-ref", "--short", "refs/remotes/origin/HEAD"], cwd=clone, capture_output=True, text=True
+    ).stdout.strip()
+    assert (head, origin_head) == ("main", "origin/main")
+    assert (clone / "f.txt").read_text() == "v2"
+
+
+@pytest.mark.parametrize("failure", ["exit_code", "timeout"])
+def test_git_pull_succeeds_when_updating_origin_head_fails(tmp_path: Path, failure: str) -> None:
+    origin = tmp_path / "origin"
+    origin.mkdir()
+    _git(origin, "init", "-b", "master")
+    (origin / "f.txt").write_text("v1")
+    _git(origin, "add", ".")
+    _git(origin, "commit", "-m", "v1")
+    clone = tmp_path / "clone"
+    _git(tmp_path, "clone", f"file://{origin}", str(clone))
+    _git(origin, "branch", "-m", "master", "main")
+    (origin / "f.txt").write_text("v2")
+    _git(origin, "commit", "-am", "v2")
+
+    real_run = subprocess.run
+
+    def fail_set_head(cmd: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        if cmd[-4:-1] == ["remote", "set-head", "origin"]:
+            if failure == "timeout":
+                raise subprocess.TimeoutExpired(cmd, 10)
+            return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="ref locked")
+        return real_run(cmd, **kwargs)
+
+    with (
+        mock.patch("compute_space.core.apps.subprocess.run", side_effect=fail_set_head),
+        mock.patch("compute_space.core.apps.logger.warning") as warning,
+    ):
+        ok, err = git_pull(str(clone), "myapp", repo_url=f"file://{origin}")
+
+    assert ok, err
+    assert warning.call_count == 1
+    assert (clone / "f.txt").read_text() == "v2"
+    head = real_run(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=clone, capture_output=True, text=True)
+    origin_head = real_run(
+        ["git", "symbolic-ref", "--short", "refs/remotes/origin/HEAD"], cwd=clone, capture_output=True, text=True
+    )
+    assert (head.stdout.strip(), origin_head.stdout.strip()) == ("main", "origin/master")
 
 
 def test_add_app_non_git_clone_does_not_pin_or_error(cfg: Any, tmp_path: Path) -> None:
@@ -366,7 +437,7 @@ def test_add_app_non_git_clone_does_not_pin_or_error(cfg: Any, tmp_path: Path) -
     with (
         mock.patch.object(apps_routes, "clone_with_github_fallback", side_effect=fake_clone),
         mock.patch.object(apps_routes, "validate_manifest", return_value=None),
-        mock.patch.object(apps_routes, "move_clone_to_app_temp_dir", return_value=str(clone)),
+        mock.patch.object(apps_routes, "move_clone_to_app_checkout_dir", return_value=str(clone)),
         mock.patch.object(apps_routes, "insert_and_deploy", side_effect=fake_insert_and_deploy),
         TestClient(app=make_test_app(api_apps_routes)) as client,
     ):

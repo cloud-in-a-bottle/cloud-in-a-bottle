@@ -103,19 +103,33 @@
 
     <div class="field">
       <span>Automatic updates</span>
-      <div class="field-row" id="auto-update-row">
+      <div class="field-row field-row--schedule" id="auto-update-row">
         <label class="field field--check">
           <input type="checkbox" id="auto-update-enabled" onchange="saveAutoUpdate()" disabled>
-          <span>Update automatically every day at</span>
+          <span>Update every day at</span>
         </label>
         <input type="time" id="auto-update-time" aria-label="Update time" onchange="saveAutoUpdate()" disabled>
+        <select id="auto-update-zone" aria-label="Timezone" onchange="saveAutoUpdate()" disabled></select>
       </div>
       <p class="notice notice--warn" id="auto-update-paused" hidden>Paused: automatic updates only run when the
         remote follows tagged releases (a URL with no <code>#branch</code> or <code>@ref</code>).</p>
-      <p class="hint">Installs the latest tagged release at the chosen time (in your
-        browser's timezone). Updating briefly makes the dashboard and apps unavailable.</p>
+      <p class="hint">Installs the latest tagged release at the chosen time. Updating briefly makes the dashboard
+        and apps unavailable.</p>
       <p class="notice" id="auto-update-last" hidden></p>
       <p id="auto-update-msg" class="msg" hidden></p>
+    </div>
+
+    <div class="field">
+      <label class="field field--check">
+        <input type="checkbox" id="app-auto-update-enabled" aria-describedby="app-auto-update-hint"
+               onchange="saveAppAutoUpdate()" disabled>
+        <span>Also update apps at that time</span>
+      </label>
+      <p class="hint" id="app-auto-update-hint">Updates each installed app to its latest version, one at a time.
+        An update that adds permissions or changes an app's settings waits for you to approve it on the app's page.
+        Stopped apps, apps with local changes and apps pinned to a commit are left alone.</p>
+      <div class="notice" id="app-auto-update-last" hidden></div>
+      <p id="app-auto-update-msg" class="msg" hidden></p>
     </div>
 
     <hr class="rule">
@@ -133,7 +147,7 @@
 <section class="section">
   {% call section_head("Domains") %}{% endcall %}
   <div class="panel">
-    <p class="hint">Hostnames this instance answers on. The primary is used for canonical links and
+    <p class="desc">Hostnames this instance answers on. The primary is used for canonical links and
       app configuration. Add a
       secondary <strong>public</strong> domain (its DNS must be delegated to this instance — it then
       acquires a TLS certificate automatically) or a hostname served locally over plain HTTP, such
@@ -171,7 +185,7 @@
 <section class="section">
   {% call section_head("API tokens") %}{% endcall %}
   <div class="panel">
-    <p class="hint">Bearer tokens for programmatic access (e.g. AI agents). Each token grants
+    <p class="desc">Bearer tokens for programmatic access (e.g. AI agents). Each token grants
       owner-level access until it expires.</p>
 
     <div class="field-row field-row--add">
@@ -212,7 +226,7 @@
 <section class="section">
   {% call section_head("Archive backend") %}{% endcall %}
   <div class="panel">
-    <p class="hint">The archive data tier (<code>app_archive</code>) is used by apps that store large
+    <p class="desc">The archive data tier (<code>app_archive</code>) is used by apps that store large
       amounts of bulk data (e.g. file uploads, media). It is always available: by default it is backed
       by <strong>local disk</strong> on this instance. Configure an <strong>S3</strong> backend for
       durable, elastic object storage &mdash; any existing local archive data is migrated into the
@@ -226,7 +240,7 @@
 <section class="section">
   {% call section_head("Services") %}{% endcall %}
   <div class="panel">
-    <p class="hint">When more than one installed app provides the same service, choose which one is
+    <p class="desc">When more than one installed app provides the same service, choose which one is
       used by default. Consumer apps that don't pin a specific provider get the default; with no
       default set, Cloud in a Bottle's own implementation serves the service if it has one, and
       otherwise the app that has provided it the longest.</p>

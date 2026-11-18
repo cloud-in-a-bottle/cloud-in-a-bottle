@@ -126,6 +126,8 @@ let savedPrereleases = null;
 let savedPrereleasesError = null;
 // The saved auto-update settings, null until loaded.
 let autoUpdate = null;
+// The saved app auto-update setting and last run, null until loaded.
+let appAutoUpdate = null;
 
 const REMOTE_SCHEMES = ['http:', 'https:', 'ssh:', 'git:', 'file:'];
 
@@ -330,27 +332,37 @@ async function savePrereleases() {
   }
 }
 
-function pad2(n) { return String(n).padStart(2, '0'); }
-
-// The scheduled time is stored as HH:MM in UTC and shown in the browser's timezone.
-function utcTimeToLocal(hhmm) {
-  const [h, m] = hhmm.split(':').map(Number);
-  const d = new Date();
-  d.setUTCHours(h, m, 0, 0);
-  return pad2(d.getHours()) + ':' + pad2(d.getMinutes());
+// The schedule is a time on the clock of an IANA timezone, saved as is: the server keeps it at that local time across
+// daylight saving time changes.
+function browserTimeZone() {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || null;
+  } catch (e) {
+    return null;
+  }
 }
 
-function localTimeToUtc(hhmm) {
-  const [h, m] = hhmm.split(':').map(Number);
-  const d = new Date();
-  d.setHours(h, m, 0, 0);
-  return pad2(d.getUTCHours()) + ':' + pad2(d.getUTCMinutes());
+// Every zone the browser knows, plus UTC (which Chromium leaves out), the browser's own, and the saved one, which
+// this browser may list under another name (Asia/Kolkata and Asia/Calcutta) or not at all.
+function fillTimeZones(select, saved) {
+  let zones = [];
+  try {
+    zones = Intl.supportedValuesOf('timeZone');
+  } catch (e) {
+    zones = [];
+  }
+  const own = browserTimeZone();
+  const all = new Set(zones.concat(['UTC', saved], own ? [own] : []));
+  select.replaceChildren.apply(select, Array.from(all).sort().map(function(zone) {
+    return new Option(zone === own ? zone + ' (this browser)' : zone, zone);
+  }));
 }
 
 function renderAutoUpdate() {
   if (autoUpdate === null || savedChannel === null) return;
   const enabled = document.getElementById('auto-update-enabled');
   const time = document.getElementById('auto-update-time');
+  const zone = document.getElementById('auto-update-zone');
   const paused = savedChannel !== 'tags';
   enabled.checked = autoUpdate.enabled;
   enabled.disabled = paused;
@@ -359,15 +371,28 @@ function renderAutoUpdate() {
   } else {
     enabled.removeAttribute('aria-describedby');
   }
-  time.value = utcTimeToLocal(autoUpdate.time_utc);
-  time.disabled = paused || !autoUpdate.enabled;
+  time.value = autoUpdate.time;
+  // App updates run at the same time, so the schedule stays editable while they're on.
+  const appsOn = appAutoUpdate !== null && appAutoUpdate.enabled;
+  time.disabled = !appsOn && (paused || !autoUpdate.enabled);
+  if (!Array.from(zone.options).some(function(o) { return o.value === autoUpdate.timezone; })) {
+    fillTimeZones(zone, autoUpdate.timezone);
+  }
+  zone.value = autoUpdate.timezone;
+  zone.disabled = time.disabled;
   document.getElementById('auto-update-paused').hidden = !paused;
-  document.getElementById('auto-update-row').classList.toggle('field-row--disabled', paused);
+  document.getElementById('auto-update-row').classList.toggle('field-row--disabled', paused && !appsOn);
 
   const last = document.getElementById('auto-update-last');
   if (autoUpdate.last_run_at) {
-    last.textContent = 'Last automatic update: ' + new Date(autoUpdate.last_run_at).toLocaleString()
-      + '. ' + autoUpdate.last_run_message;
+    const at = new Date(autoUpdate.last_run_at);
+    let when;
+    try {
+      when = at.toLocaleString(undefined, {timeZone: autoUpdate.timezone, timeZoneName: 'short'});
+    } catch (e) {
+      when = at.toLocaleString(undefined, {timeZoneName: 'short'});
+    }
+    last.textContent = 'Last automatic update: ' + when + '. ' + autoUpdate.last_run_message;
     last.hidden = false;
   } else {
     last.hidden = true;
@@ -389,6 +414,74 @@ async function loadAutoUpdate() {
   }
 }
 
+function renderAppAutoUpdate() {
+  if (appAutoUpdate === null) return;
+  const enabled = document.getElementById('app-auto-update-enabled');
+  enabled.checked = appAutoUpdate.enabled;
+  enabled.disabled = false;
+  const last = document.getElementById('app-auto-update-last');
+  if (!appAutoUpdate.last_run_at) {
+    last.hidden = true;
+    return;
+  }
+  const results = appAutoUpdate.last_run_results;
+  const count = (outcome) => results.filter((r) => r.outcome === outcome).length;
+  let html = '<p>Last automatic app update: ' + esc(new Date(appAutoUpdate.last_run_at).toLocaleString())
+    + '. ' + count('updated') + ' updated, ' + count('up_to_date') + ' up to date, '
+    + count('skipped') + ' skipped.</p>';
+  const listOf = (outcome, heading) => {
+    const items = results.filter((r) => r.outcome === outcome);
+    if (items.length === 0) return '';
+    return '<p>' + heading + '</p><ul>' + items.map((r) => '<li><a href="/app_detail/'
+      + encodeURIComponent(r.app_name) + '">' + esc(r.app_name) + '</a>'
+      + (r.detail ? ': ' + esc(r.detail) : '') + '</li>').join('') + '</ul>';
+  };
+  html += listOf('needs_approval', 'Needs your approval (open the app and update it):');
+  html += listOf('failed', 'Failed:');
+  last.innerHTML = html;
+  last.hidden = false;
+}
+
+async function loadAppAutoUpdate() {
+  try {
+    const resp = await fetch('/api/settings/app-auto-update');
+    if (!resp.ok) throw new Error('failed to load');
+    appAutoUpdate = await resp.json();
+    renderAppAutoUpdate();
+    renderAutoUpdate();
+  } catch (e) {
+    const msg = document.getElementById('app-auto-update-msg');
+    msg.textContent = 'Failed to load automatic app update settings. Reload the page to retry.';
+    msg.className = 'msg msg--error';
+    msg.hidden = false;
+  }
+}
+
+async function saveAppAutoUpdate() {
+  const msg = document.getElementById('app-auto-update-msg');
+  msg.hidden = true;
+  try {
+    const resp = await fetch('/api/settings/app-auto-update', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({enabled: document.getElementById('app-auto-update-enabled').checked}),
+    });
+    if (!resp.ok) {
+      const err = await resp.json();
+      throw new Error(responseErrorMessage(err, 'failed to save'));
+    }
+    appAutoUpdate = await resp.json();
+    msg.textContent = 'Saved.';
+    msg.className = 'msg msg--ok';
+  } catch (e) {
+    msg.textContent = 'Failed to save automatic app update settings: ' + e.message;
+    msg.className = 'msg msg--error';
+  }
+  msg.hidden = false;
+  renderAppAutoUpdate();
+  renderAutoUpdate();
+}
+
 async function saveAutoUpdate() {
   const msg = document.getElementById('auto-update-msg');
   const time = document.getElementById('auto-update-time');
@@ -400,7 +493,8 @@ async function saveAutoUpdate() {
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({
         enabled: document.getElementById('auto-update-enabled').checked,
-        time_utc: localTimeToUtc(time.value),
+        time: time.value,
+        timezone: document.getElementById('auto-update-zone').value,
       }),
     });
     if (!resp.ok) {
@@ -718,7 +812,7 @@ function renderArchiveBackend(state) {
 
   var experimentalNote = '';
   if (state.backend === 's3') {
-    experimentalNote = '<p class="hint"><strong class="error">Experimental:</strong> the S3 archive backend is best-effort durable. '
+    experimentalNote = '<p class="desc"><strong class="error">Experimental:</strong> the S3 archive backend is best-effort durable. '
       + 'Filename-to-S3-chunk mappings live in a SQLite metadata DB on this zone’s local disk; '
       + 'recovery after the local disk is wiped requires the latest meta dump in S3 plus a manual <code>juicefs load</code>.</p>';
   }
@@ -765,7 +859,7 @@ function showConfigureForm(state) {
   formEl.innerHTML = '<p><strong>Configure S3 archive storage.</strong> JuiceFS will format the bucket and mount it locally; this is a one-time operation.</p>'
     + migrateNote
     + '<p class="notice notice--warn"><strong>Experimental.</strong> Filename-to-S3-chunk mappings live in a SQLite metadata DB on this zone’s local disk, not in the bucket. If the local disk is wiped, the bucket bytes can be recovered only from JuiceFS\'s periodic meta dumps in S3 (replayed via <code>juicefs load</code>).</p>'
-    + '<p class="hint">By default, JuiceFS attempts an hourly metadata backup to <code>&lt;bucket&gt;/&lt;volume&gt;/meta/dump-*.json.gz</code>. Check Latest meta dump above to confirm one is available. Recovering the archive on a new instance also requires loading that metadata.</p>'
+    + '<p class="desc">By default, JuiceFS attempts an hourly metadata backup to <code>&lt;bucket&gt;/&lt;volume&gt;/meta/dump-*.json.gz</code>. Check Latest meta dump above to confirm one is available. Recovering the archive on a new instance also requires loading that metadata.</p>'
     + '<table class="form-table"><tbody>'
     + '<tr><th><label for="ab-bucket">S3 bucket</label></th><td><input id="ab-bucket" type="text" placeholder="my-openhost-archive"></td></tr>'
     + '<tr><th><label for="ab-region">Region</label></th><td><input id="ab-region" type="text" value="us-east-1"></td></tr>'
@@ -965,6 +1059,7 @@ async function connectImbue() {
 loadOwnerUsername();
 loadRemote();
 loadAutoUpdate();
+loadAppAutoUpdate();
 checkForUpdates();
 updateSshStatus();
 setInterval(updateSshStatus, 5000);
