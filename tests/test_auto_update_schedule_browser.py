@@ -71,6 +71,7 @@ def schedule(stack: LocalStack, owner: requests.Session) -> None:
             "auto_update_enabled": "1",
             "auto_update_time": "06:00",
             "auto_update_timezone": "America/Chicago",
+            "app_auto_update_enabled": "0",
             "auto_update_last_run_at": None,
             "auto_update_last_run_outcome": None,
             "auto_update_last_run_detail": None,
@@ -137,7 +138,6 @@ def _save(page: Page, action: str, value: str) -> dict[str, object]:
     ) as r:
         if action == "time":
             page.locator("#auto-update-time").fill(value)
-            page.locator("#auto-update-time").dispatch_event("change")
         else:
             page.locator("#auto-update-zone").select_option(value=value)
     expect(page.locator("#auto-update-msg")).to_have_text("Saved.")
@@ -216,7 +216,6 @@ def test_failed_save_puts_back_the_saved_schedule(
     expect(page.locator("#auto-update-msg")).to_contain_text("Failed to save automatic update settings")
     expect(page.locator("#auto-update-zone")).to_have_value("America/Chicago")
     page.locator("#auto-update-time").fill("08:00")
-    page.locator("#auto-update-time").dispatch_event("change")
     expect(page.locator("#auto-update-time")).to_have_value("06:00")
     assert _get_setting(stack, "auto_update_timezone") == "America/Chicago"
 
@@ -268,6 +267,30 @@ def test_dropdown_is_disabled_with_the_time(
     paused = _open(open_settings, browser, stack, owner, "Asia/Tokyo", channel="branch")
     expect(paused.locator("#auto-update-paused")).to_be_visible()
     expect(paused.locator("#auto-update-zone")).to_be_disabled()
+
+
+@pytest.mark.parametrize("channel", ["tags", "branch"])
+def test_app_updates_keep_the_shared_schedule_editable(
+    open_settings: tuple[list[BrowserContext], list[str]],
+    browser: Browser,
+    stack: LocalStack,
+    owner: requests.Session,
+    channel: str,
+) -> None:
+    _set_settings(stack, {"auto_update_enabled": "0", "app_auto_update_enabled": "1"})
+    page = _open(open_settings, browser, stack, owner, "Asia/Tokyo", channel=channel)
+    expect(page.locator("#auto-update-time")).to_be_enabled()
+    expect(page.locator("#auto-update-zone")).to_be_enabled()
+    assert _save(page, "zone", "Europe/Berlin") == {
+        "enabled": False,
+        "time": "06:00",
+        "timezone": "Europe/Berlin",
+    }
+    assert _get_setting(stack, "auto_update_timezone") == "Europe/Berlin"
+    page.locator("#app-auto-update-enabled").uncheck()
+    expect(page.locator("#app-auto-update-msg")).to_have_text("Saved.")
+    expect(page.locator("#auto-update-time")).to_be_disabled()
+    expect(page.locator("#auto-update-zone")).to_be_disabled()
 
 
 def test_last_run_is_shown_in_the_schedules_timezone(
