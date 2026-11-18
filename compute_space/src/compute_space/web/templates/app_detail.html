@@ -3,6 +3,7 @@
 {% from "_components/icon_button.html" import icon_button %}
 {% from "_components/info_table.html" import info_table, info_row %}
 {% from "_components/section.html" import section_head %}
+{% from "_components/notice.html" import notice %}
 
 {#- Name and git upstream are edited in place: a display span and an edit span
     that app-detail.js swaps by toggling `hidden`. -#}
@@ -73,7 +74,7 @@ None. All paths require Cloud in a Bottle login.
   {% endif %}
 
   {% if next_url %}
-  <p class="notice">Waiting for app to finish deploying. You'll be redirected automatically once it's ready.</p>
+  {{ notice("Waiting for app to finish deploying. You'll be redirected automatically once it's ready.") }}
   {% endif %}
 
   {% call info_table() %}
