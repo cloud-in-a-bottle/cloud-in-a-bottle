@@ -7,6 +7,7 @@ from compute_space.config import Config
 from compute_space.core.apps import restart_app_process
 from compute_space.core.apps import start_app_process
 from compute_space.core.containers import BUILD_CACHE_CORRUPT_MARKER
+from compute_space.core.containers import app_image_tag
 from compute_space.core.containers import drop_docker_build_cache
 from compute_space.core.containers import image_exists
 from compute_space.core.containers import is_container_running
@@ -60,7 +61,7 @@ def check_app_status(config: Config) -> None:
             repo_path = row["repo_path"]
             has_repo = bool(repo_path) and os.path.isdir(repo_path)
             has_manifest = bool(row["manifest_raw"]) or has_repo
-            image_tag = f"openhost-{row['name']}:latest"
+            image_tag = app_image_tag(row["name"])
             needs_build = row["status"] == "building" or not image_exists(image_tag)
             if not has_manifest or (needs_build and not has_repo):
                 db.execute(

@@ -138,7 +138,9 @@ class LocalStack:
         teardown to avoid leaking containers across test runs.
         """
         for app_name in self.deployed_app_names:
-            subprocess.run(["podman", "rm", "-f", app_container_name(app_name)], capture_output=True, timeout=60)
+            subprocess.run(
+                ["podman", "rm", "-f", "-t", "0", app_container_name(app_name)], capture_output=True, timeout=60
+            )
 
 
 def browser_session() -> requests.Session:

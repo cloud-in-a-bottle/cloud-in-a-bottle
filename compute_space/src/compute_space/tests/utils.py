@@ -108,7 +108,7 @@ def wait_app_running(session: requests.Session, router_url: str, app_name: str, 
             return bool(data["status"] == "running")
         return False
 
-    poll(_check, timeout=timeout, interval=5, fail_msg=f"{app_name} did not reach 'running' state")
+    poll(_check, timeout=timeout, interval=1, fail_msg=f"{app_name} did not reach 'running' state")
 
 
 def wait_app_removed(session: requests.Session, router_url: str, app_name: str, timeout: float = 120) -> None:
@@ -132,7 +132,7 @@ def wait_app_removed(session: requests.Session, router_url: str, app_name: str, 
                 pytest.fail(f"{app_name} removal failed: {data.get('error')}")
         return False
 
-    poll(_check, timeout=timeout, interval=2, fail_msg=f"{app_name} was not removed within {timeout}s")
+    poll(_check, timeout=timeout, interval=1, fail_msg=f"{app_name} was not removed within {timeout}s")
 
 
 def router_cmd() -> list[str]:
@@ -142,8 +142,11 @@ def router_cmd() -> list[str]:
     test runner is itself launched via ``pixi run -e dev pytest``, so
     ``sys.executable`` already points at the dev env's Python and
     ``compute_space`` is importable as the editable package install.
+
+    Goes through ``router_entrypoint`` (the real router plus test-only patches)
+    rather than ``-m compute_space``.
     """
-    return [sys.executable, "-m", "compute_space"]
+    return [sys.executable, "-m", "compute_space.tests.router_entrypoint"]
 
 
 # ---------------------------------------------------------------------------

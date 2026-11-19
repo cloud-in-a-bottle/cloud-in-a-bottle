@@ -365,7 +365,14 @@ class TestApplyWalkE2E:
         metadata = f"{_REPO}/.pixi/envs/default/conda-meta/pixi"
         owner = _exec(c, "stat", "-c", "%u:%g", metadata).stdout.strip()
         mode = _exec(c, "stat", "-c", "%a", metadata).stdout.strip()
+        # The shipped unit waits RestartSec=30 before restarting; this test checks
+        # that the restart repairs ownership offline, not the delay, so shorten it.
+        # One restart stays far inside StartLimitBurst.
+        fast_restart = "/run/systemd/system/openhost.service.d/zz-test-fast-restart.conf"
         _exec(c, "systemctl", "stop", "openhost")
+        _exec(c, "mkdir", "-p", "/run/systemd/system/openhost.service.d")
+        _exec(c, "sh", "-c", f"printf '[Service]\\nRestartSec=1\\n' > {fast_restart}")
+        _exec(c, "systemctl", "daemon-reload")
         try:
             with _without_dns_or_build_cache(c):
                 _exec(c, "systemctl", "reset-failed", "openhost")
@@ -393,6 +400,8 @@ class TestApplyWalkE2E:
                 assert _exec(c, "stat", "-c", "%U:%G", metadata).stdout.strip() == "host:host"
                 assert _exec(c, "getent", "ahostsv4", "pypi.org", check=False).returncode != 0
         finally:
+            _exec(c, "rm", "-f", fast_restart)
+            _exec(c, "systemctl", "daemon-reload")
             _exec(c, "chown", owner, metadata)
             _exec(c, "chmod", mode, metadata)
 

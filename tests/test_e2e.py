@@ -78,7 +78,7 @@ def healthy_router(router_url):
         requests.Session(),
         f"{router_url}/health",
         timeout=420,
-        interval=10,
+        interval=2,
         fail_msg=f"Router at {router_url} did not become healthy",
     )
     return True
@@ -391,7 +391,7 @@ class TestSelfHost:
             session,
             f"https://test-app.{domain}/health",
             timeout=APP_DEPLOY_TIMEOUT_S,
-            interval=5,
+            interval=1,
             fail_msg="test-app did not come back after reload",
         )
         assert r.json() == {"status": "ok"}
@@ -994,7 +994,7 @@ class TestSelfHost:
         (byte-identical) now that the volume is S3-backed, proving the juicefs
         sync + config migration preserved existing data.  The mount is briefly
         recycled across the migration, so retry."""
-        content = archive_read(TestSelfHost._archive_dir, self._PRE_MIGRATION_REL, attempts=18, interval=5)
+        content = archive_read(TestSelfHost._archive_dir, self._PRE_MIGRATION_REL, attempts=90, interval=1)
         assert content == self._PRE_MIGRATION_CONTENT, "pre-migration archive content changed across migration"
 
     def test_13i_archive_file_roundtrip(self):
@@ -1041,7 +1041,7 @@ class TestSelfHost:
 
         # Pre-migration data (seeded in 13f2, already survived local->s3 in 13h2)
         # must ALSO survive s3->s3, byte-identical.
-        content = archive_read(TestSelfHost._archive_dir, self._PRE_MIGRATION_REL, attempts=18, interval=5)
+        content = archive_read(TestSelfHost._archive_dir, self._PRE_MIGRATION_REL, attempts=90, interval=1)
         assert content == self._PRE_MIGRATION_CONTENT, "pre-migration archive content changed across s3->s3 migration"
 
     def test_13j_cleanup_archive_test(self, session, router_url, domain):

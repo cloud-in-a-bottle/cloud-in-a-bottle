@@ -26,6 +26,7 @@ from compute_space.core.auth.auth import DEFAULT_OWNER_USERNAME
 from compute_space.core.auth.auth import read_owner_username
 from compute_space.core.auth.permissions_v2 import grant_permission_v2
 from compute_space.core.containers import BUILD_CACHE_CORRUPT_MARKER
+from compute_space.core.containers import app_image_tag
 from compute_space.core.containers import build_image
 from compute_space.core.containers import is_container_running
 from compute_space.core.containers import remove_image
@@ -974,7 +975,7 @@ def restart_app_process(app_id: str, db: sqlite3.Connection, config: Config) -> 
     storage.check_before_deploy(config)
     manifest_raw = app_row["manifest_raw"]
     manifest = parse_manifest_from_string(manifest_raw) if manifest_raw else parse_manifest(app_row["repo_path"])
-    run_app_image(app_id, f"openhost-{app_row['name']}:latest", manifest, db, config)
+    run_app_image(app_id, app_image_tag(app_row["name"]), manifest, db, config)
 
 
 def app_log_path(app_name: str, config: Config) -> str:
