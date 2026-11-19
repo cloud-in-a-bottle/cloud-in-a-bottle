@@ -16,7 +16,7 @@ from compute_space.core.logging import logger
 from compute_space.core.updates import wait_for_shutdown
 
 # Track active sessions for cleanup on shutdown.
-_active_sessions: dict[int, tuple[subprocess.Popen[bytes], int]] = {}
+_active_sessions: dict[int, subprocess.Popen[bytes]] = {}
 
 
 class TerminalWebsocket(Protocol):
@@ -45,31 +45,42 @@ async def handle_terminal_ws(ws: TerminalWebsocket) -> None:
     master_fd, slave_fd = pty.openpty()
     _set_winsize(master_fd, 24, 80)
 
-    proc = subprocess.Popen(
-        ["bash", "-l"],
-        stdin=slave_fd,
-        stdout=slave_fd,
-        stderr=slave_fd,
-        preexec_fn=os.setsid,
-        env={**os.environ, "TERM": "xterm-256color"},
-    )
-    os.close(slave_fd)
+    try:
+        proc = subprocess.Popen(
+            ["bash", "-l"],
+            stdin=slave_fd,
+            stdout=slave_fd,
+            stderr=slave_fd,
+            preexec_fn=os.setsid,
+            env={**os.environ, "TERM": "xterm-256color"},
+        )
+    except BaseException:
+        os.close(master_fd)
+        raise
+    finally:
+        os.close(slave_fd)
 
     session_id = id(ws)
-    _active_sessions[session_id] = (proc, master_fd)
+    _active_sessions[session_id] = proc
 
-    loop = asyncio.get_event_loop()
+    # The PTY master is driven through asyncio's pipe transports, which make the
+    # fd nonblocking and handle partial writes and buffering. A blocking write
+    # on the event loop can deadlock the whole router: the loop waits for bash
+    # to consume input while bash waits for the loop to drain its output (#493).
+    loop = asyncio.get_running_loop()
+    reader = asyncio.StreamReader()
 
     async def pty_to_ws() -> None:
         """Read from PTY master fd, send to WebSocket as binary."""
         try:
-            while True:
-                data = await loop.run_in_executor(None, os.read, master_fd, 4096)
-                if not data:
-                    break
+            while data := await reader.read(4096):
                 await ws.send(data)
-        except Exception as e:
+        except Exception as e:  # EIO once every slave fd is closed
             logger.info(f"pty_to_ws ended: {e}")
+
+    async def write_pty(data: bytes) -> None:
+        writer.write(data)
+        await writer.drain()
 
     async def ws_to_pty() -> None:
         """Read from WebSocket, write to PTY master fd."""
@@ -80,52 +91,68 @@ async def handle_terminal_ws(ws: TerminalWebsocket) -> None:
                     kind = msg[0]
                     payload = msg[1:]
                     if kind == 0x00:
-                        os.write(master_fd, payload)
+                        await write_pty(payload)
                     elif kind == 0x01:
                         ctrl = json.loads(payload)
                         if ctrl.get("type") == "resize":
                             _set_winsize(master_fd, ctrl["rows"], ctrl["cols"])
                 elif isinstance(msg, str):
-                    os.write(master_fd, msg.encode())
+                    await write_pty(msg.encode())
         except Exception as e:
             logger.info(f"ws_to_pty ended: {e}")
 
-    def _cleanup() -> None:
+    # The read transport takes ownership of master_fd. The write transport gets
+    # a dup, since each transport closes its own fd.
+    read_transport, _ = await loop.connect_read_pipe(
+        lambda: asyncio.StreamReaderProtocol(reader), os.fdopen(master_fd, "rb", buffering=0)
+    )
+    write_transport, write_protocol = await loop.connect_write_pipe(
+        asyncio.streams.FlowControlMixin, os.fdopen(os.dup(master_fd), "wb", buffering=0)
+    )
+    writer = asyncio.StreamWriter(write_transport, write_protocol, None, loop)
+
+    logger.info(f"Terminal session started (pid {proc.pid})")
+    tasks = [asyncio.create_task(t) for t in [pty_to_ws(), ws_to_pty(), wait_for_shutdown()]]
+    try:
+        await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+    finally:
+        for t in tasks:
+            t.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
         _active_sessions.pop(session_id, None)
+        read_transport.close()
+        write_transport.abort()  # drop unsent input; close() would wait for it
         try:
             os.kill(proc.pid, signal.SIGHUP)
         except OSError:
             pass
-        try:
-            os.close(master_fd)
-        except OSError:
-            pass
-        proc.wait()
+        await asyncio.to_thread(_reap, proc)
 
+
+def _reap(proc: subprocess.Popen[bytes]) -> None:
+    """Wait for the shell to exit, escalating to SIGKILL. Bounded so teardown can't hang."""
     try:
-        logger.info(f"Terminal session started (pid {proc.pid})")
-        tasks = [asyncio.create_task(t) for t in [pty_to_ws(), ws_to_pty(), wait_for_shutdown()]]
-        done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
-        # Kill process and close fd first — this unblocks any executor thread stuck in os.read
-        _cleanup()
-        for t in pending:
-            t.cancel()
-    finally:
-        _cleanup()
+        proc.wait(timeout=1)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        try:
+            proc.wait(timeout=1)
+        except subprocess.TimeoutExpired:
+            logger.warning(f"Terminal shell did not exit after SIGKILL (pid {proc.pid})")
 
 
 def cleanup_all() -> None:
-    """Kill any remaining PTY sessions. Called at shutdown."""
+    """Kill any remaining PTY sessions. Called at shutdown.
+
+    The PTY fds belong to each session's transports, which close them when the
+    session task is cancelled or the process exits.
+    """
     logger.info("Cleaning up terminal sessions...")
-    for _sid, (proc, master_fd) in list(_active_sessions.items()):
+    for proc in list(_active_sessions.values()):
         try:
             os.kill(proc.pid, signal.SIGKILL)
         except OSError:
             pass
-        try:
-            os.close(master_fd)
-        except OSError:
-            pass
-        proc.wait()
+        _reap(proc)
     _active_sessions.clear()
     logger.info("Terminal cleanup complete.")
