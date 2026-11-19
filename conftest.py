@@ -15,6 +15,9 @@ import sys
 
 import pytest
 
+from compute_space.tests.router_entrypoint import TEST_CONTAINER_PREFIX_ENV
+from compute_space.tests.router_entrypoint import apply_test_patches
+
 # ---------------------------------------------------------------------------
 # CLI flags
 # ---------------------------------------------------------------------------
@@ -89,9 +92,6 @@ def pytest_configure(config):
     # prefix are unaffected.
     worker = os.environ.get("PYTEST_XDIST_WORKER")
     if worker and config.getoption("--run-containers"):
-        from compute_space.tests.router_entrypoint import TEST_CONTAINER_PREFIX_ENV
-        from compute_space.tests.router_entrypoint import apply_test_patches
-
         os.environ[TEST_CONTAINER_PREFIX_ENV] = f"openhost-{worker}-"
         apply_test_patches()
 
