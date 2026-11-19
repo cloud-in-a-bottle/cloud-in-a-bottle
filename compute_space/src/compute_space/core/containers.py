@@ -23,7 +23,6 @@ import os
 import re
 import sqlite3
 import subprocess
-import time
 from datetime import UTC
 from datetime import datetime
 from typing import NoReturn
@@ -511,7 +510,6 @@ def stop_container(container_id: str) -> None:
     -t 10``).  If that times out or fails, escalates to ``podman kill``
     (SIGKILL) before removing.
     """
-    started = time.monotonic()
     try:
         result = subprocess.run(
             ["podman", "stop", "-t", "10", container_id],
@@ -524,14 +522,7 @@ def stop_container(container_id: str) -> None:
     except subprocess.TimeoutExpired:
         logger.warning("podman stop {} timed out, escalating to kill", container_id)
         subprocess.run(["podman", "kill", container_id], capture_output=True, timeout=10)
-    stopped = time.monotonic()
     subprocess.run(["podman", "rm", "-f", container_id], capture_output=True, timeout=30)
-    logger.info(
-        "Stopped container {} in {:.1f}s, removed in {:.1f}s",
-        container_id,
-        stopped - started,
-        time.monotonic() - stopped,
-    )
 
 
 def container_exists(name_or_id: str) -> bool:
