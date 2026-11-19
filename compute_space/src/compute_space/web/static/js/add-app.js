@@ -16,13 +16,11 @@ if (initialRepo) {
 }
 
 function showError(msg) {
-  const el = document.getElementById('error');
-  el.textContent = msg;
-  el.hidden = false;
+  dom.setMessage(document.getElementById('error'), msg, 'error');
 }
 
 function clearError() {
-  document.getElementById('error').hidden = true;
+  dom.hideMessage(document.getElementById('error'));
 }
 
 function show(id) { document.getElementById(id).hidden = false; }

@@ -137,11 +137,14 @@ provider_teardown() {
 
     if [ -n "$instance_name" ] && [ -n "$project" ]; then
         echo "Deleting GCE instance $instance_name..."
+        # --async: don't hold the CI job open ~60s while GCE shuts the VM down.
+        # A delete that fails later is caught by the e2e-cleanup sweep.
         gcloud compute instances delete "$instance_name" \
             --project="$project" \
             --zone="$zone" \
+            --async \
             --quiet 2>/dev/null \
-            && echo "  Deleted" \
+            && echo "  Delete requested" \
             || echo "  Already deleted or not found"
     else
         echo "  No GCE instance to delete"

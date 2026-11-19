@@ -1,0 +1,10 @@
+{#- Says there is nothing here yet. Inside a panel it drops to a plain line.
+    Pass ``text``, or use it as a call block to include a link.
+
+    {{ empty("No API tokens.", id="no-tokens") }}
+
+    {% call empty() %}No apps deployed yet. <a href="/add_app">Deploy one now.</a>{% endcall %} -#}
+{% macro empty(text=none, id=none, hidden=false) -%}
+<p{% if id %} id="{{ id }}"{% endif %} class="empty"{% if hidden %} hidden{% endif %}>
+  {%- if caller is defined %}{{ caller() }}{% else %}{{ text or "" }}{% endif %}</p>
+{%- endmacro %}

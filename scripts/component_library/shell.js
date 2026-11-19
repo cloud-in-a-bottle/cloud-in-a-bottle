@@ -374,7 +374,7 @@
         rows.push(el('tr', {}, [
           el('td', {}, el('code', {text: arg.name})),
           el('td', {class: 'muted', text: withArgs.length > 1 ? macro.name : null}),
-          el('td', {}, arg.required ? el('span', {class: 'status-text status-text--warn', text: 'Required'}) : el('code', {text: arg.default})),
+          el('td', {}, arg.required ? el('span', {class: 'msg msg--warn', text: 'Required'}) : el('code', {text: arg.default})),
         ]));
       });
     });

@@ -89,19 +89,12 @@ function setActionsBusy(label) {
   var buttons = container.querySelectorAll('button');
   buttons.forEach(function(b) { b.disabled = true; });
   var msg = document.getElementById('app-action-msg');
-  if (msg) {
-    msg.style.color = 'var(--fg-status-warning)';
-    msg.textContent = label + '\u2026';
-  }
+  if (msg) dom.setMuted(msg, label + '\u2026');
   return function clear(errText) {
     buttons.forEach(function(b) { b.disabled = false; });
     if (msg) {
-      if (errText) {
-        msg.style.color = 'var(--fg-status-negative)';
-        msg.textContent = errText;
-      } else {
-        msg.textContent = '';
-      }
+      if (errText) dom.setMessage(msg, errText, 'error');
+      else dom.hideMessage(msg);
     }
   };
 }

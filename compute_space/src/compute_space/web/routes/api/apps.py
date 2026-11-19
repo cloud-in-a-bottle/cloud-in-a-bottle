@@ -57,7 +57,9 @@ from compute_space.core.apps import validate_manifest
 from compute_space.core.auth.permissions_v2 import grant_permission_v2
 from compute_space.core.checkout_operations import run_checkout_operation
 from compute_space.core.containers import BUILD_CACHE_CORRUPT_MARKER
+from compute_space.core.containers import app_container_name
 from compute_space.core.containers import archive_old_log
+from compute_space.core.containers import container_exists
 from compute_space.core.containers import get_docker_logs
 from compute_space.core.containers import log_timestamp
 from compute_space.core.containers import stop_app_process
@@ -638,7 +640,11 @@ async def stop_app(app_id: FromPath[str], db: NamedDependency[sqlite3.Connection
         raise ConflictException(detail="App is being removed")
 
     stop_app_process(app_row)
-    stop_container(f"openhost-{app_row['name']}")
+    # Also stop a container running under the app's name that the row doesn't point at
+    # (e.g. container_id not recorded yet).  Usually stop_app_process already removed it.
+    container_name = app_container_name(app_row["name"])
+    if container_exists(container_name):
+        stop_container(container_name)
     db.execute(
         "UPDATE apps SET status = 'stopped', container_id = NULL WHERE app_id = ?",
         (app_id,),

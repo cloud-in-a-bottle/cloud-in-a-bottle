@@ -3,11 +3,12 @@
 {% from "_components/section.html" import section_head %}
 {% from "_components/icon.html" import icon %}
 {% from "_components/button.html" import button %}
+{% from "_components/notice.html" import notice %}
 {% block content %}
 
 {% call section_head("Deploy New App") %}{% endcall %}
 
-<p id="error" class="notice notice--error" hidden></p>
+{{ notice(tone="error", id="error", hidden=true) }}
 
 <div id="clone-form">
 
@@ -27,7 +28,7 @@
   </div>
 
   {% call section_head("Deploy from Git URL", level=3) %}{% endcall %}
-  <p class="hint">Clone a git repository containing a <code>cloudinabottle.toml</code> manifest file.
+  <p class="desc">Clone a git repository containing a <code>cloudinabottle.toml</code> manifest file.
   Private GitHub repos are supported automatically &mdash; you'll be prompted to connect your
   GitHub account if needed.</p>
   <div class="repo-url-row">
@@ -57,17 +58,19 @@
 <div id="confirm-section" hidden>
   <div id="confirm-header"></div>
 
-  <table id="manifest-table"></table>
+  <div class="table-scroll"><table id="manifest-table"></table></div>
 
   <div id="port-mappings-section" class="port-mappings" hidden>
     {% call section_head("Port Mappings", level=3) %}{% endcall %}
-    <p class="hint">This app declares extra port mappings. You can set specific host ports or leave them as 0 for auto-assignment.</p>
-    <table>
-      <thead>
-        <tr><th>Label</th><th>Container Port</th><th>Host Port</th><th>Status</th></tr>
-      </thead>
-      <tbody id="port-mappings-body"></tbody>
-    </table>
+    <p class="desc">This app declares extra port mappings. You can set specific host ports or leave them as 0 for auto-assignment.</p>
+    <div class="table-scroll">
+      <table>
+        <thead>
+          <tr><th>Label</th><th>Container Port</th><th>Host Port</th><th>Status</th></tr>
+        </thead>
+        <tbody id="port-mappings-body"></tbody>
+      </table>
+    </div>
   </div>
 
   <br>
@@ -86,7 +89,6 @@
   "nextUrl": {{ next_url | tojson }}
 }
 </script>
-<script src="{{ static_url('js/dom.js') }}"></script>
 <script src="{{ static_url('js/http-errors.js') }}"></script>
 <script src="{{ static_url('js/add-app.js') }}"></script>
 {% endblock %}

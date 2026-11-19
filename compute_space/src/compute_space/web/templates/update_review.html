@@ -1,12 +1,14 @@
 {% extends "layout.html" %}
 {% from "_components/button.html" import button %}
+{% from "_components/msg.html" import msg %}
+{% from "_components/notice.html" import notice %}
 {% block title_suffix %} - Review Update{% endblock %}
 {% block content %}
 <h2>Review Update &mdash; {{ app.name }}</h2>
 <p>This update needs your approval. Review the changes below and approve
 them to apply the update, mirroring the approval required when the app was installed.</p>
 
-<p id="review-error" class="error" style="display:none;"></p>
+{{ notice(tone="error", id="review-error", hidden=true) }}
 
 <div id="no-review" style="display:none;">
   <p>No pending update to review. Return to
@@ -17,19 +19,19 @@ them to apply the update, mirroring the approval required when the app was insta
 <div id="review-body" style="display:none;">
   <div id="settings-section" style="display:none;">
     <h3>Changed settings</h3>
-    <table id="settings-table"></table>
+    <div class="table-scroll"><table id="settings-table"></table></div>
   </div>
 
   <div id="permissions-section" style="display:none;">
     <h3>New service permissions</h3>
     <p>These are granted when you approve the update.</p>
-    <table id="permissions-table"></table>
+    <div class="table-scroll"><table id="permissions-table"></table></div>
   </div>
 
   <div class="actions">
     {{ button("Approve & Update", variant="primary", id="approve-btn", onclick="approveUpdate()") }}
     {{ button("Cancel", onclick="cancelReview()") }}
-    <span id="review-msg"></span>
+    {{ msg(id="review-msg", hidden=true, tag="span") }}
   </div>
 </div>
 

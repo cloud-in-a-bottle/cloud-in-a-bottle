@@ -217,9 +217,9 @@ COMPONENTS = (
         template="""<div class="table-scroll"><table>
   <thead><tr><th>Domain</th><th>Status</th><th class="col-actions"></th></tr></thead>
   <tbody>
-    <tr><td>files.alice.example.com</td><td><span class="status-text status-text--ok">Active</span></td>
+    <tr><td>files.alice.example.com</td><td><span class="msg msg--ok">Active</span></td>
       <td class="col-actions">{{ icon_button("trash", "Remove files.alice.example.com") }}</td></tr>
-    <tr><td>notes.alice.example.com</td><td><span class="status-text status-text--warn">Pending</span></td>
+    <tr><td>notes.alice.example.com</td><td><span class="msg msg--warn">Pending</span></td>
       <td class="col-actions">{{ icon_button("trash", "Remove notes.alice.example.com") }}</td></tr>
   </tbody>
 </table></div>""",
@@ -259,12 +259,11 @@ COMPONENTS = (
     ),
     Component(
         id="status",
-        name="Status words",
+        name="App status",
         group="Status",
-        summary="Status as coloured text. Read, not clicked, so a filled chip beside a real button can't pass for one.",
-        template='<span class="status-text status-text--{{ v.tone }}">{{ v.label }}</span>',
+        summary="An app's lifecycle state as a coloured word with a square. For any other state label, use Inline message.",
+        template='<span class="status-value status-{{ v.status }}">{{ v.status }}</span>',
         classes=(
-            "status-text",
             "status-dot",
             "status-value",
             "status-running",
@@ -274,28 +273,46 @@ COMPONENTS = (
             "status-starting",
             "status-removing",
         ),
-        controls=(Choice("tone", ("ok", "warn", "error", "muted")), Text("label", "Running")),
+        controls=(Choice("status", ("running", "stopped", "starting", "building", "removing", "error")),),
+        notes=("The dashboard's app list shows the same state as a 5px .status-dot.",),
     ),
     Component(
         id="notice",
         name="Notice",
         group="Status",
         summary="A tinted message at panel scale, with a 3px bar on the left carrying the status.",
-        template='<div class="notice{% if v.tone != "info" %} notice--{{ v.tone }}{% endif %}">{{ v.text }}</div>',
-        classes=("notice",),
+        macro="notice",
         controls=(
             Choice("tone", ("info", "ok", "warn", "error")),
             Text("text", "Backups run every night at 03:00."),
+        ),
+        classes=("notice",),
+        notes=(
+            'Call it with a body for markup: {% call notice(tone="ok") %}...{% endcall %}.',
+            "Page scripts fill one in with dom.setMessage() and build new ones with dom.notice(), in "
+            "static/js/dom.js. Change them together.",
         ),
     ),
     Component(
         id="msg",
         name="Inline message",
         group="Status",
-        summary="One line of feedback beside a control.",
-        template='<span class="msg msg--{{ v.tone }}">{{ v.text }}</span>',
-        classes=("msg", "action-msg"),
-        controls=(Choice("tone", ("ok", "warn", "error")), Text("text", "Saved")),
+        summary='Coloured text in a tone: feedback after an action ("Saved."), or a state label ("Expired"). It wraps.',
+        macro="msg",
+        controls=(
+            Choice("tone", ("ok", "warn", "error")),
+            Text("text", "Saved."),
+            Choice("tag", ("p", "span")),
+        ),
+        classes=("msg",),
+        notes=(
+            'Use tag="span" to sit it inline after a button.',
+            'There is no neutral tone. Text with no tone, such as "Saving…" or "Never", is grey .muted text '
+            "from dom.setMuted() or dom.muted().",
+            "Render it empty and hidden when a script fills it in. Page scripts use dom.setMessage(), "
+            "dom.hideMessage() and dom.message(), in static/js/dom.js. Change them together.",
+            "Inside a Field, an error message hides the field's hint.",
+        ),
     ),
     Component(
         id="meter",
@@ -312,7 +329,7 @@ COMPONENTS = (
         name="Empty state",
         group="Status",
         summary="A box that says there is nothing here yet. Inside a panel it drops to a plain line.",
-        template='<div class="empty">{{ v.text }}</div>',
+        macro="empty",
         classes=("empty",),
         controls=(Text("text", "No apps yet. Deploy one to get started."),),
     ),
@@ -393,6 +410,25 @@ COMPONENTS = (
             "Hover the input for an fg/secondary border, and click into it for fg/primary. There is no focus ring.",
             "The 8 rows in Settings with a title and buttons still use .field by hand.",
         ),
+    ),
+    Component(
+        id="hint",
+        name="Hint",
+        group="Forms",
+        summary="A short note tied to one control. Text about a whole page or section is a Description.",
+        template='<p class="hint">{{ v.text }}</p>',
+        classes=("hint",),
+        controls=(Text("text", "Lowercase letters and digits."),),
+        notes=("12px, and 14px on touch screens. Inside a panel table it stays 12px.",),
+    ),
+    Component(
+        id="desc",
+        name="Description",
+        group="Forms",
+        summary="Text that describes a page or a section rather than one control.",
+        template='<p class="desc">{{ v.text }}</p>',
+        classes=("desc",),
+        controls=(Text("text", "Hostnames this instance answers on."),),
     ),
     Component(
         id="field-row",

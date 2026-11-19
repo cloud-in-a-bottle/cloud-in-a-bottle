@@ -70,6 +70,70 @@
     });
   }
 
+  // The inline message (.msg) takes a tone: 'ok', 'warn' or 'error'. It is both
+  // feedback after an action ("Saved.") and a state label ("Expired"). The
+  // notice (.notice) takes the same tones, or 'info' (or nothing), its neutral.
+  // Anything without a tone, such as "Saving…" or "Never", is grey .muted text
+  // from muted() and setMuted(). These mirror the message() and notice() Jinja
+  // macros so server- and client-rendered messages can't drift apart.
+  var TONES = ['ok', 'warn', 'error'];
+
+  function requireTone(tone) {
+    if (TONES.indexOf(tone) === -1) throw new Error('A message needs a tone (ok, warn or error), got ' + tone);
+  }
+
+  // `tag` is 'p' by default, or 'span' to sit inline after a button.
+  function message(content, tone, tag) {
+    requireTone(tone);
+    return el(tag || 'p', {class: 'msg msg--' + tone, role: 'status'}, content);
+  }
+
+  // Mirrors the notice() macro, including its live-region role.
+  function notice(content, tone) {
+    return el('div', {class: 'notice' + (tone && tone !== 'info' ? ' notice--' + tone : ''),
+                      role: tone === 'error' ? 'alert' : 'status'}, content);
+  }
+
+  function muted(content, tag) {
+    return el(tag || 'p', {class: 'muted', role: 'status'}, content);
+  }
+
+  function clearTones(node) {
+    TONES.forEach(function (t) {
+      node.classList.remove('msg--' + t);
+      node.classList.remove('notice--' + t);
+    });
+  }
+
+  // Fill an existing .msg or .notice, set its tone and show it. Content is
+  // text or nodes, as for el(). Other classes on the node stay put.
+  function setMessage(node, content, tone) {
+    var isNotice = node.classList.contains('notice');
+    if (!isNotice) requireTone(tone);
+    clearTones(node);
+    node.classList.remove('muted');
+    node.classList.add(isNotice ? 'notice' : 'msg');
+    if (tone && tone !== 'info') node.classList.add((isNotice ? 'notice--' : 'msg--') + tone);
+    replace(node, content);
+    node.hidden = false;
+    return node;
+  }
+
+  // Show grey text in a message's place, such as "Saving…" until setMessage().
+  function setMuted(node, content) {
+    clearTones(node);
+    node.classList.remove('msg');
+    node.classList.add('muted');
+    replace(node, content);
+    node.hidden = false;
+    return node;
+  }
+
+  function hideMessage(node) {
+    node.hidden = true;
+    return clear(node);
+  }
+
   // A bare .icon-btn <button>. Mirrors the icon_button() Jinja macro so server-
   // and client-rendered icon buttons can't drift apart.
   function iconButton(icon, label, onclick, iconSize) {
@@ -79,5 +143,9 @@
                  width: size, height: size, alt: '', 'aria-hidden': 'true'}));
   }
 
-  global.dom = {el: el, clear: clear, replace: replace, badge: badge, infoRow: infoRow, iconButton: iconButton};
+  global.dom = {
+    el: el, clear: clear, replace: replace, badge: badge, infoRow: infoRow, iconButton: iconButton,
+    message: message, notice: notice, muted: muted,
+    setMessage: setMessage, setMuted: setMuted, hideMessage: hideMessage,
+  };
 })(window);

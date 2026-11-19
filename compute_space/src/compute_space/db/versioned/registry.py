@@ -29,8 +29,9 @@ from compute_space.db.versioned.migrations.v0017_unpin_default_branch import Mig
 from compute_space.db.versioned.migrations.v0018_apps_prebuilt_image_verified import (
     Migration0018AppsPrebuiltImageVerified,
 )
-from compute_space.db.versioned.migrations.v0019_drop_image_verification_state import (
-    Migration0019DropImageVerificationState,
+from compute_space.db.versioned.migrations.v0019_auto_update_local_time import Migration0019AutoUpdateLocalTime
+from compute_space.db.versioned.migrations.v0020_drop_image_verification_state import (
+    Migration0020DropImageVerificationState,
 )
 
 # Numbered migrations in apply order. Versions MUST start at 2 and be
@@ -54,5 +55,6 @@ REGISTRY: list[Migration] = [
     Migration0016AutoUpdateOffForExisting(),
     Migration0017UnpinDefaultBranch(),
     Migration0018AppsPrebuiltImageVerified(),
-    Migration0019DropImageVerificationState(),
+    Migration0019AutoUpdateLocalTime(),
+    Migration0020DropImageVerificationState(),
 ]

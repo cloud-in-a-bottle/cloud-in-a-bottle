@@ -7,6 +7,8 @@ Routes:
 """
 
 import json
+import signal
+import sys
 from http.server import BaseHTTPRequestHandler
 from http.server import HTTPServer
 from typing import Any
@@ -60,5 +62,8 @@ class Handler(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
+    # As a container's PID 1, Python gets no default SIGTERM action, so `podman stop`
+    # would wait out its full grace period before SIGKILL. Exit promptly instead.
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
     print("Echo provider listening on :5000", flush=True)
     HTTPServer(("0.0.0.0", 5000), Handler).serve_forever()

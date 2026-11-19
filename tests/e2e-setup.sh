@@ -83,16 +83,22 @@ EOF
 provider_env_vars
 } > "$ENV_FILE"
 
-# ── 3. Wait for SSH ──────────────────────────────────────────────────────
+# ── 3. Create DNS records (TLS mode only) ────────────────────────────────
+# Submitted before the SSH wait so Route53 propagates while the VM boots; we
+# block on it below, before ansible starts the service that requests certs.
+
+if $USE_TLS; then
+    create_route53_dns "$DOMAIN" "$PUBLIC_IP" "$E2E_HOSTED_ZONE_ID"
+fi
+
+# ── 4. Wait for SSH, then for DNS ────────────────────────────────────────
 
 SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -i $SSH_KEY"
 echo "Waiting for SSH..."
 wait_for_ssh "$SSH_USER" "$PUBLIC_IP" "$SSH_OPTS" 60
 
-# ── 4. Create DNS records (TLS mode only) ────────────────────────────────
-
 if $USE_TLS; then
-    create_route53_dns "$DOMAIN" "$PUBLIC_IP" "$E2E_HOSTED_ZONE_ID"
+    wait_route53_dns
 fi
 
 # ── 5. Deploy via ansible ────────────────────────────────────────────────

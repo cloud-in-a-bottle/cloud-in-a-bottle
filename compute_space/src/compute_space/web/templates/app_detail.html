@@ -1,5 +1,7 @@
 {% extends "layout.html" %}
 {% from "_components/button.html" import button %}
+{% from "_components/msg.html" import msg %}
+{% from "_components/notice.html" import notice %}
 {% from "_components/icon_button.html" import icon_button %}
 {% from "_components/info_table.html" import info_table, info_row %}
 {% from "_components/section.html" import section_head %}
@@ -45,7 +47,7 @@
 {% for path in public_paths %}
 <code>{{ path }}</code>{% if not loop.last %}, {% endif %}
 {% endfor %}
-<p class="hint">
+<p class="desc">
   {% if "/" in public_paths %}
   All paths are accessible without Cloud in a Bottle login.
   {% else %}
@@ -73,7 +75,7 @@ None. All paths require Cloud in a Bottle login.
   {% endif %}
 
   {% if next_url %}
-  <p class="notice">Waiting for app to finish deploying. You'll be redirected automatically once it's ready.</p>
+  {{ notice("Waiting for app to finish deploying. You'll be redirected automatically once it's ready.") }}
   {% endif %}
 
   {% call info_table() %}
@@ -99,7 +101,7 @@ None. All paths require Cloud in a Bottle login.
     {#- Always rendered so app-detail.js can reveal it when an error streams in. -#}
     <tr id="app-error-row"{% if not app.error_message %} hidden{% endif %}>
       <th scope="row">Error</th>
-      <td class="error" id="app-error-cell" style="white-space: pre-wrap;">{{ app.error_message or "" }}</td>
+      <td class="msg msg--error" id="app-error-cell" style="white-space: pre-wrap;">{{ app.error_message or "" }}</td>
     </tr>
     {% if app.container_id %}
     {{ info_row("Container ID", code_value(app.container_id[:12])) }}
@@ -185,7 +187,7 @@ None. All paths require Cloud in a Bottle login.
 </div>
 {% endif %}
 {% if ungranted_permissions %}
-<p class="hint">The following permissions are declared in the app manifest but not yet granted:</p>
+<p class="desc">The following permissions are declared in the app manifest but not yet granted:</p>
 <script id="ungranted-perms-data" type="application/json">{{ ungranted_permissions | tojson }}</script>
 <div class="table-scroll">
   <table>
@@ -243,7 +245,7 @@ None. All paths require Cloud in a Bottle login.
        action_label("Remove app & data", "Deletes the app together with every database and file it owns. This cannot be undone.", danger=true),
        button("Remove App & Data", variant="danger", onclick="if(confirm('Remove " ~ app.name ~ "? This deletes all app data permanently.')) appAction('/remove_app/" ~ app.app_id ~ "', {}, {isRemove: true, label: 'Removing'})")) }}
 {% endcall %}
-<p class="action-msg" id="app-action-msg"></p>
+{{ msg(id="app-action-msg", hidden=true) }}
 
 <script>
 async function grantPermission(btn) {

@@ -2,6 +2,7 @@
 - on first init, ensure pre-commit hooks are installed (`pre-commit install`). this runs ruff and mypy on commit.
 - please ask before doing anything that affects low level system stuff on this machine, or anything using sudo.
 - never use em dashes, in docs, code comments, commit messages, or anything else you write. rewrite the sentence with a colon, comma, semicolon, parentheses, or two sentences instead.
+- keep test code out of production code: don't add test-only hooks (env vars, flags, branches) or comments about tests/testing to non-test code. patch from the test side instead, e.g. with monkeypatching.
 
 ## project structure
 

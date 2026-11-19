@@ -21,6 +21,7 @@ import requests
 from compute_space import OPENHOST_PROJECT_DIR
 from compute_space.core.auth.auth import SESSION_COOKIE_NAME
 from compute_space.core.caddy import generate_caddyfile
+from compute_space.core.containers import app_container_name
 from compute_space.core.data import make_data_dirs_and_env_vars
 from compute_space.core.domains import Domain
 from compute_space.core.manifest import AppManifest
@@ -905,7 +906,7 @@ class TestContainerE2E:
         pytest invocation in the same CI job) -- mirroring the try/finally the
         original standalone restart test had around its own isolated container.
         """
-        container_name = "openhost-test-app"
+        container_name = app_container_name("test-app")
         try:
             _stop_router_process(router_process)
 
@@ -940,7 +941,7 @@ class TestContainerE2E:
         """check_app_status() detects the dead container on boot and rebuilds it."""
         base_url = _zone_url(config)
         db_path = config.db_path
-        container_name = "openhost-test-app"
+        container_name = app_container_name("test-app")
 
         # Recovery is serial, each dead app waiting for readiness (up to 60s) before the next: this window only
         # holds if test-app is the only dead one, i.e. nothing replaced the default apps' containers meanwhile.
@@ -1022,7 +1023,7 @@ class TestContainerE2E:
     def test_final_removal_after_recovery(self, admin_session, config, restarted_router):
         """Full removal after recovery deletes the container, data, and temp dirs."""
         base_url = _zone_url(config)
-        container_name = "openhost-test-app"
+        container_name = app_container_name("test-app")
 
         app_id = app_id_for(admin_session, base_url, "test-app")
         assert app_id is not None

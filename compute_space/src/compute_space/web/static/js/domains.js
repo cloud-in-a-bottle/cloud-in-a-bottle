@@ -12,10 +12,10 @@ var CERT_STATUS = {
 
 function domainCertCell(d) {
   if (!d.tls) return dom.el('span', {class: 'muted', text: '—'});
-  var spec = CERT_STATUS[d.cert_status] || {label: 'None', variant: 'muted'};
+  var spec = CERT_STATUS[d.cert_status];
   return dom.el('span', {
-    class: 'status-text status-text--' + spec.variant,
-    text: spec.label,
+    class: spec ? 'msg msg--' + spec.variant : 'muted',
+    text: spec ? spec.label : 'None',
     title: d.error_message || null,
   });
 }
@@ -92,9 +92,7 @@ function redirectAfterPrimaryRestart(promoted, previousGeneration) {
   var target = promoted.scheme + '://' + promoted.name + '/settings';
   var msg = document.getElementById('domain-msg');
   var deadline = Date.now() + 120000;
-  msg.textContent = 'Primary changed. Waiting for the instance to restart…';
-  msg.className = 'notice';
-  msg.hidden = false;
+  dom.setMessage(msg, 'Primary changed. Waiting for the instance to restart…');
 
   function poll() {
     var controller = new AbortController();
@@ -116,8 +114,7 @@ function redirectAfterPrimaryRestart(promoted, previousGeneration) {
       .then(function(ready) {
         if (ready) return;
         if (Date.now() >= deadline) {
-          msg.textContent = 'The restart did not complete. Restart the instance manually, then open ' + target;
-          msg.className = 'notice notice--error';
+          dom.setMessage(msg, 'The restart did not complete. Restart the instance manually, then open ' + target, 'error');
           return;
         }
         setTimeout(poll, 250);
@@ -125,8 +122,7 @@ function redirectAfterPrimaryRestart(promoted, previousGeneration) {
       .catch(function() {
         clearTimeout(timeout);
         if (Date.now() >= deadline) {
-          msg.textContent = 'The restart did not complete. Restart the instance manually, then open ' + target;
-          msg.className = 'notice notice--error';
+          dom.setMessage(msg, 'The restart did not complete. Restart the instance manually, then open ' + target, 'error');
           return;
         }
         setTimeout(poll, 250);
@@ -162,10 +158,8 @@ function addDomain() {
       document.getElementById('domain-name').value = '';
       document.getElementById('add-domain-btn').disabled = true;
       if (body.tls) {
-        msg.textContent = 'Added. Acquiring a TLS certificate in the background — '
-          + 'its DNS must be delegated to this instance for acquisition to succeed.';
-        msg.className = 'notice';
-        msg.hidden = false;
+        dom.setMessage(msg, 'Added. Acquiring a TLS certificate in the background. '
+          + 'Its DNS must be delegated to this instance for acquisition to succeed.');
       }
       // Repaint from the POST response (the full list) — no follow-up GET to race the Caddy restart.
       renderDomains((data && data.domains) || []);

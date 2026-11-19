@@ -108,10 +108,14 @@ jobs:
             echo "E2E_SSH_USER=root" >> "$GITHUB_ENV"
           fi
 
-      - name: Setup instance + deploy Cloud in a Bottle via ansible
+      # The deploy runs in the background so the runner-side setup below (pixi,
+      # Chromium) overlaps it; "Wait for deploy" joins it and prints its output.
+      # The runner only reaps background processes at the end of the job.
+      - name: Start instance setup + deploy via ansible (background)
         run: |
           chmod +x tests/e2e-setup.sh
-          tests/e2e-setup.sh
+          rm -f "$RUNNER_TEMP/e2e-setup.rc"
+          ( tests/e2e-setup.sh > "$RUNNER_TEMP/e2e-setup.log" 2>&1; echo $? > "$RUNNER_TEMP/e2e-setup.rc" ) &
 
       - uses: ./.github/actions/setup-pixi
         with:
@@ -119,7 +123,17 @@ jobs:
           environments: dev
 
       - name: Install playwright browsers
-        run: pixi run -e dev playwright install --with-deps chromium
+        # No --with-deps; see the test job in ci.yml.
+        run: pixi run -e dev playwright install chromium
+
+      - name: Wait for deploy
+        run: |
+          tail -n +1 -f "$RUNNER_TEMP/e2e-setup.log" &
+          tail_pid=$!
+          until [ -f "$RUNNER_TEMP/e2e-setup.rc" ]; do sleep 2; done
+          sleep 1
+          kill "$tail_pid"
+          exit "$(cat "$RUNNER_TEMP/e2e-setup.rc")"
 
       - name: Run E2E tests
         run: |
@@ -141,5 +155,8 @@ jobs:
       - name: Teardown instance + DNS
         if: always()
         run: |
+          # If an earlier step failed while the background deploy was still going,
+          # stop it so it can't keep configuring the instance being deleted.
+          pkill -f tests/e2e-setup.sh || true
           chmod +x tests/e2e-teardown.sh
           tests/e2e-teardown.sh

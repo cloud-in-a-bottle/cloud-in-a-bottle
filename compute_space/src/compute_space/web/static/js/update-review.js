@@ -62,7 +62,7 @@ function approveUpdate() {
   var btn = document.getElementById('approve-btn');
   var msg = document.getElementById('review-msg');
   btn.disabled = true;
-  msg.textContent = 'Updating & reloading…';
+  dom.setMuted(msg, 'Updating & reloading\u2026');
   fetch(config.reloadAppUrl, {
     method: 'POST',
     credentials: 'same-origin',
@@ -73,9 +73,8 @@ function approveUpdate() {
     .then(function(res) {
       if (!res.ok || (res.data && res.data.error)) {
         var err = (res.data && res.data.error) || 'Update failed';
-        document.getElementById('review-error').textContent = err;
-        show('review-error');
-        msg.textContent = '';
+        dom.setMessage(document.getElementById('review-error'), err, 'error');
+        dom.hideMessage(msg);
         btn.disabled = false;
         return;
       }
@@ -83,9 +82,8 @@ function approveUpdate() {
       window.location.href = config.appDetailUrl;
     })
     .catch(function() {
-      document.getElementById('review-error').textContent = 'Update failed';
-      show('review-error');
-      msg.textContent = '';
+      dom.setMessage(document.getElementById('review-error'), 'Update failed', 'error');
+      dom.hideMessage(msg);
       btn.disabled = false;
     });
 }

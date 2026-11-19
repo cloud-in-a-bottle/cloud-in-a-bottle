@@ -2,6 +2,8 @@
 
 import json
 import os
+import signal
+import sys
 from http.server import BaseHTTPRequestHandler
 from http.server import HTTPServer
 
@@ -42,6 +44,9 @@ class Handler(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
+    # As a container's PID 1, Python gets no default SIGTERM action, so `podman stop`
+    # would wait out its full grace period before SIGKILL. Exit promptly instead.
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
     server = HTTPServer(("0.0.0.0", 5000), Handler)
     print("Test server listening on :5000", flush=True)
     server.serve_forever()
