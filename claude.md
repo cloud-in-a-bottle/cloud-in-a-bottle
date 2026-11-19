@@ -35,7 +35,7 @@ pixi run -e dev pytest -x compute_space/src/compute_space/tests/test_token_hashi
 
 ### keep test code out of production code
 
-don't add test-only hooks (env vars, flags, branches) to non-test code. patch from the test side instead, e.g. with monkeypatching.
+don't add test-only hooks (env vars, flags, branches) or comments about tests/testing to non-test code. patch from the test side instead, e.g. with monkeypatching.
 
 ## warnings
 
