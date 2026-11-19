@@ -286,25 +286,18 @@ def app_temp_data_dir(temp_data_dir: str, app_name: str) -> str:
     return os.path.join(temp_data_dir, "app_temp_data", app_name)
 
 
-def container_name_prefix() -> str:
-    """Prefix of every app container and image name.
-
-    Production always uses the default.  Tests that run several routers on one host
-    at once (pytest-xdist) set ``OPENHOST_CONTAINER_PREFIX`` per worker, since
-    podman names are host-global and each router would otherwise replace or delete
-    another's same-named app (e.g. two routers both deploying default ``secrets``).
-    """
-    return os.environ.get("OPENHOST_CONTAINER_PREFIX", "openhost-")
+# Prefix of every app container and image name.  Read at call time, not import time.
+APP_NAME_PREFIX = "openhost-"
 
 
 def app_container_name(app_name: str) -> str:
     """Name of the podman container an app runs in."""
-    return f"{container_name_prefix()}{app_name}"
+    return f"{APP_NAME_PREFIX}{app_name}"
 
 
 def app_image_tag(app_name: str) -> str:
     """Tag of the image built for an app."""
-    return f"{container_name_prefix()}{app_name}:latest"
+    return f"{APP_NAME_PREFIX}{app_name}:latest"
 
 
 def run_container(
@@ -692,7 +685,7 @@ def prune_dangling_images() -> str:
 # capture group is deliberately permissive and validated by the caller against
 # the apps DB rather than by a strict name regex here.
 def _image_tag_re() -> re.Pattern[str]:
-    return re.compile(rf"^(?:localhost/)?{re.escape(container_name_prefix())}(?P<app_name>.+):latest$")
+    return re.compile(rf"^(?:localhost/)?{re.escape(APP_NAME_PREFIX)}(?P<app_name>.+):latest$")
 
 
 def parse_openhost_image_app_name(tag: str) -> str | None:

@@ -142,8 +142,11 @@ def router_cmd() -> list[str]:
     test runner is itself launched via ``pixi run -e dev pytest``, so
     ``sys.executable`` already points at the dev env's Python and
     ``compute_space`` is importable as the editable package install.
+
+    Goes through ``router_entrypoint`` (the real router plus test-only patches)
+    rather than ``-m compute_space``.
     """
-    return [sys.executable, "-m", "compute_space"]
+    return [sys.executable, "-m", "compute_space.tests.router_entrypoint"]
 
 
 # ---------------------------------------------------------------------------

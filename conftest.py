@@ -83,11 +83,17 @@ def pytest_configure(config):
     # Podman container and image names are host-global, but every test router has
     # its own DB, so two routers running at once under pytest-xdist would replace or
     # delete each other's same-named apps (e.g. both deploying default `secrets`).
-    # Give each worker its own name prefix; router subprocesses inherit it.  Only
-    # for container runs, so unit tests asserting the default prefix are unaffected.
+    # Give each worker its own name prefix: router subprocesses pick it up from the
+    # env in compute_space.tests.router_entrypoint, and this process is patched
+    # directly.  Only for container runs, so unit tests asserting the default
+    # prefix are unaffected.
     worker = os.environ.get("PYTEST_XDIST_WORKER")
     if worker and config.getoption("--run-containers"):
-        os.environ["OPENHOST_CONTAINER_PREFIX"] = f"openhost-{worker}-"
+        from compute_space.tests.router_entrypoint import TEST_CONTAINER_PREFIX_ENV
+        from compute_space.tests.router_entrypoint import apply_test_patches
+
+        os.environ[TEST_CONTAINER_PREFIX_ENV] = f"openhost-{worker}-"
+        apply_test_patches()
 
 
 def pytest_collection_modifyitems(config, items):
