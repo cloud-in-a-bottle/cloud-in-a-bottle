@@ -33,13 +33,9 @@ run a single test file with `-x` to fail fast, e.g.:
 pixi run -e dev pytest -x compute_space/src/compute_space/tests/test_token_hashing.py
 ```
 
-### keep test concerns out of production code
+### keep test code out of production code
 
-don't add test-only hooks to non-test code: no env vars, flags or branches that exist only so tests can change behaviour. patch from the test side instead: `monkeypatch` in-process, and for routers launched as subprocesses, apply the patch in `compute_space/tests/router_entrypoint.py`, which every test router runs through (via `utils.router_cmd`) before calling the real `main()`. production code may expose a plain module-level value or function as the patch point (e.g. `containers.APP_NAME_PREFIX`), as long as it doesn't mention tests.
-
-### tests run in parallel
-
-CI runs both suites under pytest-xdist with `--dist loadfile`: each file stays on one worker in order, but different files run at the same time on the same host. so a test must not depend on host-global state another file could touch at the same time: fixed ports, fixed paths outside `tmp_path`, or podman container/image/volume names. derive names from a uuid or `tmp_path`. app containers and images are already namespaced per worker (the root `conftest.py` sets a per-worker `APP_NAME_PREFIX`), so build them with `app_container_name()` / `app_image_tag()`, never a literal `openhost-<app>`. a podman `rm -f` / `rmi -f` by a name another file might also use can kill that file's containers mid-test.
+don't add test-only hooks (env vars, flags, branches) to non-test code. patch from the test side instead, e.g. with monkeypatching.
 
 ## warnings
 
