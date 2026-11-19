@@ -534,6 +534,15 @@ def stop_container(container_id: str) -> None:
     )
 
 
+def container_exists(name_or_id: str) -> bool:
+    """Return whether podman has a container with this name or ID.  Never raises."""
+    try:
+        result = subprocess.run(["podman", "container", "exists", name_or_id], capture_output=True, timeout=10)
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return result.returncode == 0
+
+
 def stop_app_process(app_row: sqlite3.Row) -> None:
     """Stop the running process for an app.  Does not update the database."""
     try:
