@@ -46,7 +46,6 @@ from compute_space.core.apps import RESERVED_PATHS
 from compute_space.core.apps import PreparedImage
 from compute_space.core.apps import app_container_log_path
 from compute_space.core.apps import app_log_path
-from compute_space.core.apps import app_repo_url
 from compute_space.core.apps import clone_with_github_fallback
 from compute_space.core.apps import git_pull
 from compute_space.core.apps import insert_and_deploy
@@ -196,18 +195,6 @@ class ReloadAppRequest:
 
 
 @attr.s(auto_attribs=True, frozen=True)
-class ImageVerificationLostInfo:
-    """The app's last prebuilt image was signature-verified, and the update's isn't (see
-    image_verification.verification_lost)."""
-
-    # The running version's image, or None when it is built and the verified image came from an earlier version.
-    previous_image: str | None
-    previous_registry: str
-    new_image: str
-    new_registry: str
-
-
-@attr.s(auto_attribs=True, frozen=True)
 class UpdateReviewRequiredResponse:
     """Returned by ``/reload_app`` when an update's pulled manifest differs from
     the running one and the caller hasn't approved it. The reload is NOT
@@ -215,15 +202,13 @@ class UpdateReviewRequiredResponse:
     re-submits with ``approve_new_permissions``. ``settings_changed`` is the
     grouped old→new diff (non-gating fields included, for context, even though they
     never trigger a review by themselves); ``permissions_required`` the newly
-    declared grants; ``image_verification_lost`` is set when the app's last prebuilt image was
-    signature-verified and the update's would not be."""
+    declared grants."""
 
     ok: bool
     review_required: bool
     settings_changed: list[dict[str, object]]
     permissions_required: list[dict[str, object]]
     error: str
-    image_verification_lost: ImageVerificationLostInfo | None = None
 
 
 @attr.s(auto_attribs=True, frozen=True)
@@ -673,11 +658,8 @@ def _gate_update_review(
     repo_path: str,
     approve_new_permissions: bool,
     previous_manifest_raw: str | None = None,
-    *,
-    repo_url: str | None,
-    prebuilt_image_verified: bool,
 ) -> UpdateReviewRequiredResponse | None:
-    review = pending_update_review(app_id, repo_path, previous_manifest_raw, repo_url, prebuilt_image_verified)
+    review = pending_update_review(app_id, repo_path, previous_manifest_raw)
     if review is None:
         return None
 
@@ -687,7 +669,6 @@ def _gate_update_review(
         return None
 
     shortname_by_service = {c.service: c.shortname for c in review.manifest.consumes_services_v2}
-    loss = review.verification_loss
     return UpdateReviewRequiredResponse(
         ok=False,
         review_required=True,
@@ -700,20 +681,7 @@ def _gate_update_review(
             }
             for pg in review.new_permissions
         ],
-        error=(
-            "This update's image is no longer signature-verified; review and approve the update before it can be "
-            "applied."
-            if loss is not None and not review.gates_on_settings
-            else "This update changes the app's settings; review and approve them before it can be applied."
-        ),
-        image_verification_lost=None
-        if loss is None
-        else ImageVerificationLostInfo(
-            previous_image=loss.previous_image,
-            previous_registry=loss.previous_registry,
-            new_image=loss.new_image,
-            new_registry=loss.new_registry,
-        ),
+        error="This update needs your approval; review its settings and permissions before applying it.",
     )
 
 
@@ -880,16 +848,12 @@ async def _reload_app_impl(
     # currently running — so it can't introduce changes, and gating it would
     # wrongly re-prompt for a version the owner already chose to keep running.
     if update or continue_oauth:
-        # Read once, so the review and the image step below agree on whether the update pulls an image.
-        current_repo_url = app_repo_url(app_id, db)
         review_gate = await asyncio.to_thread(
             _gate_update_review,
             app_id,
             app_row["repo_path"],
             approve_new_permissions,
             app_row["manifest_raw"],
-            repo_url=current_repo_url,
-            prebuilt_image_verified=bool(app_row["prebuilt_image_verified"]),
         )
         if review_gate is not None:
             await _roll_back_update(app_row["repo_path"], pre_pull_sha, log_file)
@@ -903,7 +867,9 @@ async def _reload_app_impl(
         # leaves the running version untouched. The background reload runs the image prepared here rather than
         # producing it again after the app has stopped.
         try:
-            prepared_image = await prepare_update_image(app_name, app_row["repo_path"], current_repo_url, config)
+            # Use the URL that selected this checkout, even if the owner edits the remote during the pull.
+            # Re-reading it here could turn off verification for code pulled from one of our repos.
+            prepared_image = await prepare_update_image(app_name, app_row["repo_path"], repo_url, config)
         except UpdateNotApplied as e:
             await _roll_back_update(app_row["repo_path"], pre_pull_sha, log_file)
             db.execute(

@@ -30,6 +30,9 @@ from compute_space.db.versioned.migrations.v0018_apps_prebuilt_image_verified im
     Migration0018AppsPrebuiltImageVerified,
 )
 from compute_space.db.versioned.migrations.v0019_auto_update_local_time import Migration0019AutoUpdateLocalTime
+from compute_space.db.versioned.migrations.v0020_drop_image_verification_state import (
+    Migration0020DropImageVerificationState,
+)
 
 # Numbered migrations in apply order. Versions MUST start at 2 and be
 # contiguous. v0 (legacy) and v1 (baseline produced by the existing
@@ -53,4 +56,5 @@ REGISTRY: list[Migration] = [
     Migration0017UnpinDefaultBranch(),
     Migration0018AppsPrebuiltImageVerified(),
     Migration0019AutoUpdateLocalTime(),
+    Migration0020DropImageVerificationState(),
 ]

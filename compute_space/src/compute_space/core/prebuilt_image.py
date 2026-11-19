@@ -11,38 +11,16 @@ from compute_space.core.containers import app_image_tag
 from compute_space.core.git_ops import parse_repo_url
 from compute_space.core.logging import logger
 
-# Images from our registry must carry a cosign keyless signature made by app-template's shared image workflow, running
-# on main for the app's own repo, at the commit being deployed. Images from any other registry are pulled unverified.
-CIAB_REGISTRY = "registry.cloudinabottle.org"
+# Our apps require a GitHub Actions signature for their repo and commit, wherever the image is hosted.
+SIGNING_ORG = "cloud-in-a-bottle"
 SIGNING_OIDC_ISSUER = "https://token.actions.githubusercontent.com"
-SIGNING_IDENTITY = "https://github.com/cloud-in-a-bottle/app-template/.github/workflows/app-image.yml@refs/heads/main"
+SIGNING_IDENTITY_REGEXP = r"^https://github\.com/[^/]+/[^/]+/\.github/workflows/[^@]+@.+$"
 
-_GITHUB_REPO_RE = re.compile(r"^(?:https?://)?github\.com/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+?)(?:\.git)?/?$")
+_GITHUB_REPO_RE = re.compile(
+    r"^(?:https?://)?github\.com/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+?)(?:\.git)?/?$", re.IGNORECASE
+)
 _SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 _DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
-
-# cosign's own exit codes for a check that ran and failed (cmd/cosign/errors/exit_codes.go): no signature, no matching
-# signature, no certificate on the signature. Other failures, including most verification failures in cosign 3's
-# bundle format, exit 1, so those are told apart by whether the registry was reachable (see _verify_failure).
-_COSIGN_VERIFICATION_EXIT_CODES = frozenset({10, 12, 13})
-# Go's errors for a request that never got an answer (DNS, connect, proxy, TLS handshake and timeouts), and the
-# registry answering that it can't serve right now. Any of these in cosign's error means it couldn't reach the
-# registry or Sigstore's trust root, not that a signature was wrong.
-_UNREACHABLE_ERRORS = (
-    "dial tcp",
-    "proxyconnect",
-    "no such host",
-    "connection refused",
-    "connection reset by peer",
-    "network is unreachable",
-    "i/o timeout",
-    "TLS handshake timeout",
-    "context deadline exceeded",
-    "Client.Timeout exceeded",
-    "unexpected EOF",
-    "unexpected status code 5",
-    "TOOMANYREQUESTS",
-)
 
 # How long an install or update waits before each retry of a pull that can't fetch the image (so it tries 3 times in
 # all) before falling back to building the release's Dockerfile.
@@ -62,9 +40,8 @@ class ImageUnavailableError(PrebuiltImageError):
 
 
 class ImageVerificationError(PrebuiltImageError):
-    """The image isn't trusted: its signature is missing or doesn't match, or nothing could verify it. Never retried
-    and never falls back to a build: an image that fails verification is a sign the registry is serving something it
-    shouldn't."""
+    """The image couldn't be verified. Never retried: the caller builds from the release's source instead of running
+    this image. Includes missing/invalid signatures and failures to reach the registry or trust service while verifying."""
 
 
 @attr.s(auto_attribs=True, frozen=True)
@@ -77,7 +54,7 @@ class ImageToPull:
 @attr.s(auto_attribs=True, frozen=True)
 class PulledImage:
     tag: str
-    # Whether its signature was verified (see _image_to_pull): from our registry it always is, from others never.
+    # True when the source repo is in our GitHub org and the required signature was verified.
     verified: bool
 
 
@@ -104,20 +81,11 @@ class SignaturePolicy:
     """What a prebuilt image's signing certificate must say."""
 
     oidc_issuer: str
-    identity: str
+    identity_regexp: str
     # owner/name of the GitHub repo whose workflow run signed it: the app's own repo.
     workflow_repository: str
     # The commit the image was built from: the one being deployed.
     workflow_sha: str
-
-
-def image_registry(image: str) -> str:
-    """The registry host of an image reference, following the docker convention: the first path component is a
-    registry only if it looks like a host (has a dot or a port, or is localhost)."""
-    first, sep, _ = image.partition("/")
-    if sep and ("." in first or ":" in first or first == "localhost"):
-        return first
-    return "docker.io"
 
 
 def github_repository(repo_url: str) -> str | None:
@@ -130,27 +98,16 @@ def github_repository(repo_url: str) -> str | None:
     return f"{match.group(1)}/{match.group(2)}" if match else None
 
 
-def is_verified_registry(image: str) -> bool:
-    """Whether images from ``image``'s registry are signature-verified before they run (see signature_policy). Reads
-    only the reference, so it needs no network."""
-    return image_registry(image) == CIAB_REGISTRY
-
-
-def signature_policy(image: str, repo_url: str | None, commit: str) -> SignaturePolicy | None:
-    """The signature an image must carry before it runs, or None for registries we don't sign for. Raises
-    :class:`ImageVerificationError` if the image is from our registry but the app's repo isn't a GitHub repo, since
-    then nothing could verify it."""
-    if not is_verified_registry(image):
-        return None
+def signature_policy(repo_url: str | None, commit: str) -> SignaturePolicy | None:
+    """Require a GitHub Actions signature for apps from our org, regardless of registry. Third-party apps (including
+    forks outside our org) choose their own images and are pulled without this policy. A workflow or registry move
+    doesn't weaken verification: the certificate must still name the app's exact repo and deployed commit."""
     repository = github_repository(repo_url) if repo_url else None
-    if repository is None:
-        raise ImageVerificationError(
-            f"{image} is from {CIAB_REGISTRY}, whose images are verified against the app's GitHub repo, "
-            f"but this app's repo ({repo_url or 'none'}) isn't a GitHub repo"
-        )
+    if repository is None or repository.split("/", 1)[0].lower() != SIGNING_ORG:
+        return None
     return SignaturePolicy(
         oidc_issuer=SIGNING_OIDC_ISSUER,
-        identity=SIGNING_IDENTITY,
+        identity_regexp=SIGNING_IDENTITY_REGEXP,
         workflow_repository=repository,
         workflow_sha=commit,
     )
@@ -163,8 +120,8 @@ def cosign_verify_command(image_ref: str, policy: SignaturePolicy) -> list[str]:
         image_ref,
         "--certificate-oidc-issuer",
         policy.oidc_issuer,
-        "--certificate-identity",
-        policy.identity,
+        "--certificate-identity-regexp",
+        policy.identity_regexp,
         "--certificate-github-workflow-repository",
         policy.workflow_repository,
         "--certificate-github-workflow-sha",
@@ -174,86 +131,39 @@ def cosign_verify_command(image_ref: str, policy: SignaturePolicy) -> list[str]:
     ]
 
 
-def cosign_triangulate_command(tagged: str) -> list[str]:
-    # Prints ``<repo>@<digest>``, asking the registry with the same client and credentials ``cosign verify`` uses.
-    # triangulate is deprecated for removal in cosign 4; pyproject pins cosign ~=3.1, and
-    # test_cosign_still_has_triangulate catches an upgrade that drops it.
-    return ["cosign", "triangulate", "--type", "digest", tagged]
-
-
 def verified_digest(cosign_stdout: str) -> str:
     """The image digest cosign verified, from ``cosign verify --output json``. Every verified signature must name the
     same digest."""
     try:
         payloads = json.loads(cosign_stdout)
-        digests = {str(p["critical"]["image"]["docker-manifest-digest"]) for p in payloads}
+        if not isinstance(payloads, list):
+            raise ValueError("expected a list of verified payloads")
+        digests = {p["critical"]["image"]["docker-manifest-digest"] for p in payloads}
     except (ValueError, TypeError, KeyError) as e:
         raise ImageVerificationError(f"Could not read cosign's output: {e}") from e
     if len(digests) != 1:
-        raise ImageVerificationError(
-            f"cosign verified {len(digests)} digests, expected exactly one: {sorted(digests)}"
-        )
-    digest = digests.pop()
-    if not _DIGEST_RE.match(digest):
-        raise ImageVerificationError(f"cosign reported an invalid digest: {digest!r}")
+        raise ImageVerificationError(f"cosign verified {len(digests)} digests, expected exactly one")
+    digest: object = digests.pop()
+    if not isinstance(digest, str) or not _DIGEST_RE.fullmatch(digest):
+        raise ImageVerificationError("cosign reported an invalid digest")
     return digest
-
-
-def resolve_digest(tagged: str, log: Callable[[str], None]) -> str:
-    """The digest the registry serves for ``tagged``. Raises :class:`ImageUnavailableError` when the registry can't
-    say: it's unreachable or erroring, the tag isn't there (yet), or the answer is unreadable."""
-    result = _run(cosign_triangulate_command(tagged), log, timeout=120, timeout_error=ImageUnavailableError)
-    if result.returncode != 0:
-        # Leave out the deprecation notice triangulate prints first.
-        error = "\n".join(line for line in result.stderr.strip().splitlines() if "is deprecated" not in line)
-        raise ImageUnavailableError(f"Looking up {tagged} on its registry failed: {error or 'cosign exited non-zero'}")
-    _, _, digest = result.stdout.strip().rpartition("@")
-    if not _DIGEST_RE.match(digest):
-        raise ImageUnavailableError(f"cosign resolved {tagged} to an unexpected reference: {result.stdout.strip()!r}")
-    return digest
-
-
-def _verify_failure(
-    tagged: str, policy: SignaturePolicy, result: subprocess.CompletedProcess[str], log: Callable[[str], None]
-) -> PrebuiltImageError:
-    """Classify a failed ``cosign verify``. It needs the registry (for the signature) and Sigstore's trust root, so it
-    also fails when it can't reach them, which only makes the image unavailable. It's a verification failure when
-    cosign says so by exit code, or when its error isn't a network one and the registry is still serving the image.
-    Anything in doubt counts as unavailable, which is the safe side: that builds the release from source, and never
-    runs an image that wasn't verified."""
-    stderr = result.stderr.strip() or "cosign exited non-zero"
-    unavailable = ImageUnavailableError(f"Couldn't check the signature on {tagged}: {stderr}")
-    if result.returncode not in _COSIGN_VERIFICATION_EXIT_CODES:
-        if any(marker in stderr for marker in _UNREACHABLE_ERRORS):
-            return unavailable
-        try:
-            resolve_digest(tagged, log)
-        except ImageUnavailableError:
-            return unavailable
-    return ImageVerificationError(
-        f"Signature check failed for {tagged} (it must be signed by the image workflow for "
-        f"{policy.workflow_repository} at {policy.workflow_sha}): {stderr}"
-    )
 
 
 def _image_to_pull(prebuilt_image: str, commit: str, repo_url: str | None, log: Callable[[str], None]) -> ImageToPull:
-    """The reference to pull for ``commit``. From our registry: resolve ``<prebuilt_image>:<sha>`` to a digest, verify
-    the signature on that digest, and return ``<prebuilt_image>@<digest>``, so what runs is exactly what was verified
-    even if the tag moves. From any other registry: the tag itself, unverified.
-
-    Raises :class:`ImageVerificationError` when the check fails, and :class:`ImageUnavailableError` only when it
-    couldn't reach what it needed to check."""
+    """For our apps, cosign resolves and verifies the tagged image. Only its verified payload supplies the digest
+    we pull, so a tag moving afterwards cannot replace the image. Other apps pull the tag without verification."""
     tagged = f"{prebuilt_image}:{commit}"
-    policy = signature_policy(prebuilt_image, repo_url, commit)
+    policy = signature_policy(repo_url, commit)
     if policy is None:
         return ImageToPull(ref=tagged, verified=False)
-    pinned = f"{prebuilt_image}@{resolve_digest(tagged, log)}"
-    result = _run(cosign_verify_command(pinned, policy), log, timeout=300, timeout_error=ImageUnavailableError)
+    result = _run(cosign_verify_command(tagged, policy), log, timeout=300, timeout_error=ImageVerificationError)
     if result.returncode != 0:
-        raise _verify_failure(tagged, policy, result, log)
+        raise ImageVerificationError(
+            f"Signature check failed for {tagged} (GitHub repo {policy.workflow_repository}, "
+            f"commit {policy.workflow_sha}): {result.stderr.strip() or 'cosign exited non-zero'}"
+        )
     digest = verified_digest(result.stdout)
-    if f"{prebuilt_image}@{digest}" != pinned:
-        raise ImageVerificationError(f"cosign verified {digest}, not the {pinned} it was asked to")
+    pinned = f"{prebuilt_image}@{digest}"
     log(f"Verified {tagged} as {pinned}")
     return ImageToPull(ref=pinned, verified=True)
 
@@ -292,12 +202,12 @@ def pull_prebuilt_image(
     log: Callable[[str], None],
     retry_delays: Sequence[float],
 ) -> PulledImage:
-    """Pull the image built from ``commit`` (verifying its signature when it's from our registry) and tag it as the
+    """Pull the image built from ``commit`` (verifying its signature for our app repos) and tag it as the
     app's image (what ``build_image`` would otherwise produce). An :class:`ImageUnavailableError` is retried once after
     each of ``retry_delays`` (in seconds) and then raised, for the caller to fall back to a build; any other
     :class:`PrebuiltImageError` is raised at once. podman's own retries are turned off (``--retry=0``), so these are
     the only ones."""
-    if not _SHA_RE.match(commit):
+    if not _SHA_RE.fullmatch(commit):
         raise PrebuiltImageError(f"Expected a full commit sha to pick the prebuilt image, got {commit!r}")
     attempts = len(retry_delays) + 1
     for attempt, delay in enumerate(retry_delays, start=1):
