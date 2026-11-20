@@ -42,6 +42,8 @@ from compute_space.core.startup import check_app_status
 from compute_space.core.startup import retry_pending_default_apps
 from compute_space.core.storage import start_storage_guard
 from compute_space.core.terminal import cleanup_all as cleanup_terminal
+from compute_space.core.theme import Theme
+from compute_space.core.theme import read_theme
 from compute_space.db import get_db
 from compute_space.db import provide_db
 from compute_space.web.auth.auth import auth_required_response
@@ -59,6 +61,7 @@ from compute_space.web.routes.api.permissions_v2 import api_permissions_v2_route
 from compute_space.web.routes.api.services_v2 import api_services_v2_routes
 from compute_space.web.routes.api.settings import api_settings_routes
 from compute_space.web.routes.api.system import system_routes
+from compute_space.web.routes.api.theme import api_theme_routes
 from compute_space.web.routes.docs import docs_routes
 from compute_space.web.routes.pages.apps import pages_apps_routes
 from compute_space.web.routes.pages.login import pages_login_routes
@@ -117,11 +120,22 @@ def _template_globals(config: Config, static_dir: Path) -> dict[str, Any]:
             logger.exception("failed to read owner username for template")
             return None
 
+    def theme() -> Theme:
+        """The owner's chosen theme, read live so a change in Settings shows on the next page load."""
+        try:
+            with closing(get_db()) as db:
+                return read_theme(db)
+        except Exception:
+            # Like owner_name: a bad theme setting must not take every page down with it.
+            logger.exception("failed to read theme for template")
+            return Theme()
+
     return {
         "zone_name": zone_name,
         "zone_domain": zone_domain,
         "app_url": app_url,
         "owner_name": owner_name,
+        "theme": theme,
         "static_url": make_static_url(static_dir),
         "source_url": SOURCE_URL,
     }
@@ -252,6 +266,7 @@ def create_app(config: Config, dns_provider: InternalDnsProvider, mdns_responder
             api_permissions_v2_routes,
             api_services_v2_routes,
             api_settings_routes,
+            api_theme_routes,
             system_routes,
             identity_routes,
             docs_routes,

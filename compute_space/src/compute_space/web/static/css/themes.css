@@ -1,0 +1,123 @@
+/* Variants keyed off <html> data attributes. Cloudy + list uses the base styles. */
+
+/* ── Style: simple ──────────────────────────────────────────────────── */
+
+[data-style="simple"] body {
+  background: var(--bg-secondary);
+}
+
+[data-style="simple"] .deco-clouds,
+[data-style="simple"] .deco-grass,
+[data-style="simple-dark"] .deco-clouds,
+[data-style="simple-dark"] .deco-grass {
+  display: none;
+}
+
+/* ── Style: dark ────────────────────────────────────────────────────── */
+
+[data-style="dark"],
+[data-style="simple-dark"] {
+  color-scheme: dark;
+
+  --bg-surface: #182433;
+  --bg-primary: #1d2b3c;
+  --bg-secondary: #223246;
+  --bg-sky: #0f1a26;
+  --bg-meadow: #13231c;
+  --bg-disabled: #3a4757;
+
+  --bg-status-negative: #3a1f22;
+  --bg-status-positive: #1e3320;
+  --bg-status-warning: #36301a;
+  --bg-status-info: #1a2c40;
+
+  --fg-primary: #e6eef6;
+  --fg-secondary: rgb(230 238 246 / 0.65);
+  --fg-border: rgb(230 238 246 / 0.18);
+  --fg-disabled: rgb(230 238 246 / 0.45);
+  --fg-inverted: #0f1a26;
+  --fg-inverted-secondary: rgb(15 26 38 / 0.65);
+
+  --fg-status-negative: #ff9e97;
+  --fg-status-positive: #a8dc8e;
+  --fg-status-warning: #e9c37a;
+  --fg-status-info: #9cc8da;
+
+  --interactive-primary: #2b5a80;
+  --interactive-accent: #35602a;
+  --interactive-hover: rgb(230 238 246 / 0.06);
+  --interactive-active: rgb(230 238 246 / 0.12);
+
+  --color-chart-unused: #233a52;
+  --color-chart-system: #7fb0dc;
+  --color-chart-swap: #4f7aa3;
+
+  --shadow-card: 2px 2px 0 rgba(0, 0, 0, 0.35);
+}
+
+/* The sprites are drawn for daylight (white clouds, pale grass): dim them. */
+[data-style="dark"] .deco-clouds {
+  opacity: 0.15;
+}
+
+[data-style="dark"] .deco-grass {
+  filter: brightness(0.35);
+}
+
+/* Icons are black artwork in <img> tags, which CSS colours can't reach. */
+[data-style="dark"] .icon,
+[data-style="simple-dark"] .icon {
+  filter: invert(0.9);
+}
+
+/* ── Style: simple dark ─────────────────────────────────────────────── */
+
+[data-style="simple-dark"] body {
+  background: var(--bg-sky);
+}
+
+/* ── App list: grid ─────────────────────────────────────────────────── */
+
+/* Reveal the visually hidden status that dashboard.js keeps current. */
+[data-app-list="grid"] .app-row__status {
+  position: static;
+  width: auto;
+  height: auto;
+  margin: 0;
+  overflow: visible;
+  clip-path: none;
+  color: var(--fg-secondary);
+  font-size: var(--text-body-sm);
+}
+
+[data-app-list="grid"] .app-list {
+  display: grid;
+  gap: var(--space-3);
+  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+  box-shadow: none;
+}
+
+[data-app-list="grid"] .app-row {
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--space-1);
+  min-height: 72px;
+  padding: var(--space-3);
+  margin-bottom: 0;
+  box-shadow: var(--shadow-card);
+}
+
+[data-app-list="grid"] .app-row__main {
+  flex-wrap: wrap;
+  row-gap: var(--space-1);
+}
+
+[data-app-list="grid"] .app-row__name {
+  flex-basis: 100%;
+  font-weight: var(--weight-emphasized);
+}
+
+[data-app-list="grid"] .app-row__details {
+  margin: auto 0 0;
+  padding-left: 0;
+}

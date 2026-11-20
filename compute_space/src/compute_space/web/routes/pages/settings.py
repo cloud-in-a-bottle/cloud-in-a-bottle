@@ -2,12 +2,17 @@ from litestar import Router
 from litestar import get
 from litestar.response import Template
 
+from compute_space.core.theme import AppListLayout
+from compute_space.core.theme import Style
 from compute_space.web.auth.auth import require_owner_auth
 
 
 @get("/settings", guards=[require_owner_auth])
 async def settings_page() -> Template:
-    return Template(template_name="settings.html")
+    return Template(
+        template_name="settings.html",
+        context={"styles": list(Style), "app_list_layouts": list(AppListLayout)},
+    )
 
 
 @get("/updating", guards=[require_owner_auth])
