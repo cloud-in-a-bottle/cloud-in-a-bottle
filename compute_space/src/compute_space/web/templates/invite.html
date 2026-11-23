@@ -5,6 +5,10 @@
 {% block title_suffix %} - Join{% endblock %}
 
 {% block content %}
+{% if closed %}
+<h2>Invite closed</h2>
+<p class="desc">This invite link is invalid, used up, or expired. Ask whoever sent it for a new one.</p>
+{% else %}
 <h2>Create your account</h2>
 <p class="desc">The owner of this compute space invited you to use some of its apps.</p>
 {% if error %}{{ msg(error, tone="error") }}{% endif %}
@@ -21,4 +25,5 @@
     {{ button("Create account", variant="primary", type="submit") }}
   </div>
 </form>
+{% endif %}
 {% endblock %}

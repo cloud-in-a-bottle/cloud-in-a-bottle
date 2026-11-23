@@ -219,7 +219,8 @@ async def test_invite_limits(cfg: Config, client: httpx.AsyncClient, apps: dict[
     assert (await _sign_up(client, once, "alice")).status_code == 302
     for path in (once, closed, expired, "/invite/not-a-token"):
         assert (await _sign_up(client, path, "bob")).status_code == 404
-        assert (await client.get(path)).status_code == 404
+        r = await client.get(path)
+        assert r.status_code == 404 and "Invite closed" in r.text
 
 
 @pytest.mark.asyncio

@@ -23,8 +23,8 @@ from compute_space.web.helpers.zone import zone_for_request
 MIN_PASSWORD_LENGTH = 8
 
 
-def _closed_invite() -> Response[str]:
-    return Response(content="This invite link is invalid, used up, or expired.", status_code=404)
+def _closed_invite() -> Template:
+    return Template(template_name="invite.html", context={"closed": True}, status_code=404)
 
 
 @get("/invite/{token:str}")
