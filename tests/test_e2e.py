@@ -514,7 +514,7 @@ class TestSelfHost:
         """Login with wrong credentials is rejected."""
         r = requests.post(
             f"{router_url}/login",
-            data={"username": "admin", "password": "wrong-password"},
+            data={"password": "wrong-password"},
             timeout=10,
         )
         assert r.status_code == 200
@@ -526,7 +526,7 @@ class TestSelfHost:
         login_session.verify = True
         r = login_session.post(
             f"{router_url}/login",
-            data={"username": "admin", "password": OWNER_PASSWORD, "next": "/dashboard"},
+            data={"password": OWNER_PASSWORD, "next": "/dashboard"},
             allow_redirects=False,
             timeout=10,
         )
@@ -550,7 +550,7 @@ class TestSelfHost:
         s.verify = True
         r = s.post(
             f"{router_url}/login",
-            data={"username": "admin", "password": OWNER_PASSWORD},
+            data={"password": OWNER_PASSWORD},
             timeout=10,
         )
         # Verify we're logged in
