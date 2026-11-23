@@ -39,6 +39,7 @@ from compute_space.web.app import _template_globals
 from compute_space.web.auth.auth import verify_app_auth
 from compute_space.web.middleware.subdomain_proxy import SubdomainProxyMiddleware
 from compute_space.web.routes.api.invites import api_invites_routes
+from compute_space.web.routes.api.settings import set_owner_username
 from compute_space.web.routes.pages import login
 from compute_space.web.routes.pages.apps import dashboard
 from compute_space.web.routes.pages.invite import pages_invite_routes
@@ -103,7 +104,14 @@ def apps(cfg: Config, backend_ports: list[int]) -> dict[str, str]:
 async def client(cfg: Config, apps: dict[str, str]) -> AsyncIterator[httpx.AsyncClient]:
     web_dir = Path(web_app.__file__).parent
     litestar_app = Litestar(
-        route_handlers=[api_invites_routes, pages_invite_routes, pages_login_routes, dashboard, settings_page],
+        route_handlers=[
+            api_invites_routes,
+            pages_invite_routes,
+            pages_login_routes,
+            dashboard,
+            settings_page,
+            set_owner_username,
+        ],
         template_config=TemplateConfig(directory=web_dir / "templates", engine=JinjaTemplateEngine),
         dependencies={"config": Provide(provide_config, sync_to_thread=False), "db": Provide(provide_db)},
         exception_handlers={NotAuthorizedException: web_app._auth_required_handler},
@@ -223,6 +231,20 @@ async def test_signup_validation(cfg: Config, client: httpx.AsyncClient, apps: d
     assert "Username must" in (await _sign_up(client, path, "Not Valid")).text
     # Failed attempts don't spend the invite's one use.
     assert (await _sign_up(client, path, "alice")).status_code == 302
+
+
+@pytest.mark.asyncio
+async def test_owner_cannot_take_a_members_username(
+    cfg: Config, client: httpx.AsyncClient, apps: dict[str, str]
+) -> None:
+    owner = auth_cookie(cfg)
+    client.cookies.update(owner)
+    _, path = await _create_invite(client, [apps["shared"]])
+    await _sign_up(client, path, "alice")
+    client.cookies.clear()
+    client.cookies.update(owner)
+    r = await client.post("/api/settings/owner_username", json={"username": "alice"})
+    assert r.status_code == 400 and "taken" in r.text
 
 
 @pytest.mark.asyncio

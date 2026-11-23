@@ -541,6 +541,9 @@ async def set_owner_username(
         db.commit()
     except ValueError as e:
         raise ValidationException(detail=str(e), extra={"code": "invalid_username"}) from e
+    except sqlite3.IntegrityError as e:
+        db.rollback()
+        raise ValidationException(detail="That username is taken.", extra={"code": "username_taken"}) from e
     except sqlite3.Error as e:
         raise InternalServerException(detail="Failed to save the username", extra={"output": str(e)}) from e
 
