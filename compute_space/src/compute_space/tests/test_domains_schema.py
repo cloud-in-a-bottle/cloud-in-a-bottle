@@ -71,6 +71,7 @@ def test_v12_db_upgrades_to_domains_and_settings(tmp_path: Path) -> None:
     db.execute("ALTER TABLE users DROP COLUMN invite_id")
     db.execute("DROP TABLE invite_apps")
     db.execute("DROP TABLE invites")
+    db.execute("ALTER TABLE apps DROP COLUMN user_paths")
     db.execute("INSERT OR REPLACE INTO schema_version (id, version) VALUES (1, 12)")
     db.close()
 

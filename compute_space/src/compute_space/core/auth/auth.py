@@ -45,6 +45,13 @@ def read_owner_username(db: sqlite3.Connection) -> str | None:
     return username or None
 
 
+def read_owner(db: sqlite3.Connection) -> tuple[int, str]:
+    """The owner's user_id and username. The full app only runs after /setup created the owner."""
+    row = db.execute("SELECT user_id, username FROM users WHERE invite_id IS NULL").fetchone()
+    assert row is not None, "no owner: the full app runs only after setup"
+    return row["user_id"], row["username"]
+
+
 def update_owner_username(db: sqlite3.Connection, new_username: str) -> None:
     """Replace the owner's username. Caller must validate input and commit.
 
@@ -64,13 +71,13 @@ class AuthenticatedAccessor:
 
 
 @attr.s(auto_attribs=True, frozen=True)
-class AuthenticatedUser(AuthenticatedAccessor):
+class AuthenticatedOwner(AuthenticatedAccessor):
     user_id: int
     username: str
 
 
 @attr.s(auto_attribs=True, frozen=True)
-class AuthenticatedMember(AuthenticatedAccessor):
+class AuthenticatedUser(AuthenticatedAccessor):
     """A user who signed up through an invite. Not an owner: may only use the invite's apps."""
 
     user_id: int
@@ -127,7 +134,7 @@ def revoke_session(token: str, db: sqlite3.Connection) -> None:
     db.execute("DELETE FROM sessions WHERE token_hash = ?", (_hash(token),))
 
 
-def validate_session_token(token: str, db: sqlite3.Connection) -> AuthenticatedUser | AuthenticatedMember | None:
+def validate_session_token(token: str, db: sqlite3.Connection) -> AuthenticatedOwner | AuthenticatedUser | None:
     token_hash = _hash(token)
     query = """
         SELECT u.user_id, u.username, u.invite_id, s.expires_at
@@ -136,10 +143,8 @@ def validate_session_token(token: str, db: sqlite3.Connection) -> AuthenticatedU
     if row := db.execute(query, (token_hash,)).fetchone():
         if datetime.fromisoformat(row["expires_at"]) >= datetime.now(UTC):
             if row["invite_id"] is not None:
-                return AuthenticatedMember(
-                    user_id=row["user_id"], username=row["username"], invite_id=row["invite_id"]
-                )
-            return AuthenticatedUser(user_id=row["user_id"], username=row["username"])
+                return AuthenticatedUser(user_id=row["user_id"], username=row["username"], invite_id=row["invite_id"])
+            return AuthenticatedOwner(user_id=row["user_id"], username=row["username"])
     return None
 
 

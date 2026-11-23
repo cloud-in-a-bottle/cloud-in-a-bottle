@@ -1,4 +1,6 @@
--- Invite links, and members who signed up through them.
+-- Invite links, users who signed up through them, and the routes each app opens to those users.
+ALTER TABLE apps ADD COLUMN user_paths TEXT NOT NULL DEFAULT '[]';
+
 CREATE TABLE invites (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,

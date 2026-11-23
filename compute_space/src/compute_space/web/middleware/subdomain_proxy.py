@@ -17,14 +17,15 @@ from litestar.types.asgi_types import WebSocketCloseEvent
 
 from compute_space.core.apps import get_app_from_hostname
 from compute_space.core.apps import is_public_request_path
+from compute_space.core.auth.auth import read_owner
 from compute_space.core.containers import ROUTER_INTERNAL_HOSTS
 from compute_space.core.domains import Domain
 from compute_space.core.logging import logger
 from compute_space.core.proxy_target import LocalPort
 from compute_space.db import get_db
 from compute_space.web.auth.auth import auth_required_response
-from compute_space.web.auth.auth import verify_member_auth
 from compute_space.web.auth.auth import verify_owner_auth
+from compute_space.web.auth.auth import verify_user_auth
 from compute_space.web.auth.confirm_navigation import NavigationConfirmationRequired
 from compute_space.web.helpers.app_starting import app_starting_response
 from compute_space.web.helpers.proxy import proxy_http_request
@@ -34,6 +35,7 @@ from compute_space.web.helpers.zone import router_base_url
 
 IS_OWNER_HEADER = ("X-OpenHost-Is-Owner", "true")
 USER_ID_HEADER = "X-OpenHost-User-Id"
+USERNAME_HEADER = "X-OpenHost-Username"
 ROUTER_URL_HEADER = "X-OpenHost-Router-URL"
 
 # Caddy (our front proxy) reaches hypercorn over loopback and, by default,
@@ -204,17 +206,20 @@ class SubdomainProxyMiddleware:
 
         try:
             # Allow cross-site navigations into apps, eg OAuth callbacks.
-            if member := verify_member_auth(connection, app_id=app.app_id, allow_cross_site_navigation=True):
-                extra_headers.append((USER_ID_HEADER, str(member.user_id)))
+            if user := verify_user_auth(connection, app=app, allow_cross_site_navigation=True):
+                user_id, username = user.user_id, user.username
             else:
                 verify_owner_auth(connection, allow_cross_site_navigation=True)
                 extra_headers.append(IS_OWNER_HEADER)
+                with closing(get_db()) as db:
+                    user_id, username = read_owner(db)
+            extra_headers += [(USER_ID_HEADER, str(user_id)), (USERNAME_HEADER, username)]
         except NotAuthorizedException as exc:
             # Public paths are served anonymously, even to an owner whose cookie was refused.
             raw_path = scope.get("raw_path")
             if not app.public_paths or raw_path is None or not is_public_request_path(app, raw_path):
                 # Match a missing app's response so unauthorized callers cannot discover fully private apps.
-                # A Continue page is only offered on a valid owner cookie, or a member's for an app shared with them,
+                # A Continue page is only offered on a valid owner cookie, or a user's for an app shared with them,
                 # so it reveals nothing.
                 if not app.public_paths and not isinstance(exc, NavigationConfirmationRequired):
                     await _send_not_found(scope, receive, send)

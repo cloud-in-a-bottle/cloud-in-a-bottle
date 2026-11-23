@@ -50,7 +50,7 @@ CREATE TABLE "apps" (
                 manifest_raw TEXT,
                 created_at TEXT NOT NULL DEFAULT (datetime('now')),
                 updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-            , links TEXT NOT NULL DEFAULT '[]', cpu_cores REAL NOT NULL DEFAULT 0.1);
+            , links TEXT NOT NULL DEFAULT '[]', cpu_cores REAL NOT NULL DEFAULT 0.1, user_paths TEXT NOT NULL DEFAULT '[]');
 CREATE TABLE "archive_backend" (
     id INTEGER PRIMARY KEY CHECK (id = 1),
     backend TEXT NOT NULL DEFAULT 'local' CHECK(backend IN ('disabled', 'local', 's3')),

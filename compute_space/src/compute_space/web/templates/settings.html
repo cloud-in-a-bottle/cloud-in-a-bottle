@@ -250,9 +250,8 @@
 <section class="section">
   {% call section_head("Invites") %}{% endcall %}
   <div class="panel">
-    <p class="desc">Links that let people create a member account. Members can only use the apps their invite
-      shares, and see <code>X-OpenHost-User-Id</code> in place of <code>X-OpenHost-Is-Owner</code>. Deleting an
-      invite deletes its members.</p>
+    <p class="desc">Links that let people create a user account. Users reach only the apps their invite shares,
+      and only the routes those apps list in <code>user_paths</code>. Deleting an invite deletes its users.</p>
 
     <div class="field-row field-row--add">
       {% call field("Name", "invite-name") %}
@@ -271,7 +270,7 @@
       {% for app in apps %}
       <label><input type="checkbox" name="invite-app" value="{{ app.app_id }}"> {{ app.name }}</label>
       {% else %}
-      <span class="muted">No apps installed.</span>
+      <span class="muted">No installed app declares <code>user_paths</code>, so none can be shared yet.</span>
       {% endfor %}
     </fieldset>
 
@@ -286,7 +285,7 @@
     <div class="table-scroll" id="invites-table-wrap" hidden>
       <table>
         <thead><tr>
-          <th>Name</th><th>Apps</th><th>Uses left</th><th>Open until</th><th>Members</th>
+          <th>Name</th><th>Apps</th><th>Uses left</th><th>Open until</th><th>Users</th>
           <th class="col-actions">Actions</th>
         </tr></thead>
         <tbody id="invites-body"></tbody>

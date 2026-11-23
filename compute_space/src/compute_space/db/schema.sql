@@ -23,7 +23,8 @@ CREATE TABLE IF NOT EXISTS apps (
     links TEXT NOT NULL DEFAULT '[]',
     manifest_raw TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    user_paths TEXT NOT NULL DEFAULT '[]'
 );
 
 CREATE TABLE IF NOT EXISTS app_databases (
@@ -49,7 +50,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_port_mappings_host_port ON app_port_mappin
 CREATE INDEX IF NOT EXISTS idx_apps_status ON apps(status);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_apps_app_id ON apps(app_id);
 
--- Invite links the owner hands out. Members who sign up through one can use its apps, and are deleted with it.
+-- Invite links the owner hands out. Users who sign up through one can use its apps, and are deleted with it.
 CREATE TABLE IF NOT EXISTS invites (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,
@@ -65,7 +66,7 @@ CREATE TABLE IF NOT EXISTS invite_apps (
     PRIMARY KEY (invite_id, app_id)
 );
 
--- The owner is the one user without an invite_id; every other user is a member.
+-- The owner is the one user without an invite_id; every other user signed up through an invite.
 CREATE TABLE IF NOT EXISTS users (
     user_id INTEGER PRIMARY KEY AUTOINCREMENT,
     username TEXT NOT NULL UNIQUE,

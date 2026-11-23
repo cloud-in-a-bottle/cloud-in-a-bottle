@@ -17,7 +17,7 @@ from litestar.response import Template
 from compute_space.config import Config
 from compute_space.core.app_id import is_valid_app_name
 from compute_space.core.apps import deserialize_links
-from compute_space.core.auth.invites import invite_app_names
+from compute_space.core.auth.invites import invite_apps
 from compute_space.core.auth.permissions_v2 import get_all_permissions_v2
 from compute_space.core.domains import Domain
 from compute_space.core.domains import host_with_request_port
@@ -31,8 +31,8 @@ from compute_space.core.manifest import parse_manifest_from_string
 from compute_space.core.service_interface.provider import ProviderUnavailable
 from compute_space.core.service_interface.resolve import resolve_provider
 from compute_space.web.auth.auth import require_owner_auth
-from compute_space.web.auth.auth import verify_member_auth
 from compute_space.web.auth.auth import verify_owner_auth
+from compute_space.web.auth.auth import verify_user_auth
 from compute_space.web.helpers.zone import zone_for_request
 
 EDIT_APP_SERVICE_URL = "github.com/cloud-in-a-bottle/claude-code-container/services/open-workspace"
@@ -46,10 +46,10 @@ CATALOG_REPO_URL = "https://github.com/cloud-in-a-bottle/app-catalog"
 
 @get(["/", "/dashboard"])
 async def dashboard(request: Request[Any, Any, Any], db: NamedDependency[sqlite3.Connection]) -> Template:
-    if member := verify_member_auth(request):
+    if user := verify_user_auth(request):
         return Template(
-            template_name="member_home.html",
-            context={"username": member.username, "apps": invite_app_names(db, member.invite_id)},
+            template_name="user_home.html",
+            context={"username": user.username, "apps": invite_apps(db, user.invite_id)},
         )
     verify_owner_auth(request)
     apps_list = db.execute("SELECT * FROM apps ORDER BY name").fetchall()
@@ -133,6 +133,7 @@ async def app_detail(
         context={
             "app": app_row,
             "public_paths": json.loads(app_row["public_paths"] or "[]"),
+            "user_paths": json.loads(app_row["user_paths"]),
             "links": links,
             "databases": databases,
             "port_mappings": port_mappings,

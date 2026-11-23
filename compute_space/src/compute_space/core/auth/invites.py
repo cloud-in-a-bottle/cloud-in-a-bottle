@@ -4,6 +4,8 @@ import sqlite3
 from datetime import UTC
 from datetime import datetime
 
+from compute_space.core.apps import App
+
 
 def _hash(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
@@ -34,8 +36,8 @@ def is_open_invite(db: sqlite3.Connection, token: str) -> bool:
     return db.execute(query, (_hash(token), datetime.now(UTC).isoformat())).fetchone() is not None
 
 
-def create_member(db: sqlite3.Connection, token: str, username: str, password_hash: str) -> int | None:
-    """Spend one use of an open invite on a new member and return its user_id, or None if the invite is not open.
+def create_user(db: sqlite3.Connection, token: str, username: str, password_hash: str) -> int | None:
+    """Spend one use of an open invite on a new user and return its user_id, or None if the invite is not open.
 
     Raises sqlite3.IntegrityError if the username is taken. Caller commits.
     """
@@ -53,14 +55,14 @@ def create_member(db: sqlite3.Connection, token: str, username: str, password_ha
     return cursor.lastrowid
 
 
-def member_can_access_app(db: sqlite3.Connection, invite_id: int, app_id: str) -> bool:
+def user_can_access_app(db: sqlite3.Connection, invite_id: int, app_id: str) -> bool:
     query = "SELECT 1 FROM invite_apps WHERE invite_id = ? AND app_id = ?"
     return db.execute(query, (invite_id, app_id)).fetchone() is not None
 
 
-def invite_app_names(db: sqlite3.Connection, invite_id: int) -> list[str]:
+def invite_apps(db: sqlite3.Connection, invite_id: int) -> list[App]:
     rows = db.execute(
-        "SELECT a.name FROM invite_apps i JOIN apps a ON a.app_id = i.app_id WHERE i.invite_id = ? ORDER BY a.name",
+        "SELECT a.* FROM invite_apps i JOIN apps a ON a.app_id = i.app_id WHERE i.invite_id = ? ORDER BY a.name",
         (invite_id,),
     )
-    return [r["name"] for r in rows]
+    return [App.from_row(r) for r in rows]

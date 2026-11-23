@@ -69,6 +69,7 @@ Multiple apps requesting the same host port can't be installed at the same time,
 |-------|------|----------|---------|-------------|
 | `health_check` | string | no | - | Health check path. Used to determine when the app has finished booting up. |
 | `public_paths` | string[] | no | `[]` | Route prefixes accessible without authentication |
+| `user_paths` | string[] | no | `[]` | Route prefixes open to users the owner shares this app with (see [users](overview.md)). Without it the app can't be shared. Everything else stays owner-only. |
 
 ### `[[links]]` (optional, repeatable)
 

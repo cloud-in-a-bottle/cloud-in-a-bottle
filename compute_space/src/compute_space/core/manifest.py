@@ -211,6 +211,8 @@ class AppManifest:
     # [routing]
     health_check: Annotated[str | None, SettingLabel("Routing", "Health check", review_required=False)] = None
     public_paths: Annotated[list[str], SettingLabel("Routing", "Public paths")] = attr.Factory(list)
+    # Route prefixes open to users the owner has shared this app with. The app can only be shared if this is set.
+    user_paths: Annotated[list[str], SettingLabel("Routing", "User paths")] = attr.Factory(list)
 
     # [[links]]
     links: Annotated[list[AppLink], SettingLabel("Routing", "Links", review_required=False)] = attr.Factory(list)
@@ -583,6 +585,7 @@ def parse_manifest_from_string(raw_text: str) -> AppManifest:
         shm_mb=shm_mb,
         health_check=routing.get("health_check"),
         public_paths=routing.get("public_paths", []),
+        user_paths=routing.get("user_paths", []),
         links=_parse_links(data.get("links", [])),
         memory_mb=resources.get("memory_mb", 128),
         build_memory_mb=resources.get("build_memory_mb"),

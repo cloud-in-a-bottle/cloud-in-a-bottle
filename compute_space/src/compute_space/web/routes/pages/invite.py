@@ -15,7 +15,7 @@ from litestar.response import Template
 
 from compute_space.core.auth.auth import create_session
 from compute_space.core.auth.auth import validate_owner_username
-from compute_space.core.auth.invites import create_member
+from compute_space.core.auth.invites import create_user
 from compute_space.core.auth.invites import is_open_invite
 from compute_space.web.auth.cookies import build_session_cookie
 from compute_space.web.helpers.zone import zone_for_request
@@ -56,7 +56,7 @@ async def invite_post(
 
     password_hash = (await asyncio.to_thread(bcrypt.hashpw, password.encode(), bcrypt.gensalt())).decode()
     try:
-        user_id = create_member(db, token, username, password_hash)
+        user_id = create_user(db, token, username, password_hash)
     except sqlite3.IntegrityError:
         db.rollback()
         return _error("That username is taken.")

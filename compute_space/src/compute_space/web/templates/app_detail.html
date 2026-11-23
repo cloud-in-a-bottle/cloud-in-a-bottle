@@ -59,6 +59,17 @@ None. All paths require Cloud in a Bottle login.
 {% endif %}
 {%- endmacro %}
 
+{% macro user_paths_value() -%}
+{% if user_paths %}
+{% for path in user_paths %}
+<code>{{ path }}</code>{% if not loop.last %}, {% endif %}
+{% endfor %}
+<p class="desc">Users you share this app with can reach these paths and their subpaths.</p>
+{% else %}
+None. This app can't be shared with users.
+{% endif %}
+{%- endmacro %}
+
 {#- Action rows pair the button with a one-line explanation of what it does. -#}
 {% macro action_label(name, note, danger=false) -%}
 {{ name }}<span class="action-note{% if danger %} action-note--danger{% endif %}">{{ note }}</span>
@@ -89,6 +100,7 @@ None. All paths require Cloud in a Bottle login.
     {{ info_row("Description", app.description or "---") }}
     {{ info_row("URL", url_value()) }}
     {{ info_row("Public paths", public_paths_value()) }}
+    {{ info_row("User paths", user_paths_value()) }}
     {{ info_row("Local port", code_value(app.local_port)) }}
     {{ info_row("Health check", code_value(app.health_check) if app.health_check else "---") }}
     {{ info_row("Memory", app.memory_mb ~ " MB") }}

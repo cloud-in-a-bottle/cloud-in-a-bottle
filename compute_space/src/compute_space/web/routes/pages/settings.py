@@ -12,7 +12,7 @@ from compute_space.web.auth.auth import require_owner_auth
 
 @get("/settings", guards=[require_owner_auth])
 async def settings_page(db: NamedDependency[sqlite3.Connection]) -> Template:
-    apps = db.execute("SELECT app_id, name FROM apps ORDER BY name").fetchall()
+    apps = db.execute("SELECT app_id, name FROM apps WHERE user_paths != '[]' ORDER BY name").fetchall()
     return Template(
         template_name="settings.html",
         context={"styles": list(Style), "app_list_layouts": list(AppListLayout), "apps": apps},

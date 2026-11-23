@@ -18,7 +18,7 @@ from compute_space.core.auth.auth import create_password_session
 from compute_space.core.auth.auth import revoke_session
 from compute_space.core.auth.rate_limit import RateLimiter
 from compute_space.core.domains import Domain
-from compute_space.web.auth.auth import require_owner_or_member_auth
+from compute_space.web.auth.auth import require_owner_or_user_auth
 from compute_space.web.auth.auth import verify_owner_auth
 from compute_space.web.auth.cookies import build_session_cookie
 from compute_space.web.auth.cookies import clear_session_cookie
@@ -87,7 +87,7 @@ async def login_post(
     return response
 
 
-@post("/logout", status_code=200, guards=[require_owner_or_member_auth])
+@post("/logout", status_code=200, guards=[require_owner_or_user_auth])
 async def logout(
     request: Request[Any, Any, Any],
     db: NamedDependency[sqlite3.Connection],

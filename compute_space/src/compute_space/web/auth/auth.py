@@ -21,18 +21,21 @@ from litestar.handlers.base import BaseRouteHandler
 from litestar.response import Redirect
 
 from compute_space.config import get_config
+from compute_space.core.apps import App
 from compute_space.core.apps import get_app_from_hostname
+from compute_space.core.apps import is_public_request_path
+from compute_space.core.apps import is_user_request_path
 from compute_space.core.auth.auth import SESSION_COOKIE_NAME
 from compute_space.core.auth.auth import AuthenticatedAPIKey
 from compute_space.core.auth.auth import AuthenticatedAccessor
 from compute_space.core.auth.auth import AuthenticatedApp
-from compute_space.core.auth.auth import AuthenticatedMember
+from compute_space.core.auth.auth import AuthenticatedOwner
 from compute_space.core.auth.auth import AuthenticatedUser
 from compute_space.core.auth.auth import is_openhost_credential
 from compute_space.core.auth.auth import validate_api_token
 from compute_space.core.auth.auth import validate_app_token
 from compute_space.core.auth.auth import validate_session_token
-from compute_space.core.auth.invites import member_can_access_app
+from compute_space.core.auth.invites import user_can_access_app
 from compute_space.core.domains import Domain
 from compute_space.core.domains import host_with_request_port
 from compute_space.db import get_db
@@ -273,7 +276,7 @@ def verify_owner_auth(connection: AnyConnection, *, allow_cross_site_navigation:
     db = get_db()
     accessor = authenticate(connection, db=db)
 
-    if isinstance(accessor, AuthenticatedUser):
+    if isinstance(accessor, AuthenticatedOwner):
         confirmation = None
         try:
             if is_safe_for_cookie_auth(connection, allow_cross_site_navigation=allow_cross_site_navigation):
@@ -294,20 +297,24 @@ def verify_owner_auth(connection: AnyConnection, *, allow_cross_site_navigation:
     raise NotAuthorizedException(detail="User or API key authentication required")
 
 
-def verify_member_auth(
-    connection: AnyConnection, *, app_id: str | None = None, allow_cross_site_navigation: bool = False
-) -> AuthenticatedMember | None:
-    """The member whose session cookie this request carries, or None if it isn't a member's.
+def verify_user_auth(
+    connection: AnyConnection, *, app: App | None = None, allow_cross_site_navigation: bool = False
+) -> AuthenticatedUser | None:
+    """The user whose session cookie this request carries, or None if it isn't a user's.
 
-    Raises NotAuthorizedException for a member if ``app_id`` isn't shared with them (checked first, so a member can't
-    probe for apps), or if the request isn't safe for cookie auth.
+    Raises NotAuthorizedException for a user if ``app`` isn't shared with them or the path isn't one of its user or
+    public paths (checked first, so a user can't probe for apps), or if the request isn't safe for cookie auth.
     """
     with closing(get_db()) as db:
         accessor = authenticate(connection, db=db)
-        if not isinstance(accessor, AuthenticatedMember):
+        if not isinstance(accessor, AuthenticatedUser):
             return None
-        if app_id is not None and not member_can_access_app(db, accessor.invite_id, app_id):
-            raise NotAuthorizedException(detail="this app is not shared with you")
+        if app is not None:
+            raw_path = connection.scope.get("raw_path")
+            if not user_can_access_app(db, accessor.invite_id, app.app_id):
+                raise NotAuthorizedException(detail="this app is not shared with you")
+            if raw_path is None or not (is_user_request_path(app, raw_path) or is_public_request_path(app, raw_path)):
+                raise NotAuthorizedException(detail="this path is not open to users")
     if not is_safe_for_cookie_auth(connection, allow_cross_site_navigation=allow_cross_site_navigation):
         raise NotAuthorizedException(detail="cookie authentication is only valid for safe-origin requests")
     return accessor
@@ -322,7 +329,7 @@ def verify_app_auth(connection: AnyConnection) -> str:
         accessor = authenticate(connection, db=db)
         origin = get_connection_origin(connection)
 
-        if isinstance(accessor, AuthenticatedUser):
+        if isinstance(accessor, AuthenticatedOwner):
             if origin is not None and (app := get_app_from_hostname(origin, db)) is not None:
                 # requests from app js come from the user's browser with the user's auth.
                 # Origin will always be set by the browser on these cross-origin requests.
@@ -361,8 +368,8 @@ async def verify_owner_ws(socket: WebSocket[Any, Any, Any]) -> bool:
         return False
 
 
-def require_owner_or_member_auth(connection: AnyConnection, _route_handler: BaseRouteHandler) -> None:
-    if verify_member_auth(connection) is None:
+def require_owner_or_user_auth(connection: AnyConnection, _route_handler: BaseRouteHandler) -> None:
+    if verify_user_auth(connection) is None:
         verify_owner_auth(connection)
 
 

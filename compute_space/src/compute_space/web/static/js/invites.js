@@ -2,12 +2,12 @@
 
 var INVITES_URL = '/api/invites';
 
-function memberList(invite) {
-  if (!invite.members.length) return dom.muted('None', 'span');
-  return invite.members.map(function(m) {
+function userList(invite) {
+  if (!invite.users.length) return dom.muted('None', 'span');
+  return invite.users.map(function(m) {
     return dom.el('div', null, [
       m.username + ' ',
-      dom.iconButton('trash', 'Delete member ' + m.username, function() { deleteMember(m); }),
+      dom.iconButton('trash', 'Delete user ' + m.username, function() { deleteUser(m); }),
     ]);
   });
 }
@@ -25,11 +25,11 @@ function loadInvites() {
           dom.el('td', {text: inv.apps.join(', ')}),
           dom.el('td', {text: inv.uses_left}),
           dom.el('td', null, inv.expired ? dom.el('span', {class: 'msg msg--error', text: 'Expired'}) : inv.expires_at),
-          dom.el('td', null, memberList(inv)),
+          dom.el('td', null, userList(inv)),
           dom.el('td', {class: 'col-actions'}, [
             open ? dom.el('button', {class: 'btn', type: 'button', text: 'Close', title: 'Stop new signups',
                                      onclick: function() { closeInvite(inv); }}) : null,
-            dom.iconButton('trash', 'Delete invite ' + inv.name + ' and its members', function() { deleteInvite(inv); }),
+            dom.iconButton('trash', 'Delete invite ' + inv.name + ' and its users', function() { deleteInvite(inv); }),
           ]),
         ]);
       }));
@@ -60,18 +60,18 @@ function createInvite() {
 }
 
 function closeInvite(inv) {
-  if (!confirm('Stop new signups through ' + inv.name + '? Its members keep access.')) return;
+  if (!confirm('Stop new signups through ' + inv.name + '? Its users keep access.')) return;
   fetch(INVITES_URL + '/' + inv.id + '/close', {method: 'POST', credentials: 'same-origin'}).then(loadInvites);
 }
 
 function deleteInvite(inv) {
-  if (!confirm('Delete ' + inv.name + ' and all ' + inv.members.length + ' of its members?')) return;
+  if (!confirm('Delete ' + inv.name + ' and all ' + inv.users.length + ' of its users?')) return;
   fetch(INVITES_URL + '/' + inv.id, {method: 'DELETE', credentials: 'same-origin'}).then(loadInvites);
 }
 
-function deleteMember(m) {
-  if (!confirm('Delete member ' + m.username + '?')) return;
-  fetch('/api/members/' + m.user_id, {method: 'DELETE', credentials: 'same-origin'}).then(loadInvites);
+function deleteUser(m) {
+  if (!confirm('Delete user ' + m.username + '?')) return;
+  fetch('/api/users/' + m.user_id, {method: 'DELETE', credentials: 'same-origin'}).then(loadInvites);
 }
 
 loadInvites();

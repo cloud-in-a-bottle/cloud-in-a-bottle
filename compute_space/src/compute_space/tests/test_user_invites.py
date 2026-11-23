@@ -1,4 +1,4 @@
-"""Member invites end to end: owner API, invite signup, login, and what the proxy lets a member reach."""
+"""User invites end to end: owner API, invite signup, login, and what the proxy lets a user reach."""
 
 from __future__ import annotations
 
@@ -52,7 +52,8 @@ ROUTER = f"https://{ZONE}"
 
 class _Echo(BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802
-        body = json.dumps({k: self.headers.get(k) for k in ("X-OpenHost-Is-Owner", "X-OpenHost-User-Id")}).encode()
+        names = ("X-OpenHost-Is-Owner", "X-OpenHost-User-Id", "X-OpenHost-Username")
+        body = json.dumps({k: self.headers.get(k) for k in names}).encode()
         self.send_response(200)
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
@@ -73,13 +74,13 @@ def backend_ports() -> Iterator[list[int]]:
         srv.server_close()
 
 
-def _seed_app(cfg: Config, name: str, port: int, public_paths: list[str] | None = None) -> str:
+def _seed_app(cfg: Config, name: str, port: int, public_paths: list[str], user_paths: list[str]) -> str:
     app_id = new_app_id()
     with closing(open_db(cfg)) as db:
         db.execute(
-            "INSERT INTO apps (app_id, name, version, repo_path, local_port, status, public_paths)"
-            " VALUES (?, ?, '1', '/tmp/x', ?, 'running', ?)",
-            (app_id, name, port, json.dumps(public_paths or [])),
+            "INSERT INTO apps (app_id, name, version, repo_path, local_port, status, public_paths, user_paths)"
+            " VALUES (?, ?, '1', '/tmp/x', ?, 'running', ?, ?)",
+            (app_id, name, port, json.dumps(public_paths), json.dumps(user_paths)),
         )
         db.commit()
     return app_id
@@ -94,9 +95,11 @@ def cfg(tmp_path: Path) -> Config:
 def apps(cfg: Config, backend_ports: list[int]) -> dict[str, str]:
     shared, private, public = backend_ports
     return {
-        "shared": _seed_app(cfg, "shared", shared),
-        "private": _seed_app(cfg, "private", private),
-        "public": _seed_app(cfg, "public", public, public_paths=["/"]),
+        # Users get /view and the public /pub; /admin stays owner-only.
+        "shared": _seed_app(cfg, "shared", shared, public_paths=["/pub"], user_paths=["/view"]),
+        "private": _seed_app(cfg, "private", private, public_paths=[], user_paths=["/"]),
+        # Fully public, and declares no user_paths, so it can't be shared.
+        "public": _seed_app(cfg, "public", public, public_paths=["/"], user_paths=[]),
     }
 
 
@@ -155,15 +158,23 @@ async def _sign_up(c: httpx.AsyncClient, path: str, username: str, password: str
     return await c.post(path, data={"username": username, "password": password})
 
 
-async def _echo(c: httpx.AsyncClient, app: str) -> httpx.Response:
-    return await c.get(f"https://{app}.{ZONE}/")
+async def _echo(c: httpx.AsyncClient, app: str, path: str = "/view") -> httpx.Response:
+    return await c.get(f"https://{app}.{ZONE}{path}")
+
+
+def _seen(is_owner: str | None, user_id: object, username: str | None) -> dict[str, str | None]:
+    uid = None if user_id is None else str(user_id)
+    return {"X-OpenHost-Is-Owner": is_owner, "X-OpenHost-User-Id": uid, "X-OpenHost-Username": username}
 
 
 @pytest.mark.asyncio
-async def test_member_reaches_only_shared_apps(cfg: Config, client: httpx.AsyncClient, apps: dict[str, str]) -> None:
+async def test_user_reaches_only_shared_apps(cfg: Config, client: httpx.AsyncClient, apps: dict[str, str]) -> None:
     await _as_owner(cfg, client)
     _, path = await _create_invite(client, [apps["shared"]])
-    assert (await _echo(client, "shared")).json() == {"X-OpenHost-Is-Owner": "true", "X-OpenHost-User-Id": None}
+    with closing(open_db(cfg)) as db:
+        owner_id = db.execute("SELECT user_id FROM users WHERE username = 'owner'").fetchone()[0]
+    for p in ("/view", "/pub", "/admin"):
+        assert (await _echo(client, "shared", p)).json() == _seen("true", owner_id, "owner")
 
     assert (await client.get(path)).status_code == 200
     r = await _sign_up(client, path, "alice")
@@ -171,31 +182,37 @@ async def test_member_reaches_only_shared_apps(cfg: Config, client: httpx.AsyncC
     assert SESSION_COOKIE_NAME in client.cookies
 
     home = await client.get("/")
-    assert home.status_code == 200 and "Hi, alice" in home.text and "https://shared.host.example.com/" in home.text
+    assert home.status_code == 200 and "Hi, alice" in home.text and "https://shared.host.example.com/view" in home.text
     assert "private" not in home.text
 
     with closing(open_db(cfg)) as db:
         alice_id = db.execute("SELECT user_id FROM users WHERE username = 'alice'").fetchone()[0]
-    assert (await _echo(client, "shared")).json() == {"X-OpenHost-Is-Owner": None, "X-OpenHost-User-Id": str(alice_id)}
+    assert (await _echo(client, "shared")).json() == _seen(None, alice_id, "alice")
+    # Public paths of a shared app identify the user too.
+    assert (await _echo(client, "shared", "/pub")).json() == _seen(None, alice_id, "alice")
+    # Routes outside user_paths stay owner-only: the user is treated like a stranger (this app has public paths,
+    # so that means a login redirect rather than a 404).
+    assert (await _echo(client, "shared", "/admin")).status_code == 302
+    assert (await _echo(client, "shared", "/view/../admin")).status_code == 302
     assert (await _echo(client, "private")).status_code == 404
-    # A public app serves a member who wasn't invited to it anonymously.
-    assert (await _echo(client, "public")).json() == {"X-OpenHost-Is-Owner": None, "X-OpenHost-User-Id": None}
+    # A public app serves a user who wasn't invited to it anonymously.
+    assert (await _echo(client, "public")).json() == _seen(None, None, None)
 
 
 @pytest.mark.asyncio
-async def test_member_gets_nothing_owner_only(cfg: Config, client: httpx.AsyncClient, apps: dict[str, str]) -> None:
+async def test_user_gets_nothing_owner_only(cfg: Config, client: httpx.AsyncClient, apps: dict[str, str]) -> None:
     await _as_owner(cfg, client)
     _, path = await _create_invite(client, [apps["shared"]])
     await _sign_up(client, path, "alice")
     json_only = {"Accept": "application/json"}
     assert (await client.get("/api/invites", headers=json_only)).status_code == 401
-    assert (await client.delete("/api/members/1", headers=json_only)).status_code == 401
+    assert (await client.delete("/api/users/1", headers=json_only)).status_code == 401
     assert (await client.get("/settings")).status_code == 302
 
 
 @pytest.mark.asyncio
-async def test_member_cookie_is_not_app_auth(cfg: Config, client: httpx.AsyncClient, apps: dict[str, str]) -> None:
-    """An app's browser code running for a member must not get to call services as that app."""
+async def test_user_cookie_is_not_app_auth(cfg: Config, client: httpx.AsyncClient, apps: dict[str, str]) -> None:
+    """An app's browser code running for a user must not get to call services as that app."""
     await _as_owner(cfg, client)
     _, path = await _create_invite(client, [apps["shared"]])
     await _sign_up(client, path, "alice")
@@ -235,7 +252,7 @@ async def test_signup_validation(cfg: Config, client: httpx.AsyncClient, apps: d
 
 
 @pytest.mark.asyncio
-async def test_owner_cannot_take_a_members_username(
+async def test_owner_cannot_take_a_users_username(
     cfg: Config, client: httpx.AsyncClient, apps: dict[str, str]
 ) -> None:
     owner = auth_cookie(cfg)
@@ -254,6 +271,7 @@ async def test_create_invite_validation(cfg: Config, client: httpx.AsyncClient, 
     for body in (
         {"app_ids": []},
         {"app_ids": ["nope"]},
+        {"app_ids": [apps["public"]]},
         {"app_ids": [apps["shared"]], "max_uses": 0},
         {"app_ids": [apps["shared"]], "expiry_hours": 0},
     ):
@@ -262,7 +280,7 @@ async def test_create_invite_validation(cfg: Config, client: httpx.AsyncClient, 
 
 
 @pytest.mark.asyncio
-async def test_deleting_invite_or_member_revokes_access(
+async def test_deleting_invite_or_user_revokes_access(
     cfg: Config, client: httpx.AsyncClient, apps: dict[str, str]
 ) -> None:
     owner = auth_cookie(cfg)
@@ -276,21 +294,21 @@ async def test_deleting_invite_or_member_revokes_access(
     client.cookies.clear()
     client.cookies.update(owner)
     listed = (await client.get("/api/invites")).json()
-    assert [m["username"] for m in listed[0]["members"]] == ["alice", "bob"]
+    assert [m["username"] for m in listed[0]["users"]] == ["alice", "bob"]
     assert listed[0]["uses_left"] == 3 and listed[0]["apps"] == ["shared"]
 
-    bob_id = listed[0]["members"][1]["user_id"]
-    assert (await client.delete(f"/api/members/{bob_id}")).status_code == 204
+    bob_id = listed[0]["users"][1]["user_id"]
+    assert (await client.delete(f"/api/users/{bob_id}")).status_code == 204
     client.cookies.clear()
     client.cookies.update(bob)
-    assert (await _echo(client, "shared")).status_code == 404
+    assert (await _echo(client, "shared")).status_code == 302
 
     client.cookies.clear()
     client.cookies.update(owner)
     assert (await client.delete(f"/api/invites/{invite_id}")).status_code == 204
     client.cookies.clear()
     client.cookies.update(alice)
-    assert (await _echo(client, "shared")).status_code == 404
+    assert (await _echo(client, "shared")).status_code == 302
     with closing(open_db(cfg)) as db:
         assert db.execute("SELECT COUNT(*) FROM users").fetchone()[0] == 1
         assert db.execute("SELECT COUNT(*) FROM sessions s JOIN users u USING (user_id)").fetchone()[0] == 1

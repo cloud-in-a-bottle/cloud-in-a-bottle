@@ -25,6 +25,7 @@ def main(db_path: str) -> None:
         conn.execute("ALTER TABLE users DROP COLUMN invite_id")
         conn.execute("DROP TABLE invite_apps")
         conn.execute("DROP TABLE invites")
+        conn.execute("ALTER TABLE apps DROP COLUMN user_paths")
         conn.execute("INSERT OR REPLACE INTO schema_version (id, version) VALUES (1, 12)")
         conn.commit()
     finally:
