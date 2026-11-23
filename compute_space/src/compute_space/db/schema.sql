@@ -49,12 +49,31 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_port_mappings_host_port ON app_port_mappin
 CREATE INDEX IF NOT EXISTS idx_apps_status ON apps(status);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_apps_app_id ON apps(app_id);
 
+-- Invite links the owner hands out. Members who sign up through one can use its apps, and are deleted with it.
+CREATE TABLE IF NOT EXISTS invites (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    token_hash TEXT NOT NULL UNIQUE,
+    uses_left INTEGER NOT NULL,
+    expires_at TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS invite_apps (
+    invite_id INTEGER NOT NULL REFERENCES invites(id) ON DELETE CASCADE,
+    app_id TEXT NOT NULL REFERENCES apps(app_id) ON DELETE CASCADE,
+    PRIMARY KEY (invite_id, app_id)
+);
+
+-- The owner is the one user without an invite_id; every other user is a member.
 CREATE TABLE IF NOT EXISTS users (
     user_id INTEGER PRIMARY KEY AUTOINCREMENT,
     username TEXT NOT NULL UNIQUE,
     password_hash TEXT NOT NULL,
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    invite_id INTEGER REFERENCES invites(id) ON DELETE CASCADE
 );
+CREATE UNIQUE INDEX IF NOT EXISTS users_one_owner ON users((invite_id IS NULL)) WHERE invite_id IS NULL;
 
 CREATE TABLE IF NOT EXISTS sessions (
     token_hash TEXT PRIMARY KEY,

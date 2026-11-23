@@ -497,7 +497,7 @@ async def change_password(
             detail="Password must be at least 8 characters", extra={"code": "password_too_short"}
         )
 
-    row = db.execute("SELECT user_id, password_hash FROM users LIMIT 1").fetchone()
+    row = db.execute("SELECT user_id, password_hash FROM users WHERE invite_id IS NULL").fetchone()
     if not row:
         raise NotFoundException(detail="No owner found", extra={"code": "owner_not_found"})
 

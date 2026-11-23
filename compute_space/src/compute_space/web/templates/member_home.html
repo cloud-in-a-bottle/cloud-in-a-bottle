@@ -1,0 +1,19 @@
+{% extends "_layout_narrow.html" %}
+{% from "_components/button.html" import button %}
+{% from "_components/empty.html" import empty %}
+{% block title_suffix %} - Apps{% endblock %}
+
+{% block content %}
+<h2>Hi, {{ username }}</h2>
+{% if apps %}
+<p class="desc">Apps shared with you:</p>
+<ul>
+  {% for name in apps %}<li><a href="{{ app_url(name) }}">{{ name }}</a></li>{% endfor %}
+</ul>
+{% else %}
+{{ empty("No apps are shared with you right now.") }}
+{% endif %}
+<form class="actions" method="post" action="/logout">
+  {{ button("Log out", type="submit") }}
+</form>
+{% endblock %}

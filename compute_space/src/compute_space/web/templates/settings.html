@@ -248,6 +248,55 @@
 </section>
 
 <section class="section">
+  {% call section_head("Invites") %}{% endcall %}
+  <div class="panel">
+    <p class="desc">Links that let people create a member account. Members can only use the apps their invite
+      shares, and see <code>X-OpenHost-User-Id</code> in place of <code>X-OpenHost-Is-Owner</code>. Deleting an
+      invite deletes its members.</p>
+
+    <div class="field-row field-row--add">
+      {% call field("Name", "invite-name") %}
+        <input type="text" id="invite-name" placeholder="hackathon">
+      {% endcall %}
+      {% call field("Max uses", "invite-max-uses") %}
+        <input type="number" id="invite-max-uses" value="50" min="1">
+      {% endcall %}
+      {% call field("Open for (hours)", "invite-expiry") %}
+        <input type="number" id="invite-expiry" value="24" min="0.1" step="any">
+      {% endcall %}
+      {{ button("Create invite", variant="primary", onclick="createInvite()") }}
+    </div>
+    <fieldset class="action-bar app-definition-modes">
+      <legend class="hint">Apps to share</legend>
+      {% for app in apps %}
+      <label><input type="checkbox" name="invite-app" value="{{ app.app_id }}"> {{ app.name }}</label>
+      {% else %}
+      <span class="muted">No apps installed.</span>
+      {% endfor %}
+    </fieldset>
+
+    {% call notice(tone="ok", id="invite-created", hidden=true, tag="div") %}
+      <strong>Invite created.</strong> Copy the link now. It won't be shown again.
+      <div class="copy-field">
+        <code id="invite-url"></code>
+        {{ button("Copy", onclick="navigator.clipboard.writeText(document.getElementById('invite-url').textContent)") }}
+      </div>
+    {% endcall %}
+
+    <div class="table-scroll" id="invites-table-wrap" hidden>
+      <table>
+        <thead><tr>
+          <th>Name</th><th>Apps</th><th>Uses left</th><th>Open until</th><th>Members</th>
+          <th class="col-actions">Actions</th>
+        </tr></thead>
+        <tbody id="invites-body"></tbody>
+      </table>
+    </div>
+    {{ empty("No invites.", id="no-invites") }}
+  </div>
+</section>
+
+<section class="section">
   {% call section_head("Archive backend") %}{% endcall %}
   <div class="panel">
     <p class="desc">The archive data tier (<code>app_archive</code>) is used by apps that store large
@@ -314,6 +363,7 @@
 <script src="{{ static_url('js/http-errors.js') }}"></script>
 <script src="{{ static_url('js/username-validation.js') }}"></script>
 <script src="{{ static_url('js/tokens.js') }}"></script>
+<script src="{{ static_url('js/invites.js') }}"></script>
 <script src="{{ static_url('js/domains.js') }}"></script>
 <script src="{{ static_url('js/settings.js') }}"></script>
 <script src="{{ static_url('js/theme.js') }}"></script>

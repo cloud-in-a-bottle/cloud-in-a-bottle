@@ -103,6 +103,7 @@ if __name__ == "__main__":
 - Keep GET routes free of side effects: any website can link the logged-in owner to them. OAuth callbacks must verify `state`.
 - For apps that implement their own auth, routes can be set as public, and requests that have been authenticated by the router will bear a `X-OpenHost-Is-Owner=true` header.
 - `X-OpenHost-Is-Owner` is how you identify the owner. The router never forwards the credential the caller used, so you will not see the owner's session cookie or API token. The router reads its own credential from `X-OpenHost-Authorization`, so `Authorization` is free for your app's own auth.
+- The owner can also invite members (Settings, Invites) and share some apps with them. A member's requests reach your app with `X-OpenHost-User-Id: <id>` instead of `X-OpenHost-Is-Owner`. The id is stable and never reused, so key per-user data on it. Members are not owners: only give them what any signed-in user should have.
 - To surface interesting paths on your app (e.g. an admin console) to the user on the dashboard, declare them in `[[links]]` (each with a `name` and `path`). See the [manifest spec](manifest_spec.md).
 
 ### Environment variables

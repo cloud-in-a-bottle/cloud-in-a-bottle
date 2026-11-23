@@ -55,6 +55,7 @@ The router forwards HTTP and WebSocket traffic alike, and sets a few headers on 
 
 - `X-Forwarded-For`: the real client IP, taken from Caddy.
 - `X-OpenHost-Is-Owner: true` is set only when the request carries a valid owner session.
+- `X-OpenHost-User-Id: <id>` is set instead when the request carries the session of a member the app is shared with. Members sign up through an owner's invite link and can reach only the apps it shares; to them every other app is a 404, and the dashboard and router APIs are closed.
 - `X-OpenHost-Router-URL`: the router's URL on the domain the request arrived on, for the app's browser-side service calls (see [cross-app services](../creating_an_app/cross_app_services.md)).
 
 Any `X-OpenHost-*` header from the client is stripped first; the router is the only thing allowed to set them.

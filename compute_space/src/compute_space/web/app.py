@@ -57,6 +57,7 @@ from compute_space.web.routes.api.auto_suspend import api_auto_suspend_routes
 from compute_space.web.routes.api.discovery import discovery_routes
 from compute_space.web.routes.api.domains import api_domains_routes
 from compute_space.web.routes.api.identity import identity_routes
+from compute_space.web.routes.api.invites import api_invites_routes
 from compute_space.web.routes.api.permissions_v2 import api_permissions_v2_routes
 from compute_space.web.routes.api.services_v2 import api_services_v2_routes
 from compute_space.web.routes.api.settings import api_settings_routes
@@ -64,6 +65,7 @@ from compute_space.web.routes.api.system import system_routes
 from compute_space.web.routes.api.theme import api_theme_routes
 from compute_space.web.routes.docs import docs_routes
 from compute_space.web.routes.pages.apps import pages_apps_routes
+from compute_space.web.routes.pages.invite import pages_invite_routes
 from compute_space.web.routes.pages.login import pages_login_routes
 from compute_space.web.routes.pages.permissions_v2 import pages_permissions_v2_routes
 from compute_space.web.routes.pages.settings import pages_settings_routes
@@ -262,6 +264,7 @@ def create_app(config: Config, dns_provider: InternalDnsProvider, mdns_responder
             api_archive_backend_routes,
             api_auto_suspend_routes,
             api_domains_routes,
+            api_invites_routes,
             discovery_routes,
             api_permissions_v2_routes,
             api_services_v2_routes,
@@ -271,6 +274,7 @@ def create_app(config: Config, dns_provider: InternalDnsProvider, mdns_responder
             identity_routes,
             docs_routes,
             pages_apps_routes,
+            pages_invite_routes,
             pages_login_routes,
             pages_permissions_v2_routes,
             pages_settings_routes,

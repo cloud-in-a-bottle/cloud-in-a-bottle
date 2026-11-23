@@ -23,6 +23,7 @@ from compute_space.core.logging import logger
 from compute_space.core.proxy_target import LocalPort
 from compute_space.db import get_db
 from compute_space.web.auth.auth import auth_required_response
+from compute_space.web.auth.auth import verify_member_auth
 from compute_space.web.auth.auth import verify_owner_auth
 from compute_space.web.auth.confirm_navigation import NavigationConfirmationRequired
 from compute_space.web.helpers.app_starting import app_starting_response
@@ -32,6 +33,7 @@ from compute_space.web.helpers.zone import ZONE_SCOPE_KEY
 from compute_space.web.helpers.zone import router_base_url
 
 IS_OWNER_HEADER = ("X-OpenHost-Is-Owner", "true")
+USER_ID_HEADER = "X-OpenHost-User-Id"
 ROUTER_URL_HEADER = "X-OpenHost-Router-URL"
 
 # Caddy (our front proxy) reaches hypercorn over loopback and, by default,
@@ -41,7 +43,7 @@ ROUTER_URL_HEADER = "X-OpenHost-Router-URL"
 _LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1"})
 
 
-def _resolve_forwarded_for(connection: ASGIConnection[Any, Any, Any, Any]) -> str | None:
+def resolve_forwarded_for(connection: ASGIConnection[Any, Any, Any, Any]) -> str | None:
     """The X-Forwarded-For value to pass to the backend app.
 
     When the peer is the loopback front proxy (Caddy), forward the
@@ -182,7 +184,7 @@ class SubdomainProxyMiddleware:
         #    instead (the :80->:443 redirect means nothing is proxied in the
         #    clear when TLS is on), matching build_login_url.
         #  - client IP: connection.client is always Caddy; recover the real one
-        #    from the X-Forwarded-For Caddy set (see _resolve_forwarded_for).
+        #    from the X-Forwarded-For Caddy set (see resolve_forwarded_for).
         # X-Forwarded-Host preserves the original Host so apps that build absolute URLs don't use the proxy's internal hostname.
         # (The Host header itself is only rewritten on the HTTP path below — not
         # here — because the WS client appends rather than replaces it; see there.)
@@ -197,19 +199,23 @@ class SubdomainProxyMiddleware:
             # Per request, unlike OPENHOST_ROUTER_PUBLIC_URL, so it's right whichever domain the visitor used.
             (ROUTER_URL_HEADER, router_base_url(connection)),
         ]
-        if forwarded_for := _resolve_forwarded_for(connection):
+        if forwarded_for := resolve_forwarded_for(connection):
             extra_headers.append(("X-Forwarded-For", forwarded_for))
 
         try:
             # Allow cross-site navigations into apps, eg OAuth callbacks.
-            verify_owner_auth(connection, allow_cross_site_navigation=True)
-            extra_headers.append(IS_OWNER_HEADER)
+            if member := verify_member_auth(connection, app_id=app.app_id, allow_cross_site_navigation=True):
+                extra_headers.append((USER_ID_HEADER, str(member.user_id)))
+            else:
+                verify_owner_auth(connection, allow_cross_site_navigation=True)
+                extra_headers.append(IS_OWNER_HEADER)
         except NotAuthorizedException as exc:
             # Public paths are served anonymously, even to an owner whose cookie was refused.
             raw_path = scope.get("raw_path")
             if not app.public_paths or raw_path is None or not is_public_request_path(app, raw_path):
                 # Match a missing app's response so unauthorized callers cannot discover fully private apps.
-                # A Continue page is only offered on a valid owner cookie, so it reveals nothing.
+                # A Continue page is only offered on a valid owner cookie, or a member's for an app shared with them,
+                # so it reveals nothing.
                 if not app.public_paths and not isinstance(exc, NavigationConfirmationRequired):
                     await _send_not_found(scope, receive, send)
                     return

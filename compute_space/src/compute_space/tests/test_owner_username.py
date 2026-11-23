@@ -513,7 +513,7 @@ def test_login_password_check_leaves_the_router_loop_available(cfg, login_client
     response = login_client.post("/login", data={"password": "incorrect"})
     task.result(timeout=5)
     assert response.status_code == 200
-    assert "Invalid password" in response.text
+    assert "Invalid username or password" in response.text
 
 
 def test_login_rechecks_password_before_creating_session(cfg, login_client, monkeypatch) -> None:
@@ -527,7 +527,7 @@ def test_login_rechecks_password_before_creating_session(cfg, login_client, monk
     monkeypatch.setattr(bcrypt, "checkpw", change_password_during_check)
     response = login_client.post("/login", data={"password": "secretpass1"})
     assert response.status_code == 200
-    assert "Invalid password" in response.text
+    assert "Invalid username or password" in response.text
     assert _session_count(cfg.db_path) == 0
 
 

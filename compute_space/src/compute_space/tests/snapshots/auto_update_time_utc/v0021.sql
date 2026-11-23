@@ -73,6 +73,19 @@ CREATE TABLE domains (
     error_message TEXT,
     created_at    TEXT NOT NULL DEFAULT (datetime('now'))
 );
+CREATE TABLE invite_apps (
+    invite_id INTEGER NOT NULL REFERENCES invites(id) ON DELETE CASCADE,
+    app_id TEXT NOT NULL REFERENCES apps(app_id) ON DELETE CASCADE,
+    PRIMARY KEY (invite_id, app_id)
+);
+CREATE TABLE invites (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    token_hash TEXT NOT NULL UNIQUE,
+    uses_left INTEGER NOT NULL,
+    expires_at TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
 CREATE TABLE "permissions_v2" (
                 consumer_app_id TEXT NOT NULL,
                 service_url TEXT NOT NULL,
@@ -86,7 +99,7 @@ CREATE TABLE schema_version (
     id INTEGER PRIMARY KEY CHECK (id = 1),
     version INTEGER NOT NULL
 );
-INSERT INTO "schema_version" VALUES(1,20);
+INSERT INTO "schema_version" VALUES(1,21);
 CREATE TABLE "service_defaults" (
                 service_url TEXT PRIMARY KEY,
                 app_id TEXT NOT NULL,
@@ -110,15 +123,18 @@ CREATE TABLE settings (
     value TEXT
 );
 INSERT INTO "settings" VALUES('auto_update_enabled','0');
+INSERT INTO "settings" VALUES('auto_update_time','14:30');
+INSERT INTO "settings" VALUES('auto_update_timezone','UTC');
 CREATE TABLE users (
     user_id INTEGER PRIMARY KEY AUTOINCREMENT,
     username TEXT NOT NULL UNIQUE,
     password_hash TEXT NOT NULL,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
+, invite_id INTEGER REFERENCES invites(id) ON DELETE CASCADE);
 CREATE INDEX idx_apps_status ON apps(status);
 CREATE UNIQUE INDEX idx_apps_app_id ON apps(app_id);
 CREATE UNIQUE INDEX idx_port_mappings_host_port ON app_port_mappings(host_port);
 CREATE INDEX sessions_user_id_idx ON sessions(user_id);
 CREATE UNIQUE INDEX idx_domains_one_primary ON domains(is_primary) WHERE is_primary = 1;
+CREATE UNIQUE INDEX users_one_owner ON users((invite_id IS NULL)) WHERE invite_id IS NULL;
 COMMIT;

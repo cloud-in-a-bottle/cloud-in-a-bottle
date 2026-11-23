@@ -66,6 +66,11 @@ def test_v12_db_upgrades_to_domains_and_settings(tmp_path: Path) -> None:
     # dropped, so this really looks like a v12 DB rather than a v12-stamped modern one.  The same
     # reconstruction lives in the system agent's seed_pre_consolidation_db.
     db.execute("ALTER TABLE apps ADD COLUMN installed_by TEXT")
+    # ...and drop what later migrations have since added.
+    db.execute("DROP INDEX users_one_owner")
+    db.execute("ALTER TABLE users DROP COLUMN invite_id")
+    db.execute("DROP TABLE invite_apps")
+    db.execute("DROP TABLE invites")
     db.execute("INSERT OR REPLACE INTO schema_version (id, version) VALUES (1, 12)")
     db.close()
 

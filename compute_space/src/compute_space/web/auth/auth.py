@@ -26,11 +26,13 @@ from compute_space.core.auth.auth import SESSION_COOKIE_NAME
 from compute_space.core.auth.auth import AuthenticatedAPIKey
 from compute_space.core.auth.auth import AuthenticatedAccessor
 from compute_space.core.auth.auth import AuthenticatedApp
+from compute_space.core.auth.auth import AuthenticatedMember
 from compute_space.core.auth.auth import AuthenticatedUser
 from compute_space.core.auth.auth import is_openhost_credential
 from compute_space.core.auth.auth import validate_api_token
 from compute_space.core.auth.auth import validate_app_token
 from compute_space.core.auth.auth import validate_session_token
+from compute_space.core.auth.invites import member_can_access_app
 from compute_space.core.domains import Domain
 from compute_space.core.domains import host_with_request_port
 from compute_space.db import get_db
@@ -292,6 +294,25 @@ def verify_owner_auth(connection: AnyConnection, *, allow_cross_site_navigation:
     raise NotAuthorizedException(detail="User or API key authentication required")
 
 
+def verify_member_auth(
+    connection: AnyConnection, *, app_id: str | None = None, allow_cross_site_navigation: bool = False
+) -> AuthenticatedMember | None:
+    """The member whose session cookie this request carries, or None if it isn't a member's.
+
+    Raises NotAuthorizedException for a member if ``app_id`` isn't shared with them (checked first, so a member can't
+    probe for apps), or if the request isn't safe for cookie auth.
+    """
+    with closing(get_db()) as db:
+        accessor = authenticate(connection, db=db)
+        if not isinstance(accessor, AuthenticatedMember):
+            return None
+        if app_id is not None and not member_can_access_app(db, accessor.invite_id, app_id):
+            raise NotAuthorizedException(detail="this app is not shared with you")
+    if not is_safe_for_cookie_auth(connection, allow_cross_site_navigation=allow_cross_site_navigation):
+        raise NotAuthorizedException(detail="cookie authentication is only valid for safe-origin requests")
+    return accessor
+
+
 def verify_app_auth(connection: AnyConnection) -> str:
     """Verify that the request is authenticated as an "app" (either client-side, from app js, or server-side, from an app token).
 
@@ -338,6 +359,11 @@ async def verify_owner_ws(socket: WebSocket[Any, Any, Any]) -> bool:
         await socket.accept()
         await socket.close(code=4401, reason="Missing or invalid authorization")
         return False
+
+
+def require_owner_or_member_auth(connection: AnyConnection, _route_handler: BaseRouteHandler) -> None:
+    if verify_member_auth(connection) is None:
+        verify_owner_auth(connection)
 
 
 def require_app_auth(connection: AnyConnection, _route_handler: BaseRouteHandler) -> None:

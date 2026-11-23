@@ -16,12 +16,17 @@ from litestar.response import Template
 from compute_space.core.auth.auth import SESSION_COOKIE_NAME
 from compute_space.core.auth.auth import create_password_session
 from compute_space.core.auth.auth import revoke_session
+from compute_space.core.auth.rate_limit import RateLimiter
 from compute_space.core.domains import Domain
-from compute_space.web.auth.auth import require_owner_auth
+from compute_space.web.auth.auth import require_owner_or_member_auth
 from compute_space.web.auth.auth import verify_owner_auth
 from compute_space.web.auth.cookies import build_session_cookie
 from compute_space.web.auth.cookies import clear_session_cookie
 from compute_space.web.helpers.zone import zone_for_request
+from compute_space.web.middleware.subdomain_proxy import resolve_forwarded_for
+
+# Failed sign-ins per client IP. Generous enough for a room of people behind one NAT making typos.
+_failed_logins = RateLimiter(limit=20, window_seconds=60)
 
 
 def _validated_next(next_url: str, db: sqlite3.Connection) -> str | None:
@@ -60,12 +65,18 @@ async def login_post(
     db: NamedDependency[sqlite3.Connection],
 ) -> Response[Any]:
     form = await request.form()
+    username = form.get("username", "").strip()
     password = form.get("password")
     next_url = form.get("next", "")
+    context = {"next": next_url, "username": username}
+    client = resolve_forwarded_for(request) or ""
+    if _failed_logins.is_limited(client):
+        return Template(template_name="login.html", context={**context, "error": "Too many attempts, try again later"})
     if not isinstance(password, str) or not (
-        session_token := await asyncio.to_thread(create_password_session, password)
+        session_token := await asyncio.to_thread(create_password_session, username, password)
     ):
-        return Template(template_name="login.html", context={"error": "Invalid password", "next": next_url})
+        _failed_logins.hit(client)
+        return Template(template_name="login.html", context={**context, "error": "Invalid username or password"})
 
     dest = _validated_next(next_url, db) or "/"
     response = Redirect(path=dest)
@@ -76,7 +87,7 @@ async def login_post(
     return response
 
 
-@post("/logout", status_code=200, guards=[require_owner_auth])
+@post("/logout", status_code=200, guards=[require_owner_or_member_auth])
 async def logout(
     request: Request[Any, Any, Any],
     db: NamedDependency[sqlite3.Connection],

@@ -16,9 +16,13 @@ def test_upgrade_drops_only_verification_state_and_is_repeatable(tmp_path: Path,
     path = str(tmp_path / "router.db")
     init_db(path)
     with closing(sqlite3.connect(path)) as db:
-        # v18 and v19's schema is otherwise identical to the current schema. Reconstruct a main-tracking instance that
-        # already ran the now-retired verification gate, with a deployed app and its persisted manifest.
+        # v18 and v19's schema is otherwise the current schema without v21's invites. Reconstruct a main-tracking
+        # instance that already ran the now-retired verification gate, with a deployed app and its persisted manifest.
         db.execute("ALTER TABLE apps ADD COLUMN prebuilt_image_verified INTEGER NOT NULL DEFAULT 0")
+        db.execute("DROP INDEX users_one_owner")
+        db.execute("ALTER TABLE users DROP COLUMN invite_id")
+        db.execute("DROP TABLE invite_apps")
+        db.execute("DROP TABLE invites")
         db.execute("UPDATE schema_version SET version = ?", (version,))
         db.execute(
             "INSERT INTO apps (app_id, name, version, local_port, repo_path, repo_url, status, manifest_raw, prebuilt_image_verified) "
@@ -31,7 +35,7 @@ def test_upgrade_drops_only_verification_state_and_is_repeatable(tmp_path: Path,
     apply_migrations(path, registry=REGISTRY)
     apply_migrations(path, registry=REGISTRY)
     with closing(sqlite3.connect(path)) as db:
-        assert read_version(db) == 20
+        assert read_version(db) == REGISTRY[-1].version
         assert "prebuilt_image_verified" not in {row[1] for row in db.execute("PRAGMA table_info(apps)")}
         assert db.execute("SELECT * FROM apps").fetchall() == [row[:-1] for row in before]
         assert db.execute("PRAGMA foreign_key_check").fetchall() == []
