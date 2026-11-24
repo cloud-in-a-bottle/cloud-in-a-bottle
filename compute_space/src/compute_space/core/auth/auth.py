@@ -38,11 +38,18 @@ def validate_owner_username(value: str) -> str | None:
 
 def read_owner_username(db: sqlite3.Connection) -> str | None:
     """Return the configured owner username, or None if no user exists (pre-setup)."""
-    row = db.execute("SELECT username FROM users ORDER BY user_id LIMIT 1").fetchone()
+    row = db.execute("SELECT username FROM users WHERE invite_id IS NULL").fetchone()
     if row is None:
         return None
     username: str = row["username"]
     return username or None
+
+
+def read_owner(db: sqlite3.Connection) -> tuple[int, str]:
+    """The owner's user_id and username. The full app only runs after /setup created the owner."""
+    row = db.execute("SELECT user_id, username FROM users WHERE invite_id IS NULL").fetchone()
+    assert row is not None, "no owner: the full app runs only after setup"
+    return row["user_id"], row["username"]
 
 
 def update_owner_username(db: sqlite3.Connection, new_username: str) -> None:
@@ -51,7 +58,7 @@ def update_owner_username(db: sqlite3.Connection, new_username: str) -> None:
     Raises ValueError if no user row exists (pre-setup).
     """
     cursor = db.execute(
-        "UPDATE users SET username = ? WHERE user_id = (SELECT user_id FROM users ORDER BY user_id LIMIT 1)",
+        "UPDATE users SET username = ? WHERE invite_id IS NULL",
         (new_username,),
     )
     if cursor.rowcount == 0:
@@ -64,9 +71,18 @@ class AuthenticatedAccessor:
 
 
 @attr.s(auto_attribs=True, frozen=True)
-class AuthenticatedUser(AuthenticatedAccessor):
+class AuthenticatedOwner(AuthenticatedAccessor):
     user_id: int
     username: str
+
+
+@attr.s(auto_attribs=True, frozen=True)
+class AuthenticatedUser(AuthenticatedAccessor):
+    """A user who signed up through an invite. Not an owner: may only use the invite's apps."""
+
+    user_id: int
+    username: str
+    invite_id: int
 
 
 @attr.s(auto_attribs=True, frozen=True)
@@ -84,10 +100,10 @@ def _hash(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
 
 
-def create_password_session(password: str) -> str | None:
-    """Check the password and commit a session using a worker-owned connection."""
+def create_password_session(username: str, password: str) -> str | None:
+    """Check the credentials and commit a session using a worker-owned connection."""
     with closing(get_db()) as db, db:
-        row = db.execute("SELECT user_id, password_hash FROM users LIMIT 1").fetchone()
+        row = db.execute("SELECT user_id, password_hash FROM users WHERE username = ?", (username,)).fetchone()
         if row is None or not bcrypt.checkpw(password.encode(), row["password_hash"].encode()):
             return None
         # Hashing runs before taking the write lock. Recheck the password version under it.
@@ -115,15 +131,17 @@ def revoke_session(token: str, db: sqlite3.Connection) -> None:
     db.execute("DELETE FROM sessions WHERE token_hash = ?", (_hash(token),))
 
 
-def validate_session_token(token: str, db: sqlite3.Connection) -> AuthenticatedUser | None:
+def validate_session_token(token: str, db: sqlite3.Connection) -> AuthenticatedOwner | AuthenticatedUser | None:
     token_hash = _hash(token)
     query = """
-        SELECT u.user_id, u.username, s.expires_at
+        SELECT u.user_id, u.username, u.invite_id, s.expires_at
         FROM sessions s JOIN users u ON u.user_id = s.user_id
         WHERE s.token_hash = ?"""
     if row := db.execute(query, (token_hash,)).fetchone():
         if datetime.fromisoformat(row["expires_at"]) >= datetime.now(UTC):
-            return AuthenticatedUser(user_id=row["user_id"], username=row["username"])
+            if row["invite_id"] is not None:
+                return AuthenticatedUser(user_id=row["user_id"], username=row["username"], invite_id=row["invite_id"])
+            return AuthenticatedOwner(user_id=row["user_id"], username=row["username"])
     return None
 
 

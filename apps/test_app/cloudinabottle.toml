@@ -10,6 +10,7 @@ port = 5000
 
 [routing]
 health_check = "/health"
+user_paths = ["/echo-headers", "/ws"]
 
 [[services.v2.consumes]]
 service = "github.com/imbue-openhost/openhost/services/secrets"

@@ -20,6 +20,13 @@ def main(db_path: str) -> None:
         # reconstruction lives in compute_space's test_domains_schema; both need a line per
         # column-dropping migration.
         conn.execute("ALTER TABLE apps ADD COLUMN installed_by TEXT")
+        # ...and drop what later migrations have since added.
+        conn.execute("DROP INDEX users_one_owner")
+        conn.execute("ALTER TABLE users DROP COLUMN invite_id")
+        conn.execute("DROP TABLE user_apps")
+        conn.execute("DROP TABLE invite_apps")
+        conn.execute("DROP TABLE invites")
+        conn.execute("ALTER TABLE apps DROP COLUMN user_paths")
         conn.execute("INSERT OR REPLACE INTO schema_version (id, version) VALUES (1, 12)")
         conn.commit()
     finally:

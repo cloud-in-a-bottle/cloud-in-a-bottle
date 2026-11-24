@@ -54,6 +54,10 @@ class TestDefaults:
         manifest = parse_manifest_from_string(MINIMAL)
         assert manifest.public_paths == []
 
+    def test_user_paths_default_is_empty(self):
+        manifest = parse_manifest_from_string(MINIMAL)
+        assert manifest.user_paths == []
+
     def test_hidden_default_is_false(self):
         manifest = parse_manifest_from_string(MINIMAL)
         assert manifest.hidden is False
@@ -122,6 +126,11 @@ class TestExplicitValues:
         toml = MINIMAL + '\n[routing]\npublic_paths = ["/api"]\n'
         manifest = parse_manifest_from_string(toml)
         assert manifest.public_paths == ["/api"]
+
+    def test_user_paths_explicit(self):
+        toml = MINIMAL + '\n[routing]\nuser_paths = ["/view", "/ws"]\n'
+        manifest = parse_manifest_from_string(toml)
+        assert manifest.user_paths == ["/view", "/ws"]
 
     def test_hidden_explicit_true(self):
         toml = MINIMAL.replace('version = "0.1.0"', 'version = "0.1.0"\nhidden = true')

@@ -169,3 +169,48 @@ def test_app_detail_shows_the_tracked_default_branch(cfg: Config, tmp_path: Path
 
     assert response.status_code == 200
     assert ("tracks the default branch (<code>main</code>)" in response.text) is shown
+
+
+def test_app_detail_lists_users_to_assign(cfg: Config) -> None:
+    set_active_config(cfg)
+    cookie = auth_cookie(cfg)
+    with sqlite3.connect(cfg.db_path) as conn:
+        conn.execute(
+            """INSERT INTO apps (app_id, name, version, repo_path, local_port, status, user_paths)
+               VALUES ('shared-id', 'shared', '1.0.0', '/tmp/shared', 19125, 'running', '["/view"]')"""
+        )
+        conn.execute(
+            "INSERT INTO invites (id, name, token_hash, uses_left, expires_at) VALUES (1, 'hack', 'h', 1, '2999-01-01')"
+        )
+        conn.execute("INSERT INTO invite_apps (invite_id, app_id) VALUES (1, 'shared-id')")
+        conn.execute("INSERT INTO users (user_id, username, password_hash, invite_id) VALUES (10, 'alice', 'x', 1)")
+        conn.execute("INSERT INTO users (user_id, username, password_hash, invite_id) VALUES (11, 'bob', 'x', 1)")
+        conn.execute(
+            "INSERT INTO invites (id, name, token_hash, uses_left, expires_at) VALUES (2, 'solo', 'g', 1, '2999-01-01')"
+        )
+        conn.execute("INSERT INTO users (user_id, username, password_hash, invite_id) VALUES (12, 'carol', 'x', 2)")
+        conn.execute("INSERT INTO user_apps (user_id, app_id) VALUES (12, 'shared-id')")
+
+    with TestClient(app=_build_app(cfg)) as client:
+        client.cookies.update(cookie)
+        text = client.get("/app_detail/shared").text
+
+    assert '<th scope="row">User paths</th>' in text and "<code>/view</code>" in text
+    assert '"appUsersUrl": "/api/apps/shared-id/users"' in text
+    # alice and bob come through the invite (fixed here); carol is assigned on this page.
+    assert 'value="10" checked disabled' in text and "(via hack)" in text
+    assert 'value="12" checked>' in text
+
+
+def test_app_detail_without_user_paths_has_no_users_section(cfg: Config) -> None:
+    set_active_config(cfg)
+    with sqlite3.connect(cfg.db_path) as conn:
+        conn.execute(
+            """INSERT INTO apps (app_id, name, version, repo_path, local_port, status)
+               VALUES ('owner-only-id', 'owner-only', '1.0.0', '/tmp/o', 19125, 'running')"""
+        )
+    with TestClient(app=_build_app(cfg)) as client:
+        client.cookies.update(auth_cookie(cfg))
+        text = client.get("/app_detail/owner-only").text
+    assert "None. This app can't be shared with users." in text
+    assert 'name="app-user"' not in text

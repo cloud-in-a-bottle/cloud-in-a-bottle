@@ -15,7 +15,7 @@
   {% call section_head("Account") %}{% endcall %}
   <div class="panel">
     {% set username_extra %}{{ msg(id="username-msg", hidden=true) }}{% endset %}
-    {% call field("Owner username", "username-input", hint="Used as your account name inside installed apps.",
+    {% call field("Owner username", "username-input", hint="You sign in with it, and installed apps use it as your account name.",
                   extra=username_extra) %}
       <div class="field-row">
         <input type="text" id="username-input"
@@ -248,6 +248,55 @@
 </section>
 
 <section class="section">
+  {% call section_head("Invites") %}{% endcall %}
+  <div class="panel">
+    <p class="desc">Links that let people create a user account. Users reach the apps their invite shares, plus any
+      you assign them on an app's page, and only the routes those apps list in <code>user_paths</code>. Deleting an
+      invite deletes its users.</p>
+
+    <div class="field-row field-row--add">
+      {% call field("Name", "invite-name") %}
+        <input type="text" id="invite-name" placeholder="hackathon">
+      {% endcall %}
+      {% call field("Max uses", "invite-max-uses") %}
+        <input type="number" id="invite-max-uses" value="50" min="1">
+      {% endcall %}
+      {% call field("Open for (hours)", "invite-expiry") %}
+        <input type="number" id="invite-expiry" value="24" min="0.1" step="any">
+      {% endcall %}
+      {{ button("Create invite", variant="primary", onclick="createInvite()") }}
+    </div>
+    <fieldset class="check-list">
+      <legend class="hint">Apps to share</legend>
+      {% for app in apps %}
+      <label><input type="checkbox" name="invite-app" value="{{ app.app_id }}"> {{ app.name }}</label>
+      {% else %}
+      <span class="muted">No installed app declares <code>user_paths</code>, so none can be shared yet.</span>
+      {% endfor %}
+    </fieldset>
+
+    {% call notice(tone="ok", id="invite-created", hidden=true, tag="div") %}
+      <strong>Invite created.</strong> Copy the link now. It won't be shown again.
+      <div class="copy-field">
+        <code id="invite-url"></code>
+        {{ button("Copy", onclick="navigator.clipboard.writeText(document.getElementById('invite-url').textContent)") }}
+      </div>
+    {% endcall %}
+
+    <div class="table-scroll" id="invites-table-wrap" hidden>
+      <table class="invites-table">
+        <thead><tr>
+          <th>Name</th><th>Apps</th><th>Uses left</th><th>Open until</th><th>Users</th>
+          <th class="col-actions">Actions</th>
+        </tr></thead>
+        <tbody id="invites-body"></tbody>
+      </table>
+    </div>
+    {{ empty("No invites.", id="no-invites") }}
+  </div>
+</section>
+
+<section class="section">
   {% call section_head("Archive backend") %}{% endcall %}
   <div class="panel">
     <p class="desc">The archive data tier (<code>app_archive</code>) is used by apps that store large
@@ -314,6 +363,7 @@
 <script src="{{ static_url('js/http-errors.js') }}"></script>
 <script src="{{ static_url('js/username-validation.js') }}"></script>
 <script src="{{ static_url('js/tokens.js') }}"></script>
+<script src="{{ static_url('js/invites.js') }}"></script>
 <script src="{{ static_url('js/domains.js') }}"></script>
 <script src="{{ static_url('js/settings.js') }}"></script>
 <script src="{{ static_url('js/theme.js') }}"></script>

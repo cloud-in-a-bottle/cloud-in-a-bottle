@@ -17,6 +17,8 @@ from litestar.response import Template
 from compute_space.config import Config
 from compute_space.core.app_id import is_valid_app_name
 from compute_space.core.apps import deserialize_links
+from compute_space.core.auth.invites import app_users
+from compute_space.core.auth.invites import user_apps
 from compute_space.core.auth.permissions_v2 import get_all_permissions_v2
 from compute_space.core.domains import Domain
 from compute_space.core.domains import host_with_request_port
@@ -30,6 +32,8 @@ from compute_space.core.manifest import parse_manifest_from_string
 from compute_space.core.service_interface.provider import ProviderUnavailable
 from compute_space.core.service_interface.resolve import resolve_provider
 from compute_space.web.auth.auth import require_owner_auth
+from compute_space.web.auth.auth import verify_owner_auth
+from compute_space.web.auth.auth import verify_user_auth
 from compute_space.web.helpers.zone import zone_for_request
 
 EDIT_APP_SERVICE_URL = "github.com/cloud-in-a-bottle/claude-code-container/services/open-workspace"
@@ -41,8 +45,14 @@ CATALOG_APP_NAME = "catalog"
 CATALOG_REPO_URL = "https://github.com/cloud-in-a-bottle/app-catalog"
 
 
-@get(["/", "/dashboard"], guards=[require_owner_auth])
-async def dashboard(db: NamedDependency[sqlite3.Connection]) -> Template:
+@get(["/", "/dashboard"])
+async def dashboard(request: Request[Any, Any, Any], db: NamedDependency[sqlite3.Connection]) -> Template:
+    if user := verify_user_auth(request):
+        return Template(
+            template_name="user_home.html",
+            context={"username": user.username, "apps": user_apps(db, user.user_id, user.invite_id)},
+        )
+    verify_owner_auth(request)
     apps_list = db.execute("SELECT * FROM apps ORDER BY name").fetchall()
     catalog_installed = db.execute("SELECT 1 FROM apps WHERE name = ?", (CATALOG_APP_NAME,)).fetchone() is not None
     return Template(
@@ -124,6 +134,8 @@ async def app_detail(
         context={
             "app": app_row,
             "public_paths": json.loads(app_row["public_paths"] or "[]"),
+            "user_paths": json.loads(app_row["user_paths"]),
+            "app_users": app_users(db, app_id),
             "links": links,
             "databases": databases,
             "port_mappings": port_mappings,

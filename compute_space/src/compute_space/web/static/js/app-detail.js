@@ -165,6 +165,24 @@ function showToast(message, actions) {
     return toast;
 }
 
+function saveAppUsers() {
+  var status = document.getElementById('app-users-status');
+  var userIds = Array.prototype.map.call(
+    document.querySelectorAll('input[name="app-user"]:checked:not(:disabled)'),
+    function(el) { return parseInt(el.value, 10); });
+  status.textContent = 'Saving…';
+  fetch(config.appUsersUrl, {
+    method: 'PUT',
+    credentials: 'same-origin',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({user_ids: userIds}),
+  })
+    .then(readJsonResponse)
+    .then(function(res) {
+      status.textContent = res.ok ? 'Saved.' : responseErrorMessage(res.data, 'Failed to save users');
+    });
+}
+
 function clearCacheAndReload() {
     showToast('Clearing build cache...', []);
     fetch(config.dropBuildCacheUrl, {method: 'POST', credentials: 'same-origin'})

@@ -1353,6 +1353,54 @@ select {
   opacity: 1;
 }
 
+/* ── Check lists ────────────────────────────────────────────────────────
+   A row of checkboxes that wraps, each box centred on its label. */
+
+.check-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-4);
+  margin: var(--space-4) 0;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+}
+
+.check-list > label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+/* ── Invites table ──────────────────────────────────────────────────────
+   Rows grow with their user lists, so everything aligns to the first line of
+   text. A 28px control would stand 4px proud of a text line on each side. */
+
+.invites-table td.col-actions {
+  vertical-align: top;
+}
+
+.invites-table td.col-actions > *,
+.user-list .icon-btn {
+  margin: -4px 0;
+}
+
+/* Names on the left, delete buttons against the cell's right edge, so the buttons line up across every row. */
+.user-list {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: var(--space-1) var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.user-list > li {
+  display: contents;
+  white-space: nowrap;
+}
+
 /* ── Copyable value ─────────────────────────────────────────────────────
    One-time secrets (API tokens) shown for copying. */
 

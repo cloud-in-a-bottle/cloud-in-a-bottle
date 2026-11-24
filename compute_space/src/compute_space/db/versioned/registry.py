@@ -33,6 +33,7 @@ from compute_space.db.versioned.migrations.v0019_auto_update_local_time import M
 from compute_space.db.versioned.migrations.v0020_drop_image_verification_state import (
     Migration0020DropImageVerificationState,
 )
+from compute_space.db.versioned.migrations.v0021_user_invites import Migration0021UserInvites
 
 # Numbered migrations in apply order. Versions MUST start at 2 and be
 # contiguous. v0 (legacy) and v1 (baseline produced by the existing
@@ -57,4 +58,5 @@ REGISTRY: list[Migration] = [
     Migration0018AppsPrebuiltImageVerified(),
     Migration0019AutoUpdateLocalTime(),
     Migration0020DropImageVerificationState(),
+    Migration0021UserInvites(),
 ]

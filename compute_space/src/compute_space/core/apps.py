@@ -130,6 +130,7 @@ def _manifest_column_values(manifest: AppManifest) -> dict[str, object]:
         "cpu_cores": manifest.cpu_cores,
         "gpu": int(manifest.gpu),
         "public_paths": json.dumps(manifest.public_paths),
+        "user_paths": json.dumps(manifest.user_paths),
         "links": _serialize_links(manifest.links),
         "manifest_raw": manifest.raw_toml,
     }
@@ -181,11 +182,13 @@ class App:
     manifest_raw: str | None
     created_at: str
     updated_at: str
+    user_paths: list[str]
 
     @classmethod
     def from_row(cls, row: sqlite3.Row) -> "App":
         fields = {f.name: row[f.name] for f in attr.fields(cls)}
         fields["public_paths"] = json.loads(fields["public_paths"] or "[]")
+        fields["user_paths"] = json.loads(fields["user_paths"])
         fields["links"] = deserialize_links(fields["links"])
         return cls(**fields)
 
@@ -1362,6 +1365,11 @@ def is_public_request_path(app: App, raw_path: bytes) -> bool:
         return True
 
     return is_request_path_within(raw_path, app.public_paths)
+
+
+def is_user_request_path(app: App, raw_path: bytes) -> bool:
+    """Like is_public_request_path, for the routes the app opens to users it is shared with."""
+    return "/" in app.user_paths or is_request_path_within(raw_path, app.user_paths)
 
 
 def is_request_path_within(raw_path: bytes, prefixes: list[str]) -> bool:

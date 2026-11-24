@@ -497,7 +497,7 @@ async def change_password(
             detail="Password must be at least 8 characters", extra={"code": "password_too_short"}
         )
 
-    row = db.execute("SELECT user_id, password_hash FROM users LIMIT 1").fetchone()
+    row = db.execute("SELECT user_id, password_hash FROM users WHERE invite_id IS NULL").fetchone()
     if not row:
         raise NotFoundException(detail="No owner found", extra={"code": "owner_not_found"})
 
@@ -541,6 +541,9 @@ async def set_owner_username(
         db.commit()
     except ValueError as e:
         raise ValidationException(detail=str(e), extra={"code": "invalid_username"}) from e
+    except sqlite3.IntegrityError as e:
+        db.rollback()
+        raise ValidationException(detail="That username is taken.", extra={"code": "username_taken"}) from e
     except sqlite3.Error as e:
         raise InternalServerException(detail="Failed to save the username", extra={"output": str(e)}) from e
 

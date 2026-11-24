@@ -209,7 +209,7 @@ class TestRouterCore:
             data={"username": "wrong", "password": "wrong"},
         )
         assert r.status_code == 200
-        assert "Invalid password" in r.text
+        assert "Invalid username or password" in r.text
 
     def test_dashboard_after_login(self, admin_session, config):
         base_url = _zone_url(config)
