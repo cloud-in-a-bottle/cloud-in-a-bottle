@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 import threading
 from collections.abc import AsyncIterator
@@ -163,6 +164,11 @@ async def _echo(c: httpx.AsyncClient, app: str, path: str = "/view") -> httpx.Re
     return await c.get(f"https://{app}.{ZONE}{path}")
 
 
+def _links(html: str) -> list[str]:
+    """The app links on a user's home page."""
+    return re.findall(r'<li><a href="([^"]+)">', html)
+
+
 def _seen(is_owner: str | None, user_id: object, username: str | None) -> dict[str, str | None]:
     uid = None if user_id is None else str(user_id)
     return {"X-OpenHost-Is-Owner": is_owner, "X-OpenHost-User-Id": uid, "X-OpenHost-Username": username}
@@ -183,7 +189,8 @@ async def test_user_reaches_only_shared_apps(cfg: Config, client: httpx.AsyncCli
     assert SESSION_COOKIE_NAME in client.cookies
 
     home = await client.get("/")
-    assert home.status_code == 200 and "Hi, alice" in home.text and "https://shared.host.example.com/view" in home.text
+    assert home.status_code == 200 and "Hi, alice" in home.text
+    assert _links(home.text) == ["https://shared.host.example.com/view"]
     assert "private" not in home.text
 
     with closing(open_db(cfg)) as db:
@@ -388,7 +395,7 @@ async def test_assign_user_on_app_page(cfg: Config, client: httpx.AsyncClient, a
     await as_(alice)
     assert (await _echo(client, "private")).json() == _seen(None, alice_id, "alice")
     home = (await client.get("/")).text
-    assert "https://private.host.example.com/" in home and "https://shared.host.example.com/view" in home
+    assert _links(home) == ["https://private.host.example.com/", "https://shared.host.example.com/view"]
 
     # Unassigning removes direct access; access through the invite can't be taken away here.
     assert (await assign("private", [])).json()[0]["assigned"] is False
