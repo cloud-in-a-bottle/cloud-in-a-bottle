@@ -30,7 +30,7 @@ Each TLS domain gets one certificate covering both `domain` and `*.domain`, vali
 There are two ways to reach a CA:
 
 - **Your own ACME account**: configure `acme_account_key_path`, `acme_email`, and `acme_directory_url` (Let's Encrypt by default). The instance talks to the CA directly.
-- **The Imbue certificate broker**: used by managed spaces. The instance generates its keypair and CSR locally and sends only the CSR; the private key never leaves the machine.
+- **Our certificate broker**: used by managed spaces. The instance generates its keypair and CSR locally and sends only the CSR; the private key never leaves the machine.
 
 Certificates are cached on disk and reused across restarts. A background task checks every 12 hours and renews anything expiring within 7 days, then reloads Caddy. A domain whose certificate has not landed yet is served with Caddy's self-signed certificate, so it is reachable, with a browser warning, while acquisition is in flight.
 
