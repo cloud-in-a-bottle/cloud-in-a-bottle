@@ -47,6 +47,7 @@ from compute_space.web.routes.pages.login import pages_login_routes
 from compute_space.web.routes.pages.settings import settings_page
 
 ZONE = "host.example.com"
+_JSON_ONLY = {"Accept": "application/json"}
 ROUTER = f"https://{ZONE}"
 
 
@@ -358,3 +359,58 @@ def test_single_owner_is_enforced(cfg: Config) -> None:
     auth_cookie(cfg)
     with closing(open_db(cfg)) as db, pytest.raises(sqlite3.IntegrityError):
         db.execute("INSERT INTO users (username, password_hash) VALUES ('second', 'x')")
+
+
+@pytest.mark.asyncio
+async def test_assign_user_on_app_page(cfg: Config, client: httpx.AsyncClient, apps: dict[str, str]) -> None:
+    owner = auth_cookie(cfg)
+    client.cookies.update(owner)
+    _, path = await _create_invite(client, [apps["shared"]])
+    await _sign_up(client, path, "alice")
+    alice = dict(client.cookies)
+    with closing(open_db(cfg)) as db:
+        alice_id = db.execute("SELECT user_id FROM users WHERE username = 'alice'").fetchone()[0]
+
+    async def as_(cookies: dict[str, str]) -> None:
+        client.cookies.clear()
+        client.cookies.update(cookies)
+
+    async def assign(app: str, user_ids: list[int]) -> httpx.Response:
+        await as_(owner)
+        return await client.put(f"/api/apps/{apps[app]}/users", json={"user_ids": user_ids})
+
+    await as_(alice)
+    assert (await _echo(client, "private")).status_code == 404
+
+    r = await assign("private", [alice_id])
+    assert r.status_code == 200
+    assert [(u["username"], u["via_invite"], u["assigned"]) for u in r.json()] == [("alice", False, True)]
+    await as_(alice)
+    assert (await _echo(client, "private")).json() == _seen(None, alice_id, "alice")
+    home = (await client.get("/")).text
+    assert "https://private.host.example.com/" in home and "https://shared.host.example.com/view" in home
+
+    # Unassigning removes direct access; access through the invite can't be taken away here.
+    assert (await assign("private", [])).json()[0]["assigned"] is False
+    assert (await assign("shared", [])).json()[0]["via_invite"] is True
+    await as_(alice)
+    assert (await _echo(client, "private")).status_code == 404
+    assert (await _echo(client, "shared")).status_code == 200
+
+    with closing(open_db(cfg)) as db:
+        owner_id = db.execute("SELECT user_id FROM users WHERE invite_id IS NULL").fetchone()[0]
+    assert (await assign("private", [owner_id])).status_code == 400
+    assert (await assign("private", [10**6])).status_code == 400
+    assert (await assign("public", [alice_id])).status_code == 400
+    await as_(owner)
+    assert (await client.put("/api/apps/nope/users", json={"user_ids": []})).status_code == 404
+    await as_(alice)
+    r = await client.put(f"/api/apps/{apps['private']}/users", json={"user_ids": [alice_id]}, headers=_JSON_ONLY)
+    assert r.status_code == 401
+
+    # Deleting the user or the app drops the assignment with it.
+    await assign("private", [alice_id])
+    await as_(owner)
+    assert (await client.delete(f"/api/users/{alice_id}")).status_code == 204
+    with closing(open_db(cfg)) as db:
+        assert db.execute("SELECT COUNT(*) FROM user_apps").fetchone()[0] == 0

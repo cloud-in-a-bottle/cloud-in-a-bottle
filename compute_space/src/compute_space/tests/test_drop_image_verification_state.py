@@ -22,6 +22,7 @@ def test_upgrade_drops_only_verification_state_and_is_repeatable(tmp_path: Path,
         db.execute("ALTER TABLE apps ADD COLUMN prebuilt_image_verified INTEGER NOT NULL DEFAULT 0")
         db.execute("DROP INDEX users_one_owner")
         db.execute("ALTER TABLE users DROP COLUMN invite_id")
+        db.execute("DROP TABLE user_apps")
         db.execute("DROP TABLE invite_apps")
         db.execute("DROP TABLE invites")
         db.execute("ALTER TABLE apps DROP COLUMN user_paths")

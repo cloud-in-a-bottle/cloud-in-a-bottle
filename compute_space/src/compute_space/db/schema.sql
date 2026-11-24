@@ -76,6 +76,13 @@ CREATE TABLE IF NOT EXISTS users (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS users_one_owner ON users((invite_id IS NULL)) WHERE invite_id IS NULL;
 
+-- Apps the owner shared with one user directly, on top of what their invite shares.
+CREATE TABLE IF NOT EXISTS user_apps (
+    user_id INTEGER NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+    app_id TEXT NOT NULL REFERENCES apps(app_id) ON DELETE CASCADE,
+    PRIMARY KEY (user_id, app_id)
+);
+
 CREATE TABLE IF NOT EXISTS sessions (
     token_hash TEXT PRIMARY KEY,
     user_id    INTEGER NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,

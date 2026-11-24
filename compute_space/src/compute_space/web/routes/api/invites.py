@@ -10,12 +10,17 @@ from litestar import Router
 from litestar import delete
 from litestar import get
 from litestar import post
+from litestar import put
 from litestar.di import NamedDependency
+from litestar.exceptions import NotFoundException
 from litestar.exceptions import ValidationException
 from litestar.params import FromPath
 
+from compute_space.core.auth.invites import AppUser
+from compute_space.core.auth.invites import app_users
 from compute_space.core.auth.invites import create_invite
 from compute_space.core.auth.invites import invite_apps
+from compute_space.core.auth.invites import set_app_users
 from compute_space.web.auth.auth import require_owner_auth
 from compute_space.web.helpers.zone import router_base_url
 
@@ -44,6 +49,11 @@ class CreateInviteRequest:
     app_ids: list[str]
     max_uses: int
     expiry_hours: float
+
+
+@attr.s(auto_attribs=True, frozen=True)
+class SetAppUsersRequest:
+    user_ids: list[int]
 
 
 @attr.s(auto_attribs=True, frozen=True)
@@ -116,7 +126,27 @@ async def users_delete(user_id: FromPath[int], db: NamedDependency[sqlite3.Conne
     db.commit()
 
 
+@put("/api/apps/{app_id:str}/users", guards=[require_owner_auth], raises=[ValidationException, NotFoundException])
+async def app_users_set(
+    app_id: FromPath[str], data: SetAppUsersRequest, db: NamedDependency[sqlite3.Connection]
+) -> list[AppUser]:
+    """Set which users are assigned to this app directly. Users whose invite shares it keep access regardless."""
+    row = db.execute("SELECT user_paths FROM apps WHERE app_id = ?", (app_id,)).fetchone()
+    if row is None:
+        raise NotFoundException(detail="App not found")
+    if row["user_paths"] == "[]":
+        raise ValidationException(detail="Only apps that declare user_paths can be shared")
+    user_ids = sorted(set(data.user_ids))
+    placeholders = ",".join("?" * len(user_ids))
+    query = f"SELECT COUNT(*) FROM users WHERE invite_id IS NOT NULL AND user_id IN ({placeholders})"
+    if user_ids and db.execute(query, user_ids).fetchone()[0] != len(user_ids):
+        raise ValidationException(detail="Unknown user")
+    set_app_users(db, app_id, user_ids)
+    db.commit()
+    return app_users(db, app_id)
+
+
 api_invites_routes = Router(
     path="/",
-    route_handlers=[invites_list, invites_create, invites_close, invites_delete, users_delete],
+    route_handlers=[invites_list, invites_create, invites_close, invites_delete, users_delete, app_users_set],
 )

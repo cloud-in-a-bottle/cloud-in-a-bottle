@@ -125,6 +125,11 @@ CREATE TABLE settings (
 INSERT INTO "settings" VALUES('auto_update_enabled','0');
 INSERT INTO "settings" VALUES('auto_update_time','14:30');
 INSERT INTO "settings" VALUES('auto_update_timezone','UTC');
+CREATE TABLE user_apps (
+    user_id INTEGER NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+    app_id TEXT NOT NULL REFERENCES apps(app_id) ON DELETE CASCADE,
+    PRIMARY KEY (user_id, app_id)
+);
 CREATE TABLE users (
     user_id INTEGER PRIMARY KEY AUTOINCREMENT,
     username TEXT NOT NULL UNIQUE,

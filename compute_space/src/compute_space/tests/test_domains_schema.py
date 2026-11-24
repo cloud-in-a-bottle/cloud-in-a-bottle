@@ -69,6 +69,7 @@ def test_v12_db_upgrades_to_domains_and_settings(tmp_path: Path) -> None:
     # ...and drop what later migrations have since added.
     db.execute("DROP INDEX users_one_owner")
     db.execute("ALTER TABLE users DROP COLUMN invite_id")
+    db.execute("DROP TABLE user_apps")
     db.execute("DROP TABLE invite_apps")
     db.execute("DROP TABLE invites")
     db.execute("ALTER TABLE apps DROP COLUMN user_paths")

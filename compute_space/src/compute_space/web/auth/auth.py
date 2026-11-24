@@ -311,7 +311,7 @@ def verify_user_auth(
             return None
         if app is not None:
             raw_path = connection.scope.get("raw_path")
-            if not user_can_access_app(db, accessor.invite_id, app.app_id):
+            if not user_can_access_app(db, accessor.user_id, accessor.invite_id, app.app_id):
                 raise NotAuthorizedException(detail="this app is not shared with you")
             if raw_path is None or not (is_user_request_path(app, raw_path) or is_public_request_path(app, raw_path)):
                 raise NotAuthorizedException(detail="this path is not open to users")

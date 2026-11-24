@@ -250,8 +250,9 @@
 <section class="section">
   {% call section_head("Invites") %}{% endcall %}
   <div class="panel">
-    <p class="desc">Links that let people create a user account. Users reach only the apps their invite shares,
-      and only the routes those apps list in <code>user_paths</code>. Deleting an invite deletes its users.</p>
+    <p class="desc">Links that let people create a user account. Users reach the apps their invite shares, plus any
+      you assign them on an app's page, and only the routes those apps list in <code>user_paths</code>. Deleting an
+      invite deletes its users.</p>
 
     <div class="field-row field-row--add">
       {% call field("Name", "invite-name") %}

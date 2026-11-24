@@ -4,6 +4,8 @@ import sqlite3
 from datetime import UTC
 from datetime import datetime
 
+import attr
+
 from compute_space.core.apps import App
 
 
@@ -55,9 +57,18 @@ def create_user(db: sqlite3.Connection, token: str, username: str, password_hash
     return cursor.lastrowid
 
 
-def user_can_access_app(db: sqlite3.Connection, invite_id: int, app_id: str) -> bool:
-    query = "SELECT 1 FROM invite_apps WHERE invite_id = ? AND app_id = ?"
-    return db.execute(query, (invite_id, app_id)).fetchone() is not None
+# The apps a user may use: their invite's, plus any the owner assigned to them directly.
+_USER_APP_IDS = "SELECT app_id FROM invite_apps WHERE invite_id = :invite_id UNION SELECT app_id FROM user_apps WHERE user_id = :user_id"
+
+
+def user_can_access_app(db: sqlite3.Connection, user_id: int, invite_id: int, app_id: str) -> bool:
+    query = f"SELECT 1 FROM ({_USER_APP_IDS}) WHERE app_id = :app_id"
+    return db.execute(query, {"user_id": user_id, "invite_id": invite_id, "app_id": app_id}).fetchone() is not None
+
+
+def user_apps(db: sqlite3.Connection, user_id: int, invite_id: int) -> list[App]:
+    query = f"SELECT * FROM apps WHERE app_id IN ({_USER_APP_IDS}) ORDER BY name"
+    return [App.from_row(r) for r in db.execute(query, {"user_id": user_id, "invite_id": invite_id})]
 
 
 def invite_apps(db: sqlite3.Connection, invite_id: int) -> list[App]:
@@ -66,3 +77,34 @@ def invite_apps(db: sqlite3.Connection, invite_id: int) -> list[App]:
         (invite_id,),
     )
     return [App.from_row(r) for r in rows]
+
+
+@attr.s(auto_attribs=True, frozen=True)
+class AppUser:
+    """A user as the owner sees them on one app's page."""
+
+    user_id: int
+    username: str
+    invite_name: str
+    via_invite: bool
+    assigned: bool
+
+
+def app_users(db: sqlite3.Connection, app_id: str) -> list[AppUser]:
+    rows = db.execute(
+        """SELECT u.user_id, u.username, i.name AS invite_name,
+                  EXISTS (SELECT 1 FROM invite_apps WHERE invite_id = u.invite_id AND app_id = :app_id) AS via_invite,
+                  EXISTS (SELECT 1 FROM user_apps WHERE user_id = u.user_id AND app_id = :app_id) AS assigned
+           FROM users u JOIN invites i ON i.id = u.invite_id ORDER BY u.username""",
+        {"app_id": app_id},
+    )
+    return [
+        AppUser(r["user_id"], r["username"], r["invite_name"], bool(r["via_invite"]), bool(r["assigned"]))
+        for r in rows
+    ]
+
+
+def set_app_users(db: sqlite3.Connection, app_id: str, user_ids: list[int]) -> None:
+    """Replace the users assigned to ``app_id`` directly. Caller validates the ids and commits."""
+    db.execute("DELETE FROM user_apps WHERE app_id = ?", (app_id,))
+    db.executemany("INSERT INTO user_apps (user_id, app_id) VALUES (?, ?)", [(u, app_id) for u in user_ids])

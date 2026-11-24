@@ -21,3 +21,9 @@ ALTER TABLE users ADD COLUMN invite_id INTEGER REFERENCES invites(id) ON DELETE 
 -- unreachable; drop it so the one-owner index holds.
 DELETE FROM users WHERE user_id > (SELECT MIN(user_id) FROM users);
 CREATE UNIQUE INDEX users_one_owner ON users((invite_id IS NULL)) WHERE invite_id IS NULL;
+
+CREATE TABLE user_apps (
+    user_id INTEGER NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+    app_id TEXT NOT NULL REFERENCES apps(app_id) ON DELETE CASCADE,
+    PRIMARY KEY (user_id, app_id)
+);

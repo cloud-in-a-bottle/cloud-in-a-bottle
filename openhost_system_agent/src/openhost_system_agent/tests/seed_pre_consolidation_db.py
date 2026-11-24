@@ -23,6 +23,7 @@ def main(db_path: str) -> None:
         # ...and drop what later migrations have since added.
         conn.execute("DROP INDEX users_one_owner")
         conn.execute("ALTER TABLE users DROP COLUMN invite_id")
+        conn.execute("DROP TABLE user_apps")
         conn.execute("DROP TABLE invite_apps")
         conn.execute("DROP TABLE invites")
         conn.execute("ALTER TABLE apps DROP COLUMN user_paths")
