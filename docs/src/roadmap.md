@@ -11,7 +11,7 @@
 - compute space core
 - service interface
 - catalog + current apps in catalog
-- basic imbue managed spaces platform
+- basic managed spaces platform
 - public landing page, with public docs, and a clear onboarding flow for selfhost or managed
 - reasonably good docs
 
@@ -27,9 +27,9 @@
 - have email addresses (capable of send and receive) auto-setup in new spaces
 - share apps with others via email address (with email magic link auth)
 - support LLM inference apps on linux nvidia GPU machines and macbooks. need a permission to pass through the GPU somehow.
-- add opt-in imbue managed services, to make onboarding easier/faster/more convenient
+- add opt-in managed services, to make onboarding easier/faster/more convenient
   - IP tunnels, for easier setup of self-hosted instances without a static IPv4
-  - S3 for backup and archive backend, auto-setup for imbue-managed instances
+  - S3 for backup and archive backend, auto-setup for managed instances
 - make it run well + install super easily on raspberry pis (even with limited memory).
 - create polished coding apps (VS code, claude code, imbue sculptor, imbue minds, etc)
 - create or find+package many more great apps!
