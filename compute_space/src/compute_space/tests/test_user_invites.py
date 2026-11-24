@@ -189,7 +189,7 @@ async def test_user_reaches_only_shared_apps(cfg: Config, client: httpx.AsyncCli
     assert SESSION_COOKIE_NAME in client.cookies
 
     home = await client.get("/")
-    assert home.status_code == 200 and "Hi, alice" in home.text
+    assert home.status_code == 200 and "Hi, Alice" in home.text
     assert _links(home.text) == ["https://shared.host.example.com/view"]
     assert "private" not in home.text
 
@@ -341,7 +341,7 @@ async def test_login_by_username(cfg: Config, client: httpx.AsyncClient, apps: d
     client.cookies.clear()
     r = await client.post("/login", data={"username": "alice", "password": "password1"})
     assert r.status_code == 302
-    assert "Hi, alice" in (await client.get("/")).text
+    assert "Hi, Alice" in (await client.get("/")).text
     assert (await client.post("/logout")).status_code == 302
     assert (await client.get("/")).status_code == 302
 

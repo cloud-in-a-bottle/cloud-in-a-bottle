@@ -4,7 +4,7 @@
 {% block title_suffix %} - Apps{% endblock %}
 
 {% block content %}
-<h2>Hi, {{ username }}</h2>
+<h2>Hi, {{ username[:1] | upper }}{{ username[1:] }}</h2>
 {% if apps %}
 <p class="desc">Apps shared with you:</p>
 <ul>
