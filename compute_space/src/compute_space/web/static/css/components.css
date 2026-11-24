@@ -1385,21 +1385,20 @@ select {
   margin: -4px 0;
 }
 
+/* Names on the left, delete buttons against the cell's right edge, so the buttons line up across every row. */
 .user-list {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: var(--space-1) var(--space-2);
   margin: 0;
   padding: 0;
   list-style: none;
 }
 
 .user-list > li {
-  display: flex;
-  align-items: center;
-  gap: var(--space-1);
+  display: contents;
   white-space: nowrap;
-}
-
-.user-list > li + li {
-  margin-top: var(--space-1);
 }
 
 /* ── Copyable value ─────────────────────────────────────────────────────
