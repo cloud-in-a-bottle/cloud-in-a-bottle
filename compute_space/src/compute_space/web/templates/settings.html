@@ -15,7 +15,7 @@
   {% call section_head("Account") %}{% endcall %}
   <div class="panel">
     {% set username_extra %}{{ msg(id="username-msg", hidden=true) }}{% endset %}
-    {% call field("Owner username", "username-input", hint="Used as your account name inside installed apps.",
+    {% call field("Owner username", "username-input", hint="You sign in with it, and installed apps use it as your account name.",
                   extra=username_extra) %}
       <div class="field-row">
         <input type="text" id="username-input"
@@ -266,7 +266,7 @@
       {% endcall %}
       {{ button("Create invite", variant="primary", onclick="createInvite()") }}
     </div>
-    <fieldset class="action-bar app-definition-modes">
+    <fieldset class="check-list">
       <legend class="hint">Apps to share</legend>
       {% for app in apps %}
       <label><input type="checkbox" name="invite-app" value="{{ app.app_id }}"> {{ app.name }}</label>
@@ -284,7 +284,7 @@
     {% endcall %}
 
     <div class="table-scroll" id="invites-table-wrap" hidden>
-      <table>
+      <table class="invites-table">
         <thead><tr>
           <th>Name</th><th>Apps</th><th>Uses left</th><th>Open until</th><th>Users</th>
           <th class="col-actions">Actions</th>

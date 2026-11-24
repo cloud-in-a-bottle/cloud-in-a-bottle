@@ -344,7 +344,7 @@ class OpenhostStack:
         """Log ``page`` in as the zone owner through the real /login form, and return it.
 
         Drives the actual login flow — navigate to the router's login page, submit the
-        owner password, wait for the post-login redirect — so the session cookie lands on
+        owner username and password, wait for the post-login redirect — so the session cookie lands on
         the page's context and the page (and any others in that context) can then reach
         owner-only routes::
 
@@ -353,6 +353,7 @@ class OpenhostStack:
                 page.goto(stack.url)
         """
         page.goto(f"{self.router_url}/login")
+        page.fill("input[name=username]", self.owner_username)
         page.fill("input[name=password]", self.local_stack.owner_password)
         # Match either element: the login form's submit control has been both an
         # <input type=submit> and a <button type=submit>.

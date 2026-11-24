@@ -9,11 +9,13 @@
 {% if error %}{{ msg(error, tone="error") }}{% endif %}
 <form method="post">
   <input type="hidden" name="next" value="{{ next }}">
-  {% call field("Username", "username", hint="Leave blank if you are the owner.") %}
-    <input type="text" id="username" name="username" autocomplete="username" aria-describedby="username-hint" value="{{ username or '' }}">
+  {% call field("Username", "username") %}
+    <input type="text" id="username" name="username" autocomplete="username" value="{{ username or '' }}" required
+           {%- if not username %} autofocus{% endif %}>
   {% endcall %}
   {% call field("Password", "password") %}
-    <input type="password" id="password" name="password" autocomplete="current-password" required autofocus>
+    <input type="password" id="password" name="password" autocomplete="current-password" required
+           {%- if username %} autofocus{% endif %}>
   {% endcall %}
   <div class="actions">
     {{ button("Log in", variant="primary", type="submit") }}

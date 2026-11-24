@@ -127,13 +127,13 @@ None. This app can't be shared with users.
 {% if app_users %}
 <p class="desc">Users you tick can reach this app's user paths. To add people who don't have an account yet, create
   an invite in <a href="/settings">Settings</a>.</p>
-<fieldset class="action-bar app-definition-modes" id="app-users">
+<fieldset class="check-list" id="app-users">
   <legend class="visually-hidden">Users with access</legend>
   {% for u in app_users %}
   <label{% if u.via_invite %} title="Shared through invite {{ u.invite_name }}"{% endif %}>
     <input type="checkbox" name="app-user" value="{{ u.user_id }}"
            {%- if u.assigned or u.via_invite %} checked{% endif %}{% if u.via_invite %} disabled{% endif %}>
-    {{ u.username }}{% if u.via_invite %} <span class="muted">(via {{ u.invite_name }})</span>{% endif %}
+    <span>{{ u.username }}{% if u.via_invite %} <span class="muted">(via {{ u.invite_name }})</span>{% endif %}</span>
   </label>
   {% endfor %}
 </fieldset>

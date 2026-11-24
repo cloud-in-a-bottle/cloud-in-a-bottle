@@ -101,12 +101,9 @@ def _hash(token: str) -> str:
 
 
 def create_password_session(username: str, password: str) -> str | None:
-    """Check the credentials and commit a session using a worker-owned connection. A blank username means the owner."""
+    """Check the credentials and commit a session using a worker-owned connection."""
     with closing(get_db()) as db, db:
-        if username:
-            row = db.execute("SELECT user_id, password_hash FROM users WHERE username = ?", (username,)).fetchone()
-        else:
-            row = db.execute("SELECT user_id, password_hash FROM users WHERE invite_id IS NULL").fetchone()
+        row = db.execute("SELECT user_id, password_hash FROM users WHERE username = ?", (username,)).fetchone()
         if row is None or not bcrypt.checkpw(password.encode(), row["password_hash"].encode()):
             return None
         # Hashing runs before taking the write lock. Recheck the password version under it.

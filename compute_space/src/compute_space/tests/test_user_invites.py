@@ -347,8 +347,10 @@ async def test_login_by_username(cfg: Config, client: httpx.AsyncClient, apps: d
 
     client.cookies.clear()
     assert "Invalid" in (await client.post("/login", data={"username": "alice", "password": "nope"})).text
-    # Blank username is the owner (auth_cookie seeds the owner with password testpass1).
+    # The owner signs in by username too; a blank one is refused before any password check.
     r = await client.post("/login", data={"username": "", "password": "testpass1"})
+    assert r.status_code == 200 and "Enter your username" in r.text
+    r = await client.post("/login", data={"username": "owner", "password": "testpass1"})
     assert r.status_code == 302
     assert "Hi," not in (await client.get("/")).text
 
@@ -357,8 +359,8 @@ async def test_login_by_username(cfg: Config, client: httpx.AsyncClient, apps: d
 async def test_failed_logins_are_rate_limited(cfg: Config, client: httpx.AsyncClient) -> None:
     auth_cookie(cfg)
     for _ in range(20):
-        assert "Invalid" in (await client.post("/login", data={"password": "wrong"})).text
-    r = await client.post("/login", data={"password": "testpass1"})
+        assert "Invalid" in (await client.post("/login", data={"username": "owner", "password": "wrong"})).text
+    r = await client.post("/login", data={"username": "owner", "password": "testpass1"})
     assert "Too many attempts" in r.text and SESSION_COOKIE_NAME not in r.cookies
 
 
@@ -421,3 +423,12 @@ async def test_assign_user_on_app_page(cfg: Config, client: httpx.AsyncClient, a
     assert (await client.delete(f"/api/users/{alice_id}")).status_code == 204
     with closing(open_db(cfg)) as db:
         assert db.execute("SELECT COUNT(*) FROM user_apps").fetchone()[0] == 0
+
+
+@pytest.mark.asyncio
+async def test_narrow_pages_follow_the_owners_theme(cfg: Config, client: httpx.AsyncClient) -> None:
+    with closing(open_db(cfg)) as db:
+        db.execute("INSERT INTO settings (key, value) VALUES ('theme', '{\"style\": \"dark\"}')")
+        db.commit()
+    page = (await client.get("/login")).text
+    assert '<html lang="en" data-style="dark">' in page and "themes.css" in page

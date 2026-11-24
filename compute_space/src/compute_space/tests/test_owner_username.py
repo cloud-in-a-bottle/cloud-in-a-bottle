@@ -488,7 +488,8 @@ def test_login_creates_session_resolving_to_persisted_username(
     actually in the DB — not a stale literal from the old single-owner code."""
     _seed_user(cfg.db_path, "alice", password="loginpass1")
 
-    body = {"files": {"password": (None, "loginpass1")}} if multipart else {"data": {"password": "loginpass1"}}
+    form = {"username": "alice", "password": "loginpass1"}
+    body = {"files": {k: (None, v) for k, v in form.items()}} if multipart else {"data": form}
     resp = login_client.post("/login", **body, follow_redirects=False)
     assert resp.status_code in (200, 302), resp.text
     assert _session_username_after(cfg.db_path) == "alice"
@@ -510,7 +511,7 @@ def test_login_password_check_leaves_the_router_loop_available(cfg, login_client
 
     monkeypatch.setattr(bcrypt, "checkpw", check_password)
     task = login_client.blocking_portal.start_task_soon(release_from_router_loop)
-    response = login_client.post("/login", data={"password": "incorrect"})
+    response = login_client.post("/login", data={"username": "owner", "password": "incorrect"})
     task.result(timeout=5)
     assert response.status_code == 200
     assert "Invalid username or password" in response.text
@@ -525,7 +526,7 @@ def test_login_rechecks_password_before_creating_session(cfg, login_client, monk
         return True
 
     monkeypatch.setattr(bcrypt, "checkpw", change_password_during_check)
-    response = login_client.post("/login", data={"password": "secretpass1"})
+    response = login_client.post("/login", data={"username": "owner", "password": "secretpass1"})
     assert response.status_code == 200
     assert "Invalid username or password" in response.text
     assert _session_count(cfg.db_path) == 0

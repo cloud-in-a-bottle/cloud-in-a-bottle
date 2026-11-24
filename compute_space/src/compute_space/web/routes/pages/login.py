@@ -72,6 +72,8 @@ async def login_post(
     client = resolve_forwarded_for(request) or ""
     if _failed_logins.is_limited(client):
         return Template(template_name="login.html", context={**context, "error": "Too many attempts, try again later"})
+    if not username:
+        return Template(template_name="login.html", context={**context, "error": "Enter your username"})
     if not isinstance(password, str) or not (
         session_token := await asyncio.to_thread(create_password_session, username, password)
     ):

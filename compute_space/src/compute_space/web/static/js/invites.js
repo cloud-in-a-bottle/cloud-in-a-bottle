@@ -4,12 +4,12 @@ var INVITES_URL = '/api/invites';
 
 function userList(invite) {
   if (!invite.users.length) return dom.muted('None', 'span');
-  return invite.users.map(function(m) {
-    return dom.el('div', null, [
-      m.username + ' ',
+  return dom.el('ul', {class: 'user-list'}, invite.users.map(function(m) {
+    return dom.el('li', null, [
+      m.username,
       dom.iconButton('trash', 'Delete user ' + m.username, function() { deleteUser(m); }),
     ]);
-  });
+  }));
 }
 
 function loadInvites() {
@@ -24,7 +24,9 @@ function loadInvites() {
           dom.el('td', {text: inv.name}),
           dom.el('td', {text: inv.apps.join(', ')}),
           dom.el('td', {text: inv.uses_left}),
-          dom.el('td', null, inv.expired ? dom.el('span', {class: 'msg msg--error', text: 'Expired'}) : inv.expires_at),
+          dom.el('td', null, inv.expired
+            ? dom.el('span', {class: 'msg msg--error', text: 'Expired'})
+            : new Date(inv.expires_at).toLocaleString()),
           dom.el('td', null, userList(inv)),
           dom.el('td', {class: 'col-actions'}, [
             open ? dom.el('button', {class: 'btn', type: 'button', text: 'Close', title: 'Stop new signups',
